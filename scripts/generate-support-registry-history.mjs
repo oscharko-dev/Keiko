@@ -74,7 +74,7 @@ export function findSupportRegistry(identity: {
   return source;
 }
 
-export function generateSupportRegistryHistory(
+export async function generateSupportRegistryHistory(
   commits = DEFAULT_COMMITS,
   destination = fileURLToPath(
     new URL(
@@ -85,14 +85,25 @@ export function generateSupportRegistryHistory(
   write = writeFileSync,
 ) {
   const snapshots = captureSupportRegistries(commits);
-  write(destination, renderSupportRegistryHistory(snapshots));
+  const { format } = await import("prettier");
+  write(
+    destination,
+    await format(renderSupportRegistryHistory(snapshots), {
+      parser: "typescript",
+      printWidth: 100,
+    }),
+  );
   return snapshots.length;
 }
 
-export function main(argv = [], generate = generateSupportRegistryHistory, io = process.stdout) {
-  const count = generate(argv.length > 0 ? argv : DEFAULT_COMMITS);
+export async function main(
+  argv = [],
+  generate = generateSupportRegistryHistory,
+  io = process.stdout,
+) {
+  const count = await generate(argv.length > 0 ? argv : DEFAULT_COMMITS);
   io.write(`support-registry-history: captured ${count} immutable identities.\n`);
   return count;
 }
 
-if (isMainModule(import.meta.url)) main(process.argv.slice(2));
+if (isMainModule(import.meta.url)) await main(process.argv.slice(2));

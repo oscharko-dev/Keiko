@@ -8,7 +8,7 @@ the durable CLI control-state boundary for commands that audit or remove runtime
 Drafted in Wave 1 alongside the envelope's ordering primitive (`seq`) and the minimal exporter/
 analyzer, and finalized here once all seven waves of the epic had landed: envelope v2 (D1–D2),
 stack frames and their redaction guards (D3–D4), correlation threading end-to-end (D5), the
-generated op catalog (D6), process lifecycle events (D7), the support-bundle format and its CLI
+generated op catalog (D6), process lifecycle events (D7), the canonical support-report format and its CLI
 (D8–D10), the `ERROR_KIND_PATTERN` relocation (D11), HTTP/SSE detail and the browser diagnostic
 ingest (D13), and the domain-package log-port wiring recorded in D12. The "Wave N" markers below
 are left in place as a record of when each decision became load-bearing, not as an indication that
@@ -236,7 +236,7 @@ state and package targets only by SHA-256, and completion records whether state 
 retained, or would be removed/retained plus body-free affected/retained counts.
 
 `keiko support export` keeps successful install-layout normalization in the selected runtime log so
-the resulting bundle contains that evidence. When a pending normalization meets a symlink or
+the selected canonical report can retain that evidence. When a pending normalization meets a symlink or
 non-directory state root, the export refuses before reading or exporting the target and emits
 `cli.support.export.failed` through the same fixed control-state log, provided canonical isolation
 from the selected target can be proved. If isolation itself cannot be proved, the same terminal-only
@@ -713,10 +713,11 @@ worth using.
 **This is a claim about v2 lines only — it is not a claim that no fallback ordering exists at all.**
 An existing `server.log` can span the upgrade to this contract and still hold lines written before
 `seq`/`schemaVersion` shipped: valid, successfully
-parsed log records with no `pid`, `instanceId`, or `seq` field to order by. D9's exporter copies
-these verbatim (D8's "one JSON-Lines file" format applies uniformly; there is no schema-aware
-filtering at export time), so the analyzer must define what happens to them rather than silently
-dropping or misordering them. The compatibility rule: a retained pre-v2 line is never discarded and
+parsed log records with no `pid`, `instanceId`, or `seq` field to order by. The local raw-log
+reader must define what happens to them rather than silently dropping or misordering them.
+This compatibility path does not admit raw logs or legacy records into D8's received-report
+boundary: that report accepts only validated structured events. The local-reader compatibility
+rule: a retained pre-v2 line is never discarded and
 never treated as malformed — it is ordered by its own position in the file (the same signal used to
 rank process lifetimes against each other, D2), counted in `legacyLineCount`, and surfaced through
 exactly one `warnings[]` entry when that count is nonzero. This compatibility path remains required
@@ -1459,10 +1460,9 @@ requires recorded measurements that manifests are insufficient and an explicit r
 ### D12 — Relation to prior decisions
 
 - **ADR-0010** (audit ledger and evidence manifests) established the precedent this contract
-  extends: redacted-by-construction, deep field-wise, before serialization. The support artifact's
-  manifest line follows the identical shape discipline — a typed record, never a raw dump — and the
-  evidence-index section it embeds is the same `listEvidence()` output ADR-0010's lineage already
-  produces, never re-derived.
+  extends: redacted-by-construction, deep field-wise, before serialization. The canonical support
+  report follows the identical shape discipline through closed typed incident, selection, event,
+  and integrity sections. It includes neither a legacy manifest nor an evidence-index dump.
 - **ADR-0019** (modular package architecture) governs every new dependency edge this contract adds.
   Domain packages (memory, local-knowledge, security, memory-consolidation) each declare their own
   narrow, structural log-sink port — the same `KnowledgeLogEvent`-shaped pattern already proven —
@@ -1626,12 +1626,12 @@ rather than left implicit across the Decision section:
 ## References
 
 - [ADR-0010](ADR-0010-audit-ledger-and-evidence-manifests.md) — redacted-by-construction evidence
-  manifests; the precedent this contract's support-bundle manifest extends.
+  manifests; the precedent this contract's canonical report extends.
 - [ADR-0019](ADR-0019-modular-package-architecture.md) and [ADR-0179](ADR-0179-activity-log-package-boundary.md) — dependency direction and the writer/store/reader package boundary; every new log-port
   edge in this contract points inward, and the server composition root is the only place a real sink
   is wired to a domain package's port.
 - [ADR-0048](ADR-0048-evidence-artifact-confidentiality.md) — confidentiality tiers and write-time
-  permission enforcement for evidence artifacts; the support bundle is a new artifact class in the
+  permission enforcement for evidence artifacts; the canonical support report is an artifact class in the
   same spirit.
 - Epic #3233 — the governing epic; its 12-reader audit is the source of the 36 gaps this contract
   and its later waves close.

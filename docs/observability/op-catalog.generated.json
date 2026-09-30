@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e03a1573f8001cbfc2e5b1b94fc6f7390c39ead9206b3be725fced3840f2f670",
+    "catalogDigest": "9aa530362f129aa28469891772e288f263ca7fd346cc6a7bb1c7bd901728bcd2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2113,8 +2113,8 @@
         "failureClasses": ["cli-support-export"],
         "proofIds": ["cli.support.export.failed.install-layout-refusal"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/support.ts:90",
-        "emitterSites": ["packages/keiko-cli/src/support.ts:142"]
+        "registrationSite": "packages/keiko-cli/src/support.ts:89",
+        "emitterSites": ["packages/keiko-cli/src/support.ts:141"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -28314,8 +28314,8 @@
           }
         },
         "proofIds": ["support.report.completed.report-lifecycle"],
-        "registrationSite": "packages/keiko-cli/src/support-report-evidence.ts:36",
-        "emitterSites": ["packages/keiko-cli/src/support-report-evidence.ts:111"]
+        "registrationSite": "packages/keiko-cli/src/support-report-evidence.ts:41",
+        "emitterSites": ["packages/keiko-cli/src/support-report-evidence.ts:116"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -28367,8 +28367,8 @@
           }
         },
         "proofIds": ["support.report.failed.report-lifecycle"],
-        "registrationSite": "packages/keiko-cli/src/support-report-evidence.ts:57",
-        "emitterSites": ["packages/keiko-cli/src/support-report-evidence.ts:125"]
+        "registrationSite": "packages/keiko-cli/src/support-report-evidence.ts:62",
+        "emitterSites": ["packages/keiko-cli/src/support-report-evidence.ts:130"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -28411,8 +28411,8 @@
           }
         },
         "proofIds": ["support.report.started.report-lifecycle"],
-        "registrationSite": "packages/keiko-cli/src/support-report-evidence.ts:27",
-        "emitterSites": ["packages/keiko-cli/src/support-report-evidence.ts:92"]
+        "registrationSite": "packages/keiko-cli/src/support-report-evidence.ts:32",
+        "emitterSites": ["packages/keiko-cli/src/support-report-evidence.ts:97"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -75195,7 +75195,7 @@
   },
   "legacyDiscovery": {
     "dynamicCount": 57,
-    "unknownCategoryCount": 70,
+    "unknownCategoryCount": 71,
     "authoritative": false
   },
   "entries": [
@@ -75568,7 +75568,7 @@
     {
       "op": "cli.support.export.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/support.ts:93",
+      "site": "packages/keiko-cli/src/support.ts:92",
       "package": "keiko-cli"
     },
     {
@@ -75688,37 +75688,43 @@
     {
       "op": "support.report.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/support-report-evidence.ts:38",
+      "site": "packages/keiko-cli/src/support-report-evidence.ts:43",
       "package": "keiko-cli"
     },
     {
       "op": "support.report.failed",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-report-cli.ts:149",
+      "site": "packages/keiko-cli/src/support-report-cli.ts:161",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "support.report.failed",
+      "category": "unknown",
+      "site": "packages/keiko-cli/src/support-report-cli.ts:239",
       "package": "keiko-cli"
     },
     {
       "op": "support.report.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/support-report-evidence.ts:59",
+      "site": "packages/keiko-cli/src/support-report-evidence.ts:64",
       "package": "keiko-cli"
     },
     {
       "op": "support.report.started",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-report-cli.ts:219",
+      "site": "packages/keiko-cli/src/support-report-cli.ts:279",
       "package": "keiko-cli"
     },
     {
       "op": "support.report.started",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-report-cli.ts:396",
+      "site": "packages/keiko-cli/src/support-report-cli.ts:460",
       "package": "keiko-cli"
     },
     {
       "op": "support.report.started",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/support-report-evidence.ts:29",
+      "site": "packages/keiko-cli/src/support-report-evidence.ts:34",
       "package": "keiko-cli"
     },
     {

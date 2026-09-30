@@ -1,11 +1,16 @@
 import {
   activityLogEvent,
+  isActivityLogErrorKind,
+  type ActivityLogErrorKind,
   defineActivityLogOperation,
   DIAGNOSTIC_SUFFICIENCY_STATUSES,
   SUPPORT_REPORT_SCHEMA_VERSION,
   type DiagnosticSufficiencyStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+
+import { SafeArtifactFileError } from "@oscharko-dev/keiko-security/fs-hardening";
+import { SupportReportError } from "@oscharko-dev/keiko-activity-log/reader";
 
 const SURFACE = {
   type: "string",
@@ -124,7 +129,7 @@ export function emitSupportReportFailed(
   sink.write(
     activityLogEvent(
       SUPPORT_REPORT_FAILED,
-      { correlationId, errorKind: "validation-failed" },
+      { correlationId, errorKind: supportReportErrorKind(error) },
       {
         surface,
         reportSchemaVersion: SUPPORT_REPORT_SCHEMA_VERSION,
@@ -133,4 +138,11 @@ export function emitSupportReportFailed(
       },
     ),
   );
+}
+
+function supportReportErrorKind(error: unknown): ActivityLogErrorKind {
+  if (error instanceof SafeArtifactFileError && isActivityLogErrorKind(error.kind))
+    return error.kind;
+  if (error instanceof SupportReportError) return "validation-failed";
+  return "internal";
 }

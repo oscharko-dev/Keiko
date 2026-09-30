@@ -154,6 +154,32 @@ function reportQualificationFailure(stateDir, twin, firstRequest, phase) {
   );
 }
 
+function exportFailureReport(project, stateDir, runId, bin) {
+  const directory = join(project, `failure-support-${randomBytes(8).toString("hex")}`);
+  run(
+    process.execPath,
+    [
+      bin,
+      "support",
+      "export",
+      "--state-dir",
+      stateDir,
+      "--correlation-id",
+      runId,
+      "--out",
+      directory,
+    ],
+    { cwd: project },
+  );
+  const reports = readdirSync(directory);
+  if (
+    reports.length !== 1 ||
+    !/^keiko-support-v1-[a-f0-9]{12}-\d{4}-\d{2}-\d{2}\.json$/u.test(reports[0])
+  )
+    throw new Error("support export did not publish exactly one canonical report");
+  return join(directory, reports[0]);
+}
+
 function assertAnalyzableFailure(project, stateDir, lines, runId) {
   // OpenCode may publish its terminal failure first. In that ordering the gateway's additional
   // turn event is suppressed; the closed publication reason explains that outcome. The browser
@@ -162,17 +188,20 @@ function assertAnalyzableFailure(project, stateDir, lines, runId) {
   if (evidence === undefined) throw new Error("failed turn lacks linked installed-build evidence");
   const { diagnostic } = evidence;
   const bin = join(project, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
-  const bundle = join(project, `failure-support-${randomBytes(8).toString("hex")}.jsonl`);
-  run(process.execPath, [bin, "support", "export", "--state-dir", stateDir, "--out", bundle], {
-    cwd: project,
-  });
+  const bundle = exportFailureReport(project, stateDir, runId, bin);
   const analyzed = run(
     process.execPath,
     [bin, "support", "analyze", bundle, "--correlation-id", diagnostic.correlationId, "--json"],
     { cwd: project },
   );
   const report = JSON.parse(analyzed);
-  if (!JSON.stringify(report.lines).includes('"server.diagnostic.failure"')) {
+  if (
+    !JSON.stringify(
+      report.analysis.timelines.find(
+        (timeline) => timeline.correlationId === diagnostic.correlationId,
+      )?.lines,
+    ).includes('"server.diagnostic.failure"')
+  ) {
     throw new Error("support analyze omitted the failed turn's correlated diagnostic");
   }
   const analyzedRun = run(
@@ -181,7 +210,11 @@ function assertAnalyzableFailure(project, stateDir, lines, runId) {
     { cwd: project },
   );
   if (
-    !JSON.stringify(JSON.parse(analyzedRun).lines).includes('"coding-sidecar.gateway.turn-failed"')
+    !JSON.stringify(
+      JSON.parse(analyzedRun).analysis.timelines.find(
+        (timeline) => timeline.correlationId === runId,
+      )?.lines,
+    ).includes('"coding-sidecar.gateway.turn-failed"')
   ) {
     throw new Error("support analyze omitted the run's turn failure projection");
   }

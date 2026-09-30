@@ -339,12 +339,12 @@ describe("canonical body-free offline report", () => {
 
   it("uses the hard final-file budget and never reports an omitted closure as complete", () => {
     const { report, query } = fixture();
-    const reduced = buildSupportReport(report.incident, query, 4000);
-    expect(Buffer.byteLength(serializeSupportReport(reduced))).toBeLessThanOrEqual(4000);
-    if (reduced.evidence.recordCount === 0) {
-      expect(reduced.selection.status).toBe("insufficient");
-      expect(reduced.selection.reasons).toContain("report-budget-exceeded");
-    }
+    const fullBytes = Buffer.byteLength(serializeSupportReport(report));
+    const reduced = buildSupportReport(report.incident, query, fullBytes - 1);
+    expect(Buffer.byteLength(serializeSupportReport(reduced))).toBeLessThan(fullBytes);
+    expect(reduced.evidence.recordCount).toBe(0);
+    expect(reduced.selection.status).toBe("insufficient");
+    expect(reduced.selection.reasons).toContain("report-budget-exceeded");
     expect(() => buildSupportReport(report.incident, query, 1)).toThrow(SupportReportError);
   });
 });

@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  ACTIVITY_LOG_DIRECTORY_NAME,
   MAX_SUPPORT_REPORT_BYTES,
   MAX_SUPPORT_REPORT_EVENT_BYTES,
   supportIncidentPrivateProjection,
@@ -36,7 +37,7 @@ import {
   type AnalyzedSupportReport,
   type SupportAnalyzeOptions,
 } from "@oscharko-dev/keiko-activity-log/reader";
-import { resolveCliControlStateDir } from "./cli-control-state.js";
+import { cliTargetIsAtOrBelow, resolveCliControlStateDir } from "./cli-control-state.js";
 import { resolveStateDir } from "./state-paths.js";
 import { loadActivityLog, loadToolLifecycle } from "./lazy-modules.js";
 import { collectSupportReportQuery } from "./support-selective-export.js";
@@ -114,9 +115,20 @@ function reportOutputPath(
 ): string {
   const date = new Date(report.incident.createdAtMs).toISOString().slice(0, 10);
   const filename = `keiko-support-v${String(report.schemaVersion)}-${report.incident.incidentId.slice(0, 12)}-${date}.json`;
-  const directory = out === undefined ? join(stateDir, "support-reports") : resolve(cwd, out);
+  const directory = reportOutputDirectory(cwd, out, stateDir);
+  assertReportDestination(directory, stateDir);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
+  assertReportDestination(directory, stateDir);
   return join(directory, filename);
+}
+
+function reportOutputDirectory(cwd: string, out: string | undefined, stateDir: string): string {
+  return out === undefined ? join(stateDir, "support-reports") : resolve(cwd, out);
+}
+
+function assertReportDestination(directory: string, stateDir: string): void {
+  if (cliTargetIsAtOrBelow(directory, join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME)))
+    throw new SafeArtifactFileError("support-report", "unsafe-target");
 }
 
 function reportFailureReason(error: unknown): string {
@@ -202,6 +214,52 @@ async function makeReport(
   );
 }
 
+function reportRejectedDestination(
+  error: unknown,
+  io: CliIo,
+  env: EnvSource,
+  deps: SupportCliDeps,
+  correlationId: string,
+  maxBytes: number | undefined,
+): number {
+  try {
+    const sink = createFileServerLogSink(analysisControlState(deps), { env });
+    return reportSupportReportFailure(
+      {
+        io,
+        sink,
+        correlationId,
+        surface: "export",
+        maxBytes: maxBytes ?? MAX_SUPPORT_REPORT_BYTES,
+      },
+      error,
+    );
+  } catch (sinkError) {
+    reportServerLogFailure(sinkError, {
+      op: "support.report.failed",
+      correlationId,
+      loss: "event-dropped",
+    });
+    return reportFailure(error, io);
+  }
+}
+
+function reportExportDestinationFailure(
+  args: SafeSupportExportArgs,
+  io: CliIo,
+  env: EnvSource,
+  deps: SupportCliDeps,
+): number | undefined {
+  const cwd = deps.cwd ?? process.cwd();
+  const stateDir = resolveStateDir(cwd, env, args.stateDir);
+  try {
+    assertReportDestination(reportOutputDirectory(cwd, args.out, stateDir), stateDir);
+    return undefined;
+  } catch (error) {
+    return reportRejectedDestination(error, io, env, deps, randomUUID(), args.maxBytes);
+  }
+}
+
 export async function runSafeSupportExport(
   args: SafeSupportExportArgs,
   io: CliIo,
@@ -211,6 +269,8 @@ export async function runSafeSupportExport(
   const cwd = deps.cwd ?? process.cwd();
   const stateDir = resolveStateDir(cwd, env, args.stateDir);
   const correlationId = randomUUID();
+  const refused = reportExportDestinationFailure(args, io, env, deps);
+  if (refused !== undefined) return refused;
   let sink: ServerLogSink;
   try {
     sink = createFileServerLogSink(stateDir, { env });
@@ -241,15 +301,19 @@ export async function runSafeSupportExport(
       sufficiency: report.selection.status,
       reportDigest: report.integrity.reportDigest,
     });
-    io.out(
-      `Saved support report: ${path}\nDiagnostic sufficiency: ${report.selection.status}\nNothing has been sent.\n`,
-    );
+    announceReportExport(io, path, report);
     return 0;
   } catch (error) {
     return reportSupportReportFailure(context, error);
   } finally {
     sink.close?.();
   }
+}
+
+function announceReportExport(io: CliIo, path: string, report: SupportReport): void {
+  io.out(
+    `Saved support report: ${path}\nDiagnostic sufficiency: ${report.selection.status}\nNothing has been sent.\n`,
+  );
 }
 
 function analysisControlState(deps: SupportCliDeps): string {

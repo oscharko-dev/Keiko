@@ -3,10 +3,9 @@ import { closeSync, mkdirSync, writeFileSync } from "node:fs";
 
 import { homedir as defaultHomedir } from "node:os";
 
-import { dirname, resolve } from "node:path";
+import { dirname } from "node:path";
 
 import {
-  ACTIVITY_LOG_DIRECTORY_NAME,
   activityLogEvent,
   defineActivityLogOperation,
   MAX_SUPPORT_REPORT_BYTES,
@@ -399,17 +398,6 @@ function parseQuerySubcommand(subcommand: string, rest: readonly string[]): Pars
   return { kind: "usage", message: `keiko support: unknown subcommand: ${subcommand}\n${USAGE}` };
 }
 
-// Nothing but the Activity Log store may create files in its directory: a report written there could
-// take a segment's name, and retention owns every closed-grammar name in it.
-function supportDestinationCollidesWithActivityLog(
-  cwd: string,
-  stateDir: string,
-  outArg: string | undefined,
-): boolean {
-  if (outArg === undefined) return false;
-  return dirname(resolve(cwd, outArg)) === resolve(stateDir, ACTIVITY_LOG_DIRECTORY_NAME);
-}
-
 async function runSupportExport(
   args: ExportArgs,
   io: CliIo,
@@ -419,10 +407,6 @@ async function runSupportExport(
   const cwd = deps.cwd ?? process.cwd();
   const stateDir = resolveStateDir(cwd, env, args.stateDir);
   if (!prepareSupportInstallLayoutEvidence(stateDir, env, deps, io)) return 1;
-  if (supportDestinationCollidesWithActivityLog(cwd, stateDir, args.out)) {
-    io.err("keiko support export: destination collides with the Activity Log\n");
-    return 1;
-  }
   return (await import("./support-report-cli.js")).runSafeSupportExport(args, io, env, deps);
 }
 

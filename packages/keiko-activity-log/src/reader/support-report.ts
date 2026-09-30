@@ -376,6 +376,17 @@ function reportRegistry(
 
 /** Validates every byte and section before any renderer or agent receives a value. Pure, offline. */
 export function parseSupportReport(text: string): SupportReport {
+  return parseValidatedSupportReport(text).report;
+}
+
+interface ValidatedSupportReport {
+  readonly report: SupportReport;
+  readonly events: readonly SupportReportEvent[];
+  readonly registry: SupportReaderRegistry;
+  readonly analysis: AnalyzeAllResult;
+}
+
+function parseValidatedSupportReport(text: string): ValidatedSupportReport {
   if (!text.endsWith("\n")) throw new SupportReportError("corrupt-report");
   const value = readHeader(
     parseCanonicalSupportJson(text.slice(0, -1), MAX_SUPPORT_REPORT_BYTES - 1),
@@ -389,8 +400,9 @@ export function parseSupportReport(text: string): SupportReport {
   const registry = reportRegistry(incident, String(value.minimumAnalyzerVersion));
   const events = decodeEvidence(value.evidence, registry);
   const report = value as unknown as SupportReport;
-  validateReportSufficiency(report, events, registry);
-  return report;
+  const analysis = eventAnalysis(events, registry);
+  validateReportSufficiency(report, events, registry, analysis);
+  return { report, events, registry, analysis };
 }
 
 function eventAnalysis(
@@ -436,8 +448,8 @@ function projectedEvidenceReasons(
   incident: SupportIncidentPrivateProjection,
   events: readonly SupportReportEvent[],
   registry: SupportReaderRegistry,
+  analysis = eventAnalysis(events, registry),
 ): readonly DiagnosticSufficiencyReason[] {
-  const analysis = eventAnalysis(events, registry);
   const projected = restrictActivityLogSufficiency(
     analysis.sufficiency,
     reportFailureClasses(incident, events, registry),
@@ -455,9 +467,10 @@ function validateReportSufficiency(
   report: SupportReport,
   events: readonly SupportReportEvent[],
   registry: SupportReaderRegistry,
+  analysis: AnalyzeAllResult,
 ): void {
   const expected = reasons([
-    ...projectedEvidenceReasons(report.incident, events, registry),
+    ...projectedEvidenceReasons(report.incident, events, registry, analysis),
     ...report.incident.sufficiencyReasons,
     ...report.selection.reasons,
   ]);
@@ -481,9 +494,12 @@ export function analyzeSupportReport(
   text: string,
   options: SupportAnalyzeOptions = {},
 ): AnalyzedSupportReport {
-  const report = parseSupportReport(text);
-  const registry = reportRegistry(report.incident, report.minimumAnalyzerVersion);
-  const analysis = eventAnalysis(decodeEvidence(report.evidence, registry), registry, options);
+  const validated = parseValidatedSupportReport(text);
+  const { report, events, registry } = validated;
+  const analysis =
+    Object.keys(options).length === 0
+      ? validated.analysis
+      : eventAnalysis(events, registry, options);
   const sourceArtifactDigest = supportReportDigest(text);
   const artifact: AnalyzedSupportReport = {
     kind: "keiko.support.report-analysis",

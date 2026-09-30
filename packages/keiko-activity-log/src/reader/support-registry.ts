@@ -7,7 +7,7 @@ import {
   type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-export interface ReaderClassCoverage {
+interface ReaderClassCoverage {
   readonly failureClass: string;
   readonly lifecycleOperations: Readonly<Partial<Record<string, readonly string[]>>>;
 }

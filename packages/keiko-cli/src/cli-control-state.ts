@@ -55,6 +55,15 @@ function isAtOrBelow(candidate: string, target: string, platform: NodeJS.Platfor
   );
 }
 
+/** Canonical containment also covers not-yet-created descendants and filesystem aliases. */
+export function cliTargetIsAtOrBelow(candidate: string, target: string): boolean {
+  return isAtOrBelow(
+    canonicalizeWithMissingTail(candidate),
+    canonicalizeWithMissingTail(target),
+    process.platform,
+  );
+}
+
 /** True when either the control state or selected target contains the other. */
 export function cliControlStateConflictsWithTarget(
   controlStateDir: string,

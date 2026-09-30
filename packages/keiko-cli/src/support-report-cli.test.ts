@@ -20,6 +20,7 @@ import {
   analyzeSupportReport,
   parseSupportReport,
   serializeSupportReport,
+  SupportReportError,
 } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   fixtureLine,
@@ -37,6 +38,8 @@ import { resealSupportReportWithParentFanOut } from "../../../tests/support/supp
 import type { CliIo } from "./runner.js";
 import { runSupportCli } from "./support.js";
 import { publishSupportReportFile, readSupportReportFile } from "./support-export.js";
+import { SafeArtifactFileError } from "@oscharko-dev/keiko-security/fs-hardening";
+import { emitSupportReportFailed } from "./support-report-evidence.js";
 
 const CORRELATION = "support-report-cli-0001";
 let root: string;
@@ -373,13 +376,55 @@ describe("support report CLI and private publication", () => {
     expect(result.errors.join("")).not.toContain(stateDir);
   });
 
-  it("refuses any report destination in the Activity Log directory", async () => {
-    const result = capture();
-    const forbidden = join(stateDir, "logs", "report.json");
-    expect(
-      await runSupportCli(["export", "--state-dir", stateDir, "--out", forbidden], result.io),
-    ).toBe(1);
-    expect(existsSync(forbidden)).toBe(false);
+  it.each(["", "report.json", "nested/report"])(
+    "refuses the Activity Log directory or descendant %s as a destination",
+    async (tail) => {
+      const result = capture();
+      const forbidden = join(stateDir, "logs", tail);
+      const before = readdirSync(join(stateDir, "logs"));
+      expect(
+        await runSupportCli(["export", "--state-dir", stateDir, "--out", forbidden], result.io),
+      ).toBe(1);
+      expect(readdirSync(join(stateDir, "logs"))).toEqual(before);
+    },
+  );
+
+  it("refuses aliases and missing descendants of the Activity Log directory", async () => {
+    const alias = join(root, "log-alias");
+    symlinkSync(join(stateDir, "logs"), alias, "dir");
+    const before = readdirSync(join(stateDir, "logs"));
+    for (const target of [alias, join(alias, "nested", "report")]) {
+      const result = capture();
+      expect(
+        await runSupportCli(["export", "--state-dir", stateDir, "--out", target], result.io),
+      ).toBe(1);
+      expect(readdirSync(join(stateDir, "logs"))).toEqual(before);
+      expect(existsSync(join(alias, "nested"))).toBe(false);
+    }
+  });
+
+  it.each([
+    [new SafeArtifactFileError("support-report", "target-exists"), "target-exists"],
+    [new SafeArtifactFileError("support-report", "unsafe-target"), "unsafe-target"],
+    [new SafeArtifactFileError("support-report", "open-failed"), "open-failed"],
+    [new SafeArtifactFileError("support-report", "read-failed"), "read-failed"],
+    [new SupportReportError("corrupt-report"), "validation-failed"],
+    [new Error("private message"), "internal"],
+  ])("classifies report failures without exposing content (%s)", (error, errorKind) => {
+    const events: unknown[] = [];
+    emitSupportReportFailed(
+      {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      CORRELATION,
+      "analyze",
+      error,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ op: "support.report.failed", errorKind });
+    expect(JSON.stringify(events)).not.toContain("private message");
   });
 
   it("reports missing requested correlation without emitting a machine view", async () => {
