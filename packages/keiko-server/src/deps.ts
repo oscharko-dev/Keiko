@@ -518,13 +518,20 @@ export interface RuntimeGatewayConfig {
   readonly onContextWindowReported?: ((report: ContextWindowReport) => void) | undefined;
   /** Binds the host's adoption path (gateway-context-window.ts) once the handler deps exist. */
   readonly bindContextWindowReporter?:
-    | ((reporter: (report: ContextWindowReport) => void) => void)
-    | undefined;
+    ((reporter: (report: ContextWindowReport) => void) => void) | undefined;
   readonly initializationCorrelationId?: string | undefined;
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
   present(): boolean;
   set(config: GatewayConfig | undefined, present: boolean, correlationId?: string): void;
+  /**
+   * Replaces the configuration with a REFINEMENT of itself — capability metadata Keiko measured
+   * against the unchanged connections, such as a provider-reported context window — WITHOUT
+   * advancing the generation: in-flight turns keep their admission and readiness observations stay
+   * valid, while every later lookup sees the refined capability. Never use it for a change of
+   * endpoint, credential or model list; that is set().
+   */
+  refine?: ((config: GatewayConfig, correlationId?: string) => void) | undefined;
   /** Monotonic config generation; bumped by every set(). Probes capture it before running. */
   generation(): number;
   /**
@@ -1491,6 +1498,10 @@ function createRuntimeGatewayConfig(
       verification = UNVERIFIED_GATEWAY;
       verifiedCapabilities.clear();
       generation += 1;
+      listeners.notify(correlationId);
+    },
+    refine(next: GatewayConfig, correlationId?: string): void {
+      config = next;
       listeners.notify(correlationId);
     },
     subscribe: listeners.subscribe,

@@ -23,12 +23,14 @@ import {
   type GatewayConfig,
   type GatewayContextWindowDiscovery,
 } from "@oscharko-dev/keiko-model-gateway";
-import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
+import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { currentContextProfileForModel, currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { persistAdoptedContextWindow, type AdoptedContextWindowOutcome } from "./gateway-setup.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
 import { getServerLogger } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 
 type ContextWindowSource = "provider-overflow" | "startup-probe";
 
@@ -92,6 +94,34 @@ const CONTEXT_WINDOW_PROBE = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["gateway-context-admission"],
   proofIds: ["gateway.context-window.probe.line"],
+  releaseImpact: "patch",
+});
+
+const CONTEXT_WINDOW_RETRY = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.context-window.retry",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-context-window.logRetry",
+  fields: {
+    modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["chat-buffered", "chat-stream", "grounded"],
+    },
+    plannedContextWindow: { type: "integer", dataClass: "count", required: true },
+    contextWindow: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-context-admission"],
+  proofIds: ["gateway.context-window.retry.line"],
   releaseImpact: "patch",
 });
 
@@ -209,7 +239,9 @@ async function probeContextWindow(
     const outcome = await discoverGatewayContextWindow({
       config,
       provider,
-      ...(deps.gatewayReadinessFetch === undefined ? {} : { fetchImpl: deps.gatewayReadinessFetch }),
+      ...(deps.gatewayReadinessFetch === undefined
+        ? {}
+        : { fetchImpl: deps.gatewayReadinessFetch }),
       log: deps.activityLog ?? processServerLogSink(),
       correlationId,
     });
@@ -254,4 +286,70 @@ export function discoverAssumedContextWindows(deps: UiHandlerDeps, correlationId
     }
     probeQueue = probeQueue.then(() => probeContextWindow(deps, modelId, correlationId));
   }
+}
+
+export interface ContextWindowRetryInput {
+  readonly modelId: string;
+  readonly surface: "chat-buffered" | "chat-stream" | "grounded";
+  readonly correlationId: string | undefined;
+  /** False once the failed attempt already showed content, which a retry would repeat. */
+  readonly retryable?: (() => boolean) | undefined;
+}
+
+function plannedContextWindow(deps: UiHandlerDeps, modelId: string): number | undefined {
+  return currentContextProfileForModel(deps, modelId)?.maxInputTokens;
+}
+
+// A retry is justified only when the provider refused the attempt as an overflow, stated its
+// window, and that window is now what Keiko plans with while the failed attempt was planned with a
+// different one — a re-plan then produces a different, fitting request.
+function adoptedWindowAfter(
+  deps: UiHandlerDeps,
+  input: ContextWindowRetryInput,
+  planned: number | undefined,
+  error: unknown,
+): number | undefined {
+  if (!(error instanceof ContextOverflowError) || input.retryable?.() === false) return undefined;
+  const reported = error.reportedContextWindowTokens;
+  if (reported === undefined || planned === reported) return undefined;
+  return plannedContextWindow(deps, input.modelId) === reported ? reported : undefined;
+}
+
+/**
+ * Runs one model attempt and, when the provider's overflow answer taught Keiko the deployment's
+ * real window (adopted synchronously by the Gateway's report hook), re-plans and sends it exactly
+ * once more. The attempt callback must assemble its prompt from the CURRENT context profile, so the
+ * second run fits the adopted window. Any other failure — and a second overflow — propagates.
+ */
+export async function withAdoptedContextWindowRetry<T>(
+  deps: UiHandlerDeps,
+  input: ContextWindowRetryInput,
+  attempt: () => Promise<T>,
+): Promise<T> {
+  const planned = plannedContextWindow(deps, input.modelId);
+  try {
+    return await attempt();
+  } catch (error) {
+    const adopted = adoptedWindowAfter(deps, input, planned, error);
+    if (adopted === undefined || planned === undefined) throw error;
+    logRetry(input, planned, adopted);
+    return await attempt();
+  }
+}
+
+function logRetry(input: ContextWindowRetryInput, planned: number, adopted: number): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CONTEXT_WINDOW_RETRY,
+      { correlationId: correlationIdOrUnknown(input.correlationId) },
+      {
+        ...modelIdEvidence(input.modelId),
+        surface: input.surface,
+        plannedContextWindow: planned,
+        contextWindow: adopted,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }

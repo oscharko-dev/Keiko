@@ -414,7 +414,7 @@ export function isInFlight(status: SendStatus): boolean {
 // conversation exceeded the model's context window. Exported so the test can
 // pin the exact string without duplicating it.
 export const CONTEXT_OVERSIZED_USER_MESSAGE =
-  "The conversation context exceeded the model's window. Open a new chat or pick a larger-context model.";
+  "The request does not fit the model's context window. Keiko adopts the window the provider reports automatically and compacts the history on the next send.";
 export const GROUNDED_ATTACHMENT_NOTICE =
   "Attachments are not supported for grounded chats. Remove the attachment or switch to a non-grounded chat.";
 // KEIKO-0793: the voice "admit-and-drop" case (executeSendAttempt's grounded branch, when a
@@ -461,9 +461,18 @@ function isEmptyModelResponseError(error: unknown): boolean {
   return EMPTY_MODEL_RESPONSE_PHRASES.some((phrase) => text.includes(phrase));
 }
 
+function contextOversizedMessage(error: unknown): string {
+  const overflow = new ApiError("GATEWAY_CONTEXT_OVERFLOW", CONTEXT_OVERSIZED_USER_MESSAGE, 400);
+  if (error instanceof ApiError && error.correlationId !== undefined) {
+    overflow.correlationId = error.correlationId;
+  }
+  return formatUserError(overflow, CONTEXT_OVERSIZED_USER_MESSAGE);
+}
+
 function errorMessage(error: unknown): string {
-  // AC#3 — context-overflow provider errors map to a single actionable message.
-  if (isContextOversizedError(error)) return CONTEXT_OVERSIZED_USER_MESSAGE;
+  // AC#3 — context-overflow provider errors map to a single actionable message. The trailing code
+  // lets the notice localize it (format-error GATEWAY_ERROR_KEYS) and keeps the support id.
+  if (isContextOversizedError(error)) return contextOversizedMessage(error);
   if (isEmptyModelResponseError(error)) {
     return error instanceof ApiError
       ? `${EMPTY_MODEL_RESPONSE_USER_MESSAGE} (${error.code})`

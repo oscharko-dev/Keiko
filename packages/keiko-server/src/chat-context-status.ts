@@ -1,10 +1,12 @@
 import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ContextCompactionRecord, ContextProfile } from "@oscharko-dev/keiko-contracts";
+import { findConfiguredCapability } from "@oscharko-dev/keiko-model-gateway";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   currentContextProfileForModel,
+  currentGatewayConfig,
   currentRedactionSecrets,
   type UiHandlerDeps,
 } from "./deps.js";
@@ -12,6 +14,7 @@ import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import {
   conversationForGatewayWithCompaction,
   countConversationCheckpointTokens,
+  type ConversationCompactionOutcome,
 } from "./conversation-compaction.js";
 import { captureChatHistory, stampHistoryRevision } from "./chat-history-snapshot.js";
 import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
@@ -72,6 +75,62 @@ function countHistory(
   return { tokens, messages, checkpointUsed, checkpointTokens };
 }
 
+// The send path compacts proactively once the prompt reaches 90 % of the input budget and then
+// targets 70 % (chat-prompt-budget.ts selectGatewayPromptAssembly). The meter applies the same rule,
+// so it reports what the next request will actually carry instead of the raw stored history — a
+// history larger than the window is never shown as 340 % of it (customer report on 1.1.13).
+const AUTOMATIC_COMPACTION_THRESHOLD = 0.9;
+const AUTOMATIC_COMPACTION_TARGET = 0.7;
+
+function assumedWindowField(
+  deps: UiHandlerDeps,
+  modelId: string,
+): Pick<ChatContextStatusWire, "contextWindowAssumed"> {
+  const config = currentGatewayConfig(deps);
+  const capability = config === undefined ? undefined : findConfiguredCapability(config, modelId);
+  return capability?.contextWindowAssumed === true ? { contextWindowAssumed: true } : {};
+}
+
+function checkpointSavings(
+  checkpoint: ContextCompactionRecord | undefined,
+  counted: ReturnType<typeof countHistory>,
+): Pick<ChatContextStatusWire, "compaction"> {
+  if (checkpoint === undefined || !counted.checkpointUsed) return {};
+  return {
+    compaction: {
+      tokensBefore: checkpoint.tokensBefore,
+      tokensAfter: counted.checkpointTokens,
+      tokensSaved: Math.max(0, checkpoint.tokensBefore - counted.checkpointTokens),
+      messagesCompacted: checkpoint.itemsBefore,
+    },
+  };
+}
+
+function pendingCompaction(
+  deps: UiHandlerDeps,
+  chatId: string,
+  profile: ContextProfile,
+  storedTokens: number,
+  correlationId: string | undefined,
+): Pick<ChatContextStatusWire, "pendingCompaction"> {
+  if (storedTokens < profile.effectiveInputBudget * AUTOMATIC_COMPACTION_THRESHOLD) return {};
+  const target = Math.floor(profile.effectiveInputBudget * AUTOMATIC_COMPACTION_TARGET);
+  const outcome = compactionProjection(deps, chatId, profile, target, correlationId);
+  if (outcome === undefined) return {};
+  const tokensAfter = countGatewayPromptTokens(
+    { messages: outcome.messages },
+    profile.tokenAccounting,
+  );
+  if (tokensAfter >= storedTokens) return {};
+  return {
+    pendingCompaction: {
+      tokensBefore: storedTokens,
+      tokensAfter,
+      messagesCompacted: outcome.compaction?.itemsBefore ?? 0,
+    },
+  };
+}
+
 export function readChatContextStatus(
   deps: UiHandlerDeps,
   chatId: string,
@@ -81,25 +140,48 @@ export function readChatContextStatus(
   const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
   const checkpoint = checkpointForProfile(deps, chatId, profile, correlationId);
   const counted = countHistory(deps, chatId, profile, checkpoint);
+  const pending = pendingCompaction(deps, chatId, profile, counted.tokens, correlationId);
   return {
     modelId,
     contextWindowTokens: profile.maxInputTokens,
+    ...assumedWindowField(deps, modelId),
     inputBudgetTokens: profile.effectiveInputBudget,
     reservedOutputTokens: profile.reservedOutputTokens,
     safetyMarginTokens: profile.safetyMarginTokens,
-    estimatedInputTokens: counted.tokens,
+    estimatedInputTokens: pending.pendingCompaction?.tokensAfter ?? counted.tokens,
     canCompact: counted.messages >= 2,
-    ...(checkpoint === undefined || !counted.checkpointUsed
-      ? {}
-      : {
-          compaction: {
-            tokensBefore: checkpoint.tokensBefore,
-            tokensAfter: counted.checkpointTokens,
-            tokensSaved: Math.max(0, checkpoint.tokensBefore - counted.checkpointTokens),
-            messagesCompacted: checkpoint.itemsBefore,
-          },
-        }),
+    ...checkpointSavings(checkpoint, counted),
+    ...pending,
   };
+}
+
+function compactionProjection(
+  deps: UiHandlerDeps,
+  chatId: string,
+  profile: ContextProfile,
+  budget: number,
+  correlationId: string | undefined,
+): ConversationCompactionOutcome | undefined {
+  const snapshot = captureChatHistory(
+    deps.store,
+    chatId,
+    "",
+    profile,
+    currentRedactionSecrets(deps),
+    checkpointForProfile(deps, chatId, profile, correlationId),
+    correlationId === undefined ? {} : { correlationId },
+  );
+  try {
+    return conversationForGatewayWithCompaction(snapshot.history, {
+      contextProfile: profile,
+      effectiveInputBudget: budget,
+      earlierCompaction: snapshot.earlierCompaction,
+      redactionSecrets: currentRedactionSecrets(deps),
+    });
+  } catch (error) {
+    if (error instanceof ContextOverflowError) return undefined;
+    throw error;
+  }
 }
 
 function manualCompactionCandidate(
@@ -119,8 +201,9 @@ function manualCompactionCandidate(
     checkpointForProfile(deps, chatId, profile, correlationId),
     { correlationId },
   );
+  const stored = status.pendingCompaction?.tokensBefore ?? status.estimatedInputTokens;
   const budget = Math.floor(
-    Math.min(profile.effectiveInputBudget, status.estimatedInputTokens) * 0.7,
+    Math.min(profile.effectiveInputBudget, stored) * AUTOMATIC_COMPACTION_TARGET,
   );
   try {
     const outcome = conversationForGatewayWithCompaction(snapshot.history, {
@@ -173,7 +256,11 @@ export function compactChatContext(
   logChatContextManagement(
     "compacted",
     after,
-    Math.max(0, before.estimatedInputTokens - after.estimatedInputTokens),
+    Math.max(
+      0,
+      (before.pendingCompaction?.tokensBefore ?? before.estimatedInputTokens) -
+        after.estimatedInputTokens,
+    ),
     correlationId,
   );
   return after;

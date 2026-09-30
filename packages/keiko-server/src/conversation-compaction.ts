@@ -145,10 +145,70 @@ function selectCompactionOutcome(
     if (refitted !== undefined) return refitted;
   }
   const selection = selectCompaction(prepared, system, { ...budget, allowTrimming: true });
-  if (selection === undefined) {
-    return undefined;
+  if (selection !== undefined) {
+    return buildCompactedOutcome(prepared, system, selection, tokenAccounting, earlier);
   }
-  return buildCompactedOutcome(prepared, system, selection, tokenAccounting, earlier);
+  return selectWithShortenedNewestTurn(prepared, system, budget);
+}
+
+// The newest retained turn — always kept verbatim — can be larger than the whole budget (one answer
+// longer than the model's window, or a history carried over to a smaller model). Refusing the next
+// request would make the chat unusable, so that turn is kept as a head-and-tail excerpt of half the
+// budget and the older turns are compacted around it (customer report on 1.1.13: 340 % context).
+const SHORTENED_TURN_BUDGET_SHARE = 0.5;
+const SHORTENED_TURN_MARKER =
+  "\n\n[… Keiko shortened this earlier message to fit the model's context window …]\n\n";
+
+function selectWithShortenedNewestTurn(
+  prepared: readonly DroppedTurn[],
+  system: GatewayConversationMessage | undefined,
+  budget: Omit<CompactionCandidateBudget, "systemContent"> & {
+    readonly preserveNewestTurn: boolean;
+  },
+): ConversationCompactionOutcome | undefined {
+  const newest = prepared.at(-1);
+  if (newest === undefined) return undefined;
+  const target = Math.floor(budget.effectiveInputBudget * SHORTENED_TURN_BUDGET_SHARE);
+  if (newest.gatewayTokens <= target) return undefined;
+  const shortened = [...prepared.slice(0, -1), shortenTurn(newest, target, budget.tokenAccounting)];
+  if (shortened.length === 1) {
+    const messages = buildVerbatimMessages(system, shortened);
+    return countGatewayPromptTokens({ messages }, budget.tokenAccounting) <=
+      budget.effectiveInputBudget
+      ? { messages, compaction: budget.earlier }
+      : undefined;
+  }
+  const selection = selectCompaction(shortened, system, { ...budget, allowTrimming: true });
+  return selection === undefined
+    ? undefined
+    : buildCompactedOutcome(shortened, system, selection, budget.tokenAccounting, budget.earlier);
+}
+
+// Longest head (two thirds) and tail (one third) excerpt whose turn fits `targetTokens`, found by
+// binary search over the kept character count. Deterministic: the same turn and budget always
+// yield the same excerpt, so a retried request sends the identical prompt.
+function shortenTurn(
+  turn: DroppedTurn,
+  targetTokens: number,
+  accounting: ContextTokenAccounting | undefined,
+): DroppedTurn {
+  const excerpt = (kept: number): string => {
+    const head = Math.ceil((kept * 2) / 3);
+    return `${turn.content.slice(0, head)}${SHORTENED_TURN_MARKER}${turn.content.slice(
+      turn.content.length - (kept - head),
+    )}`;
+  };
+  const tokensOf = (content: string): number =>
+    countGatewayPromptTokens({ messages: [{ role: turn.role, content }] }, accounting);
+  let low = 0;
+  let high = turn.content.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (tokensOf(excerpt(mid)) <= targetTokens) low = mid;
+    else high = mid - 1;
+  }
+  const content = excerpt(low);
+  return { ...turn, content, gatewayTokens: tokensOf(content) };
 }
 
 function buildInitialMessages(

@@ -22,6 +22,10 @@ export const DE_MESSAGES = {
   "chat.context.compact": "Kontext jetzt kompaktieren",
   "chat.context.compacting": "Kontext wird kompaktiert…",
   "chat.context.wait": "Nach Abschluss der aktuellen Antwort verfügbar.",
+  "chat.context.windowAssumed":
+    "Das Gateway meldet für dieses Modell kein Kontextfenster. Keiko plant mit dem angenommenen Wert und übernimmt das tatsächliche Fenster automatisch, sobald der Anbieter es meldet.",
+  "chat.context.pending":
+    "Der gespeicherte Verlauf ({before} Tokens) wird beim nächsten Senden automatisch auf etwa {after} Tokens kompaktiert.",
   "app.skipToContent": "Zum Inhalt springen",
   "app.workspaceHeading": "Keiko-Arbeitsbereich",
   "header.tileAll": "Alle Fenster kacheln",
@@ -598,6 +602,11 @@ export const DE_MESSAGES = {
     "Das Modell hat sein gesamtes Ausgabebudget verbraucht, bevor eine Antwort entstand – meist durch Reasoning. Lass das Gateway ein größeres max_output_tokens für dieses Modell melden oder wähle ein Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
   "chat.error.gatewayOutputExhausted.remediation":
     "Erhöhe in den Einstellungen die maximalen Ausgabe-Tokens des Modells oder wechsle zu einem Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
+  "chat.error.contextOverflow.title": "Anfrage größer als das Kontextfenster",
+  "chat.error.contextOverflow.message":
+    "Die Anfrage passt nicht in das Kontextfenster des Modells. Keiko übernimmt das vom Anbieter gemeldete Fenster automatisch und kompaktiert den Verlauf beim nächsten Senden.",
+  "chat.error.contextOverflow.remediation":
+    "Sende die Nachricht erneut. Ist die Nachricht selbst zu lang, kürze sie oder wähle ein Modell mit größerem Kontextfenster.",
   "chat.keikoLogo": "Keiko-Logo",
   "chat.keikoResponding": "Keiko antwortet",
   "chat.copy.copiedStatus": "Antwort kopiert",
@@ -750,6 +759,14 @@ export const DE_MESSAGES = {
   "chat.grounding.unavailable": "{label} (nicht verfügbar)",
   "chat.grounding.catalogLoading": "Verfügbare Knowledge Pods werden aktualisiert…",
   "chat.grounding.catalogEmpty": "Keine bereiten Knowledge Pods oder Pod Sets sind verfügbar.",
+  "chat.grounding.catalogRetry": "Erneut versuchen",
+  "chat.grounding.withState": "{label} ({state})",
+  "chat.grounding.state.draft": "nicht indexiert",
+  "chat.grounding.state.indexing": "wird indexiert",
+  "chat.grounding.state.ready": "indexiert",
+  "chat.grounding.state.stale": "veraltet",
+  "chat.grounding.state.deleting": "wird gelöscht",
+  "chat.grounding.state.error": "Fehler",
   "chat.grounding.sourceLimit":
     "Quellenlimit erreicht — dieser Chat hat bereits {connectedCount} von {cap} verbundenen Quellen. Trenne eine Quelle, bevor du eine weitere verbindest.",
   "chat.grounding.readyChatRequired":
@@ -1110,6 +1127,57 @@ export const DE_MESSAGES = {
   "memoria.healthScan.kind.staleNotArchived": "Veraltet, nicht archiviert",
   "memoria.healthScan.kind.danglingReviewItem": "Hängender Review-Eintrag",
   "chat.grounded.cancel": "Grounded-Anfrage abbrechen",
+  "grounded.reviewBadge": "Bitte prüfen",
+  "grounded.partialCoverage": "Teilweise abgedeckt",
+  "grounded.loading": "Verbundene Quellen werden durchsucht und Keiko wird gefragt …",
+  "grounded.title.evidence": "Evidenz",
+  "grounded.title.knowledge": "Knowledge-Evidenz",
+  "grounded.title.grounding": "Grounding-Evidenz",
+  "grounded.citations.evidenceAria": "Evidenz-Quellenangaben",
+  "grounded.citations.knowledge": "Knowledge-Quellenangaben",
+  "grounded.citations.showAll": "Alle {count} Quellenangaben anzeigen",
+  "grounded.citations.showFewer": "Weniger Quellenangaben anzeigen",
+  "grounded.summary.connected.one":
+    "{count} Quellenangabe · {read} / {max} Dateien gelesen{omitted}",
+  "grounded.summary.connected.other":
+    "{count} Quellenangaben · {read} / {max} Dateien gelesen{omitted}",
+  "grounded.summary.notUsed": " · {count} nicht verwendet",
+  "grounded.summary.knowledge.one": "{count} Quellenangabe · {used} / {budget} Referenzen",
+  "grounded.summary.knowledge.other": "{count} Quellenangaben · {used} / {budget} Referenzen",
+  "grounded.summary.hybrid.file.one": "{count} Datei-Quellenangabe",
+  "grounded.summary.hybrid.file.other": "{count} Datei-Quellenangaben",
+  "grounded.summary.hybrid.knowledge.one": "{count} Knowledge-Quellenangabe",
+  "grounded.summary.hybrid.knowledge.other": "{count} Knowledge-Quellenangaben",
+  "grounded.warning.noEvidence":
+    "Es wurde keine stützende Evidenz gefunden — diese Antwort ist nicht belegt.",
+  "grounded.warning.rerankerUnavailable":
+    "Ranking: Reranker nicht verfügbar — es wird die zusammengeführte Suchreihenfolge angezeigt.",
+  "grounded.count.unsupportedCitation.one": "{count} nicht belegte Quellenangabe",
+  "grounded.count.unsupportedCitation.other": "{count} nicht belegte Quellenangaben",
+  "grounded.count.unsupportedClaim.one": "{count} nicht gestützte Aussage",
+  "grounded.count.unsupportedClaim.other": "{count} nicht gestützte Aussagen",
+  "grounded.detail.unsupportedCitation":
+    "die Antwort verweist auf Quellen, die nicht in der abgerufenen Evidenz enthalten waren.",
+  "grounded.detail.unsupportedClaim":
+    "die Antwort behauptet etwas, das die zitierte Quelle nicht stützt.",
+  "grounded.detail.uncitedAnswer":
+    "Diese Antwort enthält Aussagen ohne Quellenangabe, die sich keiner Quelle zuordnen lassen.",
+  "grounded.detail.entailmentUnavailable":
+    "Die Quellenbelege konnten für einen Teil dieser Antwort nicht geprüft werden.",
+  "grounded.detail.incomplete":
+    "Die Antwort wurde vor dem Ende abgebrochen und ist möglicherweise unvollständig.",
+  "grounded.uncertainty.summary": "Unsicherheit ({count}) — {kinds}",
+  "grounded.uncertainty.kind.noEvidence": "keine Evidenz",
+  "grounded.uncertainty.kind.staleEvidence": "veraltete Evidenz",
+  "grounded.uncertainty.kind.scopeIncomplete": "Umfang unvollständig",
+  "grounded.uncertainty.kind.budgetClipped": "Budget gekürzt",
+  "grounded.uncertainty.kind.toolUnavailable": "Werkzeug nicht verfügbar",
+  "grounded.uncertainty.kind.lowConfidence": "geringe Sicherheit",
+  "grounded.uncertainty.kind.unsupportedCitation": "nicht belegte Quellenangabe",
+  "grounded.uncertainty.kind.uncitedAnswer": "Antwort ohne Quellenangabe",
+  "grounded.uncertainty.kind.incompleteAnswer": "unvollständige Antwort",
+  "grounded.uncertainty.kind.unsupportedClaim": "nicht gestützte Aussage",
+  "grounded.uncertainty.kind.entailmentUnavailable": "Belegprüfung nicht verfügbar",
   "attachment.rejection.textOnly":
     "Das ausgewählte Modell kann diesen Anhangstyp nicht verarbeiten. Wähle ein Modell mit Bild- oder Dokumentunterstützung.",
   "attachment.rejection.unsupported":

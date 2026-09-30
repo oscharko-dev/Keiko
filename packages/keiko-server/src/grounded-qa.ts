@@ -1,3 +1,4 @@
+import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 import { logChatResponseMessage } from "./chat-activity.js";
 import {
@@ -25,6 +26,7 @@ import {
   resolveCostClass,
   type ChatMessage as GatewayChatMessage,
   type ModelCapability,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
@@ -986,29 +988,40 @@ export function buildGroundedGatewayMessages(
 }
 
 function createGatewayAnswerer(
+  deps: UiHandlerDeps,
   model: ModelPort,
   modelId: string,
-  redactor: Redactor,
   signal: AbortSignal,
-  modelInputTokensMax: number | undefined,
   correlationId: string | undefined,
   tokenAccounting: ContextProfile["tokenAccounting"],
 ): GroundedAnswerer {
+  // The input budget is read per attempt, not captured once: when the provider's overflow answer
+  // taught Keiko the model's real window, the retry re-budgets the excerpts to fit it.
+  const call = (question: string, pack: ConnectedContextPack): Promise<NormalizedResponse> => {
+    const modelInputTokensMax = groundedPromptInputTokensForCapability(
+      chatCapability(deps, modelId),
+    );
+    const promptOptions = {
+      ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
+      ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
+    };
+    return model.call(
+      {
+        modelId,
+        messages: buildGroundedGatewayMessages(question, pack, deps.redactor, promptOptions),
+        stream: false,
+        logContext: { correlationId },
+      },
+      signal,
+    );
+  };
   return {
     answer: async (question, pack): Promise<GroundedAnswerResult> => {
       ensureNotCancelled(signal);
-      const promptOptions = {
-        ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
-        ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
-      };
-      const response = await model.call(
-        {
-          modelId,
-          messages: buildGroundedGatewayMessages(question, pack, redactor, promptOptions),
-          stream: false,
-          logContext: { correlationId },
-        },
-        signal,
+      const response = await withAdoptedContextWindowRetry(
+        deps,
+        { modelId, surface: "grounded", correlationId },
+        () => call(question, pack),
       );
       const content = response.content.trim();
       assertUsableAssistantContent(content, modelId);
@@ -1044,7 +1057,6 @@ interface DefaultRunnerContext {
   readonly signal: AbortSignal;
   readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly model: ModelPort;
-  readonly modelInputTokensMax: number | undefined;
   readonly entailmentStage: EntailmentStage | undefined;
   readonly correlationId: string | undefined;
 }
@@ -1055,8 +1067,7 @@ function runDefaultGroundedExploration(
   runnerCtx: DefaultRunnerContext,
   input: OrchestratorInput,
 ): Promise<OrchestratorOutput> {
-  const { deps, modelId, signal, contextProfile, model, modelInputTokensMax, entailmentStage } =
-    runnerCtx;
+  const { deps, modelId, signal, contextProfile, model, entailmentStage } = runnerCtx;
   const nowMs = Date.now;
   const budgetedInput =
     input.budget === undefined
@@ -1070,11 +1081,10 @@ function runDefaultGroundedExploration(
   );
   return runGroundedExploration(budgetedInput, {
     answerer: createGatewayAnswerer(
+      deps,
       model,
       modelId,
-      deps.redactor,
       signal,
-      modelInputTokensMax,
       runnerCtx.correlationId,
       contextProfile?.tokenAccounting,
     ),
@@ -1109,7 +1119,6 @@ function defaultRunner(
 ): GroundedRunner | RouteResult {
   const model = resolveGroundedAnswerModel(deps, modelId, readinessAdmission);
   if ("status" in model) return model;
-  const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   // Knowledge M1.2 (#2563): the folder grounded-ask has no knowledge capsule, so entailment is
   // governed only by whether a compatible judge model is configured (empty capsules ⇒ no policy to
   // deny). Undefined ⇒ the stage is inert and the assembled pack is byte-identical to today.
@@ -1126,7 +1135,6 @@ function defaultRunner(
     signal,
     contextProfile,
     model,
-    modelInputTokensMax,
     entailmentStage,
     correlationId,
   };

@@ -20,6 +20,10 @@ export const EN_MESSAGES = {
   "chat.context.compact": "Compact context now",
   "chat.context.compacting": "Compacting context…",
   "chat.context.wait": "Available after the current response finishes.",
+  "chat.context.windowAssumed":
+    "The gateway declares no context window for this model. Keiko plans with the assumed value and adopts the real window automatically as soon as the provider states it.",
+  "chat.context.pending":
+    "The stored history ({before} tokens) is compacted automatically to about {after} tokens before the next request.",
 
   "app.skipToContent": "Skip to content",
   "app.workspaceHeading": "Keiko workspace",
@@ -582,6 +586,11 @@ export const EN_MESSAGES = {
     "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.",
   "chat.error.gatewayOutputExhausted.remediation":
     "Raise the model's max output tokens in Settings, or switch to a model with a smaller reasoning share, then retry.",
+  "chat.error.contextOverflow.title": "Request larger than the context window",
+  "chat.error.contextOverflow.message":
+    "The request does not fit the model's context window. Keiko adopts the window the provider reports automatically and compacts the history on the next send.",
+  "chat.error.contextOverflow.remediation":
+    "Send the message again. If the message itself is too long, shorten it or choose a model with a larger context window.",
   "chat.keikoLogo": "Keiko logo",
   "chat.keikoResponding": "Keiko is responding",
   "chat.copy.copiedStatus": "Answer copied",
@@ -729,6 +738,14 @@ export const EN_MESSAGES = {
   "chat.grounding.unavailable": "{label} (unavailable)",
   "chat.grounding.catalogLoading": "Refreshing available Knowledge Pods…",
   "chat.grounding.catalogEmpty": "No ready Knowledge Pods or Pod Sets are available.",
+  "chat.grounding.catalogRetry": "Try again",
+  "chat.grounding.withState": "{label} ({state})",
+  "chat.grounding.state.draft": "not indexed",
+  "chat.grounding.state.indexing": "indexing",
+  "chat.grounding.state.ready": "indexed",
+  "chat.grounding.state.stale": "stale",
+  "chat.grounding.state.deleting": "deleting",
+  "chat.grounding.state.error": "failed",
   "chat.grounding.sourceLimit":
     "Source limit reached — this chat already has {connectedCount} of {cap} connected sources. Disconnect a source before connecting another.",
   "chat.grounding.readyChatRequired": "Open a ready chat window before connecting a source.",
@@ -1082,6 +1099,53 @@ export const EN_MESSAGES = {
   "memoria.healthScan.kind.staleNotArchived": "Stale, not archived",
   "memoria.healthScan.kind.danglingReviewItem": "Dangling review item",
   "chat.grounded.cancel": "Cancel grounded request",
+  "grounded.reviewBadge": "Needs review",
+  "grounded.partialCoverage": "Partial coverage",
+  "grounded.loading": "Searching connected sources and asking Keiko…",
+  "grounded.title.evidence": "Evidence",
+  "grounded.title.knowledge": "Knowledge evidence",
+  "grounded.title.grounding": "Grounding evidence",
+  "grounded.citations.evidenceAria": "Evidence citations",
+  "grounded.citations.knowledge": "Knowledge citations",
+  "grounded.citations.showAll": "Show all {count} citations",
+  "grounded.citations.showFewer": "Show fewer citations",
+  "grounded.summary.connected.one": "{count} citation · {read} / {max} files read{omitted}",
+  "grounded.summary.connected.other": "{count} citations · {read} / {max} files read{omitted}",
+  "grounded.summary.notUsed": " · {count} not used",
+  "grounded.summary.knowledge.one": "{count} citation · {used} / {budget} references",
+  "grounded.summary.knowledge.other": "{count} citations · {used} / {budget} references",
+  "grounded.summary.hybrid.file.one": "{count} file citation",
+  "grounded.summary.hybrid.file.other": "{count} file citations",
+  "grounded.summary.hybrid.knowledge.one": "{count} knowledge citation",
+  "grounded.summary.hybrid.knowledge.other": "{count} knowledge citations",
+  "grounded.warning.noEvidence": "No supporting evidence was found — this answer is not grounded.",
+  "grounded.warning.rerankerUnavailable":
+    "Ranking: reranker unavailable — showing fused retrieval order.",
+  "grounded.count.unsupportedCitation.one": "{count} unsupported citation",
+  "grounded.count.unsupportedCitation.other": "{count} unsupported citations",
+  "grounded.count.unsupportedClaim.one": "{count} unsupported claim",
+  "grounded.count.unsupportedClaim.other": "{count} unsupported claims",
+  "grounded.detail.unsupportedCitation":
+    "the answer references sources that were not in the retrieved evidence.",
+  "grounded.detail.unsupportedClaim":
+    "the answer states something its cited source does not support.",
+  "grounded.detail.uncitedAnswer":
+    "This answer contains statements without an inline citation, so they cannot be traced to a source.",
+  "grounded.detail.entailmentUnavailable":
+    "Citation support could not be verified for part of this answer.",
+  "grounded.detail.incomplete": "The answer was cut off before completion and may be partial.",
+  "grounded.uncertainty.summary": "Uncertainty ({count} markers — {kinds})",
+  "grounded.uncertainty.kind.noEvidence": "no evidence",
+  "grounded.uncertainty.kind.staleEvidence": "stale evidence",
+  "grounded.uncertainty.kind.scopeIncomplete": "scope incomplete",
+  "grounded.uncertainty.kind.budgetClipped": "budget clipped",
+  "grounded.uncertainty.kind.toolUnavailable": "tool unavailable",
+  "grounded.uncertainty.kind.lowConfidence": "low confidence",
+  "grounded.uncertainty.kind.unsupportedCitation": "unsupported citation",
+  "grounded.uncertainty.kind.uncitedAnswer": "uncited answer",
+  "grounded.uncertainty.kind.incompleteAnswer": "incomplete answer",
+  "grounded.uncertainty.kind.unsupportedClaim": "unsupported claim",
+  "grounded.uncertainty.kind.entailmentUnavailable": "entailment unavailable",
   "attachment.rejection.textOnly":
     "The selected model can't accept this attachment type. Choose a model that supports images or documents.",
   "attachment.rejection.unsupported":

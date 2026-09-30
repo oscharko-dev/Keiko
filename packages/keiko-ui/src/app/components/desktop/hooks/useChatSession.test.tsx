@@ -2,6 +2,7 @@ import { act, render, renderHook, screen, waitFor } from "@testing-library/react
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { toUserErrorNotice } from "../format-error";
 import type {
   Chat,
   ChatGitChangeScope,
@@ -2570,7 +2571,13 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
       await result.current.sendMessage({ text: "summarise the retained conversation" });
     });
 
-    expect(result.current.error).toBe(CONTEXT_OVERSIZED_USER_MESSAGE);
+    // The single actionable message now carries its code, so the notice localizes it (1.1.13).
+    expect(result.current.error).toBe(
+      `${CONTEXT_OVERSIZED_USER_MESSAGE} (GATEWAY_CONTEXT_OVERFLOW)`,
+    );
+    expect(toUserErrorNotice(result.current.error, "fallback").title).toBe(
+      "Request larger than the context window",
+    );
   });
 
   it("prefers the explicit text and preserves the user's typed draft", async () => {

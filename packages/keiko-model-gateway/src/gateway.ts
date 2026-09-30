@@ -950,12 +950,7 @@ export class Gateway {
         { sink: this.log, modelId: route.provider.modelId, correlationId: ids.correlationId },
       );
     } catch (error) {
-      // RB-6: stamp the gateway request id onto the thrown error so a FAILED buffered call is
-      // traceable to the gateway record (previously requestId was attached only on success/usage).
-      attachGatewayRequestId(error, requestId);
-      this.logCallFailed(ids, route, elapsed(), error);
-      this.reportContextWindow(route, ids, error);
-      throw error;
+      this.failCall(ids, route, elapsed(), error);
     }
     this.logCallCompleted(ids, route, result, elapsed());
     return {
@@ -1158,6 +1153,15 @@ export class Gateway {
   ): never {
     attachGatewayRequestId(error, ids.requestId);
     this.logStreamFailed(ids, route, chunkCount, durationMs, error);
+    this.reportContextWindow(route, ids, error);
+    throw error;
+  }
+
+  // RB-6: stamp the gateway request id onto the thrown error so a FAILED buffered call is traceable
+  // to the gateway record (previously requestId was attached only on success/usage).
+  private failCall(ids: CallIds, route: RoutedCall, durationMs: number, error: unknown): never {
+    attachGatewayRequestId(error, ids.requestId);
+    this.logCallFailed(ids, route, durationMs, error);
     this.reportContextWindow(route, ids, error);
     throw error;
   }

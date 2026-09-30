@@ -442,6 +442,11 @@ export interface ChatsResponse {
 export interface ChatContextStatusWire {
   readonly modelId: string;
   readonly contextWindowTokens: number;
+  /**
+   * The gateway declared no window for this model and Keiko has not measured it yet, so the window
+   * above is the planning assumption, replaced automatically once the provider states its window.
+   */
+  readonly contextWindowAssumed?: boolean | undefined;
   readonly inputBudgetTokens: number;
   readonly reservedOutputTokens: number;
   readonly safetyMarginTokens: number;
@@ -452,6 +457,18 @@ export interface ChatContextStatusWire {
         readonly tokensBefore: number;
         readonly tokensAfter: number;
         readonly tokensSaved: number;
+        readonly messagesCompacted: number;
+      }
+    | undefined;
+  /**
+   * The stored history has reached the automatic-compaction threshold: the next request compacts it
+   * to `tokensAfter` before sending. `estimatedInputTokens` already reports that projection, so the
+   * meter shows what the next request carries, never the raw stored history.
+   */
+  readonly pendingCompaction?:
+    | {
+        readonly tokensBefore: number;
+        readonly tokensAfter: number;
         readonly messagesCompacted: number;
       }
     | undefined;

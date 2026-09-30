@@ -52,6 +52,17 @@ function ContextMetrics({ status }: { readonly status: ChatContextStatusWire }):
           })}
         </p>
       )}
+      {status.pendingCompaction === undefined ? null : (
+        <p className={styles.cmpSavings}>
+          {t("chat.context.pending", {
+            before: number(status.pendingCompaction.tokensBefore),
+            after: number(status.pendingCompaction.tokensAfter),
+          })}
+        </p>
+      )}
+      {status.contextWindowAssumed === true ? (
+        <p className={styles.cmpHelp}>{t("chat.context.windowAssumed")}</p>
+      ) : null}
     </>
   );
 }

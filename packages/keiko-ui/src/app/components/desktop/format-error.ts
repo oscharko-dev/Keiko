@@ -151,6 +151,17 @@ const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
     message: "chat.error.gatewayOutputExhausted.message",
     remediation: "chat.error.gatewayOutputExhausted.remediation",
   },
+  // A typed BFF overflow and a raw provider overflow share one localized notice (Issue #151 AC#3).
+  GATEWAY_CONTEXT_OVERFLOW: {
+    title: "chat.error.contextOverflow.title",
+    message: "chat.error.contextOverflow.message",
+    remediation: "chat.error.contextOverflow.remediation",
+  },
+  CONVERSATION_OVERSIZED_CONTEXT: {
+    title: "chat.error.contextOverflow.title",
+    message: "chat.error.contextOverflow.message",
+    remediation: "chat.error.contextOverflow.remediation",
+  },
 };
 
 // This module is not a component, so it cannot take the translate hook; it resolves the selected
@@ -248,7 +259,7 @@ export function toUserErrorNotice(error: unknown, fallback: string): UserErrorNo
   const formatted = parseFormattedMessage(withoutSupportId.message);
   return {
     title: titleForError(formatted.message, formatted.code),
-    message: formatted.message,
+    message: gatewayErrorText(formatted.code, "message") ?? formatted.message,
     code: formatted.code,
     remediation: remediationForError(formatted.message, formatted.code),
     correlationId: withoutSupportId.correlationId,

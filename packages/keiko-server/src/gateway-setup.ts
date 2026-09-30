@@ -2,6 +2,7 @@ import {
   logAliasIntersection,
   logRerankerSetupResolution,
   type DiscoveryAliasRole,
+  type RerankerSetupResolution,
 } from "./gateway-discovery-log.js";
 import { gatewaySpendBudgetForEnv, reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 // First-run gateway setup for non-technical UI users. The browser provides a base URL, API token,
@@ -84,6 +85,7 @@ import type {
   ModelProviderConfig,
   OpenAIEmbeddingOutcome,
   ParseGatewayConfigOptions,
+  RerankerConfig,
   VoicePersonaVoice,
   VoiceProviderLocality,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -2572,6 +2574,9 @@ function gatewayEmbeddingProbe(
 // must not hold the setup response for the adapter's multi-minute retrieval floor. The caller
 // signal is what bounds it (the adapter takes the SHORTER of its own deadline and the signal).
 const RERANKER_SETUP_PROBE_DEADLINE_MS = 30_000;
+// The reranker block's own default when the request states no provider timeout (the config parser
+// applies the same value to a stored block that omits it).
+const DEFAULT_RERANKER_TIMEOUT_MS = 120_000;
 
 // The same two-document probe gateway readiness runs, over the request's own dependencies: the
 // egress policy, spend guard and activity-log line all apply to a discovered engine exactly as
@@ -2590,7 +2595,8 @@ function gatewayRerankerProbe(
         signal: AbortSignal.timeout(RERANKER_SETUP_PROBE_DEADLINE_MS),
       });
       return rerankerProbePassed(selection);
-    } catch {
+    } catch (error) {
+      reportSetupVerificationFailure(deps, error, correlationId, "gateway.setup.reranker-probe");
       return false;
     }
   };
@@ -4939,6 +4945,7 @@ function reportSetupVerificationFailure(
     | "gateway.setup.figma-verify"
     | "gateway.setup.provider-verify"
     | "gateway.setup.tool-calling-probe"
+    | "gateway.setup.reranker-probe"
     | "gateway.setup.chat-smoke-probe",
 ): void {
   emitServerDiagnostic(
@@ -5203,7 +5210,7 @@ function finalRawConfigForSetup(
   imageInputModelIds: readonly string[],
   responseFormatModelIds: readonly string[],
   modelMetadata: Readonly<Record<string, GatewayDiscoveredModelMetadata>>,
-  discoveredVoiceModels: SetupCandidateModels,
+  admittedModels: SetupCandidateModels,
 ): Record<string, unknown> {
   const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, embeddingModelIds);
   const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
@@ -5227,6 +5234,7 @@ function finalRawConfigForSetup(
     // capability was updated (review finding on #3031).
     ...(input.current?.grounding === undefined ? {} : { grounding: input.current.grounding }),
     ...(input.current?.reranker === undefined ? {} : { reranker: input.current.reranker }),
+    ...discoveredRerankerBlock(input, admittedModels),
     ...(input.current?.egress === undefined ? {} : { egress: input.current.egress }),
     ...(input.figmaAccessToken === undefined
       ? {}
@@ -5235,7 +5243,7 @@ function finalRawConfigForSetup(
   // Verbatim restoration reads the DURABLE stored view: restored values are what the FILE
   // holds, so a transient per-model env override neither hides a sharing relationship nor gets
   // baked into the rebuilt persisted config (review finding on #3037).
-  const voiceProviders = discoveredVoiceProvidersForSetup(input, discoveredVoiceModels);
+  const voiceProviders = discoveredVoiceProvidersForSetup(input, admittedModels);
   return applyStoredDedicatedProviders(
     applyVoiceProviders(rawConfigWithOptionalBlocks, voiceProviders),
     input.stored,
@@ -5248,6 +5256,19 @@ function finalRawConfigForSetup(
       apiVersion: input.apiVersion,
     },
   );
+}
+
+// The engine that passed its live probe is wired as the retrieval reranker on the verified setup
+// connection — nothing a stored, current or operator-supplied reranker already says is overridden.
+// The plaintext key here is sealed into the credential vault by the same persistence step that
+// seals every provider key; it never reaches the file or the response.
+function discoveredRerankerBlock(
+  input: SetupVerificationInput,
+  admittedModels: SetupCandidateModels,
+): { readonly reranker?: Record<string, unknown> } {
+  const modelId = admittedModels.rerankModelIds?.[0];
+  if (modelId === undefined || reconfigurationOwnsReranker(input)) return {};
+  return { reranker: discoveredRerankerBlockFor(input, modelId) };
 }
 
 function discoveredVoiceProvidersForSetup(
@@ -5738,6 +5759,92 @@ async function admitEmbeddingCandidates(
   };
 }
 
+// A discovered rerank engine becomes the retrieval reranker only when nobody owns one and a live
+// two-document probe answers — the same gate embedding candidates pass. A model the gateway DECLARED
+// as `rerank` is still verified: a declaration says what the model is, not that its route works.
+// Probing is bounded (a handful of candidates, sequentially, in discovery order) so a gateway that
+// lists many rerank aliases cannot stretch setup, and the first engine that ranks wins.
+const MAX_RERANKER_PROBES = 3;
+
+interface RerankerAdmission {
+  /** The engine admitted as the retrieval reranker; absent when none was wired. */
+  readonly admittedModelId?: string;
+  /** Present whenever discovery found a rerank engine; drives the one body-free activity line. */
+  readonly resolution?: RerankerSetupResolution;
+}
+
+// Stored or current: either view means an operator (or an earlier setup) already chose a reranker,
+// and a discovered engine must never displace that choice.
+function reconfigurationOwnsReranker(input: SetupVerificationInput): boolean {
+  return input.current?.reranker !== undefined || input.stored?.reranker !== undefined;
+}
+
+// The reranker block a discovered engine persists: the verified setup connection, nothing else.
+function discoveredRerankerBlockFor(
+  input: SetupVerificationInput,
+  modelId: string,
+): Omit<RerankerConfig, "egress"> {
+  return {
+    modelId,
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    apiKeyHeaderName: input.apiKeyHeaderName,
+    timeoutMs: input.timeoutMs ?? DEFAULT_RERANKER_TIMEOUT_MS,
+  };
+}
+
+function candidateRerankerConfig(input: SetupVerificationInput, modelId: string): RerankerConfig {
+  return {
+    ...discoveredRerankerBlockFor(input, modelId),
+    ...(input.egress === undefined ? {} : { egress: input.egress }),
+  };
+}
+
+async function admitRerankerCandidates(
+  input: SetupVerificationInput,
+  validationConfig: GatewayConfig,
+  candidates: readonly string[],
+): Promise<RerankerAdmission> {
+  const candidateCount = candidates.length;
+  if (candidateCount === 0) return {};
+  if (reconfigurationOwnsReranker(input)) {
+    return { resolution: { outcome: "kept-existing", candidateCount, probedCount: 0 } };
+  }
+  let probedCount = 0;
+  for (const modelId of candidates.slice(0, MAX_RERANKER_PROBES)) {
+    probedCount += 1;
+    const answered = await input.rerankerProbe({
+      ...validationConfig,
+      reranker: candidateRerankerConfig(input, modelId),
+    });
+    if (answered) {
+      return {
+        admittedModelId: modelId,
+        resolution: { outcome: "wired", wiredModelId: modelId, candidateCount, probedCount },
+      };
+    }
+  }
+  return { resolution: { outcome: "probe-failed", candidateCount, probedCount } };
+}
+
+// The admitted view of the candidates: only the engine that passed its probe stays a rerank model,
+// and it leaves the "unsupported" report — the operator sees what Keiko did NOT configure.
+function withRerankerAdmission(
+  candidateModels: SetupCandidateModels,
+  admission: RerankerAdmission,
+): SetupCandidateModels {
+  const { admittedModelId } = admission;
+  const { unsupportedModels, ...admitted } = candidateModels;
+  const stillUnsupported = (unsupportedModels ?? []).filter(
+    (entry) => entry.id !== admittedModelId,
+  );
+  return {
+    ...admitted,
+    rerankModelIds: admittedModelId === undefined ? [] : [admittedModelId],
+    ...(stillUnsupported.length === 0 ? {} : { unsupportedModels: stillUnsupported }),
+  };
+}
+
 // Body-free counterpart to reportDiscoveryTruncation: counts and reason codes only, never a model
 // id or an endpoint. Ids belong in the setup RESPONSE, which the operator sees; the diagnostic
 // channel stays free of gateway inventory.
@@ -5838,7 +5945,6 @@ async function admitChatCandidatesOrDefer(
     throw new DeferredTemporaryChatAdmission(error, () =>
       verifiedSetupFromChatAdmission(
         input,
-        candidateModels,
         admittedModels,
         candidateConfig,
         embeddingAdmission,
@@ -5866,16 +5972,24 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     embeddingProbeConfigFor(input, candidateModels, smokeTimeoutMs, candidateConfig),
     candidateModels.embeddingModelIds,
   );
-  const admittedModels: SetupCandidateModels = {
-    ...candidateModels,
-    embeddingModelIds: embeddingAdmission.admitted,
-  };
+  const rerankerAdmission = await admitRerankerCandidates(
+    input,
+    validationConfig,
+    candidateModels.rerankModelIds ?? [],
+  );
+  if (rerankerAdmission.resolution !== undefined) {
+    logRerankerSetupResolution(rerankerAdmission.resolution, input.correlationId);
+  }
+  const admittedModels = withRerankerAdmission(
+    { ...candidateModels, embeddingModelIds: embeddingAdmission.admitted },
+    rerankerAdmission,
+  );
   // Emitted BEFORE the chat smoke test: the tester throws on an all-rejected gateway, and the
   // record of what discovery refused is most valuable for exactly that failed attempt.
   reportUnusableDiscoveredModels(
     input.diagnostics,
     input.correlationId,
-    candidateModels.unsupportedModels ?? [],
+    admittedModels.unsupportedModels ?? [],
     embeddingAdmission,
   );
   const chatAdmission = await admitChatCandidatesOrDefer(
@@ -5888,7 +6002,6 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   reportChatSmokeAdmission(input.diagnostics, input.correlationId, chatAdmission);
   return verifiedSetupFromChatAdmission(
     input,
-    candidateModels,
     admittedModels,
     candidateConfig,
     embeddingAdmission,
@@ -5898,7 +6011,6 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
 
 function verifiedSetupFromChatAdmission(
   input: SetupVerificationInput,
-  candidateModels: SetupCandidateModels,
   admittedModels: SetupCandidateModels,
   candidateConfig: GatewayConfig,
   embeddingAdmission: EmbeddingAdmission,
@@ -5922,7 +6034,7 @@ function verifiedSetupFromChatAdmission(
     parsedConfig.rawConfig,
     parsedConfig.config,
     testResult,
-    candidateModels,
+    admittedModels,
     embeddingAdmission,
     chatAdmission,
   );
@@ -5932,7 +6044,7 @@ function verifiedSetupResult(
   rawConfig: Record<string, unknown>,
   config: GatewayConfig,
   testResult: GatewaySetupTestResult,
-  candidateModels: SetupCandidateModels,
+  admittedModels: SetupCandidateModels,
   embeddingAdmission: EmbeddingAdmission,
   chatAdmission: ChatAdmission,
 ): VerifiedSetup {
@@ -5941,12 +6053,12 @@ function verifiedSetupResult(
     config,
     testedModelIds: testResult.testedModelIds,
     skippedModelIds: skippedModelIdsForSetup(
-      candidateModels.modelIds,
+      admittedModels.modelIds,
       chatAdmission.configuredModelIds,
       embeddingAdmission.admitted,
     ),
-    ...(candidateModels.unsupportedModels !== undefined
-      ? { unsupportedModels: candidateModels.unsupportedModels }
+    ...(admittedModels.unsupportedModels !== undefined
+      ? { unsupportedModels: admittedModels.unsupportedModels }
       : {}),
     ...(embeddingAdmission.retainedUnverified.length > 0
       ? { unverifiedEmbeddingModelIds: embeddingAdmission.retainedUnverified }
@@ -7308,15 +7420,20 @@ export function reconcileGatewayContextWindowReadiness(
 }
 
 export type AdoptedContextWindowOutcome =
-  | { readonly state: "adopted"; readonly previousContextWindow: number; readonly wasAssumed: boolean }
+  | {
+      readonly state: "adopted";
+      readonly previousContextWindow: number;
+      readonly wasAssumed: boolean;
+    }
   | { readonly state: "unchanged" | "not-chat" | "unconfigured" };
 
 /**
  * Adopts the total context window a provider stated itself — in its overflow answer or in answer to
  * the startup context-window probe. Unlike the long-context probe's lower bound this is the
  * deployment's exact limit, so it replaces the stored window in either direction and ends an
- * assumed one. Persisted like every other verified capability update: the configuration generation
- * advances, so every conversation surface re-plans the model with the real window.
+ * assumed one. It is persisted, then applied as a refinement: the configuration generation stays,
+ * so a turn already admitted (the one whose overflow reported the window) can re-plan and retry,
+ * while every later lookup plans the model with the real window.
  */
 export function persistAdoptedContextWindow(
   deps: UiHandlerDeps,
@@ -7331,21 +7448,41 @@ export function persistAdoptedContextWindow(
   if (stored.contextWindowAssumed !== true && stored.contextWindow === contextWindowTokens) {
     return { state: "unchanged" };
   }
-  const updated = replaceCapabilityContextWindow(reconciliation.current, stored, contextWindowTokens);
-  persistVerifiedCapabilityUpdate(
-    reconciliation.gatewayConfig,
-    deps,
-    modelId,
-    reconciliation.gatewayConfig.generation(),
-    updated,
-    false,
-    correlationId,
+  const updated = replaceCapabilityContextWindow(
+    reconciliation.current,
+    stored,
+    contextWindowTokens,
   );
+  applyContextWindowRefinement(reconciliation.gatewayConfig, deps, modelId, updated, correlationId);
   return {
     state: "adopted",
     previousContextWindow: stored.contextWindow,
     wasAssumed: stored.contextWindowAssumed === true,
   };
+}
+
+function applyContextWindowRefinement(
+  gatewayConfig: RuntimeGatewayConfig,
+  deps: UiHandlerDeps,
+  modelId: string,
+  updated: GatewayConfig,
+  correlationId: string,
+): void {
+  if (gatewayConfig.refine === undefined) {
+    persistVerifiedCapabilityUpdate(
+      gatewayConfig,
+      deps,
+      modelId,
+      gatewayConfig.generation(),
+      updated,
+      false,
+      correlationId,
+    );
+    return;
+  }
+  const raw = rawConfigForVerifiedCapabilityUpdate(updated, gatewayConfig.storagePath, deps);
+  persistGatewayConfig(raw, gatewayConfig.storagePath, deps, correlationId);
+  gatewayConfig.refine(updated, correlationId);
 }
 
 function replaceCapabilityContextWindow(
