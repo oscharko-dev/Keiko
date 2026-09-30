@@ -15,8 +15,8 @@
 //   * A text that carries an inline citation marker is an answer: it cites a source.
 //   * The broad absence phrasings additionally require that the text does not continue with a
 //     contrast ("... aber Y ist in Kapitel 3 beschrieben"): that is a partial answer, not a refusal.
-//   * A negated verb ("does not contain", "nicht erwähnt") additionally requires that the text names
-//     the evidence it searched; without it the sentence is a negative fact about the subject.
+//   * A negated verb ("does not contain", "nicht erwähnt") additionally requires that its own sentence
+//     names the evidence it searched; without it the sentence is a negative fact about the subject.
 
 import { findCitationMarkerGroups } from "./citation-markers.js";
 
@@ -85,8 +85,19 @@ export function isNoEvidenceAnswerText(answer: string): boolean {
   if (STOCK_REFUSAL_PATTERNS.some((pattern) => pattern.test(compact))) return true;
   if (CONTRAST_PATTERN.test(compact)) return false;
   if (INFORMATION_ABSENCE_PATTERNS.some((pattern) => pattern.test(compact))) return true;
+  return sentencesOf(compact).some(isEvidenceAbsenceSentence);
+}
+
+// A negated verb declines only when the SAME sentence names the evidence it searched: "The API does
+// not provide authentication. Documentation is public." states a fact and mentions documentation
+// separately (PR #3678 review).
+function isEvidenceAbsenceSentence(sentence: string): boolean {
   return (
-    EVIDENCE_REFERENT_PATTERN.test(compact) &&
-    NEGATED_VERB_PATTERNS.some((pattern) => pattern.test(compact))
+    EVIDENCE_REFERENT_PATTERN.test(sentence) &&
+    NEGATED_VERB_PATTERNS.some((pattern) => pattern.test(sentence))
   );
+}
+
+function sentencesOf(text: string): readonly string[] {
+  return text.split(/(?<=[.!?])\s+/u);
 }

@@ -44,6 +44,9 @@ describe("isNoEvidenceAnswerText", () => {
     "The protocol does not contain a checksum. It relies on TLS.",
     "Der Dienst ist nicht dokumentiert abgesichert, er nutzt mTLS.",
     "The export does not include deleted records.",
+    // The evidence word belongs to an independent sentence, not to the negation.
+    "The API does not provide authentication. Documentation is public.",
+    "Die API bietet keine Authentifizierung an. Die Dokumentation ist öffentlich.",
   ])("does not treat %j as a refusal", (answer) => {
     expect(isNoEvidenceAnswerText(answer)).toBe(false);
   });
