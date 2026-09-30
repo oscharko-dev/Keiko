@@ -19,9 +19,10 @@ export const DEFAULT_OWN_ASSESSMENT_POLICY: OwnAssessmentPolicy = "allowed";
 /** The system-prompt rule that allows the block. Short and plain, so small models follow it. */
 export const OWN_ASSESSMENT_PROMPT_RULE =
   "Put everything the excerpts do not back (your own recommendation, opinion, general knowledge " +
-  "or small talk) after the source-backed part, inside one <assessment></assessment> block. " +
-  "Begin that block by saying that it is your own assessment, not a statement from the sources. " +
-  "Use no [n] markers inside it.";
+  "or small talk) into one <assessment></assessment> block at the end; outside it, every " +
+  "sentence needs its [n] marker. If the question needs no sources, answer inside the block " +
+  "alone. When the block gives a recommendation or view, begin it by saying that it is your own " +
+  "assessment, not a statement from the sources. Use no [n] markers inside it.";
 
 export interface OwnAssessmentSplit {
   /** The source-backed part: every text outside the assessment block, trimmed. */
