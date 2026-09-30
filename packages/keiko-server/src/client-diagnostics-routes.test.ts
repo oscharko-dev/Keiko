@@ -1155,6 +1155,43 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  // PR #3678 review: the catalog's availability counts used to ride only the message, which ingest
+  // reduces to a digest. They are now their own counted line, at warn, joined to the report.
+  it("persists the knowledge catalog counts as client.knowledge-catalog.unavailable", async () => {
+    const sink = captureServerLog();
+    const knowledgeCatalog = {
+      podCount: 1,
+      readyPodCount: 0,
+      setCount: 0,
+      boundCount: 1,
+      missingCount: 0,
+      notReadyCount: 1,
+    };
+    const body = JSON.stringify({
+      message: "Keiko knowledge catalog offers no usable pod.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_catalog-unavailable-0001",
+      knowledgeCatalog,
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.knowledge-catalog.unavailable",
+    );
+    expect(event?.level).toBe("warn");
+    const record = expectActivityLogProof(
+      "client.knowledge-catalog.unavailable.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_catalog-unavailable-0001",
+      ...knowledgeCatalog,
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
   it("persists every closed focus location on its own client.select.dismissed line", async () => {
     for (const focus of ["trigger", "search", "option"] as const) {
       const sink = captureServerLog();

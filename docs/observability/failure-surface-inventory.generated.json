@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f834d9e425de806d7017841a5abb831c91c6760ec849a72fb9da5c6117ae2f10"
+    "catalogDigest": "a128edb836ced483d9ffb1d946efbed09bfff47438eeeeac4956a90f85acd3fc"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 488,
-    "proofCount": 496,
-    "resolvedProofCount": 496,
-    "failureClassCount": 330,
+    "operationCount": 489,
+    "proofCount": 497,
+    "resolvedProofCount": 497,
+    "failureClassCount": 331,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -133,6 +133,7 @@
         "client.diagnostic.rejected",
         "client.git-operation.attempted",
         "client.git-operation.settled",
+        "client.knowledge-catalog.unavailable",
         "client.markdown.layout",
         "client.select.dismissed",
         "client.session-repair.acknowledged",
@@ -685,6 +686,7 @@
     "client-diagnostic-rate-limit": ["client-diagnostics.loss"],
     "client-diagnostic-rejection": ["client-diagnostics.loss"],
     "client-git-operation": ["client-diagnostics.dependency-failure"],
+    "client-knowledge-catalog": ["client-diagnostics.dependency-failure"],
     "client-select": ["client-diagnostics.dependency-failure"],
     "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
@@ -1119,6 +1121,9 @@
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.git-operation.settled.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
+    "client.knowledge-catalog.unavailable.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.markdown.layout.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f834d9e425de806d7017841a5abb831c91c6760ec849a72fb9da5c6117ae2f10" as const;
+  "a128edb836ced483d9ffb1d946efbed09bfff47438eeeeac4956a90f85acd3fc" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3097,6 +3097,62 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["client-git-operation"],
     proofIds: ["client.git-operation.settled.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.knowledge-catalog.unavailable",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientKnowledgeCatalog",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      podCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      readyPodCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      setCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      boundCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      missingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      notReadyCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-knowledge-catalog"],
+    proofIds: ["client.knowledge-catalog.unavailable.line"],
     releaseImpact: "patch",
   },
   {
@@ -29798,8 +29854,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 330,
-  completeClassCount: 330,
+  supportedClassCount: 331,
+  completeClassCount: 331,
   completeness: "complete",
   classes: [
     {
@@ -33545,6 +33601,86 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["client.git-operation.settled.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "client-knowledge-catalog",
+      requirementContract: "client-knowledge-catalog",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["client.knowledge-catalog.unavailable"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.knowledge-catalog.unavailable",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.knowledge-catalog.unavailable"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.knowledge-catalog.unavailable",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "boundCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "missingCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "notReadyCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "podCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "readyPodCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "setCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.knowledge-catalog.unavailable.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -65736,6 +65872,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.diagnostic.rejected": "client-diagnostics",
     "client.git-operation.attempted": "client-diagnostics",
     "client.git-operation.settled": "client-diagnostics",
+    "client.knowledge-catalog.unavailable": "client-diagnostics",
     "client.markdown.layout": "client-diagnostics",
     "client.select.dismissed": "client-diagnostics",
     "client.session-repair.acknowledged": "client-diagnostics",

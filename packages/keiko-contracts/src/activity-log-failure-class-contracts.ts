@@ -808,6 +808,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-knowledge-catalog",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["client.knowledge-catalog.unavailable"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.knowledge-catalog.unavailable"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.knowledge-catalog.unavailable"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["client.knowledge-catalog.unavailable"],
+    requiredEvidenceClasses: ["completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-select",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

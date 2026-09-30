@@ -390,10 +390,18 @@ function useCatalogAvailabilityDiagnostic(
     const boundUnavailable = bound > 0 && missing + notReady > 0;
     const noReadyPod = podCount > 0 && readyCount === 0;
     if (!loaded || !(boundUnavailable || noReadyPod)) return;
-    const summary = `pods=${String(podCount)}, ready=${String(readyCount)}, sets=${String(setCount)}, bound=${String(bound)}, missing=${String(missing)}, notReady=${String(notReady)}`;
-    if (reportedRef.current === summary) return;
-    reportedRef.current = summary;
-    reportClientDiagnostic(`Keiko knowledge catalog offers no usable pod (${summary}).`);
+    const knowledgeCatalog = {
+      podCount,
+      readyPodCount: readyCount,
+      setCount,
+      boundCount: bound,
+      missingCount: missing,
+      notReadyCount: notReady,
+    };
+    const picture = JSON.stringify(knowledgeCatalog);
+    if (reportedRef.current === picture) return;
+    reportedRef.current = picture;
+    reportClientDiagnostic("Keiko knowledge catalog offers no usable pod.", { knowledgeCatalog });
   }, [loaded, podCount, readyCount, setCount, bound, missing, notReady]);
 }
 

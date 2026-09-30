@@ -425,9 +425,17 @@ describe("useKnowledgeCatalog diagnostics", () => {
 
     const lines = diagnostics.filter((entry) => entry.message.includes("offers no usable pod"));
     expect(lines).toHaveLength(1);
-    expect(lines[0]?.message).toBe(
-      "Keiko knowledge catalog offers no usable pod (pods=1, ready=0, sets=0, bound=1, missing=0, notReady=1).",
-    );
+    expect(lines[0]?.message).toBe("Keiko knowledge catalog offers no usable pod.");
+    // PR #3678 review: the counts travel as structured evidence — the server reduces the message
+    // to a digest, so counts inside it never reached the Activity Log.
+    expect(lines[0]?.meta?.knowledgeCatalog).toEqual({
+      podCount: 1,
+      readyPodCount: 0,
+      setCount: 0,
+      boundCount: 1,
+      missingCount: 0,
+      notReadyCount: 1,
+    });
     expect(JSON.stringify(diagnostics)).not.toContain("Customer");
     expect(JSON.stringify(diagnostics)).not.toContain("cap-1");
   });

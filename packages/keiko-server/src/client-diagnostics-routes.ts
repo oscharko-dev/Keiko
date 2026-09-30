@@ -976,6 +976,34 @@ const CLIENT_GIT_OPERATION_ATTEMPTED_OPERATION = defineActivityLogOperation({
 // really was open. There is no failure variant of this report — Escape either closes an open menu or
 // it does not report at all — so it always spends the routine budget, never the one a genuine
 // failure needs.
+// PR #3678 review: the chat's Knowledge Pod picker offered no usable pod. The availability counts
+// used to ride only the free-text message, which ingest reduces to a digest, so the log could not
+// tell a missing bound pod from one still indexing. One line per distinct picture, counts only.
+const CLIENT_KNOWLEDGE_CATALOG_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.knowledge-catalog.unavailable",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientKnowledgeCatalog",
+  fields: {
+    podCount: { type: "integer", dataClass: "count", required: true },
+    readyPodCount: { type: "integer", dataClass: "count", required: true },
+    setCount: { type: "integer", dataClass: "count", required: true },
+    boundCount: { type: "integer", dataClass: "count", required: true },
+    missingCount: { type: "integer", dataClass: "count", required: true },
+    notReadyCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-knowledge-catalog"],
+  proofIds: ["client.knowledge-catalog.unavailable.line"],
+  releaseImpact: "patch",
+});
+
 const CLIENT_SELECT_DISMISSED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -1453,6 +1481,22 @@ function projectClientStageContext(
     extra.voiceDialogueStage = request.voiceDialogueStage;
 }
 
+function logClientKnowledgeCatalog(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const catalog = request.knowledgeCatalog;
+  if (catalog === undefined) return false;
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_KNOWLEDGE_CATALOG_UNAVAILABLE_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      { ...catalog, completeness: "complete", loss: "none" },
+    ),
+  );
+  return true;
+}
+
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
@@ -1466,7 +1510,8 @@ function logClientDiagnostic(
     logMarkdownLayout(request, correlationId) ||
     logClientGitOperationSettled(request, correlationId) ||
     logClientComposerActivity(request, correlationId) ||
-    logClientSelectDismissed(request, correlationId)
+    logClientSelectDismissed(request, correlationId) ||
+    logClientKnowledgeCatalog(request, correlationId)
   ) {
     return;
   }
@@ -1943,7 +1988,9 @@ function isRoutineVoiceReport(report: ClientDiagnosticIngestRequest): boolean {
 
 function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget {
   if (report.kind === "delivery-loss") return "loss";
-  if (report.selectDismissal !== undefined) return "routine";
+  if (report.selectDismissal !== undefined || report.knowledgeCatalog !== undefined) {
+    return "routine";
+  }
   if (report.composerActivity !== undefined || isRoutineVoiceReport(report)) return "routine";
   const outcome = report.gitClientOperation?.outcome;
   if (outcome === undefined) return "failure";

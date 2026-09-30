@@ -445,6 +445,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
+  readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
@@ -634,6 +635,14 @@ function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
   );
 }
 
+// The closed, routine report shapes that may ride a message report (select dismissal, catalog).
+function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal) &&
+    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog)
+  );
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
   const { errorKind, loss, parentCorrelationId } = value;
   if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
@@ -642,7 +651,7 @@ function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolea
   if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
   if (!hasValidVoiceCaptureContext(value)) return false;
   if (!hasValidGitContext(value)) return false;
-  if (!isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal)) return false;
+  if (!hasValidClosedReportContext(value)) return false;
   return (
     hasValidComposerContext(value) &&
     hasValidCodingContext(value) &&
@@ -1300,6 +1309,46 @@ export function isClientDiagnosticSelectDismissal(
   return (
     isSetMember(value.reason, SELECT_DISMISSAL_REASON_SET) &&
     isSetMember(value.focus, SELECT_DISMISSAL_FOCUS_SET)
+  );
+}
+
+// ─── Knowledge Pod catalog availability (PR #3678 review) ─────────────────────────
+//
+// The chat's Knowledge Pod picker offered no usable pod: every bound pod is missing or not ready,
+// or no pod is ready at all. Counts only — never a pod name, path or id — so the Activity Log can
+// tell a missing bound pod from one that is still indexing without a free-text message.
+
+export const CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX = 100_000;
+
+export interface ClientDiagnosticKnowledgeCatalog {
+  readonly podCount: number;
+  readonly readyPodCount: number;
+  readonly setCount: number;
+  readonly boundCount: number;
+  readonly missingCount: number;
+  readonly notReadyCount: number;
+}
+
+const KNOWLEDGE_CATALOG_COUNT_KEYS: ReadonlySet<string> = new Set([
+  "podCount",
+  "readyPodCount",
+  "setCount",
+  "boundCount",
+  "missingCount",
+  "notReadyCount",
+]);
+
+/** True for exactly the six bounded, non-negative catalog counts and no other field. */
+export function isClientDiagnosticKnowledgeCatalog(
+  value: unknown,
+): value is ClientDiagnosticKnowledgeCatalog {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== KNOWLEDGE_CATALOG_COUNT_KEYS.size) return false;
+  return keys.every(
+    (key) =>
+      KNOWLEDGE_CATALOG_COUNT_KEYS.has(key) &&
+      isBoundedNonNegativeInteger(value[key], CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX),
   );
 }
 

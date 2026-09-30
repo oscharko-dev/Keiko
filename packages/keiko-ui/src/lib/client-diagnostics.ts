@@ -41,6 +41,7 @@ import {
   type ClientSessionRepairStream,
   type ClientDiagnosticGitChangeDescription,
   type ClientDiagnosticGitClientOperation,
+  type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
   type ClientMarkdownLayout,
@@ -143,6 +144,9 @@ export interface ClientDiagnosticMeta {
   // An open `KeikoSelect` menu dismissed by Escape (PR #3625 review): the closed reason and which
   // focus location — trigger, search or option — Escape acted from, never a label or option text.
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
+  // The chat's Knowledge Pod picker offered no usable pod (PR #3678 review): counts only, sent as
+  // structured evidence rather than folded into the message the server reduces to a digest.
+  readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

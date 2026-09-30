@@ -274,6 +274,7 @@ function clientMessagePostBody(
     workspaceTrustBinding: meta.workspaceTrustBinding,
     gitClientOperation: meta.gitClientOperation,
     selectDismissal: meta.selectDismissal,
+    knowledgeCatalog: meta.knowledgeCatalog,
     composerActivity: meta.composerActivity,
     composerFocusIndicator: meta.composerFocusIndicator,
     composerCodeStage: meta.composerCodeStage,
@@ -356,7 +357,7 @@ function gitClientOperationPostBudget(
 function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {
   if (meta === undefined) return "failure";
   if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
-  if (meta.selectDismissal !== undefined) return "routine";
+  if (meta.selectDismissal !== undefined || meta.knowledgeCatalog !== undefined) return "routine";
   if (routineComposerOrVoiceEvidence(meta)) return "routine";
   if (meta.bindingReport !== undefined) return bindingPostBudget(meta.bindingReport.outcome);
   if (meta.sessionRepairReport !== undefined) {

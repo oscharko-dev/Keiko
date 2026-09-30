@@ -1116,6 +1116,28 @@ describe("fanOutClientDiagnostic budgets", () => {
   });
 });
 
+// PR #3678 review: the catalog counts reach the wire as structured evidence and spend the routine
+// budget, like every other closed, non-failure report.
+it("posts the knowledge catalog counts on the wire and spends the routine budget", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const knowledgeCatalog = {
+    podCount: 1,
+    readyPodCount: 0,
+    setCount: 0,
+    boundCount: 1,
+    missingCount: 0,
+    notReadyCount: 1,
+  };
+  for (let index = 1; index <= 25; index += 1) {
+    fanOutClientDiagnostic("Keiko knowledge catalog offers no usable pod.", { knowledgeCatalog });
+  }
+  expect(lastPostedBody(fetchMock)).toMatchObject({ knowledgeCatalog });
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+});
+
 it("posts reduced production frames and closed causes through the existing transport", () => {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
