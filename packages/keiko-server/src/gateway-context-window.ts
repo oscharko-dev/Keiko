@@ -201,19 +201,46 @@ export function adoptReportedContextWindow(
   }
 }
 
-// One attempt per deployment identity per process: a provider that states no window is asked
-// again only after a restart or a changed deployment, never on every configuration generation.
-const probedDeployments = new Set<string>();
-let probeQueue: Promise<void> = Promise.resolve();
-
-export function resetContextWindowProbesForTests(): void {
-  probedDeployments.clear();
-  probeQueue = Promise.resolve();
+// One attempt per deployment identity per runtime configuration holder: a provider that states no
+// window is asked again only after a restart or a changed deployment, never on every generation.
+// Disposal aborts the in-flight probe and drains the queue before shutdown sealing.
+interface ProbeState {
+  readonly probed: Set<string>;
+  readonly controller: AbortController;
+  queue: Promise<void>;
+  disposed: boolean;
 }
 
-/** Resolves once every queued context-window probe has finished. Test seam. */
-export function contextWindowProbesSettledForTests(): Promise<void> {
-  return probeQueue;
+const probeStates = new WeakMap<object, ProbeState>();
+
+function probeState(deps: UiHandlerDeps): ProbeState | undefined {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return undefined;
+  let state = probeStates.get(holder);
+  if (state === undefined) {
+    state = {
+      probed: new Set(),
+      controller: new AbortController(),
+      queue: Promise.resolve(),
+      disposed: false,
+    };
+    probeStates.set(holder, state);
+  }
+  return state;
+}
+
+/** Resolves once every queued context-window probe of this holder has finished. Test seam. */
+export function contextWindowProbesSettledForTests(deps: UiHandlerDeps): Promise<void> {
+  return probeState(deps)?.queue ?? Promise.resolve();
+}
+
+/** Stops the holder's context-window probes; awaits the one in flight. */
+export async function stopAssumedContextWindowDiscovery(deps: UiHandlerDeps): Promise<void> {
+  const state = probeState(deps);
+  if (state === undefined) return;
+  state.disposed = true;
+  state.controller.abort();
+  await state.queue;
 }
 
 function assumedDeployments(config: GatewayConfig): readonly string[] {
@@ -229,12 +256,13 @@ function deploymentKey(config: GatewayConfig, modelId: string): string | undefin
 
 async function probeContextWindow(
   deps: UiHandlerDeps,
+  state: ProbeState,
   modelId: string,
   correlationId: string,
 ): Promise<void> {
   const config = currentGatewayConfig(deps);
   const provider = config?.providers.find((candidate) => candidate.modelId === modelId);
-  if (config === undefined || provider === undefined) return;
+  if (state.disposed || config === undefined || provider === undefined) return;
   try {
     const outcome = await discoverGatewayContextWindow({
       config,
@@ -244,6 +272,7 @@ async function probeContextWindow(
         : { fetchImpl: deps.gatewayReadinessFetch }),
       log: deps.activityLog ?? processServerLogSink(),
       correlationId,
+      signal: state.controller.signal,
     });
     logProbe(modelId, outcome, correlationId);
     if (outcome.status === "reported") {
@@ -275,16 +304,17 @@ async function probeContextWindow(
  */
 export function discoverAssumedContextWindows(deps: UiHandlerDeps, correlationId: string): void {
   const config = currentGatewayConfig(deps);
-  if (config === undefined) return;
+  const state = probeState(deps);
+  if (config === undefined || state === undefined || state.disposed) return;
   for (const modelId of assumedDeployments(config)) {
     const key = deploymentKey(config, modelId);
-    if (key === undefined || probedDeployments.has(key)) continue;
-    probedDeployments.add(key);
+    if (key === undefined || state.probed.has(key)) continue;
+    state.probed.add(key);
     if (deps.gatewayConfig?.spendBudget !== undefined) {
       logProbe(modelId, { status: "skipped-spend-budget" }, correlationId);
       continue;
     }
-    probeQueue = probeQueue.then(() => probeContextWindow(deps, modelId, correlationId));
+    state.queue = state.queue.then(() => probeContextWindow(deps, state, modelId, correlationId));
   }
 }
 

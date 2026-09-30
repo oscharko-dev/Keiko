@@ -498,6 +498,7 @@ export interface GatewayContextWindowDiscoveryRequest {
   readonly fetchImpl?: typeof fetch | undefined;
   readonly log?: ModelGatewayLogSink | undefined;
   readonly correlationId?: string | undefined;
+  readonly signal?: AbortSignal | undefined;
 }
 
 export async function discoverGatewayContextWindow(
@@ -515,6 +516,7 @@ export async function discoverGatewayContextWindow(
     }),
     ...(request.fetchImpl === undefined ? {} : { fetchImpl: request.fetchImpl }),
     timeoutMs: Math.min(provider.timeoutMs, CONTEXT_WINDOW_PROBE_TIMEOUT_MS),
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
     maxResponseBytes: READINESS_REJECTION_MAX_BYTES,
     ...(config.egress === undefined ? {} : { egress: config.egress }),
     ...(request.log === undefined ? {} : { log: request.log }),

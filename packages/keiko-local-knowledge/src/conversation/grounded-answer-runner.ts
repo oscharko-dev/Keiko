@@ -21,6 +21,7 @@
 
 import type { RetrievalReference } from "@oscharko-dev/keiko-contracts";
 import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
 import {
   assembleGroundedContext,
@@ -53,24 +54,16 @@ export interface GroundedAnswerDependencies {
   readonly signal?: AbortSignal;
 }
 
-const NO_EVIDENCE_REPAIR_SKIP_PATTERNS: readonly RegExp[] = [
-  /\bno\s+evidence\s+(?:found|available|in|within)\b/iu,
-  /\binsufficient\s+evidence\b/iu,
-  /\bnot\s+enough\s+evidence\b/iu,
-  /\bkeine\s+evidenz\b/iu,
-  /\bkeine\s+(?:belege|hinweise)\b/iu,
-  /\bnicht\s+genug\s+(?:evidenz|belege|hinweise)\b/iu,
-];
-
+// A refusal ("nothing about this in the documents") makes no source-backed claim, so a missing
+// citation on it is not a defect and a citation-repair model call would be wasted on it. The
+// detector is the one shared with the BFF's answer enforcement (keiko-contracts).
 function shouldRepairMissingCitations(
   answerText: string,
   references: readonly unknown[],
   attached: AttachCitationsResult,
 ): boolean {
   if (references.length === 0 || attached.citations.length > 0) return false;
-  const compact = answerText.replace(/\s+/g, " ").trim();
-  if (compact.length === 0 || compact.length > 240) return true;
-  return !NO_EVIDENCE_REPAIR_SKIP_PATTERNS.some((pattern) => pattern.test(compact));
+  return !isNoEvidenceAnswerText(answerText);
 }
 
 // ─── Retrieval wiring ─────────────────────────────────────────────────────────
@@ -173,6 +166,7 @@ function buildGroundedAnswer(
     citations: attached.citations,
     pack,
     noEvidence: false,
+    ...(attached.weakOverlapCount > 0 ? { weakCitationCount: attached.weakOverlapCount } : {}),
     ...(rerankerDiagnostics === undefined ? {} : { reranker: rerankerDiagnostics }),
     ...(retrieval.diagnostics !== undefined ? { retrievalDiagnostics: retrieval.diagnostics } : {}),
     ...(retrieval.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),

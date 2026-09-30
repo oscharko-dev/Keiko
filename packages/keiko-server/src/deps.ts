@@ -6,6 +6,7 @@ import {
 import {
   adoptReportedContextWindow,
   discoverAssumedContextWindows,
+  stopAssumedContextWindowDiscovery,
 } from "./gateway-context-window.js";
 // Wave 2 BFF handler dependencies (ADR-0011 D5/D8/D9). The Wave 1 skeleton's `UiServerDeps` carried
 // only the static-serving + CSP + port fields; the JSON/SSE handlers additionally need the resolved
@@ -1460,6 +1461,23 @@ function gatewayConfigListeners(): {
   };
 }
 
+// The Gateway reports provider-stated windows to its configuration source; the host's adoption path
+// needs the complete handler deps, which exist only after this holder, so it binds late.
+function contextWindowReporterSlot(): Pick<
+  RuntimeGatewayConfig,
+  "onContextWindowReported" | "bindContextWindowReporter"
+> {
+  let reporter: ((report: ContextWindowReport) => void) | undefined;
+  return {
+    onContextWindowReported: (report): void => {
+      reporter?.(report);
+    },
+    bindContextWindowReporter: (next): void => {
+      reporter = next;
+    },
+  };
+}
+
 function createRuntimeGatewayConfig(
   initial: GatewayConfig | undefined,
   initialPresent: boolean,
@@ -1479,17 +1497,11 @@ function createRuntimeGatewayConfig(
   // replacement config with an outcome nobody measured against it (#2847 review).
   let generation = 0;
   const listeners = gatewayConfigListeners();
-  let contextWindowReporter: ((report: ContextWindowReport) => void) | undefined;
   return {
     storagePath,
     initializationCorrelationId: bootstrapCorrelationId,
     spendBudget: gatewaySpendBudgetForEnv(env),
-    onContextWindowReported: (report): void => {
-      contextWindowReporter?.(report);
-    },
-    bindContextWindowReporter: (reporter): void => {
-      contextWindowReporter = reporter;
-    },
+    ...contextWindowReporterSlot(),
     current: (): GatewayConfig | undefined => config,
     present: (): boolean => present,
     set(next: GatewayConfig | undefined, nextPresent: boolean, correlationId?: string): void {
@@ -4569,6 +4581,7 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
     dispose: async (): Promise<void> => {
       unsubscribe?.();
       await stopConfiguredConversationReadiness(deps);
+      await stopAssumedContextWindowDiscovery(deps);
       await deps.dispose?.();
     },
   };

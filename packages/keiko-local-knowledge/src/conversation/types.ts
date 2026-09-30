@@ -68,18 +68,26 @@ export interface ConversationGroundedAnswer {
   readonly reranker?: GroundedRerankerDiagnostics | undefined;
   readonly retrievalDiagnostics?: RetrievalDiagnostics | undefined;
   readonly embeddingDegraded?: true | undefined;
+  // How many attached citations had weak lexical overlap with their excerpt (see
+  // `ConversationCitationReference.lexicalSupport`). Absent when zero; a count for diagnostics.
+  readonly weakCitationCount?: number | undefined;
 }
 
 // A `[n]` marker the answer text uses, paired with the citation it points at. `marker`
 // is the literal substring (e.g. "[1]") so the UI can highlight it without re-scanning;
 // `index` is the 1-based position the marker referred to (matches the order of the refs
 // in `ConversationGroundedAnswer.references`). Out-of-bounds markers are dropped by
-// `attachCitationsToAnswer` so this array is always well-formed.
+// `attachCitationsToAnswer` so this array is always well-formed. A grouped marker such as
+// `[1, 7, 8]` contributes one entry per index, each carrying its own single-index `marker`.
 export interface ConversationCitationReference {
   readonly marker: string;
   readonly index: number;
   readonly citation: CitationReference;
   readonly reference: RetrievalReference;
+  // Soft signal, never a filter: the claim sentence around this marker shares little vocabulary
+  // with the cited excerpt (token equality, no stemming). The citation stays attached and linked;
+  // the flag only feeds body-free diagnostics. Absent means "no weak-overlap observation".
+  readonly lexicalSupport?: "weak";
 }
 
 // ─── AnswerGenerator port ────────────────────────────────────────────────────

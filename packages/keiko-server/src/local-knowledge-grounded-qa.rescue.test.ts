@@ -2,6 +2,8 @@
 // Missing markers are not treated as "no evidence", but the server must not claim that every
 // prompt reference was cited after the fact.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +35,7 @@ import {
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import {
   AuthenticationError,
   ConfigInvalidError,
@@ -3224,7 +3227,7 @@ async function askWithNumericEntailmentJudge(
 }
 
 describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
-  it("marks a substantive markerless answer over retrieved references as unsupported-citation", async () => {
+  it("marks a substantive markerless answer over retrieved references as uncited-answer", async () => {
     const chat = await seedFailClosedChat("markerless");
 
     const answer = await askFailClosedChat(
@@ -3236,10 +3239,108 @@ describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
     // #189 mechanics stay: not a no-evidence state, and nothing is cited after the fact.
     expect(answer.noEvidence).toBe(false);
     expect(answer.citations).toEqual([]);
-    // Fail closed like the sibling grounded paths: the shared missing-citation marker.
+    // Fail closed like the sibling grounded paths: the shared missing-citation marker. It is its own
+    // kind — nothing was fabricated, so it must never be reported as an unsupported citation.
+    expect(answer.uncertainty).toHaveLength(1);
+    expect(answer.uncertainty[0]?.kind).toBe("uncited-answer");
+    expect(answer.uncertainty[0]?.claim).toContain("without a supported inline citation");
+  });
+
+  // Customer defect: a natural German refusal matched none of the stock refusal phrases, so it was
+  // reported as an answer with "1 unsupported citation" (and a needless repair call was spent on it).
+  it("treats a natural German refusal as no-evidence, never as an unsupported citation", async () => {
+    const chat = await seedFailClosedChat("german-refusal");
+
+    const answer = await askFailClosedChat(
+      chat,
+      "In den bereitgestellten Dokumenten wurden keine Informationen oder Vorgaben zur Java-Version gefunden.",
+      "fail-closed-german-refusal",
+    );
+
+    expect(answer.noEvidence).toBe(true);
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toEqual(["no-evidence"]);
+  });
+
+  // The lexical claim/excerpt overlap check used to drop an in-range marker whose claim shared no
+  // token with the excerpt (every German paraphrase). The marker stayed in the text with no link and
+  // was then reported as unsupported.
+  it("keeps an in-range marker attached and unflagged when the claim shares no token with the excerpt", async () => {
+    const chat = await seedFailClosedChat("weak-overlap");
+
+    const answer = await askFailClosedChat(
+      chat,
+      "Ein Nachweis ohne gemeinsame Woerter steht im Dokument [1].",
+      "fail-closed-weak-overlap",
+    );
+
+    expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
+    expect(answer.uncertainty).toEqual([]);
+  });
+
+  // Customer defect: an answer ending "[1], [5], [6]" showed "0 citations". The claim before the
+  // trailing list is all the marker list can be attributed to, and a lone "," used to count as the
+  // claim, so the marker was dropped by the lexical gate.
+  it("keeps the in-range marker of a trailing marker list and reports the dangling ones", async () => {
+    const chat = await seedFailClosedChat("trailing-list");
+
+    const answer = await askFailClosedChat(
+      chat,
+      "Ein Nachweis ohne gemeinsame Woerter steht im Dokument. [1], [5], [6]",
+      "fail-closed-trailing-list",
+    );
+
+    expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
     expect(answer.uncertainty).toHaveLength(1);
     expect(answer.uncertainty[0]?.kind).toBe("unsupported-citation");
-    expect(answer.uncertainty[0]?.claim).toContain("without a supported inline citation");
+    expect(answer.uncertainty[0]?.claim).toContain("[5]");
+    expect(answer.uncertainty[0]?.claim).toContain("[6]");
+  });
+
+  // Rule 1 (AGENTS.md §8): the counts that decided what the reader sees are on the activity log, so
+  // this defect class is reconstructable from the customer's log file alone.
+  it("logs the body-free citation reconciliation counts for the answer", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const chat = await seedFailClosedChat("reconcile-log");
+
+      await askFailClosedChat(
+        chat,
+        "Alpha beta grounded evidence is decisive [1, 7].",
+        "fail-closed-reconcile-log",
+      );
+
+      const line = sink.events.find((event) => event.op === "search.citations.reconciled");
+      expect(line?.extra).toMatchObject({
+        outcome: "cited-with-dangling",
+        referenceCount: 1,
+        attachedCount: 1,
+        groupedMarkerCount: 1,
+        danglingMarkerCount: 1,
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(sink.lines().join("\n")).not.toContain("decisive");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("attaches the in-range index of a grouped marker and reports the out-of-range one", async () => {
+    const chat = await seedFailClosedChat("grouped");
+
+    const answer = await askFailClosedChat(
+      chat,
+      "Alpha beta grounded evidence is decisive [1, 7].",
+      "fail-closed-grouped",
+    );
+
+    expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
+    expect(answer.uncertainty).toHaveLength(1);
+    expect(answer.uncertainty[0]?.kind).toBe("unsupported-citation");
+    expect(answer.uncertainty[0]?.claim).toContain("[7]");
+    expect(answer.uncertainty[0]?.claim).not.toContain("[1]");
   });
 
   it("marks out-of-range [n] markers as unsupported instead of silently dropping them", async () => {

@@ -1,9 +1,10 @@
 // Issue #185 — unit tests for the grounded Q&A presentation component. Extended in #187
 // with ContextPackSummary coverage and an axe-based a11y smoke.
 
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GroundedAnswer } from "./GroundedAnswer";
+import { I18N_STORAGE_KEY, I18nProvider, resetLoadedMessageCatalogs } from "@/lib/i18n";
 import activityBadgeStyles from "./GroundedAnswer.module.css";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 import type {
@@ -1473,5 +1474,121 @@ describe("GroundedAnswer", () => {
     } as GroundedAnswerType;
     const { container } = render(<GroundedAnswer answer={a} busy={false} />);
     expect(container.querySelector(".grounded-uncertainty[role='alert']")).toBeNull();
+  });
+});
+
+// The customer's grounded chat (German UI, model gemma via LiteLLM) rendered "Needs review",
+// "1 unsupported citation" and "Citation support could not be verified" in English, and counted
+// marker OBJECTS instead of the dangling markers. Every line is localised by marker kind.
+describe("GroundedAnswer — citation warnings by marker kind", () => {
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+    resetLoadedMessageCatalogs();
+  });
+
+  function renderInLocale(locale: "en" | "de", a: GroundedAnswerType): ReturnType<typeof render> {
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    return render(
+      <I18nProvider>
+        <GroundedAnswer answer={a} busy={false} />
+      </I18nProvider>,
+    );
+  }
+
+  it("counts the distinct dangling marker indices, not the marker objects", () => {
+    const a = localKnowledgeAnswer();
+    const { container } = render(
+      <GroundedAnswer
+        answer={{
+          ...a,
+          uncertainty: [
+            {
+              kind: "unsupported-citation",
+              claim:
+                "The answer cited evidence markers not present in the retrieved evidence: [7], [8], [9]. Treat the affected claims as unverified.",
+            },
+            {
+              kind: "unsupported-citation",
+              claim:
+                "The answer cited an evidence marker not present in the retrieved evidence: [9]. Treat the affected claims as unverified.",
+            },
+          ],
+        }}
+        busy={false}
+      />,
+    );
+
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent).toContain("3 unsupported citations");
+    expect(warning?.textContent).not.toContain("2 unsupported citations");
+  });
+
+  it("does not call an answer without any marker an unsupported citation", () => {
+    const a = localKnowledgeAnswer();
+    const { container } = render(
+      <GroundedAnswer
+        answer={{
+          ...a,
+          uncertainty: [
+            {
+              kind: "uncited-answer",
+              claim: "The answer used retrieved evidence without a supported inline citation.",
+            },
+          ],
+        }}
+        busy={false}
+      />,
+    );
+
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent).toContain("without an inline citation");
+    expect(warning?.textContent?.toLowerCase()).not.toContain("unsupported citation");
+    expect(warning?.textContent).not.toContain("not in the retrieved evidence");
+  });
+
+  it("renders the grounded warnings, evidence title and summary in German under the de locale", async () => {
+    const a = {
+      ...localKnowledgeAnswer(),
+      uncertainty: [
+        { kind: "unsupported-citation", claim: "The answer cited ... markers: [7], [8]." },
+        { kind: "entailment-unavailable", claim: "Citation support could not be verified." },
+      ],
+    };
+    const { container } = renderInLocale("de", a);
+
+    await waitFor(() => {
+      expect(container.querySelector(".grounded-uncertainty[role='alert']")?.textContent).toContain(
+        "Bitte prüfen",
+      );
+    });
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent).toContain("2 nicht belegte Quellenangaben");
+    expect(warning?.textContent).toContain(
+      "Die Quellenbelege konnten für einen Teil dieser Antwort nicht geprüft werden.",
+    );
+    expect(warning?.textContent).not.toContain("Needs review");
+    expect(warning?.textContent).not.toContain("could not be verified");
+    expect(screen.getByText("Knowledge-Evidenz")).toBeInTheDocument();
+    expect(screen.getByText("1 Quellenangabe · 1 / 10 Referenzen")).toBeInTheDocument();
+  });
+
+  it("localises the uncertainty disclosure lines by kind instead of the server's English claim", async () => {
+    const a = {
+      ...localKnowledgeAnswer(),
+      uncertainty: [{ kind: "uncited-answer", claim: "English server claim text." }],
+    };
+    const { container } = renderInLocale("de", a);
+
+    await waitFor(() => {
+      expect(screen.getByText("Knowledge-Evidenz")).toBeInTheDocument();
+    });
+    openEvidenceDisclosure(container);
+    expect(screen.getByText("Unsicherheit (1) — Antwort ohne Quellenangabe")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Antwort ohne Quellenangabe: Diese Antwort enthält Aussagen ohne Quellenangabe, die sich keiner Quelle zuordnen lassen.",
+      ),
+    ).toBeInTheDocument();
+    expect(container.textContent).not.toContain("English server claim text.");
   });
 });

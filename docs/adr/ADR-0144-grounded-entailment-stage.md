@@ -142,8 +142,35 @@ unchanged at 1.0.
   is a separate downstream membership stage and is not itself the verification layer.
 - A richer `keiko-evidence` verdict-tally manifest (beyond the operator diagnostic and the persisted
   uncertainty markers) remains an explicit K M2 follow-up.
-- New contract surface is limited to two additive `UncertaintyMarkerKind` values; no capsule-store
-  schema, embedding identity, RRF fusion (ADR-0036), or connector change.
+- New contract surface is limited to two additive `UncertaintyMarkerKind` values (a third,
+  `uncited-answer`, followed later — see the amendment below); no capsule-store schema, embedding
+  identity, RRF fusion (ADR-0036), or connector change.
+
+## Amendment (2026-09-30) — one marker grammar, refusals, uncited answers and judge sizing
+
+A Knowledge Pod chat (German UI) exposed four defects in how this stage's inputs and outputs were
+shaped, all on the numeric `[n]` connector path. The recorded behaviour is corrected as follows.
+
+- **One marker grammar.** Numeric markers are parsed only by `findCitationMarkerGroups`
+  (`keiko-contracts` `runtime/citation-markers`): `[1]`, the grouped `[1, 7, 8]` / `[1,7]` / `[1; 2]`,
+  and the CJK/fullwidth bracket glyphs. The attacher, `reconcileNumericCitations`, the claim
+  segmentation, the answer renderer and the copy stripper all use it; four private one-integer
+  regexes that silently ignored every grouped marker are gone. Ranges (`[1-3]`) are deliberately not
+  markers (`[0-9]`, `[2020-2024]`).
+- **Token overlap is a soft signal, never a filter.** `attachCitationsToAnswer` keeps every in-range
+  marker attached; a weak claim/excerpt overlap only flags the entry (`lexicalSupport: "weak"`) and
+  is counted on the `search.citations.reconciled` activity line. Whether a citation supports its
+  claim is this stage's question, answered by the judge.
+- **`uncited-answer` is a third additive kind.** An answer with source-backed claims and no supported
+  marker used to reuse `unsupported-citation`, which the UI reads as "references sources that were not
+  in the retrieved evidence" — false for a merely uncited answer. A refusal (one shared detector,
+  `runtime/no-evidence-answer`) makes no claim and carries neither kind.
+- **The judge is sized per evidence item.** `maxExcerptChars` bounds each cited item, a numeric
+  evidence block gets a framing allowance for its `[n] label` header and code fence, and one claim may
+  cite up to `ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM` distinct items. Before this, the rendered block
+  of a single full-length excerpt already exceeded the 900-character cap, so almost every cited claim
+  degraded to `entailment-unavailable`. A single item longer than its cap still degrades (never judged
+  against a partial excerpt). The stage's default cap follows the operator's grounding excerpt limit.
 
 ## Related
 

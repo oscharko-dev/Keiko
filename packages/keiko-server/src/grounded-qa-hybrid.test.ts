@@ -828,7 +828,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(answer.uncertainty).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          kind: "unsupported-citation",
+          kind: "uncited-answer",
           claim: expect.stringContaining("without a supported inline citation") as unknown,
         }),
       ]),

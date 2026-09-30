@@ -102,7 +102,7 @@ import {
   buildPackCitationIndex,
   GROUNDED_NO_EVIDENCE_ANSWER,
   incompleteAnswerMarker,
-  missingCitationMarker,
+  missingCitationMarkerFor,
   noEvidenceMarker,
   reconcileInlineCitations,
   reconcileNumericCitations,
@@ -1173,7 +1173,7 @@ function hybridReconciliationUncertainty(
     unsupportedNumeric === undefined &&
     reconciliation.citedScopePaths.size === 0 &&
     numericReconciliation.citedMarkers.size === 0
-      ? missingCitationMarker(nowMs)
+      ? missingCitationMarkerFor(assistant.content, nowMs)
       : undefined;
   const markers = [
     ...(unsupported === undefined ? [] : [unsupported]),

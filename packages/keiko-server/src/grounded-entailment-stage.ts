@@ -47,7 +47,7 @@ import {
   type ServerDiagnosticSink,
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
-import type { UiHandlerDeps } from "./deps.js";
+import { currentGroundingLimits, type UiHandlerDeps } from "./deps.js";
 
 export interface EntailmentStage {
   // Judge the answer's citations for support against their in-pack excerpts and return the resulting
@@ -254,6 +254,19 @@ async function evaluateHybridEntailment(
   }
 }
 
+// The judge's per-evidence-item cap follows the operator's grounding excerpt limit: every excerpt the
+// answer model was shown was capped at `maxExcerptChars`, so a judge cap below that limit would make
+// every full-length excerpt undecidable. Never below the built-in default.
+function entailmentOptionsFor(deps: UiHandlerDeps): EntailmentOptions {
+  return {
+    ...DEFAULT_ENTAILMENT_OPTIONS,
+    maxExcerptChars: Math.max(
+      DEFAULT_ENTAILMENT_OPTIONS.maxExcerptChars,
+      currentGroundingLimits(deps).maxExcerptChars,
+    ),
+  };
+}
+
 /**
  * Build the entailment stage for a grounded ask, or `undefined` when it must stay inert (no judge
  * model configured, or a capsule policy denies answer synthesis). `modelId` is the model that
@@ -266,7 +279,7 @@ export function createEntailmentStage(
   modelId: string,
   observability: EntailmentStageObservability = {},
   signal?: AbortSignal,
-  options: EntailmentOptions = DEFAULT_ENTAILMENT_OPTIONS,
+  options: EntailmentOptions = entailmentOptionsFor(deps),
 ): EntailmentStage | undefined {
   if (capsules.length > 0 && !isScopeModelUseOperationAllowed(capsules, "answerSynthesis")) {
     return undefined;

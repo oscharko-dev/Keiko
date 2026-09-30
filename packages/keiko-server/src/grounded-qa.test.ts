@@ -2945,7 +2945,7 @@ describe("handleGroundedAsk", () => {
       );
       expect(answerOnlyContextAvailable).toBe(true);
       expect(answer.uncertainty).toContainEqual({
-        kind: "unsupported-citation",
+        kind: "uncited-answer",
         claim:
           "The answer received governed memory context outside retrieved evidence. Treat claims " +
           "derived from that memory as uncited and unverified.",

@@ -53,6 +53,10 @@ import {
   isKnowledgePodRetrievalActivitySafeText,
   validateKnowledgePodRetrievalActivity,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
+import {
+  NO_EVIDENCE_ANSWER_MAX_CHARS,
+  isNoEvidenceAnswerText,
+} from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import {
   CancelledError,
@@ -86,12 +90,13 @@ import {
 } from "./grounded-rerank-facade.js";
 import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 import {
-  missingCitationMarker,
+  missingCitationMarkerFor,
   reconcileNumericCitations,
   unsupportedNumericCitationMarker,
   type NumericEntailmentEvidence,
 } from "./grounded-faithfulness.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
+import { logCitationReconciliation } from "./grounded-citation-log.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import {
   assertConversationReadinessAdmission,
@@ -1002,14 +1007,6 @@ function localKnowledgeQuery(
   };
 }
 
-const REFUSAL_PATTERNS: readonly RegExp[] = [
-  /\bno\s+evidence\s+(?:found|available|in|within)\b/iu,
-  /\binsufficient\s+evidence\b/iu,
-  /\bnot\s+enough\s+evidence\b/iu,
-  /\bkeine\s+evidenz\b/iu,
-  /\bkeine\s+(?:belege|hinweise)\b/iu,
-  /\bnicht\s+genug\s+(?:evidenz|belege|hinweise)\b/iu,
-];
 const GERMAN_QUERY_PATTERNS: readonly RegExp[] = [
   /[äöüß]/iu,
   /\b(?:bitte|was|wie|warum|welche|welcher|welches|wieviel|wieso)\b/iu,
@@ -1023,13 +1020,15 @@ function shouldUseGermanForSystemAnswer(question: string | undefined): boolean {
 
 function isNoEvidenceAnswer(answer: string): boolean {
   const compact = answer.replace(METADATA_WHITESPACE_PATTERN, " ").trim();
-  if (compact.length === 0 || compact.length > 240) return false;
+  if (compact.length === 0 || compact.length > NO_EVIDENCE_ANSWER_MAX_CHARS) return false;
   const lower = compact.toLowerCase();
   if (lower === LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER.toLowerCase()) return true;
   if (LEGACY_LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWERS.some((legacy) => lower === legacy.toLowerCase())) {
     return true;
   }
-  return REFUSAL_PATTERNS.some((pattern) => pattern.test(compact));
+  // One refusal detector for every grounded path (keiko-contracts): English and German, and never
+  // a text that carries a citation marker.
+  return isNoEvidenceAnswerText(compact);
 }
 
 function localKnowledgeSpecificNoEvidenceAnswer(
@@ -1150,7 +1149,7 @@ function citationReconciliationUncertainty(
   const unsupported = unsupportedNumericCitationMarker(numeric.unsupportedMarkers, nowMs);
   const missing =
     unsupported === undefined && result.citations.length === 0
-      ? missingCitationMarker(nowMs)
+      ? missingCitationMarkerFor(result.answer, nowMs)
       : undefined;
   const markers = [
     ...(unsupported === undefined ? [] : [unsupported]),
@@ -2270,6 +2269,31 @@ function buildPersistedScopedAnswer(input: {
   });
 }
 
+// Body-free counts of how this answer's inline markers reconciled against the retrieved references
+// (attached, grouped, dangling, weak-overlap), so a defect of that class can be rebuilt from the log.
+function logScopedCitationReconciliation(
+  result: ScopedGroundedResult,
+  correlationId: string | undefined,
+): void {
+  if (
+    result.noEvidence ||
+    result.answerOnlyContextUsed === true ||
+    result.references.length === 0
+  ) {
+    return;
+  }
+  logCitationReconciliation(
+    {
+      answer: result.answer,
+      referenceCount: result.references.length,
+      attachedIndices: result.citations.map((entry) => entry.index),
+      weakOverlapCount: result.weakCitationCount ?? 0,
+      refusal: enforcedNoEvidenceReason(result) !== undefined,
+    },
+    correlationId,
+  );
+}
+
 interface PersistScopedGroundedAnswerInput {
   readonly chat: Chat;
   readonly input: AskInput;
@@ -2294,6 +2318,7 @@ async function persistScopedGroundedAnswer(
   if (result.references.length > 0)
     emitAnswerContextAudit(auditSink, env.store, result, occurredAt);
   const assistantContent = scopedAssistantContent(result, input);
+  logScopedCitationReconciliation(result, context.correlationId);
   const persisted = persistRedactedGroundedExchange(deps, chat, input, assistantContent);
   const sourceLookup = buildSelectedScopeSourceLookup(env.store, selected);
   const limits = currentGroundingLimits(deps);

@@ -142,7 +142,11 @@ describe("attachCitationsToAnswer", () => {
     expect(result.citations[0]?.reference.chunkId).toBe("ch-a");
   });
 
-  it("drops a marker when the answer claim has no significant overlap with the excerpt", () => {
+  // The lexical overlap gate used to DROP a marker whose claim shared too few tokens with the
+  // excerpt. It is a token-equality heuristic (no stemming), so faithful German or paraphrased
+  // citations failed it routinely and were left as dead text: no link, no footer count. An
+  // in-range marker now always stays attached; a weak overlap is reported, never acted on.
+  it("keeps a marker attached and flags it weak when the claim has no significant overlap", () => {
     const refs = [reference("ch-a")];
     const result = attachCitationsToAnswer(
       "The SOC2 control requires quarterly access reviews [1].",
@@ -153,7 +157,79 @@ describe("attachCitationsToAnswer", () => {
       },
     );
     expect(result.text).toBe("The SOC2 control requires quarterly access reviews [1].");
-    expect(result.citations).toEqual([]);
+    expect(result.citations).toHaveLength(1);
+    expect(result.citations[0]?.reference.chunkId).toBe("ch-a");
+    expect(result.citations[0]?.lexicalSupport).toBe("weak");
+    expect(result.weakOverlapCount).toBe(1);
+  });
+
+  it("does not flag a marker whose claim overlaps the excerpt", () => {
+    const refs = [reference("ch-a")];
+    const result = attachCitationsToAnswer(
+      "The SOC2 control requires quarterly access reviews [1].",
+      refs,
+      {
+        excerptForReference: () =>
+          "SOC2 control AC-3 requires quarterly access reviews by the platform owner.",
+      },
+    );
+    expect(result.citations[0]?.lexicalSupport).toBeUndefined();
+    expect(result.weakOverlapCount).toBe(0);
+  });
+
+  // The customer's German answer: the claim is a paraphrase in another inflection, so almost no
+  // token matches the excerpt exactly, and it ends in a bare marker list. Every one of these
+  // markers used to be dropped (the list because a lone "," counted as the claim).
+  it("keeps every in-range marker of a German paraphrase, including a trailing marker list", () => {
+    const refs = [reference("ch-1"), reference("ch-2"), reference("ch-3")];
+    const result = attachCitationsToAnswer(
+      "Die Anwendungen laufen auf einer aktuellen Laufzeitumgebung laut Betriebsvorgaben. [1], [2], [3]",
+      refs,
+      { excerptForReference: () => "Java runtime baseline: JDK 17 for all services." },
+    );
+    expect(result.citations.map((entry) => entry.marker)).toEqual(["[1]", "[2]", "[3]"]);
+    expect(result.weakOverlapCount).toBe(3);
+  });
+
+  it("attaches one entry per index of a grouped marker, each with its own single-index literal", () => {
+    const refs = [reference("ch-a"), reference("ch-b"), reference("ch-c")];
+    const result = attachCitationsToAnswer("Java 17 wird verwendet [1, 3].", refs);
+    expect(result.text).toBe("Java 17 wird verwendet [1, 3].");
+    expect(result.citations.map((entry) => entry.marker)).toEqual(["[1]", "[3]"]);
+    expect(result.citations.map((entry) => entry.index)).toEqual([1, 3]);
+    expect(result.citations.map((entry) => entry.reference.chunkId)).toEqual(["ch-a", "ch-c"]);
+  });
+
+  it.each([
+    ["[1,2]", ["[1]", "[2]"]],
+    ["[1; 2]", ["[1]", "[2]"]],
+    ["【1, 2】", ["【1】", "【2】"]],
+  ])("accepts the grouped marker style %s", (group, markers) => {
+    const refs = [reference("ch-a"), reference("ch-b")];
+    const result = attachCitationsToAnswer(`Alpha beta ${group}.`, refs);
+    expect(result.citations.map((entry) => entry.marker)).toEqual(markers);
+  });
+
+  it("drops only the out-of-range indices of a grouped marker", () => {
+    const refs = [reference("ch-a"), reference("ch-b")];
+    const result = attachCitationsToAnswer("Alpha [2, 9, 0].", refs);
+    expect(result.citations.map((entry) => entry.index)).toEqual([2]);
+  });
+
+  it("judges each entry of a grouped marker against its own excerpt", () => {
+    const refs = [reference("ch-a"), reference("ch-b")];
+    const result = attachCitationsToAnswer(
+      "The retention period spans thirty days by policy [1, 2].",
+      refs,
+      {
+        excerptForReference: (ref) =>
+          ref.chunkId === "ch-a"
+            ? "The retention period spans thirty days by policy."
+            : "Unrelated release checklist covering signing and notarization.",
+      },
+    );
+    expect(result.citations.map((entry) => entry.lexicalSupport)).toEqual([undefined, "weak"]);
+    expect(result.weakOverlapCount).toBe(1);
   });
 
   // Repository-pod regressions. Answers grounded on a code repository name files and members
@@ -198,14 +274,15 @@ describe("attachCitationsToAnswer", () => {
     expect(result.citations).toHaveLength(1);
   });
 
-  // The guard must still bite: the fixes above widen which text counts as the claim, they do not
-  // weaken the faithfulness comparison. A file-naming claim cited against unrelated evidence is
-  // exactly the unfaithful case the check exists to catch.
-  it("still drops a file-naming claim when the excerpt is unrelated", () => {
+  // The comparison itself is not weakened: a file-naming claim cited against unrelated evidence is
+  // still recognised as unfaithful. It is reported (weak) instead of being silently erased.
+  it("flags a file-naming claim as weak when the excerpt is unrelated", () => {
     const refs = [reference("ch-a")];
     const result = attachCitationsToAnswer("It is implemented in `code-parser.ts`[1].", refs, {
       excerptForReference: () => "The release checklist covers signing, notarization, and upload.",
     });
-    expect(result.citations).toEqual([]);
+    expect(result.citations).toHaveLength(1);
+    expect(result.citations[0]?.lexicalSupport).toBe("weak");
+    expect(result.weakOverlapCount).toBe(1);
   });
 });

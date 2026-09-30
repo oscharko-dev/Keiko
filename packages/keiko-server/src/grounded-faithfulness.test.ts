@@ -9,7 +9,9 @@ import type {
 import { attachCitationsToAnswer } from "@oscharko-dev/keiko-local-knowledge";
 import {
   DEFAULT_ENTAILMENT_OPTIONS,
+  ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM,
   GROUNDED_NO_EVIDENCE_ANSWER,
+  NUMERIC_EVIDENCE_FRAMING_CHARS,
   buildPackCitationIndex,
   buildPackExcerptTextResolver,
   type EntailmentJudge,
@@ -18,6 +20,7 @@ import {
   entailmentUnavailableMarker,
   incompleteAnswerMarker,
   missingCitationMarker,
+  missingCitationMarkerFor,
   packExcerptCount,
   packHasUsableEvidence,
   packsHaveUsableEvidence,
@@ -33,6 +36,7 @@ import {
   unsupportedCitationMarker,
   unsupportedClaimMarker,
   unsupportedNumericCitationMarker,
+  uncitedMemoryContextMarker,
 } from "./grounded-faithfulness.js";
 
 const NOW = 1_700_000_000_000;
@@ -307,15 +311,41 @@ describe("unsupportedCitationMarker", () => {
     expect(marker?.claim).toContain("src/x.ts");
   });
 
+  // The reader-facing text for `unsupported-citation` says the answer "references sources that were
+  // not in the retrieved evidence". An answer that merely forgot its markers references nothing, so
+  // it carries its own kind; the warning body is unchanged.
   it("builds a body-free warning when source-backed output omits citations", () => {
     expect(missingCitationMarker(NOW)).toEqual({
-      kind: "unsupported-citation",
+      kind: "uncited-answer",
       claim:
         "The answer used retrieved evidence without a supported inline citation. Treat its " +
         "source-backed claims as unverified.",
       impactedAtomIds: [],
       emittedAtMs: NOW,
     });
+    expect(missingCitationMarker(NOW).kind).not.toBe("unsupported-citation");
+  });
+
+  it("reports governed memory context outside the evidence as uncited, not as a fabricated citation", () => {
+    expect(uncitedMemoryContextMarker(NOW).kind).toBe("uncited-answer");
+  });
+});
+
+describe("missingCitationMarkerFor", () => {
+  it("warns for a substantive answer that carries no citation", () => {
+    const marker = missingCitationMarkerFor(
+      "Die Anwendungen laufen auf Java 17 und werden mit Maven gebaut.",
+      NOW,
+    );
+    expect(marker?.kind).toBe("uncited-answer");
+  });
+
+  it.each([
+    "In den bereitgestellten Dokumenten wurden keine Informationen oder Vorgaben zur Java-Version gefunden.",
+    "The provided documents do not contain any information about the Java version.",
+    "No evidence found in the connected scope.",
+  ])("does not warn about a missing citation on the refusal %j", (refusal) => {
+    expect(missingCitationMarkerFor(refusal, NOW)).toBeUndefined();
   });
 });
 
@@ -360,6 +390,20 @@ describe("numeric citation reconciliation", () => {
 
     expect([...result.citedMarkers]).toEqual([1]);
     expect(result.unsupportedMarkers).toEqual([7, 9]);
+  });
+
+  it("reads every index of a grouped marker like the attacher does", () => {
+    const answer = "Java 17 wird verwendet [1, 7, 8]. Ein Nachtrag [2; 9].";
+    const references = [driftPinReference(), driftPinReference()];
+    const attached = attachCitationsToAnswer(answer, references);
+    const attachedMarkers = new Set(attached.citations.map((citation) => citation.index));
+    const numeric = reconcileNumericCitations(answer, attachedMarkers);
+
+    // The attacher keeps the in-range 1 and 2; the reconciler must SEE the grouped 7, 8 and 9 so
+    // they surface as unsupported instead of rendering as dead text with no signal.
+    expect([...attachedMarkers]).toEqual([1, 2]);
+    expect([...numeric.citedMarkers]).toEqual([1, 2]);
+    expect(numeric.unsupportedMarkers).toEqual([7, 8, 9]);
   });
 
   it("stays in lockstep with the attacher's marker grammar", () => {
@@ -548,6 +592,91 @@ describe("numeric citation entailment", () => {
       scriptedJudge(),
     );
     expect(result).toEqual({ unentailed: [], judgedClaims: 0, unavailableClaims: 0 });
+  });
+
+  it("segments a grouped marker into one claim citing every index", () => {
+    expect(segmentNumericCitedClaims("Java 17 wird verwendet [1, 7, 8].")).toEqual([
+      { claimText: "Java 17 wird verwendet .", markers: [1, 7, 8] },
+    ]);
+  });
+
+  // The rendered evidence block is the `[n] label` header plus a code fence around an excerpt the
+  // producer already capped at the excerpt limit, so it is LONGER than the excerpt. Measured against
+  // the bare 900-character cap it never fit, and every normally cited claim degraded to
+  // "citation support could not be verified".
+  function renderedBlock(marker: number, excerptChars: number): string {
+    const excerpt = "Retention is 30 days. "
+      .repeat(Math.ceil(excerptChars / 22))
+      .slice(0, excerptChars);
+    return `[${String(marker)}] Handbuch · Kapitel 3 · Aufbewahrung\n\`\`\`text\n${excerpt}\n\`\`\``;
+  }
+
+  it("judges a normal cited claim whose block wraps an excerpt at the excerpt limit", async () => {
+    const block = renderedBlock(1, DEFAULT_ENTAILMENT_OPTIONS.maxExcerptChars);
+    expect(block.length).toBeGreaterThan(DEFAULT_ENTAILMENT_OPTIONS.maxExcerptChars);
+    let calls = 0;
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is 30 days [1].",
+      [{ marker: 1, excerptText: block }],
+      { judge: (): Promise<EntailmentVerdict> => ((calls += 1), Promise.resolve("supported")) },
+    );
+    expect(calls).toBe(1);
+    expect(result).toEqual({ unentailed: [], judgedClaims: 1, unavailableClaims: 0 });
+  });
+
+  it("judges a claim that cites several evidence blocks at once", async () => {
+    let judgedText = "";
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is 30 days [1, 2, 3].",
+      [1, 2, 3].map((marker) => ({
+        marker,
+        excerptText: renderedBlock(marker, DEFAULT_ENTAILMENT_OPTIONS.maxExcerptChars),
+      })),
+      {
+        judge: (input): Promise<EntailmentVerdict> => {
+          judgedText = input.excerptText;
+          return Promise.resolve("supported");
+        },
+      },
+    );
+    expect(result).toEqual({ unentailed: [], judgedClaims: 1, unavailableClaims: 0 });
+    expect(judgedText).toContain("[1] Handbuch");
+    expect(judgedText).toContain("[3] Handbuch");
+  });
+
+  it("still refuses to judge a block whose excerpt is longer than the excerpt limit", async () => {
+    let calls = 0;
+    const oversized = renderedBlock(
+      1,
+      DEFAULT_ENTAILMENT_OPTIONS.maxExcerptChars + NUMERIC_EVIDENCE_FRAMING_CHARS + 50,
+    );
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is ten years [1].",
+      [{ marker: 1, excerptText: `${oversized}\n[[CONTRADICTS]]` }],
+      {
+        judge: (input): Promise<EntailmentVerdict> => ((calls += 1), scriptedJudge().judge(input)),
+      },
+    );
+    expect(calls).toBe(0);
+    expect(result).toEqual({ unentailed: [], judgedClaims: 0, unavailableClaims: 1 });
+  });
+
+  it("degrades a claim citing more distinct evidence items than one judge call carries", async () => {
+    const markers = Array.from(
+      { length: ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM + 1 },
+      (_, index) => index + 1,
+    );
+    let calls = 0;
+    const result = await reconcileNumericClaimEntailment(
+      `Retention is 30 days [${markers.join(", ")}].`,
+      markers.map((marker) => ({
+        marker,
+        excerptText: `Retention evidence number ${String(marker)}.`,
+      })),
+      { judge: (): Promise<EntailmentVerdict> => ((calls += 1), Promise.resolve("supported")) },
+    );
+    expect(calls).toBe(0);
+    expect(result).toEqual({ unentailed: [], judgedClaims: 0, unavailableClaims: 1 });
   });
 
   it("degrades to unavailable when the numeric citation judge cannot decide", async () => {

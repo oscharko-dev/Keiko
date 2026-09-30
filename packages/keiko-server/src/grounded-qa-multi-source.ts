@@ -67,7 +67,7 @@ import {
   buildPackCitationIndex,
   citationSourceIdForIndex,
   incompleteAnswerMarker,
-  missingCitationMarker,
+  missingCitationMarkerFor,
   packsHaveUsableEvidence,
   reconcileInlineCitations,
   unsupportedCitationMarker,
@@ -950,7 +950,7 @@ function buildMultiSourceReconciliationUncertainty(
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   const missing =
     unsupported === undefined && reconciliation.citedScopePaths.size === 0
-      ? missingCitationMarker(nowMs)
+      ? missingCitationMarkerFor(assistant.content, nowMs)
       : undefined;
   const markers = [
     ...(unsupported === undefined ? [] : [unsupported]),

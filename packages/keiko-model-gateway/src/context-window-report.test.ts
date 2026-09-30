@@ -86,7 +86,7 @@ describe("reportedContextWindowTokens", () => {
 describe("OpenAiAdapter overflow mapping", () => {
   it("attaches the provider-stated window to the ContextOverflowError", async () => {
     const adapter = new OpenAiAdapter({
-      fetchImpl: () =>
+      fetchImpl: (): Promise<Response> =>
         Promise.resolve(
           rejection("This model's maximum context length is 32768 tokens. However, ..."),
         ),
@@ -100,7 +100,7 @@ describe("OpenAiAdapter overflow mapping", () => {
 
   it("classifies vLLM's too-large output allocation as an overflow, not a generic 400", async () => {
     const adapter = new OpenAiAdapter({
-      fetchImpl: () =>
+      fetchImpl: (): Promise<Response> =>
         Promise.resolve(
           rejection("max_tokens=9000 cannot be greater than max_model_len=8192. Please request."),
         ),
@@ -126,9 +126,11 @@ describe("Gateway context-window report hook", () => {
   it("reports the provider-stated window of a buffered overflow before rethrowing it", async () => {
     const reports: ContextWindowReport[] = [];
     const gateway = new Gateway(assumedConfig(), {
-      fetchImpl: () =>
+      fetchImpl: (): Promise<Response> =>
         Promise.resolve(rejection("This model's maximum context length is 32768 tokens.")),
-      onContextWindowReported: (report) => reports.push(report),
+      onContextWindowReported: (report): void => {
+        reports.push(report);
+      },
     });
     await expect(
       gateway.chat({
@@ -145,7 +147,7 @@ describe("Gateway context-window report hook", () => {
   it("reports the window of a streamed overflow", async () => {
     const onContextWindowReported = vi.fn();
     const gateway = new Gateway(assumedConfig(), {
-      fetchImpl: () =>
+      fetchImpl: (): Promise<Response> =>
         Promise.resolve(rejection("max_tokens=1 cannot be greater than max_model_len=4096.")),
       onContextWindowReported,
     });
@@ -166,7 +168,7 @@ describe("Gateway context-window report hook", () => {
   it("stays silent for an overflow that names no window", async () => {
     const onContextWindowReported = vi.fn();
     const gateway = new Gateway(assumedConfig(), {
-      fetchImpl: () => Promise.resolve(rejection("context_length_exceeded")),
+      fetchImpl: (): Promise<Response> => Promise.resolve(rejection("context_length_exceeded")),
       onContextWindowReported,
     });
     await expect(
@@ -251,7 +253,10 @@ describe("discoverGatewayContextWindow", () => {
       fetchImpl,
     });
     expect(outcome).toEqual({ status: "reported", contextWindowTokens: 65_536 });
-    const body = JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    const body = JSON.parse(fetchImpl.mock.calls[0]?.[1]?.body as string) as Record<
+      string,
+      unknown
+    >;
     expect(body.max_tokens).toBe(1_000_000_000);
     expect(body.model).toBe(PROVIDER.modelId);
   });
@@ -260,7 +265,7 @@ describe("discoverGatewayContextWindow", () => {
     const outcome = await discoverGatewayContextWindow({
       config: assumedConfig(),
       provider: PROVIDER,
-      fetchImpl: () =>
+      fetchImpl: (): Promise<Response> =>
         Promise.resolve(
           new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
             status: 200,
@@ -274,7 +279,7 @@ describe("discoverGatewayContextWindow", () => {
     const outcome = await discoverGatewayContextWindow({
       config: assumedConfig(),
       provider: PROVIDER,
-      fetchImpl: () =>
+      fetchImpl: (): Promise<Response> =>
         Promise.resolve(
           rejection(
             "max_tokens is too large: 1000000000. This model supports at most 16384 completion tokens",

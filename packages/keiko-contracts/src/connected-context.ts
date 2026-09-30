@@ -299,6 +299,11 @@ export type UncertaintyMarkerKind =
   // citation reconciliation appends this marker so an ungrounded (fabricated) reference is surfaced
   // rather than displayed as a supported grounded claim.
   | "unsupported-citation"
+  // The grounded answer makes source-backed claims but carries no supported inline marker at all
+  // (or received evidence-external context it does not cite). Distinct from `unsupported-citation`:
+  // nothing was fabricated or out of range, the answer simply does not say where it got its
+  // claims from. A no-evidence refusal carries no claims and therefore never carries this marker.
+  | "uncited-answer"
   // GEN-AI-GATEWAY-001 (RB-4): the model completion was truncated (finishReason "length"); the
   // partial answer is surfaced with this marker instead of being consumed as a complete answer.
   | "incomplete-answer"
@@ -325,6 +330,7 @@ export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = Object
   "tool-unavailable",
   "low-confidence",
   "unsupported-citation",
+  "uncited-answer",
   "incomplete-answer",
   "unsupported-claim",
   "entailment-unavailable",

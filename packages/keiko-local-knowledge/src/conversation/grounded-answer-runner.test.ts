@@ -275,6 +275,48 @@ describe("runGroundedAnswer — happy path", () => {
     expect(result.citations).toEqual([]);
   });
 
+  it("does not force citation repair for a natural German refusal", async () => {
+    // The stock skip list only knew "keine Evidenz/Belege/Hinweise", so this refusal was treated
+    // as an answer that forgot its markers and cost a second, useless generation.
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-german-refusal" });
+    const refusal =
+      "In den bereitgestellten Dokumenten wurden keine Informationen oder Vorgaben zur Java-Version gefunden.";
+    const generator = fakeGenerator(refusal);
+
+    const result = await runGroundedAnswer(
+      {
+        retrieval: { store, embeddingAdapter: scriptedAdapter() },
+        answerGenerator: generator,
+      },
+      { conversationId: "conv-german-refusal", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+
+    expect(generator.calls).toHaveLength(1);
+    expect(result.answer).toBe(refusal);
+    expect(result.citations).toEqual([]);
+  });
+
+  it("keeps a weak-overlap citation attached and reports how many were weak", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-weak-overlap" });
+    const generator = fakeGenerator("Die Anwendungen nutzen eine aktuelle Laufzeit [1].");
+
+    const result = await runGroundedAnswer(
+      {
+        retrieval: { store, embeddingAdapter: scriptedAdapter() },
+        answerGenerator: generator,
+        citationFaithfulness: { excerptForReference: () => "Java runtime baseline: JDK 17." },
+      },
+      { conversationId: "conv-weak-overlap", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+
+    expect(generator.calls).toHaveLength(1);
+    expect(result.citations.map((entry) => entry.marker)).toEqual(["[1]"]);
+    expect(result.citations[0]?.lexicalSupport).toBe("weak");
+    expect(result.weakCitationCount).toBe(1);
+  });
+
   it("applies the optional reference reranker before generation and citation attachment", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-rerank" });

@@ -124,7 +124,7 @@ import {
   GROUNDED_NO_EVIDENCE_ANSWER,
   buildPackCitationIndex,
   incompleteAnswerMarker,
-  missingCitationMarker,
+  missingCitationMarkerFor,
   noEvidenceMarker,
   packHasUsableEvidence,
   reconcileInlineCitations,
@@ -5273,6 +5273,7 @@ function uncertaintyActivityExtra(
     "tool-unavailable": 0,
     "low-confidence": 0,
     "unsupported-citation": 0,
+    "uncited-answer": 0,
     "incomplete-answer": 0,
     "unsupported-claim": 0,
     "entailment-unavailable": 0,
@@ -6467,7 +6468,7 @@ function citationCoverageMarkerFor(
   const reconciliation = reconcileInlineCitations(answerContent, buildPackCitationIndex([pack]));
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   if (unsupported !== undefined || reconciliation.citedScopePaths.size > 0) return unsupported;
-  return missingCitationMarker(nowMs);
+  return missingCitationMarkerFor(answerContent, nowMs);
 }
 
 function exhaustedAnswerBudgetDimensions(
