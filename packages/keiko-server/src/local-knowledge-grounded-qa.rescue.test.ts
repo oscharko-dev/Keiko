@@ -1029,6 +1029,26 @@ describe("weakly supported citations", () => {
     }
   });
 
+  // PR #3678 review (P1): without any judge a claim hiding bracketed prose is still unverified,
+  // however well its visible half matches the excerpt.
+  it("keeps a hidden-prose claim unverified when no judge is available", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const answer = await askWith(
+        "The release checklist covers signing, notarization and upload [MFA is mandatory for every release] [1].",
+        "no-judge-hidden",
+      );
+
+      expect(lexicalSupports(answer)).toEqual([undefined]);
+      expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+      const settled = sink.events.find((event) => event.op === "search.citations.support-settled");
+      expect(settled?.extra).toMatchObject({ supportCaveat: "no-judge", hiddenProseClaimCount: 1 });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
   it("records a supported answer as settled without a caveat", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
@@ -1095,7 +1115,7 @@ describe("weakly supported citations", () => {
     }
   });
 
-  it("keeps a disabled assessment's words as source-backed text", async () => {
+  it("drops an assessment the operator disables", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
     try {
@@ -1108,7 +1128,7 @@ describe("weakly supported citations", () => {
       );
 
       expect(answer.content).toBe(
-        "The release checklist covers signing, notarization and upload [1]. Use Java 21.",
+        "The release checklist covers signing, notarization and upload [1].",
       );
       const line = sink.events.find((event) => event.op === "search.answer.assessed");
       expect(line?.extra).toMatchObject({ policy: "disabled", outcome: "neutralized" });

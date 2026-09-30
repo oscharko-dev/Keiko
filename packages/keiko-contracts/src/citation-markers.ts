@@ -389,38 +389,52 @@ class BacktickRuns {
   }
 }
 
-/**
- * Where the scan resumes after the backtick run at `position`: past the inline code span it opens,
- * or past the run itself when it is literal text. Undefined when no backtick run starts there.
- */
-function afterCodeRun(text: string, position: number, runs: BacktickRuns): number | undefined {
-  if (text.charAt(position) !== "`") return undefined;
-  const length = runLength(text, position, "`");
-  return runs.closingEnd(position, length) ?? position + length;
+/** A span of Markdown code in the scanned text: `start` inclusive, `end` exclusive. */
+export interface MarkdownCodeRange {
+  readonly start: number;
+  readonly end: number;
 }
 
-// The renderer's fenced code blocks in document order; the scan cursor only moves forward, so each
-// block is passed once.
-class FencedBlocks {
-  private readonly ranges: readonly TextRange[];
-  private next = 0;
-
-  constructor(ranges: readonly TextRange[]) {
-    this.ranges = ranges;
-  }
-
-  /** The end of the fenced block the scan has reached at `cursor`, or undefined outside one. */
-  endAt(cursor: number): number | undefined {
-    for (
-      let block = this.ranges[this.next];
-      block !== undefined && cursor >= block.start;
-      block = this.ranges[this.next]
-    ) {
-      this.next += 1;
-      if (block.end > cursor) return block.end;
+/**
+ * Every Markdown code span of `text` in document order, as the chat renderer shows it: its fenced
+ * blocks and the inline code spans outside them. The one code grammar every grounded-answer reader
+ * shares, so a citation marker or an assessment tag inside code is never read as one.
+ */
+export function markdownCodeRanges(text: string): readonly MarkdownCodeRange[] {
+  const layout = renderedLayout(text);
+  const runs = new BacktickRuns(text, layout.breaks);
+  const ranges: MarkdownCodeRange[] = [];
+  let fence = 0;
+  let cursor = 0;
+  while (cursor < text.length) {
+    const block = layout.code[fence];
+    if (block !== undefined && cursor >= block.start) {
+      if (block.end > cursor) ranges.push(block);
+      cursor = Math.max(cursor, block.end);
+      fence += 1;
+      continue;
     }
-    return undefined;
+    cursor = afterInlineCode(text, cursor, block?.start ?? text.length, runs, ranges);
   }
+  return ranges;
+}
+
+// Scans from `cursor` for the next inline code span before `limit`, records it, and returns where
+// the scan resumes: past the span, past a literal backtick run, or at `limit`.
+function afterInlineCode(
+  text: string,
+  cursor: number,
+  limit: number,
+  runs: BacktickRuns,
+  ranges: MarkdownCodeRange[],
+): number {
+  const tick = text.indexOf("`", cursor);
+  if (tick === -1 || tick >= limit) return limit;
+  const length = runLength(text, tick, "`");
+  const close = runs.closingEnd(tick, length);
+  if (close === undefined) return tick + length;
+  ranges.push({ start: tick, end: close });
+  return close;
 }
 
 /**
@@ -430,14 +444,14 @@ class FencedBlocks {
  */
 export function findCitationMarkerGroups(text: string): readonly CitationMarkerGroup[] {
   const groups: CitationMarkerGroup[] = [];
-  const layout = renderedLayout(text);
-  const runs = new BacktickRuns(text, layout.breaks);
-  const fenced = new FencedBlocks(layout.code);
+  const code = markdownCodeRanges(text);
+  let next = 0;
   let cursor = 0;
   while (cursor < text.length) {
-    const code = fenced.endAt(cursor) ?? afterCodeRun(text, cursor, runs);
-    if (code !== undefined) {
-      cursor = code;
+    const range = code[next];
+    if (range !== undefined && cursor >= range.start) {
+      cursor = Math.max(cursor, range.end);
+      next += 1;
       continue;
     }
     if (!OPEN_BRACKETS.has(text.charAt(cursor))) {

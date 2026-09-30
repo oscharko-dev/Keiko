@@ -204,8 +204,8 @@ evidence (ADR-0144). The operator sets the policy in `keiko.config.json`:
 { "groundedAnswers": { "ownAssessment": "disabled" } }
 ```
 
-`allowed` is the default. `disabled` keeps answers to the sources only. Any other value fails the
-configuration load. The Activity Log records each answer's outcome on `search.answer.assessed`
+`allowed` is the default. `disabled` keeps answers to the sources only; a block the model writes
+anyway is dropped. Any other value fails the configuration load. The Activity Log records each answer's outcome on `search.answer.assessed`
 (sizes only, never the text).
 
 ## Model-use policy

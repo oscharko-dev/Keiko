@@ -10,6 +10,8 @@
 // Everything outside the block is held to the citation, entailment and refusal rules. The block is
 // never cited, never judged, and always shown as Keiko's assessment rather than the sources'.
 
+import { markdownCodeRanges } from "./citation-markers.js";
+
 export const OWN_ASSESSMENT_POLICIES = ["allowed", "disabled"] as const;
 export type OwnAssessmentPolicy = (typeof OWN_ASSESSMENT_POLICIES)[number];
 
@@ -31,13 +33,44 @@ export interface OwnAssessmentSplit {
   readonly assessment?: string;
 }
 
-const OPEN_TAG = /<assessment>/iu;
-const CLOSE_TAG = /<\/assessment>/iu;
-const ANY_TAG = /<\/?assessment>/giu;
-const SOME_TAG = /<\/?assessment>/iu;
+const TAG = /<\/?assessment>/giu;
 
-function withoutTags(text: string): string {
-  return text.replace(ANY_TAG, "");
+interface DelimiterTag {
+  readonly start: number;
+  readonly end: number;
+  readonly closing: boolean;
+}
+
+// The assessment tags that delimit: those outside Markdown code. A tag inside inline code or a
+// fence is literal content, such as an XML example, and stays as written (PR #3678 review).
+function delimiterTags(answer: string): readonly DelimiterTag[] {
+  const code = markdownCodeRanges(answer);
+  const tags: DelimiterTag[] = [];
+  let range = 0;
+  for (const match of answer.matchAll(TAG)) {
+    while ((code[range]?.end ?? Number.POSITIVE_INFINITY) <= match.index) range += 1;
+    if ((code[range]?.start ?? Number.POSITIVE_INFINITY) <= match.index) continue;
+    const end = match.index + match[0].length;
+    tags.push({ start: match.index, end, closing: match[0].charAt(1) === "/" });
+  }
+  return tags;
+}
+
+// The text of `answer` between `from` and `to` without its delimiting tags.
+function withoutTagsBetween(
+  answer: string,
+  tags: readonly DelimiterTag[],
+  from: number,
+  to: number,
+): string {
+  let text = "";
+  let cursor = from;
+  for (const tag of tags) {
+    if (tag.start < from || tag.start >= to) continue;
+    text += answer.slice(cursor, tag.start);
+    cursor = tag.end;
+  }
+  return text + answer.slice(cursor, Math.max(cursor, to));
 }
 
 function joined(parts: readonly string[]): string {
@@ -48,31 +81,29 @@ function joined(parts: readonly string[]): string {
 }
 
 /**
- * Splits an answer at its first `<assessment>` block (tags matched case-insensitively). An
- * unclosed block runs to the end; text after a closed block stays source-backed; stray tags are
- * dropped. An answer without a block is all source-backed.
+ * Splits an answer at its first `<assessment>` block (tags matched case-insensitively, never inside
+ * Markdown code). An unclosed block runs to the end; text after a closed block stays source-backed;
+ * stray tags are dropped. An answer without a block is all source-backed.
  */
 export function splitOwnAssessment(answer: string): OwnAssessmentSplit {
-  const open = OPEN_TAG.exec(answer);
-  if (open === null) return { grounded: withoutTags(answer).trim() };
-  const before = answer.slice(0, open.index);
-  const rest = answer.slice(open.index + open[0].length);
-  const close = CLOSE_TAG.exec(rest);
-  const inside = close === null ? rest : rest.slice(0, close.index);
-  const after = close === null ? "" : rest.slice(close.index + close[0].length);
-  const grounded = joined([withoutTags(before), withoutTags(after)]);
-  const assessment = withoutTags(inside).trim();
+  const tags = delimiterTags(answer);
+  const open = tags.find((tag) => !tag.closing);
+  if (open === undefined) {
+    return { grounded: withoutTagsBetween(answer, tags, 0, answer.length).trim() };
+  }
+  const close = tags.find((tag) => tag.closing && tag.start >= open.end);
+  const grounded = joined([
+    withoutTagsBetween(answer, tags, 0, open.start),
+    withoutTagsBetween(answer, tags, close?.end ?? answer.length, answer.length),
+  ]);
+  const inside = withoutTagsBetween(answer, tags, open.end, close?.start ?? answer.length);
+  const assessment = inside.trim();
   return assessment.length === 0 ? { grounded } : { grounded, assessment };
 }
 
-/** True when `answer` carries an assessment tag at all. */
+/** True when `answer` carries an assessment tag outside Markdown code. */
 export function hasOwnAssessmentTag(answer: string): boolean {
-  return SOME_TAG.test(answer);
-}
-
-/** Removes every assessment tag and keeps the text inline: the answer when the policy disables it. */
-export function withoutOwnAssessmentTags(answer: string): string {
-  return withoutTags(answer).trim();
+  return delimiterTags(answer).length > 0;
 }
 
 /** The stored answer: the source-backed part, then the canonical assessment block. */

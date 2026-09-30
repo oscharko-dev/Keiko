@@ -483,7 +483,9 @@ describe("runGroundedAnswer — own assessment", () => {
     expect(result.ownAssessment).toBe("My own assessment: Java 21.");
   });
 
-  it("keeps a disabled assessment's words as source-backed text and says so", async () => {
+  // PR #3678 review (P1): a disabled block is dropped, never promoted to source-backed text that
+  // its citations and the judge would not cover.
+  it("drops an assessment the policy disables and says so", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-assess-c" });
     const generator = fakeGenerator("Found evidence [1]. <assessment>Use Java 21.</assessment>");
@@ -492,7 +494,7 @@ describe("runGroundedAnswer — own assessment", () => {
       { conversationId: "conv-assess-c", capsuleId: seeded.capsuleId, text: "alpha" },
     );
 
-    expect(result.answer).toBe("Found evidence [1]. Use Java 21.");
+    expect(result.answer).toBe("Found evidence [1].");
     expect(result.ownAssessment).toBeUndefined();
     expect(result.ownAssessmentNeutralized).toBe(true);
   });

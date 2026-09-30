@@ -52,6 +52,10 @@ describe("isNoEvidenceAnswerText", () => {
     "Die Quellen enthalten dazu keine Aussage.",
     "Unable to answer from the provided sources.",
     "The repository does not contain any Kafka usage.",
+    // An attribution without a comma never swallows the refusal it introduces (PR #3678 review).
+    "According to the search results the retrieved documents do not mention the Java version.",
+    "According to the search results, the retrieved documents do not mention the Java version.",
+    "Laut der Suche enthalten die bereitgestellten Dokumente keine Angaben zur Java-Version.",
   ])("recognises the refusal %j", (answer) => {
     expect(isNoEvidenceAnswerText(answer)).toBe(true);
   });

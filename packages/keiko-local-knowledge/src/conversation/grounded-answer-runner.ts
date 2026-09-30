@@ -24,7 +24,6 @@ import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/
 import {
   hasOwnAssessmentTag,
   splitOwnAssessment,
-  withoutOwnAssessmentTags,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
@@ -74,8 +73,9 @@ function shouldRepairMissingCitations(
   return !isNoEvidenceAnswerText(attached.text);
 }
 
-// The model's answer, split by the policy: an allowed assessment leaves the source-backed part;
-// a disabled one keeps its words as source-backed text, tags dropped.
+// The model's answer, split by the policy: an allowed assessment leaves the source-backed part. A
+// block the policy disables is dropped, never promoted to source-backed text its citations and
+// judge would not cover (PR #3678 review, P1).
 interface GeneratedAnswer {
   readonly attached: AttachCitationsResult;
   readonly ownAssessment?: string;
@@ -86,10 +86,10 @@ function splitGeneratedAnswer(
   text: string,
   query: ConversationGroundedQuery,
 ): { readonly grounded: string; readonly ownAssessment?: string; readonly neutralized: boolean } {
-  if (query.ownAssessment !== "allowed") {
-    return { grounded: withoutOwnAssessmentTags(text), neutralized: hasOwnAssessmentTag(text) };
-  }
   const { grounded, assessment } = splitOwnAssessment(text);
+  if (query.ownAssessment !== "allowed") {
+    return { grounded, neutralized: hasOwnAssessmentTag(text) };
+  }
   return assessment === undefined
     ? { grounded, neutralized: false }
     : { grounded, ownAssessment: assessment, neutralized: false };

@@ -5,7 +5,6 @@ import {
   hasOwnAssessmentTag,
   ownAssessmentPlainText,
   splitOwnAssessment,
-  withoutOwnAssessmentTags,
 } from "./grounded-assessment.js";
 
 describe("splitOwnAssessment", () => {
@@ -68,6 +67,34 @@ describe("composeOwnAssessment", () => {
   });
 });
 
+// PR #3678 review: a tag inside Markdown code is literal content, such as an XML example.
+describe("literal tags inside Markdown code", () => {
+  it("keeps an inline-code tag and its citation in the source-backed part", () => {
+    expect(splitOwnAssessment("The XML element is `<assessment>` [1].")).toEqual({
+      grounded: "The XML element is `<assessment>` [1].",
+    });
+    expect(hasOwnAssessmentTag("The XML element is `<assessment>` [1].")).toBe(false);
+  });
+
+  it("keeps a fenced XML example intact and still finds a real block after it", () => {
+    const answer =
+      "The schema reads [1]:\n```xml\n<assessment>required</assessment>\n```\n<assessment>Mine.</assessment>";
+    expect(splitOwnAssessment(answer)).toEqual({
+      grounded: "The schema reads [1]:\n```xml\n<assessment>required</assessment>\n```",
+      assessment: "Mine.",
+    });
+  });
+
+  it("ignores a closing tag inside code within the block", () => {
+    expect(
+      splitOwnAssessment("Fact [1]. <assessment>Use `</assessment>` tags.</assessment>"),
+    ).toEqual({
+      grounded: "Fact [1].",
+      assessment: "Use `</assessment>` tags.",
+    });
+  });
+});
+
 describe("tag handling for reading and a disabled policy", () => {
   it("detects a tag repeatedly (no global-regex state)", () => {
     expect(hasOwnAssessmentTag("a <assessment>b")).toBe(true);
@@ -76,9 +103,6 @@ describe("tag handling for reading and a disabled policy", () => {
   });
 
   it("keeps the words and drops the tags", () => {
-    expect(withoutOwnAssessmentTags("Fact [1]. <assessment>Mine.</assessment>")).toBe(
-      "Fact [1]. Mine.",
-    );
     expect(ownAssessmentPlainText("Fact [1].\n\n<assessment>\nMine.\n</assessment>")).toBe(
       "Fact [1].\n\nMine.",
     );

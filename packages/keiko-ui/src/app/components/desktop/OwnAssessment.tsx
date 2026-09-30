@@ -60,7 +60,10 @@ export function AssessedAnswerBody(props: AssessedAnswerBodyProps): ReactNode {
           <SafeMarkdownBoundary
             {...shared}
             source={assessment}
-            diagnosticCorrelationId={`${props.messageId}:assessment`}
+            // The message's own correlation keeps its layout evidence joinable (a derived id with
+            // a colon is no valid correlation); the part is named in the message identity instead.
+            diagnosticCorrelationId={props.messageId}
+            diagnosticMessageId={`${props.messageId}:assessment`}
             applyScopeId={`${props.chatId}:${props.messageId}:assessment`}
             citationPreview={undefined}
           />

@@ -609,9 +609,12 @@ export function stripInlineCitations(text: string): string {
     .trim();
 }
 
-// A bracket whose every part is a path citation hides no prose, whatever follows it: adjacent
-// citations `[a.ts:1][b.ts:2]` are two citations, not a reference-style link.
-function isPathCitationBracket(match: RegExpMatchArray): boolean {
+// A bracket whose every part is a path citation hides no prose: adjacent citations
+// `[a.ts:1][b.ts:2]` are two citations. An inline link's label is visible prose however path-like
+// it reads (`[MFA / anonymous denied](https://…)`), so a bracket followed by `(` is never one
+// (PR #3678 review).
+function isPathCitationBracket(span: string, match: RegExpMatchArray): boolean {
+  if (span.charAt((match.index ?? 0) + match[0].length) === "(") return false;
   const inner = match[0].slice(1, -1);
   return inner.split(",").every((part) => parseCitationToken(part.trim()) !== undefined);
 }
@@ -621,7 +624,7 @@ function isPathCitationBracket(match: RegExpMatchArray): boolean {
 function hidesBracketedProse(span: string): boolean {
   const markerStarts = new Set(findCitationMarkerGroups(span).map((group) => group.start));
   return [...span.matchAll(CLAIM_BRACKET_RE)].some(
-    (match) => !markerStarts.has(match.index) && !isPathCitationBracket(match),
+    (match) => !markerStarts.has(match.index) && !isPathCitationBracket(span, match),
   );
 }
 
@@ -671,22 +674,38 @@ function appendNumericCitedClaim(
 }
 
 /** Segment user-visible `[n]` citations against the sentence each marker actually supports. */
+interface SupportedClaimText {
+  readonly text: string;
+  readonly hidesProse: boolean;
+}
+
+// The claim a span's markers support: its own text, or for a marker-only span the claim before it,
+// whose hidden prose it carries along (PR #3678 review).
+function supportedClaimOf(
+  claimText: string,
+  hidden: boolean,
+  preceding: SupportedClaimText | undefined,
+): SupportedClaimText | undefined {
+  if (claimText.length > 0) return { text: claimText, hidesProse: hidden };
+  return preceding === undefined
+    ? undefined
+    : { text: preceding.text, hidesProse: preceding.hidesProse || hidden };
+}
+
 export function segmentNumericCitedClaims(answerText: string): readonly NumericCitedClaim[] {
   const claims: NumericCitedClaim[] = [];
-  let precedingClaimText: string | undefined;
+  let preceding: SupportedClaimText | undefined;
   for (const span of splitClaimSpans(answerText)) {
     const markers = [...new Set(parseNumericCitations(span))];
     const claimText = stripInlineCitations(span);
-    if (markers.length > 0) {
-      const supportedClaimText = claimText.length > 0 ? claimText : precedingClaimText;
-      if (supportedClaimText !== undefined) {
-        const claim = hidesBracketedProse(span)
-          ? { claimText: supportedClaimText, markers, hidesProse: true as const }
-          : { claimText: supportedClaimText, markers };
-        appendNumericCitedClaim(claims, claim, claimText.length === 0);
-      }
+    const supported = supportedClaimOf(claimText, hidesBracketedProse(span), preceding);
+    if (markers.length > 0 && supported !== undefined) {
+      const claim = supported.hidesProse
+        ? { claimText: supported.text, markers, hidesProse: true as const }
+        : { claimText: supported.text, markers };
+      appendNumericCitedClaim(claims, claim, claimText.length === 0);
     }
-    if (claimText.length > 0) precedingClaimText = claimText;
+    if (claimText.length > 0 && supported !== undefined) preceding = supported;
   }
   return claims;
 }

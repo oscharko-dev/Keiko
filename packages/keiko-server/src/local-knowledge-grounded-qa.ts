@@ -2420,6 +2420,10 @@ function logScopedCitationSupport(
   );
 }
 
+function hidesCitedProse(result: ScopedGroundedResult): boolean {
+  return segmentNumericCitedClaims(result.answer).some((claim) => claim.hidesProse === true);
+}
+
 function countByIndex(indices: readonly number[]): ReadonlyMap<number, number> {
   const counts = new Map<number, number>();
   for (const index of indices) counts.set(index, (counts.get(index) ?? 0) + 1);
@@ -2455,12 +2459,13 @@ function weakCitationsJudged(result: ScopedGroundedResult): boolean {
 // it, so the answer carries the fail-closed "support could not be verified" caveat instead of
 // presenting the citation as confirmed support (PR #3678 review; the unrelated-evidence pins in
 // citation-attacher.test.ts). When the judge read every weak citation's claim, its verdict (or its
-// own unavailable marker) replaces the caveat.
+// own unavailable marker) replaces the caveat. A cited claim whose bracketed prose the claim
+// stripper hides is unverified whatever its overlap, judge or not (PR #3678 review, P1).
 function withWeakCitationCaveat(
   answer: GroundedAnswer,
   result: ScopedGroundedResult,
 ): GroundedAnswer {
-  if ((result.weakCitationCount ?? 0) === 0) return answer;
+  if ((result.weakCitationCount ?? 0) === 0 && !hidesCitedProse(result)) return answer;
   if (answer.uncertainty.some((marker) => marker.kind === "entailment-unavailable")) return answer;
   const caveat = entailmentUnavailableMarker(Date.now());
   return {

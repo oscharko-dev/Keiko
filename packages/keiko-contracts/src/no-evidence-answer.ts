@@ -203,13 +203,63 @@ const EVIDENCE_REFERENT_PATTERN = anyWord([
 // An attribution names the evidence as the source of a statement, not as the place that lacks it:
 // "The API does not provide authentication according to the documentation." is a documented
 // negative fact (PR #3678 review). Attribution phrases are removed before the referent test.
-// The attributed source runs to the end of its clause: "According to the current API reference
-// documentation, …", "according to the v2.0 documentation" and "the project's documentation" are
-// whole source phrases, and a word-count bound left their referent behind (PR #3678 review). The
-// clause ends at a comma, semicolon, colon or the sentence end; the run is bounded, so matching
-// stays linear. Removing more than the source only ever removes referents, never adds a refusal.
-const LEADING_ATTRIBUTION_PATTERN =
-  /\b(?:according to|as (?:stated|described|documented|specified) in|as per|laut|gemäß)\s[^,;:!?]{1,160}/giu;
+// The attributed source is the noun phrase after the trigger: "the current API reference
+// documentation", "the v2.0 documentation", "the project's documentation" (PR #3678 review). It ends
+// at a clause mark, at a word that opens the main clause (a verb, a negation or a pronoun), or at a
+// second article, which opens the main clause's subject: in "According to the search results the
+// retrieved documents do not mention X" the source is "the search results", and the refusal keeps
+// its referent. At most eight words, read one by one, so nothing backtracks.
+const ATTRIBUTION_TRIGGER =
+  /\b(?:according to|as (?:stated|described|documented|specified) in|as per|laut|gemäß)\s+/giu;
+const ATTRIBUTION_MAX_WORDS = 8;
+const CLAUSE_MARK = /[,;:.!?]$/u;
+const MAIN_CLAUSE_WORDS: ReadonlySet<string> = new Set([
+  ...["do", "does", "did", "is", "are", "was", "were", "has", "have", "had", "there", "it"],
+  ...["can", "cannot", "could", "will", "would", "should", "may", "might", "must", "not", "no"],
+  ...["never", "we", "i", "you", "they", "contains", "mentions", "states", "says", "provides"],
+  ...["includes", "describes", "specifies", "covers", "ist", "sind", "war", "wird", "werden"],
+  ...["wurde", "wurden", "hat", "haben", "gibt", "enthält", "enthalten", "nennt", "nennen"],
+  ...["steht", "stehen", "liegt", "liegen", "lässt", "kann", "können", "bietet", "beschreibt"],
+  ...["sagt", "geht", "keine", "kein", "keinen", "nicht", "nichts", "es", "wir", "ich", "man"],
+]);
+const ARTICLES: ReadonlySet<string> = new Set([
+  ...["the", "a", "an", "this", "these", "those", "der", "die", "das", "den", "dem", "des"],
+  ...["ein", "eine", "einer", "einem", "einen"],
+]);
+
+function endsSourcePhrase(word: string, taken: number): boolean {
+  const bare = word.toLowerCase().replace(/[,;:.!?]+$/u, "");
+  return MAIN_CLAUSE_WORDS.has(bare) || (taken > 0 && ARTICLES.has(bare));
+}
+
+// The length of the source phrase at the start of `rest`, trailing whitespace included.
+function sourcePhraseLength(rest: string): number {
+  let length = 0;
+  let taken = 0;
+  for (const part of rest.split(/(\s+)/u)) {
+    if (part.trim().length === 0) {
+      length += part.length;
+      continue;
+    }
+    if (endsSourcePhrase(part, taken)) break;
+    length += part.length;
+    taken += 1;
+    if (taken >= ATTRIBUTION_MAX_WORDS || CLAUSE_MARK.test(part)) break;
+  }
+  return length;
+}
+
+function withoutLeadingAttributions(sentence: string): string {
+  let kept = "";
+  let cursor = 0;
+  for (const trigger of sentence.matchAll(ATTRIBUTION_TRIGGER)) {
+    if (trigger.index < cursor) continue;
+    const phraseStart = trigger.index + trigger[0].length;
+    kept += `${sentence.slice(cursor, trigger.index)} `;
+    cursor = phraseStart + sourcePhraseLength(sentence.slice(phraseStart));
+  }
+  return kept + sentence.slice(cursor);
+}
 
 // "den bereitgestellten Dokumenten zufolge": up to three whitespace-separated letter runs before a
 // "zufolge" name the source; the earliest may end a token that starts with punctuation ("„den").
@@ -250,7 +300,7 @@ function withoutTrailingAttributions(sentence: string): string {
 }
 
 function withoutAttributions(sentence: string): string {
-  return withoutTrailingAttributions(sentence.replace(LEADING_ATTRIBUTION_PATTERN, " "));
+  return withoutTrailingAttributions(withoutLeadingAttributions(sentence));
 }
 
 // A contrast after an absence statement turns it into a partial answer that still says something.

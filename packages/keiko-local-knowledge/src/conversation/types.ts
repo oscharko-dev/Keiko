@@ -83,8 +83,8 @@ export interface ConversationGroundedAnswer {
   // Keiko's own assessment, split off the model's answer; `answer` holds only the source-backed
   // part, so citations, repair and refusal detection never read the assessment.
   readonly ownAssessment?: string | undefined;
-  // The policy disabled the assessment, yet the model wrote an assessment block: its tags were
-  // dropped and its words kept as source-backed text, held to every citation rule.
+  // The policy disabled the assessment, yet the model wrote an assessment block: it was dropped,
+  // so no unbacked words reach the answer.
   readonly ownAssessmentNeutralized?: true | undefined;
 }
 
