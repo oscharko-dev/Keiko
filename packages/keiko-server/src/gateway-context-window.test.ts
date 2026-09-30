@@ -117,6 +117,7 @@ describe("context-window probe", () => {
 
     expect(stored(deps)?.contextWindow).toBe(65_536);
     expect(stored(deps)).not.toHaveProperty("contextWindowAssumed");
+    expect(stored(deps)?.contextWindowReported).toBe(true);
     expect(deps.gatewayConfig?.generation()).toBe(generation);
     expectActivityLogProof(
       "gateway.context-window.probe.line",
@@ -356,5 +357,24 @@ describe("context meter reading", () => {
     expect(result.body).toMatchObject({ contextWindowTokens: 32_768 });
     expect(result.body).not.toHaveProperty("contextWindowAssumed");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("provider-reported window re-check", () => {
+  it("asks a provider-reported deployment again and adopts a larger redeployed window", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        rejection("max_tokens=1000000000 cannot be greater than max_model_len=131072."),
+      ),
+    );
+    const { deps } = fixture(
+      { ...createDefaultChatCapability(MODEL), contextWindow: 16_384, contextWindowReported: true },
+      fetchImpl,
+    );
+    void discoverAssumedContextWindow(deps, MODEL, "corr-recheck");
+    await contextWindowProbesSettledForTests(deps);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(stored(deps)?.contextWindow).toBe(131_072);
+    expect(stored(deps)?.contextWindowReported).toBe(true);
   });
 });

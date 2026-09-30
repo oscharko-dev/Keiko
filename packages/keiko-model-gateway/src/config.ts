@@ -1378,6 +1378,7 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "kind",
   "contextWindow",
   "contextWindowAssumed",
+  "contextWindowReported",
   "maxOutputTokens",
   "toolCalling",
   "toolCallingVerification",
@@ -1469,13 +1470,25 @@ function optionalContextWindowAssumedFlag(
   value: Record<string, unknown>,
   path: string,
   kind: ModelKind,
-): Partial<Pick<ModelCapability, "contextWindowAssumed">> {
-  if (value.contextWindowAssumed === undefined) return {};
-  const assumed = requireBoolean(value.contextWindowAssumed, `${path}.contextWindowAssumed`);
-  if (assumed && kind !== "chat") {
-    throw new ConfigInvalidError(`${path}.contextWindowAssumed is only valid for chat models`);
+): Partial<Pick<ModelCapability, "contextWindowAssumed" | "contextWindowReported">> {
+  return {
+    ...optionalChatWindowFlag(value, path, kind, "contextWindowAssumed"),
+    ...optionalChatWindowFlag(value, path, kind, "contextWindowReported"),
+  };
+}
+
+function optionalChatWindowFlag(
+  value: Record<string, unknown>,
+  path: string,
+  kind: ModelKind,
+  field: "contextWindowAssumed" | "contextWindowReported",
+): Partial<Pick<ModelCapability, "contextWindowAssumed" | "contextWindowReported">> {
+  if (value[field] === undefined) return {};
+  const flagged = requireBoolean(value[field], `${path}.${field}`);
+  if (flagged && kind !== "chat") {
+    throw new ConfigInvalidError(`${path}.${field} is only valid for chat models`);
   }
-  return assumed ? { contextWindowAssumed: true } : {};
+  return flagged ? { [field]: true } : {};
 }
 
 function isCanonicalIsoTimestamp(value: unknown): value is string {

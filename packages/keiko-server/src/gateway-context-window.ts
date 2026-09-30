@@ -317,9 +317,14 @@ export function discoverAssumedContextWindow(
   return state.queue;
 }
 
+// An assumed window is asked for; a provider-reported one is asked again once per process, so a
+// deployment redeployed with a larger window is noticed. A declared window is never probed.
 function windowAssumed(config: GatewayConfig, modelId: string): boolean {
   const capability = findConfiguredCapability(config, modelId);
-  return capability?.kind === "chat" && capability.contextWindowAssumed === true;
+  return (
+    capability?.kind === "chat" &&
+    (capability.contextWindowAssumed === true || capability.contextWindowReported === true)
+  );
 }
 
 export interface ContextWindowRetryInput {

@@ -205,6 +205,13 @@ export interface ModelCapability {
    * Preserved only when `true`; absent means the window was declared or verified.
    */
   readonly contextWindowAssumed?: boolean | undefined;
+  /**
+   * `true` when `contextWindow` is the window the provider stated itself (an overflow answer or the
+   * window probe) rather than a declaration. Keiko asks such a deployment again once per process
+   * when a conversation first shows it, so a later redeploy with a LARGER window is noticed too —
+   * an overflow only ever teaches a smaller one. Preserved only when `true`.
+   */
+  readonly contextWindowReported?: boolean | undefined;
   readonly maxOutputTokens: number;
   readonly toolCalling: boolean;
   /**

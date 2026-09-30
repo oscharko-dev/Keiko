@@ -1465,12 +1465,13 @@ async function contextStatusWithMeasuredWindow(
   correlationId: string | undefined,
 ): Promise<ChatContextStatusWire> {
   const status = readChatContextStatus(deps, chatId, modelId, correlationId);
-  if (status.contextWindowAssumed !== true) return status;
   const probe = discoverAssumedContextWindow(
     deps,
     modelId,
     correlationId ?? UNKNOWN_CORRELATION_ID,
   );
+  // A provider-reported window is re-checked in the background; only an assumed one delays.
+  if (status.contextWindowAssumed !== true) return status;
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, CONTEXT_WINDOW_PROBE_WAIT_MS);

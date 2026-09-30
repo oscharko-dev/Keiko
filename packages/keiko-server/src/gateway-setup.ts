@@ -643,10 +643,10 @@ function createDefaultSetupCapability(
   return capability;
 }
 
-/** The capability without its "window not yet measured" flag. */
+/** The capability without its window provenance flags (assumed / provider-reported). */
 export function withoutAssumedContextWindow(capability: ModelCapability): ModelCapability {
-  const { contextWindowAssumed, ...measured } = capability;
-  return contextWindowAssumed === true ? measured : capability;
+  const { contextWindowAssumed, contextWindowReported, ...measured } = capability;
+  return contextWindowAssumed === true || contextWindowReported === true ? measured : capability;
 }
 
 // A window is assumed only while nobody has stated it: a discovered declaration ends the
@@ -658,11 +658,13 @@ function withContextWindowProvenance(
   capability: ModelCapability,
 ): ModelCapability {
   const measured = withoutAssumedContextWindow(capability);
-  const assumed =
-    capability.kind === "chat" &&
-    discovered?.contextWindow === undefined &&
-    (existing === undefined || existing.contextWindowAssumed === true);
-  return assumed ? { ...measured, contextWindowAssumed: true } : measured;
+  if (capability.kind !== "chat" || discovered?.contextWindow !== undefined) return measured;
+  if (existing === undefined || existing.contextWindowAssumed === true) {
+    return { ...measured, contextWindowAssumed: true };
+  }
+  return existing.contextWindowReported === true
+    ? { ...measured, contextWindowReported: true }
+    : measured;
 }
 
 // The generic endpoint protocol persists VERBATIM — absent fields stay absent so the runtime
@@ -7518,7 +7520,11 @@ function replaceCapabilityContextWindow(
   stored: ModelCapability,
   contextWindow: number,
 ): GatewayConfig {
-  const replacement = { ...withoutAssumedContextWindow(stored), contextWindow };
+  const replacement = {
+    ...withoutAssumedContextWindow(stored),
+    contextWindow,
+    contextWindowReported: true,
+  };
   const capabilities = [...(config.capabilities ?? [])];
   const index = capabilities.findIndex((capability) => capability.id === stored.id);
   if (index === -1) capabilities.push(replacement);

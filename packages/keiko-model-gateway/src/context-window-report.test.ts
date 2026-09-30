@@ -205,6 +205,17 @@ describe("assumed context windows", () => {
     ).toThrow(/only valid for chat models/u);
   });
 
+  it("round-trips a provider-reported window flag for chat capabilities only", () => {
+    const record = { ...createDefaultChatCapability("m"), contextWindowReported: true };
+    expect(parseModelCapability(record, "capabilities[0]").contextWindowReported).toBe(true);
+    expect(() =>
+      parseModelCapability(
+        { ...record, kind: "embedding", contextWindowReported: true },
+        "capabilities[0]",
+      ),
+    ).toThrow(/only valid for chat models/u);
+  });
+
   it("marks the exact legacy placeholder signature at load and nothing else", () => {
     const placeholder = { ...createDefaultChatCapability("legacy") };
     const declared = { ...createDefaultChatCapability("declared"), maxOutputTokens: 4_096 };
