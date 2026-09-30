@@ -238,6 +238,100 @@ describe("selectConfiguredModel", () => {
   });
 });
 
+// Customer field incident (0.3.11) generalised: a mode-less OCR engine sitting first in the configured
+// list must not become the default for the background callers (commit drafts, PR descriptions, the
+// context-profile default) either. They share the chat picker's conversation-default preference.
+describe("selectConfiguredModel — conversation-default preference for chat", () => {
+  function rankedChat(id: string, overrides: Partial<ModelCapability> = {}): ModelCapability {
+    return {
+      id,
+      kind: "chat",
+      contextWindow: 32_768,
+      maxOutputTokens: 4_096,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: false,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Test"],
+      knownLimitations: [],
+      ...overrides,
+    };
+  }
+
+  it.each([
+    "dots.ocr",
+    "whisper-large-v3",
+    "bge-reranker-v2-m3",
+    "llama-guard-3-8b",
+    "omni-moderation-latest",
+  ])(
+    "does not elect the mode-less special-purpose model %s ahead of an ordinary chat model",
+    (id) => {
+      const modelIds = [id, "qwen3-235b-instruct"];
+      const capabilities = modelIds.map((modelId) => rankedChat(modelId));
+      expect(selectConfiguredModel(config(modelIds, capabilities), { kind: "chat" })).toBe(
+        "qwen3-235b-instruct",
+      );
+    },
+  );
+
+  it("ranks the special-purpose engine below a chat model even when it is the cheaper class", () => {
+    const capabilities = [
+      rankedChat("dots.ocr", { costClass: "low" }),
+      rankedChat("qwen3-235b-instruct", { costClass: "high" }),
+    ];
+    expect(
+      selectConfiguredModel(config(["dots.ocr", "qwen3-235b-instruct"], capabilities), {
+        kind: "chat",
+      }),
+    ).toBe("qwen3-235b-instruct");
+  });
+
+  it("prefers a gateway-declared chat mode over a mode-less model, then falls back to cost", () => {
+    const capabilities = [
+      rankedChat("mode-less-cheap", { costClass: "low" }),
+      rankedChat("declared-chat", { costClass: "medium", chatModeDeclared: true }),
+      rankedChat("declared-chat-cheap", { costClass: "low", chatModeDeclared: true }),
+    ];
+    expect(
+      selectConfiguredModel(
+        config(["mode-less-cheap", "declared-chat", "declared-chat-cheap"], capabilities),
+        { kind: "chat" },
+      ),
+    ).toBe("declared-chat-cheap");
+  });
+
+  it("keeps the configured order within a tier and never turns the rank into an eligibility gate", () => {
+    const ordinary = [rankedChat("mistral-small"), rankedChat("llama-3-70b-instruct")];
+    expect(
+      selectConfiguredModel(config(["mistral-small", "llama-3-70b-instruct"], ordinary), {
+        kind: "chat",
+      }),
+    ).toBe("mistral-small");
+    // A gateway whose ONLY chat-listed model is special-purpose still resolves to it.
+    expect(
+      selectConfiguredModel(config(["dots.ocr"], [rankedChat("dots.ocr")]), { kind: "chat" }),
+    ).toBe("dots.ocr");
+  });
+
+  it("does not apply the chat preference to other kinds", () => {
+    const embeddings = [
+      rankedChat("embed-large", { kind: "embedding", costClass: "high" }),
+      rankedChat("embed-small", { kind: "embedding", costClass: "low" }),
+    ];
+    expect(
+      selectConfiguredModel(config(["embed-large", "embed-small"], embeddings), {
+        kind: "embedding",
+      }),
+    ).toBe("embed-small");
+  });
+});
+
 // Issue #810: multimodal (image-input) selection through the config-aware selector.
 describe("selectConfiguredModel — supportsImageInput (multimodal) routing", () => {
   function chatCap(id: string, supportsImageInput: boolean): ModelCapability {

@@ -5388,6 +5388,11 @@ describe("handleGatewaySetup", () => {
       gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
+    // The reranker candidate is probed before it may be wired; this fixture's engine does not
+    // answer, so it stays a reported, unconfigured model. Injected so the run never opens a socket.
+    Object.assign(deps, {
+      rerankRequest: () => Promise.resolve({ ok: false, kind: "transport" } as const),
+    });
 
     const result = await handleGatewaySetup(
       ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
@@ -5398,6 +5403,7 @@ describe("handleGatewaySetup", () => {
     expect(result.body).toMatchObject({
       unsupportedModels: [{ id: "house-reranker", reason: "rerank" }],
     });
+    expect(currentGatewayConfig(deps)?.reranker).toBeUndefined();
     deps.store.close();
   });
 

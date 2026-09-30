@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ModelCapability } from "@oscharko-dev/keiko-model-gateway";
+import { selectConfiguredModel, type ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps } from "./deps.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
@@ -23,6 +23,7 @@ import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleModels } from "./read-handlers.js";
 import { handleUpdateChat } from "./store-handlers.js";
 import {
+  configuredEmbeddingProviders,
   handleConnectLocalKnowledgeCapsule,
   handleCreateLocalKnowledgeCapsule,
   handleGetLocalKnowledgeCapsule,
@@ -52,6 +53,9 @@ function json(res: ServerResponse, payload: unknown, status = 200): void {
 interface FakeGatewayLog {
   embeddingBodies: Record<string, unknown>[];
   chatModels: string[];
+  // Bodies of every /rerank request: a discovered reranker must be probed with the two-document
+  // request readiness sends, and only then wired.
+  rerankBodies?: Record<string, unknown>[];
 }
 
 interface StrictLiteLlmOptions {
@@ -61,6 +65,9 @@ interface StrictLiteLlmOptions {
   readonly unsuitableFirstChatModel?: boolean;
   // A second declared chat model, as the field gateway has several tool-capable ones.
   readonly secondChatModel?: boolean;
+  // The customer's whole gateway: ~15 deployed models of every kind the proxy hosts, exactly as
+  // /model/info lists them (see `fieldInventory`).
+  readonly fullInventory?: boolean;
 }
 
 // Mutable per-test control: a model in this set answers chat completions with an EMPTY
@@ -94,7 +101,44 @@ function requestedToolName(body: Record<string, unknown>): string | undefined {
   return typeof functionDefinition.name === "string" ? functionDefinition.name : undefined;
 }
 
+// The field inventory, in the order the customer's LiteLLM lists it: the OCR model FIRST and
+// mode-less (a `hosted_vllm` deployment declares no mode, window or capabilities), the declared
+// chat aliases behind it, then every non-chat engine the proxy hosts next to them.
+function fieldInventory(): readonly Record<string, unknown>[] {
+  const hostedVllm = (name: string): Record<string, unknown> => ({
+    model_name: name,
+    litellm_params: { model: `hosted_vllm/${name}` },
+    model_info: { id: `${name}-deployment`, mode: null, max_input_tokens: null },
+  });
+  return [
+    hostedVllm("dotsocr"),
+    hostedVllm("hosted-vllm-llama"),
+    hostedVllm("llama-guard-3"),
+    { model_name: "gpt-4o", model_info: { mode: "chat", max_input_tokens: 128_000 } },
+    { model_name: "qwen3-235b", model_info: { mode: "chat", max_input_tokens: 131_072 } },
+    // A vLLM-native window declaration (`/v1/models` publishes max_model_len).
+    { model_name: "vllm-native-chat", model_info: { mode: "chat", max_model_len: 32_768 } },
+    // One alias, two deployments: the usable window is their intersection.
+    { model_name: "multi-alias", model_info: { mode: "chat", max_input_tokens: 64_000 } },
+    { model_name: "multi-alias", model_info: { mode: "chat", max_input_tokens: 32_000 } },
+    // A wildcard route: declared chat, but no concrete model — the proxy refuses it.
+    { model_name: "openai/*", model_info: { mode: "chat" } },
+    // openai_like embedding: 1024 dimensions, 512 tokens per input.
+    { model_name: "multilingual-e5-large", model_info: { mode: "embedding" } },
+    { model_name: "bge-reranker-v2-m3", model_info: { mode: "rerank" } },
+    { model_name: "whisper-1", model_info: { mode: "audio_transcription" } },
+    { model_name: "tts-1", model_info: { mode: "audio_speech" } },
+    { model_name: "dall-e-3", model_info: { mode: "image_generation" } },
+    { model_name: "omni-moderation-latest", model_info: { mode: "moderation" } },
+    { model_name: "vendor-special", model_info: { mode: "vendor-private-mode" } },
+  ];
+}
+
 function answerModelInfo(res: ServerResponse, options: StrictLiteLlmOptions): void {
+  if (options.fullInventory === true) {
+    json(res, { data: fieldInventory() });
+    return;
+  }
   json(res, {
     data: [
       ...(options.unsuitableFirstChatModel === true ? [{ model_name: "dotsocr" }] : []),
@@ -115,6 +159,11 @@ function answerChatCompletion(
 ): void {
   const body = JSON.parse(raw === "" ? "{}" : raw) as Record<string, unknown>;
   if (typeof body.model === "string") log.chatModels.push(body.model);
+  if (typeof body.model === "string" && body.model.includes("*")) {
+    // LiteLLM cannot route a wildcard alias to a concrete deployment.
+    json(res, { error: { message: "Invalid model name passed in model=openai/*" } }, 400);
+    return;
+  }
   const empty = typeof body.model === "string" && behavior.emptyChatModels.has(body.model);
   const toolName = requestedToolName(body);
   // The long-context probe asks for its sentinel back; a real model that read the prompt returns it.
@@ -173,6 +222,18 @@ function answerEmbeddings(
   });
 }
 
+// A working reranker: the document the query matches verbatim ranks first.
+function answerRerank(res: ServerResponse, raw: string, log: FakeGatewayLog): void {
+  const body = JSON.parse(raw === "" ? "{}" : raw) as Record<string, unknown>;
+  log.rerankBodies?.push(body);
+  const documents = Array.isArray(body.documents) ? (body.documents as unknown[]) : [];
+  const best = Math.max(0, documents.indexOf(body.query));
+  const order = [best, ...documents.map((_, index) => index).filter((index) => index !== best)];
+  json(res, {
+    results: order.map((index, rank) => ({ index, relevance_score: 1 - rank / 10 })),
+  });
+}
+
 function startStrictLiteLlm(
   log: FakeGatewayLog,
   options: StrictLiteLlmOptions = {},
@@ -194,6 +255,8 @@ function startStrictLiteLlm(
         answerChatCompletion(res, raw, log, behavior);
       } else if (url.endsWith("/embeddings")) {
         answerEmbeddings(res, raw, log, behavior.maxEmbeddingInputChars);
+      } else if (url.endsWith("/rerank")) {
+        answerRerank(res, raw, log);
       } else {
         json(res, { error: { message: `unknown route ${url}` } }, 404);
       }
@@ -266,6 +329,7 @@ interface FieldFixture {
   readonly deps: UiHandlerDeps;
   readonly projectDir: string;
   readonly tmp: string;
+  readonly setupBody: Record<string, unknown>;
 }
 
 async function setUpFieldGateway(port: number, tmp: string): Promise<FieldFixture> {
@@ -288,7 +352,7 @@ async function setUpFieldGateway(port: number, tmp: string): Promise<FieldFixtur
     deps,
   );
   expect(setup.status).toBe(200);
-  return { deps, projectDir, tmp };
+  return { deps, projectDir, tmp, setupBody: setup.body as Record<string, unknown> };
 }
 
 function fieldTmpDir(): string {
@@ -1008,5 +1072,135 @@ describe("strict LiteLLM field twin", () => {
       await deps?.dispose?.();
       await closeServer(gateway);
     }
+  });
+
+  // The customer runs a self-hosted LiteLLM with about fifteen deployed models. Discovery must
+  // analyse every one of them and put it in the right place — for a gateway of this shape and for
+  // the Azure one the developers use — through the REAL production deps and the REAL transports.
+  describe("the customer's ~15-model LiteLLM inventory", () => {
+    interface InventoryRun {
+      readonly fixture: FieldFixture;
+      readonly log: FakeGatewayLog;
+    }
+
+    async function withInventory(run: (inventory: InventoryRun) => Promise<void>): Promise<void> {
+      const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [], rerankBodies: [] };
+      const gateway = startStrictLiteLlm(log, { fullInventory: true });
+      const port = await listen(gateway);
+      let deps: UiHandlerDeps | undefined;
+      try {
+        const fixture = await setUpFieldGateway(port, fieldTmpDir());
+        deps = fixture.deps;
+        await run({ fixture, log });
+      } finally {
+        await deps?.dispose?.();
+        await closeServer(gateway);
+      }
+    }
+
+    function capabilityIds(deps: UiHandlerDeps, kind: ModelCapability["kind"]): readonly string[] {
+      return (deps.gatewayConfig?.current()?.capabilities ?? [])
+        .filter((capability) => capability.kind === kind)
+        .map((capability) => capability.id);
+    }
+
+    it("puts every model in its lane", async () => {
+      await withInventory(({ fixture }) => {
+        const { deps, setupBody } = fixture;
+        // Chat, in gateway order: the mode-less OCR/guard/hosted_vllm models stay candidates (the
+        // gateway declared nothing that excludes them), the wildcard route the proxy refuses is
+        // gone, and no engine of another kind leaked in.
+        expect(capabilityIds(deps, "chat")).toEqual([
+          "dotsocr",
+          "hosted-vllm-llama",
+          "llama-guard-3",
+          "gpt-4o",
+          "qwen3-235b",
+          "vllm-native-chat",
+          "multi-alias",
+        ]);
+        expect(capabilityIds(deps, "embedding")).toEqual(["multilingual-e5-large"]);
+        expect([...capabilityIds(deps, "voice")].sort()).toEqual(["tts-1", "whisper-1"]);
+        // What Keiko did not configure is REPORTED with the gateway's declared reason. The
+        // reranker is not among them: it was probed and wired.
+        expect(setupBody.unsupportedModels).toEqual([
+          { id: "dall-e-3", reason: "image_generation" },
+          { id: "omni-moderation-latest", reason: "moderation" },
+          { id: "vendor-special", reason: "unrecognised-mode" },
+        ]);
+        // The proxy answered the wildcard with HTTP 400: dropped, never configured.
+        expect(setupBody.droppedChatModelIds).toEqual(["openai/*"]);
+        return Promise.resolve();
+      });
+    });
+
+    it("declares the windows the gateway published, in every spelling", async () => {
+      await withInventory(({ fixture }) => {
+        const capabilities = fixture.deps.gatewayConfig?.current()?.capabilities ?? [];
+        const windowOf = (id: string): number | undefined =>
+          capabilities.find((capability) => capability.id === id)?.contextWindow;
+        expect(windowOf("gpt-4o")).toBe(128_000);
+        expect(windowOf("vllm-native-chat")).toBe(32_768);
+        // Two deployments behind one alias: the smaller window is the safe one.
+        expect(windowOf("multi-alias")).toBe(32_000);
+        return Promise.resolve();
+      });
+    });
+
+    it("wires the discovered reranker after the two-document probe", async () => {
+      await withInventory(({ fixture, log }) => {
+        const config = fixture.deps.gatewayConfig?.current();
+        expect(config?.reranker).toMatchObject({ modelId: "bge-reranker-v2-m3" });
+        expect(config?.reranker?.baseUrl).toBe(config?.providers[0]?.baseUrl);
+        expect(log.rerankBodies).toHaveLength(1);
+        expect(log.rerankBodies?.[0]).toMatchObject({
+          model: "bge-reranker-v2-m3",
+          query: "alpha readiness match",
+          documents: ["alpha readiness match", "unrelated beta"],
+          top_n: 1,
+        });
+        // It is a retrieval reranker, never a chat or embedding provider.
+        const providerIds = config?.providers.map((provider) => provider.modelId) ?? [];
+        expect(providerIds).not.toContain("bge-reranker-v2-m3");
+        return Promise.resolve();
+      });
+    });
+
+    it("never elects a mode-less special-purpose model as any default", async () => {
+      await withInventory(async ({ fixture }) => {
+        const { deps, projectDir } = fixture;
+        const config = deps.gatewayConfig?.current();
+        // dotsocr sits FIRST and answers warm; the first declared chat model still wins for the
+        // chat picker AND for the background callers (commit drafts, PR descriptions, profiles).
+        expect(selectConfiguredModel(config ?? { providers: [] }, { kind: "chat" })).toBe("gpt-4o");
+        const chat = await handleCreateDesktopChat(
+          ctx("POST", { projectPath: projectDir, title: "Erster Chat" }),
+          deps,
+        );
+        expect(chat.status).toBe(201);
+        const body = chat.body as { readonly chat: { readonly selectedModel?: string } };
+        expect(body.chat.selectedModel).toBe("gpt-4o");
+      });
+    });
+
+    it("binds new Knowledge Pods to the one embedding model the gateway hosts", async () => {
+      await withInventory(async ({ fixture }) => {
+        const { deps } = fixture;
+        expect(
+          configuredEmbeddingProviders(deps.gatewayConfig?.current()).map((p) => p.modelId),
+        ).toEqual(["multilingual-e5-large"]);
+        const created = await handleCreateLocalKnowledgeCapsule(
+          ctx("POST", { displayName: "Handbuch" }),
+          deps,
+        );
+        expect(created.status).toBe(201);
+        const capsule = (
+          created.body as {
+            capsule: { embeddingModelIdentity: { modelId: string } };
+          }
+        ).capsule;
+        expect(capsule.embeddingModelIdentity.modelId).toBe("multilingual-e5-large");
+      });
+    });
   });
 });

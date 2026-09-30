@@ -661,9 +661,7 @@ function withContextWindowProvenance(
   const assumed =
     capability.kind === "chat" &&
     discovered?.contextWindow === undefined &&
-    (existing === undefined
-      ? capability.contextWindowAssumed === true
-      : existing.contextWindowAssumed === true);
+    (existing === undefined || existing.contextWindowAssumed === true);
   return assumed ? { ...measured, contextWindowAssumed: true } : measured;
 }
 
@@ -5233,8 +5231,7 @@ function finalRawConfigForSetup(
     // configuration — a reranker or egress topology must not vanish because an unrelated
     // capability was updated (review finding on #3031).
     ...(input.current?.grounding === undefined ? {} : { grounding: input.current.grounding }),
-    ...(input.current?.reranker === undefined ? {} : { reranker: input.current.reranker }),
-    ...discoveredRerankerBlock(input, admittedModels),
+    ...rerankerBlockForSetup(input, admittedModels),
     ...(input.current?.egress === undefined ? {} : { egress: input.current.egress }),
     ...(input.figmaAccessToken === undefined
       ? {}
@@ -5256,6 +5253,37 @@ function finalRawConfigForSetup(
       apiVersion: input.apiVersion,
     },
   );
+}
+
+// The rebuild's reranker block: the current one survives (following the gateway connection when it
+// shared it), and only when there is none does a probed discovered engine become the reranker.
+function rerankerBlockForSetup(
+  input: SetupVerificationInput,
+  admittedModels: SetupCandidateModels,
+): { readonly reranker?: RerankerConfig | Record<string, unknown> } {
+  const preserved = preservedReranker(input);
+  return preserved === undefined
+    ? discoveredRerankerBlock(input, admittedModels)
+    : { reranker: preserved };
+}
+
+// A reranker that rode the stored gateway connection (same endpoint AND credential — exactly what a
+// discovered one does) follows a credential rotation or endpoint move like every other provider
+// that shared it: left behind, it would keep sending a dead token and silently degrade retrieval.
+// One with its own endpoint or credential keeps both — the freshly verified connection details
+// never travel to a connection they were not tested against.
+function preservedReranker(input: SetupVerificationInput): RerankerConfig | undefined {
+  const reranker = input.current?.reranker;
+  if (reranker === undefined) return undefined;
+  if (!sharesStoredGatewayConnection(reranker, storedPrimaryGatewayProvider(input.stored))) {
+    return reranker;
+  }
+  return {
+    ...reranker,
+    baseUrl: input.baseUrl,
+    apiKey: input.apiKey,
+    apiKeyHeaderName: input.apiKeyHeaderName,
+  };
 }
 
 // The engine that passed its live probe is wired as the retrieval reranker on the verified setup
