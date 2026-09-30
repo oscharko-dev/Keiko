@@ -33,6 +33,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { pickWithNativeDialog } from "@/lib/native-file-dialog";
 import { useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
+import {
+  knowledgePodGuidanceText,
+  useLocalKnowledgeTranslate,
+  type I18nTranslate as LocalKnowledgeTranslate,
+} from "@/app/local-knowledge/local-knowledge-i18n";
 import { useNativeFileDialogCapability } from "@/app/components/desktop/hooks/useNativeFileDialogCapability";
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
 import {
@@ -531,7 +536,7 @@ function isConnectedFallbackAllowed(
   return false;
 }
 
-function resolveSelectedSourceGuidance(
+function selectedKnowledgePodGuidance(
   sourceKind: ManualSourceKind,
   selectedCapsule: CapsuleListEntry | undefined,
   selectedCapsuleSet: CapsuleSetListEntry | undefined,
@@ -539,6 +544,18 @@ function resolveSelectedSourceGuidance(
   if (sourceKind === "capsule") return selectedCapsule?.knowledgePod?.guidance;
   if (sourceKind === "capsule-set") return selectedCapsuleSet?.knowledgePod?.guidance;
   return undefined;
+}
+
+// The selected source's guidance, worded in the user's language (the guidance itself is a closed
+// code; the wording lives in the Local Knowledge catalog).
+function resolveSelectedSourceGuidance(
+  sourceKind: ManualSourceKind,
+  selectedCapsule: CapsuleListEntry | undefined,
+  selectedCapsuleSet: CapsuleSetListEntry | undefined,
+  lkT: LocalKnowledgeTranslate,
+): { readonly label: string; readonly description: string } | undefined {
+  const guidance = selectedKnowledgePodGuidance(sourceKind, selectedCapsule, selectedCapsuleSet);
+  return guidance === undefined ? undefined : knowledgePodGuidanceText(guidance, lkT);
 }
 
 function parseSeedInput(trimmedSeed: string): number | undefined {
@@ -600,6 +617,7 @@ export function RunLauncher({
   retentionPolicyId = "qi:short-30d",
 }: RunLauncherProps): ReactNode {
   const t = useTranslate();
+  const lkT = useLocalKnowledgeTranslate();
   const [label, setLabel] = useState("");
   const [sourceKind, setSourceKind] = useState<ManualSourceKind>("requirements");
   const [text, setText] = useState("");
@@ -656,6 +674,7 @@ export function RunLauncher({
     sourceKind,
     selectedCapsule,
     selectedCapsuleSet,
+    lkT,
   );
   const pathReady = path.trim().length > 0;
   const manualReady = isManualSourceReady(sourceKind, text, pathReady, capsuleId, capsuleSetId);

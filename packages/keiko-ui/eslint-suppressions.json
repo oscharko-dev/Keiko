@@ -1972,11 +1972,6 @@
       "count": 1
     }
   },
-  "src/lib/local-knowledge-api.ts": {
-    "max-lines-per-function": {
-      "count": 1
-    }
-  },
   "src/lib/memory-api.ts": {
     "complexity": {
       "count": 1

@@ -17,7 +17,7 @@
 //  - Every diagnostic is body-free: counts and closed identifiers, never a pod name or a path.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import type { ActivityLogErrorKind, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
@@ -98,12 +98,43 @@ function reusableSnapshot(now: number, maxAgeMs: number): KnowledgeCatalogSnapsh
   return age < Math.min(freshnessMs(cachedSnapshot), maxAgeMs) ? cachedSnapshot : undefined;
 }
 
-function reportCatalogLoadFailure(list: "capsules" | "capsule-sets", reason: unknown): void {
+// `catalog` is a failure that escaped the per-list handling (a request that could not even be made).
+type CatalogList = "capsules" | "capsule-sets" | "catalog";
+
+function reportCatalogLoadFailure(
+  list: CatalogList,
+  reason: unknown,
+  errorKind: ActivityLogErrorKind = bffRequestErrorKind(reason),
+): void {
   reportClientDiagnostic(`Keiko knowledge catalog load failed (list=${list}).`, {
     correlationId: correlationIdOf(reason),
-    errorKind: bffRequestErrorKind(reason),
+    errorKind,
     errorEvidence: clientErrorEvidence(reason),
   });
+}
+
+// One list of the catalog: its entries, or the failure that kept them out. A request that failed
+// and a 200 whose body does not have the listed shape are both failures the caller can retry; the
+// second used to throw out of the mapping and leave the picker loading with no error.
+type CatalogListOutcome<T> =
+  | { readonly failed: false; readonly entries: readonly T[] }
+  | { readonly failed: true; readonly reason: unknown };
+
+function settleCatalogList<Response, Entry>(
+  list: CatalogList,
+  result: PromiseSettledResult<Response>,
+  toEntries: (response: Response) => readonly Entry[],
+): CatalogListOutcome<Entry> {
+  if (result.status !== "fulfilled") {
+    reportCatalogLoadFailure(list, result.reason);
+    return { failed: true, reason: result.reason };
+  }
+  try {
+    return { failed: false, entries: toEntries(result.value) };
+  } catch (malformed) {
+    reportCatalogLoadFailure(list, malformed, "validation-failed");
+    return { failed: true, reason: malformed };
+  }
 }
 
 async function fetchKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
@@ -112,22 +143,30 @@ async function fetchKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot
     fetchCapsuleSets({ includeKnowledgePods: true }),
   ]);
   const loadedAt = Date.now();
-  if (capsuleResult.status !== "fulfilled") {
-    reportCatalogLoadFailure("capsules", capsuleResult.reason);
-    return { ...EMPTY_KNOWLEDGE_CATALOG, loadError: capsuleResult.reason, loadedAt };
-  }
-  if (capsuleSetResult.status !== "fulfilled") {
-    reportCatalogLoadFailure("capsule-sets", capsuleSetResult.reason);
+  // Both lists are settled and reported before either failure decides the snapshot, so a capsule
+  // failure no longer hides a set-list failure.
+  const capsules = settleCatalogList("capsules", capsuleResult, capsulesForKnowledgePodUi);
+  const capsuleSets = settleCatalogList(
+    "capsule-sets",
+    capsuleSetResult,
+    capsuleSetsForKnowledgePodUi,
+  );
+  if (capsules.failed) {
+    return { ...EMPTY_KNOWLEDGE_CATALOG, loadError: capsules.reason, loadedAt };
   }
   return {
-    capsules: capsulesForKnowledgePodUi(capsuleResult.value),
-    capsuleSets:
-      capsuleSetResult.status === "fulfilled"
-        ? capsuleSetsForKnowledgePodUi(capsuleSetResult.value)
-        : [],
-    loadError: capsuleSetResult.status === "fulfilled" ? null : capsuleSetResult.reason,
+    capsules: capsules.entries,
+    capsuleSets: capsuleSets.failed ? [] : capsuleSets.entries,
+    loadError: capsuleSets.failed ? capsuleSets.reason : null,
     loadedAt,
   };
+}
+
+// The load never rejects: whatever escapes the per-list handling is reported and still ends as a
+// retryable error snapshot, so a caller's `loading` always settles.
+function failedCatalogSnapshot(reason: unknown): KnowledgeCatalogSnapshot {
+  reportCatalogLoadFailure("catalog", reason);
+  return { ...EMPTY_KNOWLEDGE_CATALOG, loadError: reason, loadedAt: Date.now() };
 }
 
 /**
@@ -143,6 +182,7 @@ export function loadKnowledgeCatalog(
   if (pendingLoad !== undefined) return pendingLoad;
   const epoch = cacheEpoch;
   const request = fetchKnowledgeCatalogSnapshot()
+    .catch(failedCatalogSnapshot)
     .then((snapshot) => {
       if (epoch === cacheEpoch) cachedSnapshot = snapshot;
       return snapshot;
@@ -375,7 +415,8 @@ function useBoundScopeRecovery(
   }, [needsRecovery, scopeSignature, resumeCount, refreshInBackground]);
 }
 
-// One body-free line per distinct availability picture: counts only, never a name, path or id.
+// One body-free line per availability episode: counts only, never a name, path or id. A distinct
+// picture reports once; the same picture reports again only after a healthy interval between.
 function useCatalogAvailabilityDiagnostic(
   snapshot: KnowledgeCatalogSnapshot,
   availability: BoundScopeAvailability,
@@ -389,7 +430,12 @@ function useCatalogAvailabilityDiagnostic(
   useEffect(() => {
     const boundUnavailable = bound > 0 && missing + notReady > 0;
     const noReadyPod = podCount > 0 && readyCount === 0;
-    if (!loaded || !(boundUnavailable || noReadyPod)) return;
+    if (!loaded) return;
+    if (!(boundUnavailable || noReadyPod)) {
+      // A healthy catalog ends the episode: the same counts recurring later are a new episode.
+      reportedRef.current = "";
+      return;
+    }
     const knowledgeCatalog = {
       podCount,
       readyPodCount: readyCount,

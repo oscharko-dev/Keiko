@@ -181,10 +181,6 @@
       "Permission scope",
       "Reject"
     ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/cards/ConnectorPickerWidget.tsx": [
-      "Knowledge Pod Sets",
-      "Knowledge Pods"
-    ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorBreadcrumbBar.tsx": [
       "Editor breadcrumbs"
     ],
@@ -698,46 +694,8 @@
     "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-actions.tsx": [
       "src/app.ts README.md"
     ],
-    "packages/keiko-ui/src/app/local-knowledge/capsule-set-compose.tsx": ["Creating..."],
     "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": ["Knowledge Pod Detail — Keiko"],
-    "packages/keiko-ui/src/app/local-knowledge/connector-graph.tsx": [
-      "Attach a source before indexing this Knowledge Pod.",
-      "Attach a source before indexing.",
-      "Cancel indexing for Knowledge Pod",
-      "Cancelling…",
-      "Index",
-      "Indexing…",
-      "Knowledge Pod guidance:",
-      "Knowledge Pod Set readiness: .",
-      "Knowledge Pod Set:",
-      "Knowledge Pods",
-      "Last refresh",
-      "Pods",
-      "Removed pages could not be detected this run (the crawl reached its page limit).",
-      "Start indexing Knowledge Pod"
-    ],
     "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
-    "packages/keiko-ui/src/lib/local-knowledge-api.ts": [
-      "Embedding mismatch",
-      "Embedding opaque",
-      "Embedding readiness warning",
-      "Embedding unavailable",
-      "Future member placeholder",
-      "HTML manual",
-      "Manual degraded",
-      "Manual indexing",
-      "Manual retrieval is ${summary.readiness}; it cannot contribute silently as empty evidence.",
-      "Manual retrieval is ${summary.readiness}; it is not yet ready to contribute evidence.",
-      "Manual retrieval is degraded; answers may use only available evidence. ${manualCountSummary(summary.counts)}.",
-      "Manual unavailable",
-      "Members not ready",
-      "Members unavailable",
-      "Policy denied",
-      "Ready for chat retrieval through Local Knowledge. ${manualCountSummary(summary.counts)}.",
-      "Reindex recommended",
-      "Retrieval degraded",
-      "Sealed local policy"
-    ],
     "packages/keiko-ui/src/lib/ResourceLimitDecisionsTable.tsx": [
       "Breached",
       "Dimension",

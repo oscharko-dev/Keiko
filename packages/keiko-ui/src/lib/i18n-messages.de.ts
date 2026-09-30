@@ -743,11 +743,11 @@ export const DE_MESSAGES = {
   "chat.grounding.catalogEmpty": "Keine bereiten Knowledge Pods oder Pod Sets sind verfügbar.",
   "chat.grounding.catalogRetry": "Erneut versuchen",
   "chat.grounding.withState": "{label} ({state})",
-  "chat.grounding.state.draft": "nicht indexiert",
+  "chat.grounding.state.draft": "Entwurf",
   "chat.grounding.state.indexing": "wird indexiert",
   "chat.grounding.state.stale": "veraltet",
   "chat.grounding.state.deleting": "wird gelöscht",
-  "chat.grounding.state.error": "Fehler",
+  "chat.grounding.state.error": "fehlgeschlagen",
   "chat.grounding.sourceLimit":
     "Quellenlimit erreicht — dieser Chat hat bereits {connectedCount} von {cap} verbundenen Quellen. Trenne eine Quelle, bevor du eine weitere verbindest.",
   "chat.grounding.readyChatRequired":

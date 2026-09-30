@@ -162,6 +162,65 @@ describe("loadKnowledgeCatalog", () => {
     expect(JSON.stringify(diagnostics)).not.toContain("alice");
   });
 
+  it("reports both failed lists instead of stopping at the capsule failure", async () => {
+    fetchCapsulesMock.mockRejectedValueOnce(new Error("capsules down"));
+    fetchCapsuleSetsMock.mockRejectedValueOnce(new Error("sets down"));
+
+    const snapshot = await loadKnowledgeCatalog();
+
+    expect(snapshot.loadError).toBeInstanceOf(Error);
+    expect(diagnostics.map((entry) => entry.message)).toEqual([
+      "Keiko knowledge catalog load failed (list=capsules).",
+      "Keiko knowledge catalog load failed (list=capsule-sets).",
+    ]);
+  });
+
+  it("returns a load error for a capsule response without capsules instead of rejecting", async () => {
+    fetchCapsulesMock.mockResolvedValueOnce({} as CapsulesResponse);
+
+    const snapshot = await loadKnowledgeCatalog();
+
+    expect(snapshot.loadError).toBeInstanceOf(TypeError);
+    expect(snapshot.capsules).toEqual([]);
+    expect(snapshot.loadedAt).toBeGreaterThan(0);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.message).toBe("Keiko knowledge catalog load failed (list=capsules).");
+    expect(diagnostics[0]?.meta?.errorKind).toBe("validation-failed");
+  });
+
+  it("returns a load error when a list request throws before it returns a promise", async () => {
+    fetchCapsulesMock.mockImplementationOnce(() => {
+      throw new Error("request could not be built");
+    });
+
+    const snapshot = await loadKnowledgeCatalog();
+
+    expect(snapshot.loadError).toBeInstanceOf(Error);
+    expect(snapshot.capsules).toEqual([]);
+    expect(snapshot.loadedAt).toBeGreaterThan(0);
+    expect(diagnostics.map((entry) => entry.message)).toEqual([
+      "Keiko knowledge catalog load failed (list=catalog).",
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("could not be built");
+  });
+
+  it("keeps the capsules when only the capsule-set response is malformed", async () => {
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [wireCapsule("cap-1", "Ready pod", "ready")],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({} as Awaited<ReturnType<typeof fetchCapsuleSets>>);
+
+    const snapshot = await loadKnowledgeCatalog();
+
+    expect(snapshot.capsules.map((capsule) => capsule.displayName)).toEqual(["Ready pod"]);
+    expect(snapshot.capsuleSets).toEqual([]);
+    expect(snapshot.loadError).toBeInstanceOf(TypeError);
+    expect(diagnostics.map((entry) => entry.message)).toEqual([
+      "Keiko knowledge catalog load failed (list=capsule-sets).",
+    ]);
+    expect(diagnostics[0]?.meta?.errorKind).toBe("validation-failed");
+  });
+
   it("does not let a request that started before a clear repopulate the cache", async () => {
     let release: (value: CapsulesResponse) => void = () => undefined;
     fetchCapsulesMock.mockReturnValueOnce(
@@ -409,6 +468,32 @@ describe("useKnowledgeCatalog recovery", () => {
   });
 });
 
+describe("useKnowledgeCatalog malformed response", () => {
+  it("settles loading with a retryable error when the catalog response is malformed", async () => {
+    vi.useFakeTimers();
+    fetchCapsulesMock.mockResolvedValueOnce({} as CapsulesResponse);
+    const unbound: readonly ChatLocalKnowledgeScope[] = [];
+
+    const { result } = renderHook(() => useKnowledgeCatalog(unbound));
+    await flush();
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.loadError).toBeInstanceOf(TypeError);
+
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [wireCapsule("cap-1", "Recovered", "ready")],
+    });
+    act(() => {
+      result.current.refresh();
+    });
+    await flush();
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.loadError).toBeNull();
+    expect(result.current.capsules.map((capsule) => capsule.displayName)).toEqual(["Recovered"]);
+  });
+});
+
 describe("useKnowledgeCatalog diagnostics", () => {
   it("reports the availability picture once, with counts only", async () => {
     vi.useFakeTimers();
@@ -438,6 +523,36 @@ describe("useKnowledgeCatalog diagnostics", () => {
     });
     expect(JSON.stringify(diagnostics)).not.toContain("Customer");
     expect(JSON.stringify(diagnostics)).not.toContain("cap-1");
+  });
+
+  it("reports a recurrence of the same picture after a healthy interval", async () => {
+    vi.useFakeTimers();
+    fetchCapsulesMock.mockResolvedValue({
+      capsules: [wireCapsule("cap-1", "test", "indexing")],
+    });
+    const scopes = [capsuleScope("cap-1")];
+    const { result } = renderHook(() => useKnowledgeCatalog(scopes));
+    await flush();
+    const usableLines = (): number =>
+      diagnostics.filter((entry) => entry.message.includes("offers no usable pod")).length;
+    expect(usableLines()).toBe(1);
+
+    fetchCapsulesMock.mockResolvedValue({ capsules: [wireCapsule("cap-1", "test", "ready")] });
+    act(() => {
+      result.current.refresh();
+    });
+    await flush();
+    expect(result.current.capsules[0]?.lifecycleState).toBe("ready");
+    expect(usableLines()).toBe(1);
+
+    // The same counts as the first episode: a new episode, not a repeat of the old one.
+    fetchCapsulesMock.mockResolvedValue({ capsules: [wireCapsule("cap-1", "test", "indexing")] });
+    act(() => {
+      result.current.refresh();
+    });
+    await flush();
+    expect(result.current.capsules[0]?.lifecycleState).toBe("indexing");
+    expect(usableLines()).toBe(2);
   });
 
   it("stays silent for a fresh installation with no pods and for ready pods", async () => {

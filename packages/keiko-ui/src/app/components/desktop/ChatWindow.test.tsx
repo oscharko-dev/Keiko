@@ -26,7 +26,7 @@ import {
   rootDisplayName,
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
-import { translate, type I18nTranslate } from "@/lib/i18n";
+import { I18N_STORAGE_KEY, I18nProvider, translate, type I18nTranslate } from "@/lib/i18n";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { PdfCitationPreviewWindowApi } from "./hooks/usePdfCitationPreview";
 import type {
@@ -1825,6 +1825,51 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.getByText(/blocks grounded answer synthesis/u)).toBeVisible();
     expect(screen.queryByText(/\/Users\/alice/u)).toBeNull();
     expect(screen.queryByText(/client_secret/u)).toBeNull();
+  });
+
+  // PR #3678 audit O3: the option badge and description came from the producer in English whatever
+  // the UI language; they are now resolved from the Local Knowledge catalog at render time.
+  it("shows the Knowledge Pod option guidance in German", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const user = userEvent.setup();
+    const capsuleId = makeCapsuleId("cap-sealed-de");
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Vertragswerk",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        {
+          ...knowledgePodSummary(capsuleId, "pod", "Vertragswerk"),
+          governance: {
+            locationKind: "local",
+            sealingPosture: "sealed-pod-policy",
+            policyPosture: "policy-pack",
+            managedServiceDependency: false,
+          },
+          modelUsePolicy: resolveKnowledgePodModelUsePolicy(sealedLocalPodModelUsePolicy()),
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+
+    render(
+      <I18nProvider>
+        <ChatSessionProvider value={makeSession({ activeChat: makeChat() })}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      </I18nProvider>,
+    );
+    await openCombobox(user, "Grounding-Modus");
+
+    expect(await screen.findByText("Durch Richtlinie gesperrt")).toBeVisible();
+    expect(screen.getByText(/blockiert geerdete Antwortsynthese/u)).toBeVisible();
+    expect(screen.queryByText("Policy denied")).toBeNull();
   });
 
   it("surfaces HTML manual pod readiness and selects it through the existing grounding flow", async () => {

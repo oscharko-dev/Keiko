@@ -153,7 +153,16 @@ import { MarkdownComposer } from "./composer/MarkdownComposer";
 import type { ComposerInputHandle, ComposerKeyEvent } from "./composer/composer-editor-types";
 import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
-import type { CapsuleListEntry, CapsuleSetListEntry } from "@/lib/local-knowledge-api";
+import type {
+  CapsuleListEntry,
+  CapsuleSetListEntry,
+  KnowledgePodUiGuidance,
+} from "@/lib/local-knowledge-api";
+import {
+  knowledgePodGuidanceText,
+  useLocalKnowledgeTranslate,
+  type I18nTranslate as LocalKnowledgeTranslate,
+} from "@/app/local-knowledge/local-knowledge-i18n";
 import {
   capsuleNameWithState,
   isReadyCapsule,
@@ -3930,22 +3939,29 @@ function boundCapsuleOption(
   };
 }
 
+// The option badge and description of a Knowledge Pod guidance, in the user's language. The wording
+// lives in the Local Knowledge catalog; the guidance itself is a closed code.
+function guidanceOption(
+  guidance: KnowledgePodUiGuidance | undefined,
+  lk: LocalKnowledgeTranslate,
+): Pick<ScopeOption, "badge" | "description"> {
+  if (guidance === undefined) return {};
+  const { label, description } = knowledgePodGuidanceText(guidance, lk);
+  return { badge: label, description };
+}
+
 // `capsules` are the selectable (ready) pods; `knownCapsules` is every listed pod in any state.
 function capsuleOptions(
   chat: Chat,
   capsules: readonly CapsuleListEntry[],
   knownCapsules: readonly CapsuleListEntry[],
   t: I18nTranslate,
+  lk: LocalKnowledgeTranslate,
 ): readonly ScopeOption[] {
   const options = capsules.map((capsule) => ({
     value: `capsule:${capsule.id}`,
     label: t("chat.grounding.capsule", { name: capsule.displayName }),
-    ...(capsule.knowledgePod?.guidance !== undefined
-      ? {
-          badge: capsule.knowledgePod.guidance.label,
-          description: capsule.knowledgePod.guidance.description,
-        }
-      : {}),
+    ...guidanceOption(capsule.knowledgePod?.guidance, lk),
   }));
   const selectedValue = groundedModeValue(chat);
   if (!selectedValue.startsWith("capsule:")) {
@@ -3961,16 +3977,12 @@ function capsuleSetOptions(
   chat: Chat,
   capsuleSets: readonly CapsuleSetListEntry[],
   t: I18nTranslate,
+  lk: LocalKnowledgeTranslate,
 ): readonly ScopeOption[] {
   const options = capsuleSets.map((capsuleSet) => ({
     value: `capsule-set:${capsuleSet.id}`,
     label: t("chat.grounding.capsuleSet", { name: capsuleSet.displayName }),
-    ...(capsuleSet.knowledgePod?.guidance !== undefined
-      ? {
-          badge: capsuleSet.knowledgePod.guidance.label,
-          description: capsuleSet.knowledgePod.guidance.description,
-        }
-      : {}),
+    ...guidanceOption(capsuleSet.knowledgePod?.guidance, lk),
   }));
   const selectedValue = groundedModeValue(chat);
   if (!selectedValue.startsWith("capsule-set:")) {
@@ -4239,13 +4251,14 @@ function knowledgeScopeChoices(
   chat: Chat,
   catalog: KnowledgeCatalog,
   t: I18nTranslate,
+  lk: LocalKnowledgeTranslate,
 ): KnowledgeScopeChoices {
   const { capsules, capsuleSets, loading, loadError } = catalog;
   const readyCapsules = loading ? [] : capsules.filter(isReadyCapsule);
   const selectableSets = loading ? [] : capsuleSets.filter(isSelectableGroundingCapsuleSet);
-  const capsuleSetChoices = capsuleSetOptions(chat, selectableSets, t);
+  const capsuleSetChoices = capsuleSetOptions(chat, selectableSets, t, lk);
   return {
-    capsuleChoices: capsuleOptions(chat, readyCapsules, capsules, t),
+    capsuleChoices: capsuleOptions(chat, readyCapsules, capsules, t, lk),
     capsuleSetChoices,
     // "No ready pods" is only true when the load succeeded: a failed load is an error, not empty.
     catalogEmpty:
@@ -4268,6 +4281,7 @@ function LocalKnowledgeScopeControl({
   readonly connected: boolean;
 }): ReactNode {
   const t = useTranslate();
+  const lk = useLocalKnowledgeTranslate();
   const { loading, refresh, refreshOnPickerOpen } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -4289,6 +4303,7 @@ function LocalKnowledgeScopeControl({
     chat,
     catalog,
     t,
+    lk,
   );
   // Audit F-12 — a disabled option must say why: without a connected Files source the reason
   // for the greyed-out "Live Files context" entry is otherwise undiscoverable.

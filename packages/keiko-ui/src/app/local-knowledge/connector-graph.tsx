@@ -27,11 +27,9 @@ import type {
   KnowledgeCapsuleId,
   CapsuleSetId,
   CapsuleLifecycleState,
-  KnowledgePodSetReadinessReasonCode,
   ManualRefreshChangeSummary,
   ManualRefreshReasonCode,
 } from "@oscharko-dev/keiko-contracts";
-import { MANUAL_REFRESH_REASON_GUIDANCE } from "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh";
 import { Icons } from "@/app/components/desktop/Icons";
 import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
 import { useDialogTabTrap } from "@/app/components/desktop/hooks/useDialogTabTrap";
@@ -41,7 +39,12 @@ import {
   NATIVE_FIELDSET_RESET_STYLE,
 } from "@/app/components/desktop/native-element-styles";
 import {
+  knowledgePodGuidanceText,
+  manualRefreshReasonText,
+  readinessLabelText,
+  setReadinessReasonText,
   useLocalKnowledgeTranslate as useTranslate,
+  type I18nTranslate,
   type LocalKnowledgeMessageKey,
 } from "./local-knowledge-i18n";
 import type {
@@ -711,10 +714,11 @@ function EmbeddingGuidanceBadge({
 }: {
   readonly guidance: NonNullable<CapsuleListEntry["knowledgePod"]>["guidance"];
 }): ReactNode {
+  const t = useTranslate();
   if (guidance === undefined) return null;
   return (
     <span className="lk-badge" data-state={guidanceBadgeState(guidance.tone)}>
-      {guidance.label}
+      {knowledgePodGuidanceText(guidance, t).label}
     </span>
   );
 }
@@ -726,10 +730,11 @@ function EmbeddingGuidanceDescription({
   readonly id: string;
   readonly guidance: NonNullable<CapsuleListEntry["knowledgePod"]>["guidance"];
 }): ReactNode {
+  const t = useTranslate();
   if (guidance === undefined) return null;
   return (
     <small id={id}>
-      Knowledge Pod guidance: {guidance.label}. {guidance.description}
+      {t("localKnowledge.guidance.summary", knowledgePodGuidanceText(guidance, t))}
     </small>
   );
 }
@@ -751,33 +756,42 @@ function manualRefreshBadgeState(
   return "draft";
 }
 
-function manualRefreshOutcomeLabel(outcome: ManualRefreshChangeSummary["outcome"]): string {
-  if (outcome === "unchanged") return "Unchanged";
-  if (outcome === "updated") return "Updated";
-  if (outcome === "partial") return "Partial";
-  if (outcome === "failed") return "Failed";
-  return "Cancelled";
-}
-
-const MANUAL_REFRESH_COUNT_LABELS: Record<keyof ManualRefreshChangeSummary["counts"], string> = {
-  addedPages: "Added",
-  changedPages: "Changed",
-  removedPages: "Removed",
-  movedPages: "Moved",
-  unchangedPages: "Unchanged",
-  failedPages: "Failed",
-  deniedLinks: "Denied links",
+const MANUAL_REFRESH_OUTCOME_KEYS: Record<
+  ManualRefreshChangeSummary["outcome"],
+  LocalKnowledgeMessageKey
+> = {
+  unchanged: "localKnowledge.manualRefresh.outcome.unchanged",
+  updated: "localKnowledge.manualRefresh.outcome.updated",
+  partial: "localKnowledge.manualRefresh.outcome.partial",
+  failed: "localKnowledge.manualRefresh.outcome.failed",
+  cancelled: "localKnowledge.manualRefresh.outcome.cancelled",
 };
 
-function manualRefreshCounts(counts: ManualRefreshChangeSummary["counts"]): ReactNode {
-  const entries = Object.entries(MANUAL_REFRESH_COUNT_LABELS) as ReadonlyArray<
-    [keyof ManualRefreshChangeSummary["counts"], string]
+const MANUAL_REFRESH_COUNT_KEYS: Record<
+  keyof ManualRefreshChangeSummary["counts"],
+  LocalKnowledgeMessageKey
+> = {
+  addedPages: "localKnowledge.manualRefresh.count.addedPages",
+  changedPages: "localKnowledge.manualRefresh.count.changedPages",
+  removedPages: "localKnowledge.manualRefresh.count.removedPages",
+  movedPages: "localKnowledge.manualRefresh.count.movedPages",
+  unchangedPages: "localKnowledge.manualRefresh.count.unchangedPages",
+  failedPages: "localKnowledge.manualRefresh.count.failedPages",
+  deniedLinks: "localKnowledge.manualRefresh.count.deniedLinks",
+};
+
+function manualRefreshCounts(
+  counts: ManualRefreshChangeSummary["counts"],
+  t: I18nTranslate,
+): ReactNode {
+  const entries = Object.entries(MANUAL_REFRESH_COUNT_KEYS) as ReadonlyArray<
+    [keyof ManualRefreshChangeSummary["counts"], LocalKnowledgeMessageKey]
   >;
   return (
     <dl className="lkd-manual-refresh-counts">
-      {entries.map(([key, label]) => (
+      {entries.map(([key, labelKey]) => (
         <Fragment key={key}>
-          <dt>{label}</dt>
+          <dt>{t(labelKey)}</dt>
           <dd>{counts[key].toString()}</dd>
         </Fragment>
       ))}
@@ -785,12 +799,15 @@ function manualRefreshCounts(counts: ManualRefreshChangeSummary["counts"]): Reac
   );
 }
 
-function manualRefreshGuidanceLines(reasonCodes: readonly ManualRefreshReasonCode[]): ReactNode {
+function manualRefreshGuidanceLines(
+  reasonCodes: readonly ManualRefreshReasonCode[],
+  t: I18nTranslate,
+): ReactNode {
   if (reasonCodes.length === 0) return null;
   return (
     <ul className="lkd-manual-refresh-guidance">
       {reasonCodes.map((code) => (
-        <li key={code}>{MANUAL_REFRESH_REASON_GUIDANCE[code]}</li>
+        <li key={code}>{manualRefreshReasonText(code, t)}</li>
       ))}
     </ul>
   );
@@ -803,6 +820,7 @@ function ManualRefreshPanel({
   readonly manualRefresh: ManualRefreshChangeSummary | undefined;
   readonly headingId: string;
 }): ReactNode {
+  const t = useTranslate();
   if (manualRefresh === undefined) return null;
   const removalSkipped = manualRefresh.removalDetection === "not-evaluated-page-limit";
   return (
@@ -812,19 +830,17 @@ function ManualRefreshPanel({
     >
       <div className="lkd-manual-refresh-heading">
         <span id={headingId} className="lkd-manual-refresh-title">
-          Last refresh
+          {t("localKnowledge.manualRefresh.title")}
         </span>
         <span className="lk-badge" data-state={manualRefreshBadgeState(manualRefresh.outcome)}>
-          {manualRefreshOutcomeLabel(manualRefresh.outcome)}
+          {t(MANUAL_REFRESH_OUTCOME_KEYS[manualRefresh.outcome])}
         </span>
       </div>
-      {manualRefreshCounts(manualRefresh.counts)}
+      {manualRefreshCounts(manualRefresh.counts, t)}
       {removalSkipped ? (
-        <p className="lkd-manual-refresh-note">
-          Removed pages could not be detected this run (the crawl reached its page limit).
-        </p>
+        <p className="lkd-manual-refresh-note">{t("localKnowledge.manualRefresh.removalNote")}</p>
       ) : null}
-      {manualRefreshGuidanceLines(manualRefresh.reasonCodes)}
+      {manualRefreshGuidanceLines(manualRefresh.reasonCodes, t)}
     </section>
   );
 }
@@ -839,69 +855,39 @@ function readinessBadgeState(
   return "draft";
 }
 
-function readinessLabel(
-  readiness: NonNullable<CapsuleSetListEntry["knowledgePod"]>["readiness"] | undefined,
-): string {
-  if (readiness === undefined) return "Unknown";
-  if (readiness === "ready") return "Ready";
-  if (readiness === "indexing") return "Indexing";
-  if (readiness === "stale") return "Stale";
-  if (readiness === "degraded") return "Degraded";
-  if (readiness === "unavailable") return "Unavailable";
-  if (readiness === "error") return "Failed";
-  return "Draft";
-}
-
 type CapsuleSetReadinessSummary = NonNullable<
   NonNullable<CapsuleSetListEntry["knowledgePod"]>["setReadiness"]
 >;
 
-const SET_READINESS_REASON_LABELS: Record<KnowledgePodSetReadinessReasonCode, string> = {
-  "member-draft": "draft",
-  "member-indexing": "indexing",
-  "member-stale": "stale",
-  "member-error": "error",
-  "member-unavailable": "unavailable",
-  "member-degraded": "degraded",
-  "missing-member": "missing",
-  "policy-denied": "policy denied",
-  "embedding-unknown": "embedding unknown",
-  "embedding-incompatible": "embedding mismatch",
-  "embedding-unavailable": "embedding unavailable",
-  "embedding-opaque": "embedding opaque",
-  "no-sources": "no sources",
-  "no-vectors": "no vectors",
-  "future-remote-member": "remote placeholder",
-  "future-federated-member": "federated placeholder",
-  "future-ephemeral-member": "ephemeral placeholder",
-};
-
-function setReasonLabels(setReadiness: CapsuleSetReadinessSummary): readonly string[] {
-  return setReadiness.reasonCodes.map((code) => SET_READINESS_REASON_LABELS[code]);
+function setReasonLabels(
+  setReadiness: CapsuleSetReadinessSummary,
+  t: I18nTranslate,
+): readonly string[] {
+  return setReadiness.reasonCodes.map((code) => setReadinessReasonText(code, t));
 }
 
 function setCountsEntries(
   counts: NonNullable<NonNullable<CapsuleSetListEntry["knowledgePod"]>["counts"]>,
   setReadiness: CapsuleSetReadinessSummary | undefined,
-): ReadonlyArray<readonly [string, string]> {
-  const base: ReadonlyArray<readonly [string, string]> = [
-    ["pods", counts.capsuleCount.toString()],
-    ["sources", counts.sourceCount.toString()],
-    ["docs", counts.documentCount.toString()],
-    ["chunks", counts.chunkCount.toString()],
-    ["vectors", counts.vectorCount.toString()],
+): ReadonlyArray<readonly [LocalKnowledgeMessageKey, string]> {
+  const base: ReadonlyArray<readonly [LocalKnowledgeMessageKey, string]> = [
+    ["localKnowledge.set.count.pods", counts.capsuleCount.toString()],
+    ["localKnowledge.set.count.sources", counts.sourceCount.toString()],
+    ["localKnowledge.set.count.docs", counts.documentCount.toString()],
+    ["localKnowledge.set.count.chunks", counts.chunkCount.toString()],
+    ["localKnowledge.set.count.vectors", counts.vectorCount.toString()],
   ];
   if (setReadiness === undefined) return base;
   return [
     ...base,
-    ["ready", setReadiness.readyCount.toString()],
-    ["degraded", setReadiness.degradedCount.toString()],
-    ["unavailable", setReadiness.unavailableCount.toString()],
-    ["policy denied", setReadiness.deniedCount.toString()],
-    ["indexing", setReadiness.indexingCount.toString()],
-    ["stale", setReadiness.staleCount.toString()],
-    ["error", setReadiness.errorCount.toString()],
-    ["missing", setReadiness.missingCount.toString()],
+    ["localKnowledge.set.count.ready", setReadiness.readyCount.toString()],
+    ["localKnowledge.set.count.degraded", setReadiness.degradedCount.toString()],
+    ["localKnowledge.set.count.unavailable", setReadiness.unavailableCount.toString()],
+    ["localKnowledge.set.count.policyDenied", setReadiness.deniedCount.toString()],
+    ["localKnowledge.set.count.indexing", setReadiness.indexingCount.toString()],
+    ["localKnowledge.set.count.stale", setReadiness.staleCount.toString()],
+    ["localKnowledge.set.count.error", setReadiness.errorCount.toString()],
+    ["localKnowledge.set.count.missing", setReadiness.missingCount.toString()],
   ];
 }
 
@@ -909,26 +895,27 @@ function setCountsEntries(
 // warnings/counts should reduce ambiguity, not become a wall of status text (#1931 engineering
 // notes). Follows the same dt/dd + reasons-list pattern as manualRefreshCounts above.
 function SetCountsList({ set }: { readonly set: CapsuleSetListEntry }): ReactNode {
+  const t = useTranslate();
   const counts = set.knowledgePod?.counts;
   if (counts === undefined) {
-    return <>{`${set.capsuleCount.toString()} Knowledge Pods`}</>;
+    return <>{t("localKnowledge.set.podCountText", { count: set.capsuleCount })}</>;
   }
   const setReadiness = set.knowledgePod?.setReadiness;
   const entries = setCountsEntries(counts, setReadiness);
-  const reasonLabels = setReadiness === undefined ? [] : setReasonLabels(setReadiness);
+  const reasonLabels = setReadiness === undefined ? [] : setReasonLabels(setReadiness, t);
   return (
     <>
       <dl className="lkd-set-counts">
-        {entries.map(([label, value]) => (
-          <Fragment key={label}>
-            <dt>{label}</dt>
+        {entries.map(([labelKey, value]) => (
+          <Fragment key={labelKey}>
+            <dt>{t(labelKey)}</dt>
             <dd>{value}</dd>
           </Fragment>
         ))}
       </dl>
       {reasonLabels.length > 0 ? (
         <ul className="lkd-set-counts-reasons">
-          <li>{`reasons: ${reasonLabels.join(", ")}`}</li>
+          <li>{t("localKnowledge.set.reasonsSummary", { reasons: reasonLabels.join(", ") })}</li>
         </ul>
       ) : null}
     </>
@@ -971,13 +958,13 @@ function IndexOrCancelBtn({
         type="button"
         disabled={busy}
         aria-busy={busyKind === "cancel"}
-        aria-label={`Cancel indexing for Knowledge Pod ${displayName}`}
+        aria-label={t("localKnowledge.row.cancelIndexingLabel", { name: displayName })}
         onClick={() => {
           onCancel(id);
         }}
         className="lk-btn lk-btn-ghost"
       >
-        {busyKind === "cancel" ? "Cancelling…" : t("common.cancel")}
+        {busyKind === "cancel" ? t("localKnowledge.row.cancelling") : t("common.cancel")}
       </button>
     );
   }
@@ -989,20 +976,20 @@ function IndexOrCancelBtn({
         disabled={busy}
         aria-disabled={hasSources ? undefined : true}
         aria-busy={busyKind === "index"}
-        aria-label={`Start indexing Knowledge Pod ${displayName}`}
+        aria-label={t("localKnowledge.row.startIndexingLabel", { name: displayName })}
         aria-describedby={hasSources ? undefined : noSourceHintId}
-        title={hasSources ? undefined : "Attach a source before indexing this Knowledge Pod."}
+        title={hasSources ? undefined : t("localKnowledge.row.attachSourceTitle")}
         onClick={() => {
           if (!hasSources) return;
           onStart(id);
         }}
         className="lk-btn lk-btn-primary"
       >
-        {busyKind === "index" ? "Indexing…" : "Index"}
+        {busyKind === "index" ? t("localKnowledge.row.indexing") : t("localKnowledge.row.index")}
       </button>
       {!hasSources ? (
         <span id={noSourceHintId} className="visually-hidden">
-          Attach a source before indexing.
+          {t("localKnowledge.row.attachSourceHint")}
         </span>
       ) : null}
     </>
@@ -1493,7 +1480,7 @@ function CapsuleSetRow({
   };
   return (
     <article
-      aria-label={`Knowledge Pod Set: ${capsuleSet.displayName}`}
+      aria-label={t("localKnowledge.set.article", { name: capsuleSet.displayName })}
       aria-describedby={describedBy}
       className="lk-capsule-row"
     >
@@ -1516,10 +1503,10 @@ function CapsuleSetRow({
             {capsuleSet.displayName}
           </span>
           <span className="lk-badge" data-state={readinessBadgeState(readiness)}>
-            {readinessLabel(readiness)}
+            {readinessLabelText(readiness, t)}
           </span>
           <span className="lk-badge" data-state="draft">
-            {capsuleSet.capsuleCount.toString()} Pods
+            {t("localKnowledge.set.podCountBadge", { count: capsuleSet.capsuleCount })}
           </span>
           <EmbeddingGuidanceBadge guidance={guidance} />
           <small
@@ -1527,7 +1514,9 @@ function CapsuleSetRow({
             className={setCountsStyles.scope}
             style={{ display: "block", color: "var(--text-secondary)" }}
           >
-            {`Knowledge Pod Set readiness: ${readinessLabel(readiness)}.`}
+            {t("localKnowledge.set.readinessSummary", {
+              readiness: readinessLabelText(readiness, t),
+            })}
             <SetCountsList set={capsuleSet} />
           </small>
           <EmbeddingGuidanceDescription id={guidanceDescriptionId} guidance={guidance} />
