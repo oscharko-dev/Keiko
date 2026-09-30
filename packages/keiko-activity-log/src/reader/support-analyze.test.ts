@@ -285,6 +285,45 @@ describe("analyzeLogText — governed update attempts", () => {
     expect(analyzeLogText(serialized).updateAttempts).toEqual([]);
   });
 
+  it("indexes many unrelated fallback records by their proven parents within the budget", () => {
+    const text = Array.from({ length: 2000 }, (_, index) =>
+      line({
+        ts: T0,
+        category: "diagnostic",
+        op: "server.diagnostic.failure",
+        correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        parentCorrelationId: `fallback-parent-${String(index)}`,
+      }),
+    ).join("\n");
+    const result = analyzeLogText(text, { maxTimelineRecords: 4000 });
+    expect(findTimeline(result, ACTIVITY_LOG_UNKNOWN_CORRELATION_ID)?.lines).toHaveLength(2000);
+    expect(findTimeline(result, "fallback-parent-17")?.lines).toEqual([
+      expect.objectContaining({ parentCorrelationId: "fallback-parent-17" }),
+    ]);
+    expect(result.timelines).toHaveLength(2001);
+  });
+
+  it("shares the bounded timeline budget with reconstructed update attempts", () => {
+    const text = line({
+      ts: T0,
+      category: "diagnostic",
+      op: "update.candidate.issued",
+      correlationId: "update-budget-correlation",
+      candidateId: "update-budget-candidate",
+    });
+    const original = analyzeLogText(text);
+    expect(original.timelines).toHaveLength(1);
+    expect(original.updateAttempts).toHaveLength(1);
+    expect(analyzeLogText(text, { maxTimelineRecords: 2 })).toEqual(original);
+    expect(() => analyzeLogText(text, { maxTimelineRecords: 1 })).toThrow(
+      "timeline-budget-exceeded",
+    );
+    const ordinaryBytes = Buffer.byteLength(JSON.stringify(original.timelines[0]?.lines[0]));
+    expect(() => analyzeLogText(text, { maxTimelineBytes: ordinaryBytes })).toThrow(
+      "timeline-budget-exceeded",
+    );
+  });
+
   it("reconstructs a large corpus of distinct explicit candidates", () => {
     const candidateCount = 1024;
     const text = Array.from({ length: candidateCount }, (_, index) => {

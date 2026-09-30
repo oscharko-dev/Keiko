@@ -8,6 +8,8 @@ import {
   MAX_SUPPORT_REPORT_RECORD_BYTES,
   MAX_SUPPORT_REPORT_EVENT_BYTES,
   MAX_SUPPORT_REPORT_RECORDS,
+  MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
+  MAX_SUPPORT_REPORT_TIMELINE_BYTES,
   DIAGNOSTIC_SUFFICIENCY_REASONS,
   diagnosticSufficiencyStatus,
   isActivityLogIdentityDigest,
@@ -27,6 +29,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
   analyzeLogText,
+  ActivityLogAnalyzeBudgetError,
   buildReproductionSeedFromAnalysis,
   isSupportReportEvent,
   findTimeline,
@@ -159,17 +162,20 @@ function selectedEvidence(
   let evidence: SupportReportEvidence;
   try {
     evidence = encodeSupportReportEvidence(events);
+    selectedReasons = reasons([
+      ...selectedReasons,
+      ...projectedEvidenceReasons(incident, events, registry),
+    ]);
   } catch (error) {
     if (!(error instanceof SupportReportError) || error.reason !== "report-budget-exceeded")
       throw error;
-    events = [];
     evidence = encodeSupportReportEvidence([]);
-    selectedReasons = reasons([...selectedReasons, "report-budget-exceeded"]);
+    selectedReasons = reasons([
+      ...selectedReasons,
+      "report-budget-exceeded",
+      ...projectedEvidenceReasons(incident, [], registry),
+    ]);
   }
-  selectedReasons = reasons([
-    ...selectedReasons,
-    ...projectedEvidenceReasons(incident, events, registry),
-  ]);
   return { evidence, selectedReasons };
 }
 
@@ -392,11 +398,22 @@ function eventAnalysis(
   registry: SupportReaderRegistry,
   options: SupportAnalyzeOptions = {},
 ): AnalyzeAllResult {
-  return analyzeLogText(
-    events.map((event) => canonicalSupportJson(event.record)).join("\n") +
-      (events.length === 0 ? "" : "\n"),
-    { ...options, registry },
-  );
+  try {
+    return analyzeLogText(
+      events.map((event) => canonicalSupportJson(event.record)).join("\n") +
+        (events.length === 0 ? "" : "\n"),
+      {
+        ...options,
+        registry,
+        maxTimelineRecords: MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
+        maxTimelineBytes: MAX_SUPPORT_REPORT_TIMELINE_BYTES,
+      },
+    );
+  } catch (error) {
+    if (error instanceof ActivityLogAnalyzeBudgetError)
+      throw new SupportReportError("report-budget-exceeded");
+    throw error;
+  }
 }
 
 function reportFailureClasses(

@@ -11,6 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { inflateSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -28,6 +29,11 @@ import {
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../../../tests/support/activity-log-scenario.js";
+import {
+  encodeSupportReportEvidence,
+  sealSupportReport,
+  serializeSupportReport,
+} from "../../keiko-activity-log/src/reader/support-report.js";
 import type { CliIo } from "./runner.js";
 import { runSupportCli } from "./support.js";
 import { publishSupportReportFile, readSupportReportFile } from "./support-export.js";
@@ -211,6 +217,55 @@ describe("support report CLI and private publication", () => {
       expectedOps: ["support.report.started", "support.report.failed"],
     });
     expect(trace.failureClasses).toContain("support-report");
+  });
+
+  it("emits only a body-free failure when a resealed report amplifies its timelines", async () => {
+    await exportReport();
+    const report = parseSupportReport(readSupportReportFile(path));
+    const retained = JSON.parse(
+      inflateSync(Buffer.from(report.evidence.payload, "base64")).toString(),
+    ) as { sourceSegmentId: string }[];
+    const sourceSegmentId = retained[0]?.sourceSegmentId;
+    if (sourceSegmentId === undefined) throw new TypeError("missing fixture segment");
+    const process = fixtureProcess(4242, "aabbccdd");
+    const hostile = sealSupportReport(
+      report.incident,
+      report.selection,
+      encodeSupportReportEvidence(
+        Array.from({ length: 300 }, (_, index) => ({
+          sourceSegmentId,
+          record: JSON.parse(
+            fixtureLine(process, Date.now() + index, {
+              op: "client.diagnostic",
+              correlationId: CORRELATION,
+              parentCorrelationId: `amplified-parent-${String(index)}`,
+            }),
+          ) as Record<string, unknown>,
+        })),
+      ),
+    );
+    writeFileSync(path, serializeSupportReport(hostile), { mode: 0o600 });
+    const result = await analyze(["--json"]);
+    expect(result.code).toBe(1);
+    expect(result.output).toEqual([]);
+    expect(result.errors.join("")).toContain("report-budget-exceeded");
+    const [line] = persistedActivityLogLines(
+      readPersistedActivityLog(controlStateDir),
+      "support.report.failed",
+    );
+    expect(
+      expectActivityLogProof("support.report.failed.report-lifecycle", line ?? ""),
+    ).toMatchObject({
+      errorKind: "validation-failed",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(
+      persistedActivityLogLines(
+        readPersistedActivityLog(controlStateDir),
+        "support.report.completed",
+      ),
+    ).toEqual([]);
   });
 
   it("uses the closed default filename and owner-private output directory", async () => {

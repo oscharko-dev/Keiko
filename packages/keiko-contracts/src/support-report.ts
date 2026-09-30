@@ -9,6 +9,8 @@ export const MAX_SUPPORT_REPORT_INCIDENT_BYTES = 1024 * 1024;
 export const MAX_SUPPORT_REPORT_RECORD_BYTES = 64 * 1024;
 export const MAX_SUPPORT_REPORT_RECORDS = 20_000;
 export const MAX_SUPPORT_REPORT_DEPTH = 12;
+export const MAX_SUPPORT_REPORT_TIMELINE_RECORDS = 80_000;
+export const MAX_SUPPORT_REPORT_TIMELINE_BYTES = 64 * 1024 * 1024;
 
 export interface SupportReportSelection {
   readonly status: DiagnosticSufficiencyStatus;

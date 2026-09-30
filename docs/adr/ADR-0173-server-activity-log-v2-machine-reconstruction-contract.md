@@ -611,7 +611,11 @@ package versions, which the product's version-consistency gate keeps in lockstep
 retain their exact build/release/platform classes and registry/schema/catalog digests.
 
 The fixed bounds are 10 MiB for the entire file, 1 MiB for the incident projection, 16 MiB for the
-decoded event section, 64 KiB per event, 20,000 records and 12 JSON nesting levels. `--max-bytes`
+decoded event section, 64 KiB per event, 20,000 records and 12 JSON nesting levels. Derived ordinary
+and update timelines share an additional ceiling of 80,000 record occurrences and 64 MiB of UTF-8
+record-view payloads; parent fan-out is charged before expansion. A producer that exceeds these
+limits emits explicitly insufficient evidence, while an incoming report is rejected before output.
+`--max-bytes`
 may lower the final-file ceiling but cannot raise it. These are separate limits: compression cannot
 hide unbounded decoded input. Every real #3532 fault-injection scenario also passes its incident
 and selected closure through the production report builder and offline analyzer. These traces fit

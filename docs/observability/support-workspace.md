@@ -72,7 +72,10 @@ are future hardening requiring a real separately governed lifecycle.
 
 Schema 1 uses canonical JSON with incident, selection, losslessly compacted registered events and
 embedded SHA-256 section/overall digests. The bounds are independent: 10 MiB final file, 1 MiB
-incident, 16 MiB decoded events, 64 KiB per event, 20,000 records, and depth 12. Private permissions,
+incident, 16 MiB decoded events, 64 KiB per event, 20,000 records, and depth 12. Derived ordinary and
+update timelines together permit at most 80,000 record occurrences and 64 MiB of UTF-8 record-view
+payloads. Parent fan-out is checked before expansion; excessive export evidence is marked
+insufficient, and excessive received evidence is rejected before output. Private permissions,
 exclusive publication, canonical bytes and bounded decompression are mandatory. Analysis reads in
 32 KiB chunks and emits the fully validated machine view in bounded chunks; decompression and
 parsing have separate hard ceilings. A 2,000-event production calibration also runs offline under a

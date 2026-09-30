@@ -9,6 +9,7 @@ import {
   type SupportReport,
   MAX_SUPPORT_REPORT_EVENT_BYTES,
   MAX_SUPPORT_REPORT_BYTES,
+  MAX_SUPPORT_REPORT_RECORDS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { recordUserReportedIncident, supportIncidentSegmentFiles } from "../support-incident.js";
 import { resolveSupportIncident } from "../../../keiko-cli/src/support-incident.js";
@@ -19,6 +20,7 @@ import {
   segmentIdentity,
   writeFixtureSegment,
 } from "../../../../tests/support/activity-log-segments.js";
+import { analyzeLogText } from "./support-analyze.js";
 import { selectedLogContent } from "./support-selective-export.js";
 import { DEFAULT_SUPPORT_QUERY_LIMITS, type SupportQueryResult } from "./support-query.js";
 import {
@@ -41,6 +43,7 @@ let stateDir: string;
 function fixture(
   count = 1,
   fields: Readonly<Record<string, unknown>> = {},
+  parentAt?: (index: number) => string,
 ): { report: SupportReport; query: SupportQueryResult } {
   const process = fixtureProcess(4242, "aabbccdd");
   writeFixtureSegment(
@@ -50,6 +53,7 @@ function fixture(
       fixtureLine(process, T0 + index, {
         op: "client.diagnostic",
         correlationId: CORRELATION,
+        ...(parentAt === undefined ? {} : { parentCorrelationId: parentAt(index) }),
         fields,
       }),
     ),
@@ -93,6 +97,88 @@ describe("canonical body-free offline report", () => {
     expect(analyzed.analysis.timelines[0]?.lines[0]?.op).toBe("client.diagnostic");
     expect(analyzed.selection.status).toBe("complete");
     expect(text).not.toContain(stateDir);
+  });
+
+  it("bounds parent fan-out before the analyzer materializes duplicated timelines", () => {
+    const { query } = fixture(30, {}, (index) => `parent-${String(index)}`);
+    const text = query.events.map((event) => event.text).join("\n");
+    expect(() => analyzeLogText(text, { maxTimelineRecords: 400 })).toThrow(
+      "timeline-budget-exceeded",
+    );
+  });
+
+  it("accounts for record occurrences and UTF-8 view bytes without truncating timelines", () => {
+    const { query } = fixture(4, {}, (index) => `parent-${String(index)}`);
+    const text = query.events.map((event) => event.text).join("\n");
+    const original = analyzeLogText(text);
+    const views = original.timelines.flatMap((timeline) => timeline.lines);
+    const bytes = views.reduce((sum, view) => sum + Buffer.byteLength(JSON.stringify(view)), 0);
+    expect(
+      analyzeLogText(text, { maxTimelineRecords: views.length, maxTimelineBytes: bytes }),
+    ).toEqual(original);
+    expect(() => analyzeLogText(text, { maxTimelineRecords: views.length - 1 })).toThrow(
+      "timeline-budget-exceeded",
+    );
+    expect(() => analyzeLogText(text, { maxTimelineBytes: bytes - 1 })).toThrow(
+      "timeline-budget-exceeded",
+    );
+  });
+
+  it.each([0, -1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])(
+    "refuses invalid explicit timeline limits (%s)",
+    (limit) => {
+      expect(() => analyzeLogText("", { maxTimelineRecords: limit })).toThrow(
+        "timeline-budget-exceeded",
+      );
+      expect(() => analyzeLogText("", { maxTimelineBytes: limit })).toThrow(
+        "timeline-budget-exceeded",
+      );
+    },
+  );
+
+  it("reduces evidence above the record cap to an explicitly insufficient report", () => {
+    const { report, query } = fixture();
+    const event = query.events[0];
+    if (event === undefined) throw new TypeError("missing fixture evidence");
+    const oversized = {
+      ...query,
+      events: Array.from({ length: MAX_SUPPORT_REPORT_RECORDS + 1 }, () => event),
+    };
+    const reduced = buildSupportReport(report.incident, oversized);
+    expect(reduced.evidence.recordCount).toBe(0);
+    expect(reduced.selection.status).toBe("insufficient");
+    expect(reduced.selection.reasons).toContain("report-budget-exceeded");
+    expect(analyzeSupportReport(serializeSupportReport(reduced)).selection).toEqual(
+      reduced.selection,
+    );
+  });
+
+  it("exports honest insufficiency and rejects resealed graph amplification without a caller override", () => {
+    const { report, query } = fixture(300, {}, (index) => `parent-${String(index)}`);
+    expect(report.evidence.recordCount).toBe(0);
+    expect(report.selection).toMatchObject({ status: "insufficient" });
+    expect(report.selection.reasons).toContain("report-budget-exceeded");
+    expect(report.selection.reasons).toContain("evidence-not-retained");
+    expect(report.selection.requiredBytes).toBe(query.truncation.requiredBytes);
+    expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe(
+      "insufficient",
+    );
+    const hostile = sealSupportReport(
+      report.incident,
+      report.selection,
+      encodeSupportReportEvidence(
+        query.events.map((event) => ({
+          sourceSegmentId: event.file.segmentId ?? "legacy",
+          record: JSON.parse(event.text) as Record<string, unknown>,
+        })),
+      ),
+    );
+    expect(() =>
+      analyzeSupportReport(serializeSupportReport(hostile), {
+        maxTimelineRecords: Number.MAX_SAFE_INTEGER,
+        maxTimelineBytes: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toThrow("report-budget-exceeded");
   });
 
   it("keeps the selective reader projection at its owning public entry point", () => {

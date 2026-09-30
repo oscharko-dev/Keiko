@@ -78,6 +78,8 @@ import { CURRENT_SUPPORT_REGISTRY, type SupportReaderRegistry } from "./support-
 
 export interface SupportAnalyzeOptions {
   readonly registry?: SupportReaderRegistry;
+  readonly maxTimelineRecords?: number;
+  readonly maxTimelineBytes?: number;
   readonly toolLifecycleValidator?: ToolLifecycleValidator;
   readonly toolDiagnosticRedactor?: ToolDiagnosticRedactor;
 }
@@ -821,46 +823,102 @@ function addParentLink(children: Map<string, Set<string>>, record: ParsedLine): 
   children.set(parent, linked);
 }
 
+export class ActivityLogAnalyzeBudgetError extends Error {
+  constructor() {
+    super("timeline-budget-exceeded");
+    this.name = "ActivityLogAnalyzeBudgetError";
+  }
+}
+
+function timelineLimit(value: number | undefined): number {
+  if (value === undefined) return Infinity;
+  if (!Number.isSafeInteger(value) || value < 1) throw new ActivityLogAnalyzeBudgetError();
+  return value;
+}
+
+/** Counts all ordinary and update timeline occurrences before allocating their views. */
+class TimelineBudget {
+  readonly #maxRecords: number;
+  readonly #maxBytes: number;
+  readonly #weights = new WeakMap<ParsedLine, number>();
+  #records = 0;
+  #bytes = 0;
+
+  constructor(options: SupportAnalyzeOptions) {
+    this.#maxRecords = timelineLimit(options.maxTimelineRecords);
+    this.#maxBytes = timelineLimit(options.maxTimelineBytes);
+  }
+
+  consume(records: Iterable<ParsedLine>): void {
+    if (this.#maxRecords === Infinity && this.#maxBytes === Infinity) return;
+    for (const record of records) {
+      this.#records += 1;
+      if (this.#records > this.#maxRecords) throw new ActivityLogAnalyzeBudgetError();
+      if (this.#maxBytes === Infinity) continue;
+      let bytes = this.#weights.get(record);
+      if (bytes === undefined) {
+        bytes = Buffer.byteLength(JSON.stringify(record.view));
+        this.#weights.set(record, bytes);
+      }
+      this.#bytes += bytes;
+      if (this.#bytes > this.#maxBytes) throw new ActivityLogAnalyzeBudgetError();
+    }
+  }
+}
+
+function* linkedParentRecords(
+  parent: string,
+  linked: ReadonlySet<string>,
+  direct: ReadonlyMap<string, readonly ParsedLine[]>,
+  fallbackByParent: ReadonlyMap<string, readonly ParsedLine[]>,
+): Generator<ParsedLine> {
+  for (const child of linked) {
+    // Index shared fallback records by their proven parent instead of rescanning every record.
+    const records =
+      child === ACTIVITY_LOG_UNKNOWN_CORRELATION_ID
+        ? fallbackByParent.get(parent)
+        : direct.get(child);
+    yield* records ?? [];
+  }
+}
+
 function expandedParentGroup(
   parent: string,
   linked: ReadonlySet<string>,
   direct: ReadonlyMap<string, readonly ParsedLine[]>,
+  fallbackByParent: ReadonlyMap<string, readonly ParsedLine[]>,
 ): ParsedLine[] {
-  const expanded = [...(direct.get(parent) ?? [])];
-  const seen = new Set(expanded);
-  // One line establishes the request-to-run edge; other lines with that request ID may carry
-  // no parent field. Include the whole uniquely identified child timeline while keeping its
-  // direct lookup intact. The shared fallback ID requires record-level parent evidence.
-  for (const child of linked) {
-    for (const record of direct.get(child) ?? []) {
-      // The fallback correlation is shared by unrelated requests. Only an explicit parent
-      // on that individual record proves it belongs to this run.
-      if (
-        child === ACTIVITY_LOG_UNKNOWN_CORRELATION_ID &&
-        record.view.parentCorrelationId !== parent
-      ) {
-        continue;
-      }
-      if (seen.has(record)) continue;
-      expanded.push(record);
-      seen.add(record);
-    }
-  }
-  // assignOrder ranks each process lifetime by the first record it encounters. Parent-first
-  // expansion is not file order when a child request was written before the run's own line.
+  // Direct correlation groups are disjoint, and self-links are excluded by addParentLink.
+  const expanded = [
+    ...(direct.get(parent) ?? []),
+    ...linkedParentRecords(parent, linked, direct, fallbackByParent),
+  ];
+  // Process lifetimes must be ranked in original file order even when a child precedes its parent.
   return expanded.sort((left, right) => left.fileIndex - right.fileIndex);
 }
 
-function groupByCorrelationId(records: readonly ParsedLine[]): ReadonlyMap<string, ParsedLine[]> {
+function groupByCorrelationId(
+  records: readonly ParsedLine[],
+  budget: TimelineBudget,
+): ReadonlyMap<string, ParsedLine[]> {
   const direct = new Map<string, ParsedLine[]>();
   const children = new Map<string, Set<string>>();
+  const fallbackByParent = new Map<string, ParsedLine[]>();
   for (const record of records) {
     addDirectCorrelation(direct, record);
     addParentLink(children, record);
+    if (
+      record.correlationId === ACTIVITY_LOG_UNKNOWN_CORRELATION_ID &&
+      record.view.parentCorrelationId !== undefined
+    )
+      appendIndexEntry(fallbackByParent, record.view.parentCorrelationId, record);
   }
+  for (const group of direct.values()) budget.consume(group);
   const groups = new Map(direct);
   for (const [parent, linked] of children) {
-    groups.set(parent, expandedParentGroup(parent, linked, direct));
+    // Charge only additional child occurrences; the direct parent group was already counted.
+    budget.consume(linkedParentRecords(parent, linked, direct, fallbackByParent));
+    groups.set(parent, expandedParentGroup(parent, linked, direct, fallbackByParent));
   }
   return groups;
 }
@@ -1042,12 +1100,16 @@ function orderedAttemptLines(
   return [...linesByFileIndex.values()].sort((a, b) => a.fileIndex - b.fileIndex);
 }
 
-function buildUpdateAttempts(records: readonly ParsedLine[]): readonly UpdateAttemptTimeline[] {
+function buildUpdateAttempts(
+  records: readonly ParsedLine[],
+  budget: TimelineBudget,
+): readonly UpdateAttemptTimeline[] {
   const { candidateRecords, correlationRecords, childCorrelations } =
     buildUpdateAttemptIndexes(records);
   return [...candidateRecords].map(([candidateId, roots]) => {
     const correlationIds = reachableCorrelationIds(roots, childCorrelations);
     const attemptLines = orderedAttemptLines(roots, correlationIds, correlationRecords);
+    budget.consume(attemptLines);
     const sessionId = attemptLines
       .map((record) => updateIdentity(record.view, "sessionId"))
       .find((value) => value !== undefined);
@@ -1587,7 +1649,8 @@ function analyzeParsedLines(
   options: SupportAnalyzeOptions,
 ): AnalyzeAllResult {
   const { parsedLines, evidenceCounts, malformedLineCount } = accumulation;
-  const groups = groupByCorrelationId(parsedLines);
+  const budget = new TimelineBudget(options);
+  const groups = groupByCorrelationId(parsedLines, budget);
   const timelines = [...groups.entries()].map(([correlationId, group]) =>
     buildTimeline(correlationId, group),
   );
@@ -1597,7 +1660,7 @@ function analyzeParsedLines(
   const legacyLineCount = evidence.legacyLineCount;
   const warnings = evidenceWarnings(evidence);
   const clusters = buildOpClusters(parsedLines);
-  const updateAttempts = buildUpdateAttempts(parsedLines);
+  const updateAttempts = buildUpdateAttempts(parsedLines, budget);
   const observation = latestObservation(parsedLines);
   const sufficiency = projectActivityLogSufficiency(
     parsedLines.map(sufficiencyLine),
