@@ -1108,6 +1108,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.outputReserve": "Reserved for the answer",
   "chat.context.safetyMargin": "Safety margin",
   "chat.context.saved": "{tokens} tokens saved across {count} summarized messages.",
+  "chat.context.saved.one": "{tokens} tokens saved across 1 summarized message.",
+  "chat.context.percent": "{percent}%",
   "chat.context.unavailable": "Context estimate unavailable",
   "chat.context.estimate":
     "Estimated for the next request; knowledge chats include the latest question's source share. Your draft and attachments are added when you send.",
@@ -1135,10 +1137,11 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.count.references": "{sent} of {available} references sent",
   "chat.context.referencesTrimmed":
     "Only {sent} of {available} references fit the model's context window. The most relevant were used.",
-  "chat.context.lastRequestMeasured": "Last request: {tokens} tokens (measured by the provider).",
+  "chat.context.lastRequestMeasured":
+    "Last knowledge request: {tokens} tokens (measured by the provider).",
   "chat.context.lastRequestMeasuredWithEstimate":
-    "Last request: {tokens} tokens (measured by the provider). Keiko conservatively estimated {estimated}; the breakdown above uses that estimate.",
-  "chat.context.lastRequestEstimated": "Last request: about {tokens} tokens (estimated).",
+    "Last knowledge request: {tokens} tokens (measured by the provider). Keiko estimated {estimated}; the breakdown above uses that estimate.",
+  "chat.context.lastRequestEstimated": "Last knowledge request: about {tokens} tokens (estimated).",
   "chat.context.untilCompaction": "{tokens} tokens until automatic compaction.",
   "chat.context.sourcesPolicy":
     "Knowledge sources are retrieved fresh for every question and never summarized. Compaction only condenses the conversation, which gets at most a third of the input for knowledge questions.",

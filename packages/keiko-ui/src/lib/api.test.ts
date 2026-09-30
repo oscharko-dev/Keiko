@@ -2769,6 +2769,117 @@ describe("sendDesktopChatStream — stalled stream watchdog", () => {
     expect(cancelled).toBe(true);
   });
 
+  // PR #3678 audit: the idle limit also covers the response-header phase. A half-open proxy that
+  // never answers the POST left "Receiving response" up forever, because the watchdog only started
+  // once a body existed.
+  function hangingFetch(): {
+    readonly fetchMock: ReturnType<typeof vi.fn>;
+    readonly requestSignal: () => AbortSignal | undefined;
+  } {
+    let seen: AbortSignal | undefined;
+    const fetchMock = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          seen = init.signal ?? undefined;
+          // A real fetch rejects at once for a signal that is already aborted.
+          if (init.signal?.aborted === true) reject(init.signal.reason as unknown);
+          init.signal?.addEventListener("abort", () => {
+            reject(init.signal?.reason as unknown);
+          });
+        }),
+    );
+    return { fetchMock, requestSignal: () => seen };
+  }
+
+  it("fails with DESKTOP_CHAT_STREAM_STALLED when the response headers never arrive", async () => {
+    vi.useFakeTimers();
+    const { fetchMock, requestSignal } = hangingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const handlers = makeStreamHandlers();
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+    const outcome = expect(pending).rejects.toMatchObject({
+      code: "DESKTOP_CHAT_STREAM_STALLED",
+      correlationId: expect.any(String) as unknown,
+    });
+    await vi.advanceTimersByTimeAsync(DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS - 1);
+    expect(requestSignal()?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(2);
+    await outcome;
+    expect(requestSignal()?.aborted).toBe(true);
+    expect(handlers.onToken).not.toHaveBeenCalled();
+  });
+
+  it("reports a caller abort during the header phase as an abort, not a stall", async () => {
+    vi.useFakeTimers();
+    const { fetchMock, requestSignal } = hangingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const caller = new AbortController();
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      caller.signal,
+      makeStreamHandlers(),
+    );
+    const outcome = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    caller.abort();
+    await outcome;
+    expect(requestSignal()?.aborted).toBe(true);
+    // The idle timer was cleared: waiting past the limit raises nothing further.
+    await vi.advanceTimersByTimeAsync(DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS * 2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not start a request for a signal that is already aborted", async () => {
+    vi.useFakeTimers();
+    const { fetchMock } = hangingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const caller = new AbortController();
+    caller.abort();
+    await expect(
+      sendDesktopChatStream(
+        { chatId: "c1", projectPath: "/repo", content: "hello" },
+        caller.signal,
+        makeStreamHandlers(),
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps the caller's abort wired to the response body once the headers arrived", async () => {
+    vi.useFakeTimers();
+    let seen: AbortSignal | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        seen = init.signal ?? undefined;
+        // A real fetch errors the response body when its signal aborts.
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller): void {
+            init.signal?.addEventListener("abort", () => {
+              controller.error(init.signal?.reason);
+            });
+          },
+        });
+        return Promise.resolve(makeSseResponse(stream));
+      }),
+    );
+    const caller = new AbortController();
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      caller.signal,
+      makeStreamHandlers(),
+    );
+    const outcome = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    caller.abort();
+    await outcome;
+    expect(seen?.aborted).toBe(true);
+  });
+
   // PR #3678 review: a proxy may forward the terminal `done` event and keep the body half-open.
   // The settled turn must not fail sixty seconds later.
   it("stops reading after the terminal done event, even without EOF", async () => {

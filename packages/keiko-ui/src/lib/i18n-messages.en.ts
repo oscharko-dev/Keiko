@@ -567,9 +567,10 @@ export const EN_MESSAGES = {
     "Send the message again. If it keeps happening, check the network, the proxy, or whether Keiko restarted.",
   "chat.error.contextOverflow.title": "Request larger than the context window",
   "chat.error.contextOverflow.message":
-    "The request does not fit the model's context window. Keiko adopts the window the provider reports automatically and compacts the history on the next send.",
+    "The request exceeds the model's context window. If the provider reports its window, Keiko adopts it.",
   "chat.error.contextOverflow.remediation":
-    "Send the message again. If the message itself is too long, shorten it or choose a model with a larger context window.",
+    "Shorten the message or choose a model with a larger context window.",
+  "chat.error.attachmentOversized.message": "Attached content is too large. Shorten or remove it.",
   "chat.keikoLogo": "Keiko logo",
   "chat.keikoResponding": "Keiko is responding",
   "chat.copy.copiedStatus": "Answer copied",

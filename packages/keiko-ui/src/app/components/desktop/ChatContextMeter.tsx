@@ -142,7 +142,9 @@ function SegmentRow({
         {detail === undefined ? null : <span className={styles.cmpLegendDetail}>{detail}</span>}
       </span>
       <span className={styles.cmpLegendValue}>{segment.tokens.toLocaleString(locale)}</span>
-      <span className={styles.cmpLegendShare}>{formatContextPercent(share, locale)} %</span>
+      <span className={styles.cmpLegendShare}>
+        {t("chat.context.percent", { percent: formatContextPercent(share, locale) })}
+      </span>
     </li>
   );
 }
@@ -248,10 +250,15 @@ function ContextFootnotes({ status }: { readonly status: ChatContextStatusWire }
     <>
       {status.compaction === undefined ? null : (
         <p className={styles.cmpSavings}>
-          {t("chat.context.saved", {
-            tokens: number(status.compaction.tokensSaved),
-            count: number(status.compaction.messagesCompacted),
-          })}
+          {t(
+            status.compaction.messagesCompacted === 1
+              ? "chat.context.saved.one"
+              : "chat.context.saved",
+            {
+              tokens: number(status.compaction.tokensSaved),
+              count: number(status.compaction.messagesCompacted),
+            },
+          )}
         </p>
       )}
       {status.pendingCompaction === undefined ? null : (

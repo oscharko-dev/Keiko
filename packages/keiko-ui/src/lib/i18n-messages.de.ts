@@ -584,9 +584,11 @@ export const DE_MESSAGES = {
     "Sende die Nachricht erneut. Tritt es wiederholt auf, prüfe Netzwerk, Proxy oder ob Keiko neu gestartet wurde.",
   "chat.error.contextOverflow.title": "Anfrage größer als das Kontextfenster",
   "chat.error.contextOverflow.message":
-    "Die Anfrage passt nicht in das Kontextfenster des Modells. Keiko übernimmt das vom Anbieter gemeldete Fenster automatisch und kompaktiert den Verlauf beim nächsten Senden.",
+    "Die Anfrage überschreitet das Kontextfenster des Modells. Meldet der Anbieter sein Fenster, übernimmt Keiko es.",
   "chat.error.contextOverflow.remediation":
-    "Sende die Nachricht erneut. Ist die Nachricht selbst zu lang, kürze sie oder wähle ein Modell mit größerem Kontextfenster.",
+    "Kürze die Nachricht oder wähle ein Modell mit größerem Kontextfenster.",
+  "chat.error.attachmentOversized.message":
+    "Angehängte Inhalte sind zu groß. Kürze oder entferne sie.",
   "chat.keikoLogo": "Keiko-Logo",
   "chat.keikoResponding": "Keiko antwortet",
   "chat.copy.copiedStatus": "Antwort kopiert",

@@ -1155,6 +1155,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.outputReserve": "Für die Antwort reserviert",
   "chat.context.safetyMargin": "Sicherheitsreserve",
   "chat.context.saved": "{tokens} Tokens bei {count} zusammengefassten Nachrichten eingespart.",
+  "chat.context.saved.one": "{tokens} Tokens bei 1 zusammengefassten Nachricht eingespart.",
+  "chat.context.percent": "{percent} %",
   "chat.context.unavailable": "Kontextschätzung nicht verfügbar",
   "chat.context.estimate":
     "Geschätzt für die nächste Anfrage, bei Wissens-Chats mit dem Quellenanteil der letzten Frage. Entwurf und Anhänge kommen beim Senden hinzu.",
@@ -1169,10 +1171,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.wait": "Nach Abschluss der aktuellen Antwort verfügbar.",
   "chat.context.total": "{used} von {usable} nutzbaren Eingabe-Tokens · Kontextfenster {window}",
   "chat.context.breakdown": "Aufteilung des Kontextfensters",
-  "chat.context.segment.system": "System-Anweisungen",
+  "chat.context.segment.system": "Systemanweisungen",
   "chat.context.segment.summary": "Zusammenfassung früherer Nachrichten",
   "chat.context.segment.messages": "Nachrichten",
-  "chat.context.segment.knowledge": "Quellen (Wissen)",
+  "chat.context.segment.knowledge": "Wissensquellen",
   "chat.context.segment.free": "Frei",
   "chat.context.segment.compactionBuffer": "Kompaktierungspuffer",
   "chat.context.count.messages": "{count} Nachrichten",
@@ -1182,10 +1184,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.count.references": "{sent} von {available} Referenzen gesendet",
   "chat.context.referencesTrimmed":
     "Nur {sent} von {available} Referenzen passten ins Kontextfenster des Modells. Verwendet wurden die relevantesten.",
-  "chat.context.lastRequestMeasured": "Letzte Anfrage: {tokens} Tokens (vom Anbieter gemessen).",
+  "chat.context.lastRequestMeasured":
+    "Letzte Wissensanfrage: {tokens} Tokens (vom Anbieter gemessen).",
   "chat.context.lastRequestMeasuredWithEstimate":
-    "Letzte Anfrage: {tokens} Tokens (vom Anbieter gemessen). Keiko hatte vorsichtig {estimated} geschätzt; die Aufteilung oben nutzt diese Schätzung.",
-  "chat.context.lastRequestEstimated": "Letzte Anfrage: ungefähr {tokens} Tokens (geschätzt).",
+    "Letzte Wissensanfrage: {tokens} Tokens (vom Anbieter gemessen). Keiko hat {estimated} geschätzt; die Aufteilung oben nutzt diese Schätzung.",
+  "chat.context.lastRequestEstimated":
+    "Letzte Wissensanfrage: ungefähr {tokens} Tokens (geschätzt).",
   "chat.context.untilCompaction": "Noch {tokens} Tokens bis zur automatischen Kompaktierung.",
   "chat.context.sourcesPolicy":
     "Quellen werden für jede Frage frisch abgerufen und nie zusammengefasst. Kompaktiert wird nur der Gesprächsverlauf; er erhält bei Wissensfragen höchstens ein Drittel der Eingabe.",

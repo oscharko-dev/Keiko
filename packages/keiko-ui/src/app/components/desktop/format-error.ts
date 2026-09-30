@@ -152,12 +152,10 @@ const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
     remediation: "chat.error.gatewayOutputExhausted.remediation",
   },
   // A typed BFF overflow and a raw provider overflow share one localized notice (Issue #151 AC#3).
+  // CONVERSATION_OVERSIZED_CONTEXT is deliberately NOT mapped here: the server raises it for an
+  // oversized attachment or document context, where the context-window notice would tell the user
+  // to resend a request that fails the same way (PR #3678 audit).
   GATEWAY_CONTEXT_OVERFLOW: {
-    title: "chat.error.contextOverflow.title",
-    message: "chat.error.contextOverflow.message",
-    remediation: "chat.error.contextOverflow.remediation",
-  },
-  CONVERSATION_OVERSIZED_CONTEXT: {
     title: "chat.error.contextOverflow.title",
     message: "chat.error.contextOverflow.message",
     remediation: "chat.error.contextOverflow.remediation",
@@ -174,12 +172,20 @@ const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
 const translateForSelectedLocale: I18nTranslate = (key, values) =>
   translate(readStoredLocale(), key, values);
 
+// Codes whose server text is English-only but whose notice needs no separate title or remediation:
+// the localized message already names the remedy.
+const CODE_MESSAGE_KEYS: Readonly<Record<string, MessageKey>> = {
+  CONVERSATION_OVERSIZED_CONTEXT: "chat.error.attachmentOversized.message",
+};
+
 function gatewayErrorText(
   code: string | undefined,
   part: keyof GatewayErrorKeys,
 ): string | undefined {
   const keys = code === undefined ? undefined : GATEWAY_ERROR_KEYS[code];
-  return keys === undefined ? undefined : translateForSelectedLocale(keys[part]);
+  if (keys !== undefined) return translateForSelectedLocale(keys[part]);
+  const messageKey = part === "message" && code !== undefined ? CODE_MESSAGE_KEYS[code] : undefined;
+  return messageKey === undefined ? undefined : translateForSelectedLocale(messageKey);
 }
 
 function friendlyMessageForCode(

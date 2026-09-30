@@ -415,7 +415,7 @@ export function isInFlight(status: SendStatus): boolean {
 // conversation exceeded the model's context window. Exported so the test can
 // pin the exact string without duplicating it.
 export const CONTEXT_OVERSIZED_USER_MESSAGE =
-  "The request does not fit the model's context window. Keiko adopts the window the provider reports automatically and compacts the history on the next send.";
+  "The request exceeds the model's context window. If the provider reports its window, Keiko adopts it.";
 export const GROUNDED_ATTACHMENT_NOTICE =
   "Attachments are not supported for grounded chats. Remove the attachment or switch to a non-grounded chat.";
 // KEIKO-0793: the voice "admit-and-drop" case (executeSendAttempt's grounded branch, when a
@@ -433,10 +433,10 @@ export const EMPTY_MODEL_RESPONSE_USER_MESSAGE =
 // A typed BFF overflow surfaces under the conversation-layer code; a raw provider
 // overflow surfaces under the gateway-layer code (CB-F2). Both map to the single
 // actionable user message below.
-const CONTEXT_OVERSIZED_API_CODES = new Set([
-  "CONVERSATION_OVERSIZED_CONTEXT",
-  "GATEWAY_CONTEXT_OVERFLOW",
-]);
+// CONVERSATION_OVERSIZED_CONTEXT is an oversized attachment, not a context-window overflow: it keeps
+// its own localized notice (format-error), which tells the user to shorten the attachment instead
+// of resending a request that fails the same way (PR #3678 review).
+const CONTEXT_OVERSIZED_API_CODES = new Set(["GATEWAY_CONTEXT_OVERFLOW"]);
 const CONTEXT_OVERSIZED_PHRASES = [
   "context length",
   "context_length_exceeded",

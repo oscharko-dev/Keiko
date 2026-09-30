@@ -2580,6 +2580,28 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     );
   });
 
+  // PR #3678 review: an oversized attachment is not a context-window overflow. The overflow notice
+  // told the user to resend a request that fails the same way.
+  it("keeps an oversized-attachment error apart from the context-window notice", async () => {
+    vi.mocked(sendDesktopChat).mockRejectedValueOnce(
+      new ApiError(
+        "CONVERSATION_OVERSIZED_CONTEXT",
+        "Attached content exceeds the conversation context budget. Remove or shorten attachments.",
+        400,
+      ),
+    );
+    const { result } = await setupUngroundedSession();
+
+    await act(async () => {
+      await result.current.sendMessage({ text: "summarise the attachment" });
+    });
+
+    expect(result.current.error).not.toContain(CONTEXT_OVERSIZED_USER_MESSAGE);
+    const notice = toUserErrorNotice(result.current.error, "fallback");
+    expect(notice.title).not.toBe("Request larger than the context window");
+    expect(notice.message).toBe("Attached content is too large. Shorten or remove it.");
+  });
+
   it("prefers the explicit text and preserves the user's typed draft", async () => {
     const { result } = await setupUngroundedSession();
     act(() => {

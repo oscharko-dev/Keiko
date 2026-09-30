@@ -1515,7 +1515,8 @@ function processSseLines(
 // The BFF writes a keep-alive comment every 15 s while a turn streams (keiko-server sse.ts). A
 // stream that delivers no byte for four intervals is a dead connection — the server process ended
 // or a proxy holds a half-open socket — not a slow model, so the turn fails with a clear error
-// instead of showing "Receiving response" forever.
+// instead of showing "Receiving response" forever. The same limit bounds the wait for the response
+// headers: Node sends them with the first write, the first token or the first heartbeat.
 export const DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS = 60_000;
 
 // The stalled turn's own request correlation, so the diagnostic joins the failed turn's timeline.
@@ -1529,27 +1530,53 @@ function stalledDesktopChatStreamError(correlationId: string): ApiError {
   return error;
 }
 
-async function readWithinIdleLimit(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+// Races `work` against the idle limit. A stall rejects with the stalled-stream error and runs
+// `onStall`, which closes the half-open connection so the server observes the disconnect and
+// settles the turn.
+async function withinIdleLimit<T>(
+  work: Promise<T>,
   correlationId: string,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
+  onStall: () => void,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stalled = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       reject(stalledDesktopChatStreamError(correlationId));
+      onStall();
     }, DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS);
   });
   try {
-    return await Promise.race([reader.read(), stalled]);
-  } catch (error) {
-    // Closing the half-open body lets the server observe the disconnect and settle the turn.
-    if (error instanceof ApiError && error.code === "DESKTOP_CHAT_STREAM_STALLED") {
-      void reader.cancel();
-    }
-    throw error;
+    return await Promise.race([work, stalled]);
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function readWithinIdleLimit(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  correlationId: string,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  return withinIdleLimit(reader.read(), correlationId, () => {
+    void reader.cancel();
+  });
+}
+
+// Starts the streaming POST and gives up when no response headers arrive within the idle limit.
+// The request follows the caller's signal AND a stall controller (the same combinator every other
+// read uses), so the stall path can abort the half-open request while a caller abort still
+// surfaces as the fetch's own AbortError and never as a stall. The caller's signal stays wired to
+// the response body after the headers arrived.
+async function fetchWithinIdleLimit(
+  url: string,
+  init: RequestInit,
+  signal: AbortSignal,
+  correlationId: string,
+): Promise<Response> {
+  const stall = new AbortController();
+  const pending = fetch(url, { ...init, signal: combineAbortSignals(signal, stall.signal) });
+  return withinIdleLimit(pending, correlationId, () => {
+    stall.abort();
+  });
 }
 
 // `done`, `error` and `cancelled` end the turn. Nothing after them is read and the body is
@@ -1638,11 +1665,12 @@ export async function sendDesktopChatStream(
     body: JSON.stringify(input),
     headers: { Accept: "text/event-stream" },
   };
-  const res = await fetch("/api/desktop/chat/stream", {
-    ...requestInit,
-    headers: buildBffHeaders(requestInit, correlationId),
+  const res = await fetchWithinIdleLimit(
+    "/api/desktop/chat/stream",
+    { ...requestInit, headers: buildBffHeaders(requestInit, correlationId) },
     signal,
-  });
+    correlationId,
+  );
   const responseCorrelationId = res.headers.get(CORRELATION_HEADER) ?? correlationId;
 
   const contentType = res.headers.get("content-type") ?? "";
