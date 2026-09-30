@@ -159,7 +159,14 @@ The real window replaces the assumption from the provider's own statement, never
 - The window is adopted exactly, in either direction, persisted, and applied as a configuration
   refinement without a generation bump. The admitted turn whose overflow reported it re-plans
   from the current profile and is sent once more: buffered chat, streamed chat before its first
-  token, and grounded answers. A second overflow propagates.
+  token, and grounded answers. A second overflow propagates. A model port follows the
+  refinements of the generation it was resolved in, so the retry runs on the Gateway built from
+  the adopted window.
+- A statement is adopted only for the deployment that made it. Every report carries the
+  deployment fingerprint, and a statement from a deployment the alias no longer routes to is
+  recorded as `stale-deployment`, never adopted. Each probe runs under its own correlation,
+  joined to the reading that spawned it. A reading whose probe is still running after the wait
+  carries `contextWindowProbePending`, and the meter reads again until the answer is in.
 
 `gateway.context-window.probe`, `.adoption` and `.retry` record the evidence body-free.
 
@@ -197,8 +204,10 @@ the used shares are capped at the input budget. The segment ids are a closed wir
 a second meter.
 
 While a chat is grounded, the next question is planned with the source share of its latest grounded
-request. The conversation then receives at most min(8,000, one third of the input budget) tokens
-(`groundedHistoryLaneTokens`). Retrieved sources are fetched fresh for every question and are never
+request. Knowledge Pod, folder, multi-source and hybrid answers all report that share. The
+conversation then receives at most min(8,000, one third of the input budget) tokens
+(`groundedHistoryLaneTokens`). The meter projects the history against that lane with the same
+profile the grounded send path compacts with (`groundedConversationLaneProfile`). Retrieved sources are fetched fresh for every question and are never
 compacted. Compaction summarizes only the conversation lane; sources give way only by rank inside
 their own prompt. The latest grounded request is shown as the provider measured it, together with
 Keiko's estimate when the two differ.
