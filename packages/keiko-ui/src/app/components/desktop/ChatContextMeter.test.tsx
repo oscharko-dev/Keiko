@@ -131,7 +131,9 @@ describe("Chat context window breakdown", () => {
       "output-reserve",
       "safety-margin",
     ]);
-    expect(within(panel).getByText("5,610 of 16,384 context window tokens")).toBeInTheDocument();
+    expect(
+      within(panel).getByText("5,610 of 11,776 usable input tokens · context window 16,384"),
+    ).toBeInTheDocument();
     const knowledge = rows.find((row) => row.getAttribute("data-segment") === "knowledge");
     expect(knowledge).toHaveTextContent("Knowledge sources");
     expect(knowledge).toHaveTextContent("4 of 16 references sent");

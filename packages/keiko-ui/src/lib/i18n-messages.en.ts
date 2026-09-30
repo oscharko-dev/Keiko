@@ -20,7 +20,7 @@ export const EN_MESSAGES = {
   "chat.context.compact": "Compact context now",
   "chat.context.compacting": "Compacting context…",
   "chat.context.wait": "Available after the current response finishes.",
-  "chat.context.total": "{used} of {window} context window tokens",
+  "chat.context.total": "{used} of {usable} usable input tokens · context window {window}",
   "chat.context.breakdown": "Context window breakdown",
   "chat.context.segment.system": "System instructions",
   "chat.context.segment.summary": "Summary of earlier messages",

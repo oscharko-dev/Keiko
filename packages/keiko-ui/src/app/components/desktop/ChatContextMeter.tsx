@@ -158,6 +158,7 @@ function ContextBreakdown({
       <p className={styles.cmpTotal}>
         {t("chat.context.total", {
           used: status.estimatedInputTokens.toLocaleString(locale),
+          usable: status.inputBudgetTokens.toLocaleString(locale),
           window: status.contextWindowTokens.toLocaleString(locale),
         })}
       </p>

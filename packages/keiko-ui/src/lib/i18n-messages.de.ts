@@ -22,7 +22,7 @@ export const DE_MESSAGES = {
   "chat.context.compact": "Kontext jetzt kompaktieren",
   "chat.context.compacting": "Kontext wird kompaktiert…",
   "chat.context.wait": "Nach Abschluss der aktuellen Antwort verfügbar.",
-  "chat.context.total": "{used} von {window} Tokens des Kontextfensters",
+  "chat.context.total": "{used} von {usable} nutzbaren Eingabe-Tokens · Kontextfenster {window}",
   "chat.context.breakdown": "Aufteilung des Kontextfensters",
   "chat.context.segment.system": "System-Anweisungen",
   "chat.context.segment.summary": "Zusammenfassung früherer Nachrichten",
