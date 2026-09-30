@@ -81,6 +81,9 @@ import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, RetrievalOnlyOutput } from "./grounded-orchestrator.js";
 import { mockRequest, mockResponse } from "./_support.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1528,6 +1531,53 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     }
     expect(auditKindsFor(capA)).toEqual(["retrieval-performed"]);
     expect(auditKindsFor(capB)).toEqual(["retrieval-performed"]);
+  });
+
+  // PR #3678 review: the entailment verdict line minted its own correlation, so the displayed
+  // unsupported-claim total could not be joined to the grounded request it describes.
+  it("records the entailment verdict on the grounded request's correlation", async () => {
+    const { capsuleId: capA } = await seedReadyCapsule("Verdict A Docs");
+    const { capsuleId: capB } = await seedReadyCapsule("Verdict B Docs");
+    const chatId = makeHybridChat(
+      [],
+      [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+      ],
+    );
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new Error("expected hybrid chat");
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const result = await runHybridGroundedAsk({
+        chat,
+        content: "What package manager do I prefer?",
+        answerContent:
+          "User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm.",
+        answerOnlyContextAvailable: true,
+        modelId: ENTAILMENT_MODEL,
+        contextProfile: undefined,
+        correlationId: "corr-hybrid-verdict",
+        deps: hybridDeps({
+          config: entailmentGatewayConfig(),
+          configPresent: true,
+          modelPortFactory: (): ModelPort => ({
+            call: () => Promise.reject(new Error("judge unavailable")),
+          }),
+        }),
+        signal: new AbortController().signal,
+        connectorRetrieve: () =>
+          Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" }),
+        answer: () => Promise.resolve("You prefer pnpm [1]."),
+      });
+
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      const verdict = sink.events.find((event) => event.op === "search.entailment.judged");
+      expect(verdict?.correlationId).toBe("corr-hybrid-verdict");
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("answers from explicit personal context without projecting empty hybrid sources", async () => {

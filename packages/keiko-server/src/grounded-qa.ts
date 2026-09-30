@@ -1201,7 +1201,8 @@ function defaultRunner(
     deps,
     [],
     modelId,
-    { diagnostics: deps.diagnostics },
+    // The request's correlation, so the verdict line joins the ask (PR #3678 review).
+    { diagnostics: deps.diagnostics, correlationId },
     signal,
   );
   const runnerCtx: DefaultRunnerContext = {

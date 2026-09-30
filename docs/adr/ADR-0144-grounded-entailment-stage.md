@@ -159,7 +159,8 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   private one-integer grammars that silently ignored every grouped marker are gone. Ranges (`[1-3]`) are deliberately not
   markers (`[0-9]`, `[2020-2024]`). Markdown code (a fenced block or an inline code span) is never
   scanned, so `const a = [1, 2, 3];` cites nothing; an inline code span never reaches across a
-  blank line or a fence. Outside code, every index of every group is reconciled: a fabricated
+  blank line, a fence, a heading, a list item or a block quote. Outside code, every index of every
+  group is reconciled: a fabricated
   `[9, 10]` beside a real `[1]` dangles, because failing closed beats a quiet source attribution.
   The copy stripper removes only a grounded answer's groups whose every index names one of its
   references and leaves an ordinary answer's brackets untouched. Read-aloud text is stripped by
@@ -170,8 +171,9 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   A weak claim/excerpt overlap flags the entry (`lexicalSupport: "weak"`) and is counted on the
   `search.citations.reconciled` activity line. When the numeric judge reads a weak citation's
   claim, its verdict (`unsupported-claim`, or its own `entailment-unavailable` on failure) decides.
-  When no judge is available, or the judge read no claim for that marker (a bracketed claim leaves
-  no text after the claim stripper), the Knowledge Pod answer carries the fail-closed
+  When no judge is available, or the judge read fewer claims for that marker than the answer uses
+  it (a bracketed claim leaves no text after the claim stripper, so a reused marker is no verdict
+  on it), the Knowledge Pod answer carries the fail-closed
   `entailment-unavailable` caveat and the citation chip reads "unverified". A weakly supported
   citation is never presented as confirmed support (`withWeakCitationCaveat`).
 - **Markers resolve only against the evidence the model was shown.** A window-fitted prompt keeps the
@@ -183,7 +185,9 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   `runtime/no-evidence-answer`) makes no claim and carries neither kind. Only explicit "not enough
   evidence/information" statements are refusals unconditionally. A negated verb ("does not contain",
   "nicht erwähnt", "geht nicht hervor", "cannot answer") counts as a refusal only when its own
-  sentence names the evidence it searched (documents, sources, context, repository). An
+  sentence names the evidence it searched (documents, sources, context, repository); an
+  attribution such as "according to the documentation", plain or as inline Markdown, names a
+  source, not the place that lacks it. An
   absent-information noun ("keine Angaben", "no details") also counts with a search outcome
   ("gefunden", "available", "liegen … vor") in that sentence. Otherwise "The API does not provide
   authentication." or "The API returns no details on errors." is a negative fact, not a refusal.

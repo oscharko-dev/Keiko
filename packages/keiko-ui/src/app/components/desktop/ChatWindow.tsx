@@ -500,30 +500,38 @@ export function speakableAnswerText(message: ChatMessage): string {
 // The copy's body-free evidence (PR #3678 review): whether it succeeded, whether the answer was
 // grounded, and how many marker groups the copy removed and kept — by the same rule as the copy
 // itself. Never the copied text.
+// `grounded` is whether the answer is grounded at all — a grounded refusal with no reference is
+// still grounded — independent of the reference count that decides what is stripped (PR #3678
+// review).
+interface AnswerCopySubject {
+  readonly content: string;
+  readonly citationCeiling: number;
+  readonly grounded: boolean;
+}
+
 function answerCopyEvidence(
-  content: string,
-  citationCeiling: number,
+  subject: AnswerCopySubject,
   outcome: ClientDiagnosticAnswerCopy["outcome"],
 ): ClientDiagnosticAnswerCopy {
-  const groups = findCitationMarkerGroups(sanitizeRepositoryEvidenceText(content));
-  const stripped = groups.filter((group) => citesWithin(group, citationCeiling)).length;
+  const groups = findCitationMarkerGroups(sanitizeRepositoryEvidenceText(subject.content));
+  const stripped = groups.filter((group) => citesWithin(group, subject.citationCeiling)).length;
   return {
     outcome,
-    grounded: citationCeiling > 0,
+    grounded: subject.grounded,
     strippedGroupCount: stripped,
     keptGroupCount: groups.length - stripped,
   };
 }
 
-function reportAnswerCopy(content: string, citationCeiling: number, error?: unknown): void {
+function reportAnswerCopy(subject: AnswerCopySubject, error?: unknown): void {
   if (error === undefined) {
     reportClientDiagnostic("Keiko chat answer copied.", {
-      answerCopy: answerCopyEvidence(content, citationCeiling, "copied"),
+      answerCopy: answerCopyEvidence(subject, "copied"),
     });
     return;
   }
   reportClientDiagnostic("Keiko chat answer copy failed.", {
-    answerCopy: answerCopyEvidence(content, citationCeiling, "failed"),
+    answerCopy: answerCopyEvidence(subject, "failed"),
     errorKind: "unavailable",
     errorEvidence: clientErrorEvidence(error),
   });
@@ -573,18 +581,21 @@ function isCollapsibleAssistantAnswer(content: string): boolean {
 function MessageCopyButton({
   content,
   citationCeiling,
+  grounded,
 }: {
   readonly content: string;
   readonly citationCeiling: number;
+  readonly grounded: boolean;
 }): ReactNode {
   const t = useTranslate();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [status, setStatus] = useState("");
 
   const handleCopy = useCallback(() => {
+    const subject = { content, citationCeiling, grounded };
     void copyTextToClipboard(copyableMessageText(content, citationCeiling)).then(
       () => {
-        reportAnswerCopy(content, citationCeiling);
+        reportAnswerCopy(subject);
         setCopyState("copied");
         setStatus(t("chat.copy.copiedStatus"));
         setTimeout(() => {
@@ -593,12 +604,12 @@ function MessageCopyButton({
         }, 1500);
       },
       (error: unknown) => {
-        reportAnswerCopy(content, citationCeiling, error);
+        reportAnswerCopy(subject, error);
         setCopyState("failed");
         setStatus(t("chat.copy.failedStatus"));
       },
     );
-  }, [citationCeiling, content, t]);
+  }, [citationCeiling, content, grounded, t]);
 
   const copied = copyState === "copied";
   const failed = copyState === "failed";
@@ -892,6 +903,7 @@ function ChatBubbleFooterActions({
       <MessageCopyButton
         content={message.content}
         citationCeiling={groundedCitationCeiling(message.groundedAnswer)}
+        grounded={message.groundedAnswer !== undefined}
       />
       {canCollapse ? (
         <button

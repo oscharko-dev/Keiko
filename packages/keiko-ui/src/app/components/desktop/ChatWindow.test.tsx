@@ -3888,6 +3888,49 @@ describe("ChatWindow message copy", () => {
     }
   });
 
+  // PR #3678 review: a grounded refusal with no reference is still a grounded copy.
+  it("reports a zero-reference grounded answer's copy as grounded", async () => {
+    const reports: { readonly meta: unknown }[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      reports.push({ meta });
+    });
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const content = "No evidence found in the selected knowledge scope.";
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content,
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+            groundedAnswer: copyTestGroundedAnswer(content, 0),
+          },
+        ],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+    await waitFor(() => {
+      expect(reports.map((report) => report.meta)).toContainEqual({
+        answerCopy: { outcome: "copied", grounded: true, strippedGroupCount: 0, keptGroupCount: 0 },
+      });
+    });
+    resetClientDiagnosticWriter();
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
   it("copies an ordinary answer's brackets unchanged: only grounded citations are stripped", async () => {
     const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
     const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");

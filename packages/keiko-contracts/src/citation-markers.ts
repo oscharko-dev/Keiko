@@ -159,10 +159,12 @@ function fencedBlockEnd(text: string, position: number, fence: string, length: n
   return text.length;
 }
 
-// Where a Markdown block ends: a blank line or a fence line. An inline code span never reaches across
-// one (CommonMark), so an unmatched backtick in one paragraph cannot pair with one in the next and
-// swallow the cited prose between them (PR #3678 review).
-const BLOCK_BREAK = /\n[ \t]*\n|\n {0,3}(?:`{3}|~{3})/gu;
+// Where a Markdown block ends: a blank line, or a line that starts a block of its own — a fence, an
+// ATX heading, a list item or a block quote. An inline code span never reaches across one
+// (CommonMark), so an unmatched backtick in one block cannot pair with one in the next and swallow
+// the cited prose between them (PR #3678 review).
+const BLOCK_BREAK =
+  /\n[ \t]*\n|\n {0,3}(?:`{3}|~{3}|#{1,6}(?=[ \t\n])|[-*+][ \t]|\d{1,9}[.)][ \t]|>)/gu;
 
 // Every backtick run of the text, grouped by run length in document order, so an inline code span
 // finds its closing run without rescanning the text: the per-length cursors and the block-break

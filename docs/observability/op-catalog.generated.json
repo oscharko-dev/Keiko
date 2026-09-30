@@ -81002,7 +81002,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:2537",
+      "site": "packages/keiko-server/src/grounded-qa.ts:2538",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -81386,7 +81386,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2205",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2206",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

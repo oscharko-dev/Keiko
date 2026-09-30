@@ -949,6 +949,18 @@ describe("weakly supported citations", () => {
     expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
   });
 
+  // PR #3678 review (P1): a judged claim that reuses the weak citation's marker is no verdict on the
+  // weak occurrence the judge never read.
+  it("keeps the caveat when a judged claim only reuses the weak citation's marker", async () => {
+    const answer = await askWith(
+      "The release checklist covers signing, notarization and upload [1]. [The repository enforces MFA] [1]",
+      "judged-reused",
+      "supported",
+    );
+
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+  });
+
   it("adds no caveat when the claim shares its wording with the cited excerpt", async () => {
     const answer = await askWith(
       "The release checklist covers signing, notarization and upload [1].",

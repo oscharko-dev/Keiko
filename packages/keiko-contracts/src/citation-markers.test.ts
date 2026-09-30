@@ -131,6 +131,16 @@ describe("findCitationMarkerGroups", () => {
     expect(citationMarkerIndices(paragraphs)).toEqual([1]);
     expect(citationMarkerIndices(fenced)).toEqual([1, 2]);
     expect(citationMarkerIndices("One `[1]\nstill one span` [2].")).toEqual([2]);
+    // A heading, a list item and a block quote start a block of their own as well.
+    for (const block of [
+      "# The API uses TLS [1]",
+      "- The API uses TLS [1]",
+      "2. The API uses TLS [1]",
+      "> The API uses TLS [1]",
+    ]) {
+      const text = `An unmatched \` appears here.\n${block}\nAnother unmatched \` appears here.`;
+      expect(citationMarkerIndices(text)).toEqual([1]);
+    }
   });
 
   it("runs an unclosed fence to the end of the text, like the Markdown renderer", () => {

@@ -38,6 +38,7 @@ describe("isNoEvidenceAnswerText", () => {
     "No information is available on this topic.",
     "The codebase does not mention the Java version.",
     "I couldn’t find the Java version in the retrieved excerpts.",
+    "The **provided documents** do not mention the Java version.",
     // The audit's exact probes.
     "Die Dokumente sagen dazu nichts.",
     "In den Dokumenten steht dazu nichts.",
@@ -90,6 +91,9 @@ describe("isNoEvidenceAnswerText", () => {
     "The API does not provide authentication according to the documentation. Requests are anonymous.",
     "According to the provided documents, the API does not include a retry policy.",
     "Laut der Dokumentation enthält die API keine Authentifizierung.",
+    // The attribution written as inline Markdown (PR #3678 review).
+    "The API does not provide authentication according to the [documentation](docs/auth.md). Requests are anonymous.",
+    "The API does not provide authentication according to the **documentation**.",
     "Den Unterlagen zufolge wird Java 17 nicht mehr unterstützt und nicht erwähnt.",
     // The audit's exact false-positive probes.
     "Für diesen Endpunkt sind keine Angaben zum Benutzer erforderlich.",

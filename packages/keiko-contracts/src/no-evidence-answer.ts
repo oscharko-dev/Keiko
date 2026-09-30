@@ -107,9 +107,20 @@ export function isNoEvidenceAnswerText(answer: string): boolean {
   const compact = collapseWhitespace(answer);
   if (compact.length === 0 || compact.length > NO_EVIDENCE_ANSWER_MAX_CHARS) return false;
   if (findCitationMarkerGroups(compact).length > 0) return false;
-  if (STOCK_REFUSAL_PATTERNS.some((pattern) => pattern.test(compact))) return true;
-  if (CONTRAST_PATTERN.test(compact)) return false;
-  return sentencesOf(compact).some(isEvidenceAbsenceSentence);
+  const text = withoutInlineMarkdown(compact);
+  if (STOCK_REFUSAL_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  if (CONTRAST_PATTERN.test(text)) return false;
+  return sentencesOf(text).some(isEvidenceAbsenceSentence);
+}
+
+// Inline Markdown is read as the words it renders: "according to the [documentation](docs/a.md)"
+// and "**documentation**" are the same attribution as the plain word (PR #3678 review). Bounded
+// quantifiers keep the rewrite linear over the already length-capped text.
+const MARKDOWN_LINK_PATTERN = /\[([^\]\n]{1,200})\]\([^)\n]{0,500}\)/gu;
+const MARKDOWN_EMPHASIS_PATTERN = /[*_`~]+/gu;
+
+function withoutInlineMarkdown(text: string): string {
+  return text.replace(MARKDOWN_LINK_PATTERN, "$1").replace(MARKDOWN_EMPHASIS_PATTERN, "");
 }
 
 // A sentence declines only when it names the evidence it searched, or, for an absent-information

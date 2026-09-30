@@ -48,6 +48,7 @@ import type {
   KnowledgeSourceId,
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
+import { citationMarkerIndices } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { classifyDocumentationTarget } from "@oscharko-dev/keiko-contracts/runtime/documentation-browser";
 import {
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
@@ -2324,15 +2325,30 @@ async function appendLocalKnowledgeNumericEntailment(
   return weakCitationsJudged(result) ? judged : withWeakCitationCaveat(judged, result);
 }
 
-// Every weakly supported citation belongs to a claim the numeric judge actually reads: the same
-// segmentation the stage judges (segmentNumericCitedClaims) names its marker.
+function countByIndex(indices: readonly number[]): ReadonlyMap<number, number> {
+  const counts = new Map<number, number>();
+  for (const index of indices) counts.set(index, (counts.get(index) ?? 0) + 1);
+  return counts;
+}
+
+// Every occurrence of a weakly supported marker belongs to a claim the numeric judge actually reads,
+// per occurrence, not per index: in `The API uses TLS [1]. [The repository enforces MFA] [1]` the
+// judge reads only the TLS claim, so the second [1] is unjudged although the index appears in a
+// judged claim (PR #3678 review, P1). An index is covered only when the claims the stage judges
+// (segmentNumericCitedClaims) name it at least as often as the answer uses it; anything less keeps
+// the caveat, failing closed.
 function weakCitationsJudged(result: ScopedGroundedResult): boolean {
-  const weak = result.citations.filter((citation) => citation.lexicalSupport === "weak");
-  if (weak.length === 0) return true;
-  const judged = new Set(
+  const weak = new Set(
+    result.citations
+      .filter((citation) => citation.lexicalSupport === "weak")
+      .map((citation) => citation.index),
+  );
+  if (weak.size === 0) return true;
+  const judged = countByIndex(
     segmentNumericCitedClaims(result.answer).flatMap((claim) => claim.markers),
   );
-  return weak.every((citation) => judged.has(citation.index));
+  const used = countByIndex(citationMarkerIndices(result.answer));
+  return [...weak].every((index) => (judged.get(index) ?? 0) >= (used.get(index) ?? 0));
 }
 
 // Weak lexical overlap is not a verdict. An in-range marker stays attached so the reader can open

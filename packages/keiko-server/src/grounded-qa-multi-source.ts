@@ -1099,7 +1099,8 @@ async function applyMultiSourceEntailment(
           ctx.deps,
           [],
           ctx.modelId,
-          { diagnostics: ctx.deps.diagnostics },
+          // The request's correlation, so the verdict line joins the ask (PR #3678 review).
+          { diagnostics: ctx.deps.diagnostics, correlationId: ctx.correlationId },
           ctx.signal,
         );
   if (stage === undefined) {
