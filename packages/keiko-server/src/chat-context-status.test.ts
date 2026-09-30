@@ -15,7 +15,11 @@ import type {
   ChatContextSegmentId,
   GroundedPromptContextWire,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -286,6 +290,66 @@ describe("grounded context status", () => {
     expect(summary.tokens + messages.tokens).toBeLessThanOrEqual(
       Math.floor(status.inputBudgetTokens / 3),
     );
+  });
+
+  // PR #3678 review (C12): an undeclared window reads as the default planning window and says so.
+  it("reports an assumed window with the default geometry and flags it", () => {
+    const { deps, chatId } = fixture(2, "Kurze Frage und Antwort.");
+    const assumedDeps: UiHandlerDeps = {
+      ...deps,
+      contextProfile: undefined,
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          {
+            ...createDefaultChatCapability("fixture"),
+            contextWindow: 4_096,
+            contextWindowAssumed: true,
+          },
+        ],
+      },
+      configPresent: true,
+    };
+
+    const status = readChatContextStatus(assumedDeps, chatId, "fixture");
+
+    expect(status.contextWindowAssumed).toBe(true);
+    expect(status.contextWindowTokens).toBe(DEFAULT_CONTEXT_PROFILE.maxInputTokens);
+  });
+
+  // PR #3678 review (C4/C12): a grounded chat's readings carry the sources, so the logged savings
+  // must be the conversation's own, equal to the saved checkpoint's.
+  it("logs the conversation's own savings when a grounded chat with a pending compaction compacts", () => {
+    const seeded = fixture(10, "Wir besprechen die Kontoführung im Detail. ".repeat(40));
+    const deps = {
+      ...seeded.deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 16_384,
+        reservedOutputTokens: 4_096,
+        safetyMarginTokens: 512,
+      }),
+    };
+    seedGroundedAnswer(deps, seeded.chatId, {
+      promptTokens: 9_000,
+      promptTokensMeasured: true,
+      instructionTokens: 310,
+      sourceTokens: 6_000,
+      sentReferenceCount: 4,
+      availableReferenceCount: 4,
+    });
+    deps.store.updateChat(seeded.chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    expect(readChatContextStatus(deps, seeded.chatId, "fixture").pendingCompaction).toBeDefined();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    const after = compactChatContext(deps, seeded.chatId, "fixture", "corr-grounded-savings");
+
+    const compacted = sink.events.find(
+      (event) => event.op === "chat.context.management" && event.extra?.outcome === "compacted",
+    );
+    expect(after.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(compacted?.extra?.tokensSaved).toBe(after.compaction?.tokensSaved);
   });
 
   it("keeps a model-only chat free of a source share", () => {
