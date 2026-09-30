@@ -5304,6 +5304,113 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  // A re-setup must keep what a stored window's provenance records: it is assumed only while nobody
+  // has stated it. A gateway's declaration ends the assumption (and replaces a reported window), but
+  // a rediscovery that declares nothing must neither invent an assumption for a window a provider
+  // reported or a probe measured, nor forget one for a window that was never stated.
+  it.each([
+    {
+      title: "an assumed window stays assumed while discovery declares nothing",
+      stored: { contextWindow: 4_096, contextWindowAssumed: true },
+      declared: undefined,
+      expected: {
+        contextWindow: 4_096,
+        contextWindowAssumed: true,
+        contextWindowReported: undefined,
+      },
+    },
+    {
+      title: "a declared window ends the assumption",
+      stored: { contextWindow: 4_096, contextWindowAssumed: true },
+      declared: 131_072,
+      expected: {
+        contextWindow: 131_072,
+        contextWindowAssumed: undefined,
+        contextWindowReported: undefined,
+      },
+    },
+    {
+      title: "a provider-reported window survives a rediscovery that declares nothing",
+      stored: { contextWindow: 200_000, contextWindowReported: true },
+      declared: undefined,
+      expected: {
+        contextWindow: 200_000,
+        contextWindowAssumed: undefined,
+        contextWindowReported: true,
+      },
+    },
+    {
+      title: "a declared window replaces a provider-reported one",
+      stored: { contextWindow: 200_000, contextWindowReported: true },
+      declared: 131_072,
+      expected: {
+        contextWindow: 131_072,
+        contextWindowAssumed: undefined,
+        contextWindowReported: undefined,
+      },
+    },
+    {
+      title: "a measured window (neither flag) stays measured",
+      stored: { contextWindow: 32_000 },
+      declared: undefined,
+      expected: {
+        contextWindow: 32_000,
+        contextWindowAssumed: undefined,
+        contextWindowReported: undefined,
+      },
+    },
+  ] as const)("keeps window provenance across a re-setup: $title", async (row) => {
+    const baseUrl = "https://llm-gateway.example.com/v1";
+    const deps = createUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-window-provenance-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-window-provenance-"), "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          row.declared === undefined
+            ? ["hosted-vllm-chat"]
+            : parseModelDiscovery({
+                data: [
+                  {
+                    model_name: "hosted-vllm-chat",
+                    model_info: { mode: "chat", max_input_tokens: row.declared },
+                  },
+                ],
+              }),
+        ),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "hosted-vllm-chat",
+            baseUrl,
+            apiKey: "old-token",
+            capability: { ...createDefaultChatCapability("hosted-vllm-chat"), ...row.stored },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(ctx({ baseUrl, apiKey: "example-secret-token" }), deps);
+
+    expect(result.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "hosted-vllm-chat",
+    );
+    expect({
+      contextWindow: capability?.contextWindow,
+      contextWindowAssumed: capability?.contextWindowAssumed,
+      contextWindowReported: capability?.contextWindowReported,
+    }).toEqual(row.expected);
+    deps.store.close();
+  });
+
   it("keeps a NEW image claim on the verified rebuild path", async () => {
     // Expanding image capability onto an id that never carried it still demands the vision
     // probe — only clears and shrinks are metadata edits.
@@ -10187,11 +10294,13 @@ describe("normalizeDiscoveryPayload", () => {
   );
 
   it("uses the canonical embedding model-id families", () => {
+    // Discovery orders the embedding lane declared-first, then by id (never by listing order), so
+    // this all-name-inferred list is written in id order: the assertion stays an exact match.
     const embeddingModelIds = [
       "bge-large-en-v1.5",
+      "hkunlp/instructor-xl",
       "intfloat/e5-large-v2",
       "thenlper/gte-large",
-      "hkunlp/instructor-xl",
     ];
     expect(
       normalizeDiscoveryPayloadForSetup({

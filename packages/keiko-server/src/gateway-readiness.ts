@@ -5,6 +5,7 @@ import {
   listConfiguredCapabilities,
   requestGatewayReadinessChatCompletion,
   requestOpenAIEmbedding,
+  selectConfiguredModel,
   toolCallingConfigurationFingerprint,
   vectorL2Norm,
   type GatewayConfig,
@@ -731,10 +732,14 @@ function providerCapability(
   );
 }
 
+// The embedding model the probe verifies is the one every binder binds — pod creation, full
+// re-embed, repository semantic search and memory all take the preference
+// `selectConfiguredModel({ kind: "embedding" })` applies (cheapest cost class first, the configured
+// order breaking ties). A plain `find` took the first embedding LISTED, so a gateway with two
+// engines was verified on a model nothing would ever use.
 function chooseEmbeddingProvider(config: GatewayConfig): ModelProviderConfig | undefined {
-  return config.providers.find(
-    (provider) => providerCapability(config, provider)?.kind === "embedding",
-  );
+  const modelId = selectConfiguredModel(config, { kind: "embedding" });
+  return config.providers.find((provider) => provider.modelId === modelId);
 }
 
 // Surfaces the HTTP status when the gateway answered: "(http-error 400)" points at the request

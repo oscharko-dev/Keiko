@@ -1156,7 +1156,9 @@ describe("strict LiteLLM field twin", () => {
         expect(log.rerankBodies?.[0]).toMatchObject({
           model: "bge-reranker-v2-m3",
           query: "alpha readiness match",
-          documents: ["alpha readiness match", "unrelated beta"],
+          // The relevant document is second, so an engine that returns input order fails the
+          // probe instead of passing it (PR #3678 review).
+          documents: ["unrelated beta", "alpha readiness match"],
           top_n: 1,
         });
         // It is a retrieval reranker, never a chat or embedding provider.

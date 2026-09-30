@@ -634,17 +634,21 @@ Discovery gives a rerank model a lane of its own: it is never configured as a ch
 model, whatever its family prefix says. After the chat and embedding probes, setup sends the same
 two-document request gateway readiness sends to the discovered engine and wires it as the retrieval
 reranker on the verified setup connection only when the provider answers and ranks the matching
-document first. It is not wired when (a) the probe failed or ranked wrongly — at most three
-candidates are probed, in gateway order — or (b) a reranker already exists in the stored or current
-configuration: a file- or operator-configured reranker is never replaced, and one that shares the
-gateway connection follows a credential rotation.
+document first; the matching document is sent second, so an engine that only returns the input
+order fails. It is not wired when (a) the probe failed or ranked wrongly — at most three candidates
+are probed, declared rerank models before name-inferred ones and then by id, within one shared
+45-second probe budget per setup — or (b) a reranker already exists in the stored or current
+configuration: a file- or operator-configured reranker is never replaced. One that shares the
+gateway connection follows a credential rotation, and when the setup moves to a new endpoint it is
+probed there again and dropped when the new gateway does not host it.
 
 **Diagnostic Steps**
 
 `keiko support analyze <bundle>` shows one `gateway.discovery.alias-intersection` line per
 discovered alias whose `role` names its lane, and one `gateway.reranker.setup.resolved` line per
-setup attempt that found a rerank model: `outcome` is `wired`, `kept-existing` (an existing
-reranker blocked the wiring; nothing was probed) or `probe-failed`, with the candidate and probe
+committed setup that found a rerank model: `outcome` is `wired`, `kept-existing` (an existing
+reranker blocked the wiring; probed once only when it moved to a new endpoint) or `probe-failed`
+(logged at `warn`, with a `GATEWAY_RERANKER_PROBE_FAILED` diagnostic), with the candidate and probe
 counts. The probe itself leaves a `search.rerank.completed` line with the closed `failureKind`.
 The setup response lists every model Keiko did not configure under `unsupportedModels`; a wired
 reranker is absent from it and appears as `config.reranker.modelId`.

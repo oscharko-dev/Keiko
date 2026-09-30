@@ -1856,7 +1856,7 @@ describe("local-knowledge reranker diagnostics", () => {
       failureKind: "not-configured",
       latencyMs: 0,
     });
-    // A reranker that was simply never configured is the default, fully-supported install state — it
+    // A reranker that was simply never configured is a fully-supported install state — it
     // must NOT degrade the Knowledge Pod activity row (#1922 regression: the single-scope path now
     // matches the hybrid path, which already suppresses not-configured). The redacted diagnostics
     // still surface on the context pack for observability, but the activity pod stays "searched".

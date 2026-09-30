@@ -4,14 +4,17 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
-import { readFileSync, realpathSync, rmSync } from "node:fs";
+import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ERROR_CODES,
+  createDefaultChatCapability,
+  createDefaultEmbeddingCapability,
   parseGatewayConfig,
   type LiteLLMRerankRequest,
   type RerankOutcome,
@@ -23,7 +26,9 @@ import {
   normalizeDiscoveryPayloadForSetup,
   parseModelDiscovery,
 } from "./gateway-setup.js";
-import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { configuredEmbeddingModelIds } from "./local-knowledge-handlers.js";
+import { createServerLogger, getServerLogger, setServerLogger } from "./observability/index.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { stopConfiguredConversationReadiness } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
 
@@ -42,6 +47,7 @@ const tmpDirs: string[] = [];
 const handlerDeps: UiHandlerDeps[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   resetServerLogger();
   await Promise.all(handlerDeps.splice(0).map(stopConfiguredConversationReadiness));
   for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -263,23 +269,107 @@ describe("discovery role evidence", () => {
   });
 });
 
+describe("discovery candidate order", () => {
+  // Two declared engines (`mode` stated by the gateway) and two whose ROLE Keiko only inferred from
+  // the id. Neither the listing order nor the alphabet may decide which one is tried or bound first
+  // ahead of what the gateway itself declared.
+  const RERANKERS: readonly Record<string, unknown>[] = [
+    { model_name: "a-inferred-reranker" },
+    { model_name: "z-declared-reranker", model_info: { mode: "rerank" } },
+    { model_name: "b-inferred-reranker" },
+    { model_name: "m-declared-reranker", model_info: { mode: "rerank" } },
+  ];
+  const EMBEDDINGS: readonly Record<string, unknown>[] = [
+    { model_name: "text-embedding-ada-002" },
+    { model_name: "z-house-embed", model_info: { mode: "embedding" } },
+    { model_name: "bge-m3" },
+    { model_name: "a-house-embed", model_info: { mode: "embedding" } },
+  ];
+  const CHAT = { model_name: "qwen-chat", model_info: { mode: "chat" } };
+
+  it("orders rerank candidates declared-first, then by id, whatever the listing order", () => {
+    const forward = normalizeDiscoveryPayloadForSetup({ data: [CHAT, ...RERANKERS] });
+    const reverse = normalizeDiscoveryPayloadForSetup({
+      data: [CHAT, ...[...RERANKERS].reverse()],
+    });
+    const expected = [
+      "m-declared-reranker",
+      "z-declared-reranker",
+      "a-inferred-reranker",
+      "b-inferred-reranker",
+    ];
+    expect(forward.rerankModelIds).toEqual(expected);
+    expect(reverse.rerankModelIds).toEqual(expected);
+  });
+
+  it("orders embedding candidates declared-first, then by id, whatever the listing order", () => {
+    const forward = normalizeDiscoveryPayloadForSetup({ data: [CHAT, ...EMBEDDINGS] });
+    const reverse = normalizeDiscoveryPayloadForSetup({
+      data: [CHAT, ...[...EMBEDDINGS].reverse()],
+    });
+    const expected = ["a-house-embed", "z-house-embed", "bge-m3", "text-embedding-ada-002"];
+    expect(forward.embeddingModelIds).toEqual(expected);
+    expect(reverse.embeddingModelIds).toEqual(expected);
+    // The listing itself is not reordered: only the two role lanes carry an order.
+    expect(forward.modelIds).toEqual([
+      "qwen-chat",
+      "text-embedding-ada-002",
+      "z-house-embed",
+      "bge-m3",
+      "a-house-embed",
+    ]);
+  });
+
+  it.each([
+    { title: "declared first", replicas: [{ mode: "rerank" }, {}] },
+    { title: "name-inferred first", replicas: [{}, { mode: "rerank" }] },
+  ])(
+    "merges a declared and a name-inferred replica of one rerank alias as declared ($title)",
+    ({ replicas }) => {
+      const merged = replicas.map((info) => ({
+        model_name: "house-reranker",
+        ...(info.mode === undefined ? {} : { model_info: info }),
+      }));
+      const parsed = normalizeDiscoveryPayloadForSetup({
+        data: [CHAT, { model_name: "a-inferred-reranker" }, ...merged],
+      });
+      // One engine, and it sorts as DECLARED — ahead of the name-inferred "a-inferred-reranker" —
+      // in either replica order: the merge must not let the first replica decide.
+      expect(parsed.rerankModelIds).toEqual(["house-reranker", "a-inferred-reranker"]);
+      expect(parsed.unsupportedModels).toEqual([
+        { id: "a-inferred-reranker", reason: "rerank" },
+        { id: "house-reranker", reason: "rerank" },
+      ]);
+    },
+  );
+});
+
 interface RerankPort {
   readonly requests: LiteLLMRerankRequest[];
   readonly rerankRequest: (request: LiteLLMRerankRequest) => Promise<RerankOutcome>;
 }
 
-// The provider ranks the document that matches the probe query first — a working reranker.
-function answeringRerankPort(): RerankPort {
-  return scriptedRerankPort((request) => ({
+// What a working engine answers: the document that matches the query verbatim first, then the rest.
+// The order is derived from the request itself — the probe owns where its matching document sits,
+// and a fixture that restated that position would keep passing after the probe moved it.
+function rankedByQuery(request: LiteLLMRerankRequest, wrongOrder = false): RerankOutcome {
+  const best = Math.max(0, request.documents.indexOf(request.query));
+  const ranked = [best, ...request.documents.map((_document, index) => index)].filter(
+    (index, position, all) => all.indexOf(index) === position,
+  );
+  const order = wrongOrder ? [...ranked].reverse() : ranked;
+  return {
     ok: true,
     value: {
       modelId: request.modelId,
-      results: [
-        { index: 0, relevanceScore: 0.97 },
-        { index: 1, relevanceScore: 0.02 },
-      ],
+      results: order.map((index, rank) => ({ index, relevanceScore: 1 - rank / 10 })),
     },
-  }));
+  };
+}
+
+// The provider ranks the document that matches the probe query first — a working reranker.
+function answeringRerankPort(): RerankPort {
+  return scriptedRerankPort((request) => rankedByQuery(request));
 }
 
 function scriptedRerankPort(script: (request: LiteLLMRerankRequest) => RerankOutcome): RerankPort {
@@ -344,7 +434,8 @@ describe("reranker wiring from discovery", () => {
     expect(port.requests[0]).toMatchObject({
       modelId: "house-reranker",
       endpoint: "https://llm-gateway.example.com/v1",
-      documents: ["alpha readiness match", "unrelated beta"],
+      // The matching document is NOT first, so an engine answering in input order cannot pass.
+      documents: ["unrelated beta", "alpha readiness match"],
       topN: 1,
     });
     // The reranker is not a chat or embedding provider, and it is no longer "unsupported".
@@ -373,16 +464,7 @@ describe("reranker wiring from discovery", () => {
   });
 
   it("does not wire a reranker that answers but ranks the wrong document first", async () => {
-    const port = scriptedRerankPort((request) => ({
-      ok: true,
-      value: {
-        modelId: request.modelId,
-        results: [
-          { index: 1, relevanceScore: 0.9 },
-          { index: 0, relevanceScore: 0.1 },
-        ],
-      },
-    }));
+    const port = scriptedRerankPort((request) => rankedByQuery(request, true));
     const { deps } = await setupFixture(CHAT_AND_RERANKER, port);
     const result = await handleGatewaySetup(
       ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
@@ -507,10 +589,7 @@ describe("reranker wiring from discovery", () => {
   it("wires the first candidate that ranks and stops probing", async () => {
     const port = scriptedRerankPort((request) =>
       request.modelId === "second-reranker"
-        ? {
-            ok: true,
-            value: { modelId: request.modelId, results: [{ index: 0 }, { index: 1 }] },
-          }
+        ? rankedByQuery(request)
         : { ok: false, kind: "transport" },
     );
     const { deps } = await setupFixture(
@@ -560,6 +639,30 @@ describe("reranker wiring from discovery", () => {
     expect(result.status).toBe(200);
     expect(port.requests).toHaveLength(3);
     expect(currentGatewayConfig(deps)?.reranker).toBeUndefined();
+  });
+
+  it("does not wire an engine that answers in input order without ranking anything", async () => {
+    // The pass condition must not be reachable by an engine that ignores the query: with the
+    // matching document at index 0, "first in, first out" and a zero-score answer looked exactly
+    // like a working reranker.
+    const port = scriptedRerankPort((request) => ({
+      ok: true,
+      value: {
+        modelId: request.modelId,
+        results: request.documents.map((_document, index) => ({ index })),
+      },
+    }));
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, port);
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(port.requests).toHaveLength(1);
+    expect(currentGatewayConfig(deps)?.reranker).toBeUndefined();
+    expect(result.body).toMatchObject({
+      unsupportedModels: [{ id: "house-reranker", reason: "rerank" }],
+    });
   });
 
   it("does not probe at all when discovery found no reranker", async () => {
@@ -640,5 +743,439 @@ describe("reranker wiring from discovery", () => {
     const lines = sink.events.filter((event) => event.op === "gateway.reranker.setup.resolved");
     expect(lines).toHaveLength(1);
     expect(lines[0]?.extra).toMatchObject({ outcome: "kept-existing", probedCount: 0 });
+  });
+});
+
+const GATEWAY_A = "https://gw-a.example.com/v1";
+const GATEWAY_B = "https://gw-b.example.com/v1";
+const CHAT_ONLY: readonly Record<string, unknown>[] = [
+  { model_name: "qwen-chat", model_info: { mode: "chat" } },
+];
+
+// What discovery lists from now on — the gateway the operator moved to hosts other engines.
+function listInventory(deps: UiHandlerDeps, payload: readonly Record<string, unknown>[]): void {
+  Object.assign(deps, {
+    gatewayModelDiscovery: () =>
+      Promise.resolve(normalizeDiscoveryPayloadForSetup({ data: payload })),
+  });
+}
+
+// The chat smoke test refuses every candidate URL the predicate names.
+function refuseChatAt(deps: UiHandlerDeps, refuses: (baseUrl: string) => boolean): void {
+  const tester: NonNullable<UiHandlerDeps["gatewaySetupTester"]> = (config, modelIds) =>
+    config.providers.some((provider) => refuses(provider.baseUrl))
+      ? Promise.reject(new Error("chat smoke refused"))
+      : Promise.resolve(modelIds);
+  Object.assign(deps, { gatewaySetupTester: tester });
+}
+
+function captureDiagnostics(deps: UiHandlerDeps): ServerDiagnosticRecord[] {
+  const records: ServerDiagnosticRecord[] = [];
+  Object.assign(deps, {
+    diagnostics: {
+      record: (record: ServerDiagnosticRecord): void => {
+        records.push(record);
+      },
+    },
+  });
+  return records;
+}
+
+function setupAt(
+  deps: UiHandlerDeps,
+  baseUrl: string,
+  apiKey: string,
+): ReturnType<typeof handleGatewaySetup> {
+  return handleGatewaySetup(ctx({ baseUrl, apiKey }), deps);
+}
+
+function resolutionLines(
+  sink: ReturnType<typeof createBufferedServerLogSink>,
+): ReturnType<typeof createBufferedServerLogSink>["events"] {
+  return sink.events.filter((event) => event.op === "gateway.reranker.setup.resolved");
+}
+
+function infoSink(): ReturnType<typeof createBufferedServerLogSink> {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  return sink;
+}
+
+describe("reranker resolution is decided at commit", () => {
+  it("emits one resolution for a request whose first candidate URL was refused", async () => {
+    const sink = infoSink();
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
+    // The bare host is tried first, then `<host>/v1`: two admission attempts, one commit.
+    refuseChatAt(deps, (baseUrl) => !baseUrl.endsWith("/v1"));
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const lines = resolutionLines(sink);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.extra).toMatchObject({ outcome: "wired", candidateCount: 1, probedCount: 1 });
+  });
+
+  it("emits one resolution when a temporary provider failure defers the chat admission", async () => {
+    const sink = infoSink();
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
+    // Every candidate URL is rate-limited: the setup is kept, chat unverified, and committed once.
+    Object.assign(deps, {
+      gatewaySetupTester: () =>
+        Promise.reject(Object.assign(new Error("rate limited"), { code: ERROR_CODES.RATE_LIMIT })),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.reranker?.modelId).toBe("house-reranker");
+    expect(resolutionLines(sink)).toHaveLength(1);
+  });
+
+  it("emits nothing for a reranker whose setup never committed", async () => {
+    const sink = infoSink();
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
+    refuseChatAt(deps, () => true);
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(502);
+    expect(currentGatewayConfig(deps)?.reranker).toBeUndefined();
+    expect(resolutionLines(sink)).toHaveLength(0);
+  });
+});
+
+describe("a failed reranker probe is loud", () => {
+  it("logs probe-failed at warn and leaves one body-free diagnostic", async () => {
+    const sink = infoSink();
+    const port = scriptedRerankPort(() => ({ ok: false, kind: "unsupported-model" }));
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, port);
+    const records = captureDiagnostics(deps);
+    const result = await setupAt(deps, GATEWAY_A, "example-secret-token");
+    expect(result.status).toBe(200);
+    const lines = resolutionLines(sink);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ level: "warn", extra: { outcome: "probe-failed" } });
+    const failed = records.filter((record) => record.source === "gateway.setup.reranker-probe");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({
+      operation: "POST /api/gateway/setup",
+      correlationId: "corr-discovery-roles",
+      code: "GATEWAY_RERANKER_PROBE_FAILED",
+    });
+    expect(JSON.stringify(failed)).not.toContain("house-reranker");
+    expect(JSON.stringify(failed)).not.toContain("example-secret-token");
+  });
+
+  it("keeps a wired reranker at info with no probe diagnostic", async () => {
+    const sink = infoSink();
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
+    const records = captureDiagnostics(deps);
+    await setupAt(deps, GATEWAY_A, "example-secret-token");
+    expect(resolutionLines(sink)[0]).toMatchObject({ level: "info", extra: { outcome: "wired" } });
+    expect(records.filter((record) => record.source === "gateway.setup.reranker-probe")).toEqual(
+      [],
+    );
+  });
+
+  it("treats a probe that throws as not admitted, reports it, and still completes the setup", async () => {
+    const sink = infoSink();
+    // The rerank facade logs its own outcome through `.log`; a logger that throws there is a probe
+    // that rejects rather than answers — the branch the transport-level catch never reaches.
+    const real = getServerLogger();
+    setServerLogger({
+      ...real,
+      log: (level, source) => {
+        const event = typeof source === "function" ? source() : source;
+        if (event.op === "search.rerank.completed") {
+          throw new Error("rerank outcome line could not be written");
+        }
+        real.log(level, source);
+      },
+    });
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
+    const records = captureDiagnostics(deps);
+    const result = await setupAt(deps, GATEWAY_A, "example-secret-token");
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.reranker).toBeUndefined();
+    const thrown = records.filter(
+      (record) => record.source === "gateway.setup.reranker-probe" && record.errorClass === "Error",
+    );
+    expect(thrown).toHaveLength(1);
+    expect(resolutionLines(sink)[0]?.extra).toMatchObject({ outcome: "probe-failed" });
+  });
+});
+
+// A reranker the gateway hosts answers only on the endpoints that host it.
+function rerankerHostedAt(...endpoints: readonly string[]): RerankPort {
+  return scriptedRerankPort((request) =>
+    endpoints.includes(request.endpoint)
+      ? rankedByQuery(request)
+      : { ok: false, kind: "unsupported-model" },
+  );
+}
+
+describe("a wired reranker follows the gateway to a new endpoint", () => {
+  it("re-probes it on the new connection and keeps it when that gateway hosts it too", async () => {
+    const sink = infoSink();
+    const port = rerankerHostedAt(GATEWAY_A, GATEWAY_B);
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, port);
+    expect((await setupAt(deps, GATEWAY_A, "token-a")).status).toBe(200);
+    listInventory(deps, CHAT_ONLY);
+
+    const moved = await setupAt(deps, GATEWAY_B, "token-b");
+
+    expect(moved.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.reranker).toMatchObject({
+      modelId: "house-reranker",
+      baseUrl: GATEWAY_B,
+      apiKey: "token-b",
+    });
+    expect(port.requests.map((request) => request.endpoint)).toEqual([GATEWAY_A, GATEWAY_B]);
+    expect(resolutionLines(sink).map((line) => line.extra)).toMatchObject([
+      { outcome: "wired" },
+      { outcome: "kept-existing", candidateCount: 0, probedCount: 1 },
+    ]);
+  });
+
+  it("drops it when the new gateway does not host it, instead of pointing it at a dead route", async () => {
+    const sink = infoSink();
+    const port = rerankerHostedAt(GATEWAY_A);
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, port);
+    expect((await setupAt(deps, GATEWAY_A, "token-a")).status).toBe(200);
+    listInventory(deps, CHAT_ONLY);
+
+    const moved = await setupAt(deps, GATEWAY_B, "token-b");
+
+    expect(moved.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.reranker).toBeUndefined();
+    const line = resolutionLines(sink).at(-1);
+    expect(line).toMatchObject({
+      level: "warn",
+      extra: { outcome: "probe-failed", candidateCount: 0, probedCount: 1 },
+    });
+  });
+
+  it("lets discovery on the new gateway decide when the carried-over reranker fails", async () => {
+    const sink = infoSink();
+    const port = scriptedRerankPort((request) =>
+      request.endpoint === GATEWAY_A || request.modelId === "backup-reranker"
+        ? rankedByQuery(request)
+        : { ok: false, kind: "unsupported-model" },
+    );
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, port);
+    expect((await setupAt(deps, GATEWAY_A, "token-a")).status).toBe(200);
+    listInventory(deps, [
+      ...CHAT_ONLY,
+      { model_name: "backup-reranker", model_info: { mode: "rerank" } },
+    ]);
+
+    const moved = await setupAt(deps, GATEWAY_B, "token-b");
+
+    expect(moved.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.reranker).toMatchObject({
+      modelId: "backup-reranker",
+      baseUrl: GATEWAY_B,
+    });
+    expect(resolutionLines(sink).at(-1)?.extra).toMatchObject({
+      outcome: "wired",
+      candidateCount: 1,
+      probedCount: 2,
+    });
+  });
+
+  it("never re-probes a reranker with its own connection, moved gateway or not", async () => {
+    const port = rerankerHostedAt(GATEWAY_A, GATEWAY_B);
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, port);
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [{ modelId: "qwen-chat", baseUrl: GATEWAY_A, apiKey: "token-a" }],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        reranker: {
+          modelId: "operator-reranker",
+          baseUrl: "https://rerank.example.com",
+          apiKey: "operator-rerank-token",
+        },
+      }),
+      true,
+    );
+    expect((await setupAt(deps, GATEWAY_B, "token-b")).status).toBe(200);
+    expect(port.requests).toHaveLength(0);
+    expect(currentGatewayConfig(deps)?.reranker).toMatchObject({
+      modelId: "operator-reranker",
+      baseUrl: "https://rerank.example.com",
+    });
+  });
+});
+
+describe("a stored reranker is owned even when only the durable file names it", () => {
+  it("keeps it through a rewrite and neither probes nor replaces it", async () => {
+    const port = answeringRerankPort();
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, port);
+    const storagePath = deps.gatewayConfig?.storagePath;
+    if (storagePath === undefined) throw new Error("expected a gateway config store");
+    const provider = { modelId: "qwen-chat", baseUrl: GATEWAY_A, apiKey: "token-a" };
+    const circuitBreaker = { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 };
+    // The durable file holds the reranker; the runtime view (an env override, a hot config) does not.
+    writeFileSync(
+      storagePath,
+      JSON.stringify({
+        providers: [provider],
+        circuitBreaker,
+        reranker: {
+          modelId: "operator-reranker",
+          baseUrl: "https://rerank.example.com",
+          apiKey: "operator-rerank-token",
+        },
+      }),
+    );
+    deps.gatewayConfig?.set(parseGatewayConfig({ providers: [provider], circuitBreaker }), true);
+    expect(currentGatewayConfig(deps)?.reranker).toBeUndefined();
+
+    const result = await setupAt(deps, GATEWAY_A, "token-a2");
+
+    expect(result.status).toBe(200);
+    expect(port.requests).toHaveLength(0);
+    expect(currentGatewayConfig(deps)?.reranker).toMatchObject({
+      modelId: "operator-reranker",
+      apiKey: "operator-rerank-token",
+    });
+  });
+});
+
+describe("the probe budget of one setup request", () => {
+  it("is shared by every engine and every candidate URL", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // Each probe "takes" its full 30 s deadline: an unreachable endpoint. Without a shared budget a
+    // gateway listing many rerank aliases held the setup response for 3 x 30 s per candidate URL.
+    const port = scriptedRerankPort(() => {
+      vi.advanceTimersByTime(30_000);
+      return { ok: false, kind: "timeout" };
+    });
+    const { deps } = await setupFixture(
+      [
+        ...CHAT_ONLY,
+        ...Array.from({ length: 6 }, (_value, index) => ({
+          model_name: `reranker-${String(index)}`,
+          model_info: { mode: "rerank" },
+        })),
+      ],
+      port,
+    );
+    refuseChatAt(deps, (baseUrl) => !baseUrl.endsWith("/v1"));
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    // 30 s + 30 s of a 45 s budget: the second probe is still admitted (with the 15 s left), the
+    // third — on this URL or the next — is not.
+    expect(port.requests).toHaveLength(2);
+    expect(currentGatewayConfig(deps)?.reranker).toBeUndefined();
+  });
+});
+
+describe("a reranker stored as an embedding model", () => {
+  // The field incident's stored state: the gateway declared `mode: "rerank"`, an old build filed
+  // the endpoint as an embedding model, and every Settings save kept it there.
+  function storeRerankerAsEmbedding(deps: UiHandlerDeps): void {
+    const raw = (modelId: string, capability: unknown): Record<string, unknown> => ({
+      modelId,
+      baseUrl: GATEWAY_A,
+      apiKey: "old-token",
+      capability,
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          raw("qwen-chat", createDefaultChatCapability("qwen-chat")),
+          raw("bge-reranker-v2-m3", createDefaultEmbeddingCapability("bge-reranker-v2-m3")),
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+  }
+
+  it("re-classifies it as a reranker on a preserve-mode save and wires it after the probe", async () => {
+    const { deps } = await setupFixture(CHAT_ONLY, rerankerHostedAt(GATEWAY_A));
+    storeRerankerAsEmbedding(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const config = currentGatewayConfig(deps);
+    expect(config?.capabilities?.filter((capability) => capability.kind === "embedding")).toEqual(
+      [],
+    );
+    expect(config?.providers.map((provider) => provider.modelId)).toEqual(["qwen-chat"]);
+    expect(config?.reranker).toMatchObject({
+      modelId: "bge-reranker-v2-m3",
+      baseUrl: GATEWAY_A,
+      apiKey: "rotated-token",
+    });
+    expect(result.body).not.toHaveProperty("unverifiedEmbeddingModelIds");
+    expect(result.body).not.toHaveProperty("droppedEmbeddingModelIds");
+  });
+
+  it("leaves it unconfigured, and reported, when the probe refuses it", async () => {
+    const { deps } = await setupFixture(CHAT_ONLY, rerankerHostedAt());
+    storeRerankerAsEmbedding(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const config = currentGatewayConfig(deps);
+    expect(config?.providers.map((provider) => provider.modelId)).toEqual(["qwen-chat"]);
+    expect(config?.reranker).toBeUndefined();
+    expect(result.body).toMatchObject({
+      unsupportedModels: [{ id: "bge-reranker-v2-m3", reason: "rerank" }],
+    });
+  });
+});
+
+describe("the default embedding model", () => {
+  const ADA = { model_name: "text-embedding-ada-002" };
+  const BGE = { model_name: "bge-m3" };
+
+  it("stays the stored one when a later discovery lists another model first", async () => {
+    const { deps } = await setupFixture([...CHAT_ONLY, ADA], answeringRerankPort());
+    expect((await setupAt(deps, GATEWAY_A, "token-a")).status).toBe(200);
+    expect(configuredEmbeddingModelIds(currentGatewayConfig(deps))).toEqual([
+      "text-embedding-ada-002",
+    ]);
+
+    // The gateway grows a second embedding engine that sorts (and lists) ahead of the first.
+    listInventory(deps, [...CHAT_ONLY, BGE, ADA]);
+    expect((await setupAt(deps, GATEWAY_A, "token-a2")).status).toBe(200);
+
+    // A key rotation must not silently rebind every NEW Knowledge Pod to another model.
+    expect(configuredEmbeddingModelIds(currentGatewayConfig(deps))).toEqual([
+      "text-embedding-ada-002",
+      "bge-m3",
+    ]);
+  });
+
+  it("is chosen the same way whatever order the gateway lists its embeddings in", async () => {
+    const chosen: string[][] = [];
+    for (const embeddings of [
+      [ADA, BGE],
+      [BGE, ADA],
+    ]) {
+      const { deps } = await setupFixture([...CHAT_ONLY, ...embeddings], answeringRerankPort());
+      expect((await setupAt(deps, GATEWAY_A, "token-a")).status).toBe(200);
+      chosen.push([...configuredEmbeddingModelIds(currentGatewayConfig(deps))]);
+    }
+    expect(chosen[0]).toEqual(["bge-m3", "text-embedding-ada-002"]);
+    expect(chosen[1]).toEqual(chosen[0]);
   });
 });

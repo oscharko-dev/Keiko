@@ -985,9 +985,13 @@ export type DeclaredModelMode =
 // Total over DeclaredModelMode: adding a mode to the union without a role here fails the compile.
 // A DECLARATION IS AUTHORITATIVE. Keiko is model-agnostic — a customer hosts whatever models they
 // like behind their gateway, so the only trustworthy statement about what a model IS comes from
-// the gateway itself. Name heuristics may express a PREFERENCE (conversationDefaultRank), never a
-// role: a field incident bound a rerank endpoint named "bge-reranker-v2-m3" to every Knowledge Pod
-// as its embedding model, purely because the id contains "bge".
+// the gateway itself. A name never overrides a declaration: it may express a PREFERENCE
+// (conversationDefaultRank) and, ONLY for a model whose gateway declared no `mode` at all, it lets
+// discovery recognise the rerank and embedding lanes (isLikelyRerankModelId,
+// isLikelyEmbeddingModelId) — a recognition that is still verified by a live probe before a
+// reranker is wired or an embedding model is persisted. A field incident bound a rerank endpoint
+// named "bge-reranker-v2-m3" to every Knowledge Pod as its embedding model, purely because the id
+// contains "bge".
 const DECLARED_MODE_ROLES: Record<DeclaredModelMode, DeclaredModeRole> = {
   chat: "chat",
   completion: "chat",

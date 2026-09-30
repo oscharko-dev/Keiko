@@ -9,7 +9,11 @@ import { rerankSelection, type RerankSelection } from "./grounded-rerank-facade.
 
 /** The document the probe query matches verbatim: a working reranker returns it first. */
 const RERANKER_PROBE_TOP_DOCUMENT = "alpha readiness match";
-const RERANKER_PROBE_DOCUMENTS: readonly string[] = [RERANKER_PROBE_TOP_DOCUMENT, "unrelated beta"];
+// The matching document is deliberately NOT first. With it at index 0, an engine that ignores the
+// query — input order, all-zero scores, "first document only" — and the `slice-topN` fallback both
+// "ranked" it first, so a broken engine passed. In this order only an engine that actually reads
+// the query, and moves the second document to the top, reproduces the expected selection.
+const RERANKER_PROBE_DOCUMENTS: readonly string[] = ["unrelated beta", RERANKER_PROBE_TOP_DOCUMENT];
 
 interface RerankerProbeInput {
   readonly deps: UiHandlerDeps;

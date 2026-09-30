@@ -250,11 +250,15 @@ Three clarifications on the current behavior:
   policy operation is reserved forward-compatible surface for a future local reranker and
   has no runtime consumer today; only `externalReranking` currently gates the provider
   call.
-- A reranker that is simply not configured is the default, fully-supported install state.
-  It is reported as `status: "disabled"` with failure kind `not-configured` and is treated
-  as an ordinary searched pod, not a degraded one, on both the single-scope and hybrid
-  grounding paths. Only genuine failures (unavailable, timeout, transport, invalid-response)
-  degrade the pod activity row.
+- A reranker that is simply not configured is a fully-supported state, though not always the
+  default one: Gateway Setup discovers the rerank models the gateway hosts (a declared
+  `mode: "rerank"`, or an id that names one, such as `bge-reranker-v2-m3`) and wires the first
+  that passes a live two-document probe as the retrieval reranker, unless a reranker is already
+  configured. On such a gateway reranking is active after setup; `not-configured` remains the
+  state when the gateway hosts no reranker or none passes the probe. It is reported as
+  `status: "disabled"` with failure kind `not-configured` and is treated as an ordinary searched
+  pod, not a degraded one, on both the single-scope and hybrid grounding paths. Only genuine
+  failures (unavailable, timeout, transport, invalid-response) degrade the pod activity row.
 - Reranker input is bounded by the existing grounding budgets. The Knowledge Pod path caps
   candidate count and excerpt length with `maxPromptReferences` and `maxExcerptChars` (its
   input is already rank-capped upstream, so it needs no separate pre-fusion pool budget),

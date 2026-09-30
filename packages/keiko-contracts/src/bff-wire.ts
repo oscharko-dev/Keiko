@@ -1240,8 +1240,9 @@ export interface GroundedUncertainty {
   readonly claim: string;
 }
 
-// "not-configured" is intentionally not a member here: a not-configured reranker is the default,
-// fully-supported install state and always carries status "disabled" with
+// "not-configured" is intentionally not a member here: a not-configured reranker is a
+// fully-supported install state (Gateway Setup wires a discovered reranker only when it passes the
+// probe) and always carries status "disabled" with
 // failureKind: "not-configured" (see `disabledDiagnostics` in
 // keiko-server/src/grounded-rerank-facade.ts, and local-knowledge-grounded-qa.ts). Branch on
 // failureKind, not status, to detect it.

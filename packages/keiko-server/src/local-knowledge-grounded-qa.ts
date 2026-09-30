@@ -1588,7 +1588,7 @@ export function retrievalActivityResultFromScoped(
   };
 }
 
-// A reranker that was never configured is the default, fully-supported install state — it must not
+// A reranker that was never configured is a fully-supported install state — it must not
 // surface as a degraded Knowledge Pod activity row on ANY grounding path (single-scope or hybrid).
 // Genuine failures keep a non-"disabled" status (unavailable / invalid-response) and still degrade.
 // Applied uniformly by both retrieval-activity projections above.

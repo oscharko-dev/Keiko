@@ -93,8 +93,12 @@ const RERANKER_SETUP_RESOLVED = defineActivityLogOperation({
   emitter: "gateway-discovery-log.logRerankerSetupResolution",
   fields: {
     // wired: a probed discovered engine became the retrieval reranker; kept-existing: the operator
-    // already owns one, so nothing was probed or replaced; probe-failed: every probed candidate
-    // failed the live two-document probe, so retrieval reranking stays off.
+    // (or an earlier setup) already owns one, so no discovered engine was probed or replaced — a
+    // reranker that followed the gateway to a NEW endpoint is re-probed there first (probedCount 1)
+    // and stays kept-existing when it answers; probe-failed: every probed candidate failed the live
+    // two-document probe — including a carried-over reranker the new gateway does not host — so
+    // retrieval reranking stays off. `candidateCount` counts the rerank engines discovery listed and
+    // `probedCount` every probe the request spent, the carried-over reranker's included.
     outcome: {
       type: "string",
       dataClass: "closed-enum",
@@ -123,12 +127,17 @@ export interface RerankerSetupResolution {
   readonly probedCount: number;
 }
 
-/** One body-free line per setup attempt that discovered at least one rerank engine. */
+/**
+ * One body-free line per COMMITTED setup request that discovered a rerank engine or had to verify a
+ * carried-over reranker. `probe-failed` is a warning: retrieval reranking silently stays off, and
+ * at log level `warn` nothing else would say so. `wired` and `kept-existing` are the steady state.
+ */
 export function logRerankerSetupResolution(
   resolution: RerankerSetupResolution,
   correlationId: string | undefined,
 ): void {
-  getServerLogger().info(
+  getServerLogger().log(
+    resolution.outcome === "probe-failed" ? "warn" : "info",
     activityLogEvent(
       RERANKER_SETUP_RESOLVED,
       { correlationId: correlationIdOrUnknown(correlationId) },
