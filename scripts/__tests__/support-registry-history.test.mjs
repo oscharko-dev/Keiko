@@ -27,9 +27,10 @@ describe("trusted support registry history generator", () => {
       expect(committed).toContain(snapshot.sourceCommit);
       expect(committed).toContain(snapshot.schemaDigest);
       expect(committed).toContain(snapshot.catalogDigest);
-      expect(inflateSync(Buffer.from(payloads[index][1], "base64"))).toEqual(
-        inflateSync(Buffer.from(snapshot.payload, "base64")),
-      );
+      const shipped = inflateSync(Buffer.from(payloads[index][1], "base64"));
+      const captured = inflateSync(Buffer.from(snapshot.payload, "base64"));
+      // Native byte equality avoids millions of instrumented JS property comparisons in CI.
+      expect(shipped.equals(captured), snapshot.sourceCommit).toBe(true);
     }
     expect(await format(committed, { parser: "typescript", printWidth: 100 })).toBe(committed);
     for (const snapshot of snapshots) {
