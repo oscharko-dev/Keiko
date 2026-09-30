@@ -80,6 +80,16 @@ to fit the model (`trimmed`) or could not fit a single one (`refused`), with the
 the prompt size and the input budget.
 `client.knowledge-catalog.unavailable` records the six counts of a Knowledge Pod picker that offered
 no usable pod (pods, ready pods, sets, bound, missing, not ready), never a name, path or id.
+`search.citations.reconciled` records how a Knowledge Pod answer's markers met its sent references
+(`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`) with the reference,
+attached, weak-overlap, grouped and dangling counts. `gateway.discovery.alias-intersection` carries
+the `role` discovery gave each alias (`chat`, `embedding`, `voice`, `rerank`, `unsupported`), and
+`gateway.reranker.setup.resolved` records once per committed setup whether a discovered reranker was
+`wired`, `kept-existing` or `probe-failed` (at `warn`, with a diagnostic), with candidate and probe
+counts. The `inspected` `chat.context.management` line also carries the meter reading's optional
+counts: stored and projected history, knowledge-source tokens, the sent and available reference
+counts, the last knowledge request (measured and estimated), the system, summary and message shares,
+the automatic-compaction trigger, and the assumed-window and pending-probe flags.
 
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
