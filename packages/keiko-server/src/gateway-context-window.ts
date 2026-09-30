@@ -5,7 +5,7 @@
 // `contextWindowAssumed`. Conversation budgeting plans such a model with the default geometry;
 // this module replaces the assumption with the deployment's exact window from two provider
 // statements:
-//   1. the startup context-window probe (once per deployment identity per process, background);
+//   1. a context-window probe when a conversation first shows the model (once per deployment);
 //   2. every provider overflow answer that names the window (the Gateway's report hook).
 // Both persist through gateway-setup's verified-capability path, which advances the configuration
 // generation so every surface re-plans the model. Nothing here throws into a caller: an adoption
@@ -17,7 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   discoverGatewayContextWindow,
-  listConfiguredCapabilities,
+  findConfiguredCapability,
   toolCallingConfigurationFingerprint,
   type ContextWindowReport,
   type GatewayConfig,
@@ -32,7 +32,7 @@ import { getServerLogger } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 
-type ContextWindowSource = "provider-overflow" | "startup-probe";
+type ContextWindowSource = "provider-overflow" | "window-probe";
 
 const CONTEXT_WINDOW_ADOPTION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -47,7 +47,7 @@ const CONTEXT_WINDOW_ADOPTION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["provider-overflow", "startup-probe"],
+      values: ["provider-overflow", "window-probe"],
     },
     state: {
       type: "string",
@@ -243,12 +243,6 @@ export async function stopAssumedContextWindowDiscovery(deps: UiHandlerDeps): Pr
   await state.queue;
 }
 
-function assumedDeployments(config: GatewayConfig): readonly string[] {
-  return listConfiguredCapabilities(config)
-    .filter((capability) => capability.kind === "chat" && capability.contextWindowAssumed === true)
-    .map((capability) => capability.id);
-}
-
 function deploymentKey(config: GatewayConfig, modelId: string): string | undefined {
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
   return provider === undefined ? undefined : toolCallingConfigurationFingerprint(provider);
@@ -277,7 +271,7 @@ async function probeContextWindow(
     logProbe(modelId, outcome, correlationId);
     if (outcome.status === "reported") {
       const report = { modelId, contextWindowTokens: outcome.contextWindowTokens, correlationId };
-      adoptReportedContextWindow(deps, report, "startup-probe");
+      adoptReportedContextWindow(deps, report, "window-probe");
     }
   } catch (error) {
     logProbe(modelId, { status: "failed" }, correlationId);
@@ -296,26 +290,31 @@ async function probeContextWindow(
 }
 
 /**
- * Queues one background context-window probe for every configured chat model whose window is still
- * assumed. Sequential on purpose: each adoption advances the configuration generation, and the next
- * probe must read the configuration the previous one left behind. With a spend budget configured
- * the probe is skipped — its output allocation cannot be reserved — and the window is learned from
- * the provider's first overflow instead.
+ * Queues one background context-window probe for a chat model whose window is still assumed — once
+ * per deployment identity per configuration holder, when a conversation first shows the model (the
+ * context meter). Models nobody uses are never asked. Probes run one after another, so each reads
+ * the configuration the previous adoption left behind. With a spend budget configured the probe is
+ * skipped — its output allocation cannot be reserved — and the window is learned from the
+ * provider's first overflow instead.
  */
-export function discoverAssumedContextWindows(deps: UiHandlerDeps, correlationId: string): void {
+export function discoverAssumedContextWindow(
+  deps: UiHandlerDeps,
+  modelId: string,
+  correlationId: string,
+): void {
   const config = currentGatewayConfig(deps);
   const state = probeState(deps);
   if (config === undefined || state === undefined || state.disposed) return;
-  for (const modelId of assumedDeployments(config)) {
-    const key = deploymentKey(config, modelId);
-    if (key === undefined || state.probed.has(key)) continue;
-    state.probed.add(key);
-    if (deps.gatewayConfig?.spendBudget !== undefined) {
-      logProbe(modelId, { status: "skipped-spend-budget" }, correlationId);
-      continue;
-    }
-    state.queue = state.queue.then(() => probeContextWindow(deps, state, modelId, correlationId));
+  const capability = findConfiguredCapability(config, modelId);
+  if (capability?.kind !== "chat" || capability.contextWindowAssumed !== true) return;
+  const key = deploymentKey(config, modelId);
+  if (key === undefined || state.probed.has(key)) return;
+  state.probed.add(key);
+  if (deps.gatewayConfig?.spendBudget !== undefined) {
+    logProbe(modelId, { status: "skipped-spend-budget" }, correlationId);
+    return;
   }
+  state.queue = state.queue.then(() => probeContextWindow(deps, state, modelId, correlationId));
 }
 
 export interface ContextWindowRetryInput {

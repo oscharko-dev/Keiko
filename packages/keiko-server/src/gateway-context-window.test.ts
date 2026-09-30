@@ -25,7 +25,7 @@ import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import {
   adoptReportedContextWindow,
   contextWindowProbesSettledForTests,
-  discoverAssumedContextWindows,
+  discoverAssumedContextWindow,
   withAdoptedContextWindowRetry,
 } from "./gateway-context-window.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
@@ -100,7 +100,7 @@ function stored(deps: UiHandlerDeps): ModelCapability | undefined {
   return config === undefined ? undefined : findConfiguredCapability(config, MODEL);
 }
 
-describe("startup context-window probe", () => {
+describe("context-window probe", () => {
   it("adopts the window vLLM names, persisted, without a generation bump", async () => {
     const sink = capture();
     const fetchImpl = vi.fn<typeof fetch>(() =>
@@ -110,7 +110,7 @@ describe("startup context-window probe", () => {
     );
     const { deps, configPath } = fixture(assumedChatCapability(MODEL), fetchImpl);
     const generation = deps.gatewayConfig?.generation();
-    discoverAssumedContextWindows(deps, "corr-startup-window");
+    discoverAssumedContextWindow(deps, MODEL, "corr-startup-window");
     await contextWindowProbesSettledForTests(deps);
 
     expect(stored(deps)?.contextWindow).toBe(65_536);
@@ -138,7 +138,7 @@ describe("startup context-window probe", () => {
       expect.objectContaining({
         op: "gateway.context-window.adoption",
         extra: expect.objectContaining({
-          source: "startup-probe",
+          source: "window-probe",
           state: "adopted",
           previousContextWindow: 4_096,
           wasAssumed: true,
@@ -157,8 +157,8 @@ describe("startup context-window probe", () => {
       ),
     );
     const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
-    discoverAssumedContextWindows(deps, "corr-first");
-    discoverAssumedContextWindows(deps, "corr-second");
+    discoverAssumedContextWindow(deps, MODEL, "corr-first");
+    discoverAssumedContextWindow(deps, MODEL, "corr-second");
     await contextWindowProbesSettledForTests(deps);
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -177,7 +177,7 @@ describe("startup context-window probe", () => {
       { ...createDefaultChatCapability(MODEL), contextWindow: 32_768 },
       fetchImpl,
     );
-    discoverAssumedContextWindows(deps, "corr-declared");
+    discoverAssumedContextWindow(deps, MODEL, "corr-declared");
     await contextWindowProbesSettledForTests(deps);
     expect(fetchImpl).not.toHaveBeenCalled();
   });

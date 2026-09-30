@@ -1,5 +1,6 @@
 import { readChatContextStatus, compactChatContext } from "./chat-context-status.js";
 import { logChatContextManagement } from "./chat-context-log.js";
+import { discoverAssumedContextWindow } from "./gateway-context-window.js";
 // ADR-0013 D7 — Route handlers for UI-local store routes. All inputs are validated;
 // every error path uses the redacted `{ error: { code, message } }` envelope; SECURITY_HEADERS are
 // applied uniformly by the server layer. JSON body reading is bounded by MAX_STORE_BODY_BYTES.
@@ -1442,6 +1443,9 @@ export function handleChatContextStatus(ctx: RouteContext, deps: UiHandlerDeps):
     assertChatModelId(deps, modelId);
     const status = readChatContextStatus(deps, chatId, modelId, ctx.correlationId);
     logChatContextManagement("inspected", status, 0, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
+    // The meter shows this model: ask its deployment once for the window its gateway never declared.
+    if (status.contextWindowAssumed === true)
+      discoverAssumedContextWindow(deps, modelId, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
     return { status: 200, body: status };
   });
 }

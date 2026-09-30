@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "436a1a3e4cf5a5b1bcd2b073f1c09480582f031232cd5b58f467e2498a6c4ac9" as const;
+  "e7415aaab615953bf9092788e0763ffb6c4fe1da02f4970ef2e99f67157ce434" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -12132,7 +12132,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["provider-overflow", "startup-probe"],
+        values: ["provider-overflow", "window-probe"],
       },
       state: {
         type: "string",

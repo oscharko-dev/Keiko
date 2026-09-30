@@ -5,7 +5,6 @@ import {
 } from "./gateway-readiness.js";
 import {
   adoptReportedContextWindow,
-  discoverAssumedContextWindows,
   stopAssumedContextWindowDiscovery,
 } from "./gateway-context-window.js";
 // Wave 2 BFF handler dependencies (ADR-0011 D5/D8/D9). The Wave 1 skeleton's `UiServerDeps` carried
@@ -4559,21 +4558,15 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
 function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
   initializeConfiguredConversationReadiness(deps);
   // A provider-stated window replaces an assumed one wherever it is observed: in every overflow
-  // answer, and once per deployment from the startup context-window probe (customer, 1.1.13).
+  // answer and in the window probe a conversation starts (customer report on 1.1.13).
   deps.gatewayConfig?.bindContextWindowReporter?.((report) => {
     adoptReportedContextWindow(deps, report, "provider-overflow");
   });
-  discoverAssumedContextWindows(
-    deps,
-    deps.gatewayConfig?.initializationCorrelationId ?? newCorrelationId(),
-  );
   const unsubscribe = deps.gatewayConfig?.subscribe?.((correlationId) => {
     // Setup stamps its successful credential checks synchronously after replacement. Reuse
     // those observations before deciding which models still need startup verification.
     queueMicrotask(() => {
-      const id = correlationId ?? newCorrelationId();
-      initializeConfiguredConversationReadiness(deps, id);
-      discoverAssumedContextWindows(deps, id);
+      initializeConfiguredConversationReadiness(deps, correlationId ?? newCorrelationId());
     });
   });
   return {
