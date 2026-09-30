@@ -11,7 +11,8 @@
 // Both persist through gateway-setup and apply as a configuration refinement without a generation
 // bump, so every surface re-plans the model. A statement is adopted only for the deployment and
 // generation that made it. Nothing here throws into a caller: an adoption or probe failure is
-// recorded as a diagnostic and the assumption stays in place.
+// recorded as a diagnostic and the assumption stays in place; a window that could not be written to
+// the configuration file still applies in memory.
 
 import {
   activityLogEvent,
@@ -27,10 +28,14 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { currentContextProfileForModel, currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSummary,
+} from "./diagnostics-log.js";
 import { persistAdoptedContextWindow, type AdoptedContextWindowOutcome } from "./gateway-setup.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
-import { getServerLogger } from "./observability/index.js";
+import { getServerLogger, reportServerLogFailure } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { correlationIdOrUnknown, newCorrelationId } from "./correlation.js";
 
@@ -177,7 +182,42 @@ function logProbe(
   );
 }
 
-/** Adopts a provider-stated window. Never throws: a persistence failure becomes a diagnostic. */
+// Evidence is never control flow: a failure to write a line is reported on the independent channel
+// and the work it describes carries on — an adoption, a retry, the probe queue.
+function recordSafely(op: string, correlationId: string, write: () => void): void {
+  try {
+    write();
+  } catch (error) {
+    reportServerLogFailure(error, { op, correlationId, loss: "event-dropped" });
+  }
+}
+
+// One failure of this module's work, recorded body-free on the diagnostic port.
+function emitContextWindowDiagnostic(
+  deps: UiHandlerDeps,
+  correlation: { readonly correlationId: string; readonly parentCorrelationId?: string },
+  failure: {
+    readonly source: string;
+    readonly error: unknown;
+    readonly summary: ServerDiagnosticSummary;
+  },
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      ...correlation,
+      operation: "gateway.context-window",
+      ...failure,
+      redact: (message): string => String(deps.redactor(message)),
+    }),
+  );
+}
+
+/**
+ * Adopts a provider-stated window. Never throws: a failure becomes a diagnostic. A window that was
+ * applied but could not be written to the configuration file is still logged as adopted; the write
+ * failure is reported by the adoption itself.
+ */
 export function adoptReportedContextWindow(
   deps: UiHandlerDeps,
   report: ContextWindowReport,
@@ -197,19 +237,15 @@ export function adoptReportedContextWindow(
           report.correlationId,
         )
       : { state: "stale-deployment" as const };
-    logAdoption(report.modelId, report.contextWindowTokens, source, outcome, correlation);
+    recordSafely(CONTEXT_WINDOW_ADOPTION.op, report.correlationId, () => {
+      logAdoption(report.modelId, report.contextWindowTokens, source, outcome, correlation);
+    });
   } catch (error) {
-    emitServerDiagnostic(
-      deps.diagnostics,
-      serverDiagnosticFromError({
-        ...correlation,
-        operation: "gateway.context-window",
-        source: "gateway-context-window.adopt",
-        error,
-        summary: "The provider-reported gateway context window could not be adopted.",
-        redact: (message): string => String(deps.redactor(message)),
-      }),
-    );
+    emitContextWindowDiagnostic(deps, correlation, {
+      source: "gateway-context-window.adopt",
+      error,
+      summary: "The provider-reported gateway context window could not be adopted.",
+    });
   }
 }
 
@@ -231,15 +267,29 @@ function reportFromCurrentDeployment(deps: UiHandlerDeps, report: ContextWindowR
   return config !== undefined && deploymentKey(config, report.modelId) === deploymentFingerprint;
 }
 
-// One attempt per deployment identity and configuration generation per runtime configuration
-// holder: a provider that states no window is asked again only after a restart or a setup that
-// replaced its routing (a new generation), never on every reading. Adoption itself is a refinement
-// and does not advance the generation.
+// One answered attempt per deployment identity and configuration generation per runtime
+// configuration holder: a provider that states no window is asked again only after a restart or a
+// setup that replaced its routing (a new generation), never on every reading. Adoption itself is a
+// refinement and does not advance the generation. An attempt that got no answer at all — the
+// gateway was unreachable — says nothing about the deployment, so it is asked again after a
+// cooldown, a bounded number of times.
 // Disposal aborts the in-flight probe and drains the queue before shutdown sealing.
+const FAILED_PROBE_COOLDOWN_MS = 30_000;
+const MAX_PROBE_ATTEMPTS = 3;
+
+interface FailedProbes {
+  readonly at: number;
+  readonly count: number;
+}
+
 interface ProbeState {
   readonly probed: Set<string>;
-  /** Probe identities queued or running; the meter reads again while its model's is here. */
-  readonly inFlight: Set<string>;
+  /**
+   * Probe identities queued or running, each with its own completion: the meter reads again while
+   * its model's is here, and a reading waits for that probe alone, never for the whole queue.
+   */
+  readonly inFlight: Map<string, Promise<void>>;
+  readonly failed: Map<string, FailedProbes>;
   readonly controller: AbortController;
   queue: Promise<void>;
   disposed: boolean;
@@ -254,7 +304,8 @@ function probeState(deps: UiHandlerDeps): ProbeState | undefined {
   if (state === undefined) {
     state = {
       probed: new Set(),
-      inFlight: new Set(),
+      inFlight: new Map(),
+      failed: new Map(),
       controller: new AbortController(),
       queue: Promise.resolve(),
       disposed: false,
@@ -283,9 +334,32 @@ function deploymentKey(config: GatewayConfig, modelId: string): string | undefin
   return provider === undefined ? undefined : toolCallingConfigurationFingerprint(provider);
 }
 
+// The failure of one probe: the diagnostic first (it never throws), then the probe line. A probe the
+// shutdown aborted is not a defect of the gateway and leaves no trace.
+function recordProbeFailure(
+  deps: UiHandlerDeps,
+  state: ProbeState,
+  key: string,
+  modelId: string,
+  probe: ProbeCorrelation,
+  error: unknown,
+): void {
+  if (state.disposed) return;
+  state.failed.set(key, { at: Date.now(), count: (state.failed.get(key)?.count ?? 0) + 1 });
+  emitContextWindowDiagnostic(deps, probe, {
+    source: "gateway-context-window.probe",
+    error,
+    summary: "The gateway context-window probe could not be completed.",
+  });
+  recordSafely(CONTEXT_WINDOW_PROBE.op, probe.correlationId, () => {
+    logProbe(modelId, { status: "failed" }, probe);
+  });
+}
+
 async function probeContextWindow(
   deps: UiHandlerDeps,
   state: ProbeState,
+  key: string,
   modelId: string,
   probe: ProbeCorrelation,
 ): Promise<void> {
@@ -293,8 +367,9 @@ async function probeContextWindow(
   const configurationGeneration = deps.gatewayConfig?.generation();
   const provider = config?.providers.find((candidate) => candidate.modelId === modelId);
   if (state.disposed || config === undefined || provider === undefined) return;
+  let outcome: GatewayContextWindowDiscovery;
   try {
-    const outcome = await discoverGatewayContextWindow({
+    outcome = await discoverGatewayContextWindow({
       config,
       provider,
       ...(deps.gatewayReadinessFetch === undefined
@@ -304,31 +379,57 @@ async function probeContextWindow(
       correlationId: probe.correlationId,
       signal: state.controller.signal,
     });
-    logProbe(modelId, outcome, probe);
-    if (outcome.status === "reported") {
-      const report = {
-        modelId,
-        contextWindowTokens: outcome.contextWindowTokens,
-        correlationId: probe.correlationId,
-        deploymentFingerprint: toolCallingConfigurationFingerprint(provider),
-        configurationGeneration,
-      };
-      adoptReportedContextWindow(deps, report, "window-probe", probe.parentCorrelationId);
-    }
   } catch (error) {
-    logProbe(modelId, { status: "failed" }, probe);
-    emitServerDiagnostic(
-      deps.diagnostics,
-      serverDiagnosticFromError({
-        ...probe,
-        operation: "gateway.context-window",
-        source: "gateway-context-window.probe",
-        error,
-        summary: "The gateway context-window probe could not be completed.",
-        redact: (message): string => String(deps.redactor(message)),
-      }),
-    );
+    recordProbeFailure(deps, state, key, modelId, probe, error);
+    return;
   }
+  state.failed.delete(key);
+  recordSafely(CONTEXT_WINDOW_PROBE.op, probe.correlationId, () => {
+    logProbe(modelId, outcome, probe);
+  });
+  if (outcome.status === "reported") {
+    const report = {
+      modelId,
+      contextWindowTokens: outcome.contextWindowTokens,
+      correlationId: probe.correlationId,
+      deploymentFingerprint: toolCallingConfigurationFingerprint(provider),
+      configurationGeneration,
+    };
+    adoptReportedContextWindow(deps, report, "window-probe", probe.parentCorrelationId);
+  }
+}
+
+// One step of the shared queue. It never rejects: a link that rejected would skip every later
+// probe for good and surface as an unhandled rejection at each reading that dropped its promise. A
+// failure that reaches this catch is a logging failure of the probe's own line, reported on the
+// independent channel.
+async function runProbeStep(
+  deps: UiHandlerDeps,
+  state: ProbeState,
+  key: string,
+  modelId: string,
+  probe: ProbeCorrelation,
+): Promise<void> {
+  try {
+    await probeContextWindow(deps, state, key, modelId, probe);
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: CONTEXT_WINDOW_PROBE.op,
+      correlationId: probe.correlationId,
+      loss: "event-dropped",
+    });
+  } finally {
+    state.inFlight.delete(key);
+  }
+}
+
+// A failed identity is asked again once its cooldown has passed, at most MAX_PROBE_ATTEMPTS times.
+// A clock that moved backwards fails toward asking.
+function failedProbeDue(state: ProbeState, key: string): boolean {
+  const failed = state.failed.get(key);
+  if (failed === undefined || failed.count >= MAX_PROBE_ATTEMPTS) return false;
+  const elapsedMs = Date.now() - failed.at;
+  return elapsedMs < 0 || elapsedMs >= FAILED_PROBE_COOLDOWN_MS;
 }
 
 /**
@@ -337,7 +438,8 @@ async function probeContextWindow(
  * context meter). Models nobody uses are never asked. Probes run one after another, so each reads
  * the configuration the previous adoption left behind. With a spend budget configured the probe is
  * skipped — its output allocation cannot be reserved — and the window is learned from the
- * provider's first overflow instead.
+ * provider's first overflow instead. The returned promise settles with THIS model's probe (already
+ * settled when none is running for it), never with the probes of other models.
  */
 export function discoverAssumedContextWindow(
   deps: UiHandlerDeps,
@@ -347,26 +449,34 @@ export function discoverAssumedContextWindow(
   const config = currentGatewayConfig(deps);
   const state = probeState(deps);
   if (config === undefined || state === undefined || state.disposed) return Promise.resolve();
-  if (!windowAssumed(config, modelId)) return Promise.resolve();
-  const key = probeKey(deps, config, modelId);
-  if (key === undefined || state.probed.has(key)) return state.queue;
+  const key = windowAssumed(config, modelId) ? probeKey(deps, config, modelId) : undefined;
+  if (key === undefined) return Promise.resolve();
+  const running = state.inFlight.get(key);
+  if (running !== undefined) return running;
+  if (state.probed.has(key) && !failedProbeDue(state, key)) return Promise.resolve();
+  return startProbe(deps, state, key, modelId, correlationId);
+}
+
+function startProbe(
+  deps: UiHandlerDeps,
+  state: ProbeState,
+  key: string,
+  modelId: string,
+  correlationId: string,
+): Promise<void> {
   state.probed.add(key);
-  state.inFlight.add(key);
   // Each probe is its own background operation, joined to the read that spawned it.
   const probe = { correlationId: newCorrelationId(), parentCorrelationId: correlationId };
   if (deps.gatewayConfig?.spendBudget !== undefined) {
-    state.inFlight.delete(key);
-    logProbe(modelId, { status: "skipped-spend-budget" }, probe);
+    recordSafely(CONTEXT_WINDOW_PROBE.op, probe.correlationId, () => {
+      logProbe(modelId, { status: "skipped-spend-budget" }, probe);
+    });
     return Promise.resolve();
   }
-  state.queue = state.queue.then(async () => {
-    try {
-      await probeContextWindow(deps, state, modelId, probe);
-    } finally {
-      state.inFlight.delete(key);
-    }
-  });
-  return state.queue;
+  const step = state.queue.then(() => runProbeStep(deps, state, key, modelId, probe));
+  state.queue = step;
+  state.inFlight.set(key, step);
+  return step;
 }
 
 // The generation is part of the identity: a setup that replaced only the credentials behind the
@@ -460,7 +570,9 @@ export async function withAdoptedContextWindowRetry<T>(
   } catch (error) {
     const adopted = adoptedWindowAfter(deps, input, planned, error);
     if (adopted === undefined || planned === undefined) throw error;
-    logRetry(input, planned, adopted);
+    recordSafely(CONTEXT_WINDOW_RETRY.op, correlationIdOrUnknown(input.correlationId), () => {
+      logRetry(input, planned, adopted);
+    });
     return await attempt({ retrying: true, retryFollows: () => false });
   }
 }

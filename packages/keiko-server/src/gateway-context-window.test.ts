@@ -3,13 +3,14 @@
 // context overflow. These tests pin the server half of the repair: the startup probe and every
 // provider overflow answer adopt the deployment's real window, persisted and applied without a
 // configuration-generation bump, and an admitted turn re-plans and retries exactly once.
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assumedChatCapability,
   createDefaultChatCapability,
+  createDefaultEmbeddingCapability,
   findConfiguredCapability,
   parseGatewayConfig,
   type ModelCapability,
@@ -20,14 +21,19 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
-import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  resetServerLogFailureNotices,
+  resetServerLogger,
+} from "../../../tests/support/activity-log-test-support.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import {
   adoptReportedContextWindow,
   contextWindowProbesSettledForTests,
   discoverAssumedContextWindow,
+  stopAssumedContextWindowDiscovery,
   withAdoptedContextWindowRetry,
 } from "./gateway-context-window.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { readChatContextStatus } from "./chat-context-status.js";
 import { handleChatContextStatus } from "./store-handlers.js";
@@ -59,6 +65,16 @@ function rejection(message: string): Response {
 function fixture(
   capability: ModelCapability,
   fetchImpl?: typeof fetch,
+  overrides: Partial<UiHandlerDeps> = {},
+): { deps: UiHandlerDeps; configPath: string } {
+  return fixtureOf([capability], fetchImpl, overrides);
+}
+
+// One deployment per capability, all behind the same gateway, each addressed by its capability id.
+function fixtureOf(
+  capabilities: readonly ModelCapability[],
+  fetchImpl?: typeof fetch,
+  overrides: Partial<UiHandlerDeps> = {},
 ): { deps: UiHandlerDeps; configPath: string } {
   const root = mkdtempSync(join(realpathSync(tmpdir()), "keiko-context-window-"));
   roots.push(root);
@@ -69,28 +85,48 @@ function fixture(
     env: {},
   });
   disposals.push(built);
-  const deps: UiHandlerDeps =
-    fetchImpl === undefined ? built : { ...built, gatewayReadinessFetch: fetchImpl };
+  const deps: UiHandlerDeps = {
+    ...built,
+    ...(fetchImpl === undefined ? {} : { gatewayReadinessFetch: fetchImpl }),
+    ...overrides,
+  };
   const holder = deps.gatewayConfig;
   if (holder === undefined) throw new Error("expected a runtime gateway config");
   holder.set(
     parseGatewayConfig({
-      providers: [
-        {
-          modelId: MODEL,
-          baseUrl: "https://litellm.example.invalid/v1",
-          apiKey: "fake-test-key",
-          timeoutMs: 5_000,
-          maxRetries: 0,
-          retryBaseDelayMs: 1,
-        },
-      ],
-      capabilities: [capability],
+      providers: capabilities.map((capability) => ({
+        modelId: capability.id,
+        baseUrl: "https://litellm.example.invalid/v1",
+        apiKey: "fake-test-key",
+        timeoutMs: 5_000,
+        maxRetries: 0,
+        retryBaseDelayMs: 1,
+      })),
+      capabilities,
       circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
     }),
     true,
   );
   return { deps, configPath: holder.storagePath };
+}
+
+function recordedDiagnostics(): {
+  readonly records: ServerDiagnosticRecord[];
+  readonly diagnostics: { readonly record: (record: ServerDiagnosticRecord) => void };
+} {
+  const records: ServerDiagnosticRecord[] = [];
+  return {
+    records,
+    diagnostics: {
+      record: (record): void => {
+        records.push(record);
+      },
+    },
+  };
+}
+
+function vllmWindow(tokens: number): Response {
+  return rejection(`max_tokens=1000000000 cannot be greater than max_model_len=${String(tokens)}.`);
 }
 
 function persistedLine(sink: ReturnType<typeof createBufferedServerLogSink>, op: string): string {
@@ -303,7 +339,9 @@ describe("generation-bound adoption", () => {
 });
 
 describe("provider-reported window adoption", () => {
-  it("replaces even a declared window in either direction with the provider's statement", () => {
+  // PR #3678 audit: a provider statement may LOWER an operator-declared window (the deployment
+  // cannot take more than it says), but it never RAISES one — the declared cap stays the operator's.
+  it("lowers a declared window to the provider's statement", () => {
     const sink = capture();
     const { deps } = fixture({ ...createDefaultChatCapability(MODEL), contextWindow: 32_768 });
     adoptReportedContextWindow(
@@ -324,6 +362,67 @@ describe("provider-reported window adoption", () => {
         }) as unknown,
       }),
     );
+  });
+
+  it("never raises a declared window from a provider statement and records it unchanged", () => {
+    const sink = capture();
+    const { deps } = fixture({ ...createDefaultChatCapability(MODEL), contextWindow: 32_768 });
+    const before = deps.gatewayConfig?.current();
+    adoptReportedContextWindow(
+      deps,
+      { modelId: MODEL, contextWindowTokens: 131_072, correlationId: "corr-declared-raise" },
+      "provider-overflow",
+    );
+    expect(deps.gatewayConfig?.current()).toBe(before);
+    expect(stored(deps)?.contextWindow).toBe(32_768);
+    expect(stored(deps)).not.toHaveProperty("contextWindowReported");
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.context-window.adoption",
+        correlationId: "corr-declared-raise",
+        extra: expect.objectContaining({ state: "unchanged", contextWindow: 131_072 }) as unknown,
+      }),
+    );
+  });
+
+  it("adopts a larger window for an assumed window and for a provider-reported one", () => {
+    const sink = capture();
+    const assumed = fixture(assumedChatCapability(MODEL)).deps;
+    adoptReportedContextWindow(
+      assumed,
+      { modelId: MODEL, contextWindowTokens: 131_072, correlationId: "corr-assumed-raise" },
+      "provider-overflow",
+    );
+    expect(stored(assumed)?.contextWindow).toBe(131_072);
+    expect(stored(assumed)?.contextWindowReported).toBe(true);
+
+    const reported = fixture({
+      ...createDefaultChatCapability(MODEL),
+      contextWindow: 16_384,
+      contextWindowReported: true,
+    }).deps;
+    adoptReportedContextWindow(
+      reported,
+      { modelId: MODEL, contextWindowTokens: 65_536, correlationId: "corr-reported-raise" },
+      "provider-overflow",
+    );
+    expect(stored(reported)?.contextWindow).toBe(65_536);
+    expect(sink.events.filter((event) => event.op === "gateway.context-window.adoption")).toEqual([
+      expect.objectContaining({
+        extra: expect.objectContaining({
+          state: "adopted",
+          previousContextWindow: 4_096,
+          wasAssumed: true,
+        }) as unknown,
+      }),
+      expect.objectContaining({
+        extra: expect.objectContaining({
+          state: "adopted",
+          previousContextWindow: 16_384,
+          wasAssumed: false,
+        }) as unknown,
+      }),
+    ]);
   });
 
   it("records an unchanged statement without rewriting the configuration", () => {
@@ -520,6 +619,57 @@ describe("context meter reading", () => {
   });
 });
 
+// PR #3678 audit (O10): a reading of a model whose probe had already answered without a window
+// waited on the shared queue, so it sat behind another model's slow probe for its whole deadline.
+describe("context meter reading beside another model's probe", () => {
+  it("answers at once for a model whose probe finished while another model's is still running", async () => {
+    capture();
+    const A = "model-a";
+    const B = "model-b";
+    let answerB!: (response: Response) => void;
+    const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      if (!body.includes("1000000000")) return Promise.reject(new TypeError("not a window probe"));
+      if (body.includes(`"${B}"`)) {
+        return new Promise<Response>((resolve) => {
+          answerB = resolve;
+        });
+      }
+      return Promise.resolve(new Response(JSON.stringify({ choices: [] }), { status: 200 }));
+    });
+    const { deps } = fixtureOf([assumedChatCapability(A), assumedChatCapability(B)], fetchImpl);
+    const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-two-models-"));
+    roots.push(project);
+    deps.store.createProject(project, "Meter");
+    const chatId = deps.store.createChat(project, "Meter", A).id;
+    void discoverAssumedContextWindow(deps, A, "corr-a-probe");
+    await contextWindowProbesSettledForTests(deps);
+    void discoverAssumedContextWindow(deps, B, "corr-b-probe");
+    await vi.waitFor(() => {
+      expect(answerB).toBeDefined();
+    });
+
+    const started = performance.now();
+    const result = await handleChatContextStatus(
+      {
+        correlationId: "corr-meter-a",
+        params: {},
+        url: new URL(
+          `http://localhost/api/chats/context?${new URLSearchParams({ chatId, projectPath: project, modelId: A }).toString()}`,
+        ),
+      } as unknown as RouteContext,
+      deps,
+    );
+    // The reading's own wait is three seconds; model B's probe is still running.
+    expect(performance.now() - started).toBeLessThan(1_500);
+    expect(result.body).toMatchObject({ contextWindowAssumed: true });
+    expect(result.body).not.toHaveProperty("contextWindowProbePending");
+
+    answerB(vllmWindow(65_536));
+    await contextWindowProbesSettledForTests(deps);
+  });
+});
+
 describe("context meter reading of a slow probe", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -619,5 +769,398 @@ describe("provider-reported window re-check", () => {
     const after = (await read()).body;
     expect(after).toMatchObject({ contextWindowTokens: 131_072 });
     expect(after).not.toHaveProperty("contextWindowProbePending");
+  });
+});
+
+// PR #3678 audit (G4): a read-only or managed configuration file made the durable write throw
+// before the refinement, so the learned window was never applied and every overflow repeated.
+describe("adoption when the configuration cannot be persisted", () => {
+  it("applies the window in memory and reports the persistence failure", () => {
+    const sink = capture();
+    const { records, diagnostics } = recordedDiagnostics();
+    const { deps, configPath } = fixture(assumedChatCapability(MODEL), undefined, { diagnostics });
+    // A directory where the file must be replaced: the atomic write fails for every user.
+    rmSync(configPath, { force: true });
+    mkdirSync(configPath);
+    adoptReportedContextWindow(
+      deps,
+      { modelId: MODEL, contextWindowTokens: 8_192, correlationId: "corr-read-only" },
+      "provider-overflow",
+    );
+    expect(stored(deps)?.contextWindow).toBe(8_192);
+    expect(stored(deps)?.contextWindowReported).toBe(true);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.context-window.adoption",
+        correlationId: "corr-read-only",
+        extra: expect.objectContaining({ state: "adopted", contextWindow: 8_192 }) as unknown,
+      }),
+    );
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: "corr-read-only",
+      operation: "gateway.context-window",
+      source: "gateway-setup.adopted-context-window",
+      message: "The verified gateway context window could not be persisted.",
+    });
+  });
+
+  it("lets a retry re-plan on the adopted window although the write failed", async () => {
+    capture();
+    const { diagnostics } = recordedDiagnostics();
+    const { deps, configPath } = fixture(assumedChatCapability(MODEL), undefined, { diagnostics });
+    rmSync(configPath, { force: true });
+    mkdirSync(configPath);
+    const planned: number[] = [];
+    const result = await withAdoptedContextWindowRetry(
+      deps,
+      { modelId: MODEL, surface: "chat-buffered", correlationId: "corr-read-only-retry" },
+      () => {
+        planned.push(stored(deps)?.contextWindow ?? 0);
+        if (planned.length > 1) return Promise.resolve("answer");
+        adoptReportedContextWindow(
+          deps,
+          { modelId: MODEL, contextWindowTokens: 8_192, correlationId: "corr-read-only-retry" },
+          "provider-overflow",
+        );
+        const error = new ContextOverflowError("provider reported context overflow");
+        error.reportedContextWindowTokens = 8_192;
+        return Promise.reject(error);
+      },
+    );
+    expect(result).toBe("answer");
+    expect(planned).toEqual([4_096, 8_192]);
+  });
+
+  it("adopts through the persisting fallback when the holder has no refine", () => {
+    const sink = capture();
+    const { deps } = fixture(assumedChatCapability(MODEL));
+    const holder = deps.gatewayConfig;
+    if (holder === undefined) throw new Error("expected a runtime gateway config");
+    const withoutRefine = { ...holder, refine: undefined };
+    const generation = holder.generation();
+    adoptReportedContextWindow(
+      { ...deps, gatewayConfig: withoutRefine },
+      { modelId: MODEL, contextWindowTokens: 16_384, correlationId: "corr-no-refine" },
+      "provider-overflow",
+    );
+    expect(stored(deps)?.contextWindow).toBe(16_384);
+    expect(holder.generation()).toBeGreaterThan(generation);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.context-window.adoption",
+        extra: expect.objectContaining({ state: "adopted" }) as unknown,
+      }),
+    );
+  });
+});
+
+describe("adoption states that leave the configuration alone", () => {
+  it("records a statement about an unconfigured gateway", () => {
+    const sink = capture();
+    const { deps } = fixture(assumedChatCapability(MODEL));
+    adoptReportedContextWindow(
+      { ...deps, gatewayConfig: undefined },
+      { modelId: MODEL, contextWindowTokens: 8_192, correlationId: "corr-unconfigured" },
+      "provider-overflow",
+    );
+    expectActivityLogProof(
+      "gateway.context-window.adoption.line",
+      persistedLine(sink, "gateway.context-window.adoption"),
+    );
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.context-window.adoption",
+        correlationId: "corr-unconfigured",
+        extra: expect.objectContaining({ state: "unconfigured", contextWindow: 8_192 }) as unknown,
+      }),
+    );
+    expect(stored(deps)?.contextWindowAssumed).toBe(true);
+  });
+
+  it("records a statement about a model that is not a chat model", () => {
+    const sink = capture();
+    const { deps } = fixture(createDefaultEmbeddingCapability(MODEL));
+    adoptReportedContextWindow(
+      deps,
+      { modelId: MODEL, contextWindowTokens: 8_192, correlationId: "corr-not-chat" },
+      "provider-overflow",
+    );
+    expectActivityLogProof(
+      "gateway.context-window.adoption.line",
+      persistedLine(sink, "gateway.context-window.adoption"),
+    );
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.context-window.adoption",
+        correlationId: "corr-not-chat",
+        extra: expect.objectContaining({ state: "not-chat", contextWindow: 8_192 }) as unknown,
+      }),
+    );
+    expect(stored(deps)?.kind).toBe("embedding");
+  });
+});
+
+describe("context-window probe failure evidence", () => {
+  it("records a transport failure as a failed probe with its diagnostic", async () => {
+    const sink = capture();
+    const { records, diagnostics } = recordedDiagnostics();
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.reject(new TypeError("fetch failed")));
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl, { diagnostics });
+    void discoverAssumedContextWindow(deps, MODEL, "corr-failed-read");
+    await contextWindowProbesSettledForTests(deps);
+
+    expectActivityLogProof(
+      "gateway.context-window.probe.line",
+      persistedLine(sink, "gateway.context-window.probe"),
+    );
+    const probeLine = sink.events.find((event) => event.op === "gateway.context-window.probe");
+    expect(probeLine).toMatchObject({
+      parentCorrelationId: "corr-failed-read",
+      errorKind: "unavailable",
+      extra: expect.objectContaining({ state: "failed" }) as unknown,
+    });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: probeLine?.correlationId,
+      parentCorrelationId: "corr-failed-read",
+      operation: "gateway.context-window",
+      source: "gateway-context-window.probe",
+      message: "The gateway context-window probe could not be completed.",
+    });
+    expect(stored(deps)?.contextWindowAssumed).toBe(true);
+  });
+
+  it("records a probe skipped under a spend budget without asking the provider", async () => {
+    const sink = capture();
+    const fetchImpl = vi.fn<typeof fetch>();
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    const holder = deps.gatewayConfig;
+    if (holder === undefined) throw new Error("expected a runtime gateway config");
+    const budgeted = {
+      ...deps,
+      gatewayConfig: { ...holder, spendBudget: { reserve: vi.fn() } },
+    };
+    await discoverAssumedContextWindow(budgeted, MODEL, "corr-budgeted");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expectActivityLogProof(
+      "gateway.context-window.probe.line",
+      persistedLine(sink, "gateway.context-window.probe"),
+    );
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        op: "gateway.context-window.probe",
+        parentCorrelationId: "corr-budgeted",
+        extra: expect.objectContaining({ state: "skipped-spend-budget" }) as unknown,
+      }),
+    );
+  });
+});
+
+// PR #3678 audit (G11): a probe was marked done before its outcome was known, so one transient
+// outage at the first reading left the model on its assumption until a restart.
+describe("context-window probe retry after a failure", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function outage(): Promise<Response> {
+    return Promise.reject(new TypeError("fetch failed"));
+  }
+
+  it("asks again once the cooldown has passed and adopts the window then", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T10:00:00.000Z"));
+    const sink = capture();
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(outage)
+      .mockImplementation(() => Promise.resolve(vllmWindow(65_536)));
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    void discoverAssumedContextWindow(deps, MODEL, "corr-outage");
+    await contextWindowProbesSettledForTests(deps);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date("2026-09-30T10:00:10.000Z"));
+    void discoverAssumedContextWindow(deps, MODEL, "corr-too-early");
+    await contextWindowProbesSettledForTests(deps);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date("2026-09-30T10:00:31.000Z"));
+    void discoverAssumedContextWindow(deps, MODEL, "corr-after-cooldown");
+    await contextWindowProbesSettledForTests(deps);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(stored(deps)?.contextWindow).toBe(65_536);
+    expect(
+      sink.events
+        .filter((event) => event.op === "gateway.context-window.probe")
+        .map((event) => (event.extra as { state?: unknown }).state),
+    ).toEqual(["failed", "reported"]);
+  });
+
+  it("gives up after a bounded number of failed attempts", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T10:00:00.000Z"));
+    capture();
+    const fetchImpl = vi.fn<typeof fetch>(outage);
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      vi.setSystemTime(new Date(Date.parse("2026-09-30T10:00:00.000Z") + attempt * 60_000));
+      void discoverAssumedContextWindow(deps, MODEL, `corr-attempt-${String(attempt)}`);
+      await contextWindowProbesSettledForTests(deps);
+    }
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not ask again after an answer that named no window", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T10:00:00.000Z"));
+    capture();
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response(JSON.stringify({ choices: [] }), { status: 200 })),
+    );
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    void discoverAssumedContextWindow(deps, MODEL, "corr-answered");
+    await contextWindowProbesSettledForTests(deps);
+    vi.setSystemTime(new Date("2026-09-30T12:00:00.000Z"));
+    void discoverAssumedContextWindow(deps, MODEL, "corr-answered-again");
+    await contextWindowProbesSettledForTests(deps);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+// PR #3678 audit (O5): a logging failure inside a probe step rejected the shared queue for good, so
+// no later probe ever ran, and the dropped promise of a reading became an unhandled rejection.
+describe("context-window probe queue", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    // The failure notice of the throwing logger is flushed while stderr is still muted.
+    resetServerLogFailureNotices();
+    vi.restoreAllMocks();
+  });
+
+  it("survives a probe whose logging throws and keeps serving later probes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T10:00:00.000Z"));
+    vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const inner = createServerLogger({ sink: createBufferedServerLogSink(), level: "info" });
+    setServerLogger({
+      ...inner,
+      info: (): void => {
+        throw new Error("logger down");
+      },
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(() => Promise.reject(new TypeError("fetch failed")))
+      .mockImplementation(() => Promise.resolve(vllmWindow(32_768)));
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    void discoverAssumedContextWindow(deps, MODEL, "corr-logger-down");
+    await expect(contextWindowProbesSettledForTests(deps)).resolves.toBeUndefined();
+
+    vi.setSystemTime(new Date("2026-09-30T10:01:00.000Z"));
+    void discoverAssumedContextWindow(deps, MODEL, "corr-logger-down-again");
+    await expect(contextWindowProbesSettledForTests(deps)).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(stored(deps)?.contextWindow).toBe(32_768);
+  });
+
+  // PR #3678 audit (O10): a reading of a model whose probe already answered waited on the shared
+  // queue, so it sat behind another model's probe for its whole deadline.
+  it("does not make a reading of one model wait for another model's probe", async () => {
+    capture();
+    const A = "model-a";
+    const B = "model-b";
+    let answerB!: (response: Response) => void;
+    const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      if (body.includes(`"${B}"`)) {
+        return new Promise<Response>((resolve) => {
+          answerB = resolve;
+        });
+      }
+      return Promise.resolve(new Response(JSON.stringify({ choices: [] }), { status: 200 }));
+    });
+    const { deps } = fixtureOf(
+      [
+        { ...assumedChatCapability(A), id: A },
+        { ...assumedChatCapability(B), id: B },
+      ],
+      fetchImpl,
+    );
+    void discoverAssumedContextWindow(deps, A, "corr-a-first");
+    await contextWindowProbesSettledForTests(deps);
+    void discoverAssumedContextWindow(deps, B, "corr-b");
+    await vi.waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+    });
+
+    const pending = Symbol("pending");
+    const settled = await Promise.race([
+      discoverAssumedContextWindow(deps, A, "corr-a-reading"),
+      new Promise<symbol>((resolve) => {
+        setTimeout(() => {
+          resolve(pending);
+        }, 50);
+      }),
+    ]);
+    expect(settled).not.toBe(pending);
+
+    answerB(vllmWindow(65_536));
+    await contextWindowProbesSettledForTests(deps);
+  });
+
+  it("waits for the model's own probe while it is in flight", async () => {
+    capture();
+    let answer!: (response: Response) => void;
+    const fetchImpl = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    void discoverAssumedContextWindow(deps, MODEL, "corr-own");
+    await vi.waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+    const pending = Symbol("pending");
+    const raced = await Promise.race([
+      discoverAssumedContextWindow(deps, MODEL, "corr-own-reading"),
+      new Promise<symbol>((resolve) => {
+        setTimeout(() => {
+          resolve(pending);
+        }, 50);
+      }),
+    ]);
+    expect(raced).toBe(pending);
+    answer(vllmWindow(32_768));
+    await contextWindowProbesSettledForTests(deps);
+    expect(stored(deps)?.contextWindow).toBe(32_768);
+  });
+});
+
+// PR #3678 audit (O5): shutdown aborts the probe in flight, and the abort is not a defect.
+describe("context-window probe at shutdown", () => {
+  it("records nothing for a probe the shutdown aborted", async () => {
+    const sink = capture();
+    const { records, diagnostics } = recordedDiagnostics();
+    const fetchImpl = vi.fn<typeof fetch>(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        }),
+    );
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl, { diagnostics });
+    void discoverAssumedContextWindow(deps, MODEL, "corr-shutdown");
+    await vi.waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+    await stopAssumedContextWindowDiscovery(deps);
+    expect(sink.events.filter((event) => event.op === "gateway.context-window.probe")).toEqual([]);
+    expect(records).toEqual([]);
+    expect(stored(deps)?.contextWindowAssumed).toBe(true);
   });
 });

@@ -150,17 +150,22 @@ refused every grounded question against 2,944 usable tokens. Configurations pers
 existed are marked at the file-load boundary when a record carries the exact placeholder signature.
 The real window replaces the assumption from the provider's own statement, never from a guess:
 
-- When the context meter first shows an assumed model, one probe per deployment sends a
-  one-token request with an output allocation larger than any window. vLLM validates that allocation
-  before generation and names its `max_model_len`; the status reading waits up to three seconds
-  for it.
+- When the context meter first shows an assumed model, one probe per deployment sends a short
+  streamed request with an output allocation larger than any window. vLLM validates that allocation
+  before generation and names its `max_model_len`; an accepted answer is dropped at its status, so a
+  provider that accepts the allocation never generates for it. The status reading waits up to
+  three seconds for the probe of its own model. A probe that got no answer at all (the gateway was
+  unreachable) is asked again after 30 seconds, at most three times; an answered probe is not.
 - Every provider overflow answer that names the window ("maximum context length is N tokens",
-  "max_model_len=N", and the Anthropic, TGI and llama.cpp forms) is attached to the
-  `ContextOverflowError` and reported by the Gateway to its configuration source.
-- The window is adopted exactly, in either direction, persisted, and applied as a configuration
-  refinement without a generation bump. The admitted turn whose overflow reported it re-plans
-  from the current profile and is sent once more: buffered chat, streamed chat before its first
-  token, and grounded answers. A second overflow propagates. A model port follows the
+  "max_model_len=N", the Anthropic and TGI forms, and llama.cpp's `n_ctx`) is attached to the
+  `ContextOverflowError` and reported by the Gateway to its configuration source. Only the first
+  4,096 characters of an error body are read, with bounded patterns.
+- An assumed or provider-reported window is adopted exactly, in either direction; a declared window
+  is only ever lowered, and a raise is recorded as `unchanged`. The adopted window is applied as a
+  configuration refinement without a generation bump, then persisted; a failed write still leaves
+  it applied in memory and is reported as a diagnostic. The admitted turn whose overflow reported
+  it re-plans from the current profile and is sent once more: buffered chat and its regeneration,
+  streamed chat before its first token, and folder, multi-source, hybrid and Knowledge Pod answers. A second overflow propagates. A model port follows the
   refinements of the generation it was resolved in, so the retry runs on the Gateway built from
   the adopted window.
 - A statement is adopted only for the deployment that made it. Every report carries the
