@@ -13,7 +13,10 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ChatContextStatusWire,
+  ProjectWithAvailability,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
@@ -1434,20 +1437,47 @@ export async function handleUpdateMessage(
 // barrel-level NOT_FOUND helper used by future delete-missing paths
 export { notFoundResult };
 
-export function handleChatContextStatus(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  return runHandlerSync(() => {
+export function handleChatContextStatus(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
     const chatId = requireQuery(ctx, "chatId");
     const projectPath = requireQuery(ctx, "projectPath");
     if (!chatBelongsToProject(deps, projectPath, chatId)) return notFoundResult("Chat not found.");
     const modelId = requireQuery(ctx, "modelId");
     assertChatModelId(deps, modelId);
-    const status = readChatContextStatus(deps, chatId, modelId, ctx.correlationId);
+    const status = await contextStatusWithMeasuredWindow(deps, chatId, modelId, ctx.correlationId);
     logChatContextManagement("inspected", status, 0, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
-    // The meter shows this model: ask its deployment once for the window its gateway never declared.
-    if (status.contextWindowAssumed === true)
-      discoverAssumedContextWindow(deps, modelId, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
     return { status: 200, body: status };
   });
+}
+
+// The meter shows this model: ask its deployment once for the window its gateway never declared,
+// and wait briefly so the first reading already carries the real window. vLLM answers the probe
+// without generating; a slow gateway only delays the reading, never fails it.
+const CONTEXT_WINDOW_PROBE_WAIT_MS = 3_000;
+
+async function contextStatusWithMeasuredWindow(
+  deps: UiHandlerDeps,
+  chatId: string,
+  modelId: string,
+  correlationId: string | undefined,
+): Promise<ChatContextStatusWire> {
+  const status = readChatContextStatus(deps, chatId, modelId, correlationId);
+  if (status.contextWindowAssumed !== true) return status;
+  const probe = discoverAssumedContextWindow(
+    deps,
+    modelId,
+    correlationId ?? UNKNOWN_CORRELATION_ID,
+  );
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, CONTEXT_WINDOW_PROBE_WAIT_MS);
+  });
+  await Promise.race([probe, deadline]);
+  clearTimeout(timer);
+  return readChatContextStatus(deps, chatId, modelId, correlationId);
 }
 
 export async function handleCompactChatContext(

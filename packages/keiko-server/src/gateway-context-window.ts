@@ -301,20 +301,23 @@ export function discoverAssumedContextWindow(
   deps: UiHandlerDeps,
   modelId: string,
   correlationId: string,
-): void {
+): Promise<void> {
   const config = currentGatewayConfig(deps);
   const state = probeState(deps);
-  if (config === undefined || state === undefined || state.disposed) return;
+  if (config === undefined || state === undefined || state.disposed) return Promise.resolve();
   const capability = findConfiguredCapability(config, modelId);
-  if (capability?.kind !== "chat" || capability.contextWindowAssumed !== true) return;
+  if (capability?.kind !== "chat" || capability.contextWindowAssumed !== true) {
+    return Promise.resolve();
+  }
   const key = deploymentKey(config, modelId);
-  if (key === undefined || state.probed.has(key)) return;
+  if (key === undefined || state.probed.has(key)) return state.queue;
   state.probed.add(key);
   if (deps.gatewayConfig?.spendBudget !== undefined) {
     logProbe(modelId, { status: "skipped-spend-budget" }, correlationId);
-    return;
+    return Promise.resolve();
   }
   state.queue = state.queue.then(() => probeContextWindow(deps, state, modelId, correlationId));
+  return state.queue;
 }
 
 export interface ContextWindowRetryInput {

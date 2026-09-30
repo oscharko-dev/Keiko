@@ -30,6 +30,8 @@ import {
 } from "./gateway-context-window.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { readChatContextStatus } from "./chat-context-status.js";
+import { handleChatContextStatus } from "./store-handlers.js";
+import type { RouteContext } from "./routes.js";
 
 const MODEL = "gemma-4-31b-it";
 const roots: string[] = [];
@@ -326,5 +328,33 @@ describe("context status of an assumed window", () => {
     expect(status.contextWindowAssumed).toBe(true);
     expect(status.contextWindowTokens).toBe(128_000);
     expect(status.inputBudgetTokens).toBe(116_000);
+  });
+});
+
+describe("context meter reading", () => {
+  it("waits for the window probe so the first reading already carries the real window", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        rejection("max_tokens=1000000000 cannot be greater than max_model_len=32768."),
+      ),
+    );
+    const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
+    const project = mkdtempSync(join(realpathSync(tmpdir()), "keiko-meter-project-"));
+    roots.push(project);
+    deps.store.createProject(project, "Meter");
+    const chatId = deps.store.createChat(project, "Meter", MODEL).id;
+    const query = new URLSearchParams({ chatId, projectPath: project, modelId: MODEL });
+    const result = await handleChatContextStatus(
+      {
+        correlationId: "corr-meter",
+        params: {},
+        url: new URL(`http://localhost/api/chats/context?${query.toString()}`),
+      } as unknown as RouteContext,
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ contextWindowTokens: 32_768 });
+    expect(result.body).not.toHaveProperty("contextWindowAssumed");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
