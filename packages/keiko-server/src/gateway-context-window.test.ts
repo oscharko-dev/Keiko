@@ -112,7 +112,7 @@ describe("context-window probe", () => {
     );
     const { deps, configPath } = fixture(assumedChatCapability(MODEL), fetchImpl);
     const generation = deps.gatewayConfig?.generation();
-    discoverAssumedContextWindow(deps, MODEL, "corr-startup-window");
+    void discoverAssumedContextWindow(deps, MODEL, "corr-startup-window");
     await contextWindowProbesSettledForTests(deps);
 
     expect(stored(deps)?.contextWindow).toBe(65_536);
@@ -159,8 +159,8 @@ describe("context-window probe", () => {
       ),
     );
     const { deps } = fixture(assumedChatCapability(MODEL), fetchImpl);
-    discoverAssumedContextWindow(deps, MODEL, "corr-first");
-    discoverAssumedContextWindow(deps, MODEL, "corr-second");
+    void discoverAssumedContextWindow(deps, MODEL, "corr-first");
+    void discoverAssumedContextWindow(deps, MODEL, "corr-second");
     await contextWindowProbesSettledForTests(deps);
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -179,7 +179,7 @@ describe("context-window probe", () => {
       { ...createDefaultChatCapability(MODEL), contextWindow: 32_768 },
       fetchImpl,
     );
-    discoverAssumedContextWindow(deps, MODEL, "corr-declared");
+    void discoverAssumedContextWindow(deps, MODEL, "corr-declared");
     await contextWindowProbesSettledForTests(deps);
     expect(fetchImpl).not.toHaveBeenCalled();
   });

@@ -305,10 +305,7 @@ export function discoverAssumedContextWindow(
   const config = currentGatewayConfig(deps);
   const state = probeState(deps);
   if (config === undefined || state === undefined || state.disposed) return Promise.resolve();
-  const capability = findConfiguredCapability(config, modelId);
-  if (capability?.kind !== "chat" || capability.contextWindowAssumed !== true) {
-    return Promise.resolve();
-  }
+  if (!windowAssumed(config, modelId)) return Promise.resolve();
   const key = deploymentKey(config, modelId);
   if (key === undefined || state.probed.has(key)) return state.queue;
   state.probed.add(key);
@@ -318,6 +315,11 @@ export function discoverAssumedContextWindow(
   }
   state.queue = state.queue.then(() => probeContextWindow(deps, state, modelId, correlationId));
   return state.queue;
+}
+
+function windowAssumed(config: GatewayConfig, modelId: string): boolean {
+  const capability = findConfiguredCapability(config, modelId);
+  return capability?.kind === "chat" && capability.contextWindowAssumed === true;
 }
 
 export interface ContextWindowRetryInput {
