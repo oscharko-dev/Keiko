@@ -655,13 +655,16 @@ export interface NumericCitedClaim {
   readonly hidesProse?: true;
 }
 
+// A span that continues the last cited claim extends that claim: it keeps the earlier markers, so
+// the judge reads the whole visible claim against every excerpt cited for it, never one part of it
+// against another part's source alone (PR #3678 review).
 function appendNumericCitedClaim(
   claims: NumericCitedClaim[],
   claim: NumericCitedClaim,
-  mergeWithPrevious: boolean,
+  continuesPrevious: boolean,
 ): void {
   const previous = claims.at(-1);
-  if (mergeWithPrevious && previous?.claimText === claim.claimText) {
+  if (continuesPrevious && previous !== undefined) {
     const hidesProse = previous.hidesProse === true || claim.hidesProse === true;
     claims[claims.length - 1] = {
       claimText: claim.claimText,
@@ -712,19 +715,24 @@ function supportedClaimOf(
 export function segmentNumericCitedClaims(answerText: string): readonly NumericCitedClaim[] {
   const claims: NumericCitedClaim[] = [];
   let preceding: SupportedClaimText | undefined;
+  let precedingIsLastClaim = false;
   for (const span of splitClaimSpans(answerText)) {
     const markers = [...new Set(parseNumericCitations(span))];
     const claimText = stripInlineCitations(span);
     const supported = supportedClaimOf(claimText, hidesBracketedProse(span), preceding);
+    const continuesLastClaim: boolean = precedingIsLastClaim && !isOwnClaimText(claimText);
     if (markers.length > 0 && supported !== undefined) {
       const claim = supported.hidesProse
         ? { claimText: supported.text, markers, hidesProse: true as const }
         : { claimText: supported.text, markers };
-      appendNumericCitedClaim(claims, claim, !isOwnClaimText(claimText));
+      appendNumericCitedClaim(claims, claim, continuesLastClaim);
     }
     // An uncited span of bracketed prose alone still hides that prose: from the claim it follows,
     // or, at the start, from the marker that cites it later (PR #3678 review).
-    if (supported !== undefined) preceding = supported;
+    if (supported !== undefined) {
+      preceding = supported;
+      precedingIsLastClaim = markers.length > 0 || continuesLastClaim;
+    }
   }
   return claims;
 }

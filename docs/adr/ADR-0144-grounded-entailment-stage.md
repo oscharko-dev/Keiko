@@ -189,7 +189,10 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   its lexical overlap, such a claim (path or numeric) is never judged: it counts as unavailable and
   the answer carries `entailment-unavailable`. The same holds when no judge is available at all. A
   marker-only span such as `[1]` in `The API uses TLS [MFA mandatory]. [1]` carries the hidden
-  prose of the claim before it. A Markdown link label is visible prose, however path-like it reads. `search.entailment.judged` records the count as
+  prose of the claim before it. Any span without a letter or digit (punctuation, Markdown syntax, a
+  bare symbol such as `` `||` ``) continues the claim before it with its visible residue; a claim
+  already cited keeps its markers, so `The API uses TLS [1].` followed by `` `||` [2]`` is judged
+  against [1] and [2] together, never the TLS sentence against [2] alone. A Markdown link label is visible prose, however path-like it reads. `search.entailment.judged` records the count as
   `hiddenProseClaimCount`, and `search.citations.support-settled` records why a Knowledge Pod
   answer did or did not end with the caveat (`none`, `judge-undecided`, `no-judge`,
   `unjudged-citation`), once that decision is made.

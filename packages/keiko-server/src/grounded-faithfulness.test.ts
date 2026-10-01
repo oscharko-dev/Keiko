@@ -722,6 +722,33 @@ describe("numeric citation entailment", () => {
     expect(result.unentailed).toHaveLength(1);
   });
 
+  // PR #3678 review (P2): a separately cited symbol claim after a cited sentence keeps both sources;
+  // the judge never reads the sentence against the symbol's excerpt alone.
+  it("keeps the earlier source when a cited symbol claim continues a cited sentence", async () => {
+    const answer = "The API uses TLS [1].\n`||` [2]";
+    expect(segmentNumericCitedClaims(answer)).toEqual([
+      { claimText: "The API uses TLS . `||`", markers: [1, 2] },
+    ]);
+    const judged: EntailmentJudgeInput[] = [];
+    const result = await reconcileNumericClaimEntailment(
+      answer,
+      [
+        { marker: 1, excerptText: "The API uses TLS." },
+        { marker: 2, excerptText: "The logical OR operator is ||." },
+      ],
+      {
+        judge: (input): Promise<EntailmentVerdict> => {
+          judged.push(input);
+          return scriptedJudge().judge(input);
+        },
+      },
+    );
+    expect(judged).toHaveLength(1);
+    expect(judged[0]?.excerptText).toContain("The API uses TLS.");
+    expect(judged[0]?.excerptText).toContain("The logical OR operator is ||.");
+    expect(result).toMatchObject({ judgedClaims: 1, unentailed: [] });
+  });
+
   it("carries hidden prose into a marker-only continuation and flags a link label", () => {
     expect(segmentNumericCitedClaims("The API uses TLS [MFA mandatory]. [1]")).toEqual([
       { claimText: "The API uses TLS .", markers: [1], hidesProse: true },
