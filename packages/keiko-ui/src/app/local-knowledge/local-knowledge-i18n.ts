@@ -2,8 +2,14 @@
 
 import { useMemo } from "react";
 import { UNSUPPORTED_DOCUMENT_GUIDANCE_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-records";
-import type { UnsupportedDocumentGuidanceCode } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgePodReadiness,
+  KnowledgePodSetReadinessReasonCode,
+  ManualRefreshReasonCode,
+  UnsupportedDocumentGuidanceCode,
+} from "@oscharko-dev/keiko-contracts";
 import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
+import type { KnowledgePodGuidanceCode, KnowledgePodUiGuidance } from "@/lib/local-knowledge-api";
 
 const LOCAL_KNOWLEDGE_EN_MESSAGES = {
   "common.cancel": "Cancel",
@@ -22,6 +28,204 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
     'Disconnect "{name}"? Its index remains; only the source link is removed.',
   "localKnowledge.disconnect.confirm": "Disconnect",
   "localKnowledge.row.addToWorkspace": "Add to workspace",
+  "localKnowledge.row.actionsLabel": "Actions for Knowledge Pod {name}",
+  "localKnowledge.row.addToWorkspaceLabel": "Add Knowledge Pod {name} to workspace",
+  "localKnowledge.row.details": "Details",
+  "localKnowledge.row.detailsLabel": "Open details for Knowledge Pod {name}",
+  "localKnowledge.row.disconnectLabel": "Disconnect Knowledge Pod {name}",
+  "localKnowledge.row.disconnecting": "Disconnecting…",
+  "localKnowledge.picker.loading": "Loading Knowledge Pods…",
+  "localKnowledge.picker.loadFailed": "Failed to load Knowledge Pods.",
+  "localKnowledge.picker.retry": "Try again",
+  "localKnowledge.picker.create": "Create a Knowledge Pod",
+  "localKnowledge.picker.label": "Select Knowledge Pod source",
+  "localKnowledge.picker.placeholder": "— choose a Knowledge Pod source —",
+  "localKnowledge.picker.menuTitle": "Available Knowledge Pod sources",
+  "localKnowledge.picker.setOption": "{name} ({count} pods)",
+  "localKnowledge.picker.setsFailed": "Knowledge Pod Sets could not be loaded.",
+  "localKnowledge.picker.manage": "Create or manage Knowledge Pods",
+  "localKnowledge.picker.state.ready": "Ready",
+  "localKnowledge.picker.state.indexing": "Indexing…",
+  "localKnowledge.picker.state.error": "Failed",
+  "localKnowledge.node.unselected": "Local Knowledge",
+  "localKnowledge.node.meta": "Local Knowledge Pod",
+  "localKnowledge.node.manage": "Manage",
+  "localKnowledge.state.draft": "Draft",
+  "localKnowledge.state.indexing": "Indexing",
+  "localKnowledge.state.ready": "Indexed",
+  "localKnowledge.state.stale": "Stale",
+  "localKnowledge.state.deleting": "Deleting",
+  "localKnowledge.state.error": "Failed",
+  "localKnowledge.row.cancelIndexingLabel": "Cancel indexing for Knowledge Pod {name}",
+  "localKnowledge.row.cancelling": "Cancelling…",
+  "localKnowledge.row.startIndexingLabel": "Start indexing Knowledge Pod {name}",
+  "localKnowledge.row.attachSourceTitle": "Attach a source before indexing this Knowledge Pod.",
+  "localKnowledge.row.attachSourceHint": "Attach a source before indexing.",
+  "localKnowledge.row.index": "Index",
+  "localKnowledge.row.indexing": "Indexing…",
+  "localKnowledge.readiness.ready": "Ready",
+  "localKnowledge.readiness.indexing": "Indexing",
+  "localKnowledge.readiness.stale": "Stale",
+  "localKnowledge.readiness.degraded": "Degraded",
+  "localKnowledge.readiness.unavailable": "Unavailable",
+  "localKnowledge.readiness.error": "Failed",
+  "localKnowledge.readiness.draft": "Draft",
+  "localKnowledge.readiness.unknown": "Unknown",
+  "localKnowledge.set.article": "Knowledge Pod Set: {name}",
+  "localKnowledge.set.podCountBadge": "{count} Pods",
+  "localKnowledge.set.podCountText": "{count} Knowledge Pods",
+  "localKnowledge.set.readinessSummary": "Knowledge Pod Set readiness: {readiness}.",
+  "localKnowledge.set.reasonsSummary": "reasons: {reasons}",
+  "localKnowledge.set.count.pods": "pods",
+  "localKnowledge.set.count.sources": "sources",
+  "localKnowledge.set.count.docs": "docs",
+  "localKnowledge.set.count.chunks": "chunks",
+  "localKnowledge.set.count.vectors": "vectors",
+  "localKnowledge.set.count.ready": "ready",
+  "localKnowledge.set.count.degraded": "degraded",
+  "localKnowledge.set.count.unavailable": "unavailable",
+  "localKnowledge.set.count.policyDenied": "policy denied",
+  "localKnowledge.set.count.indexing": "indexing",
+  "localKnowledge.set.count.stale": "stale",
+  "localKnowledge.set.count.error": "error",
+  "localKnowledge.set.count.missing": "missing",
+  "localKnowledge.set.reason.memberDraft": "draft",
+  "localKnowledge.set.reason.memberIndexing": "indexing",
+  "localKnowledge.set.reason.memberStale": "stale",
+  "localKnowledge.set.reason.memberError": "error",
+  "localKnowledge.set.reason.memberUnavailable": "unavailable",
+  "localKnowledge.set.reason.memberDegraded": "degraded",
+  "localKnowledge.set.reason.missingMember": "missing",
+  "localKnowledge.set.reason.policyDenied": "policy denied",
+  "localKnowledge.set.reason.embeddingUnknown": "embedding unknown",
+  "localKnowledge.set.reason.embeddingIncompatible": "embedding mismatch",
+  "localKnowledge.set.reason.embeddingUnavailable": "embedding unavailable",
+  "localKnowledge.set.reason.embeddingOpaque": "embedding opaque",
+  "localKnowledge.set.reason.noSources": "no sources",
+  "localKnowledge.set.reason.noVectors": "no vectors",
+  "localKnowledge.set.reason.futureRemoteMember": "remote placeholder",
+  "localKnowledge.set.reason.futureFederatedMember": "federated placeholder",
+  "localKnowledge.set.reason.futureEphemeralMember": "ephemeral placeholder",
+  "localKnowledge.guidance.summary": "Knowledge Pod guidance: {label}. {description}",
+  "localKnowledge.guidance.label.embeddingMismatch": "Embedding mismatch",
+  "localKnowledge.guidance.label.embeddingUnavailable": "Embedding unavailable",
+  "localKnowledge.guidance.label.reindexRecommended": "Reindex recommended",
+  "localKnowledge.guidance.label.embeddingOpaque": "Embedding opaque",
+  "localKnowledge.guidance.label.manualReady": "HTML manual",
+  "localKnowledge.guidance.label.manualDegraded": "Manual degraded",
+  "localKnowledge.guidance.label.manualIndexing": "Manual indexing",
+  "localKnowledge.guidance.label.manualUnavailable": "Manual unavailable",
+  "localKnowledge.guidance.label.futureMember": "Future member placeholder",
+  "localKnowledge.guidance.label.membersUnavailable": "Members unavailable",
+  "localKnowledge.guidance.label.membersNotReady": "Members not ready",
+  "localKnowledge.guidance.label.retrievalDegraded": "Retrieval degraded",
+  "localKnowledge.guidance.label.embeddingReadinessWarning": "Embedding readiness warning",
+  "localKnowledge.guidance.label.policyDenied": "Policy denied",
+  "localKnowledge.guidance.label.sealedLocalPolicy": "Sealed local policy",
+  "localKnowledge.guidance.description.embeddingMismatch.pod":
+    "Semantic retrieval is disabled for this pod until it is reindexed locally.",
+  "localKnowledge.guidance.description.embeddingMismatch.set":
+    "Semantic retrieval is disabled for affected set members until they are reindexed locally.",
+  "localKnowledge.guidance.description.embeddingUnavailable.pod":
+    "Semantic retrieval cannot run under the current local policy.",
+  "localKnowledge.guidance.description.embeddingUnavailable.set":
+    "Semantic retrieval cannot run for affected set members under the current local policy.",
+  "localKnowledge.guidance.description.reindexRecommended.pod":
+    "Compatibility is unverified; lexical fallback remains available.",
+  "localKnowledge.guidance.description.reindexRecommended.set":
+    "Compatibility is unverified for affected set members; lexical fallback remains available.",
+  "localKnowledge.guidance.description.embeddingOpaque.pod":
+    "Semantic compatibility cannot be verified for this retrieval space.",
+  "localKnowledge.guidance.description.embeddingOpaque.set":
+    "Semantic compatibility cannot be verified for this Knowledge Pod Set.",
+  "localKnowledge.guidance.description.policyDenied.pod":
+    "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
+  "localKnowledge.guidance.description.policyDenied.set":
+    "This Knowledge Pod Set blocks grounded answer synthesis or raw-content release for affected members; Keiko will return a policy-denied state instead of sending excerpts to a model.",
+  "localKnowledge.guidance.description.sealedLocalPolicy.pod":
+    "External embedding or reranking calls are disabled for this Knowledge Pod; retrieval may use lexical or local fallback.",
+  "localKnowledge.guidance.description.sealedLocalPolicy.set":
+    "External embedding or reranking calls are disabled for affected set members; retrieval may use lexical or local fallback.",
+  "localKnowledge.guidance.description.futureMember":
+    "This Knowledge Pod Set includes future remote, federated, or ephemeral placeholders; those members are not active retrieval sources yet.",
+  "localKnowledge.guidance.description.membersUnavailable":
+    "Some set members are missing, failed, or unavailable; retrieval will use only available members.",
+  "localKnowledge.guidance.description.membersNotReady":
+    "Some set members are indexing, stale, or draft; refresh or index them before relying on this set.",
+  "localKnowledge.guidance.description.retrievalDegraded":
+    "Some set members have no sources, no vectors, or degraded indexing; lexical fallback may be the only available path.",
+  "localKnowledge.guidance.description.embeddingReadinessWarning":
+    "Some set members need embedding review; Keiko does not compare raw vector scores across embedding spaces.",
+  "localKnowledge.guidance.description.manualReady":
+    "Ready for chat retrieval through Local Knowledge. {counts}.",
+  "localKnowledge.guidance.description.manualDegraded":
+    "Manual retrieval is degraded; answers may use only available evidence. {counts}.",
+  "localKnowledge.guidance.description.manualIndexing":
+    "Manual retrieval is {state}; it is not yet ready to contribute evidence.",
+  "localKnowledge.guidance.description.manualUnavailable":
+    "Manual retrieval is {state}; it cannot contribute silently as empty evidence.",
+  "localKnowledge.guidance.manualCounts": "{docs} docs · {chunks} chunks · {vectors} vectors",
+  "localKnowledge.guidance.manualState.ready": "ready",
+  "localKnowledge.guidance.manualState.indexing": "indexing",
+  "localKnowledge.guidance.manualState.stale": "stale",
+  "localKnowledge.guidance.manualState.degraded": "degraded",
+  "localKnowledge.guidance.manualState.unavailable": "unavailable",
+  "localKnowledge.guidance.manualState.error": "error",
+  "localKnowledge.guidance.manualState.draft": "draft",
+  "localKnowledge.picker.sectionPods": "Knowledge Pods",
+  "localKnowledge.picker.sectionSets": "Knowledge Pod Sets",
+  "localKnowledge.picker.unavailablePod": "Knowledge Pod (unavailable)",
+  "localKnowledge.picker.unavailableSet": "Knowledge Pod Set (unavailable)",
+  // The chat header's Knowledge Pod pills (PR #3678): a pod the catalog has not answered for yet is
+  // named by its kind, never by its raw id.
+  "localKnowledge.scopePill.pendingPod": "Knowledge Pod",
+  "localKnowledge.scopePill.pendingSet": "Knowledge Pod Set",
+  "localKnowledge.scopePill.disconnect": "Disconnect {label} from chat",
+  "localKnowledge.scopePill.disconnectError": "Unable to disconnect Knowledge Pod.",
+  "localKnowledge.scopePill.removed": "Connected Knowledge Pod removed.",
+  "localKnowledge.scopePill.updated.one": "Connected Knowledge Pods updated: 1 source.",
+  "localKnowledge.scopePill.updated.other": "Connected Knowledge Pods updated: {count} sources.",
+  "localKnowledge.picker.selectedWithState": "{name} ({state})",
+  "localKnowledge.node.unavailable": "Unavailable",
+  "localKnowledge.node.defaultLabel": "Knowledge Pod",
+  "localKnowledge.manualRefresh.title": "Last refresh",
+  "localKnowledge.manualRefresh.removalNote":
+    "Removed pages could not be detected this run (the crawl reached its page limit).",
+  "localKnowledge.manualRefresh.outcome.unchanged": "Unchanged",
+  "localKnowledge.manualRefresh.outcome.updated": "Updated",
+  "localKnowledge.manualRefresh.outcome.partial": "Partial",
+  "localKnowledge.manualRefresh.outcome.failed": "Failed",
+  "localKnowledge.manualRefresh.outcome.cancelled": "Cancelled",
+  "localKnowledge.manualRefresh.count.addedPages": "Added",
+  "localKnowledge.manualRefresh.count.changedPages": "Changed",
+  "localKnowledge.manualRefresh.count.removedPages": "Removed",
+  "localKnowledge.manualRefresh.count.movedPages": "Moved",
+  "localKnowledge.manualRefresh.count.unchangedPages": "Unchanged",
+  "localKnowledge.manualRefresh.count.failedPages": "Failed",
+  "localKnowledge.manualRefresh.count.deniedLinks": "Denied links",
+  "localKnowledge.manualRefresh.reason.scopePreserved":
+    "Refresh reused the originally approved manual scope and limits.",
+  "localKnowledge.manualRefresh.reason.scopeLimitReached":
+    "The refresh reached a crawl limit; some pages were not visited.",
+  "localKnowledge.manualRefresh.reason.removalDetectionSkipped":
+    "The crawl reached its page limit, so removed pages could not be detected this run.",
+  "localKnowledge.manualRefresh.reason.pagesAdded": "New pages were discovered and indexed.",
+  "localKnowledge.manualRefresh.reason.pagesChanged": "Existing pages changed and were re-indexed.",
+  "localKnowledge.manualRefresh.reason.pagesRemoved":
+    "Pages that are no longer reachable were removed from the pod.",
+  "localKnowledge.manualRefresh.reason.pagesMoved":
+    "Pages moved to a new location; their content was unchanged.",
+  "localKnowledge.manualRefresh.reason.pagesFailed":
+    "Some pages could not be re-indexed and may be temporarily unsearchable; a future successful refresh will retry them.",
+  "localKnowledge.manualRefresh.reason.linksDenied":
+    "Some links were skipped because they fell outside the approved scope.",
+  "localKnowledge.manualRefresh.reason.embeddingIncompatible":
+    "The embedding model changed; re-index the manual to refresh its vectors.",
+  "localKnowledge.manualRefresh.reason.crawlEmpty": "The refresh crawl found no indexable pages.",
+  "localKnowledge.manualRefresh.reason.crawlCancelled":
+    "The refresh was cancelled. Pages not yet reached are unaffected; a page already being re-indexed at that moment may be temporarily unsearchable until a future successful refresh.",
+  "localKnowledge.manualRefresh.reason.indexFailed":
+    "Indexing failed during refresh. Pages that were being re-indexed at the time of failure may be temporarily unsearchable until a future successful refresh repairs them.",
   "localKnowledge.create.title": "Create Knowledge Pod",
   "localKnowledge.create.description":
     "Name this Knowledge Pod, then connect a source and start indexing from its page.",
@@ -517,6 +721,206 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
     '"{name}" trennen? Der Index bleibt erhalten; nur die Verknüpfung zur Quelle wird entfernt.',
   "localKnowledge.disconnect.confirm": "Trennen",
   "localKnowledge.row.addToWorkspace": "Zum Arbeitsbereich hinzufügen",
+  "localKnowledge.row.actionsLabel": "Aktionen für Knowledge Pod {name}",
+  "localKnowledge.row.addToWorkspaceLabel": "Knowledge Pod {name} zum Arbeitsbereich hinzufügen",
+  "localKnowledge.row.details": "Details",
+  "localKnowledge.row.detailsLabel": "Details zu Knowledge Pod {name} öffnen",
+  "localKnowledge.row.disconnectLabel": "Knowledge Pod {name} trennen",
+  "localKnowledge.row.disconnecting": "Wird getrennt…",
+  "localKnowledge.picker.loading": "Knowledge Pods werden geladen…",
+  "localKnowledge.picker.loadFailed": "Knowledge Pods konnten nicht geladen werden.",
+  "localKnowledge.picker.retry": "Erneut versuchen",
+  "localKnowledge.picker.create": "Knowledge Pod erstellen",
+  "localKnowledge.picker.label": "Knowledge-Pod-Quelle auswählen",
+  "localKnowledge.picker.placeholder": "— Knowledge-Pod-Quelle wählen —",
+  "localKnowledge.picker.menuTitle": "Verfügbare Knowledge-Pod-Quellen",
+  "localKnowledge.picker.setOption": "{name} ({count} Pods)",
+  "localKnowledge.picker.setsFailed": "Knowledge Pod Sets konnten nicht geladen werden.",
+  "localKnowledge.picker.manage": "Knowledge Pods erstellen oder verwalten",
+  "localKnowledge.picker.state.ready": "Bereit",
+  "localKnowledge.picker.state.indexing": "Wird indexiert…",
+  "localKnowledge.picker.state.error": "Fehlgeschlagen",
+  "localKnowledge.node.unselected": "Lokales Wissen",
+  "localKnowledge.node.meta": "Lokaler Knowledge Pod",
+  "localKnowledge.node.manage": "Verwalten",
+  "localKnowledge.state.draft": "Entwurf",
+  "localKnowledge.state.indexing": "Wird indexiert",
+  "localKnowledge.state.ready": "Indexiert",
+  "localKnowledge.state.stale": "Veraltet",
+  "localKnowledge.state.deleting": "Wird gelöscht",
+  "localKnowledge.state.error": "Fehlgeschlagen",
+  "localKnowledge.row.cancelIndexingLabel": "Indexierung für Knowledge Pod {name} abbrechen",
+  "localKnowledge.row.cancelling": "Wird abgebrochen…",
+  "localKnowledge.row.startIndexingLabel": "Indexierung für Knowledge Pod {name} starten",
+  "localKnowledge.row.attachSourceTitle":
+    "Verbinde eine Quelle, bevor du diesen Knowledge Pod indexierst.",
+  "localKnowledge.row.attachSourceHint": "Verbinde eine Quelle vor dem Indexieren.",
+  "localKnowledge.row.index": "Indexieren",
+  "localKnowledge.row.indexing": "Wird indexiert…",
+  "localKnowledge.readiness.ready": "Bereit",
+  "localKnowledge.readiness.indexing": "Wird indexiert",
+  "localKnowledge.readiness.stale": "Veraltet",
+  "localKnowledge.readiness.degraded": "Eingeschränkt",
+  "localKnowledge.readiness.unavailable": "Nicht verfügbar",
+  "localKnowledge.readiness.error": "Fehlgeschlagen",
+  "localKnowledge.readiness.draft": "Entwurf",
+  "localKnowledge.readiness.unknown": "Unbekannt",
+  "localKnowledge.set.article": "Knowledge Pod Set: {name}",
+  "localKnowledge.set.podCountBadge": "{count} Pods",
+  "localKnowledge.set.podCountText": "{count} Knowledge Pods",
+  "localKnowledge.set.readinessSummary": "Bereitschaft des Knowledge Pod Sets: {readiness}.",
+  "localKnowledge.set.reasonsSummary": "Gründe: {reasons}",
+  "localKnowledge.set.count.pods": "Pods",
+  "localKnowledge.set.count.sources": "Quellen",
+  "localKnowledge.set.count.docs": "Dokumente",
+  "localKnowledge.set.count.chunks": "Chunks",
+  "localKnowledge.set.count.vectors": "Vektoren",
+  "localKnowledge.set.count.ready": "bereit",
+  "localKnowledge.set.count.degraded": "eingeschränkt",
+  "localKnowledge.set.count.unavailable": "nicht verfügbar",
+  "localKnowledge.set.count.policyDenied": "durch Richtlinie gesperrt",
+  "localKnowledge.set.count.indexing": "wird indexiert",
+  "localKnowledge.set.count.stale": "veraltet",
+  "localKnowledge.set.count.error": "fehlgeschlagen",
+  "localKnowledge.set.count.missing": "fehlend",
+  "localKnowledge.set.reason.memberDraft": "Entwurf",
+  "localKnowledge.set.reason.memberIndexing": "wird indexiert",
+  "localKnowledge.set.reason.memberStale": "veraltet",
+  "localKnowledge.set.reason.memberError": "fehlgeschlagen",
+  "localKnowledge.set.reason.memberUnavailable": "nicht verfügbar",
+  "localKnowledge.set.reason.memberDegraded": "eingeschränkt",
+  "localKnowledge.set.reason.missingMember": "fehlend",
+  "localKnowledge.set.reason.policyDenied": "durch Richtlinie gesperrt",
+  "localKnowledge.set.reason.embeddingUnknown": "Embedding unbekannt",
+  "localKnowledge.set.reason.embeddingIncompatible": "Embedding-Abweichung",
+  "localKnowledge.set.reason.embeddingUnavailable": "Embedding nicht verfügbar",
+  "localKnowledge.set.reason.embeddingOpaque": "Embedding nicht prüfbar",
+  "localKnowledge.set.reason.noSources": "keine Quellen",
+  "localKnowledge.set.reason.noVectors": "keine Vektoren",
+  "localKnowledge.set.reason.futureRemoteMember": "Remote-Platzhalter",
+  "localKnowledge.set.reason.futureFederatedMember": "Föderations-Platzhalter",
+  "localKnowledge.set.reason.futureEphemeralMember": "Platzhalter (ephemer)",
+  "localKnowledge.guidance.summary": "Hinweis zum Knowledge Pod: {label}. {description}",
+  "localKnowledge.guidance.label.embeddingMismatch": "Embedding-Abweichung",
+  "localKnowledge.guidance.label.embeddingUnavailable": "Embedding nicht verfügbar",
+  "localKnowledge.guidance.label.reindexRecommended": "Neuindexierung empfohlen",
+  "localKnowledge.guidance.label.embeddingOpaque": "Embedding nicht prüfbar",
+  "localKnowledge.guidance.label.manualReady": "HTML-Handbuch",
+  "localKnowledge.guidance.label.manualDegraded": "Handbuch eingeschränkt",
+  "localKnowledge.guidance.label.manualIndexing": "Handbuch wird indexiert",
+  "localKnowledge.guidance.label.manualUnavailable": "Handbuch nicht verfügbar",
+  "localKnowledge.guidance.label.futureMember": "Platzhalter für künftige Mitglieder",
+  "localKnowledge.guidance.label.membersUnavailable": "Mitglieder nicht verfügbar",
+  "localKnowledge.guidance.label.membersNotReady": "Mitglieder nicht bereit",
+  "localKnowledge.guidance.label.retrievalDegraded": "Retrieval eingeschränkt",
+  "localKnowledge.guidance.label.embeddingReadinessWarning": "Warnung zur Embedding-Bereitschaft",
+  "localKnowledge.guidance.label.policyDenied": "Durch Richtlinie gesperrt",
+  "localKnowledge.guidance.label.sealedLocalPolicy": "Versiegelte lokale Richtlinie",
+  "localKnowledge.guidance.description.embeddingMismatch.pod":
+    "Die semantische Suche ist für diesen Pod deaktiviert, bis er lokal neu indexiert wird.",
+  "localKnowledge.guidance.description.embeddingMismatch.set":
+    "Die semantische Suche ist für betroffene Set-Mitglieder deaktiviert, bis sie lokal neu indexiert werden.",
+  "localKnowledge.guidance.description.embeddingUnavailable.pod":
+    "Die semantische Suche kann unter der aktuellen lokalen Richtlinie nicht ausgeführt werden.",
+  "localKnowledge.guidance.description.embeddingUnavailable.set":
+    "Die semantische Suche kann für betroffene Set-Mitglieder unter der aktuellen lokalen Richtlinie nicht ausgeführt werden.",
+  "localKnowledge.guidance.description.reindexRecommended.pod":
+    "Die Kompatibilität ist ungeprüft; der lexikalische Fallback bleibt verfügbar.",
+  "localKnowledge.guidance.description.reindexRecommended.set":
+    "Die Kompatibilität ist für betroffene Set-Mitglieder ungeprüft; der lexikalische Fallback bleibt verfügbar.",
+  "localKnowledge.guidance.description.embeddingOpaque.pod":
+    "Die semantische Kompatibilität kann für diesen Retrieval-Raum nicht geprüft werden.",
+  "localKnowledge.guidance.description.embeddingOpaque.set":
+    "Die semantische Kompatibilität kann für dieses Knowledge Pod Set nicht geprüft werden.",
+  "localKnowledge.guidance.description.policyDenied.pod":
+    "Dieser Knowledge Pod blockiert geerdete Antwortsynthese oder die Freigabe von Rohinhalten; Keiko meldet den Zustand „durch Richtlinie gesperrt“, statt Auszüge an ein Modell zu senden.",
+  "localKnowledge.guidance.description.policyDenied.set":
+    "Dieses Knowledge Pod Set blockiert für betroffene Mitglieder geerdete Antwortsynthese oder die Freigabe von Rohinhalten; Keiko meldet den Zustand „durch Richtlinie gesperrt“, statt Auszüge an ein Modell zu senden.",
+  "localKnowledge.guidance.description.sealedLocalPolicy.pod":
+    "Externe Embedding- oder Reranking-Aufrufe sind für diesen Knowledge Pod deaktiviert; das Retrieval kann lexikalischen oder lokalen Fallback nutzen.",
+  "localKnowledge.guidance.description.sealedLocalPolicy.set":
+    "Externe Embedding- oder Reranking-Aufrufe sind für betroffene Set-Mitglieder deaktiviert; das Retrieval kann lexikalischen oder lokalen Fallback nutzen.",
+  "localKnowledge.guidance.description.futureMember":
+    "Dieses Knowledge Pod Set enthält Platzhalter für künftige Remote-, föderierte oder ephemere Mitglieder; diese sind noch keine aktiven Retrieval-Quellen.",
+  "localKnowledge.guidance.description.membersUnavailable":
+    "Einige Set-Mitglieder fehlen, sind fehlgeschlagen oder nicht verfügbar; das Retrieval nutzt nur verfügbare Mitglieder.",
+  "localKnowledge.guidance.description.membersNotReady":
+    "Einige Set-Mitglieder werden indexiert, sind veraltet oder Entwürfe; aktualisiere oder indexiere sie, bevor du dich auf dieses Set verlässt.",
+  "localKnowledge.guidance.description.retrievalDegraded":
+    "Einige Set-Mitglieder haben keine Quellen, keine Vektoren oder eine eingeschränkte Indexierung; womöglich ist nur der lexikalische Fallback verfügbar.",
+  "localKnowledge.guidance.description.embeddingReadinessWarning":
+    "Bei einigen Set-Mitgliedern muss das Embedding geprüft werden; Keiko vergleicht keine rohen Vektor-Scores über Embedding-Räume hinweg.",
+  "localKnowledge.guidance.description.manualReady":
+    "Bereit für die Chat-Suche über Lokales Wissen. {counts}.",
+  "localKnowledge.guidance.description.manualDegraded":
+    "Der Handbuch-Abruf ist eingeschränkt; Antworten nutzen womöglich nur verfügbare Belege. {counts}.",
+  "localKnowledge.guidance.description.manualIndexing":
+    "Handbuch-Abruf (Status: {state}); noch nicht bereit, Belege beizusteuern.",
+  "localKnowledge.guidance.description.manualUnavailable":
+    "Handbuch-Abruf (Status: {state}); er darf nicht stillschweigend als leere Belegmenge gelten.",
+  "localKnowledge.guidance.manualCounts": "{docs} Dok. · {chunks} Chunks · {vectors} Vektoren",
+  "localKnowledge.guidance.manualState.ready": "bereit",
+  "localKnowledge.guidance.manualState.indexing": "wird indexiert",
+  "localKnowledge.guidance.manualState.stale": "veraltet",
+  "localKnowledge.guidance.manualState.degraded": "eingeschränkt",
+  "localKnowledge.guidance.manualState.unavailable": "nicht verfügbar",
+  "localKnowledge.guidance.manualState.error": "fehlgeschlagen",
+  "localKnowledge.guidance.manualState.draft": "Entwurf",
+  "localKnowledge.picker.sectionPods": "Knowledge Pods",
+  "localKnowledge.picker.sectionSets": "Knowledge Pod Sets",
+  "localKnowledge.picker.unavailablePod": "Knowledge Pod (nicht verfügbar)",
+  "localKnowledge.picker.unavailableSet": "Knowledge Pod Set (nicht verfügbar)",
+  "localKnowledge.scopePill.pendingPod": "Knowledge Pod",
+  "localKnowledge.scopePill.pendingSet": "Knowledge Pod Set",
+  "localKnowledge.scopePill.disconnect": "{label} vom Chat trennen",
+  "localKnowledge.scopePill.disconnectError": "Knowledge Pod konnte nicht getrennt werden.",
+  "localKnowledge.scopePill.removed": "Verbundener Knowledge Pod wurde entfernt.",
+  "localKnowledge.scopePill.updated.one": "Verbundene Knowledge Pods aktualisiert: 1 Quelle.",
+  "localKnowledge.scopePill.updated.other":
+    "Verbundene Knowledge Pods aktualisiert: {count} Quellen.",
+  "localKnowledge.picker.selectedWithState": "{name} ({state})",
+  "localKnowledge.node.unavailable": "Nicht verfügbar",
+  "localKnowledge.node.defaultLabel": "Knowledge Pod",
+  "localKnowledge.manualRefresh.title": "Letzte Aktualisierung",
+  "localKnowledge.manualRefresh.removalNote":
+    "Entfernte Seiten konnten in diesem Lauf nicht erkannt werden (der Crawl hat sein Seitenlimit erreicht).",
+  "localKnowledge.manualRefresh.outcome.unchanged": "Unverändert",
+  "localKnowledge.manualRefresh.outcome.updated": "Aktualisiert",
+  "localKnowledge.manualRefresh.outcome.partial": "Teilweise",
+  "localKnowledge.manualRefresh.outcome.failed": "Fehlgeschlagen",
+  "localKnowledge.manualRefresh.outcome.cancelled": "Abgebrochen",
+  "localKnowledge.manualRefresh.count.addedPages": "Hinzugefügt",
+  "localKnowledge.manualRefresh.count.changedPages": "Geändert",
+  "localKnowledge.manualRefresh.count.removedPages": "Entfernt",
+  "localKnowledge.manualRefresh.count.movedPages": "Verschoben",
+  "localKnowledge.manualRefresh.count.unchangedPages": "Unverändert",
+  "localKnowledge.manualRefresh.count.failedPages": "Fehlgeschlagen",
+  "localKnowledge.manualRefresh.count.deniedLinks": "Abgelehnte Links",
+  "localKnowledge.manualRefresh.reason.scopePreserved":
+    "Die Aktualisierung hat den ursprünglich freigegebenen Handbuch-Umfang samt Limits wiederverwendet.",
+  "localKnowledge.manualRefresh.reason.scopeLimitReached":
+    "Die Aktualisierung hat ein Crawl-Limit erreicht; einige Seiten wurden nicht besucht.",
+  "localKnowledge.manualRefresh.reason.removalDetectionSkipped":
+    "Der Crawl hat sein Seitenlimit erreicht, daher konnten entfernte Seiten in diesem Lauf nicht erkannt werden.",
+  "localKnowledge.manualRefresh.reason.pagesAdded": "Neue Seiten wurden entdeckt und indexiert.",
+  "localKnowledge.manualRefresh.reason.pagesChanged":
+    "Vorhandene Seiten haben sich geändert und wurden neu indexiert.",
+  "localKnowledge.manualRefresh.reason.pagesRemoved":
+    "Seiten, die nicht mehr erreichbar sind, wurden aus dem Pod entfernt.",
+  "localKnowledge.manualRefresh.reason.pagesMoved":
+    "Seiten wurden an einen neuen Ort verschoben; ihr Inhalt blieb unverändert.",
+  "localKnowledge.manualRefresh.reason.pagesFailed":
+    "Einige Seiten konnten nicht neu indexiert werden und sind möglicherweise vorübergehend nicht durchsuchbar; eine spätere erfolgreiche Aktualisierung versucht es erneut.",
+  "localKnowledge.manualRefresh.reason.linksDenied":
+    "Einige Links wurden übersprungen, weil sie außerhalb des freigegebenen Umfangs lagen.",
+  "localKnowledge.manualRefresh.reason.embeddingIncompatible":
+    "Das Embedding-Modell hat sich geändert; indexiere das Handbuch neu, um seine Vektoren zu aktualisieren.",
+  "localKnowledge.manualRefresh.reason.crawlEmpty":
+    "Der Aktualisierungs-Crawl hat keine indexierbaren Seiten gefunden.",
+  "localKnowledge.manualRefresh.reason.crawlCancelled":
+    "Die Aktualisierung wurde abgebrochen. Noch nicht erreichte Seiten sind nicht betroffen; eine Seite, die in diesem Moment bereits neu indexiert wurde, ist möglicherweise bis zu einer späteren erfolgreichen Aktualisierung vorübergehend nicht durchsuchbar.",
+  "localKnowledge.manualRefresh.reason.indexFailed":
+    "Die Indexierung ist bei der Aktualisierung fehlgeschlagen. Seiten, die zum Zeitpunkt des Fehlers neu indexiert wurden, sind möglicherweise vorübergehend nicht durchsuchbar, bis eine spätere erfolgreiche Aktualisierung sie repariert.",
   "localKnowledge.create.title": "Knowledge Pod erstellen",
   "localKnowledge.create.description":
     "Benenne diesen Knowledge Pod, verbinde eine Quelle und starte die Indexierung auf seiner Seite.",
@@ -1056,6 +1460,215 @@ export function unsupportedGuidanceText(code: string, t: I18nTranslate): string 
     ? UNSUPPORTED_GUIDANCE_MESSAGE_KEYS[code]
     : UNSUPPORTED_GUIDANCE_MESSAGE_KEYS["unsupported-format"];
   return t(key);
+}
+
+// A Knowledge Pod / Pod Set readiness state, named in the user's language. `undefined` is a summary
+// the server did not echo.
+const READINESS_LABEL_KEYS: Readonly<Record<KnowledgePodReadiness, LocalKnowledgeMessageKey>> = {
+  ready: "localKnowledge.readiness.ready",
+  indexing: "localKnowledge.readiness.indexing",
+  stale: "localKnowledge.readiness.stale",
+  degraded: "localKnowledge.readiness.degraded",
+  unavailable: "localKnowledge.readiness.unavailable",
+  error: "localKnowledge.readiness.error",
+  draft: "localKnowledge.readiness.draft",
+};
+
+export function readinessLabelText(
+  readiness: KnowledgePodReadiness | undefined,
+  t: I18nTranslate,
+): string {
+  return t(
+    readiness === undefined ? "localKnowledge.readiness.unknown" : READINESS_LABEL_KEYS[readiness],
+  );
+}
+
+// The short reason a Pod Set is not simply ready. Keyed by the contract's closed code list, so a
+// new reason cannot ship without both catalog halves.
+const SET_REASON_KEYS: Readonly<
+  Record<KnowledgePodSetReadinessReasonCode, LocalKnowledgeMessageKey>
+> = {
+  "member-draft": "localKnowledge.set.reason.memberDraft",
+  "member-indexing": "localKnowledge.set.reason.memberIndexing",
+  "member-stale": "localKnowledge.set.reason.memberStale",
+  "member-error": "localKnowledge.set.reason.memberError",
+  "member-unavailable": "localKnowledge.set.reason.memberUnavailable",
+  "member-degraded": "localKnowledge.set.reason.memberDegraded",
+  "missing-member": "localKnowledge.set.reason.missingMember",
+  "policy-denied": "localKnowledge.set.reason.policyDenied",
+  "embedding-unknown": "localKnowledge.set.reason.embeddingUnknown",
+  "embedding-incompatible": "localKnowledge.set.reason.embeddingIncompatible",
+  "embedding-unavailable": "localKnowledge.set.reason.embeddingUnavailable",
+  "embedding-opaque": "localKnowledge.set.reason.embeddingOpaque",
+  "no-sources": "localKnowledge.set.reason.noSources",
+  "no-vectors": "localKnowledge.set.reason.noVectors",
+  "future-remote-member": "localKnowledge.set.reason.futureRemoteMember",
+  "future-federated-member": "localKnowledge.set.reason.futureFederatedMember",
+  "future-ephemeral-member": "localKnowledge.set.reason.futureEphemeralMember",
+};
+
+export function setReadinessReasonText(
+  code: KnowledgePodSetReadinessReasonCode,
+  t: I18nTranslate,
+): string {
+  return t(SET_REASON_KEYS[code]);
+}
+
+// Knowledge Pod guidance is a closed code plus a scope (the producer never emits display text): this
+// table is the single place a code becomes a label and a description. Codes whose copy does not
+// differ between one pod and a set name the same key for both scopes.
+interface GuidanceCopyKeys {
+  readonly label: LocalKnowledgeMessageKey;
+  readonly description: Readonly<Record<KnowledgePodUiGuidance["scope"], LocalKnowledgeMessageKey>>;
+}
+
+function sameForBothScopes(
+  label: LocalKnowledgeMessageKey,
+  description: LocalKnowledgeMessageKey,
+): GuidanceCopyKeys {
+  return { label, description: { pod: description, "pod-set": description } };
+}
+
+const GUIDANCE_COPY_KEYS: Readonly<Record<KnowledgePodGuidanceCode, GuidanceCopyKeys>> = {
+  "embedding-mismatch": {
+    label: "localKnowledge.guidance.label.embeddingMismatch",
+    description: {
+      pod: "localKnowledge.guidance.description.embeddingMismatch.pod",
+      "pod-set": "localKnowledge.guidance.description.embeddingMismatch.set",
+    },
+  },
+  "embedding-unavailable": {
+    label: "localKnowledge.guidance.label.embeddingUnavailable",
+    description: {
+      pod: "localKnowledge.guidance.description.embeddingUnavailable.pod",
+      "pod-set": "localKnowledge.guidance.description.embeddingUnavailable.set",
+    },
+  },
+  "reindex-recommended": {
+    label: "localKnowledge.guidance.label.reindexRecommended",
+    description: {
+      pod: "localKnowledge.guidance.description.reindexRecommended.pod",
+      "pod-set": "localKnowledge.guidance.description.reindexRecommended.set",
+    },
+  },
+  "embedding-opaque": {
+    label: "localKnowledge.guidance.label.embeddingOpaque",
+    description: {
+      pod: "localKnowledge.guidance.description.embeddingOpaque.pod",
+      "pod-set": "localKnowledge.guidance.description.embeddingOpaque.set",
+    },
+  },
+  "policy-denied": {
+    label: "localKnowledge.guidance.label.policyDenied",
+    description: {
+      pod: "localKnowledge.guidance.description.policyDenied.pod",
+      "pod-set": "localKnowledge.guidance.description.policyDenied.set",
+    },
+  },
+  "sealed-local-policy": {
+    label: "localKnowledge.guidance.label.sealedLocalPolicy",
+    description: {
+      pod: "localKnowledge.guidance.description.sealedLocalPolicy.pod",
+      "pod-set": "localKnowledge.guidance.description.sealedLocalPolicy.set",
+    },
+  },
+  "manual-ready": sameForBothScopes(
+    "localKnowledge.guidance.label.manualReady",
+    "localKnowledge.guidance.description.manualReady",
+  ),
+  "manual-degraded": sameForBothScopes(
+    "localKnowledge.guidance.label.manualDegraded",
+    "localKnowledge.guidance.description.manualDegraded",
+  ),
+  "manual-indexing": sameForBothScopes(
+    "localKnowledge.guidance.label.manualIndexing",
+    "localKnowledge.guidance.description.manualIndexing",
+  ),
+  "manual-unavailable": sameForBothScopes(
+    "localKnowledge.guidance.label.manualUnavailable",
+    "localKnowledge.guidance.description.manualUnavailable",
+  ),
+  "future-member-placeholder": sameForBothScopes(
+    "localKnowledge.guidance.label.futureMember",
+    "localKnowledge.guidance.description.futureMember",
+  ),
+  "members-unavailable": sameForBothScopes(
+    "localKnowledge.guidance.label.membersUnavailable",
+    "localKnowledge.guidance.description.membersUnavailable",
+  ),
+  "members-not-ready": sameForBothScopes(
+    "localKnowledge.guidance.label.membersNotReady",
+    "localKnowledge.guidance.description.membersNotReady",
+  ),
+  "retrieval-degraded": sameForBothScopes(
+    "localKnowledge.guidance.label.retrievalDegraded",
+    "localKnowledge.guidance.description.retrievalDegraded",
+  ),
+  "embedding-readiness-warning": sameForBothScopes(
+    "localKnowledge.guidance.label.embeddingReadinessWarning",
+    "localKnowledge.guidance.description.embeddingReadinessWarning",
+  ),
+};
+
+const MANUAL_STATE_KEYS: Readonly<Record<KnowledgePodReadiness, LocalKnowledgeMessageKey>> = {
+  ready: "localKnowledge.guidance.manualState.ready",
+  indexing: "localKnowledge.guidance.manualState.indexing",
+  stale: "localKnowledge.guidance.manualState.stale",
+  degraded: "localKnowledge.guidance.manualState.degraded",
+  unavailable: "localKnowledge.guidance.manualState.unavailable",
+  error: "localKnowledge.guidance.manualState.error",
+  draft: "localKnowledge.guidance.manualState.draft",
+};
+
+// Only the `manual-*` codes carry facts their copy interpolates (the counts and the state).
+function guidanceValues(guidance: KnowledgePodUiGuidance, t: I18nTranslate): MessageValues {
+  const manual = guidance.manual;
+  if (manual === undefined) return {};
+  return {
+    counts: t("localKnowledge.guidance.manualCounts", {
+      docs: manual.documentCount,
+      chunks: manual.chunkCount,
+      vectors: manual.vectorCount,
+    }),
+    state: t(MANUAL_STATE_KEYS[manual.readiness]),
+  };
+}
+
+/** The label and description of one Knowledge Pod guidance, in the user's language. */
+export function knowledgePodGuidanceText(
+  guidance: KnowledgePodUiGuidance,
+  t: I18nTranslate,
+): { readonly label: string; readonly description: string } {
+  const keys = GUIDANCE_COPY_KEYS[guidance.code];
+  return {
+    label: t(keys.label),
+    description: t(keys.description[guidance.scope], guidanceValues(guidance, t)),
+  };
+}
+
+// The operator guidance of one HTML manual refresh reason. The contract owns the closed code list and
+// an English sentence for each; this catalog owns the wording the operator reads, in either language
+// (a test pins the English text to the contract's, so the two cannot drift apart).
+const MANUAL_REFRESH_REASON_KEYS: Readonly<
+  Record<ManualRefreshReasonCode, LocalKnowledgeMessageKey>
+> = {
+  "scope-preserved": "localKnowledge.manualRefresh.reason.scopePreserved",
+  "scope-limit-reached": "localKnowledge.manualRefresh.reason.scopeLimitReached",
+  "removal-detection-skipped": "localKnowledge.manualRefresh.reason.removalDetectionSkipped",
+  "pages-added": "localKnowledge.manualRefresh.reason.pagesAdded",
+  "pages-changed": "localKnowledge.manualRefresh.reason.pagesChanged",
+  "pages-removed": "localKnowledge.manualRefresh.reason.pagesRemoved",
+  "pages-moved": "localKnowledge.manualRefresh.reason.pagesMoved",
+  "pages-failed": "localKnowledge.manualRefresh.reason.pagesFailed",
+  "links-denied": "localKnowledge.manualRefresh.reason.linksDenied",
+  "embedding-incompatible": "localKnowledge.manualRefresh.reason.embeddingIncompatible",
+  "crawl-empty": "localKnowledge.manualRefresh.reason.crawlEmpty",
+  "crawl-cancelled": "localKnowledge.manualRefresh.reason.crawlCancelled",
+  "index-failed": "localKnowledge.manualRefresh.reason.indexFailed",
+};
+
+export function manualRefreshReasonText(code: ManualRefreshReasonCode, t: I18nTranslate): string {
+  return t(MANUAL_REFRESH_REASON_KEYS[code]);
 }
 
 export function useLocalKnowledgeTranslate(): I18nTranslate {

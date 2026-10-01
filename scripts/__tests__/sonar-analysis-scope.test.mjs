@@ -221,6 +221,13 @@ describe("Sonar analysis scope", () => {
 
   it("keeps local Keiko task workspaces outside the local Sonar TypeScript graph", () => {
     expect(localSonarGate).toContain("**/.keiko/**");
+    // bash 3.2 (macOS) reads an empty array as unbound under `set -u`: the whole-project scan, which
+    // passes no scope arguments, must expand the array through the guarded form (PR #3678).
+    expect(localSonarGate).toContain('${scanner_args[@]+"${scanner_args[@]}"}');
+    expect(localSonarGate).not.toMatch(/^\s*"\$\{scanner_args\[@\]\}"/mu);
+    // The bridge heap keeps its 8 GiB-VM default and is raised only explicitly (PR #3678).
+    expect(localSonarGate).toContain('node_maxspace="${KEIKO_LOCAL_SONAR_NODE_MAXSPACE:-4608}"');
+    expect(localSonarGate).toContain('-Dsonar.javascript.node.maxspace="${node_maxspace}"');
     expect(localSonarGate).toContain("rev-parse --path-format=absolute --git-common-dir");
     expect(localSonarGate).not.toContain("rev-parse --absolute-git-dir");
     expect(validProperties).toContain(

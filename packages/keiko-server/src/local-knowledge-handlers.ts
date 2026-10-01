@@ -1611,22 +1611,39 @@ export function selectEmbeddingModelId(
   return configuredEmbeddingModelIds(config)[0];
 }
 
+// ONE deterministic order for every consumer that binds a single embedding model — pod creation,
+// full re-embed, repository semantic search and memory. It is the preference
+// `selectConfiguredModel({ kind: "embedding" })` already applies (cheapest cost class first, the
+// configured order breaking ties), so those surfaces can no longer bind different models on a
+// gateway that lists several embedding engines. Array.prototype.sort is stable, and only providers
+// whose resolved capability IS an embedding model take part: a chat model is never a fallback.
+function preferredEmbeddingOrder<T extends { readonly modelId: string }>(
+  config: EmbeddingSelectionConfig,
+  providers: readonly T[],
+): readonly T[] {
+  return providers
+    .flatMap((provider) => {
+      const capability = configuredCapabilityForModel(config, provider.modelId);
+      return capability?.kind === "embedding"
+        ? [{ provider, rank: MODEL_COST_RANK[capability.costClass] }]
+        : [];
+    })
+    .sort((left, right) => left.rank - right.rank)
+    .map((entry) => entry.provider);
+}
+
 export function configuredEmbeddingModelIds(
   config: EmbeddingSelectionConfig | null | undefined,
 ): readonly string[] {
   if (config === undefined || config === null || config.providers.length === 0) return [];
-  return config.providers
-    .filter((provider) => isConfiguredEmbeddingModel(config, provider.modelId))
-    .map((provider) => provider.modelId);
+  return preferredEmbeddingOrder(config, config.providers).map((provider) => provider.modelId);
 }
 
 export function configuredEmbeddingProviders(
   config: GatewayConfig | undefined,
 ): readonly ModelProviderConfig[] {
   if (config === undefined || config.providers.length === 0) return [];
-  return config.providers.filter((provider) =>
-    isConfiguredEmbeddingModel(config, provider.modelId),
-  );
+  return preferredEmbeddingOrder(config, config.providers);
 }
 
 function createCapsuleStorageReference(capsuleId: string): string {

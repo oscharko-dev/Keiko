@@ -24,6 +24,7 @@
 
 import type { CitationReference, RetrievalReference } from "@oscharko-dev/keiko-contracts";
 import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 
 import type { LocalKnowledgeGroundedContextPack } from "../retrieval/context-pack-assembler.js";
 import type {
@@ -47,6 +48,11 @@ export interface ConversationGroundedQuery {
   // Explicit BFF admission: governed personal context is available for generation even when
   // source retrieval returns no references. It never participates in retrieval or reranking.
   readonly answerOnlyContextAvailable?: boolean | undefined;
+  // Whether the answer may carry Keiko's own, labelled assessment beside the source-backed part
+  // (keiko-contracts `grounded-assessment`, ADR-0144). Absent means disabled: sources only. When
+  // allowed, a question with no retrieved evidence still reaches the model, which may then answer
+  // with its assessment alone.
+  readonly ownAssessment?: OwnAssessmentPolicy | undefined;
   readonly topK?: number;
   readonly minScore?: number;
   readonly strategy?: RetrievalQuery["strategy"];
@@ -68,18 +74,35 @@ export interface ConversationGroundedAnswer {
   readonly reranker?: GroundedRerankerDiagnostics | undefined;
   readonly retrievalDiagnostics?: RetrievalDiagnostics | undefined;
   readonly embeddingDegraded?: true | undefined;
+  // How many attached citations had weak lexical overlap with their excerpt (see
+  // `ConversationCitationReference.lexicalSupport`). Absent when zero; a count for diagnostics.
+  readonly weakCitationCount?: number | undefined;
+  // How many of `references` the answer prompt carried. A generator that fits its prompt to the
+  // model's window may send fewer than were retrieved; absent means all of them were sent.
+  readonly promptReferenceCount?: number | undefined;
+  // Keiko's own assessment, split off the model's answer; `answer` holds only the source-backed
+  // part, so citations, repair and refusal detection never read the assessment.
+  readonly ownAssessment?: string | undefined;
+  // The policy disabled the assessment, yet the model wrote an assessment block: it was dropped,
+  // so no unbacked words reach the answer.
+  readonly ownAssessmentNeutralized?: true | undefined;
 }
 
 // A `[n]` marker the answer text uses, paired with the citation it points at. `marker`
 // is the literal substring (e.g. "[1]") so the UI can highlight it without re-scanning;
 // `index` is the 1-based position the marker referred to (matches the order of the refs
 // in `ConversationGroundedAnswer.references`). Out-of-bounds markers are dropped by
-// `attachCitationsToAnswer` so this array is always well-formed.
+// `attachCitationsToAnswer` so this array is always well-formed. A grouped marker such as
+// `[1, 7, 8]` contributes one entry per index, each carrying its own single-index `marker`.
 export interface ConversationCitationReference {
   readonly marker: string;
   readonly index: number;
   readonly citation: CitationReference;
   readonly reference: RetrievalReference;
+  // Soft signal, never a filter: the claim sentence around this marker shares little vocabulary
+  // with the cited excerpt (token equality, no stemming). The citation stays attached and linked;
+  // the flag only feeds body-free diagnostics. Absent means "no weak-overlap observation".
+  readonly lexicalSupport?: "weak";
 }
 
 // ─── AnswerGenerator port ────────────────────────────────────────────────────
@@ -97,6 +120,13 @@ export interface AnswerGeneratorInput {
 // out-of-bounds markers. Implementations MUST NOT mutate any input.
 export interface AnswerGenerator {
   readonly generate: (input: AnswerGeneratorInput) => Promise<string>;
+  /**
+   * The references the last `generate` call actually put into the prompt, in their prompt order.
+   * A generator that fits its prompt to the model's window may send fewer than it was given; a
+   * marker beyond them names evidence the model never saw and must not attach. Absent means every
+   * given reference was sent.
+   */
+  readonly promptReferences?: () => readonly RetrievalReference[];
 }
 
 // Optional pre-answer reranker port. The BFF owns provider configuration; this package only sees

@@ -17,7 +17,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import type { VoiceProfile } from "@/lib/types";
+import type { ClientDiagnosticAnswerSpeech } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { ApiError, synthesizeAssistantSpeech, type VoiceSpeechResult } from "@/lib/api";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { decodeBase64ArrayBuffer } from "@/lib/bytes";
 import type { VoiceTurnManagerEngine } from "./voice-turn-manager";
 import { useVoicePlayback, type VoicePlaybackBinding } from "./useVoicePlayback";
@@ -68,7 +71,11 @@ export interface UseAssistantSpeechOptions {
   readonly turnManager?: VoiceTurnManagerEngine | undefined;
   // Test seams. Production uses the BFF synthesis client, `new Audio()`, and the URL object-store.
   readonly synthesize?:
-    ((text: string, signal: AbortSignal) => Promise<VoiceSpeechResult>) | undefined;
+    | ((text: string, signal: AbortSignal, correlationId?: string) => Promise<VoiceSpeechResult>)
+    | undefined;
+  // How `text` was prepared from the answer (PR #3678 review): reported body-free under the same
+  // correlation the synthesis request carries, once per spoken turn.
+  readonly preparation?: ClientDiagnosticAnswerSpeech | undefined;
   readonly createAudio?: (() => AssistantSpeechAudioElement) | undefined;
   readonly createObjectUrl?: ((blob: Blob) => string) | undefined;
   readonly revokeObjectUrl?: ((url: string) => void) | undefined;
@@ -89,9 +96,26 @@ export interface AssistantSpeechBinding extends VoicePlaybackBinding {
 // explicitly configured persona mapping and never a provider-specific implicit default.
 function makeDefaultSynthesize(
   persona: VoicePersona | undefined,
-): (text: string, signal: AbortSignal) => Promise<VoiceSpeechResult> {
-  return (text, signal) =>
-    synthesizeAssistantSpeech(persona === undefined ? { text } : { text, persona }, signal);
+): (text: string, signal: AbortSignal, correlationId?: string) => Promise<VoiceSpeechResult> {
+  return (text, signal, correlationId) =>
+    synthesizeAssistantSpeech(
+      persona === undefined ? { text } : { text, persona },
+      signal,
+      correlationId,
+    );
+}
+
+// One spoken turn's correlation: its preparation evidence is reported under it, and its synthesis
+// request carries it, so the two join on one timeline.
+function startSpokenTurn(preparation: ClientDiagnosticAnswerSpeech | undefined): string {
+  const correlationId = newClientCorrelationId();
+  if (preparation !== undefined) {
+    reportClientDiagnostic("Keiko chat answer prepared for speech.", {
+      answerSpeech: preparation,
+      correlationId,
+    });
+  }
+  return correlationId;
 }
 
 function defaultCreateAudio(): AssistantSpeechAudioElement {
@@ -202,6 +226,8 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): Assistan
   // newly selected voice; an explicit test seam (options.synthesize) always wins.
   const synthesizeRef = useRef(options.synthesize ?? makeDefaultSynthesize(persona));
   synthesizeRef.current = options.synthesize ?? makeDefaultSynthesize(persona);
+  const preparationRef = useRef(options.preparation);
+  preparationRef.current = options.preparation;
   const createAudioRef = useRef(options.createAudio ?? defaultCreateAudio);
   createAudioRef.current = options.createAudio ?? defaultCreateAudio;
   const createUrlRef = useRef(options.createObjectUrl ?? defaultCreateObjectUrl);
@@ -298,6 +324,7 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): Assistan
     const cancelledRef: CurrentRef<boolean> = { current: false };
     const controller = new AbortController();
     abortRef.current = controller;
+    const correlationId = startSpokenTurn(preparationRef.current);
     pb.prepare();
     const settle = (): void => notifySettled(messageId);
 
@@ -309,7 +336,7 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): Assistan
       const audio = createAudioRef.current();
       audio.muted = false;
       audioRef.current = audio;
-      Promise.resolve(synthesizeRef.current(text, controller.signal))
+      Promise.resolve(synthesizeRef.current(text, controller.signal, correlationId))
         .then((result) => {
           if (cancelledRef.current || controller.signal.aborted) {
             return undefined;
@@ -364,6 +391,7 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): Assistan
               }
             },
           },
+          correlationId,
         )
         .then((engaged) => {
           if (!engaged && !cancelledRef.current && !controller.signal.aborted) {

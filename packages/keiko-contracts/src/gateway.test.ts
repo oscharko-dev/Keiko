@@ -39,6 +39,7 @@ import {
   DECLARED_MODEL_MODES,
   boundedUnsupportedReason,
   isChatCompatibleDeclaredMode,
+  isLikelyRerankModelId,
   modelKindForDeclaredMode,
 } from "./gateway.js";
 import type {
@@ -613,6 +614,74 @@ describe("conversationDefaultRank", () => {
     expect(conversationDefaultRank(cap({ id: "qwen-chat", chatModeDeclared: false }))).toBe(1);
     expect(conversationDefaultRank(cap({ id: "dotsocr", chatModeDeclared: false }))).toBe(2);
   });
+
+  // Field twin (LiteLLM proxy with ~15 deployed models): the gateway hosts guard, moderation,
+  // embedding, image and speech engines next to its chat models. Each token below is pinned by a
+  // realistic id, so a marker cannot be added (or dropped) without a test that names the family.
+  it.each([
+    ["llama-guard-3-8b", "guard"],
+    ["omni-moderation-latest", "moderation"],
+    ["nomic-embed-text-v1.5", "embed"],
+    ["text-embedding-3-large", "embedding"],
+    ["colpali-v1.3", "colpali"],
+    ["stable-diffusion-xl-base", "diffusion"],
+    ["sdxl-turbo", "sdxl"],
+    ["flux-1-schnell", "flux"],
+    ["clip-vit-large-patch14", "clip"],
+    ["gpt-4o-transcribe", "transcribe"],
+    ["azure-transcription-v2", "transcription"],
+    ["parakeet-stt-en", "stt"],
+    ["t5-text-encoder", "encoder"],
+    ["rerank-multilingual-v3.0", "rerank"],
+    ["jina-reranker-v2-base", "reranker"],
+  ])("ranks the mode-less non-conversational family %s last (%s)", (id) => {
+    expect(conversationDefaultRank(cap({ id }))).toBe(2);
+    // A declared chat mode is still the gateway's affirmative statement and wins over the id.
+    expect(conversationDefaultRank(cap({ id, chatModeDeclared: true }))).toBe(0);
+  });
+
+  it("keeps lookalike chat ids in the middle tier — the markers match whole tokens only", () => {
+    for (const id of [
+      "guardian-chat",
+      "clipboard-assistant",
+      "fluxion-chat",
+      "embedded-agent-chat",
+      "moderator-bot",
+      "llama-3-70b-instruct",
+      "qwen3-235b-a22b",
+    ]) {
+      expect(conversationDefaultRank(cap({ id }))).toBe(1);
+    }
+  });
+});
+
+describe("isLikelyRerankModelId", () => {
+  it("recognises rerank engines by token, whatever family prefix precedes them", () => {
+    for (const id of [
+      "bge-reranker-v2-m3",
+      "jina-reranker-v2-base-multilingual",
+      "rerank-english-v3.0",
+      "qwen3-reranker-8b",
+      "Cohere/Rerank_v3",
+      "house-reranking-service",
+    ]) {
+      expect(isLikelyRerankModelId(id)).toBe(true);
+    }
+  });
+
+  it("never matches a chat, embedding or OCR id that merely contains the letters", () => {
+    for (const id of [
+      "bge-m3",
+      "jina-embeddings-v3",
+      "multilingual-e5-large",
+      "dots.ocr",
+      "gpt-4o",
+      "prererank-chat",
+      "",
+    ]) {
+      expect(isLikelyRerankModelId(id)).toBe(false);
+    }
+  });
 });
 
 describe("electConversationDefault", () => {
@@ -704,15 +773,20 @@ describe("modelKindForDeclaredMode", () => {
   });
 
   it("refuses to give a role to modes discovery cannot configure", () => {
-    for (const mode of [
-      "rerank",
-      "image_generation",
-      "audio_transcription",
-      "audio_speech",
-      "moderation",
-    ]) {
+    for (const mode of ["image_generation", "audio_transcription", "audio_speech", "moderation"]) {
       expect(modelKindForDeclaredMode(mode)).toBe("unsupported");
     }
+  });
+
+  // The rerank declaration moved from "unsupported" to a role of its own: discovery wires it as the
+  // retrieval reranker (after a live probe) instead of only reporting it. The invariant of the
+  // original field incident is preserved and made explicit — a declared reranker is never chat
+  // and never an embedding model, whatever its id says.
+  it("gives a declared reranker its own role, never chat or embedding", () => {
+    expect(modelKindForDeclaredMode("rerank")).toBe("rerank");
+    expect(modelKindForDeclaredMode(" RERANK ")).toBe("rerank");
+    expect(isChatCompatibleDeclaredMode("rerank")).toBe(false);
+    expect(boundedUnsupportedReason("rerank")).toBe("rerank");
   });
 
   it("treats an UNRECOGNISED declaration as unsupported, never as chat", () => {

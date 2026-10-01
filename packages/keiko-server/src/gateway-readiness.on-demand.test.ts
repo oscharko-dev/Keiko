@@ -56,7 +56,11 @@ function holderWith(
 }
 
 describe("ensureOnDemandConversationReadiness guards", () => {
-  it("does not start probes from conversation requests with unknown or expired observations", async () => {
+  // Interactive Chat adds no readiness request for a model it cannot date: the observation here
+  // carries a malformed timestamp. A WELL-FORMED failed observation older than the cooldown earns
+  // one re-probe from the first request that needs the model — pinned, with its bounds, in
+  // gateway-readiness.initialization.test.ts (ADR-0171 D2).
+  it("does not start probes from conversation requests with unknown or malformed observations", async () => {
     const { deps, fetchCalls } = probeableDeps("invalid");
     await awaitInitializedConversationReadiness(deps, "chat-model");
     await awaitAnyInitializedConversationReadyChatModel(deps, "chat-model");

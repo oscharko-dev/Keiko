@@ -311,6 +311,23 @@ describe("isLikelyEmbeddingModelId — negative cases", () => {
   it("does not match empty string", () => {
     expect(isLikelyEmbeddingModelId("")).toBe(false);
   });
+
+  // Field incident (LiteLLM customer, 2026-08): "bge-reranker-v2-m3" carries the "bge" embedding
+  // family prefix and was bound to every Knowledge Pod as its embedding model. A rerank engine is
+  // never an embedding model, whichever family it derives from.
+  it("never claims a rerank engine on its embedding-family prefix", () => {
+    for (const id of [
+      "bge-reranker-v2-m3",
+      "jina-reranker-v2-base-multilingual",
+      "gte-multilingual-reranker-base",
+      "mxbai-rerank-large-v2",
+    ]) {
+      expect(isLikelyEmbeddingModelId(id), id).toBe(false);
+    }
+    // The sibling embedding models of the same families stay embeddings.
+    expect(isLikelyEmbeddingModelId("bge-m3")).toBe(true);
+    expect(isLikelyEmbeddingModelId("jina-embeddings-v3")).toBe(true);
+  });
 });
 
 // Issue #144 / Epic #142: default embedding capability factory — field shape and eligibility.

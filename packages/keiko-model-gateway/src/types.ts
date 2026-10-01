@@ -13,6 +13,7 @@ import type {
   VoicePersona,
 } from "@oscharko-dev/keiko-contracts";
 import type { GroundingLimits } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { OwnAssessmentPolicy } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 
 export type {
   ModelKind,
@@ -189,6 +190,15 @@ export interface GatewayBrandingConfig {
   readonly logoUrl?: string | undefined;
 }
 
+/**
+ * Server-owned policy for grounded answers (PR #3678, ADR-0144). `ownAssessment` decides whether a
+ * grounded answer may add Keiko's own, labelled assessment beside the source-backed part; absent
+ * means the default, `allowed`. `disabled` keeps answers to the sources only.
+ */
+export interface GroundedAnswersConfig {
+  readonly ownAssessment?: OwnAssessmentPolicy | undefined;
+}
+
 export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
@@ -198,6 +208,7 @@ export interface GatewayConfig {
   readonly egress?: OutboundHttpEgressConfig | undefined;
   readonly figma?: FigmaConnectorConfig | undefined;
   readonly branding?: GatewayBrandingConfig | undefined;
+  readonly groundedAnswers?: GroundedAnswersConfig | undefined;
 }
 
 // ─── Provider adapter interface (runtime port — STAYS local) ──────────────────

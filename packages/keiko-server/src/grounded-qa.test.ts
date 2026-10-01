@@ -41,6 +41,7 @@ import {
 
 import {
   buildGroundedGatewayMessages,
+  fittedGroundedGatewayPrompt,
   groundedPromptInputTokensForCapability,
   handleGroundedAsk,
   mappedGatewayError,
@@ -53,6 +54,8 @@ import {
   type GroundedRunner,
 } from "./grounded-qa.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { sentPromptContext } from "./grounded-prompt-context.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -916,6 +919,51 @@ describe("buildGroundedGatewayMessages", () => {
     expect(messages[1]?.content).toContain("scope-incomplete");
     expect(messages[1]?.content).toContain("Incomplete repository coverage");
     expect(messages[1]?.content).toContain("reasons=file-cap");
+  });
+});
+
+// PR #3678 review: the context meter's share of a folder answer comes from the prompt as it was
+// SENT — fitted to the model's input budget — never from the retrieval pack before fitting.
+describe("folder prompt share", () => {
+  function alphaPack(): ConnectedContextPack {
+    const base = packWithCitations();
+    const alpha = "alpha ".repeat(2_000);
+    const first = requirePackExcerpt(base, 0);
+    const excerpts = [0.9, 0.8, 0.7].map((score, index) => ({
+      ...first.excerpt,
+      atom: { ...first.excerpt.atom, stableId: `atom-${String(index)}`, score },
+      content: alpha,
+      contentBytes: alpha.length,
+    }));
+    return {
+      ...base,
+      budget: { ...base.budget, modelInputTokensMax: 2_000 },
+      files: [{ ...first.file, excerpts }],
+    };
+  }
+
+  it("counts only the excerpts the fitted prompt carried", () => {
+    const pack = alphaPack();
+    const sent = fittedGroundedGatewayPrompt("What is alpha?", pack, buildRedactor({}, undefined));
+    const context = sentPromptContext(sent, 0, undefined);
+    expect(sent.availableReferenceCount).toBe(3);
+    expect(sent.sentReferenceCount).toBeLessThan(3);
+    expect(context.sourceTokens).toBeLessThanOrEqual(2_000);
+    expect(context.promptTokens).toBe(countGatewayPromptTokens({ messages: sent.messages }));
+  });
+
+  it("estimates the whole request, question included, when the provider reports no usage", () => {
+    const question = "Explain TLS in depth. ".repeat(400);
+    const base = packWithCitations();
+    const pack: ConnectedContextPack = {
+      ...base,
+      budget: { ...base.budget, modelInputTokensMax: 100_000 },
+    };
+    const sent = fittedGroundedGatewayPrompt(question, pack, buildRedactor({}, undefined));
+    const context = sentPromptContext(sent, 0, undefined);
+    expect(context.promptTokensMeasured).toBe(false);
+    expect(context.promptTokens).toBe(countGatewayPromptTokens({ messages: sent.messages }));
+    expect(context.promptTokens).toBeGreaterThan(context.sourceTokens + context.instructionTokens);
   });
 });
 
@@ -2405,6 +2453,11 @@ describe("handleGroundedAsk", () => {
     expect(answer.content).toBe("Grounded answer [src/foo.ts:1-3]");
     expect(answer.contextPack.usage.modelInputTokens).toBe(41);
     expect(answer.contextPack.usage.modelOutputTokens).toBe(7);
+    // PR #3678 review: a folder answer reports the prompt share of its excerpts to the meter.
+    const promptContext = (result.body as GroundedAnswer).promptContext;
+    expect(promptContext).toMatchObject({ promptTokens: 41, promptTokensMeasured: true });
+    expect(promptContext?.sourceTokens).toBeGreaterThan(0);
+    expect(promptContext?.sentReferenceCount).toBeGreaterThan(0);
     const assistant = store
       .listMessages(chatId)
       .find((message) => message.id === answer.assistantMessageId);
@@ -2945,7 +2998,7 @@ describe("handleGroundedAsk", () => {
       );
       expect(answerOnlyContextAvailable).toBe(true);
       expect(answer.uncertainty).toContainEqual({
-        kind: "unsupported-citation",
+        kind: "uncited-answer",
         claim:
           "The answer received governed memory context outside retrieved evidence. Treat claims " +
           "derived from that memory as uncited and unverified.",

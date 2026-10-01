@@ -1,4 +1,9 @@
 import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { hasGroundingScope } from "./chat-grounding.js";
+import {
+  withAdoptedContextWindowRetry,
+  type ContextWindowAttempt,
+} from "./gateway-context-window.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 // Desktop chat BFF routes for the Keiko canvas UI. These routes intentionally keep the model call
 // behind the existing ModelPort/Gateway boundary: the browser sends only chat content and a registry
@@ -2118,15 +2123,6 @@ function latestRegenerableTurn(
   return { assistant, user: previousUser, beforeAssistant: messages.slice(0, targetIndex) };
 }
 
-function hasGroundingScope(chat: Chat): boolean {
-  return (
-    chat.connectedScope !== undefined ||
-    (chat.connectedScopes?.length ?? 0) > 0 ||
-    chat.localKnowledgeScope !== undefined ||
-    (chat.localKnowledgeScopes?.length ?? 0) > 0
-  );
-}
-
 function groundedRegenerateResult(): RouteResult {
   return {
     status: 409,
@@ -2374,6 +2370,14 @@ function buildBufferedGatewayAssembly(
   return assemblyWithConversationImages(deps, request, modelId, baseAssembly);
 }
 
+// The per-attempt inputs of one buffered assembly: the turn's abort signal and correlation, and the
+// context-window attempt that decides whether a failure is retried with the adopted window.
+interface BufferedAssemblyAttempt {
+  readonly signal: AbortSignal;
+  readonly correlationId: string | undefined;
+  readonly attempt: ContextWindowAttempt;
+}
+
 async function prepareBufferedGatewayAssembly(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
@@ -2383,11 +2387,11 @@ async function prepareBufferedGatewayAssembly(
     readonly executionAdmission: DesktopChatExecutionAdmission;
   },
   gatewayTurn: GatewayTurnSnapshot,
-  signal: AbortSignal,
-  correlationId: string | undefined,
+  run: BufferedAssemblyAttempt,
 ): Promise<GatewayPromptAssembly> {
   const { request, modelId } = prepared;
   const { admitted, executionAdmission } = admission;
+  const { signal, correlationId, attempt } = run;
   try {
     const executionRequest = await prepareDesktopChatPrompt(
       deps,
@@ -2406,7 +2410,11 @@ async function prepareBufferedGatewayAssembly(
       correlationId,
     );
   } catch (error) {
-    settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
+    // A summary call that taught Keiko the model's real window is retried with the whole turn:
+    // the admitted turn stays open for it.
+    if (!attempt.retryFollows(error)) {
+      settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
+    }
     throw error;
   }
 }
@@ -2430,6 +2438,43 @@ function callPreparedAssembly(
   );
 }
 
+// One assembled attempt: plans the prompt from the CURRENT context profile, re-checks the provider
+// boundary and calls the model. Re-run as a whole when the provider taught Keiko its real window.
+async function assembleAndCallBuffered(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  memory: ConversationMemoryResultWire,
+  admission: {
+    readonly admitted: AdmittedTurnHandle;
+    readonly executionAdmission: DesktopChatExecutionAdmission;
+  },
+  snapshot: GatewayTurnSnapshot,
+  run: BufferedAssemblyAttempt,
+): Promise<{ assembly: GatewayPromptAssembly; response: NormalizedResponse } | RouteResult> {
+  const { modelId } = prepared;
+  const { signal: abortSignal, correlationId } = run;
+  const assembly = await prepareBufferedGatewayAssembly(
+    deps,
+    prepared,
+    memory,
+    admission,
+    snapshot,
+    run,
+  );
+  const model = bufferedModelAtProviderBoundary(
+    deps,
+    modelId,
+    admission.executionAdmission,
+    correlationId,
+  );
+  if (isRouteResult(model)) {
+    settleRejectedDesktopChatTurn(deps, prepared, admission.admitted);
+    return model;
+  }
+  const response = await callPreparedAssembly(model, modelId, assembly, abortSignal, correlationId);
+  return { assembly, response };
+}
+
 async function executeBufferedModelTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
@@ -2441,26 +2486,23 @@ async function executeBufferedModelTurn(
   const { modelId } = prepared;
   const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
   if (isRouteResult(outcome)) return outcome;
-  const { admitted, executionAdmission } = outcome;
+  const { admitted } = outcome;
   const { userMessage } = admitted;
   const snapshot = captureAdmittedSnapshot(deps, prepared, admitted, abortSignal, correlationId);
   const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
   if (isRouteResult(memory)) return memory;
-  const assembly = await prepareBufferedGatewayAssembly(
+  const called = await withAdoptedContextWindowRetry(
     deps,
-    prepared,
-    memory,
-    outcome,
-    snapshot,
-    abortSignal,
-    correlationId,
+    { modelId, surface: "chat-buffered", correlationId },
+    (attempt) =>
+      assembleAndCallBuffered(deps, prepared, memory, outcome, snapshot, {
+        signal: abortSignal,
+        correlationId,
+        attempt,
+      }),
   );
-  const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission, correlationId);
-  if (isRouteResult(model)) {
-    settleRejectedDesktopChatTurn(deps, prepared, admitted);
-    return model;
-  }
-  const response = await callPreparedAssembly(model, modelId, assembly, abortSignal, correlationId);
+  if (isRouteResult(called)) return called;
+  const { assembly, response } = called;
   const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, abortSignal);
   if (cancelledAfterCall !== undefined) return cancelledAfterCall;
   return finalizeAndRecordBufferedTurn(
@@ -3982,21 +4024,27 @@ function captureGatewayGeneration(deps: UiHandlerDeps): DesktopChatExecutionAdmi
   return { gatewayConfigGeneration: deps.gatewayConfig?.generation() };
 }
 
+function resolveRegenerateMemory(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatRegenerate,
+): Promise<ConversationMemoryResultWire> {
+  const { memoryRequest, memoryContext } = prepared;
+  return memoryContext === undefined
+    ? Promise.resolve(emptyMemoryResult(false))
+    : buildMemoryResult(memoryRequest, deps, memoryContext);
+}
+
 async function buildRegenerateContext(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
+  memory: ConversationMemoryResultWire,
   correlationId: string | undefined,
   signal: AbortSignal,
 ): Promise<{
-  readonly memory: ConversationMemoryResultWire;
   readonly messages: readonly GatewayConversationMessage[];
   readonly maxOutputTokens?: number;
 }> {
-  const { modelId, turn, memoryRequest, memoryContext } = prepared;
-  const memory =
-    memoryContext === undefined
-      ? emptyMemoryResult(false)
-      : await buildMemoryResult(memoryRequest, deps, memoryContext);
+  const { modelId, turn, memoryRequest } = prepared;
   const executionRequest = await prepareDesktopChatPrompt(
     deps,
     memoryRequest,
@@ -4014,7 +4062,7 @@ async function buildRegenerateContext(
     turn.beforeAssistant,
     correlationId,
   );
-  return { memory, messages: assembly.messages, ...gatewayAssemblyOutputAllocation(assembly) };
+  return { messages: assembly.messages, ...gatewayAssemblyOutputAllocation(assembly) };
 }
 
 function validateRegenerateCommit(
@@ -4069,39 +4117,59 @@ function commitRegeneratedChatTurn(
   };
 }
 
+// One regeneration attempt: plans the prompt from the CURRENT context profile and calls the model.
+// Re-run as a whole when the provider's overflow answer taught Keiko the deployment's real window.
+async function assembleAndCallRegeneration(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatRegenerate,
+  memory: ConversationMemoryResultWire,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<NormalizedResponse | RouteResult> {
+  const { modelId, executionAdmission } = prepared;
+  const { messages, maxOutputTokens } = await buildRegenerateContext(
+    deps,
+    prepared,
+    memory,
+    correlationId,
+    signal,
+  );
+  if (requestSignalAborted(signal)) return requestCancelledResult();
+  const model = bufferedModelAtProviderBoundary(
+    deps,
+    modelId,
+    executionAdmission,
+    correlationId,
+    "chat.regeneration.rejected",
+  );
+  if (isRouteResult(model)) return model;
+  return model.call(
+    {
+      modelId,
+      messages,
+      ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+      stream: false,
+      logContext: { correlationId },
+    },
+    signal,
+  );
+}
+
 async function persistRegeneratedChatTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
   signal: AbortSignal,
   correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const { modelId, executionAdmission } = prepared;
+  const { modelId } = prepared;
   try {
-    const { memory, messages, maxOutputTokens } = await buildRegenerateContext(
+    const memory = await resolveRegenerateMemory(deps, prepared);
+    const response = await withAdoptedContextWindowRetry(
       deps,
-      prepared,
-      correlationId,
-      signal,
+      { modelId, surface: "chat-buffered", correlationId },
+      () => assembleAndCallRegeneration(deps, prepared, memory, signal, correlationId),
     );
-    if (requestSignalAborted(signal)) return requestCancelledResult();
-    const model = bufferedModelAtProviderBoundary(
-      deps,
-      modelId,
-      executionAdmission,
-      correlationId,
-      "chat.regeneration.rejected",
-    );
-    if (isRouteResult(model)) return model;
-    const response = await model.call(
-      {
-        modelId,
-        messages,
-        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
-        stream: false,
-        logContext: { correlationId },
-      },
-      signal,
-    );
+    if (isRouteResult(response)) return response;
     if (requestSignalAborted(signal)) return requestCancelledResult();
     return commitRegeneratedChatTurn(deps, prepared, memory, response);
   } catch (error) {

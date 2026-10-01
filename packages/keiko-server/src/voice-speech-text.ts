@@ -78,6 +78,10 @@ function citationMarkerEnd(text: string, open: number): number | undefined {
  * `cursor`, so no character is ever rescanned by a later attempt from an earlier offset -- the same
  * amortized-O(n) argument `stripMarkdownLinks` relies on, without needing its bounded window.
  */
+// Grouped and CJK grounded markers (`[1, 7, 8]`, `【1】`) are removed by the UI before synthesis, by
+// the copy rule that knows the answer's references (ChatWindow `speakableAnswerText`): this route
+// receives only text, so it cannot tell `[1, 2]` citations from a numeric list and keeps groups as
+// content (PR #3678 review).
 function stripCitationMarkers(text: string): string {
   const parts: string[] = [];
   let cursor = 0;

@@ -319,8 +319,11 @@ describe("dev quality workflows", () => {
     );
     expect(localSonar).toContain('git -C "${repo_root}" ls-files -z --others --exclude-standard');
     expect(localSonar).toContain("--needs-full-scan");
-    expect(localSonar).not.toContain("-Dsonar.javascript.node.maxspace=4096");
-    expect(localSonar).toContain("-Dsonar.javascript.node.maxspace=4608");
+    // The analyzer heap defaults to 4608 MiB (never the old 4096) and reaches the scanner through the
+    // validated override (PR #3678).
+    expect(localSonar).not.toMatch(/node\.maxspace=4096|NODE_MAXSPACE:-4096/u);
+    expect(localSonar).toContain('node_maxspace="${KEIKO_LOCAL_SONAR_NODE_MAXSPACE:-4608}"');
+    expect(localSonar).toContain('-Dsonar.javascript.node.maxspace="${node_maxspace}"');
     expect(localSonar).toContain("--partition-inclusions");
     expect(localSonar).toContain(
       '"-Dsonar.inclusions=${source_inclusions:-${empty_source_inclusion}}"',

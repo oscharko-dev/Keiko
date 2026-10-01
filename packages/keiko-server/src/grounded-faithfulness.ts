@@ -11,7 +11,9 @@
 //      GROUNDED_SYSTEM_PROMPT asks the model to emit and checks each against the evidence pack that
 //      was ACTUALLY sent to the model. Inline references to files the model never received are
 //      surfaced as an `unsupported-citation` uncertainty marker rather than displayed as grounded
-//      claims (GEN-AI-GROUNDING-001/-008).
+//      claims (GEN-AI-GROUNDING-001/-008). An answer that makes source-backed claims with no
+//      supported marker at all is a different defect and carries the distinct `uncited-answer`
+//      marker; a refusal ("nothing about this in the documents") carries neither.
 //   3. Truncation surfacing — `incompleteAnswerMarker` turns a `finishReason:"length"` completion
 //      into an `incomplete-answer` marker so a cut-off answer is not consumed as final
 //      (GEN-AI-GATEWAY-001).
@@ -24,7 +26,14 @@ import type {
   LineRange,
   UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  CITATION_FINDING_LIST_MAX,
+  citationFindingTotalSuffix,
+  citationMarkerIndices,
+  findCitationMarkerGroups,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
 // Deterministic no-evidence answer used when the folder/multi-source path abstains BEFORE the
 // model call. Kept generic (no scope path) so it is safe to display and speak verbatim.
@@ -76,14 +85,6 @@ export interface ParsedInlineCitation {
 const BRACKET_RE = /\[([^\]\n]{1,200})\]/g;
 const LINE_RANGE_SUFFIX_RE = /:(\d+)(?:-(\d+))?$/;
 const SOURCE_QUALIFIER_RE = /^source:(\d+)\|/u;
-// Must match the marker grammar of the citation attacher it reconciles against
-// (packages/keiko-local-knowledge/src/conversation/citation-attacher.ts MARKER_PATTERN): ASCII
-// plus CJK lenticular 【n】 and fullwidth ［n］ glyphs, mismatched pairs tolerated. A reconciler
-// narrower than the attacher cannot see a dropped marker, so the fail-closed net would miss
-// exactly the gpt-oss-style output the attacher exists to tolerate. A lockstep pin in
-// grounded-faithfulness.test.ts guards the two patterns against drifting apart.
-const NUMERIC_CITATION_RE = /[[【［](\d+)[\]】］]/gu;
-
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const codePoint = value.codePointAt(index);
@@ -196,17 +197,12 @@ export interface NumericCitationReconciliation {
   readonly unsupportedMarkers: readonly number[];
 }
 
-interface ParsedNumericCitation {
-  readonly marker: number;
-}
-
-function parseNumericCitations(answerText: string): readonly ParsedNumericCitation[] {
-  const citations: ParsedNumericCitation[] = [];
-  for (const match of answerText.matchAll(NUMERIC_CITATION_RE)) {
-    const marker = Number.parseInt(match[1] ?? "", 10);
-    if (Number.isSafeInteger(marker) && marker > 0) citations.push({ marker });
-  }
-  return citations;
+// The numeric marker grammar is the shared one in keiko-contracts (`findCitationMarkerGroups`), the
+// exact parser the citation attacher uses — a reconciler narrower than the attacher cannot see a
+// dropped marker, and one parser cannot drift from itself. Grouped markers (`[1, 7, 8]`) expand to
+// one index each; an index of zero or below is never a reference.
+function parseNumericCitations(answerText: string): readonly number[] {
+  return citationMarkerIndices(answerText).filter((marker) => marker > 0);
 }
 
 /** Reconcile hybrid `[n]` markers against the exact selected evidence marker set. */
@@ -217,7 +213,10 @@ export function reconcileNumericCitations(
   const citedMarkers = new Set<number>();
   const unsupportedMarkers: number[] = [];
   const seenUnsupported = new Set<number>();
-  for (const { marker } of parseNumericCitations(answerText)) {
+  // Every index of every marker group outside Markdown code counts, a grouped one included: a
+  // fabricated `[9, 10]` beside a real `[1]` is a dangling source attribution, never content
+  // (PR #3678 review, P1).
+  for (const marker of parseNumericCitations(answerText)) {
     if (supportedMarkers.has(marker)) {
       citedMarkers.add(marker);
     } else if (!seenUnsupported.has(marker)) {
@@ -368,14 +367,15 @@ export function unsupportedCitationMarker(
   if (unsupported.length === 0) {
     return undefined;
   }
-  const paths = [...new Set(unsupported.map((c) => c.scopePath))].slice(0, 8);
+  const allPaths = [...new Set(unsupported.map((c) => c.scopePath))];
+  const paths = allPaths.slice(0, CITATION_FINDING_LIST_MAX);
   return {
     kind: "unsupported-citation",
     claim:
       `The answer cited ${paths.length === 1 ? "a source" : "sources"} not present in the ` +
-      `retrieved evidence: ${paths.join(", ")}. Treat ${
-        paths.length === 1 ? "that claim" : "those claims"
-      } as unverified.`,
+      `retrieved evidence: ${paths.join(", ")}. ` +
+      `Treat ${paths.length === 1 ? "that claim" : "those claims"} as unverified.` +
+      citationFindingTotalSuffix(allPaths.length),
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };
@@ -387,24 +387,30 @@ export function unsupportedNumericCitationMarker(
   nowMs: number,
 ): UncertaintyMarker | undefined {
   if (unsupportedMarkers.length === 0) return undefined;
-  const markers = [...new Set(unsupportedMarkers)]
-    .slice(0, 8)
+  const distinct = [...new Set(unsupportedMarkers)];
+  const markers = distinct
+    .slice(0, CITATION_FINDING_LIST_MAX)
     .map((marker) => `[${String(marker)}]`);
   return {
     kind: "unsupported-citation",
     claim:
       `The answer cited ${markers.length === 1 ? "an evidence marker" : "evidence markers"} ` +
-      `not present in the retrieved evidence: ${markers.join(", ")}. Treat the affected ` +
-      "claims as unverified.",
+      `not present in the retrieved evidence: ${markers.join(", ")}. Treat the affected claims ` +
+      `as unverified.${citationFindingTotalSuffix(distinct.length)}`,
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };
 }
 
-/** Body-free warning for a source-backed answer that contains no supported citation at all. */
+/**
+ * Body-free warning for a source-backed answer that contains no supported citation at all. Kind
+ * `uncited-answer`, NOT `unsupported-citation`: nothing was fabricated or out of range — the answer
+ * just does not say where its claims come from, and the reader-facing wording must not claim that
+ * it "references sources that were not in the retrieved evidence".
+ */
 export function missingCitationMarker(nowMs: number): UncertaintyMarker {
   return {
-    kind: "unsupported-citation",
+    kind: "uncited-answer",
     claim:
       "The answer used retrieved evidence without a supported inline citation. Treat its " +
       "source-backed claims as unverified.",
@@ -414,12 +420,25 @@ export function missingCitationMarker(nowMs: number): UncertaintyMarker {
 }
 
 /**
+ * The missing-citation warning for a concrete answer text, or `undefined` when the answer is a
+ * refusal ("nothing about this in the documents"). A refusal makes no source-backed claim, so there
+ * is nothing to cite and nothing to warn about; the shared detector lives in keiko-contracts.
+ */
+export function missingCitationMarkerFor(
+  answerText: string,
+  nowMs: number,
+): UncertaintyMarker | undefined {
+  return isNoEvidenceAnswerText(answerText) ? undefined : missingCitationMarker(nowMs);
+}
+
+/**
  * Body-free uncertainty for a grounded answer that received governed memory outside the evidence
- * pack. A valid repository citation does not authenticate a separate memory-derived assertion.
+ * pack. A valid repository citation does not authenticate a separate memory-derived assertion, so
+ * those claims are uncited (`uncited-answer`) — they cite no fabricated source.
  */
 export function uncitedMemoryContextMarker(nowMs: number): UncertaintyMarker {
   return {
-    kind: "unsupported-citation",
+    kind: "uncited-answer",
     claim:
       "The answer received governed memory context outside retrieved evidence. Treat claims " +
       "derived from that memory as uncited and unverified.",
@@ -488,6 +507,8 @@ export interface EntailmentJudge {
 export interface CitedClaim {
   readonly claimText: string;
   readonly citations: readonly ParsedInlineCitation[];
+  /** Present when the stripper removed bracketed prose from the claim (see NumericCitedClaim). */
+  readonly hidesProse?: true;
 }
 
 /** Per-answer bounds so the judge is never invoked unboundedly. */
@@ -497,6 +518,7 @@ export interface EntailmentOptions {
   // answer degrades to the entailment-unavailable caveat instead of rendering its untested tail as
   // verified (#2670 AC6).
   readonly maxClaims: number;
+  // Per evidence item (one cited excerpt), not per claim — see ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM.
   readonly maxExcerptChars: number;
   // Stage-wide wall-clock budget for the whole entailment pass. Once it (or the caller signal) is
   // exhausted, no further judge calls are made and any remaining claims are counted `unavailable`
@@ -504,6 +526,20 @@ export interface EntailmentOptions {
   // stacking `maxClaims` sequential judge timeouts into minutes of tail latency.
   readonly maxTotalMs: number;
 }
+
+// One claim may cite several evidence items ("[1, 7, 8]"). `maxExcerptChars` bounds EACH item (the
+// producers already capped every excerpt at the grounding excerpt limit before it was shown to the
+// answer model), and this ceiling bounds how many distinct items one judge call may carry, so the
+// judge input stays bounded at items x per-item cap. A claim citing more distinct items than this is
+// undecidable (counted `unavailable`), never judged against a subset of its evidence.
+export const ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM = 8;
+
+// A numeric `[n]` evidence item is the prompt-rendered block, not the bare excerpt: an `[n] <label>`
+// header (the label is capped at 512 characters upstream) plus a code fence around the excerpt. That
+// framing is not excerpt text, so it must not count against `maxExcerptChars` — before this
+// allowance a single excerpt at the cap could never fit its own block and EVERY normally cited claim
+// degraded to the "citation support could not be verified" caveat.
+export const NUMERIC_EVIDENCE_FRAMING_CHARS = 1_024;
 
 export const DEFAULT_ENTAILMENT_OPTIONS: EntailmentOptions = {
   // Lowered from 24: bounds the sequential judge fan-out per answer while still covering the cited
@@ -562,12 +598,34 @@ export function splitClaimSpans(text: string): readonly string[] {
   return spans;
 }
 
+// Every bracketed span the claim stripper removes, a citation or not.
+const CLAIM_BRACKET_RE = /[[［【][^\]］】\n]{1,200}[\]］】]/g;
+
 /** Remove inline `[...]` citation brackets from a claim span so the judge sees the prose claim. */
 export function stripInlineCitations(text: string): string {
   return text
-    .replace(/[[［【][^\]］】\n]{1,200}[\]］】]/g, " ")
+    .replace(CLAIM_BRACKET_RE, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+// A bracket whose every part is a path citation hides no prose: adjacent citations
+// `[a.ts:1][b.ts:2]` are two citations. An inline link's label is visible prose however path-like
+// it reads (`[MFA / anonymous denied](https://…)`), so a bracket followed by `(` is never one
+// (PR #3678 review).
+function isPathCitationBracket(span: string, match: RegExpMatchArray): boolean {
+  if (span.charAt((match.index ?? 0) + match[0].length) === "(") return false;
+  const inner = match[0].slice(1, -1);
+  return inner.split(",").every((part) => parseCitationToken(part.trim()) !== undefined);
+}
+
+// True when the stripper removes bracketed text that is not a citation marker: prose such as
+// `[The repository enforces MFA]` or a link label that the reader sees and the judge never reads.
+function hidesBracketedProse(span: string): boolean {
+  const markerStarts = new Set(findCitationMarkerGroups(span).map((group) => group.start));
+  return [...span.matchAll(CLAIM_BRACKET_RE)].some(
+    (match) => !markerStarts.has(match.index) && !isPathCitationBracket(span, match),
+  );
 }
 
 /** Segment an answer into the cited claims (spans that carry at least one inline citation). */
@@ -576,7 +634,12 @@ export function segmentCitedClaims(answerText: string): readonly CitedClaim[] {
   for (const span of splitClaimSpans(answerText)) {
     const citations = parseInlineCitations(span);
     if (citations.length > 0) {
-      claims.push({ claimText: stripInlineCitations(span), citations });
+      const claimText = stripInlineCitations(span);
+      claims.push(
+        hidesBracketedProse(span)
+          ? { claimText, citations, hidesProse: true }
+          : { claimText, citations },
+      );
     }
   }
   return claims;
@@ -585,41 +648,108 @@ export function segmentCitedClaims(answerText: string): readonly CitedClaim[] {
 export interface NumericCitedClaim {
   readonly claimText: string;
   readonly markers: readonly number[];
+  /**
+   * Present when the claim's span(s) carried bracketed prose the stripper removed: the judge reads
+   * `claimText` only, so its verdict does not cover everything the reader sees (PR #3678 review).
+   */
+  readonly hidesProse?: true;
 }
 
+interface NumericClaimDraft {
+  claimText: string;
+  readonly markers: Set<number>;
+  hidesProse: boolean;
+}
+
+// A span that continues the last cited claim extends that claim in place: it keeps the earlier
+// markers, so the judge reads the whole visible claim against every excerpt cited for it, never one
+// part of it against another part's source alone. The marker union grows incrementally, so a hostile
+// run of continuations stays linear (PR #3678 review).
 function appendNumericCitedClaim(
-  claims: NumericCitedClaim[],
-  claimText: string,
+  drafts: NumericClaimDraft[],
+  continued: NumericClaimDraft | undefined,
+  supported: SupportedClaimText,
   markers: readonly number[],
-  mergeWithPrevious: boolean,
-): void {
-  const previous = claims.at(-1);
-  if (mergeWithPrevious && previous?.claimText === claimText) {
-    claims[claims.length - 1] = {
-      claimText,
-      markers: [...new Set([...previous.markers, ...markers])],
+): NumericClaimDraft {
+  if (continued === undefined) {
+    const draft = {
+      claimText: supported.text,
+      markers: new Set(markers),
+      hidesProse: supported.hidesProse,
     };
-    return;
+    drafts.push(draft);
+    return draft;
   }
-  claims.push({ claimText, markers });
+  continued.claimText = supported.text;
+  for (const marker of markers) continued.markers.add(marker);
+  continued.hidesProse ||= supported.hidesProse;
+  return continued;
+}
+
+function numericCitedClaimOf(draft: NumericClaimDraft): NumericCitedClaim {
+  const markers = [...draft.markers];
+  return draft.hidesProse
+    ? { claimText: draft.claimText, markers, hidesProse: true }
+    : { claimText: draft.claimText, markers };
 }
 
 /** Segment user-visible `[n]` citations against the sentence each marker actually supports. */
-export function segmentNumericCitedClaims(answerText: string): readonly NumericCitedClaim[] {
-  const claims: NumericCitedClaim[] = [];
-  let precedingClaimText: string | undefined;
-  for (const span of splitClaimSpans(answerText)) {
-    const markers = [...new Set(parseNumericCitations(span).map((citation) => citation.marker))];
-    const claimText = stripInlineCitations(span);
-    if (markers.length > 0) {
-      const supportedClaimText = claimText.length > 0 ? claimText : precedingClaimText;
-      if (supportedClaimText !== undefined) {
-        appendNumericCitedClaim(claims, supportedClaimText, markers, claimText.length === 0);
-      }
-    }
-    if (claimText.length > 0) precedingClaimText = claimText;
+interface SupportedClaimText {
+  readonly text: string;
+  readonly hidesProse: boolean;
+}
+
+// A span with a letter or a digit is a claim of its own; an ordered-list number alone ("1." of
+// `1. [1]`) is not. Any other span (punctuation, Markdown syntax, a bare symbol such as `>>` or `~`)
+// continues the claim before it: the judge reads that claim with the span's visible residue
+// appended, and the claim keeps every hidden prose seen since. Nothing visible is dropped and no
+// hidden prose is lost, whatever syntax the renderer gives the residue (PR #3678 review).
+const OWN_CLAIM_TEXT = /[\p{L}\p{N}]/u;
+const LIST_NUMBER_ONLY = /^\d{1,9}[.)]$/u;
+const PUNCTUATION_ONLY = /^[\s.,;:!?…]*$/u;
+
+function isOwnClaimText(claimText: string): boolean {
+  return OWN_CLAIM_TEXT.test(claimText) && !LIST_NUMBER_ONLY.test(claimText.trim());
+}
+
+// The claim a span's markers support. A marker with no claim before it supports its own residue,
+// or, when its span only hides prose, an empty hidden claim the judge can never decide.
+function supportedClaimOf(
+  claimText: string,
+  hidden: boolean,
+  preceding: SupportedClaimText | undefined,
+): SupportedClaimText | undefined {
+  if (isOwnClaimText(claimText)) return { text: claimText, hidesProse: hidden };
+  const residue = PUNCTUATION_ONLY.test(claimText) ? "" : claimText.trim();
+  if (preceding !== undefined) {
+    const text = residue.length === 0 ? preceding.text : `${preceding.text} ${residue}`;
+    return { text, hidesProse: preceding.hidesProse || hidden };
   }
-  return claims;
+  if (residue.length > 0) return { text: residue, hidesProse: hidden };
+  return hidden ? { text: "", hidesProse: true } : undefined;
+}
+
+export function segmentNumericCitedClaims(answerText: string): readonly NumericCitedClaim[] {
+  const drafts: NumericClaimDraft[] = [];
+  let preceding: SupportedClaimText | undefined;
+  // The claim the preceding span cited or continued: a span without claim text of its own extends it.
+  let lastClaim: NumericClaimDraft | undefined;
+  for (const span of splitClaimSpans(answerText)) {
+    const markers = parseNumericCitations(span);
+    const claimText = stripInlineCitations(span);
+    const supported = supportedClaimOf(claimText, hidesBracketedProse(span), preceding);
+    if (supported !== undefined) {
+      const continued = isOwnClaimText(claimText) ? undefined : lastClaim;
+      lastClaim =
+        markers.length > 0
+          ? appendNumericCitedClaim(drafts, continued, supported, markers)
+          : continued;
+      // An uncited span of bracketed prose alone still hides that prose: from the claim it follows,
+      // or, at the start, from the marker that cites it later (PR #3678 review).
+      preceding = supported;
+    }
+  }
+  return drafts.map(numericCitedClaimOf);
 }
 
 /** A claim whose cited excerpt(s) did NOT support it (verdict `unsupported`). */
@@ -634,6 +764,9 @@ export interface EntailmentReconciliation {
   readonly judgedClaims: number;
   // Count of claims the judge could not decide (verdict `unavailable`).
   readonly unavailableClaims: number;
+  // Of those, the claims never sent to the judge because the claim stripper removed bracketed prose
+  // the reader sees: the judge would read only part of the claim (PR #3678 review, P1). Absent at 0.
+  readonly hiddenProseClaims?: number;
 }
 
 /** Resolve the bounded excerpt text for a membership-valid citation, or `undefined` if none. */
@@ -648,18 +781,34 @@ export interface NumericEntailmentEvidence {
 interface EntailmentClaimEvidence {
   readonly citedPath: string;
   readonly excerptText: string | undefined;
+  // Characters of the text that are rendering frame rather than excerpt (numeric blocks only).
+  readonly framingChars?: number;
 }
 
 interface EntailmentClaim {
   readonly claimText: string;
   readonly evidence: readonly EntailmentClaimEvidence[];
+  readonly hidesProse?: true;
+}
+
+// A claim the judge would read only in part is undecidable, whatever its lexical overlap: it is
+// counted unavailable and never judged (fail closed), so `The API uses TLS [MFA mandatory] [1]`
+// cannot pass on its TLS half.
+function claimForJudge(
+  claimText: string,
+  evidence: readonly EntailmentClaimEvidence[],
+  hidesProse: true | undefined,
+): readonly EntailmentClaim[] {
+  if (evidence.length === 0) return [];
+  return [hidesProse === true ? { claimText, evidence, hidesProse } : { claimText, evidence }];
 }
 
 interface CollectedExcerptText {
   readonly text: string;
-  // True when the joined excerpt text exceeded `maxExcerptChars` and was cut down for the judge —
-  // the judge then never sees the tail of the cited evidence, so a claim whose contradiction sits
-  // past the cut must not be judged against the truncated prefix (see `verdictForClaim`).
+  // True when the judge could not be shown ALL of the cited evidence: one item is longer than the
+  // per-item cap, or more distinct items are cited than one judge call may carry. The judge then
+  // never sees part of the cited evidence, so a claim whose contradiction sits in the unseen part
+  // must not be judged against the rest (see `judgeableClaimFor`).
   readonly truncated: boolean;
 }
 
@@ -669,6 +818,7 @@ function collectExcerptText(
 ): CollectedExcerptText {
   const seen = new Set<string>();
   const parts: string[] = [];
+  let itemTooLong = false;
   for (const item of evidence) {
     const text = item.excerptText?.trim();
     if (text === undefined || text.length === 0 || seen.has(text)) {
@@ -676,9 +826,12 @@ function collectExcerptText(
     }
     seen.add(text);
     parts.push(text);
+    itemTooLong ||= text.length > maxExcerptChars + (item.framingChars ?? 0);
   }
-  const joined = parts.join("\n\n");
-  return { text: joined.slice(0, maxExcerptChars), truncated: joined.length > maxExcerptChars };
+  return {
+    text: parts.join("\n\n"),
+    truncated: itemTooLong || parts.length > ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM,
+  };
 }
 
 // `submittedToJudge` distinguishes a real judge call from every fail-closed "unavailable" that
@@ -701,9 +854,9 @@ function judgeableClaimFor(
     return undefined;
   }
   if (truncated) {
-    // The judge would only see a prefix of the cited evidence, exactly like an exhausted
+    // The judge could not be shown all of the cited evidence, exactly like an exhausted
     // maxClaims/maxTotalMs budget — count it unavailable rather than risk a "supported" verdict
-    // that never saw the excerpt text past the cut.
+    // that never saw the evidence past the cut.
     return undefined;
   }
   return {
@@ -794,9 +947,15 @@ async function reconcileEntailmentClaims(
     maxClaims: Math.min(options.maxClaims, budget.remainingClaims),
   };
   const unentailed: UnentailedClaim[] = [];
-  const scheduledClaims = scheduleClaimJudges(claims, judge, boundedOptions, budget.signal);
+  const hiddenProseClaims = claims.filter((claim) => claim.hidesProse === true).length;
+  const scheduledClaims = scheduleClaimJudges(
+    claims.filter((claim) => claim.hidesProse !== true),
+    judge,
+    boundedOptions,
+    budget.signal,
+  );
   budget.remainingClaims -= scheduledClaims.scheduled.length;
-  let unavailableClaims = scheduledClaims.unavailableClaims;
+  let unavailableClaims = scheduledClaims.unavailableClaims + hiddenProseClaims;
   const { scheduled } = scheduledClaims;
   const outcomes = await Promise.all(scheduled.map(({ verdict }) => verdict));
   for (const [index, outcome] of outcomes.entries()) {
@@ -808,7 +967,12 @@ async function reconcileEntailmentClaims(
       unavailableClaims += 1;
     }
   }
-  return { unentailed, judgedClaims: scheduled.length, unavailableClaims };
+  return {
+    unentailed,
+    judgedClaims: scheduled.length,
+    unavailableClaims,
+    ...(hiddenProseClaims > 0 ? { hiddenProseClaims } : {}),
+  };
 }
 
 function inlineEntailmentClaims(
@@ -824,7 +988,7 @@ function inlineEntailmentClaims(
         citedPath: citation.scopePath,
         excerptText: resolveExcerptText(citation),
       }));
-    return evidence.length === 0 ? [] : [{ claimText: claim.claimText, evidence }];
+    return claimForJudge(claim.claimText, evidence, claim.hidesProse);
   });
 }
 
@@ -871,9 +1035,15 @@ export async function reconcileNumericClaimEntailment(
         const selected = evidenceByMarker.get(marker);
         return selected === undefined
           ? []
-          : [{ citedPath: `[${String(selected.marker)}]`, excerptText: selected.excerptText }];
+          : [
+              {
+                citedPath: `[${String(selected.marker)}]`,
+                excerptText: selected.excerptText,
+                framingChars: NUMERIC_EVIDENCE_FRAMING_CHARS,
+              },
+            ];
       });
-      return evidence.length === 0 ? [] : [{ claimText: claim.claimText, evidence }];
+      return claimForJudge(claim.claimText, evidence, claim.hidesProse);
     },
   );
   return reconcileEntailmentClaims(claims, judge, options, signal, executionBudget);
@@ -891,14 +1061,19 @@ export function unsupportedClaimMarker(
   if (unentailed.length === 0) {
     return undefined;
   }
-  const paths = [...new Set(unentailed.flatMap((c) => c.citedPaths))].slice(0, 8);
+  const paths = [...new Set(unentailed.flatMap((c) => c.citedPaths))].slice(
+    0,
+    CITATION_FINDING_LIST_MAX,
+  );
   const single = unentailed.length === 1;
   return {
     kind: "unsupported-claim",
     claim:
       `The answer made ${single ? "a claim" : "claims"} that the cited ` +
       `${paths.length === 1 ? "source does" : "sources do"} not appear to support: ` +
-      `${paths.join(", ")}. Treat ${single ? "that statement" : "those statements"} as unverified.`,
+      `${paths.join(", ")}. ` +
+      `Treat ${single ? "that statement" : "those statements"} as unverified.` +
+      citationFindingTotalSuffix(unentailed.length),
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };

@@ -1,0 +1,17 @@
+/* Keiko's own assessment inside a grounded answer (ADR-0144): set apart from the source-backed
+   text with a neutral dashed rule and a visible label, never the accent that marks cited
+   evidence. Component-scoped; globals.css stays untouched (#1300). */
+
+.cmpOwnAssessment {
+  margin: var(--space-5) 0 0;
+  padding: var(--space-4) var(--space-5);
+  border-left: 2px dashed var(--line);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in oklch, var(--surface-inset) 60%, transparent);
+}
+
+.cmpOwnAssessmentLabel {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-label);
+  color: var(--text-secondary);
+}

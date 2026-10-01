@@ -195,6 +195,23 @@ export interface ModelCapability {
    */
   readonly chatModeDeclared?: boolean | undefined;
   readonly contextWindow: number;
+  /**
+   * `true` when neither the gateway nor the operator declared this chat model's context window
+   * and Keiko has not measured it yet: `contextWindow` then holds the conservative setup
+   * placeholder, which only gates surfaces that need a PROVEN window (the Coding Workbench).
+   * Conversation budgeting plans such a model with the default geometry instead and adopts the
+   * window the provider reports on its first overflow (customer report on 1.1.13: a LiteLLM
+   * `hosted_vllm` model was planned as a 4,096-token model and every grounded question failed).
+   * Preserved only when `true`; absent means the window was declared or verified.
+   */
+  readonly contextWindowAssumed?: boolean | undefined;
+  /**
+   * `true` when `contextWindow` is the window the provider stated itself (an overflow answer or the
+   * window probe) rather than a declaration. Keiko asks such a deployment again once per process
+   * when a conversation first shows it, so a later redeploy with a LARGER window is noticed too —
+   * an overflow only ever teaches a smaller one. Preserved only when `true`.
+   */
+  readonly contextWindowReported?: boolean | undefined;
   readonly maxOutputTokens: number;
   readonly toolCalling: boolean;
   /**
@@ -876,35 +893,79 @@ export function explainConversationIneligibility(
 // chat-compatible mode is the only affirmative signal a gateway gives; a special-purpose id is
 // the strongest negative one. Ranking is a PREFERENCE, never an eligibility gate — with one
 // configured model the rank-2 entry is still chosen and still probed honestly.
+
+// Rerank engines: a subset of the special-purpose markers that discovery additionally gives a ROLE
+// (a reranker is wired into retrieval, not merely ranked down), and that the embedding id heuristic
+// must never claim on a family prefix ("bge-reranker-v2-m3", "jina-reranker-v2").
+const RERANK_ID_TOKENS: ReadonlySet<string> = new Set([
+  "rerank",
+  "reranker",
+  "rerankers",
+  "reranking",
+]);
+
+// Whole-token markers of engines that are not conversational. Every token names a family a gateway
+// can plausibly host next to its chat models: speech and vision-to-text engines, rerankers,
+// guard/moderation classifiers, embedding encoders and image generators. The match is token-wise, so
+// "llama-guard-3" ranks down while "guardian-chat" and "clipboard-chat" do not.
 const SPECIAL_PURPOSE_ID_TOKENS: ReadonlySet<string> = new Set([
   "ocr",
   "whisper",
   "speech",
   "tts",
   "asr",
-  "rerank",
-  "reranker",
+  "stt",
+  "transcribe",
+  "transcription",
+  ...RERANK_ID_TOKENS,
+  "guard",
+  "moderation",
+  "embed",
+  "embedding",
+  "embeddings",
+  "encoder",
+  "colpali",
+  "clip",
+  "diffusion",
+  "sdxl",
+  "flux",
 ]);
+
+function modelIdTokens(modelId: string): readonly string[] {
+  return modelId.toLowerCase().split(/[^a-z0-9]+/u);
+}
 
 // Token-wise match so "dots.ocr" and "my-ocr-model" rank down while ordinary chat ids never can.
 // The suffix form covers separator-free composites like "dotsocr"; it is deliberately limited to
 // "ocr" — the only marker observed fused into an id in the field — because broader suffix
 // matching starts swallowing legitimate names.
 function isLikelySpecialPurposeModelId(modelId: string): boolean {
-  const tokens = modelId.toLowerCase().split(/[^a-z0-9]+/u);
-  return tokens.some(
+  return modelIdTokens(modelId).some(
     (token) => SPECIAL_PURPOSE_ID_TOKENS.has(token) || (token.length > 3 && token.endsWith("ocr")),
   );
 }
 
 /**
- * The role a gateway's DECLARED model mode maps onto, FOR DISCOVERY. "unsupported" means discovery
- * will not configure the model from this declaration — deliberately distinct from "unknown", so a
- * recognised rerank/speech/image engine is reported to the operator instead of silently
- * disappearing. It does NOT mean the product has no lane for that capability: reranking and speech
- * have their own configuration surfaces, which discovery does not populate.
+ * True when the id NAMES a rerank engine ("bge-reranker-v2-m3", "rerank-multilingual-v3.0",
+ * "jina-reranker-v2-base-multilingual"). Token-wise, so a chat family that merely contains the
+ * letters never matches. A NAME is a weaker statement than a declared `mode: "rerank"`: discovery
+ * uses it only when the gateway declared no mode at all, and still verifies the engine with a live
+ * probe before wiring it.
  */
-export type DeclaredModeRole = "chat" | "embedding" | "unsupported";
+export function isLikelyRerankModelId(modelId: string): boolean {
+  return modelIdTokens(modelId).some((token) => RERANK_ID_TOKENS.has(token));
+}
+
+/**
+ * The role a gateway's DECLARED model mode maps onto, FOR DISCOVERY. "rerank" is the retrieval
+ * reranker lane: discovery never configures such a model as chat or embedding, and setup wires it
+ * as the reranker only after a live two-document probe answers. "unsupported" means discovery will
+ * not configure the model from this declaration — deliberately distinct from "unknown", so a
+ * recognised speech/image/moderation engine is reported to the operator instead of silently
+ * disappearing. It does NOT mean the product has no lane for that capability: speech has its own
+ * configuration surface, which discovery populates separately.
+ */
+export type DeclaredModeRole = "chat" | "embedding" | "rerank" | "unsupported";
 
 /**
  * Modes a provider may declare for a model. LiteLLM's `/model/info` `mode` is the vocabulary this
@@ -924,15 +985,19 @@ export type DeclaredModelMode =
 // Total over DeclaredModelMode: adding a mode to the union without a role here fails the compile.
 // A DECLARATION IS AUTHORITATIVE. Keiko is model-agnostic — a customer hosts whatever models they
 // like behind their gateway, so the only trustworthy statement about what a model IS comes from
-// the gateway itself. Name heuristics may express a PREFERENCE (conversationDefaultRank), never a
-// role: a field incident bound a rerank endpoint named "bge-reranker-v2-m3" to every Knowledge Pod
-// as its embedding model, purely because the id contains "bge".
+// the gateway itself. A name never overrides a declaration: it may express a PREFERENCE
+// (conversationDefaultRank) and, ONLY for a model whose gateway declared no `mode` at all, it lets
+// discovery recognise the rerank and embedding lanes (isLikelyRerankModelId,
+// isLikelyEmbeddingModelId) — a recognition that is still verified by a live probe before a
+// reranker is wired or an embedding model is persisted. A field incident bound a rerank endpoint
+// named "bge-reranker-v2-m3" to every Knowledge Pod as its embedding model, purely because the id
+// contains "bge".
 const DECLARED_MODE_ROLES: Record<DeclaredModelMode, DeclaredModeRole> = {
   chat: "chat",
   completion: "chat",
   responses: "chat",
   embedding: "embedding",
-  rerank: "unsupported",
+  rerank: "rerank",
   image_generation: "unsupported",
   audio_transcription: "unsupported",
   audio_speech: "unsupported",

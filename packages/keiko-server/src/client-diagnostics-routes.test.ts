@@ -1155,6 +1155,133 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  // PR #3678 review: the catalog's availability counts used to ride only the message, which ingest
+  // reduces to a digest. They are now their own counted line, at warn, joined to the report.
+  it("persists the knowledge catalog counts as client.knowledge-catalog.unavailable", async () => {
+    const sink = captureServerLog();
+    const knowledgeCatalog = {
+      podCount: 1,
+      readyPodCount: 0,
+      setCount: 0,
+      boundCount: 1,
+      missingCount: 0,
+      notReadyCount: 1,
+    };
+    const body = JSON.stringify({
+      message: "Keiko knowledge catalog offers no usable pod.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_catalog-unavailable-0001",
+      knowledgeCatalog,
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.knowledge-catalog.unavailable",
+    );
+    expect(event?.level).toBe("warn");
+    const record = expectActivityLogProof(
+      "client.knowledge-catalog.unavailable.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_catalog-unavailable-0001",
+      ...knowledgeCatalog,
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  // PR #3678 review: the copy button's changed transformation must be reconstructable: one line per
+  // copy with its outcome and marker counts, and a failed copy with its error kind and frames.
+  it("persists a chat answer copy and its failure as client.answer.copied", async () => {
+    const sink = captureServerLog();
+    const answerCopy = { grounded: true, strippedGroupCount: 2, keptGroupCount: 1 };
+    const copied = JSON.stringify({
+      message: "Keiko chat answer copied.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_answer-copy-0001",
+      answerCopy: { outcome: "copied", ...answerCopy },
+    });
+    const failed = JSON.stringify({
+      message: "Keiko chat answer copy failed.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_answer-copy-0002",
+      errorKind: "unavailable",
+      errorEvidence: { errorClass: "Error", frames: [], causeChain: ["Error"] },
+      answerCopy: { outcome: "failed", ...answerCopy },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(copied))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(await handleClientDiagnosticIngest(context(failed))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const lines = sink.events.filter((candidate) => candidate.op === "client.answer.copied");
+    expect(lines.map((line) => line.level)).toEqual(["info", "warn"]);
+    const record = expectActivityLogProof(
+      "client.answer.copied.line",
+      formatActivityLogProofLine(lines[0] ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_answer-copy-0001",
+      outcome: "copied",
+      ...answerCopy,
+    });
+    expect(lines[1]).toMatchObject({
+      correlationId: "ui_answer-copy-0002",
+      errorKind: "unavailable",
+      extra: { outcome: "failed", errorClass: "Error", causeChain: ["Error"] },
+    });
+  });
+
+  // PR #3678 review: the read-aloud preparation keeps a bracketed path and drops grounded markers;
+  // its counts land on their own line under the synthesis request's correlation.
+  it("persists a read-aloud preparation as client.answer.speech-prepared", async () => {
+    const sink = captureServerLog();
+    const answerSpeech = { grounded: true, strippedGroupCount: 1, keptGroupCount: 0 };
+    const body = JSON.stringify({
+      message: "Keiko chat answer prepared for speech.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_answer-speech-0001",
+      answerSpeech,
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find((candidate) => candidate.op === "client.answer.speech-prepared");
+    expect(event?.level).toBe("info");
+    const record = expectActivityLogProof(
+      "client.answer.speech-prepared.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_answer-speech-0001",
+      ...answerSpeech,
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  it("rejects a read-aloud report with an unknown field or an unbounded count", async () => {
+    for (const answerSpeech of [
+      { grounded: true, strippedGroupCount: 1, keptGroupCount: 0, text: "spoken" },
+      { grounded: true, strippedGroupCount: -1, keptGroupCount: 0 },
+    ]) {
+      const body = JSON.stringify({
+        message: "Keiko chat answer prepared for speech.",
+        clientTs: CLIENT_TS,
+        answerSpeech,
+      });
+      const result = await handleClientDiagnosticIngest(context(body));
+      expect(result.status).toBe(400);
+    }
+  });
+
   it("persists every closed focus location on its own client.select.dismissed line", async () => {
     for (const focus of ["trigger", "search", "option"] as const) {
       const sink = captureServerLog();

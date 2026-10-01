@@ -139,6 +139,86 @@ cost, so their token savings agree with the difference between the pre/post-comp
 The optional LiteLLM counter may still report a higher count and refuse admission; local assembly
 and gateway admission use the same local fallback, not a claim of provider-exact counting.
 
+**Undeclared windows (amended for the 1.1.13 field report).** A chat capability whose window nobody
+declared — a LiteLLM `hosted_vllm` deployment without `max_input_tokens`, a mode-less discovered
+model, an Azure deployment set up without discovery, or an env-only provider — carries the 4,096
+setup placeholder flagged `contextWindowAssumed`. The placeholder is a floor only for surfaces that
+need a proven window (the Coding Workbench). `deriveContextProfileFromCapability` plans an assumed
+window with the default geometry (128,000 input window, an 8,000 output reserve, or the declared
+output limit when that is smaller, and a 4,000 safety margin), because the 1.1.12 admission otherwise
+refused every grounded question against 2,944 usable tokens. Configurations persisted before the flag
+existed are marked at the file-load boundary when a record carries the exact placeholder signature.
+The real window replaces the assumption from the provider's own statement, never from a guess:
+
+- When the context meter first shows an assumed model, one probe per deployment sends a short
+  streamed request with an output allocation larger than any window. vLLM validates that allocation
+  before generation and names its `max_model_len`; an accepted answer is dropped at its status, so a
+  provider that accepts the allocation never generates for it. The status reading waits up to
+  three seconds for the probe of its own model. A probe that got no answer at all (the gateway was
+  unreachable) is asked again after 30 seconds, at most three times; an answered probe is not.
+- Every provider overflow answer that names the window ("maximum context length is N tokens",
+  "max_model_len=N", the Anthropic and TGI forms, and llama.cpp's `n_ctx`) is attached to the
+  `ContextOverflowError` and reported by the Gateway to its configuration source. Only the first
+  4,096 characters of an error body are read, with bounded patterns.
+- An assumed or provider-reported window is adopted exactly, in either direction; a declared window
+  is only ever lowered, and a raise is recorded as `unchanged`; a lowered declared window stays
+  declared, so the operator's ceiling survives later statements and restarts. The adopted window is applied as a
+  configuration refinement without a generation bump, then persisted; a failed write still leaves
+  it applied in memory and is reported as a diagnostic. The admitted turn whose overflow reported
+  it re-plans from the current profile and is sent once more: buffered chat and its regeneration,
+  streamed chat before its first token, and folder, multi-source, hybrid and Knowledge Pod answers. A second overflow propagates. A model port follows the
+  refinements of the generation it was resolved in, so the retry runs on the Gateway built from
+  the adopted window.
+- A statement is adopted only for the deployment that made it. Every report carries the
+  deployment fingerprint, and a statement from a deployment the alias no longer routes to is
+  recorded as `stale-deployment`, never adopted. Each probe runs under its own correlation,
+  joined to the reading that spawned it. A reading whose probe is still running after the wait
+  carries `contextWindowProbePending`, and the meter reads again until the answer is in.
+
+`gateway.context-window.probe`, `.adoption` and `.retry` record the evidence body-free.
+
+**The meter reports the next request (amended for the 1.1.13 field report).** The context status
+applies the send path's rule: at 90 % of the input budget, compaction to 70 % precedes the next
+request. It therefore reports the projected history (`pendingCompaction`), never the raw stored
+history, so a history larger than the window can no longer read as 340 % of it. Status projection
+and manual compaction may summarize the newest stored turn, like the send path's history prefix.
+The current request is never shortened.
+
+**Provider-reported windows are re-checked (amended for the 1.1.13 field report).** A window adopted
+from a provider statement is persisted with `contextWindowReported`. A deployment can be redeployed
+with a different `max_model_len`, so the first context reading in each process probes such a model
+once more, exactly like an assumed one, and adopts the answer in either direction. A declared window
+is never probed.
+
+**Knowledge Pod prompts fit the window (amended for the 1.1.13 field report).** The Knowledge Pod
+answer prompt keeps the highest-ranked references that fit the input budget, counted with the
+admission's own accounting. Kept references keep their numbering, so their `[n]` markers still
+resolve. When not even one reference fits, the question is refused locally with
+`ContextOverflowError` rather than answered without evidence. Like the other grounded surfaces, the
+generator re-plans once after an adopted window. `search.prompt.window-fitted` records a trimmed or
+refused prompt body-free: reference counts and the input budget.
+
+**The context window breakdown (amended for the 1.1.13 field report).** The context status breaks the
+whole window into shares that sum to `contextWindowTokens`:
+
+- system instructions, the compaction summary, messages and retrieved knowledge sources;
+- free input up to the automatic-compaction threshold, and the compaction buffer above it;
+- the output reserve and the safety margin.
+
+Every used share is counted with the admission estimate — the unit compaction decides with — and
+the used shares are capped at the input budget. The segment ids are a closed wire vocabulary
+(`ChatContextSegmentId`). A future share, such as MCP tool definitions, becomes a new id rather than
+a second meter.
+
+While a chat is grounded, the next question is planned with the source share of its latest grounded
+request. Knowledge Pod, folder, multi-source and hybrid answers all report that share. The
+conversation then receives min(8,000, one third of the input budget) tokens, never fewer than 512
+(`groundedHistoryLaneTokens`). The meter projects the history against that lane with the same
+profile the grounded send path compacts with (`groundedConversationLaneProfile`). Retrieved sources are fetched fresh for every question and are never
+compacted. Compaction summarizes only the conversation lane; sources give way only by rank inside
+their own prompt. The latest grounded request is shown as the provider measured it, together with
+Keiko's estimate when the two differ.
+
 ### D3 — Eight-lane taxonomy with a fixed allocation order
 
 We will encode exactly eight lanes via `ContextLaneId`:

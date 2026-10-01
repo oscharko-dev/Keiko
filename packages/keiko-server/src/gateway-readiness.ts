@@ -5,6 +5,7 @@ import {
   listConfiguredCapabilities,
   requestGatewayReadinessChatCompletion,
   requestOpenAIEmbedding,
+  selectConfiguredModel,
   toolCallingConfigurationFingerprint,
   vectorL2Norm,
   type GatewayConfig,
@@ -24,6 +25,7 @@ import type {
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  withActivityLogParentCorrelation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { gatewayVerificationFromProbeOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -38,7 +40,8 @@ import type { UiHandlerDeps, VerifiedModelCapabilityFields } from "./deps.js";
 import { currentConversationReady, currentGatewayConfig } from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
-import { rerankSelection } from "./grounded-rerank-facade.js";
+import type { RerankSelection } from "./grounded-rerank-facade.js";
+import { requestRerankerProbe, rerankerProbePassed } from "./gateway-reranker-probe.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
 import {
@@ -730,10 +733,14 @@ function providerCapability(
   );
 }
 
+// The embedding model the probe verifies is the one every binder binds — pod creation, full
+// re-embed, repository semantic search and memory all take the preference
+// `selectConfiguredModel({ kind: "embedding" })` applies (cheapest cost class first, the configured
+// order breaking ties). A plain `find` took the first embedding LISTED, so a gateway with two
+// engines was verified on a model nothing would ever use.
 function chooseEmbeddingProvider(config: GatewayConfig): ModelProviderConfig | undefined {
-  return config.providers.find(
-    (provider) => providerCapability(config, provider)?.kind === "embedding",
-  );
+  const modelId = selectConfiguredModel(config, { kind: "embedding" });
+  return config.providers.find((provider) => provider.modelId === modelId);
 }
 
 // Surfaces the HTTP status when the gateway answered: "(http-error 400)" points at the request
@@ -815,8 +822,7 @@ async function probeEmbedding(
 // Maps one reranker selection onto its probe result. Extracted so `probeReranker` stays inside the
 // 50-line ceiling now that its catch reports through the diagnostic sink.
 function rerankerSelectionResult(
-  selection: Awaited<ReturnType<typeof rerankSelection<string>>>,
-  expectedTopDocument: string,
+  selection: RerankSelection<string>,
   start: number,
 ): GatewayReadinessProbeResult {
   if (selection.diagnostics.status !== "applied") {
@@ -828,7 +834,7 @@ function rerankerSelectionResult(
       `Reranker endpoint could not be verified (${kind}).`,
     );
   }
-  const passed = selection.selected[0] === expectedTopDocument;
+  const passed = rerankerProbePassed(selection);
   return result(
     "reranker",
     passed ? "passed" : "unsupported",
@@ -853,21 +859,13 @@ async function probeReranker(
     return skipped("reranker", "No reranker is configured.");
   }
   try {
-    const documents = ["alpha readiness match", "unrelated beta"] as const;
-    const selection = await rerankSelection({
+    const selection = await requestRerankerProbe({
       deps,
-      gatewayConfig: config,
-      query: "alpha readiness match",
-      candidates: documents,
-      documentFor: (document) => document,
-      topN: 1,
-      ...(deps.gatewayReadinessFetch !== undefined
-        ? { fetchImpl: deps.gatewayReadinessFetch }
-        : {}),
+      config,
       correlationId,
-      fallbackMode: "slice-topN",
+      fetchImpl: deps.gatewayReadinessFetch,
     });
-    return rerankerSelectionResult(selection, documents[0], start);
+    return rerankerSelectionResult(selection, start);
   } catch (probeError) {
     return probeFailure(
       deps,
@@ -2205,6 +2203,10 @@ interface ConversationInitializationQueue {
   readonly pending: (() => Promise<void>)[];
   readonly retries: Map<string, ReturnType<typeof setTimeout>>;
   readonly retryable: Map<string, boolean>;
+  // When each model's latest probe of the current generation settled. A failed report may keep an
+  // older feature-observation timestamp (`preserveUnexecutedCapabilityObservation`), so the
+  // cooldown a conversation request honours is dated by the probe, never by that timestamp.
+  readonly probeSettledAt: Map<string, number>;
 }
 const conversationQueues = new WeakMap<
   NonNullable<UiHandlerDeps["gatewayConfig"]>,
@@ -2224,6 +2226,7 @@ function conversationQueue(
       pending: [],
       retries: new Map(),
       retryable: new Map(),
+      probeSettledAt: new Map(),
     };
     conversationQueues.set(holder, queue);
   }
@@ -2318,7 +2321,7 @@ function initializationDeps(
     ...deps,
     activityLog: {
       write: (event): void => {
-        sink.write({ parentCorrelationId, ...event });
+        sink.write(withActivityLogParentCorrelation(event, parentCorrelationId));
       },
     },
   };
@@ -2409,6 +2412,7 @@ export function initializeConfiguredConversationReadiness(
   for (const timer of queue.retries.values()) clearTimeout(timer);
   queue.retries.clear();
   queue.retryable.clear();
+  queue.probeSettledAt.clear();
   queue.initializedGeneration = generation;
   const config = currentGatewayConfig(deps);
   if (config === undefined) return;
@@ -2418,7 +2422,17 @@ export function initializeConfiguredConversationReadiness(
   }
 }
 
-/** Join an existing initialization, with no permission to initiate a provider probe. */
+/**
+ * What a conversation request does about a model that is not ready. A ready model, and a model whose
+ * readiness was never observed, are never probed here: interactive Chat adds no readiness request.
+ * A probe already running is joined. Only a model whose LAST probe failed at least
+ * `NOT_READY_REPROBE_COOLDOWN_MS` ago earns one fresh probe from the first request that needs it —
+ * a conclusive failure stops the background retries, so without this a transient gateway answer at
+ * startup would leave the model not-ready until a restart or a Settings change (1.1.13 regression;
+ * 1.1.11 re-probed on the next send). The probe goes through the same in-flight map, the same
+ * two-slot queue and the same cooldown as every other probe, so concurrent requests share it and a
+ * failed one refreshes the cooldown: never a probe storm.
+ */
 export async function awaitInitializedConversationReadiness(
   deps: UiHandlerDeps,
   modelId: string,
@@ -2427,7 +2441,10 @@ export async function awaitInitializedConversationReadiness(
   const holder = deps.gatewayConfig;
   if (holder === undefined || currentConversationReady(deps, modelId)) return;
   const probe = readinessProbesFor(holder).get(`${String(holder.generation())}:${modelId}`);
-  if (probe === undefined) return;
+  if (probe === undefined) {
+    await reprobeExpiredNotReadyModel(deps, holder, modelId, correlationId);
+    return;
+  }
   logAutomaticReadinessJoined(
     deps,
     modelId,
@@ -2438,29 +2455,84 @@ export async function awaitInitializedConversationReadiness(
   await settledWithinBudget(probe.promise, CHAT_MODEL_WALK_BUDGET_MS);
 }
 
+async function reprobeExpiredNotReadyModel(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  correlationId: string | undefined,
+): Promise<void> {
+  if (modelId.length === 0 || conversationQueue(holder).disposed) return;
+  if (!notReadyCooldownElapsed(holder, modelId)) return;
+  const requestCorrelationId = correlationId ?? newCorrelationId();
+  // The probe's own lines carry the request's correlation id; a probe failure is reported once by
+  // the queue and once here, against the request that was waiting for it.
+  const reprobe = ensureOnDemandConversationReadiness(deps, modelId, requestCorrelationId).catch(
+    (error: unknown) => {
+      emitServerDiagnostic(
+        deps.diagnostics,
+        serverDiagnosticFromError({
+          correlationId: requestCorrelationId,
+          operation: "gateway.readiness",
+          source: "gateway-readiness.conversation-request",
+          error,
+          summary: "A gateway readiness probe could not be completed.",
+          redact: (message): string => String(deps.redactor(message)),
+        }),
+      );
+    },
+  );
+  await settledWithinBudget(reprobe, CHAT_MODEL_WALK_BUDGET_MS);
+}
+
 // A failed probe must not pin the model for the whole configuration generation: a transient
 // gateway outage would brick every chat surface until a manual re-probe or restart (the
 // readiness twin of the 0.3.11 endless-indexing incident). It must not be re-probed on every
 // request either — each probe can burn the full provider timeout against a dead gateway. So a
 // current-generation non-ready observation answers the guard only within this window; after it,
-// configuration-owned background recovery re-probes and either heals or refreshes the pin.
+// configuration-owned background recovery — and, when that has stopped on a conclusive failure, the
+// first conversation request that needs the model — re-probes and either heals or refreshes the pin.
 export const NOT_READY_REPROBE_COOLDOWN_MS = 30_000;
+
+// Age of the current-generation EXPLICIT failed chat observation of a model, `NaN` when its
+// timestamp is malformed, `undefined` when there is no such observation. Only an explicit failed
+// chat probe earns a cooldown. An observation without a conversationReady field (e.g. a capability
+// record carrying other probe fields) is unknown readiness, and unknown must probe immediately —
+// never sit out a 30-second admission block (review finding on #3220).
+function notReadyObservationAgeMs(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+): number | undefined {
+  const observation = holder.verifiedCapability(modelId);
+  if (observation?.generation !== holder.generation()) return undefined;
+  if (observation.fields.conversationReady !== false) return undefined;
+  return Date.now() - Date.parse(observation.checkedAt);
+}
 
 function withinNotReadyCooldown(
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
 ): boolean {
-  const observation = holder.verifiedCapability(modelId);
-  if (observation?.generation !== holder.generation()) return false;
-  // Only an EXPLICIT failed chat probe earns a cooldown. An observation without a
-  // conversationReady field (e.g. a capability record carrying other probe fields) is unknown
-  // readiness, and unknown must probe immediately — never sit out a 30-second admission block
-  // (review finding on #3220).
-  if (observation.fields.conversationReady !== false) return false;
-  const ageMs = Date.now() - Date.parse(observation.checkedAt);
+  const ageMs = notReadyObservationAgeMs(holder, modelId);
   // Malformed AND future timestamps fail open toward probing — never toward a pin: NaN and
   // negative ages both miss the [0, cooldown) window.
-  return ageMs >= 0 && ageMs < NOT_READY_REPROBE_COOLDOWN_MS;
+  return ageMs !== undefined && ageMs >= 0 && ageMs < NOT_READY_REPROBE_COOLDOWN_MS;
+}
+
+// The conversation-request twin of `withinNotReadyCooldown`: a request may start a probe only for a
+// failed observation whose LATEST evidence — the observation or the probe that settled it,
+// whichever is younger — has outlived the cooldown. A malformed or future timestamp fails CLOSED
+// here (it yields no usable age): background recovery still probes such a model, but interactive
+// Chat never adds a readiness request on a value it cannot date.
+function notReadyCooldownElapsed(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+): boolean {
+  const observedAgeMs = notReadyObservationAgeMs(holder, modelId);
+  if (observedAgeMs === undefined) return false;
+  const settledAt = conversationQueue(holder).probeSettledAt.get(modelId);
+  const ages = [observedAgeMs, settledAt === undefined ? Number.NaN : Date.now() - settledAt];
+  const usableAges = ages.filter((ageMs) => Number.isFinite(ageMs) && ageMs >= 0);
+  return usableAges.length > 0 && Math.min(...usableAges) >= NOT_READY_REPROBE_COOLDOWN_MS;
 }
 
 // `correlationId` is the conversation request that needed the answer: the probe's lines carry it,
@@ -2569,7 +2641,9 @@ async function runOnDemandReadinessProbe(
   logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId, backgroundAttempt);
   const outcome = await observeOnDemandProbe(deps, modelId, probeCorrelationId);
   if (holder.generation() === generation) {
-    conversationQueue(holder).retryable.set(modelId, outcome.inconclusiveProbes > 0);
+    const queue = conversationQueue(holder);
+    queue.retryable.set(modelId, outcome.inconclusiveProbes > 0);
+    queue.probeSettledAt.set(modelId, Date.now());
   }
   // A failed report CLEARS the capability entry; without a current-generation observation
   // every subsequent chat attempt would probe the provider again. Persist an explicit

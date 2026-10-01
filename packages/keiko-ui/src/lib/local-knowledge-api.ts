@@ -38,10 +38,41 @@ import {
 // Wire shapes
 // ---------------------------------------------------------------------------
 
+// The guidance a Knowledge Pod or Pod Set surface shows next to its state. It is a closed code plus
+// the few facts its copy interpolates, never display text: the lib runs before the locale is known,
+// and the wording (English and German) lives in the Local Knowledge catalog, resolved at render
+// time by `knowledgePodGuidanceText`.
+export type KnowledgePodGuidanceCode =
+  | "embedding-mismatch"
+  | "embedding-unavailable"
+  | "reindex-recommended"
+  | "embedding-opaque"
+  | "manual-ready"
+  | "manual-degraded"
+  | "manual-indexing"
+  | "manual-unavailable"
+  | "future-member-placeholder"
+  | "members-unavailable"
+  | "members-not-ready"
+  | "retrieval-degraded"
+  | "embedding-readiness-warning"
+  | "policy-denied"
+  | "sealed-local-policy";
+
+export interface KnowledgePodUiManualDetail {
+  readonly documentCount: number;
+  readonly chunkCount: number;
+  readonly vectorCount: number;
+  readonly readiness: KnowledgePodSummary["readiness"];
+}
+
 export interface KnowledgePodUiGuidance {
-  readonly label: string;
-  readonly description: string;
+  readonly code: KnowledgePodGuidanceCode;
+  /** Whether the copy speaks of one Knowledge Pod or of the members of a Knowledge Pod Set. */
+  readonly scope: KnowledgePodSummary["kind"];
   readonly tone: "warning" | "danger" | "muted";
+  /** Present for the `manual-*` codes only: the counts and the state their copy names. */
+  readonly manual?: KnowledgePodUiManualDetail;
 }
 
 export interface KnowledgePodUiMetadata {
@@ -88,46 +119,13 @@ function summariesById(
 
 function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
   const status = summary.retrieval.embeddingCompatibilityStatus;
-  if (status === "incompatible") {
-    return {
-      label: "Embedding mismatch",
-      description:
-        summary.kind === "pod-set"
-          ? "Semantic retrieval is disabled for affected set members until they are reindexed locally."
-          : "Semantic retrieval is disabled for this pod until it is reindexed locally.",
-      tone: "danger",
-    };
-  }
-  if (status === "unavailable") {
-    return {
-      label: "Embedding unavailable",
-      description:
-        summary.kind === "pod-set"
-          ? "Semantic retrieval cannot run for affected set members under the current local policy."
-          : "Semantic retrieval cannot run under the current local policy.",
-      tone: "danger",
-    };
-  }
+  const scope = summary.kind;
+  if (status === "incompatible") return { code: "embedding-mismatch", scope, tone: "danger" };
+  if (status === "unavailable") return { code: "embedding-unavailable", scope, tone: "danger" };
   if (status === "unknown" || summary.retrieval.reindexRecommended === true) {
-    return {
-      label: "Reindex recommended",
-      description:
-        summary.kind === "pod-set"
-          ? "Compatibility is unverified for affected set members; lexical fallback remains available."
-          : "Compatibility is unverified; lexical fallback remains available.",
-      tone: "warning",
-    };
+    return { code: "reindex-recommended", scope, tone: "warning" };
   }
-  if (status === "opaque") {
-    return {
-      label: "Embedding opaque",
-      description:
-        summary.kind === "pod-set"
-          ? "Semantic compatibility cannot be verified for this Knowledge Pod Set."
-          : "Semantic compatibility cannot be verified for this retrieval space.",
-      tone: "muted",
-    };
-  }
+  if (status === "opaque") return { code: "embedding-opaque", scope, tone: "muted" };
   return undefined;
 }
 
@@ -139,46 +137,33 @@ function isHtmlManualSummary(summary: KnowledgePodSummary): boolean {
   return summary.sourceKinds.length > 0 && summary.sourceKinds.every(isHtmlManualSourceKind);
 }
 
-function manualCountSummary(counts: KnowledgePodSummary["counts"]): string {
-  return [
-    `${counts.documentCount.toString()} docs`,
-    `${counts.chunkCount.toString()} chunks`,
-    `${counts.vectorCount.toString()} vectors`,
-  ].join(" · ");
+function manualDetail(summary: KnowledgePodSummary): KnowledgePodUiManualDetail {
+  return {
+    documentCount: summary.counts.documentCount,
+    chunkCount: summary.counts.chunkCount,
+    vectorCount: summary.counts.vectorCount,
+    readiness: summary.readiness,
+  };
 }
 
 function guidanceForHtmlManual(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
   if (!isHtmlManualSummary(summary)) return undefined;
+  const scope = summary.kind;
+  const manual = manualDetail(summary);
   if (summary.readiness === "ready") {
-    return {
-      label: "HTML manual",
-      description: `Ready for chat retrieval through Local Knowledge. ${manualCountSummary(summary.counts)}.`,
-      tone: "muted",
-    };
+    return { code: "manual-ready", scope, tone: "muted", manual };
   }
   if (summary.readiness === "degraded") {
-    return {
-      label: "Manual degraded",
-      description: `Manual retrieval is degraded; answers may use only available evidence. ${manualCountSummary(summary.counts)}.`,
-      tone: "warning",
-    };
+    return { code: "manual-degraded", scope, tone: "warning", manual };
   }
   if (
     summary.readiness === "draft" ||
     summary.readiness === "indexing" ||
     summary.readiness === "stale"
   ) {
-    return {
-      label: "Manual indexing",
-      description: `Manual retrieval is ${summary.readiness}; it is not yet ready to contribute evidence.`,
-      tone: "warning",
-    };
+    return { code: "manual-indexing", scope, tone: "warning", manual };
   }
-  return {
-    label: "Manual unavailable",
-    description: `Manual retrieval is ${summary.readiness}; it cannot contribute silently as empty evidence.`,
-    tone: "danger",
-  };
+  return { code: "manual-unavailable", scope, tone: "danger", manual };
 }
 
 function hasSetReadinessReason(
@@ -192,6 +177,7 @@ function guidanceForSetReadiness(summary: KnowledgePodSummary): KnowledgePodUiGu
   if (summary.kind !== "pod-set" || summary.setReadiness === undefined) return undefined;
 
   const reasonCodes = new Set(summary.setReadiness.reasonCodes);
+  const scope = summary.kind;
   if (
     hasSetReadinessReason(reasonCodes, [
       "future-remote-member",
@@ -199,38 +185,18 @@ function guidanceForSetReadiness(summary: KnowledgePodSummary): KnowledgePodUiGu
       "future-ephemeral-member",
     ])
   ) {
-    return {
-      label: "Future member placeholder",
-      description:
-        "This Knowledge Pod Set includes future remote, federated, or ephemeral placeholders; those members are not active retrieval sources yet.",
-      tone: "warning",
-    };
+    return { code: "future-member-placeholder", scope, tone: "warning" };
   }
   if (
     hasSetReadinessReason(reasonCodes, ["missing-member", "member-error", "member-unavailable"])
   ) {
-    return {
-      label: "Members unavailable",
-      description:
-        "Some set members are missing, failed, or unavailable; retrieval will use only available members.",
-      tone: "danger",
-    };
+    return { code: "members-unavailable", scope, tone: "danger" };
   }
   if (hasSetReadinessReason(reasonCodes, ["member-indexing", "member-stale", "member-draft"])) {
-    return {
-      label: "Members not ready",
-      description:
-        "Some set members are indexing, stale, or draft; refresh or index them before relying on this set.",
-      tone: "warning",
-    };
+    return { code: "members-not-ready", scope, tone: "warning" };
   }
   if (hasSetReadinessReason(reasonCodes, ["member-degraded", "no-sources", "no-vectors"])) {
-    return {
-      label: "Retrieval degraded",
-      description:
-        "Some set members have no sources, no vectors, or degraded indexing; lexical fallback may be the only available path.",
-      tone: "warning",
-    };
+    return { code: "retrieval-degraded", scope, tone: "warning" };
   }
   if (
     hasSetReadinessReason(reasonCodes, [
@@ -240,12 +206,7 @@ function guidanceForSetReadiness(summary: KnowledgePodSummary): KnowledgePodUiGu
       "embedding-opaque",
     ])
   ) {
-    return {
-      label: "Embedding readiness warning",
-      description:
-        "Some set members need embedding review; Keiko does not compare raw vector scores across embedding spaces.",
-      tone: "warning",
-    };
+    return { code: "embedding-readiness-warning", scope, tone: "warning" };
   }
   return undefined;
 }
@@ -277,25 +238,12 @@ function guidanceForPolicy(
   modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
 ): KnowledgePodUiGuidance | undefined {
   const operations = modelUsePolicy.operations;
+  const scope = summary.kind;
   if (operations.answerSynthesis === "deny" || operations.rawContentRelease === "deny") {
-    return {
-      label: "Policy denied",
-      description:
-        summary.kind === "pod-set"
-          ? "This Knowledge Pod Set blocks grounded answer synthesis or raw-content release for affected members; Keiko will return a policy-denied state instead of sending excerpts to a model."
-          : "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
-      tone: "danger",
-    };
+    return { code: "policy-denied", scope, tone: "danger" };
   }
   if (operations.externalEmbeddings === "deny" || operations.externalReranking === "deny") {
-    return {
-      label: "Sealed local policy",
-      description:
-        summary.kind === "pod-set"
-          ? "External embedding or reranking calls are disabled for affected set members; retrieval may use lexical or local fallback."
-          : "External embedding or reranking calls are disabled for this Knowledge Pod; retrieval may use lexical or local fallback.",
-      tone: "warning",
-    };
+    return { code: "sealed-local-policy", scope, tone: "warning" };
   }
   return undefined;
 }

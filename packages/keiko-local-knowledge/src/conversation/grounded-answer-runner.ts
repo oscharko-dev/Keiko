@@ -21,6 +21,11 @@
 
 import type { RetrievalReference } from "@oscharko-dev/keiko-contracts";
 import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  hasOwnAssessmentTag,
+  splitOwnAssessment,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
 import {
   assembleGroundedContext,
@@ -53,24 +58,57 @@ export interface GroundedAnswerDependencies {
   readonly signal?: AbortSignal;
 }
 
-const NO_EVIDENCE_REPAIR_SKIP_PATTERNS: readonly RegExp[] = [
-  /\bno\s+evidence\s+(?:found|available|in|within)\b/iu,
-  /\binsufficient\s+evidence\b/iu,
-  /\bnot\s+enough\s+evidence\b/iu,
-  /\bkeine\s+evidenz\b/iu,
-  /\bkeine\s+(?:belege|hinweise)\b/iu,
-  /\bnicht\s+genug\s+(?:evidenz|belege|hinweise)\b/iu,
-];
-
+// A refusal ("nothing about this in the documents") makes no source-backed claim, so a missing
+// citation on it is not a defect and a citation-repair model call would be wasted on it. The
+// detector is the one shared with the BFF's answer enforcement (keiko-contracts).
+// Keiko's assessment alone, with an empty source-backed part, claims nothing from the sources
+// either; an empty answer without one is still repaired (KEIKO-0275).
 function shouldRepairMissingCitations(
-  answerText: string,
+  generated: GeneratedAnswer,
   references: readonly unknown[],
-  attached: AttachCitationsResult,
 ): boolean {
+  const { attached } = generated;
   if (references.length === 0 || attached.citations.length > 0) return false;
-  const compact = answerText.replace(/\s+/g, " ").trim();
-  if (compact.length === 0 || compact.length > 240) return true;
-  return !NO_EVIDENCE_REPAIR_SKIP_PATTERNS.some((pattern) => pattern.test(compact));
+  if (generated.ownAssessment !== undefined && attached.text.trim().length === 0) return false;
+  return !isNoEvidenceAnswerText(attached.text);
+}
+
+// The model's answer, split by the policy: an allowed assessment leaves the source-backed part. A
+// block the policy disables is dropped, never promoted to source-backed text its citations and
+// judge would not cover (PR #3678 review, P1).
+interface GeneratedAnswer {
+  readonly attached: AttachCitationsResult;
+  readonly ownAssessment?: string;
+  readonly neutralized: boolean;
+}
+
+function splitGeneratedAnswer(
+  text: string,
+  query: ConversationGroundedQuery,
+): { readonly grounded: string; readonly ownAssessment?: string; readonly neutralized: boolean } {
+  const { grounded, assessment } = splitOwnAssessment(text);
+  if (query.ownAssessment !== "allowed") {
+    return { grounded, neutralized: hasOwnAssessmentTag(text) };
+  }
+  return assessment === undefined
+    ? { grounded, neutralized: false }
+    : { grounded, ownAssessment: assessment, neutralized: false };
+}
+
+function attachGenerated(
+  deps: GroundedAnswerDependencies,
+  answerInput: AnswerGeneratorInput,
+  text: string,
+): GeneratedAnswer {
+  const split = splitGeneratedAnswer(text, answerInput.query);
+  const attached = attachCitationsToAnswer(
+    split.grounded,
+    promptReferencesOf(deps, answerInput.references),
+    deps.citationFaithfulness,
+  );
+  return split.ownAssessment === undefined
+    ? { attached, neutralized: split.neutralized }
+    : { attached, ownAssessment: split.ownAssessment, neutralized: split.neutralized };
 }
 
 // ─── Retrieval wiring ─────────────────────────────────────────────────────────
@@ -142,37 +180,50 @@ async function rerankReferences(
 async function generateGroundedAnswerText(
   deps: GroundedAnswerDependencies,
   answerInput: AnswerGeneratorInput,
-  references: readonly RetrievalReference[],
-): Promise<AttachCitationsResult> {
-  const answerText = await deps.answerGenerator.generate(answerInput);
-  const attached = attachCitationsToAnswer(answerText, references, deps.citationFaithfulness);
-  if (
-    deps.signal?.aborted === true ||
-    !shouldRepairMissingCitations(answerText, references, attached)
-  ) {
-    return attached;
+): Promise<GeneratedAnswer> {
+  const generated = attachGenerated(
+    deps,
+    answerInput,
+    await deps.answerGenerator.generate(answerInput),
+  );
+  const sent = promptReferencesOf(deps, answerInput.references);
+  if (deps.signal?.aborted === true || !shouldRepairMissingCitations(generated, sent)) {
+    return generated;
   }
   const repairedText = await deps.answerGenerator.generate({
     ...answerInput,
     citationRepair: true,
   });
-  return attachCitationsToAnswer(repairedText, references, deps.citationFaithfulness);
+  return attachGenerated(deps, answerInput, repairedText);
+}
+
+// Citations resolve only against the evidence the model was shown: a window-fitted prompt keeps
+// the highest-ranked references under their original numbers, so the rest are out of range.
+function promptReferencesOf(
+  deps: GroundedAnswerDependencies,
+  references: readonly RetrievalReference[],
+): readonly RetrievalReference[] {
+  return deps.answerGenerator.promptReferences?.() ?? references;
 }
 
 // ─── Final answer assembly ─────────────────────────────────────────────────────
 function buildGroundedAnswer(
-  attached: AttachCitationsResult,
+  generated: GeneratedAnswer,
   references: readonly RetrievalReference[],
   pack: LocalKnowledgeGroundedContextPack,
   retrieval: RetrievalResult,
   rerankerDiagnostics: GroundedRerankerDiagnostics | undefined,
 ): ConversationGroundedAnswer {
+  const { attached } = generated;
   return {
     answer: attached.text,
+    ...(generated.ownAssessment === undefined ? {} : { ownAssessment: generated.ownAssessment }),
+    ...(generated.neutralized ? { ownAssessmentNeutralized: true as const } : {}),
     references,
     citations: attached.citations,
     pack,
     noEvidence: false,
+    ...(attached.weakOverlapCount > 0 ? { weakCitationCount: attached.weakOverlapCount } : {}),
     ...(rerankerDiagnostics === undefined ? {} : { reranker: rerankerDiagnostics }),
     ...(retrieval.diagnostics !== undefined ? { retrievalDiagnostics: retrieval.diagnostics } : {}),
     ...(retrieval.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
@@ -188,7 +239,10 @@ export async function runGroundedAnswer(
     buildRetrievalQuery(query),
   );
 
-  if (retrieval.noEvidence && query.answerOnlyContextAvailable !== true) {
+  // Without evidence the model is asked only when something else may answer: governed personal
+  // context, or Keiko's own labelled assessment.
+  const answerOnlyContext = query.answerOnlyContextAvailable === true;
+  if (retrieval.noEvidence && !answerOnlyContext && query.ownAssessment !== "allowed") {
     return buildNoEvidenceAnswer(retrieval, assembleGroundedContext(retrieval.references));
   }
 
@@ -204,7 +258,17 @@ export async function runGroundedAnswer(
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
   };
 
-  const attached = await generateGroundedAnswerText(deps, answerInput, references);
-  const answer = buildGroundedAnswer(attached, references, pack, retrieval, rerankerDiagnostics);
-  return answerOnly ? { ...answer, noEvidence: true, answerOnlyContextUsed: true } : answer;
+  const generated = await generateGroundedAnswerText(deps, answerInput);
+  const built = buildGroundedAnswer(generated, references, pack, retrieval, rerankerDiagnostics);
+  const sentCount = promptReferencesOf(deps, references).length;
+  const answer =
+    sentCount < references.length ? { ...built, promptReferenceCount: sentCount } : built;
+  if (!answerOnly) return answer;
+  return answerOnlyContext
+    ? { ...answer, noEvidence: true, answerOnlyContextUsed: true }
+    : {
+        ...answer,
+        noEvidence: true,
+        ...(retrieval.reason === undefined ? {} : { reason: retrieval.reason }),
+      };
 }

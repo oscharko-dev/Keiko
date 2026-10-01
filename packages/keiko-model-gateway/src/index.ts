@@ -70,6 +70,7 @@ export {
 
 export {
   CAPABILITY_REGISTRY,
+  assumedChatCapability,
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
   EMBEDDING_ID_PATTERN,
@@ -151,6 +152,7 @@ export { hasConfiguredEnvModelProvider } from "./config.js";
 
 export {
   Gateway,
+  type ContextWindowReport,
   type GatewayCallRequest,
   type GatewayDeps,
   type GatewaySpendBudget,
@@ -180,7 +182,10 @@ export {
 } from "./replay.js";
 
 export {
+  discoverGatewayContextWindow,
   requestGatewayReadinessChatCompletion,
+  type GatewayContextWindowDiscovery,
+  type GatewayContextWindowDiscoveryRequest,
   type GatewayReadinessChatCompletionRequest,
 } from "./readiness-probe.js";
 

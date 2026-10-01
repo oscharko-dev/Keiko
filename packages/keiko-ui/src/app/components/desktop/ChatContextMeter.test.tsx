@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,12 @@ import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wi
 import { ChatContextMeter } from "./ChatContextMeter";
 import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
 import { ApiError } from "@/lib/api-shared-primitives";
+import {
+  I18N_STORAGE_KEY,
+  I18nProvider,
+  loadLocaleMessages,
+  resetLoadedMessageCatalogs,
+} from "@/lib/i18n";
 
 const contextApi = vi.hoisted(() => ({ fetch: vi.fn(), compact: vi.fn(), report: vi.fn() }));
 vi.mock("@/lib/api", async () => ({
@@ -74,6 +80,312 @@ function fixture(
     compact,
   };
 }
+
+// Field report 1.1.13: a grounded chat's meter showed one number although retrieved sources filled
+// most of each request. The panel now draws the whole window as ordered shares.
+function groundedStatus(): ChatContextStatusWire {
+  return {
+    ...status(8_000),
+    contextWindowTokens: 16_384,
+    inputBudgetTokens: 11_776,
+    reservedOutputTokens: 4_096,
+    safetyMarginTokens: 512,
+    estimatedInputTokens: 5_610,
+    compaction: undefined,
+    knowledgeSources: { tokens: 4_100, sentReferenceCount: 4, availableReferenceCount: 16 },
+    lastRequest: { promptTokens: 5_901, measured: true },
+    autoCompactionAtTokens: 10_598,
+    segments: [
+      { id: "system", tokens: 310 },
+      { id: "summary", tokens: 0, count: 0 },
+      { id: "messages", tokens: 1_200, count: 4 },
+      { id: "knowledge", tokens: 4_100, count: 4 },
+      { id: "free", tokens: 4_988 },
+      { id: "compaction-buffer", tokens: 1_178 },
+      { id: "output-reserve", tokens: 4_096 },
+      { id: "safety-margin", tokens: 512 },
+    ],
+  };
+}
+
+function openGroundedPanel(status: ChatContextStatusWire = groundedStatus()): HTMLElement {
+  render(
+    <ChatContextMeter
+      status={status}
+      busy={false}
+      compacting={false}
+      error={false}
+      onCompact={vi.fn()}
+      onRetry={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+  return screen.getByRole("region", { name: "Conversation context" });
+}
+
+describe("Chat context window breakdown", () => {
+  it("lists every non-empty share of the window with its tokens and share", () => {
+    const panel = openGroundedPanel();
+    const legend = within(panel).getByRole("list", { name: "Context window breakdown" });
+    const rows = within(legend).getAllByRole("listitem");
+    expect(rows.map((row) => row.getAttribute("data-segment"))).toEqual([
+      "system",
+      "messages",
+      "knowledge",
+      "free",
+      "compaction-buffer",
+      "output-reserve",
+      "safety-margin",
+    ]);
+    expect(
+      within(panel).getByText("5,610 of 11,776 usable input tokens · context window 16,384"),
+    ).toBeInTheDocument();
+    const knowledge = rows.find((row) => row.getAttribute("data-segment") === "knowledge");
+    expect(knowledge).toHaveTextContent("Knowledge sources");
+    expect(knowledge).toHaveTextContent("4 of 16 references sent");
+    expect(knowledge).toHaveTextContent("4,100");
+    expect(knowledge).toHaveTextContent("25%");
+  });
+
+  it("warns when references were left out and states the measured request size", () => {
+    const panel = openGroundedPanel();
+    expect(within(panel).getByRole("note")).toHaveTextContent(
+      "Only 4 of 16 references fit the model's context window. The most relevant were used.",
+    );
+    expect(
+      within(panel).getByText("Last knowledge request: 5,901 tokens (measured by the provider)."),
+    ).toBeInTheDocument();
+    expect(within(panel).getByText("4,988 tokens until automatic compaction.")).toBeInTheDocument();
+    expect(within(panel).getByText(/never summarized/u)).toBeInTheDocument();
+  });
+
+  it("states Keiko's estimate beside a differing provider measurement", () => {
+    const panel = openGroundedPanel({
+      ...groundedStatus(),
+      lastRequest: { promptTokens: 5_901, measured: true, estimatedTokens: 6_420 },
+    });
+    expect(
+      within(panel).getByText(
+        "Last knowledge request: 5,901 tokens (measured by the provider). Keiko estimated 6,420; the breakdown above uses that estimate.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("marks an unmeasured request size as an estimate", () => {
+    const panel = openGroundedPanel({
+      ...groundedStatus(),
+      lastRequest: { promptTokens: 6_420, measured: false },
+    });
+    expect(
+      within(panel).getByText("Last knowledge request: about 6,420 tokens (estimated)."),
+    ).toBeInTheDocument();
+  });
+
+  it("has no accessibility violations", async () => {
+    const panel = openGroundedPanel();
+    expect(await axe(panel)).toHaveNoViolations();
+  });
+});
+
+// PR #3678 audit (findings 7, 10, 12): the request line describes the last KNOWLEDGE request, the
+// percent sign follows the locale, singular counts use their own strings, and the metric rows and
+// footnotes of both presentations are covered.
+function renderMeter(
+  status: ChatContextStatusWire | undefined,
+  locale: "en" | "de" = "en",
+): HTMLElement {
+  window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+  render(
+    <I18nProvider>
+      <ChatContextMeter
+        status={status}
+        busy={false}
+        compacting={false}
+        error={false}
+        onCompact={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    </I18nProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Gesprächskontext:|Conversation context:/u }));
+  return screen.getByRole("region", { name: /Gesprächskontext|Conversation context/u });
+}
+
+function withSegments(
+  segments: ChatContextStatusWire["segments"],
+  overrides: Partial<ChatContextStatusWire> = {},
+): ChatContextStatusWire {
+  return {
+    ...status(735),
+    contextWindowTokens: 1_000,
+    inputBudgetTokens: 900,
+    compaction: undefined,
+    segments,
+    ...overrides,
+  };
+}
+
+describe("Chat context meter presentation details", () => {
+  afterEach(() => {
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+    resetLoadedMessageCatalogs();
+  });
+
+  it("puts no space before the percent sign in English and one in German", async () => {
+    const english = renderMeter(withSegments([{ id: "messages", tokens: 735, count: 4 }]));
+    expect(within(english).getByRole("heading")).toHaveTextContent("Conversation context 81.7%");
+    expect(within(english).getByText("73.5%")).toBeInTheDocument();
+    cleanup();
+    await loadLocaleMessages("de");
+    const german = renderMeter(withSegments([{ id: "messages", tokens: 735, count: 4 }]), "de");
+    expect(within(german).getByRole("heading")).toHaveTextContent("Gesprächskontext 81,7 %");
+    expect(within(german).getByText("73,5 %")).toBeInTheDocument();
+  });
+
+  it("writes the German share labels as single compound words", async () => {
+    await loadLocaleMessages("de");
+    const panel = renderMeter(
+      withSegments([
+        { id: "system", tokens: 100 },
+        { id: "knowledge", tokens: 200, count: 2 },
+      ]),
+      "de",
+    );
+    expect(within(panel).getByText("Systemanweisungen")).toBeInTheDocument();
+    expect(within(panel).getByText("Wissensquellen")).toBeInTheDocument();
+    expect(within(panel).queryByText(/System-Anweisungen|Quellen \(Wissen\)/u)).toBeNull();
+  });
+
+  it("uses the singular strings for one message and one summarized message", () => {
+    const panel = renderMeter(
+      withSegments([
+        { id: "summary", tokens: 120, count: 1 },
+        { id: "messages", tokens: 300, count: 1 },
+      ]),
+    );
+    const rows = within(panel).getAllByRole("listitem");
+    const summary = rows.find((row) => row.getAttribute("data-segment") === "summary");
+    const messages = rows.find((row) => row.getAttribute("data-segment") === "messages");
+    expect(summary).toHaveTextContent("Summary of earlier messages1 message summarized");
+    expect(messages).toHaveTextContent("Messages1 message");
+    expect(messages).not.toHaveTextContent("1 messages");
+  });
+
+  it("uses the plural strings from two messages on", () => {
+    const panel = renderMeter(
+      withSegments([
+        { id: "summary", tokens: 120, count: 3 },
+        { id: "messages", tokens: 300, count: 2 },
+      ]),
+    );
+    expect(within(panel).getByText("3 messages summarized")).toBeInTheDocument();
+    expect(within(panel).getByText("2 messages")).toBeInTheDocument();
+  });
+
+  it("uses the singular saved-tokens string for one summarized message", () => {
+    const panel = renderMeter({
+      ...status(8_000),
+      compaction: { tokensBefore: 900, tokensAfter: 300, tokensSaved: 600, messagesCompacted: 1 },
+    });
+    expect(
+      within(panel).getByText("600 tokens saved across 1 summarized message."),
+    ).toBeInTheDocument();
+  });
+
+  it("uses the singular saved-tokens string in German too", async () => {
+    await loadLocaleMessages("de");
+    const panel = renderMeter(
+      {
+        ...status(8_000),
+        compaction: { tokensBefore: 900, tokensAfter: 300, tokensSaved: 600, messagesCompacted: 1 },
+      },
+      "de",
+    );
+    expect(
+      within(panel).getByText("600 Tokens bei 1 zusammengefassten Nachricht eingespart."),
+    ).toBeInTheDocument();
+  });
+
+  it("labels the last request as a knowledge request in German", async () => {
+    await loadLocaleMessages("de");
+    const panel = renderMeter(
+      withSegments([{ id: "knowledge", tokens: 300, count: 4 }], {
+        knowledgeSources: { tokens: 300, sentReferenceCount: 4, availableReferenceCount: 4 },
+        lastRequest: { promptTokens: 5_901, measured: true, estimatedTokens: 6_420 },
+      }),
+      "de",
+    );
+    expect(
+      within(panel).getByText(
+        "Letzte Wissensanfrage: 5.901 Tokens (vom Anbieter gemessen). Keiko hat 6.420 geschätzt; die Aufteilung oben nutzt diese Schätzung.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("lists the metric rows of a status without segments", () => {
+    const panel = renderMeter(status(8_000));
+    const rows = within(panel)
+      .getAllByRole("term")
+      .map((term) => [term.textContent, term.nextElementSibling?.textContent]);
+    expect(rows).toEqual([
+      ["Estimated tokens used", "8,000"],
+      ["Usable input tokens", "10,000"],
+      ["Full context window", "12,000"],
+      ["Reserved for the answer", "1,600"],
+      ["Safety margin", "400"],
+    ]);
+    expect(within(panel).queryByRole("list", { name: "Context window breakdown" })).toBeNull();
+  });
+
+  it("draws the breakdown, including a summary row, instead of the metric rows when segments exist", () => {
+    const panel = renderMeter(
+      withSegments([
+        { id: "system", tokens: 100 },
+        { id: "summary", tokens: 120, count: 5 },
+        { id: "messages", tokens: 300, count: 4 },
+      ]),
+    );
+    expect(within(panel).queryAllByRole("term")).toHaveLength(0);
+    const legend = within(panel).getByRole("list", { name: "Context window breakdown" });
+    const summary = within(legend)
+      .getAllByRole("listitem")
+      .find((row) => row.getAttribute("data-segment") === "summary");
+    expect(summary).toHaveTextContent("Summary of earlier messages5 messages summarized12012%");
+  });
+
+  it.each([
+    ["without segments", undefined],
+    ["with segments", [{ id: "messages", tokens: 300, count: 4 }] as const],
+  ])("shows the pending compaction and the assumed window %s", (_label, segments) => {
+    const panel = renderMeter(
+      segments === undefined
+        ? {
+            ...status(8_000),
+            compaction: undefined,
+            pendingCompaction: { tokensBefore: 9_400, tokensAfter: 3_100, messagesCompacted: 12 },
+            contextWindowAssumed: true,
+          }
+        : withSegments(segments, {
+            pendingCompaction: { tokensBefore: 9_400, tokensAfter: 3_100, messagesCompacted: 12 },
+            contextWindowAssumed: true,
+          }),
+    );
+    expect(
+      within(panel).getByText(
+        "The stored history (9,400 tokens) is compacted automatically to about 3,100 tokens before the next request.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getByText(/declares no context window for this model/u),
+    ).toBeInTheDocument();
+  });
+
+  it("omits the pending compaction and assumed-window notes when neither applies", () => {
+    const panel = renderMeter({ ...status(8_000), compaction: undefined });
+    expect(within(panel).queryByText(/compacted automatically to about/u)).toBeNull();
+    expect(within(panel).queryByText(/declares no context window/u)).toBeNull();
+  });
+});
 
 describe("Chat context meter", () => {
   it("shows a nonzero fractional estimate for a small occupied context", () => {
@@ -319,6 +631,59 @@ it("lets a slow pending status settle, then stops polling once the persisted con
     await vi.advanceTimersByTimeAsync(120_000);
   });
   expect(contextApi.fetch).toHaveBeenCalledTimes(2);
+  view.unmount();
+});
+
+// PR #3678 review: an idle chat whose first reading still carries the assumed window reads again
+// until the server's window probe is in, instead of keeping the assumption until the next send.
+it("reads an idle chat's status again while its window probe is pending", async () => {
+  vi.useFakeTimers();
+  contextApi.fetch
+    .mockReset()
+    .mockResolvedValueOnce({
+      ...status(8_000),
+      contextWindowAssumed: true,
+      contextWindowProbePending: true,
+    })
+    .mockResolvedValueOnce({ ...status(8_000), contextWindowTokens: 32_768 });
+  const view = render(<ChatContextMeterContainer session={contextSession()} />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(contextApi.fetch).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  expect(contextApi.fetch).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(120_000);
+  });
+  expect(contextApi.fetch).toHaveBeenCalledTimes(2);
+  view.unmount();
+});
+
+// PR #3678 audit (finding 12): the bounded polling cap holds even while the probe never answers.
+it("stops reading after the polling cap while the window probe stays pending", async () => {
+  vi.useFakeTimers();
+  contextApi.fetch.mockReset().mockResolvedValue({
+    ...status(8_000),
+    contextWindowAssumed: true,
+    contextWindowProbePending: true,
+  });
+  const view = render(<ChatContextMeterContainer session={contextSession()} />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(contextApi.fetch).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(120_000);
+  });
+  // One first read and six bounded re-reads (1 s, 2 s, 4 s, then 8 s steps), never more.
+  expect(contextApi.fetch).toHaveBeenCalledTimes(7);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(600_000);
+  });
+  expect(contextApi.fetch).toHaveBeenCalledTimes(7);
   view.unmount();
 });
 

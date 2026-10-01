@@ -1,8 +1,16 @@
 import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistory.js";
 import {
+  DEFAULT_OWN_ASSESSMENT_POLICY,
+  type OwnAssessmentPolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import {
   initializeConfiguredConversationReadiness,
   stopConfiguredConversationReadiness,
 } from "./gateway-readiness.js";
+import {
+  adoptReportedContextWindow,
+  stopAssumedContextWindowDiscovery,
+} from "./gateway-context-window.js";
 // Wave 2 BFF handler dependencies (ADR-0011 D5/D8/D9). The Wave 1 skeleton's `UiServerDeps` carried
 // only the static-serving + CSP + port fields; the JSON/SSE handlers additionally need the resolved
 // gateway config (for the config inspector and for building a ModelPort), an evidence store, a live
@@ -13,7 +21,7 @@ import {
 
 import { configuredRuntimePromptTokenBudget } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import {
-  createDefaultChatCapability,
+  assumedChatCapability,
   findConfiguredCapability,
   hasConfiguredEnvModelProvider,
   loadConfigFromFile,
@@ -27,6 +35,7 @@ import {
   resolveCostClass,
   type EnvSource,
   type GatewayRequest,
+  type ContextWindowReport,
   type GatewaySpendBudget,
   type GatewayStreamChunk,
   type GatewayConfig,
@@ -49,7 +58,7 @@ import {
   type TextToSpeechRequest,
   type TextToSpeechStreamOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
-import { GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
+import { GatewayModelPort, type ChatModel, type ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createAuditRedactor,
   DEFAULT_RETENTION,
@@ -509,11 +518,24 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 export interface RuntimeGatewayConfig {
   readonly subscribe?: (listener: (correlationId?: string) => void) => () => void;
   readonly spendBudget?: GatewaySpendBudget | undefined;
+  /** Provider-stated context windows observed by this source's gateways. Never throws. */
+  readonly onContextWindowReported?: ((report: ContextWindowReport) => void) | undefined;
+  /** Binds the host's adoption path (gateway-context-window.ts) once the handler deps exist. */
+  readonly bindContextWindowReporter?:
+    ((reporter: (report: ContextWindowReport) => void) => void) | undefined;
   readonly initializationCorrelationId?: string | undefined;
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
   present(): boolean;
   set(config: GatewayConfig | undefined, present: boolean, correlationId?: string): void;
+  /**
+   * Replaces the configuration with a REFINEMENT of itself — capability metadata Keiko measured
+   * against the unchanged connections, such as a provider-reported context window — WITHOUT
+   * advancing the generation: in-flight turns keep their admission and readiness observations stay
+   * valid, while every later lookup sees the refined capability. Never use it for a change of
+   * endpoint, credential or model list; that is set().
+   */
+  refine?: ((config: GatewayConfig, correlationId?: string) => void) | undefined;
   /** Monotonic config generation; bumped by every set(). Probes capture it before running. */
   generation(): number;
   /**
@@ -579,11 +601,21 @@ export interface GatewayDiscoveredModels {
   // moderation, or an unrecognised value). Recognised, reported, never configured — so the
   // operator learns the model exists and why it was skipped instead of it vanishing silently.
   readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
+  // Rerank engines among the models above — declared `mode: "rerank"`, or named as one when the
+  // gateway declared no mode. They are ALSO listed in `unsupportedModels` until setup admits one as
+  // the retrieval reranker after a live probe; never present when the gateway offers none.
+  readonly rerankModelIds?: readonly string[];
 }
 
 export interface GatewayDiscoveredModelMetadata {
   readonly tokenCounter?: "litellm" | undefined;
   readonly contextWindow?: number | undefined;
+  /**
+   * True when at least one replica of this alias declared no window, so `contextWindow` is the
+   * conservative 4,096 fallback, not a declaration. Setup then keeps the window assumed and lets
+   * the provider's own statement replace it (PR #3678 review).
+   */
+  readonly contextWindowUndeclared?: boolean | undefined;
   readonly maxOutputTokens?: number | undefined;
   readonly toolCalling?: boolean | undefined;
   readonly reasoningEfforts?: readonly ModelReasoningEffort[] | undefined;
@@ -1337,7 +1369,7 @@ function resolveEnvOnlyConfig(env: EnvSource): GatewayConfig | undefined {
     modelId,
     baseUrl: "",
     apiKey: "",
-    capability: createDefaultChatCapability(modelId),
+    capability: assumedChatCapability(modelId),
   }));
   if (providers.length === 0) {
     return undefined;
@@ -1438,6 +1470,23 @@ function gatewayConfigListeners(): {
   };
 }
 
+// The Gateway reports provider-stated windows to its configuration source; the host's adoption path
+// needs the complete handler deps, which exist only after this holder, so it binds late.
+function contextWindowReporterSlot(): Pick<
+  RuntimeGatewayConfig,
+  "onContextWindowReported" | "bindContextWindowReporter"
+> {
+  let reporter: ((report: ContextWindowReport) => void) | undefined;
+  return {
+    onContextWindowReported: (report): void => {
+      reporter?.(report);
+    },
+    bindContextWindowReporter: (next): void => {
+      reporter = next;
+    },
+  };
+}
+
 function createRuntimeGatewayConfig(
   initial: GatewayConfig | undefined,
   initialPresent: boolean,
@@ -1461,6 +1510,7 @@ function createRuntimeGatewayConfig(
     storagePath,
     initializationCorrelationId: bootstrapCorrelationId,
     spendBudget: gatewaySpendBudgetForEnv(env),
+    ...contextWindowReporterSlot(),
     current: (): GatewayConfig | undefined => config,
     present: (): boolean => present,
     set(next: GatewayConfig | undefined, nextPresent: boolean, correlationId?: string): void {
@@ -1469,6 +1519,10 @@ function createRuntimeGatewayConfig(
       verification = UNVERIFIED_GATEWAY;
       verifiedCapabilities.clear();
       generation += 1;
+      listeners.notify(correlationId);
+    },
+    refine(next: GatewayConfig, correlationId?: string): void {
+      config = next;
       listeners.notify(correlationId);
     },
     subscribe: listeners.subscribe,
@@ -1735,6 +1789,14 @@ export function currentGroundingLimits(deps: UiHandlerDeps): GroundingLimits {
   return resolveGroundingLimits({ ...fileGrounding, ...ENV_GROUNDING_OVERRIDES });
 }
 
+// Whether a grounded answer may carry Keiko's own, labelled assessment (ADR-0144): the operator's
+// `groundedAnswers.ownAssessment`, else the default. Re-read per call like the grounding limits.
+export function currentOwnAssessmentPolicy(deps: UiHandlerDeps): OwnAssessmentPolicy {
+  return (
+    currentGatewayConfig(deps)?.groundedAnswers?.ownAssessment ?? DEFAULT_OWN_ASSESSMENT_POLICY
+  );
+}
+
 // Re-export GroundingLimits so callers (read-handlers, store-handlers) only need one import.
 export type { GroundingLimits };
 
@@ -1894,11 +1956,33 @@ export function currentEvidenceRequiresFullStringRedaction(deps: UiHandlerDeps):
 // config was resolved so the run route answers 400 NO_MODEL rather than constructing a broken port.
 function defaultModelPortFactory(runtimeConfig: RuntimeGatewayConfig): ModelPortFactory {
   return (): ModelPort | undefined => {
+    const generation = runtimeConfig.generation();
     const gateway = gatewayForRuntimeConfig(runtimeConfig);
     if (gateway === undefined) {
       return undefined;
     }
-    return new GatewayModelPort(gateway);
+    return new GatewayModelPort(refinedGatewayOf(runtimeConfig, generation, gateway));
+  };
+}
+
+// A port stays bound to the generation it was resolved in, yet follows that generation's
+// refinements. Adopting a provider-reported context window refines the configuration without a
+// generation bump (gateway-context-window.ts). The re-planned retry of the admitted turn must then
+// run on the Gateway built from the refined configuration: the captured one would allocate the old
+// window's output reserve again and overflow once more (PR #3678 review). A generation change keeps
+// the captured Gateway, so an admitted request never silently moves to a different setup.
+function refinedGatewayOf(
+  runtimeConfig: RuntimeGatewayConfig,
+  generation: number,
+  captured: Gateway,
+): ChatModel {
+  const current = (): Gateway =>
+    runtimeConfig.generation() === generation
+      ? (gatewayForRuntimeConfig(runtimeConfig) ?? captured)
+      : captured;
+  return {
+    chat: (request) => current().chat(request),
+    chatStream: (request) => current().chatStream(request),
   };
 }
 
@@ -4513,6 +4597,11 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
 
 function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHandlerDeps {
   initializeConfiguredConversationReadiness(deps);
+  // A provider-stated window replaces an assumed one wherever it is observed: in every overflow
+  // answer and in the window probe a conversation starts (customer report on 1.1.13).
+  deps.gatewayConfig?.bindContextWindowReporter?.((report) => {
+    adoptReportedContextWindow(deps, report, "provider-overflow");
+  });
   const unsubscribe = deps.gatewayConfig?.subscribe?.((correlationId) => {
     // Setup stamps its successful credential checks synchronously after replacement. Reuse
     // those observations before deciding which models still need startup verification.
@@ -4525,6 +4614,7 @@ function installConversationReadinessInitialization(deps: UiHandlerDeps): UiHand
     dispose: async (): Promise<void> => {
       unsubscribe?.();
       await stopConfiguredConversationReadiness(deps);
+      await stopAssumedContextWindowDiscovery(deps);
       await deps.dispose?.();
     },
   };
