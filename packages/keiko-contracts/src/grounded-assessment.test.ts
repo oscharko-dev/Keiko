@@ -36,6 +36,18 @@ describe("splitOwnAssessment", () => {
     ).toEqual({ grounded: "A [1].\n\nB [2].", assessment: "Mine." });
   });
 
+  // PR #3678 review (P1): every block is the assessment; a second one never becomes source-backed.
+  it("collects every assessment block and keeps the text between them source-backed", () => {
+    expect(
+      splitOwnAssessment(
+        "The API uses TLS [1]. <assessment>Use Java 21.</assessment><assessment>MFA is mandatory.</assessment> Keys rotate [2].",
+      ),
+    ).toEqual({
+      grounded: "The API uses TLS [1].\n\nKeys rotate [2].",
+      assessment: "Use Java 21.\n\nMFA is mandatory.",
+    });
+  });
+
   it("returns no assessment for an empty block and an empty source part for a block alone", () => {
     expect(splitOwnAssessment("Fact [1]. <assessment>  </assessment>")).toEqual({
       grounded: "Fact [1].",

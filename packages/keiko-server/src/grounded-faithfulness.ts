@@ -679,17 +679,23 @@ interface SupportedClaimText {
   readonly hidesProse: boolean;
 }
 
-// The claim a span's markers support: its own text, or for a marker-only span the claim before it,
-// whose hidden prose it carries along (PR #3678 review).
+// Text with a letter or a digit says something; a lone "." after a marker does not.
+const SUBSTANTIVE_TEXT = /[\p{L}\p{N}]/u;
+
+// The claim a span's markers support: its own substantive text, or, for a span that only adds
+// markers or punctuation, the claim before it with every hidden prose seen since (PR #3678 review).
+// A marker with no claim before it supports only what its own span hides: an empty, hidden claim
+// the judge can never decide.
 function supportedClaimOf(
   claimText: string,
   hidden: boolean,
   preceding: SupportedClaimText | undefined,
 ): SupportedClaimText | undefined {
-  if (claimText.length > 0) return { text: claimText, hidesProse: hidden };
-  return preceding === undefined
-    ? undefined
-    : { text: preceding.text, hidesProse: preceding.hidesProse || hidden };
+  if (SUBSTANTIVE_TEXT.test(claimText)) return { text: claimText, hidesProse: hidden };
+  if (preceding !== undefined) {
+    return { text: preceding.text, hidesProse: preceding.hidesProse || hidden };
+  }
+  return hidden ? { text: "", hidesProse: true } : undefined;
 }
 
 export function segmentNumericCitedClaims(answerText: string): readonly NumericCitedClaim[] {
@@ -699,13 +705,15 @@ export function segmentNumericCitedClaims(answerText: string): readonly NumericC
     const markers = [...new Set(parseNumericCitations(span))];
     const claimText = stripInlineCitations(span);
     const supported = supportedClaimOf(claimText, hidesBracketedProse(span), preceding);
+    const continues = !SUBSTANTIVE_TEXT.test(claimText);
     if (markers.length > 0 && supported !== undefined) {
       const claim = supported.hidesProse
         ? { claimText: supported.text, markers, hidesProse: true as const }
         : { claimText: supported.text, markers };
-      appendNumericCitedClaim(claims, claim, claimText.length === 0);
+      appendNumericCitedClaim(claims, claim, continues);
     }
-    if (claimText.length > 0 && supported !== undefined) preceding = supported;
+    // An uncited span of bracketed prose alone still hides that prose from the claim it follows.
+    if (supported !== undefined && (!continues || preceding !== undefined)) preceding = supported;
   }
   return claims;
 }

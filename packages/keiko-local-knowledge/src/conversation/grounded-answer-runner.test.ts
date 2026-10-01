@@ -488,7 +488,9 @@ describe("runGroundedAnswer — own assessment", () => {
   it("drops an assessment the policy disables and says so", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-assess-c" });
-    const generator = fakeGenerator("Found evidence [1]. <assessment>Use Java 21.</assessment>");
+    const generator = fakeGenerator(
+      "Found evidence [1]. <assessment>Use Java 21.</assessment><assessment>MFA is mandatory.</assessment>",
+    );
     const result = await runGroundedAnswer(
       { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
       { conversationId: "conv-assess-c", capsuleId: seeded.capsuleId, text: "alpha" },

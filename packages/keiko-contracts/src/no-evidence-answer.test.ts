@@ -108,6 +108,9 @@ describe("isNoEvidenceAnswerText", () => {
     "According to the current API reference documentation, the API does not provide authentication. Requests are anonymous.",
     "The API does not provide authentication according to the v2.0 documentation.",
     "Gemäß der Dokumentation v2.0 des Projekts bietet die API keine Authentifizierung an.",
+    // A nested source keeps its articles after a preposition (PR #3678 review).
+    "According to the README of the repository, the API does not provide authentication.",
+    "The API does not provide authentication according to the README of the repository.",
     // The audit's exact false-positive probes.
     "Für diesen Endpunkt sind keine Angaben zum Benutzer erforderlich.",
     "The endpoint requires no details about the user.",

@@ -56,23 +56,6 @@ function delimiterTags(answer: string): readonly DelimiterTag[] {
   return tags;
 }
 
-// The text of `answer` between `from` and `to` without its delimiting tags.
-function withoutTagsBetween(
-  answer: string,
-  tags: readonly DelimiterTag[],
-  from: number,
-  to: number,
-): string {
-  let text = "";
-  let cursor = from;
-  for (const tag of tags) {
-    if (tag.start < from || tag.start >= to) continue;
-    text += answer.slice(cursor, tag.start);
-    cursor = tag.end;
-  }
-  return text + answer.slice(cursor, Math.max(cursor, to));
-}
-
 function joined(parts: readonly string[]): string {
   return parts
     .map((part) => part.trim())
@@ -81,24 +64,27 @@ function joined(parts: readonly string[]): string {
 }
 
 /**
- * Splits an answer at its first `<assessment>` block (tags matched case-insensitively, never inside
- * Markdown code). An unclosed block runs to the end; text after a closed block stays source-backed;
- * stray tags are dropped. An answer without a block is all source-backed.
+ * Splits an answer into its source-backed text and Keiko's assessment. Every `<assessment>` block
+ * counts (tags matched case-insensitively, never inside Markdown code): a model that writes two
+ * blocks never gets the second one's words past the citation rules (PR #3678 review). An unclosed
+ * block runs to the end, stray tags are dropped, and an answer without a block is all
+ * source-backed.
  */
 export function splitOwnAssessment(answer: string): OwnAssessmentSplit {
-  const tags = delimiterTags(answer);
-  const open = tags.find((tag) => !tag.closing);
-  if (open === undefined) {
-    return { grounded: withoutTagsBetween(answer, tags, 0, answer.length).trim() };
+  const grounded: string[] = [];
+  const assessed: string[] = [];
+  let inBlock = false;
+  let cursor = 0;
+  for (const tag of delimiterTags(answer)) {
+    (inBlock ? assessed : grounded).push(answer.slice(cursor, tag.start));
+    cursor = tag.end;
+    if (tag.closing === inBlock) inBlock = !inBlock;
   }
-  const close = tags.find((tag) => tag.closing && tag.start >= open.end);
-  const grounded = joined([
-    withoutTagsBetween(answer, tags, 0, open.start),
-    withoutTagsBetween(answer, tags, close?.end ?? answer.length, answer.length),
-  ]);
-  const inside = withoutTagsBetween(answer, tags, open.end, close?.start ?? answer.length);
-  const assessment = inside.trim();
-  return assessment.length === 0 ? { grounded } : { grounded, assessment };
+  (inBlock ? assessed : grounded).push(answer.slice(cursor));
+  const assessment = joined(assessed);
+  return assessment.length === 0
+    ? { grounded: joined(grounded) }
+    : { grounded: joined(grounded), assessment };
 }
 
 /** True when `answer` carries an assessment tag outside Markdown code. */

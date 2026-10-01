@@ -204,11 +204,12 @@ const EVIDENCE_REFERENT_PATTERN = anyWord([
 // "The API does not provide authentication according to the documentation." is a documented
 // negative fact (PR #3678 review). Attribution phrases are removed before the referent test.
 // The attributed source is the noun phrase after the trigger: "the current API reference
-// documentation", "the v2.0 documentation", "the project's documentation" (PR #3678 review). It ends
-// at a clause mark, at a word that opens the main clause (a verb, a negation or a pronoun), or at a
-// second article, which opens the main clause's subject: in "According to the search results the
-// retrieved documents do not mention X" the source is "the search results", and the refusal keeps
-// its referent. At most eight words, read one by one, so nothing backtracks.
+// documentation", "the v2.0 documentation", "the project's documentation", "the README of the
+// repository" (PR #3678 review). It ends at a clause mark, at a word that opens the main clause (a
+// verb, a negation or a pronoun), or at a second article not after a preposition, which opens the
+// main clause's subject: in "According to the search results the retrieved documents do not
+// mention X" the source is "the search results", and the refusal keeps its referent. At most eight
+// words, read one by one, so nothing backtracks.
 const ATTRIBUTION_TRIGGER =
   /\b(?:according to|as (?:stated|described|documented|specified) in|as per|laut|gemäß)\s+/giu;
 const ATTRIBUTION_MAX_WORDS = 8;
@@ -225,6 +226,10 @@ const MAIN_CLAUSE_WORDS: ReadonlySet<string> = new Set(
 const ARTICLES: ReadonlySet<string> = new Set(
   "the a an this these those der die das den dem des ein eine einer einem einen".split(" "),
 );
+// An article after one of these continues the source ("the README of the repository").
+const PREPOSITIONS: ReadonlySet<string> = new Set(
+  "of for from in on at by with to von aus für mit bei zu zum zur im am".split(" "),
+);
 
 function endsWithClauseMark(word: string): boolean {
   return CLAUSE_MARKS.has(word.at(-1) ?? "");
@@ -237,23 +242,26 @@ function bareWord(word: string): string {
   return word.slice(0, end).toLowerCase();
 }
 
-function endsSourcePhrase(word: string, taken: number): boolean {
+function endsSourcePhrase(word: string, previous: string | undefined): boolean {
   const bare = bareWord(word);
-  return MAIN_CLAUSE_WORDS.has(bare) || (taken > 0 && ARTICLES.has(bare));
+  if (MAIN_CLAUSE_WORDS.has(bare)) return true;
+  return previous !== undefined && ARTICLES.has(bare) && !PREPOSITIONS.has(bareWord(previous));
 }
 
 // The length of the source phrase at the start of `rest`, trailing whitespace included.
 function sourcePhraseLength(rest: string): number {
   let length = 0;
   let taken = 0;
+  let previous: string | undefined;
   for (const part of rest.split(/(\s+)/u)) {
     if (part.trim().length === 0) {
       length += part.length;
       continue;
     }
-    if (endsSourcePhrase(part, taken)) break;
+    if (endsSourcePhrase(part, previous)) break;
     length += part.length;
     taken += 1;
+    previous = part;
     if (taken >= ATTRIBUTION_MAX_WORDS || endsWithClauseMark(part)) break;
   }
   return length;

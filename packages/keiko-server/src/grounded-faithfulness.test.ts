@@ -671,6 +671,18 @@ describe("numeric citation entailment", () => {
 
   // PR #3678 review (P1): a marker-only span supports the claim before it, hidden prose included,
   // and a Markdown link label is visible prose however path-like it reads.
+  it("keeps hidden prose across a bracket-only line, a trailing period and a lone marker", () => {
+    expect(segmentNumericCitedClaims("The API uses TLS.\n[MFA mandatory]\n[1]")).toEqual([
+      { claimText: "The API uses TLS.", markers: [1], hidesProse: true },
+    ]);
+    expect(segmentNumericCitedClaims("The API uses TLS [MFA mandatory]. [1].")).toEqual([
+      { claimText: "The API uses TLS .", markers: [1], hidesProse: true },
+    ]);
+    expect(segmentNumericCitedClaims("[MFA mandatory] [1]")).toEqual([
+      { claimText: "", markers: [1], hidesProse: true },
+    ]);
+  });
+
   it("carries hidden prose into a marker-only continuation and flags a link label", () => {
     expect(segmentNumericCitedClaims("The API uses TLS [MFA mandatory]. [1]")).toEqual([
       { claimText: "The API uses TLS .", markers: [1], hidesProse: true },
