@@ -749,6 +749,35 @@ describe("numeric citation entailment", () => {
     expect(result).toMatchObject({ judgedClaims: 1, unentailed: [] });
   });
 
+  // PR #3678 review (P2): a hostile run of distinct-marker continuations is parsed before any judge
+  // budget applies; rebuilding the marker union per span measured seconds here and grows
+  // quadratically, the incremental union stays in low milliseconds.
+  it("stays fast and keeps every marker over a long run of cited symbol continuations", () => {
+    const continuations = 24_000;
+    const lines = Array.from(
+      { length: continuations },
+      (_, index) => `\`||\` [${String(index + 2)}]`,
+    );
+    const answer = `Fact [1].\n${lines.join("\n")}`;
+
+    const start = Date.now();
+    const claims = segmentNumericCitedClaims(answer);
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(2000);
+    expect(claims).toHaveLength(1);
+    expect(claims[0]?.markers).toHaveLength(continuations + 1);
+    expect(claims[0]?.markers.slice(0, 3)).toEqual([1, 2, 3]);
+    expect(claims[0]?.markers.at(-1)).toBe(continuations + 1);
+  });
+
+  it("gives a lone leading marker no claim and never lets it open one for the next span", () => {
+    expect(segmentNumericCitedClaims("[1]")).toEqual([]);
+    expect(segmentNumericCitedClaims("[1]\nThe API uses TLS [2].")).toEqual([
+      { claimText: "The API uses TLS .", markers: [2] },
+    ]);
+  });
+
   it("carries hidden prose into a marker-only continuation and flags a link label", () => {
     expect(segmentNumericCitedClaims("The API uses TLS [MFA mandatory]. [1]")).toEqual([
       { claimText: "The API uses TLS .", markers: [1], hidesProse: true },

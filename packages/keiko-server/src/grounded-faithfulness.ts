@@ -655,25 +655,42 @@ export interface NumericCitedClaim {
   readonly hidesProse?: true;
 }
 
-// A span that continues the last cited claim extends that claim: it keeps the earlier markers, so
-// the judge reads the whole visible claim against every excerpt cited for it, never one part of it
-// against another part's source alone (PR #3678 review).
+interface NumericClaimDraft {
+  claimText: string;
+  readonly markers: Set<number>;
+  hidesProse: boolean;
+}
+
+// A span that continues the last cited claim extends that claim in place: it keeps the earlier
+// markers, so the judge reads the whole visible claim against every excerpt cited for it, never one
+// part of it against another part's source alone. The marker union grows incrementally, so a hostile
+// run of continuations stays linear (PR #3678 review).
 function appendNumericCitedClaim(
-  claims: NumericCitedClaim[],
-  claim: NumericCitedClaim,
-  continuesPrevious: boolean,
-): void {
-  const previous = claims.at(-1);
-  if (continuesPrevious && previous !== undefined) {
-    const hidesProse = previous.hidesProse === true || claim.hidesProse === true;
-    claims[claims.length - 1] = {
-      claimText: claim.claimText,
-      markers: [...new Set([...previous.markers, ...claim.markers])],
-      ...(hidesProse ? { hidesProse } : {}),
+  drafts: NumericClaimDraft[],
+  continued: NumericClaimDraft | undefined,
+  supported: SupportedClaimText,
+  markers: readonly number[],
+): NumericClaimDraft {
+  if (continued === undefined) {
+    const draft = {
+      claimText: supported.text,
+      markers: new Set(markers),
+      hidesProse: supported.hidesProse,
     };
-    return;
+    drafts.push(draft);
+    return draft;
   }
-  claims.push(claim);
+  continued.claimText = supported.text;
+  for (const marker of markers) continued.markers.add(marker);
+  continued.hidesProse ||= supported.hidesProse;
+  return continued;
+}
+
+function numericCitedClaimOf(draft: NumericClaimDraft): NumericCitedClaim {
+  const markers = [...draft.markers];
+  return draft.hidesProse
+    ? { claimText: draft.claimText, markers, hidesProse: true }
+    : { claimText: draft.claimText, markers };
 }
 
 /** Segment user-visible `[n]` citations against the sentence each marker actually supports. */
@@ -713,28 +730,26 @@ function supportedClaimOf(
 }
 
 export function segmentNumericCitedClaims(answerText: string): readonly NumericCitedClaim[] {
-  const claims: NumericCitedClaim[] = [];
+  const drafts: NumericClaimDraft[] = [];
   let preceding: SupportedClaimText | undefined;
-  let precedingIsLastClaim = false;
+  // The claim the preceding span cited or continued: a span without claim text of its own extends it.
+  let lastClaim: NumericClaimDraft | undefined;
   for (const span of splitClaimSpans(answerText)) {
-    const markers = [...new Set(parseNumericCitations(span))];
+    const markers = parseNumericCitations(span);
     const claimText = stripInlineCitations(span);
     const supported = supportedClaimOf(claimText, hidesBracketedProse(span), preceding);
-    const continuesLastClaim: boolean = precedingIsLastClaim && !isOwnClaimText(claimText);
-    if (markers.length > 0 && supported !== undefined) {
-      const claim = supported.hidesProse
-        ? { claimText: supported.text, markers, hidesProse: true as const }
-        : { claimText: supported.text, markers };
-      appendNumericCitedClaim(claims, claim, continuesLastClaim);
-    }
-    // An uncited span of bracketed prose alone still hides that prose: from the claim it follows,
-    // or, at the start, from the marker that cites it later (PR #3678 review).
     if (supported !== undefined) {
+      const continued = isOwnClaimText(claimText) ? undefined : lastClaim;
+      lastClaim =
+        markers.length > 0
+          ? appendNumericCitedClaim(drafts, continued, supported, markers)
+          : continued;
+      // An uncited span of bracketed prose alone still hides that prose: from the claim it follows,
+      // or, at the start, from the marker that cites it later (PR #3678 review).
       preceding = supported;
-      precedingIsLastClaim = markers.length > 0 || continuesLastClaim;
     }
   }
-  return claims;
+  return drafts.map(numericCitedClaimOf);
 }
 
 /** A claim whose cited excerpt(s) did NOT support it (verdict `unsupported`). */
