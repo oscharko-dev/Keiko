@@ -66,21 +66,23 @@ function joined(parts: readonly string[]): string {
 /**
  * Splits an answer into its source-backed text and Keiko's assessment. Every `<assessment>` block
  * counts (tags matched case-insensitively, never inside Markdown code): a model that writes two
- * blocks never gets the second one's words past the citation rules (PR #3678 review). An unclosed
- * block runs to the end, stray tags are dropped, and an answer without a block is all
- * source-backed.
+ * blocks, or nests one, never gets any of their words past the citation rules (PR #3678 review).
+ * An unclosed block runs to the end, a stray closing tag is dropped, and an answer without a block
+ * is all source-backed.
  */
 export function splitOwnAssessment(answer: string): OwnAssessmentSplit {
   const grounded: string[] = [];
   const assessed: string[] = [];
-  let inBlock = false;
+  // Nested blocks count by depth: everything until the outermost block closes is assessment, so a
+  // nested closing tag never hands the outer block's remaining words to the sources (PR #3678).
+  let depth = 0;
   let cursor = 0;
   for (const tag of delimiterTags(answer)) {
-    (inBlock ? assessed : grounded).push(answer.slice(cursor, tag.start));
+    (depth > 0 ? assessed : grounded).push(answer.slice(cursor, tag.start));
     cursor = tag.end;
-    if (tag.closing === inBlock) inBlock = !inBlock;
+    depth = tag.closing ? Math.max(0, depth - 1) : depth + 1;
   }
-  (inBlock ? assessed : grounded).push(answer.slice(cursor));
+  (depth > 0 ? assessed : grounded).push(answer.slice(cursor));
   const assessment = joined(assessed);
   return assessment.length === 0
     ? { grounded: joined(grounded) }

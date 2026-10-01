@@ -681,6 +681,9 @@ describe("numeric citation entailment", () => {
     expect(segmentNumericCitedClaims("[MFA mandatory] [1]")).toEqual([
       { claimText: "", markers: [1], hidesProse: true },
     ]);
+    expect(segmentNumericCitedClaims("[MFA mandatory]\n[1]")).toEqual([
+      { claimText: "", markers: [1], hidesProse: true },
+    ]);
   });
 
   it("carries hidden prose into a marker-only continuation and flags a link label", () => {

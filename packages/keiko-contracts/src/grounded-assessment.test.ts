@@ -48,6 +48,17 @@ describe("splitOwnAssessment", () => {
     });
   });
 
+  it("keeps a nested block's words, inner and outer, in the assessment", () => {
+    expect(
+      splitOwnAssessment(
+        "The API uses TLS [1]. <assessment>Use Java 21. <assessment>MFA is mandatory.</assessment> Keys must rotate daily.</assessment> Keys rotate [2].",
+      ),
+    ).toEqual({
+      grounded: "The API uses TLS [1].\n\nKeys rotate [2].",
+      assessment: "Use Java 21.\n\nMFA is mandatory.\n\nKeys must rotate daily.",
+    });
+  });
+
   it("returns no assessment for an empty block and an empty source part for a block alone", () => {
     expect(splitOwnAssessment("Fact [1]. <assessment>  </assessment>")).toEqual({
       grounded: "Fact [1].",

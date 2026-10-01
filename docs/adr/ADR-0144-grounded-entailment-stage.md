@@ -205,9 +205,10 @@ shaped, all on the numeric `[n]` connector path. The recorded behaviour is corre
   sentence names the evidence it searched (documents, sources, context, repository); an
   attribution such as "according to the documentation", plain or as inline Markdown, with a
   possessive, version or compound source word ("the project's documentation"), names a source, not
-  the place that lacks it. The attributed source is the noun phrase after the trigger. It ends at a
-  clause mark, at a word that opens the main clause, or at a second article, so "According to the
-  search results the retrieved documents do not mention X" is still a refusal. An
+  the place that lacks it. The attributed source is the noun phrase after the trigger, however long
+  ("the README of the repository"). It ends at a clause mark, at a word that opens the main clause,
+  or at a second article that does not follow a preposition, so "According to the search results
+  the retrieved documents do not mention X" is still a refusal. An
   absent-information noun ("keine Angaben", "no details") also counts with a search outcome
   ("gefunden", "available", "liegen … vor") in that sentence. Otherwise "The API does not provide
   authentication." or "The API returns no details on errors." is a negative fact, not a refusal.
@@ -253,6 +254,8 @@ A chat with Knowledge Pods attached must still be a conversation partner.
   - When the policy is disabled, the prompt carries no rule. A block the model writes anyway is
     dropped (`neutralized`), never promoted to source-backed text that its citations and the judge
     would not cover.
+- **Every block counts.** A second or a nested block is assessment too, by nesting depth; none of
+  its words reaches the source-backed part.
 - **Code stays literal.** Tags inside inline code or a fenced block, such as an XML example, are
   content and never delimit. The tag grammar reads code through the same `markdownCodeRanges` as
   the citation markers.

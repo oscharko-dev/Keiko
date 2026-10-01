@@ -208,16 +208,17 @@ const EVIDENCE_REFERENT_PATTERN = anyWord([
 // repository" (PR #3678 review). It ends at a clause mark, at a word that opens the main clause (a
 // verb, a negation or a pronoun), or at a second article not after a preposition, which opens the
 // main clause's subject: in "According to the search results the retrieved documents do not
-// mention X" the source is "the search results", and the refusal keeps its referent. At most eight
-// words, read one by one, so nothing backtracks.
+// mention X" the source is "the search results", and the refusal keeps its referent. No word count
+// bounds it, so a long source never leaves its own noun behind as a referent; the words are read
+// one by one, so nothing backtracks.
 const ATTRIBUTION_TRIGGER =
   /\b(?:according to|as (?:stated|described|documented|specified) in|as per|laut|gemäß)\s+/giu;
-const ATTRIBUTION_MAX_WORDS = 8;
 const CLAUSE_MARKS: ReadonlySet<string> = new Set([",", ";", ":", ".", "!", "?"]);
 const MAIN_CLAUSE_WORDS: ReadonlySet<string> = new Set(
   (
     "do does did is are was were has have had there it can cannot could will would should may " +
-    "might must not no never we i you they contains mentions states says provides includes " +
+    "might must not no never nothing none we i you they contains mentions states says provides " +
+    "includes " +
     "describes specifies covers ist sind war wird werden wurde wurden hat haben gibt enthält " +
     "enthalten nennt nennen steht stehen liegt liegen lässt kann können bietet beschreibt sagt " +
     "geht keine kein keinen nicht nichts es wir ich man"
@@ -251,7 +252,6 @@ function endsSourcePhrase(word: string, previous: string | undefined): boolean {
 // The length of the source phrase at the start of `rest`, trailing whitespace included.
 function sourcePhraseLength(rest: string): number {
   let length = 0;
-  let taken = 0;
   let previous: string | undefined;
   for (const part of rest.split(/(\s+)/u)) {
     if (part.trim().length === 0) {
@@ -260,9 +260,8 @@ function sourcePhraseLength(rest: string): number {
     }
     if (endsSourcePhrase(part, previous)) break;
     length += part.length;
-    taken += 1;
     previous = part;
-    if (taken >= ATTRIBUTION_MAX_WORDS || endsWithClauseMark(part)) break;
+    if (endsWithClauseMark(part)) break;
   }
   return length;
 }

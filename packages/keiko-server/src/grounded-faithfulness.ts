@@ -712,8 +712,9 @@ export function segmentNumericCitedClaims(answerText: string): readonly NumericC
         : { claimText: supported.text, markers };
       appendNumericCitedClaim(claims, claim, continues);
     }
-    // An uncited span of bracketed prose alone still hides that prose from the claim it follows.
-    if (supported !== undefined && (!continues || preceding !== undefined)) preceding = supported;
+    // An uncited span of bracketed prose alone still hides that prose: from the claim it follows,
+    // or, at the start, from the marker that cites it later (PR #3678 review).
+    if (supported !== undefined) preceding = supported;
   }
   return claims;
 }

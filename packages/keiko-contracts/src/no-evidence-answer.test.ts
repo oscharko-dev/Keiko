@@ -111,6 +111,7 @@ describe("isNoEvidenceAnswerText", () => {
     // A nested source keeps its articles after a preposition (PR #3678 review).
     "According to the README of the repository, the API does not provide authentication.",
     "The API does not provide authentication according to the README of the repository.",
+    "According to the current published version of the API reference documentation, the API does not provide authentication.",
     // The audit's exact false-positive probes.
     "Für diesen Endpunkt sind keine Angaben zum Benutzer erforderlich.",
     "The endpoint requires no details about the user.",
