@@ -681,6 +681,11 @@ describe("numeric citation entailment", () => {
     expect(segmentNumericCitedClaims("[MFA mandatory] [1]")).toEqual([
       { claimText: "", markers: [1], hidesProse: true },
     ]);
+    for (const formatted of ["**[1]**", "*[1]*", "_[1]_", "~~[1]~~"]) {
+      expect(segmentNumericCitedClaims(`The API uses TLS [MFA mandatory]. ${formatted}`)).toEqual([
+        { claimText: "The API uses TLS .", markers: [1], hidesProse: true },
+      ]);
+    }
     expect(segmentNumericCitedClaims("[MFA mandatory]\n[1]")).toEqual([
       { claimText: "", markers: [1], hidesProse: true },
     ]);

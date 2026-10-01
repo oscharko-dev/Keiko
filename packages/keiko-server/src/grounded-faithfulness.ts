@@ -679,10 +679,10 @@ interface SupportedClaimText {
   readonly hidesProse: boolean;
 }
 
-// Only whitespace and sentence punctuation, such as the "." after `[1].`, continue the claim before
-// them. Anything else says something, a symbol-valued code answer such as `||` included, and the
-// judge must read it (PR #3678 review).
-const CONTINUATION_TEXT = /^[\s.,;:!?…]*$/u;
+// Only whitespace, sentence punctuation and Markdown emphasis, such as the "." after `[1].` or the
+// asterisks around `**[1]**`, continue the claim before them. Anything else says something, a
+// symbol-valued code answer such as `||` included, and the judge must read it (PR #3678 review).
+const CONTINUATION_TEXT = /^[\s.,;:!?…*_~]*$/u;
 
 // The claim a span's markers support: its own substantive text, or, for a span that only adds
 // markers or punctuation, the claim before it with every hidden prose seen since (PR #3678 review).
