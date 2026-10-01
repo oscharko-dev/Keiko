@@ -686,6 +686,12 @@ describe("numeric citation entailment", () => {
         { claimText: "The API uses TLS .", markers: [1], hidesProse: true },
       ]);
     }
+    for (const block of ["> [1]", "- [1]", "1. [1]"]) {
+      expect(segmentNumericCitedClaims(`The API uses TLS.\n[MFA mandatory]\n${block}`)).toEqual([
+        { claimText: "The API uses TLS.", markers: [1], hidesProse: true },
+      ]);
+    }
+    expect(segmentNumericCitedClaims("~ [1]")).toEqual([{ claimText: "~", markers: [1] }]);
     expect(segmentNumericCitedClaims("[MFA mandatory]\n[1]")).toEqual([
       { claimText: "", markers: [1], hidesProse: true },
     ]);
@@ -694,6 +700,13 @@ describe("numeric citation entailment", () => {
   // PR #3678 review (P1): a symbol-valued code answer is a claim, never punctuation.
   it("judges a symbol-only code answer and flags it when the excerpt contradicts it", async () => {
     expect(segmentNumericCitedClaims("`||` [1]")).toEqual([{ claimText: "`||`", markers: [1] }]);
+    const notOperator = await reconcileNumericClaimEntailment(
+      "~ [1]",
+      [{ marker: 1, excerptText: "The NOT operator is !. [[CONTRADICTS]]" }],
+      scriptedJudge(),
+    );
+    expect(notOperator).toMatchObject({ judgedClaims: 1, unavailableClaims: 0 });
+    expect(notOperator.unentailed).toHaveLength(1);
     const result = await reconcileNumericClaimEntailment(
       "`||` [1]",
       [{ marker: 1, excerptText: "The API uses && as its boolean operator. [[CONTRADICTS]]" }],

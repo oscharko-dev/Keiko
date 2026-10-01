@@ -679,10 +679,30 @@ interface SupportedClaimText {
   readonly hidesProse: boolean;
 }
 
-// Only whitespace, sentence punctuation and Markdown emphasis, such as the "." after `[1].` or the
-// asterisks around `**[1]**`, continue the claim before them. Anything else says something, a
-// symbol-valued code answer such as `||` included, and the judge must read it (PR #3678 review).
-const CONTINUATION_TEXT = /^[\s.,;:!?…*_~]*$/u;
+// A span continues the claim before it when what it renders, its citation brackets removed, is no
+// more than Markdown syntax and sentence punctuation: the "." after `[1].`, the empty emphasis of
+// `**[1]**` or `~~[1]~~`, the quote marker of `> [1]` or the bullet of `- [1]`. Anything else says
+// something, a literal `~` or a code answer such as `||` included, and the judge must read it
+// (PR #3678 review).
+const CONTINUATION_TEXT = /^[\s.,;:!?…]*$/u;
+// An ordered marker may end its span: the claim splitter cuts `1. [1]` after the "1.".
+const LIST_MARKER = /^(?:[-*+][ \t]|\d{1,9}[.)](?:[ \t]|$))/u;
+const EMPTY_EMPHASIS = /(\*{1,3}|_{1,3}|~~)\s*\1/gu;
+
+// One line's rendered text: quote markers and a list bullet at its start are block syntax.
+function renderedLineText(line: string): string {
+  let text = line.trimStart();
+  while (text.startsWith(">")) text = text.slice(1).trimStart();
+  const bullet = LIST_MARKER.exec(text);
+  return (bullet === null ? text : text.slice(bullet[0].length)).replace(EMPTY_EMPHASIS, "");
+}
+
+function continuesPrecedingClaim(span: string): boolean {
+  const withoutBrackets = span.replace(CLAIM_BRACKET_RE, "");
+  return withoutBrackets
+    .split("\n")
+    .every((line) => CONTINUATION_TEXT.test(renderedLineText(line)));
+}
 
 // The claim a span's markers support: its own substantive text, or, for a span that only adds
 // markers or punctuation, the claim before it with every hidden prose seen since (PR #3678 review).
@@ -690,10 +710,11 @@ const CONTINUATION_TEXT = /^[\s.,;:!?…*_~]*$/u;
 // the judge can never decide.
 function supportedClaimOf(
   claimText: string,
+  continues: boolean,
   hidden: boolean,
   preceding: SupportedClaimText | undefined,
 ): SupportedClaimText | undefined {
-  if (!CONTINUATION_TEXT.test(claimText)) return { text: claimText, hidesProse: hidden };
+  if (!continues) return { text: claimText, hidesProse: hidden };
   if (preceding !== undefined) {
     return { text: preceding.text, hidesProse: preceding.hidesProse || hidden };
   }
@@ -706,8 +727,8 @@ export function segmentNumericCitedClaims(answerText: string): readonly NumericC
   for (const span of splitClaimSpans(answerText)) {
     const markers = [...new Set(parseNumericCitations(span))];
     const claimText = stripInlineCitations(span);
-    const supported = supportedClaimOf(claimText, hidesBracketedProse(span), preceding);
-    const continues = CONTINUATION_TEXT.test(claimText);
+    const continues = continuesPrecedingClaim(span);
+    const supported = supportedClaimOf(claimText, continues, hidesBracketedProse(span), preceding);
     if (markers.length > 0 && supported !== undefined) {
       const claim = supported.hidesProse
         ? { claimText: supported.text, markers, hidesProse: true as const }
