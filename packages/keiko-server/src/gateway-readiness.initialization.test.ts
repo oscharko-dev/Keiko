@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import {
@@ -87,6 +88,18 @@ it("isolates throwing subscribers and retains the configuration request's causal
   expect(started?.parentCorrelationId).toBe("corr-config-subscription");
   expect(started?.correlationId).not.toBe(deps.gatewayConfig?.initializationCorrelationId);
   expect(JSON.stringify(sink.events)).not.toContain("private subscriber detail");
+  // PR #3678: the parent correlation used to be added with a plain spread, which dropped the
+  // registration marker, so the file writer discarded every startup probe line as unregistered.
+  const probeLines = sink.events.filter(
+    (event) =>
+      event.op === "gateway.readiness.automatic.started" ||
+      event.op === "gateway.readiness.automatic.completed" ||
+      event.op.startsWith("http.gateway.fetch."),
+  );
+  expect(probeLines.length).toBeGreaterThanOrEqual(3);
+  for (const line of probeLines) {
+    expect(() => validateRegisteredActivityLogEvent(line)).not.toThrow();
+  }
 });
 
 it("disposal cancels recovery timers and ignores subsequent configuration changes", async () => {

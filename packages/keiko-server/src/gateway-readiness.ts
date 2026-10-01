@@ -25,6 +25,7 @@ import type {
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  withActivityLogParentCorrelation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { gatewayVerificationFromProbeOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -2320,7 +2321,7 @@ function initializationDeps(
     ...deps,
     activityLog: {
       write: (event): void => {
-        sink.write({ parentCorrelationId, ...event });
+        sink.write(withActivityLogParentCorrelation(event, parentCorrelationId));
       },
     },
   };
