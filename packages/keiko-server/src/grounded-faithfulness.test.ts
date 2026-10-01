@@ -686,6 +686,18 @@ describe("numeric citation entailment", () => {
     ]);
   });
 
+  // PR #3678 review (P1): a symbol-valued code answer is a claim, never punctuation.
+  it("judges a symbol-only code answer and flags it when the excerpt contradicts it", async () => {
+    expect(segmentNumericCitedClaims("`||` [1]")).toEqual([{ claimText: "`||`", markers: [1] }]);
+    const result = await reconcileNumericClaimEntailment(
+      "`||` [1]",
+      [{ marker: 1, excerptText: "The API uses && as its boolean operator. [[CONTRADICTS]]" }],
+      scriptedJudge(),
+    );
+    expect(result).toMatchObject({ judgedClaims: 1, unavailableClaims: 0 });
+    expect(result.unentailed).toHaveLength(1);
+  });
+
   it("carries hidden prose into a marker-only continuation and flags a link label", () => {
     expect(segmentNumericCitedClaims("The API uses TLS [MFA mandatory]. [1]")).toEqual([
       { claimText: "The API uses TLS .", markers: [1], hidesProse: true },

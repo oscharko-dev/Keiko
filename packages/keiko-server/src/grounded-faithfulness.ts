@@ -679,8 +679,10 @@ interface SupportedClaimText {
   readonly hidesProse: boolean;
 }
 
-// Text with a letter or a digit says something; a lone "." after a marker does not.
-const SUBSTANTIVE_TEXT = /[\p{L}\p{N}]/u;
+// Only whitespace and sentence punctuation, such as the "." after `[1].`, continue the claim before
+// them. Anything else says something, a symbol-valued code answer such as `||` included, and the
+// judge must read it (PR #3678 review).
+const CONTINUATION_TEXT = /^[\s.,;:!?…]*$/u;
 
 // The claim a span's markers support: its own substantive text, or, for a span that only adds
 // markers or punctuation, the claim before it with every hidden prose seen since (PR #3678 review).
@@ -691,7 +693,7 @@ function supportedClaimOf(
   hidden: boolean,
   preceding: SupportedClaimText | undefined,
 ): SupportedClaimText | undefined {
-  if (SUBSTANTIVE_TEXT.test(claimText)) return { text: claimText, hidesProse: hidden };
+  if (!CONTINUATION_TEXT.test(claimText)) return { text: claimText, hidesProse: hidden };
   if (preceding !== undefined) {
     return { text: preceding.text, hidesProse: preceding.hidesProse || hidden };
   }
@@ -705,7 +707,7 @@ export function segmentNumericCitedClaims(answerText: string): readonly NumericC
     const markers = [...new Set(parseNumericCitations(span))];
     const claimText = stripInlineCitations(span);
     const supported = supportedClaimOf(claimText, hidesBracketedProse(span), preceding);
-    const continues = !SUBSTANTIVE_TEXT.test(claimText);
+    const continues = CONTINUATION_TEXT.test(claimText);
     if (markers.length > 0 && supported !== undefined) {
       const claim = supported.hidesProse
         ? { claimText: supported.text, markers, hidesProse: true as const }
