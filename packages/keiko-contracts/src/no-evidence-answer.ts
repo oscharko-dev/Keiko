@@ -212,23 +212,33 @@ const EVIDENCE_REFERENT_PATTERN = anyWord([
 const ATTRIBUTION_TRIGGER =
   /\b(?:according to|as (?:stated|described|documented|specified) in|as per|laut|gemäß)\s+/giu;
 const ATTRIBUTION_MAX_WORDS = 8;
-const CLAUSE_MARK = /[,;:.!?]$/u;
-const MAIN_CLAUSE_WORDS: ReadonlySet<string> = new Set([
-  ...["do", "does", "did", "is", "are", "was", "were", "has", "have", "had", "there", "it"],
-  ...["can", "cannot", "could", "will", "would", "should", "may", "might", "must", "not", "no"],
-  ...["never", "we", "i", "you", "they", "contains", "mentions", "states", "says", "provides"],
-  ...["includes", "describes", "specifies", "covers", "ist", "sind", "war", "wird", "werden"],
-  ...["wurde", "wurden", "hat", "haben", "gibt", "enthält", "enthalten", "nennt", "nennen"],
-  ...["steht", "stehen", "liegt", "liegen", "lässt", "kann", "können", "bietet", "beschreibt"],
-  ...["sagt", "geht", "keine", "kein", "keinen", "nicht", "nichts", "es", "wir", "ich", "man"],
-]);
-const ARTICLES: ReadonlySet<string> = new Set([
-  ...["the", "a", "an", "this", "these", "those", "der", "die", "das", "den", "dem", "des"],
-  ...["ein", "eine", "einer", "einem", "einen"],
-]);
+const CLAUSE_MARKS: ReadonlySet<string> = new Set([",", ";", ":", ".", "!", "?"]);
+const MAIN_CLAUSE_WORDS: ReadonlySet<string> = new Set(
+  (
+    "do does did is are was were has have had there it can cannot could will would should may " +
+    "might must not no never we i you they contains mentions states says provides includes " +
+    "describes specifies covers ist sind war wird werden wurde wurden hat haben gibt enthält " +
+    "enthalten nennt nennen steht stehen liegt liegen lässt kann können bietet beschreibt sagt " +
+    "geht keine kein keinen nicht nichts es wir ich man"
+  ).split(" "),
+);
+const ARTICLES: ReadonlySet<string> = new Set(
+  "the a an this these those der die das den dem des ein eine einer einem einen".split(" "),
+);
+
+function endsWithClauseMark(word: string): boolean {
+  return CLAUSE_MARKS.has(word.at(-1) ?? "");
+}
+
+// The word without its trailing clause marks, lower-cased; read character by character.
+function bareWord(word: string): string {
+  let end = word.length;
+  while (end > 0 && CLAUSE_MARKS.has(word.charAt(end - 1))) end -= 1;
+  return word.slice(0, end).toLowerCase();
+}
 
 function endsSourcePhrase(word: string, taken: number): boolean {
-  const bare = word.toLowerCase().replace(/[,;:.!?]+$/u, "");
+  const bare = bareWord(word);
   return MAIN_CLAUSE_WORDS.has(bare) || (taken > 0 && ARTICLES.has(bare));
 }
 
@@ -244,7 +254,7 @@ function sourcePhraseLength(rest: string): number {
     if (endsSourcePhrase(part, taken)) break;
     length += part.length;
     taken += 1;
-    if (taken >= ATTRIBUTION_MAX_WORDS || CLAUSE_MARK.test(part)) break;
+    if (taken >= ATTRIBUTION_MAX_WORDS || endsWithClauseMark(part)) break;
   }
   return length;
 }
