@@ -679,45 +679,33 @@ interface SupportedClaimText {
   readonly hidesProse: boolean;
 }
 
-// A span continues the claim before it when what it renders, its citation brackets removed, is no
-// more than Markdown syntax and sentence punctuation: the "." after `[1].`, the empty emphasis of
-// `**[1]**` or `~~[1]~~`, the quote marker of `> [1]` or the bullet of `- [1]`. Anything else says
-// something, a literal `~` or a code answer such as `||` included, and the judge must read it
-// (PR #3678 review).
-const CONTINUATION_TEXT = /^[\s.,;:!?…]*$/u;
-// An ordered marker may end its span: the claim splitter cuts `1. [1]` after the "1.".
-const LIST_MARKER = /^(?:[-*+][ \t]|\d{1,9}[.)](?:[ \t]|$))/u;
-const EMPTY_EMPHASIS = /(\*{1,3}|_{1,3}|~~)\s*\1/gu;
+// A span with a letter or a digit is a claim of its own; an ordered-list number alone ("1." of
+// `1. [1]`) is not. Any other span (punctuation, Markdown syntax, a bare symbol such as `>>` or `~`)
+// continues the claim before it: the judge reads that claim with the span's visible residue
+// appended, and the claim keeps every hidden prose seen since. Nothing visible is dropped and no
+// hidden prose is lost, whatever syntax the renderer gives the residue (PR #3678 review).
+const OWN_CLAIM_TEXT = /[\p{L}\p{N}]/u;
+const LIST_NUMBER_ONLY = /^\d{1,9}[.)]$/u;
+const PUNCTUATION_ONLY = /^[\s.,;:!?…]*$/u;
 
-// One line's rendered text: quote markers and a list bullet at its start are block syntax.
-function renderedLineText(line: string): string {
-  let text = line.trimStart();
-  while (text.startsWith(">")) text = text.slice(1).trimStart();
-  const bullet = LIST_MARKER.exec(text);
-  return (bullet === null ? text : text.slice(bullet[0].length)).replace(EMPTY_EMPHASIS, "");
+function isOwnClaimText(claimText: string): boolean {
+  return OWN_CLAIM_TEXT.test(claimText) && !LIST_NUMBER_ONLY.test(claimText.trim());
 }
 
-function continuesPrecedingClaim(span: string): boolean {
-  const withoutBrackets = span.replace(CLAIM_BRACKET_RE, "");
-  return withoutBrackets
-    .split("\n")
-    .every((line) => CONTINUATION_TEXT.test(renderedLineText(line)));
-}
-
-// The claim a span's markers support: its own substantive text, or, for a span that only adds
-// markers or punctuation, the claim before it with every hidden prose seen since (PR #3678 review).
-// A marker with no claim before it supports only what its own span hides: an empty, hidden claim
-// the judge can never decide.
+// The claim a span's markers support. A marker with no claim before it supports its own residue,
+// or, when its span only hides prose, an empty hidden claim the judge can never decide.
 function supportedClaimOf(
   claimText: string,
-  continues: boolean,
   hidden: boolean,
   preceding: SupportedClaimText | undefined,
 ): SupportedClaimText | undefined {
-  if (!continues) return { text: claimText, hidesProse: hidden };
+  if (isOwnClaimText(claimText)) return { text: claimText, hidesProse: hidden };
+  const residue = PUNCTUATION_ONLY.test(claimText) ? "" : claimText.trim();
   if (preceding !== undefined) {
-    return { text: preceding.text, hidesProse: preceding.hidesProse || hidden };
+    const text = residue.length === 0 ? preceding.text : `${preceding.text} ${residue}`;
+    return { text, hidesProse: preceding.hidesProse || hidden };
   }
+  if (residue.length > 0) return { text: residue, hidesProse: hidden };
   return hidden ? { text: "", hidesProse: true } : undefined;
 }
 
@@ -727,13 +715,12 @@ export function segmentNumericCitedClaims(answerText: string): readonly NumericC
   for (const span of splitClaimSpans(answerText)) {
     const markers = [...new Set(parseNumericCitations(span))];
     const claimText = stripInlineCitations(span);
-    const continues = continuesPrecedingClaim(span);
-    const supported = supportedClaimOf(claimText, continues, hidesBracketedProse(span), preceding);
+    const supported = supportedClaimOf(claimText, hidesBracketedProse(span), preceding);
     if (markers.length > 0 && supported !== undefined) {
       const claim = supported.hidesProse
         ? { claimText: supported.text, markers, hidesProse: true as const }
         : { claimText: supported.text, markers };
-      appendNumericCitedClaim(claims, claim, continues);
+      appendNumericCitedClaim(claims, claim, !isOwnClaimText(claimText));
     }
     // An uncited span of bracketed prose alone still hides that prose: from the claim it follows,
     // or, at the start, from the marker that cites it later (PR #3678 review).
