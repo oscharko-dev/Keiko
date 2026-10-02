@@ -496,8 +496,9 @@ describe("support query causal closure (#3531)", () => {
     expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
   });
 
-  // Review #3679: an unsupported line or a recorded loss in a start-less lifetime's segments could be
-  // its start, so neither leaves the beginning proven.
+  // Review #3679: an unsupported line, or an event the process recorded losing, in a start-less
+  // lifetime's segments could be its start, so neither leaves the beginning proven. A seal's confirmed
+  // drop counts before any loss summary is written.
   it.each([
     [
       "an unsupported start",
@@ -517,6 +518,29 @@ describe("support query causal closure (#3531)", () => {
             loss: "event-dropped",
             trigger: "heartbeat",
             totalLost: 1,
+            schemaRejected: 1,
+          },
+        }),
+    ],
+    [
+      "a seal's confirmed drop",
+      (a: FixtureProcess): string =>
+        fixtureLine(a, T0 + 1, {
+          op: "activity-log.segment.sealed",
+          correlationId: "unknown-correlation-id",
+          fields: {
+            completeness: "partial",
+            loss: "event-dropped",
+            sealReason: "close",
+            segmentIndex: 2,
+            segmentFirstSeq: 2,
+            segmentLastSeq: 2,
+            segmentLineCount: 1,
+            segmentBytes: 512,
+            segmentDurationMs: 1,
+            droppedEventCount: 1,
+            segmentByteLimit: 1_048_576,
+            segmentSecondsLimit: 3600,
           },
         }),
     ],
@@ -535,15 +559,19 @@ describe("support query causal closure (#3531)", () => {
     expect(result.lifetimes).toEqual([{ pid: 4101, instanceId: "aaaaaaa1", start: "lost" }]);
   });
 
-  // Only the writer's own ledger reporting a lost event leaves a start unaccounted for; a ledger
-  // that lost nothing, like a domain loss of other evidence, loses no line of the lifetime.
-  it("keeps a beginning proven beside a loss ledger that lost nothing", () => {
+  // Review #3679: only the process losing its own evidence leaves a start unaccounted for. A summary
+  // that lost nothing, or counted only browser reports the server refused, loses no line of it.
+  it.each([
+    ["nothing lost", { totalLost: 0 }],
+    ["a refused browser report", { totalLost: 1, clientRejected: 1 }],
+    ["a failed browser post", { totalLost: 1, clientPostFailed: 1 }],
+  ])("keeps a beginning proven beside a loss summary of %s", (_label, counters) => {
     const a = fixtureProcess(4101, "aaaaaaa1");
     writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
       signal(a, T0),
       fixtureLine(a, T0 + 1, {
         op: "activity-log.loss",
-        fields: { trigger: "exit", totalLost: 0 },
+        fields: { trigger: "exit", ...counters },
       }),
     ]);
     writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 600_000, 2), [

@@ -136,6 +136,19 @@ function isEvidenceLossLine(
   return fields.loss !== undefined && fields.loss !== "none";
 }
 
+/**
+ * True for a line recording that its own process lost Activity Log evidence: a registered evidence
+ * loss (the loss summary counts process counters only, never the browser-side ones) or a producer's
+ * confirmed drop, such as a segment seal's `droppedEventCount`. A browser report the server
+ * refused loses no line of the process.
+ */
+export function reportsProcessEvidenceLoss(
+  line: ActivityLogSufficiencyLine,
+  registry: SupportReaderRegistry = CURRENT_SUPPORT_REGISTRY,
+): boolean {
+  return isEvidenceLossLine(line, registry) || positiveCount(line.fields?.droppedEventCount);
+}
+
 function droppedOperation(
   line: ActivityLogSufficiencyLine,
   registry: SupportReaderRegistry,

@@ -60,6 +60,7 @@ import {
 import {
   activityLogFailureClassesOf,
   projectActivityLogSufficiency,
+  reportsProcessEvidenceLoss,
   restrictActivityLogSufficiency,
   type ActivityLogClassSufficiency,
   type ActivityLogSufficiencyIntegrity,
@@ -592,7 +593,6 @@ function firstOperationLines(
   state: EngineState,
   lifetimes: ReadonlySet<string>,
   op: string,
-  matches: (accepted: AcceptedLine) => boolean = () => true,
 ): ReadonlyMap<string, AcceptedLine> {
   if (lifetimes.size === 0) return new Map();
   const files = candidateFiles(
@@ -604,7 +604,7 @@ function firstOperationLines(
     state,
     lifetimes,
     files,
-    (accepted) => accepted.parsed.view.op === op && matches(accepted),
+    (accepted) => accepted.parsed.view.op === op,
   );
 }
 
@@ -670,19 +670,17 @@ function firstSegmentLines(
   return firstLinePerLifetime(state, lifetimes, files, () => true);
 }
 
-// The writer's own loss ledger. A lifetime that recorded losing any of its own events cannot show that
-// none of them was its start; a domain loss (a refused client report, say) loses no line of it.
-const OWN_LOSS_OP = "activity-log.loss";
-
+// A lifetime whose process recorded losing its own Activity Log evidence (its loss summary's
+// process counters, a seal's confirmed drops) cannot show that no lost event was its start. A
+// browser report the server refused, or any other domain loss, loses no line of it.
 function lifetimesWithOwnLoss(
   state: EngineState,
   lifetimes: ReadonlySet<string>,
+  segments: ReadonlyMap<string, LifetimeSegments>,
 ): ReadonlySet<string> {
-  const losses = firstOperationLines(
-    state,
-    lifetimes,
-    OWN_LOSS_OP,
-    (accepted) => Number(accepted.parsed.view.extra?.totalLost) > 0,
+  const files = [...lifetimes].flatMap((key) => [...(segments.get(key)?.values() ?? [])]);
+  const losses = firstLinePerLifetime(state, lifetimes, files, (accepted) =>
+    reportsProcessEvidenceLoss(sufficiencyLine(accepted.parsed)),
   );
   return new Set(losses.keys());
 }
@@ -702,7 +700,7 @@ function lifetimeEvidence(state: EngineState, closure: ClosureEvents): LifetimeE
   const segments = lifetimeSegments(state.input.files);
   const unanchored = [...closure.lifetimes].filter((key) => !starts.has(key));
   const held = new Set(unanchored.filter((key) => beginningRetained(state, segments.get(key))));
-  const lossy = lifetimesWithOwnLoss(state, held);
+  const lossy = lifetimesWithOwnLoss(state, held, segments);
   const lost = new Set(unanchored.filter((key) => !held.has(key) || lossy.has(key)));
   const unshown = new Set(
     unanchored.filter((key) => !lost.has(key) && !closure.beginnings.has(key)),

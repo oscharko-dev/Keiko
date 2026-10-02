@@ -1520,14 +1520,15 @@ writes a start; a one-shot command writes none (its fatal and exit lines come wi
 writer numbers a lifetime's segments from 1 and retention prunes the oldest first, so a lifetime
 without a start is complete only while its segments still run unbroken from its first, every one
 readable with only supported records (a torn tail may end only the last, where a crash stops it),
-and its own loss ledger (`activity-log.loss`) records no lost event: then it never wrote one, and
-the first line of its first segment travels with the selection when no other line shows that
-beginning. Otherwise its start may have been pruned or damaged, before or after its first heartbeat;
-the selection is `evidence-not-retained` and carries the lifetime's first heartbeat, when one is
-retained, as the proof a receiver recomputes. Legacy files carry no segment index and prove no
-beginning. The result accounts for each selected lifetime's start as `selected`, `absent` or `lost`,
-and a report carries that account. A user-reported incident also selects its pinned window and takes
-every correlation in it as a root.
+and its process recorded losing none of its own evidence (no process counter in its loss summary,
+never the browser ones, and no seal's confirmed drop): then it never wrote one, and the first line
+of its first segment travels with the selection when no other line shows that beginning. Otherwise
+its start may have been pruned or damaged, before or after its first heartbeat; the selection is
+`evidence-not-retained` and carries the lifetime's first heartbeat, when one is retained, as the
+proof a receiver recomputes. Legacy files carry no segment index and prove no beginning. The result
+accounts for each selected lifetime's start as `selected`, `absent` or `lost`, and a report carries
+that account. A user-reported incident also selects its pinned window and takes every correlation in
+it as a root.
 
 **Nothing required is truncated.** A closure that does not fit the budget returns no events and is
 `insufficient` with `report-budget-exceeded`. Its `requiredBytes` counts the closure with every
