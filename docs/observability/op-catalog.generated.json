@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3627805231221ad015132a9a46b6111682e3561d48d8a72583ea9e677c274d7a",
+    "catalogDigest": "6e0272da7fcca4aad704454ef65dd31315071ae7f73e99a16e25fc602a934d0e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -40642,8 +40642,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 334,
-      "completeClassCount": 334,
+      "supportedClassCount": 332,
+      "completeClassCount": 332,
       "completeness": "complete",
       "classes": [
         {
@@ -77049,8 +77049,8 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 59,
-    "unknownCategoryCount": 66,
+    "dynamicCount": 60,
+    "unknownCategoryCount": 71,
     "authoritative": false
   },
   "entries": [
@@ -77603,7 +77603,7 @@
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-contracts/src/observability.ts:1256",
+      "site": "packages/keiko-contracts/src/observability.ts:1271",
       "package": "keiko-contracts"
     },
     {

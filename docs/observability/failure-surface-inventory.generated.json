@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3627805231221ad015132a9a46b6111682e3561d48d8a72583ea9e677c274d7a"
+    "catalogDigest": "6e0272da7fcca4aad704454ef65dd31315071ae7f73e99a16e25fc602a934d0e"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 494,
+    "operationCount": 495,
     "proofCount": 502,
     "resolvedProofCount": 502,
-    "failureClassCount": 334,
+    "failureClassCount": 332,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },

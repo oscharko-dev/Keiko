@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "3627805231221ad015132a9a46b6111682e3561d48d8a72583ea9e677c274d7a" as const;
+  "6e0272da7fcca4aad704454ef65dd31315071ae7f73e99a16e25fc602a934d0e" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -30038,8 +30038,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 334,
-  completeClassCount: 334,
+  supportedClassCount: 332,
+  completeClassCount: 332,
   completeness: "complete",
   classes: [
     {
