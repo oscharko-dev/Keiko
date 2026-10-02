@@ -1,36 +1,80 @@
 #!/usr/bin/env node
-// Capture reviewed repository-owned registries. Runtime admission never accepts reporter schemas.
+// Captures the Activity Log registry of every stable Keiko release that `keiko support analyze`
+// must keep validating: each tag v<X> with FIRST_SUPPORTED_RELEASE <= X <= the current product
+// version. A tag only discovers a release; the shipped history pins that release's commit, and
+// scripts/__tests__/support-registry-history.test.mjs proves every pinned snapshot is that commit's
+// exact registry and that no release older than the current version is missing. `npm run
+// set-version` regenerates this file, so a release can never ship without its predecessors'
+// registries. Runtime admission never accepts a reporter-supplied schema.
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
-import { isMainModule } from "./lib/is-main-module.mjs";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { URL, fileURLToPath } from "node:url";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
+import { compareStableVersions, parseStableVersion } from "./lib/stable-version.mjs";
 
-export const DEFAULT_COMMITS = [
-  "5cc94e89a25a2cb98c233732dfba9916ce5b9498",
-  "9016bf6041c2b871f9c6f7c2b2e28c2fc4baaa73",
-  "5c10b23d635cfabcc6939305916e6a6b8874ceb0",
-  "1cfb6cf08779f34b913d6163e7e2ab31939c081e",
-  "b2a66d87d540d23042d211d57598d8ca1cc6aec0",
-];
-export function captureSupportRegistries(commits = DEFAULT_COMMITS, execute = execFileSync) {
+export const FIRST_SUPPORTED_RELEASE = "1.1.9";
+// Inflating a shipped snapshot is bounded at runtime by exactly this ceiling; a release whose
+// decoded registry would not fit fails here, at generation, never inside an operator's analysis.
+export const MAX_DECODED_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const HISTORY_PATH = fileURLToPath(
+  new URL("../packages/keiko-activity-log/src/reader/support-registry-history.ts", import.meta.url),
+);
+const CATALOG_PATH = "docs/observability/op-catalog.generated.json";
+
+function git(execute, args) {
+  return execute(resolveHostExecutable("git"), args, {
+    cwd: ROOT,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+}
+
+function requiredStableVersion(value, label) {
+  const parsed = parseStableVersion(value);
+  if (parsed === undefined) throw new TypeError(`${label} is not a stable product version`);
+  return parsed;
+}
+
+/** Stable release tags from the first supported release up to and including `version`. */
+export function supportedReleases(version, execute = execFileSync) {
+  const current = requiredStableVersion(version, "the current version");
+  const floor = requiredStableVersion(FIRST_SUPPORTED_RELEASE, "the first supported release");
+  const releases = git(execute, ["tag", "--list", "v[0-9]*"])
+    .split(/\r?\n/u)
+    .map((tag) => ({ tag, parsed: parseStableVersion(tag.trim()) }))
+    .filter(
+      ({ parsed }) =>
+        parsed !== undefined &&
+        compareStableVersions(parsed, floor) >= 0 &&
+        compareStableVersions(parsed, current) <= 0,
+    )
+    .sort((left, right) => compareStableVersions(left.parsed, right.parsed));
+  if (releases.length === 0 && compareStableVersions(current, floor) > 0) {
+    throw new Error(
+      "support-registry-history: no release tag is available; fetch the tags (git fetch --tags).",
+    );
+  }
+  return releases.map(({ tag, parsed }) => ({
+    release: parsed.join("."),
+    sourceCommit: git(execute, ["rev-parse", "--verify", `${tag.trim()}^{commit}`]).trim(),
+  }));
+}
+
+/** One snapshot per distinct registry identity, from the oldest release that shipped it. */
+export function captureSupportRegistries(releases, execute = execFileSync) {
   const snapshots = [];
   const seen = new Set();
-  for (const sourceCommit of commits) {
-    if (!/^[a-f0-9]{40}$/u.test(sourceCommit))
-      throw new TypeError("Expected a reviewed commit SHA");
-    const catalog = JSON.parse(
-      execute(
-        resolveHostExecutable("git"),
-        ["show", `${sourceCommit}:docs/observability/op-catalog.generated.json`],
-        {
-          encoding: "utf8",
-          maxBuffer: 16 * 1024 * 1024,
-        },
-      ),
-    );
-    const registry = catalog.typedRegistry;
+  for (const { release, sourceCommit } of releases) {
+    if (!/^[a-f0-9]{40}$/u.test(sourceCommit)) {
+      throw new TypeError("Expected a release commit SHA");
+    }
+    const registry = JSON.parse(
+      git(execute, ["show", `${sourceCommit}:${CATALOG_PATH}`]),
+    ).typedRegistry;
     if (seen.has(registry.catalogDigest)) continue;
     seen.add(registry.catalogDigest);
     const identity = {
@@ -38,27 +82,40 @@ export function captureSupportRegistries(commits = DEFAULT_COMMITS, execute = ex
       schemaDigest: registry.schemaDigest,
       catalogDigest: registry.catalogDigest,
     };
-    const snapshot = {
+    const text = JSON.stringify({
       ...identity,
       operations: registry.operations,
       classes: registry.failureClassCoverage.classes,
-    };
+    });
+    if (Buffer.byteLength(text) > MAX_DECODED_SNAPSHOT_BYTES) {
+      throw new RangeError(`the ${release} registry exceeds the decoded snapshot ceiling`);
+    }
     snapshots.push({
+      release,
       sourceCommit,
       ...identity,
-      payload: deflateSync(JSON.stringify(snapshot), { level: 9 }).toString("base64"),
+      payload: deflateSync(text, { level: 9 }).toString("base64"),
     });
   }
   return snapshots;
 }
 
+function releaseRange(snapshots) {
+  if (snapshots.length === 0) return "none";
+  const first = snapshots[0].release;
+  const last = snapshots.at(-1).release;
+  return first === last ? first : `${first}–${last}`;
+}
+
 function renderSupportRegistryHistory(snapshots) {
-  const source = `// Generated by scripts/generate-support-registry-history.mjs from reviewed repository commits.
-// Supported releases 1.1.9–1.1.13 and the frozen pre-extraction/dev identity. Never reporter schemas.
+  return `// Generated by scripts/generate-support-registry-history.mjs from the stable release tags.
+// Supported releases ${releaseRange(snapshots)}. Never reporter schemas. Regenerated by set-version.
 import { inflateSync } from "node:zlib";
 import { CURRENT_SUPPORT_REGISTRY, supportReaderRegistry, type SupportReaderRegistry, type SupportRegistrySnapshot } from "./support-registry.js";
 
 const RELEASE_SNAPSHOTS = ${JSON.stringify(snapshots, null, 2)} as const;
+
+const decodedRegistries = new Map<string, SupportReaderRegistry>();
 
 export function findSupportRegistry(identity: {
   readonly registryVersion: number; readonly schemaDigest: string; readonly catalogDigest: string;
@@ -67,24 +124,27 @@ export function findSupportRegistry(identity: {
   if (matches(CURRENT_SUPPORT_REGISTRY)) return CURRENT_SUPPORT_REGISTRY;
   const snapshot = RELEASE_SNAPSHOTS.find(matches);
   if (snapshot === undefined) return undefined;
-  const decoded = JSON.parse(inflateSync(Buffer.from(snapshot.payload, "base64"), { maxOutputLength: 4 * 1024 * 1024 }).toString("utf8")) as SupportRegistrySnapshot;
-  return supportReaderRegistry(decoded);
+  const cached = decodedRegistries.get(snapshot.catalogDigest);
+  if (cached !== undefined) return cached;
+  const decoded = JSON.parse(inflateSync(Buffer.from(snapshot.payload, "base64"), { maxOutputLength: ${String(MAX_DECODED_SNAPSHOT_BYTES)} }).toString("utf8")) as SupportRegistrySnapshot;
+  const registry = supportReaderRegistry(decoded);
+  decodedRegistries.set(snapshot.catalogDigest, registry);
+  return registry;
 }
 `;
-  return source;
 }
 
-export async function generateSupportRegistryHistory(
-  commits = DEFAULT_COMMITS,
-  destination = fileURLToPath(
-    new URL(
-      "../packages/keiko-activity-log/src/reader/support-registry-history.ts",
-      import.meta.url,
-    ),
-  ),
+function currentVersion() {
+  return JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+}
+
+export async function generateSupportRegistryHistory({
+  version = currentVersion(),
+  destination = HISTORY_PATH,
+  execute = execFileSync,
   write = writeFileSync,
-) {
-  const snapshots = captureSupportRegistries(commits);
+} = {}) {
+  const snapshots = captureSupportRegistries(supportedReleases(version, execute), execute);
   const { format } = await import("prettier");
   write(
     destination,
@@ -93,17 +153,16 @@ export async function generateSupportRegistryHistory(
       printWidth: 100,
     }),
   );
+  return snapshots;
+}
+
+export async function main(generate = generateSupportRegistryHistory, io = process.stdout) {
+  const snapshots = await generate();
+  io.write(
+    `support-registry-history: captured ${String(snapshots.length)} release registr` +
+      `${snapshots.length === 1 ? "y" : "ies"} (${releaseRange(snapshots)}).\n`,
+  );
   return snapshots.length;
 }
 
-export async function main(
-  argv = [],
-  generate = generateSupportRegistryHistory,
-  io = process.stdout,
-) {
-  const count = await generate(argv.length > 0 ? argv : DEFAULT_COMMITS);
-  io.write(`support-registry-history: captured ${count} immutable identities.\n`);
-  return count;
-}
-
-if (isMainModule(import.meta.url)) await main(process.argv.slice(2));
+if (isMainModule(import.meta.url)) await main();
