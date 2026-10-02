@@ -483,9 +483,10 @@ describe("existing CLI lazy lifecycle analysis dispatch", () => {
       "--correlation-id",
       "correlation-1",
     ]);
-    expect(result.code).toBe(1);
-    expect(result.errors).toContain("internal");
-    expect(result.output).toBe("");
+    expect(result.code).toBe(0);
+    expect(result.errors).toContain("lifecycle validator unavailable — TypeError");
+    expect(result.output).toContain("lifecycle-validator-unavailable");
+    expect(result.output).not.toContain("budgetDisposition");
     expect(result.output + result.errors).not.toContain("private-import-token");
   });
 

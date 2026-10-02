@@ -1,3 +1,4 @@
+import { computeDefectFingerprint } from "../defect-fingerprint.js";
 import { projectSupportLogFields } from "../log-redaction.js";
 import { deflateSync, inflateSync } from "node:zlib";
 import {
@@ -11,6 +12,8 @@ import {
   MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
   MAX_SUPPORT_REPORT_TIMELINE_BYTES,
   DIAGNOSTIC_SUFFICIENCY_REASONS,
+  SUPPORT_INCIDENT_UNATTRIBUTED,
+  UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   diagnosticSufficiencyStatus,
   isActivityLogIdentityDigest,
   isActivityLogProductVersion,
@@ -28,22 +31,25 @@ import {
   compareProductVersions,
 } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
+  ACTIVITY_LOG_EVIDENCE_INTEGRITY,
   analyzeLogText,
   ActivityLogAnalyzeBudgetError,
   buildReproductionSeedFromAnalysis,
   isSupportReportEvent,
   findTimeline,
+  timelineSufficiency,
   type AnalyzeAllResult,
+  type LogTimeline,
   type SupportAnalyzeOptions,
   type ReproductionSeed,
 } from "./support-analyze.js";
 import {
   activityLogFailureClassesOf,
   restrictActivityLogSufficiency,
+  type ActivityLogSufficiency,
 } from "./support-analyze-sufficiency.js";
 import type { SupportQueryResult } from "./support-query.js";
-import { type SupportReaderRegistry } from "./support-registry.js";
-import { findSupportRegistry } from "./support-registry-history.js";
+import { findSupportRegistry, type SupportReaderRegistry } from "./support-registry.js";
 import {
   canonicalSupportJson,
   parseCanonicalSupportJson,
@@ -145,38 +151,48 @@ function queryEvents(query: SupportQueryResult): readonly SupportReportEvent[] {
   });
 }
 
+interface SelectedEvidence {
+  readonly evidence: SupportReportEvidence;
+  readonly selectedReasons: readonly DiagnosticSufficiencyReason[];
+  readonly requiredBytes: number;
+}
+
+// A record the incident's exact registry cannot validate (for example one written by another
+// release after an upgrade) is left out and named; every other selected record is retained.
 function selectedEvidence(
   incident: SupportIncidentPrivateProjection,
   query: SupportQueryResult,
   registry: SupportReaderRegistry,
-): { evidence: SupportReportEvidence; selectedReasons: readonly DiagnosticSufficiencyReason[] } {
-  let events = queryEvents(query);
-  let selectedReasons = reasons([
+): SelectedEvidence {
+  const selected = queryEvents(query);
+  const events = selected.filter((event) => isSupportReportEvent(event.record, registry));
+  const selectedReasons = reasons([
     ...query.diagnosticSufficiency.reasons,
     ...incident.sufficiencyReasons,
+    ...(events.length < selected.length ? (["unsupported-evidence"] as const) : []),
   ]);
-  if (!events.every((event) => isSupportReportEvent(event.record, registry))) {
-    events = [];
-    selectedReasons = reasons([...selectedReasons, "unsupported-evidence"]);
-  }
-  let evidence: SupportReportEvidence;
   try {
-    evidence = encodeSupportReportEvidence(events);
-    selectedReasons = reasons([
-      ...selectedReasons,
-      ...projectedEvidenceReasons(incident, events, registry),
-    ]);
+    return {
+      evidence: encodeSupportReportEvidence(events),
+      selectedReasons: reasons([
+        ...selectedReasons,
+        ...projectedEvidenceReasons(incident, events, registry),
+      ]),
+      requiredBytes: query.truncation.requiredBytes,
+    };
   } catch (error) {
     if (!(error instanceof SupportReportError) || error.reason !== "report-budget-exceeded")
       throw error;
-    evidence = encodeSupportReportEvidence([]);
-    selectedReasons = reasons([
-      ...selectedReasons,
-      "report-budget-exceeded",
-      ...projectedEvidenceReasons(incident, [], registry),
-    ]);
+    return {
+      evidence: encodeSupportReportEvidence([]),
+      selectedReasons: reasons([
+        ...selectedReasons,
+        "report-budget-exceeded",
+        ...projectedEvidenceReasons(incident, [], registry),
+      ]),
+      requiredBytes: query.truncation.requiredBytes,
+    };
   }
-  return { evidence, selectedReasons };
 }
 
 /** Generates only the canonical private projection and registered causal evidence. */
@@ -193,22 +209,25 @@ export function buildSupportReport(
     throw new SupportReportError("report-budget-exceeded");
   const registry = findSupportRegistry(incident.build);
   if (registry === undefined) throw new SupportReportError("unsupported-report");
-  const { evidence, selectedReasons } = selectedEvidence(incident, query, registry);
+  const { evidence, selectedReasons, requiredBytes } = selectedEvidence(incident, query, registry);
   const selection = {
     status: diagnosticSufficiencyStatus(selectedReasons),
     reasons: selectedReasons,
-    requiredBytes: query.truncation.requiredBytes,
+    requiredBytes,
   };
   let report = sealSupportReport(incident, selection, evidence);
-  if (Buffer.byteLength(serializeSupportReport(report)) > maxBytes) {
+  const completeBytes = Buffer.byteLength(serializeSupportReport(report));
+  if (completeBytes > maxBytes) {
     const budgetReasons = reasons([
       ...selectedReasons,
       "report-budget-exceeded",
       ...projectedEvidenceReasons(incident, [], registry),
     ]);
+    // The report-budget metric names what the complete report would need: --max-bytes at least
+    // this large (within the hard ceiling) carries the whole selection.
     report = sealSupportReport(
       incident,
-      { ...selection, status: "insufficient", reasons: budgetReasons },
+      { status: "insufficient", reasons: budgetReasons, requiredBytes: completeBytes },
       encodeSupportReportEvidence([]),
     );
   }
@@ -229,7 +248,7 @@ function readHeader(value: unknown): Record<string, unknown> {
     throw new SupportReportError("unsafe-report");
   validateMinimumAnalyzerVersion(value.minimumAnalyzerVersion);
   if (value.kind !== SUPPORT_REPORT_KIND || value.schemaVersion !== SUPPORT_REPORT_SCHEMA_VERSION) {
-    throw new SupportReportError("unsupported-report", value.minimumAnalyzerVersion);
+    throw new SupportReportError("unsupported-report");
   }
   if (!reportKeys(value, REPORT_KEYS)) throw new SupportReportError("unsafe-report");
   return value;
@@ -335,7 +354,7 @@ function decodeEvidence(
   let bytes: Buffer;
   try {
     const inflated = inflateSync(encoded, {
-      maxOutputLength: MAX_SUPPORT_REPORT_EVENT_BYTES,
+      maxOutputLength: Math.max(1, evidence.rawBytes),
       info: true,
     }) as unknown as { buffer: Buffer; engine: { bytesWritten: number } };
     if (inflated.engine.bytesWritten !== encoded.length)
@@ -361,18 +380,66 @@ function decodeEvidence(
   return events;
 }
 
-function reportRegistry(
-  incident: SupportIncidentPrivateProjection,
-  minimumVersion: string,
-): SupportReaderRegistry {
+function reportRegistry(incident: SupportIncidentPrivateProjection): SupportReaderRegistry {
   const registry = findSupportRegistry(incident.build);
-  if (registry === undefined) throw new SupportReportError("unsupported-report", minimumVersion);
+  if (registry === undefined) throw new SupportReportError("unsupported-report");
   if (
     incident.trigger === "registered-failure" &&
     registry.operations.get(incident.op)?.lifecycle !== "failure"
   )
     throw new SupportReportError("unsafe-report");
   return registry;
+}
+
+const UNATTRIBUTED_DEFECT_FINGERPRINT = computeDefectFingerprint(
+  UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
+);
+
+// A user-reported incident attributes nothing: its fingerprint inputs are the fixed constants.
+function unattributedIncident(incident: SupportIncidentPrivateProjection): boolean {
+  return (
+    incident.surface === SUPPORT_INCIDENT_UNATTRIBUTED &&
+    incident.op === SUPPORT_INCIDENT_UNATTRIBUTED &&
+    incident.errorKind === UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT.errorKind &&
+    incident.frameCount === 0 &&
+    incident.defectFingerprint === UNATTRIBUTED_DEFECT_FINGERPRINT
+  );
+}
+
+/**
+ * The relations the producer guarantees between the incident header and its evidence. A header
+ * that contradicts them, or contradicts its own retained failure line, is refused: the declared
+ * integrity maps to its completeness and loss, the window is anchored at creation, a user report
+ * carries the unattributed constants, and a retained failure line agrees on its error kind.
+ */
+function validateIncidentProvenance(
+  incident: SupportIncidentPrivateProjection,
+  events: readonly SupportReportEvent[],
+): void {
+  const integrity = ACTIVITY_LOG_EVIDENCE_INTEGRITY[incident.integrity];
+  if (
+    integrity.completeness !== incident.completeness ||
+    integrity.loss !== incident.loss ||
+    incident.window.incidentAtMs !== incident.createdAtMs
+  )
+    throw new SupportReportError("unsafe-report");
+  if (incident.trigger === "user-report") {
+    if (!unattributedIncident(incident)) throw new SupportReportError("unsafe-report");
+    return;
+  }
+  const failures = events.filter((event) => event.record.op === incident.op);
+  if (
+    failures.length > 0 &&
+    !failures.some((event) => (event.record.errorKind ?? "unknown") === incident.errorKind)
+  )
+    throw new SupportReportError("unsafe-report");
+}
+
+// A canonical report is exactly one line. The retired open JSONL bundle starts with its
+// `$section` manifest and a raw Activity Log with a timestamped record: both are refused by name,
+// so the receiver regenerates on the originating installation instead of suspecting tampering.
+function isLegacySupportInput(text: string): boolean {
+  return text.startsWith('{"$section"') || text.startsWith('{"ts"');
 }
 
 /** Validates every byte and section before any renderer or agent receives a value. Pure, offline. */
@@ -385,9 +452,11 @@ interface ValidatedSupportReport {
   readonly events: readonly SupportReportEvent[];
   readonly registry: SupportReaderRegistry;
   readonly analysis: AnalyzeAllResult;
+  readonly selection: SupportReportSelection;
 }
 
 function parseValidatedSupportReport(text: string): ValidatedSupportReport {
+  if (isLegacySupportInput(text)) throw new SupportReportError("legacy-input");
   if (!text.endsWith("\n")) throw new SupportReportError("corrupt-report");
   const value = readHeader(
     parseCanonicalSupportJson(text.slice(0, -1), MAX_SUPPORT_REPORT_BYTES - 1),
@@ -398,12 +467,13 @@ function parseValidatedSupportReport(text: string): ValidatedSupportReport {
   if (Buffer.byteLength(canonicalSupportJson(incident)) > MAX_SUPPORT_REPORT_INCIDENT_BYTES)
     throw new SupportReportError("report-budget-exceeded");
   verifyIntegrity(value);
-  const registry = reportRegistry(incident, String(value.minimumAnalyzerVersion));
+  const registry = reportRegistry(incident);
   const events = decodeEvidence(value.evidence, registry);
+  validateIncidentProvenance(incident, events);
   const report = value as unknown as SupportReport;
   const analysis = eventAnalysis(events, registry);
-  validateReportSufficiency(report, events, registry, analysis);
-  return { report, events, registry, analysis };
+  const selection = effectiveSelection(report, events, registry, analysis);
+  return { report, events, registry, analysis, selection };
 }
 
 function eventAnalysis(
@@ -418,6 +488,7 @@ function eventAnalysis(
       {
         ...options,
         registry,
+        sourceKind: "support-report",
         maxTimelineRecords: MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
         maxTimelineBytes: MAX_SUPPORT_REPORT_TIMELINE_BYTES,
       },
@@ -459,30 +530,49 @@ function projectedEvidenceReasons(
     incident.correlation.rootCorrelationId,
     ...incident.correlation.childCorrelationIds,
   ].filter((value): value is string => value !== undefined);
-  if (correlations.some((correlation) => findTimeline(analysis, correlation) === undefined))
+  // A registered failure is reconstructable only with its own failing line: without it neither the
+  // failure site nor the cause chain can be localized, whatever else the closure retained.
+  const failureRetained =
+    incident.trigger !== "registered-failure" ||
+    events.some((event) => event.record.op === incident.op);
+  if (
+    !failureRetained ||
+    correlations.some((correlation) => findTimeline(analysis, correlation) === undefined)
+  )
     return reasons([...projected, "evidence-not-retained"]);
   return projected;
 }
 
-function validateReportSufficiency(
+/**
+ * The analyzer recomputes sufficiency from the evidence and the exact matched registry. A report
+ * can only lose status here, never gain it: every declared reason is kept and every recomputed one
+ * added, so a forged "complete" over absent evidence reads as insufficient, and a later analyzer's
+ * stricter rule never makes an older, honestly declared report unreadable.
+ */
+function effectiveSelection(
   report: SupportReport,
   events: readonly SupportReportEvent[],
   registry: SupportReaderRegistry,
   analysis: AnalyzeAllResult,
-): void {
-  const expected = reasons([
+): SupportReportSelection {
+  const effective = reasons([
     ...projectedEvidenceReasons(report.incident, events, registry, analysis),
     ...report.incident.sufficiencyReasons,
     ...report.selection.reasons,
   ]);
-  if (canonicalSupportJson(expected) !== canonicalSupportJson(report.selection.reasons))
-    throw new SupportReportError("corrupt-report");
+  return {
+    status: diagnosticSufficiencyStatus(effective),
+    reasons: effective,
+    requiredBytes: report.selection.requiredBytes,
+  };
 }
 
 export interface AnalyzedSupportReport {
   readonly kind: "keiko.support.report-analysis";
   readonly schemaVersion: 1;
   readonly authenticity: "unknown";
+  // The analyzer that validated the report; the producer's build and registry are incident.build.
+  readonly analyzerVersion: string;
   readonly reportDigest: string;
   readonly sourceArtifactDigest: string;
   readonly seed?: ReproductionSeed;
@@ -496,7 +586,7 @@ export function analyzeSupportReport(
   options: SupportAnalyzeOptions = {},
 ): AnalyzedSupportReport {
   const validated = parseValidatedSupportReport(text);
-  const { report, events, registry } = validated;
+  const { report, events, registry, selection } = validated;
   const analysis =
     Object.keys(options).length === 0
       ? validated.analysis
@@ -506,10 +596,11 @@ export function analyzeSupportReport(
     kind: "keiko.support.report-analysis",
     schemaVersion: 1,
     authenticity: "unknown",
+    analyzerVersion: KEIKO_PRODUCT_VERSION,
     reportDigest: report.integrity.reportDigest,
     sourceArtifactDigest,
     incident: report.incident,
-    selection: report.selection,
+    selection,
     analysis,
   };
   const seed = prepareSupportReportSeed(artifact, undefined, options);
@@ -523,10 +614,11 @@ export function prepareSupportReportSeed(
   options: SupportAnalyzeOptions = {},
 ): ReproductionSeed | undefined {
   if (correlationId === undefined) return undefined;
-  const registry = reportRegistry(artifact.incident, KEIKO_PRODUCT_VERSION);
+  const registry = reportRegistry(artifact.incident);
   return buildReproductionSeedFromAnalysis(
     artifact.analysis,
     {
+      kind: "support-report",
       lineCount: artifact.analysis.evidence.supportedLineCount,
       sha256: artifact.sourceArtifactDigest,
       firstLine: undefined,
@@ -535,4 +627,37 @@ export function prepareSupportReportSeed(
     new Date(artifact.incident.createdAtMs),
     { ...options, registry },
   );
+}
+
+export interface AnalyzedSupportReportTimeline extends LogTimeline {
+  readonly kind: "keiko.support.report-timeline";
+  readonly schemaVersion: 1;
+  readonly authenticity: "unknown";
+  readonly analyzerVersion: string;
+  readonly reportDigest: string;
+  readonly sourceArtifactDigest: string;
+  readonly sufficiency: ActivityLogSufficiency;
+}
+
+/** The validated timeline of one correlation, or undefined when the report holds none. */
+export function supportReportTimeline(
+  artifact: AnalyzedSupportReport,
+  correlationId: string,
+): AnalyzedSupportReportTimeline | undefined {
+  const timeline = findTimeline(artifact.analysis, correlationId);
+  if (timeline === undefined) return undefined;
+  return {
+    kind: "keiko.support.report-timeline",
+    schemaVersion: 1,
+    authenticity: "unknown",
+    analyzerVersion: artifact.analyzerVersion,
+    reportDigest: artifact.reportDigest,
+    sourceArtifactDigest: artifact.sourceArtifactDigest,
+    ...timeline,
+    sufficiency: timelineSufficiency(
+      artifact.analysis,
+      timeline,
+      reportRegistry(artifact.incident),
+    ),
+  };
 }

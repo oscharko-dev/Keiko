@@ -57,10 +57,13 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === "string" ? error.code : undefined;
 }
 
-// A name retention removed after the listing reads as absent; any other failure propagates.
-function regularFileSize(path: string): number | undefined {
+// A name retention removed after the listing reads as absent; any other failure propagates. Any
+// other entry at an Activity Log name is listed: a symlink, directory or FIFO there then fails the
+// hardened open and is named unreadable, never silently missing from a selection's evidence.
+function storeEntrySize(path: string): number | undefined {
   const stat = lstatSync(path, { throwIfNoEntry: false });
-  return stat?.isFile() === true ? stat.size : undefined;
+  if (stat === undefined) return undefined;
+  return stat.isFile() ? stat.size : 0;
 }
 
 /** Every readable Activity Log file of `stateDir` in logical-log order; opens no file. */
@@ -76,7 +79,7 @@ export function listActivityLogStoreFiles(stateDir: string): readonly ActivityLo
   const files: ActivityLogStoreFile[] = [];
   for (const file of readableActivityLogFileNames(orderActivityLogFileNames(names))) {
     const path = join(directory, file.name);
-    const sizeBytes = regularFileSize(path);
+    const sizeBytes = storeEntrySize(path);
     if (sizeBytes === undefined) continue;
     files.push({
       name: file.name,

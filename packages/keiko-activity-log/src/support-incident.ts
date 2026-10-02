@@ -32,7 +32,7 @@
 // at the same instant, and its fingerprint and slot claims release with it, so an unreported incident
 // releases its evidence and its claims predictably.
 
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   ACTIVITY_LOG_DIRECTORY_NAME,
@@ -46,7 +46,6 @@ import {
   activityLogErrorKindOr,
   activityLogEvent,
   activityLogOperationSchema,
-  defectFingerprintPreimage,
   defineActivityLogOperation,
   isActivityLogCorrelationId,
   normalizeKeikoFrameSignature,
@@ -77,6 +76,7 @@ import {
   type ActivityLogPinResult,
   type ServerLogEvent,
 } from "./server-log.js";
+import { computeDefectFingerprint } from "./defect-fingerprint.js";
 import { activityLogTestWriterInstalled } from "./server-logger.js";
 import { FRAME_SHAPE_PATTERN } from "./stack-frames.js";
 import {
@@ -496,10 +496,7 @@ function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
 
 // ─── Fingerprint and candidate policy ──────────────────────────────────────────────────────────
 
-/** The deterministic, versioned defectFingerprint: SHA-256 over the canonical contract preimage. */
-export function computeDefectFingerprint(input: DefectFingerprintInput): string {
-  return createHash("sha256").update(defectFingerprintPreimage(input), "utf8").digest("hex");
-}
+export { computeDefectFingerprint };
 
 let supportedFailureClasses: ReadonlySet<string> | undefined;
 

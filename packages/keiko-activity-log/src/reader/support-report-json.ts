@@ -1,19 +1,19 @@
 import { createHash } from "node:crypto";
 import {
-  MAX_SUPPORT_REPORT_DEPTH,
-  MAX_SUPPORT_REPORT_RECORDS,
   MAX_SUPPORT_REPORT_BYTES,
+  MAX_SUPPORT_REPORT_CONTAINERS,
+  MAX_SUPPORT_REPORT_DEPTH,
+  MAX_SUPPORT_REPORT_OBJECT_KEYS,
+  MAX_SUPPORT_REPORT_RECORDS,
+  MAX_SUPPORT_REPORT_VALUES,
   type SupportReportFailure,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 export class SupportReportError extends Error {
   public readonly reason: SupportReportFailure;
-  public readonly minimumAnalyzerVersion: string;
-  public constructor(
-    reason: SupportReportFailure,
-    minimumAnalyzerVersion: string = KEIKO_PRODUCT_VERSION,
-  ) {
+  /** Set only when a report declares that it needs a newer analyzer than this one. */
+  public readonly minimumAnalyzerVersion: string | undefined;
+  public constructor(reason: SupportReportFailure, minimumAnalyzerVersion?: string) {
     super(`support report rejected: ${reason}`);
     this.name = "SupportReportError";
     this.reason = reason;
@@ -21,13 +21,8 @@ export class SupportReportError extends Error {
   }
 }
 
-function isUnsafeControl(code: number): boolean {
-  return (
-    code <= 0x1f ||
-    (code >= 0x7f && code <= 0x9f) ||
-    (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2066 && code <= 0x2069)
-  );
+function budgetExceeded(): SupportReportError {
+  return new SupportReportError("report-budget-exceeded");
 }
 
 export function reportObject(value: unknown): value is Record<string, unknown> {
@@ -58,81 +53,185 @@ function compareSupportKeys(left: string, right: string): number {
   return left < right ? -1 : 1;
 }
 
-function canonicalValue(value: unknown, depth: number): unknown {
-  if (depth > MAX_SUPPORT_REPORT_DEPTH) throw new SupportReportError("report-budget-exceeded");
-  if (typeof value === "string") return safeString(value);
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (value === null || typeof value === "boolean") return value;
-  if (Array.isArray(value)) {
-    if (value.length > MAX_SUPPORT_REPORT_RECORDS)
-      throw new SupportReportError("report-budget-exceeded");
-    return value.map((entry: unknown) => canonicalValue(entry, depth + 1));
-  }
-  if (!reportObject(value)) throw new SupportReportError("unsafe-report");
-  return Object.fromEntries(
-    Object.keys(value)
-      .sort(compareSupportKeys)
-      .map((key) => [safeString(key), canonicalValue(value[key], depth + 1)]),
+// The writer and the parser charge one shared budget, so the producer never emits a report the
+// analyzer refuses. Object keys count as values, exactly as the parser's scan sees them.
+interface JsonShapeBudget {
+  values: number;
+  containers: number;
+}
+
+function charge(budget: JsonShapeBudget, container: boolean): void {
+  budget.values += 1;
+  if (container) budget.containers += 1;
+  if (budget.values > MAX_SUPPORT_REPORT_VALUES) throw budgetExceeded();
+  if (budget.containers > MAX_SUPPORT_REPORT_CONTAINERS) throw budgetExceeded();
+}
+
+function isCanonicalScalar(value: unknown): value is string | number | boolean | null {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
   );
 }
 
-function safeString(value: string): string {
-  for (const character of value) {
-    if (isUnsafeControl(character.codePointAt(0) ?? 0))
-      throw new SupportReportError("unsafe-report");
+function canonicalValue(value: unknown, depth: number, budget: JsonShapeBudget): unknown {
+  if (isCanonicalScalar(value)) {
+    charge(budget, false);
+    return typeof value === "string" ? safeString(value) : value;
   }
-  if (Buffer.byteLength(value) > MAX_SUPPORT_REPORT_BYTES)
-    throw new SupportReportError("report-budget-exceeded");
+  // `depth` counts the enclosing containers; the root container is nesting level one.
+  if (depth >= MAX_SUPPORT_REPORT_DEPTH) throw budgetExceeded();
+  charge(budget, true);
+  if (Array.isArray(value)) {
+    if (value.length > MAX_SUPPORT_REPORT_RECORDS) throw budgetExceeded();
+    return value.map((entry: unknown) => canonicalValue(entry, depth + 1, budget));
+  }
+  return canonicalObject(value, depth, budget);
+}
+
+function canonicalObject(
+  value: unknown,
+  depth: number,
+  budget: JsonShapeBudget,
+): Record<string, unknown> {
+  if (!reportObject(value)) throw new SupportReportError("unsafe-report");
+  const keys = Object.keys(value).sort(compareSupportKeys);
+  if (keys.length > MAX_SUPPORT_REPORT_OBJECT_KEYS) throw budgetExceeded();
+  return Object.fromEntries(
+    keys.map((key) => {
+      charge(budget, false);
+      return [safeString(key), canonicalValue(value[key], depth + 1, budget)];
+    }),
+  );
+}
+
+// Every value a report legitimately carries is a printable-ASCII machine token: the body-free
+// registry admits nothing else. Anything outside that range is refused rather than filtered, so
+// no control, escape, bidirectional, zero-width or surrogate code point can reach a renderer.
+function safeString(value: string): string {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x20 || code > 0x7e) throw new SupportReportError("unsafe-report");
+  }
+  if (value.length > MAX_SUPPORT_REPORT_BYTES) throw budgetExceeded();
   return value;
 }
 
 export function canonicalSupportJson(value: unknown): string {
-  return JSON.stringify(canonicalValue(value, 0));
+  return JSON.stringify(canonicalValue(value, 0, { values: 0, containers: 0 }));
 }
 
 export function supportReportDigest(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-function jsonDepthDelta(character: string): number {
-  if (character === "{" || character === "[") return 1;
-  return character === "}" || character === "]" ? -1 : 0;
+const QUOTE = 0x22;
+const BACKSLASH = 0x5c;
+const OPEN_OBJECT = 0x7b;
+const CLOSE_OBJECT = 0x7d;
+const OPEN_ARRAY = 0x5b;
+const CLOSE_ARRAY = 0x5d;
+
+function stringEnd(text: string, start: number): number {
+  let index = start + 1;
+  while (index < text.length) {
+    const code = text.charCodeAt(index);
+    if (code === QUOTE) return index + 1;
+    index += code === BACKSLASH ? 2 : 1;
+  }
+  return index;
 }
 
-/** Bounds nesting before JSON.parse allocates a hostile object graph. */
-function checkJsonDepth(text: string): void {
-  let depth = 0;
-  let quoted = false;
-  let escaped = false;
-  for (const character of text) {
-    if (escaped) {
-      escaped = false;
-      continue;
+function isScalarStart(code: number): boolean {
+  // `-`, a digit, or the first letter of true, false or null.
+  return (
+    code === 0x2d ||
+    (code >= 0x30 && code <= 0x39) ||
+    code === 0x74 ||
+    code === 0x66 ||
+    code === 0x6e
+  );
+}
+
+function scalarEnd(text: string, start: number): number {
+  let index = start + 1;
+  while (index < text.length) {
+    const code = text.charCodeAt(index);
+    if (code === 0x2c || code === CLOSE_OBJECT || code === CLOSE_ARRAY || code <= 0x20) break;
+    index += 1;
+  }
+  return index;
+}
+
+/** The entries of every open container, charged against the shared shape budget. */
+class JsonShapeScan {
+  readonly #entries: number[] = [];
+  readonly #limits: number[] = [];
+  readonly #budget: JsonShapeBudget = { values: 0, containers: 0 };
+
+  value(container: boolean): void {
+    charge(this.#budget, container);
+    const top = this.#entries.length - 1;
+    if (top < 0) return;
+    const entries = (this.#entries[top] ?? 0) + 1;
+    this.#entries[top] = entries;
+    if (entries > (this.#limits[top] ?? 0)) throw budgetExceeded();
+  }
+
+  open(object: boolean): void {
+    this.value(true);
+    if (this.#entries.length >= MAX_SUPPORT_REPORT_DEPTH) throw budgetExceeded();
+    this.#entries.push(0);
+    // An object's keys and values both start an entry.
+    this.#limits.push(object ? 2 * MAX_SUPPORT_REPORT_OBJECT_KEYS : MAX_SUPPORT_REPORT_RECORDS);
+  }
+
+  close(): void {
+    this.#entries.pop();
+    this.#limits.pop();
+  }
+}
+
+/**
+ * Bounds the shape of untrusted JSON before JSON.parse allocates it: nesting depth, the total
+ * number of values and containers, and the entries of any one array or object. Malformed text is
+ * left to JSON.parse; this linear pass only guarantees that no input can expand unboundedly.
+ */
+function checkJsonShape(text: string): void {
+  const scan = new JsonShapeScan();
+  let index = 0;
+  while (index < text.length) {
+    const code = text.charCodeAt(index);
+    if (code === QUOTE) {
+      scan.value(false);
+      index = stringEnd(text, index);
+    } else if (code === OPEN_OBJECT || code === OPEN_ARRAY) {
+      scan.open(code === OPEN_OBJECT);
+      index += 1;
+    } else if (code === CLOSE_OBJECT || code === CLOSE_ARRAY) {
+      scan.close();
+      index += 1;
+    } else if (isScalarStart(code)) {
+      scan.value(false);
+      index = scalarEnd(text, index);
+    } else {
+      index += 1;
     }
-    if (quoted && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) continue;
-    depth += jsonDepthDelta(character);
-    if (depth > MAX_SUPPORT_REPORT_DEPTH) throw new SupportReportError("report-budget-exceeded");
   }
 }
 
 export function parseCanonicalSupportJson(text: string, maxBytes: number): unknown {
-  if (Buffer.byteLength(text) > maxBytes) throw new SupportReportError("report-budget-exceeded");
-  checkJsonDepth(text);
+  if (Buffer.byteLength(text) > maxBytes) throw budgetExceeded();
+  checkJsonShape(text);
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch {
     throw new SupportReportError("corrupt-report");
   }
-  // A duplicate key, extra whitespace, noncanonical number or invalid Unicode changes the bytes.
+  // A duplicate key, extra whitespace, noncanonical number or escape sequence changes the bytes.
   if (canonicalSupportJson(value) !== text) throw new SupportReportError("corrupt-report");
   return value;
 }

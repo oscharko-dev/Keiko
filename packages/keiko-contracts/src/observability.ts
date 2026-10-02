@@ -335,8 +335,15 @@ export function isActivityLogPlatformClass(value: unknown): value is string {
   return typeof value === "string" && ACTIVITY_LOG_PLATFORM_CLASS_PATTERN.test(value);
 }
 
+// Bounded like the product-version comparison, so no identity field can carry an unbounded string.
+const MAX_ACTIVITY_LOG_PRODUCT_VERSION_LENGTH = 128;
+
 export function isActivityLogProductVersion(value: unknown): value is string {
-  return typeof value === "string" && ACTIVITY_LOG_PRODUCT_VERSION_PATTERN.test(value);
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_ACTIVITY_LOG_PRODUCT_VERSION_LENGTH &&
+    ACTIVITY_LOG_PRODUCT_VERSION_PATTERN.test(value)
+  );
 }
 
 export function isActivityLogProcessId(value: unknown): value is number {

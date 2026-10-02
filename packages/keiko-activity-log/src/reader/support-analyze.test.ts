@@ -22,6 +22,7 @@ import {
   type ServerLogSink,
 } from "@oscharko-dev/keiko-activity-log";
 import { readPersistedActivityLog } from "../../../../tests/support/activity-log-proof.js";
+import { fixtureLine, fixtureProcess } from "../../../../tests/support/activity-log-segments.js";
 
 import {
   analyzeLogText,
@@ -183,6 +184,20 @@ function expectCorrelatedSafeOpen(view: ServerLogLineView | undefined): void {
   expect(view?.errorKind).toBeUndefined();
   expect(view?.extra).toEqual(SAFE_OPEN_EXTRA);
 }
+
+describe("persisted timestamp grammar", () => {
+  it("never accepts an extended-year timestamp that would break lexical ordering", () => {
+    const valid = fixtureLine(fixtureProcess(4242, "aabbccdd"), Date.UTC(2026, 8, 30, 12), {
+      op: "client.diagnostic",
+      correlationId: "corr-00000001",
+    });
+    const extended = valid.replace(/"ts":"[^"]+"/u, '"ts":"+275760-09-13T00:00:00.000Z"');
+    expect(analyzeLogText(`${valid}\n`).evidence.supportedLineCount).toBe(1);
+    const result = analyzeLogText(`${extended}\n`);
+    expect(result.evidence.supportedLineCount).toBe(0);
+    expect(result.timelines).toEqual([]);
+  });
+});
 
 describe("detectSourceKind", () => {
   it("recognises a bundle's manifest first line", () => {

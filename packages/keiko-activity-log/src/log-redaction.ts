@@ -944,6 +944,15 @@ export function closeReasonVocabulary(
   return vocab.has(value) ? value : fallback;
 }
 
+// The producer-only prose/route escape hatches. A received report carries them only as the
+// projection's explicit markers, which the equality check below proves.
+const SUPPORT_PROJECTED_FIELDS: ReadonlySet<string> = new Set([
+  "path",
+  "routeTemplate",
+  "clientNote",
+  "diagnosticSummary",
+]);
+
 // Received reports cannot inherit the producer-only prose/route escape hatches. Their closed
 // projection preserves these fields as explicit markers, independent of a configured server.
 export function projectSupportLogFields(
@@ -958,12 +967,31 @@ export function projectSupportLogFields(
   );
 }
 
-/** Reuse the owning frame/cause reducers; an untrusted sender cannot claim producer redaction. */
-export function areSupportLogFieldsSafe(fields: Readonly<Record<string, unknown>>): boolean {
+/**
+ * Reuse the owning reducers; an untrusted sender cannot claim producer redaction. Every field
+ * outside the envelope must already be a fixed point of the same redaction the writer applies
+ * before persisting, so a received report cannot carry an endpoint, credential, identity or path
+ * that a Keiko writer would have replaced with a marker. Frames and causes, when present, must be
+ * non-empty arrays their reducer leaves unchanged.
+ */
+export function areSupportLogFieldsSafe(
+  fields: Readonly<Record<string, unknown>>,
+  envelopeKeys: ReadonlySet<string> = new Set<string>(),
+): boolean {
   const projected = projectSupportLogFields(fields);
   if (!Object.entries(fields).every(([name, value]) => value === projected[name])) return false;
+  const producerFields = Object.fromEntries(
+    Object.entries(fields).filter(
+      ([name]) =>
+        !SUPPORT_PROJECTED_FIELDS.has(name) &&
+        (!envelopeKeys.has(name) || name === "frames" || name === "causeChain"),
+    ),
+  );
+  const redacted = redactLogFields(producerFields) ?? {};
+  if (JSON.stringify(redacted) !== JSON.stringify(producerFields)) return false;
   return ["frames", "causeChain"].every((name) => {
     if (fields[name] === undefined) return true;
+    if (!Array.isArray(fields[name]) || fields[name].length === 0) return false;
     const sanitized = redactAcceptedField(name, fields[name], MAX_LOG_FIELD_DEPTH);
     return JSON.stringify(sanitized) === JSON.stringify(fields[name]);
   });

@@ -378,6 +378,14 @@ function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+// The largest instant a JavaScript Date represents. A larger safe integer would pass as a count but
+// crash every consumer that renders it as a timestamp.
+const MAX_EPOCH_MS = 8_640_000_000_000_000;
+
+function isEpochMs(value: unknown): value is number {
+  return isCount(value) && value <= MAX_EPOCH_MS;
+}
+
 function isOneOf<T extends string>(values: readonly T[], value: unknown): value is T {
   return (values as readonly unknown[]).includes(value);
 }
@@ -442,9 +450,9 @@ function validWindow(value: unknown): value is SupportIncidentWindow {
   return (
     isPlainObject(value) &&
     hasOnlyKeys(value, ["fromMs", "incidentAtMs", "toMs"]) &&
-    isCount(value.fromMs) &&
-    isCount(value.incidentAtMs) &&
-    isCount(value.toMs) &&
+    isEpochMs(value.fromMs) &&
+    isEpochMs(value.incidentAtMs) &&
+    isEpochMs(value.toMs) &&
     value.fromMs <= value.incidentAtMs &&
     value.incidentAtMs <= value.toMs
   );
@@ -497,8 +505,8 @@ function validRecordHeader(value: PlainObject): boolean {
     isOneOf(SUPPORT_INCIDENT_STATES, value.state) &&
     isCount(value.slotIndex) &&
     value.slotIndex < SUPPORT_INCIDENT_SLOT_COUNT &&
-    isCount(value.createdAtMs) &&
-    isCount(value.expiresAtMs) &&
+    isEpochMs(value.createdAtMs) &&
+    isEpochMs(value.expiresAtMs) &&
     value.expiresAtMs > value.createdAtMs
   );
 }

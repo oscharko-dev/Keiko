@@ -74,10 +74,17 @@ import {
 } from "./support-analyze-sufficiency.js";
 import { SequenceNumberSet } from "./sequence-number-set.js";
 
-import { CURRENT_SUPPORT_REGISTRY, type SupportReaderRegistry } from "./support-registry.js";
+import {
+  CURRENT_SUPPORT_REGISTRY,
+  findSupportRegistry,
+  type SupportReaderRegistry,
+} from "./support-registry.js";
 
 export interface SupportAnalyzeOptions {
   readonly registry?: SupportReaderRegistry;
+  // Set by a caller that already knows its source, so a validated report is never labelled as the
+  // raw log or bundle its first line might resemble.
+  readonly sourceKind?: SourceKind;
   readonly maxTimelineRecords?: number;
   readonly maxTimelineBytes?: number;
   readonly toolLifecycleValidator?: ToolLifecycleValidator;
@@ -249,7 +256,7 @@ export interface AnalyzeAllResult {
   readonly sufficiency: ActivityLogSufficiency;
 }
 
-export type SourceKind = "bundle" | "raw-log";
+export type SourceKind = "bundle" | "raw-log" | "support-report";
 
 function splitLines(text: string): readonly string[] {
   if (text.length === 0) return [];
@@ -707,6 +714,9 @@ function registeredRecordClassification(
 }
 
 function isPersistedTimestamp(value: string): boolean {
+  // The writer's form is exactly YYYY-MM-DDTHH:mm:ss.sssZ. An extended-year timestamp also
+  // round-trips through Date, but it would break the lexical ordering timelines rely on.
+  if (value.length !== 24) return false;
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
@@ -766,7 +776,7 @@ export function classifyLine(
   const record = tryParseJsonObject(raw);
   if (record === undefined) return rejectedLine(invalidJsonEvidence(terminalFragment));
   if (typeof record.$section === "string") return { kind: "section" };
-  const registry = options.registry ?? CURRENT_SUPPORT_REGISTRY;
+  const registry = options.registry ?? recordedRegistry(record);
   const evidence = identityClassification(record, registry);
   if (evidence === "unsupported") return rejectedLine(evidence);
   const labels = requiredLineLabels(record);
@@ -787,6 +797,35 @@ export function classifyLine(
   };
 }
 
+// Without an explicit registry, a line is judged by the exact registry it records when that is a
+// supported release's: lines an upgraded installation wrote before the upgrade stay evidence. Any
+// other identity is judged by the current registry, which classifies it as unsupported.
+function recordedRegistry(record: Record<string, unknown>): SupportReaderRegistry {
+  if (!validRegistryIdentityShape(record)) return CURRENT_SUPPORT_REGISTRY;
+  return (
+    findSupportRegistry({
+      registryVersion: Number(record.registryVersion),
+      schemaDigest: String(record.schemaDigest),
+      catalogDigest: String(record.catalogDigest),
+    }) ?? CURRENT_SUPPORT_REGISTRY
+  );
+}
+
+// A received record may carry frames or a cause chain only where its own registration declares
+// them, and only as arrays: the envelope exemption must never become an open key/value channel.
+function declaresReducerFields(
+  record: Record<string, unknown>,
+  op: string,
+  registry: SupportReaderRegistry,
+): boolean {
+  const fields = registry.operations.get(op)?.fields;
+  return ["frames", "causeChain"].every(
+    (name) =>
+      record[name] === undefined ||
+      (Array.isArray(record[name]) && fields !== undefined && Object.hasOwn(fields, name)),
+  );
+}
+
 /** Closed field validation, independent of evidence completeness; no rendering or IO. */
 export function isSupportReportEvent(
   record: Record<string, unknown>,
@@ -801,7 +840,8 @@ export function isSupportReportEvent(
     record.schemaDigest === registry.schemaDigest &&
     record.catalogDigest === registry.catalogDigest &&
     labels !== undefined &&
-    areSupportLogFieldsSafe(record) &&
+    declaresReducerFields(record, labels.op, registry) &&
+    areSupportLogFieldsSafe(record, KNOWN_ENVELOPE_KEYS) &&
     registeredRecordClassification(record, labels.category, labels.op, registry) === "supported"
   );
 }
@@ -1624,7 +1664,7 @@ export function analyzeLogLines(
   const iterator = lines[Symbol.iterator]();
   const first = iterator.next();
   const firstLine: ActivityLogTextLine | undefined = first.done === true ? undefined : first.value;
-  const kind = detectSourceKind(firstLine?.text);
+  const kind = options.sourceKind ?? detectSourceKind(firstLine?.text);
   const fragments =
     kind === "bundle" ? bundleRelativeFragments(firstLine?.text) : new Set<number>();
   const accumulation: LineAccumulation = {
@@ -1634,7 +1674,7 @@ export function analyzeLogLines(
     contentIndex: 0,
     leadingSections: undefined,
   };
-  if (firstLine !== undefined && kind === "raw-log") {
+  if (firstLine !== undefined && kind !== "bundle") {
     accumulateContentLine(accumulation, firstLine, fragments, options);
   }
   for (let next = iterator.next(); next.done !== true; next = iterator.next()) {
@@ -2365,9 +2405,10 @@ function storeFingerprintWarning(
   fingerprints: readonly StoreFingerprint[] | undefined,
 ): string | undefined {
   if (fingerprints !== undefined) return undefined;
+  if (kind === "support-report")
+    return "a support report carries no store fingerprints — export never opens a store for a diagnostic snapshot";
   return kind === "raw-log"
-    ? "a raw Activity Log file carries no store fingerprints — export a support bundle " +
-        "(`keiko support export`) to include them"
+    ? "a raw Activity Log file carries no store fingerprints"
     : "no store fingerprints found in this bundle's manifest — either the exporter predates " +
         "Wave 4a, or every store was unavailable at export time";
 }
@@ -2450,7 +2491,7 @@ function computeSeedFields(
     line.toolCatalog === undefined ? [] : [line.toolCatalog],
   );
   return {
-    kind: detectSourceKind(source.firstLine),
+    kind: source.kind ?? detectSourceKind(source.firstLine),
     gatewayScript: buildGatewayReplayScript(timeline.lines),
     httpRequest: buildHttpRequestSeed(timeline.lines),
     indexingJob: buildIndexingJobSeed(timeline.lines),
@@ -2466,6 +2507,8 @@ function computeSeedFields(
 // (#3531), so a seed never needs the artifact held whole: the line count, the SHA-256 of the
 // artifact's bytes, and its first line (a bundle's manifest line, for its store fingerprints).
 export interface ReproductionSeedSource {
+  // Known by a caller that validated its source; otherwise detected from the first line.
+  readonly kind?: SourceKind;
   readonly lineCount: number;
   readonly sha256: string;
   readonly firstLine: string | undefined;

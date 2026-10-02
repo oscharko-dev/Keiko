@@ -289,11 +289,12 @@ describe("SupportIncident candidates", () => {
   describe("the registered-failure trigger", () => {
     it("derives eligibility from the registry, not from a caller list", () => {
       expect(supportIncidentEligibleOperation(FAILURE_OP)).toBe(true);
-      expect(supportIncidentEligibleOperation("support.analyze.classified")).toBe(false);
+      // A registered operation outside the failure lifecycle is never eligible.
+      expect(supportIncidentEligibleOperation("support.report.completed")).toBe(false);
       expect(supportIncidentEligibleOperation("support.incident.rejected")).toBe(false);
       expect(supportIncidentEligibleOperation("not.a.registered.operation")).toBe(false);
       expect(
-        recordRegisteredFailureIncident(stateDir, { op: "support.analyze.classified" }),
+        recordRegisteredFailureIncident(stateDir, { op: "support.report.completed" }),
       ).toBeUndefined();
     });
 

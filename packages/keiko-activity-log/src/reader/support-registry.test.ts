@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { analyzeLogText } from "./support-analyze.js";
-import { findSupportRegistry } from "./support-registry-history.js";
+import { CURRENT_SUPPORT_REGISTRY, findSupportRegistry } from "./support-registry.js";
 
 function preMoveLines(): string {
   const packed = JSON.parse(
@@ -31,7 +31,12 @@ describe("version-matched support registry", () => {
     const registry = findSupportRegistry(identity);
     expect(registry).toBeDefined();
     if (registry === undefined) throw new TypeError("missing archived registry");
-    expect(analyzeLogText(text).evidence.classification).toBe("unsupported");
+    // Without a registry each line is judged by the supported release registry it records, so
+    // the pre-upgrade evidence stays evidence. An explicit registry is never overridden.
+    expect(analyzeLogText(text).evidence.classification).toBe("supported");
+    expect(
+      analyzeLogText(text, { registry: CURRENT_SUPPORT_REGISTRY }).evidence.classification,
+    ).toBe("unsupported");
     const result = analyzeLogText(text, { registry });
     expect(result.evidence.unsupportedLineCount).toBe(0);
     expect(result.malformedLineCount).toBe(0);

@@ -1083,6 +1083,7 @@ interface PublicationIntent {
 type PublicationReceiptState = "active" | "complete" | "consumed";
 
 const PUBLICATION_SLOT_PATTERN = /^[0-9a-f]{24}$/u;
+const PUBLICATION_STAGE_NAME_PATTERN = /^\.keiko-publish-[0-9a-f]{24}-(?:0|[1-9][0-9]?)\.stage$/u;
 const PUBLICATION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const PUBLICATION_OWNER_TOKEN_PATTERN = /^[0-9a-f]{24}$/u;
 // The owner file and in-process token identify one synchronous publish call, not a process. A peer
@@ -1094,6 +1095,14 @@ const MAX_PUBLICATION_ENTRIES = 16;
 export const MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES = 256 * 1024 * 1024;
 export const MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES = 512 * 1024 * 1024;
 const MAX_PUBLICATION_INTENT_BYTES = 64 * 1024;
+
+/**
+ * True for the private stage copy an interrupted publication can leave beside its destination:
+ * `.keiko-publish-<24 hex>-<entry index>.stage`. It is Keiko's own and never a published artifact.
+ */
+export function isSafeArtifactStageFileName(name: string): boolean {
+  return PUBLICATION_STAGE_NAME_PATTERN.test(name);
+}
 
 function validatePublicationSlot(slot: string, artifactClass: SafeArtifactClass): void {
   if (!PUBLICATION_SLOT_PATTERN.test(slot)) {

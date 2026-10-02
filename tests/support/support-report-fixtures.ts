@@ -36,3 +36,12 @@ export function resealSupportReportWithParentFanOut(report: SupportReport): Supp
   }));
   return sealSupportReport(report.incident, report.selection, encodeSupportReportEvidence(events));
 }
+
+/** Reseals a report through the production integrity owner, optionally with another header. */
+export function resealSupportReport(
+  report: SupportReport,
+  incident: SupportReport["incident"] = report.incident,
+  minimumAnalyzerVersion?: string,
+): SupportReport {
+  return sealSupportReport(incident, report.selection, report.evidence, minimumAnalyzerVersion);
+}

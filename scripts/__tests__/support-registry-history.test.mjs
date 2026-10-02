@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +15,7 @@ import {
 } from "../generate-support-registry-history.mjs";
 import { compareStableVersions, parseStableVersion } from "../lib/stable-version.mjs";
 
-const HISTORY = "packages/keiko-activity-log/src/reader/support-registry-history.ts";
+const HISTORY = "packages/keiko-activity-log/src/reader/support-registry-history.generated.ts";
 const VERSION = JSON.parse(readFileSync("package.json", "utf8")).version;
 
 function shippedSnapshots() {
@@ -84,7 +85,9 @@ describe("trusted support registry history", () => {
       expect(entry.decoded.length).toBeLessThanOrEqual(MAX_DECODED_SNAPSHOT_BYTES);
     }
     const committed = readFileSync(HISTORY, "utf8");
-    expect(committed).toContain(`maxOutputLength: ${String(MAX_DECODED_SNAPSHOT_BYTES)}`);
+    expect(committed).toContain(
+      `MAX_DECODED_SUPPORT_REGISTRY_SNAPSHOT_BYTES = ${String(MAX_DECODED_SNAPSHOT_BYTES)};`,
+    );
   });
 
   it("is formatted exactly as the generator writes it", async () => {
@@ -146,6 +149,12 @@ describe("trusted support registry history", () => {
     expect(() =>
       captureSupportRegistries([{ release: "1.1.9", sourceCommit: "3".repeat(40) }], () => huge),
     ).toThrow(RangeError);
+    // A shallow clone names the missing release instead of git's own opaque failure.
+    expect(() =>
+      captureSupportRegistries([{ release: "1.1.9", sourceCommit: "4".repeat(40) }], () => {
+        throw new Error("fatal: path does not exist");
+      }),
+    ).toThrow("release 1.1.9 (" + "4".repeat(40) + ") is not available locally");
   });
 
   it("writes only the selected destination and reports the captured releases", async () => {
@@ -166,7 +175,7 @@ describe("trusted support registry history", () => {
       expect(await main(generate, { write: (text) => writes.push(text) })).toBe(2);
       const rendered = readFileSync(output, "utf8");
       expect(rendered).toContain("Supported releases 1.1.9–1.1.10.");
-      expect(rendered).toContain("findSupportRegistry");
+      expect(rendered).toContain("export const SUPPORT_RELEASE_REGISTRY_SNAPSHOTS = [");
       expect(writes.join("")).toContain("captured 2 release registries (1.1.9–1.1.10)");
       expect(await format(rendered, { parser: "typescript", printWidth: 100 })).toBe(rendered);
     } finally {
