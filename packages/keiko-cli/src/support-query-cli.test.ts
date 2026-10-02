@@ -302,6 +302,38 @@ function readExportedReport(directory: string): string {
 }
 
 describe("keiko support export with a selector (#3531)", () => {
+  // Review #3679: the report of a long-running process keeps the runtime its start recorded.
+  it("keeps a long-running process's runtime in the exported report", async () => {
+    const stateDir = makeRoot("keiko-query-cli-runtime-");
+    const a = fixtureProcess(7103, "0badc0d3");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      fixtureLine(a, T0, { op: "process.started" }),
+      fixtureLine(a, T0 + 600_000, { op: "client.diagnostic", correlationId: ROOT_ID }),
+    ]);
+    const outDir = makeRoot("keiko-query-cli-out-");
+    const { io, err } = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outDir],
+      io,
+      AUDIT_ENV,
+      exportDeps(outDir),
+    );
+
+    expect(code, err()).toBe(0);
+    const report = parseSupportReport(readExportedReport(outDir));
+    const decoded = JSON.parse(
+      inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8"),
+    ) as readonly { readonly record: Readonly<Record<string, unknown>> }[];
+    expect(decoded.map((event) => event.record)).toContainEqual(
+      expect.objectContaining({
+        op: "process.started",
+        nodeVersion: "v24.18.0",
+        platform: "linux",
+      }),
+    );
+  });
+
   // #3534: a report over a crashed writer's torn tail says truncated, never corrupt, so the intact
   // evidence before the crash is degraded rather than refused as insufficient.
   it("reports a torn segment tail as truncated evidence, never corrupt", async () => {

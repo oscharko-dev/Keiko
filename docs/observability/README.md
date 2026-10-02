@@ -698,7 +698,9 @@ bounded memory. There are two kinds of question:
   `parentCorrelationId` and every descendant, such as a background job the request started.
   Unrelated correlations, siblings included, are never selected. A narrow context is added: the
   uncorrelated process signals (lifecycle, resource, loss, backpressure, disk) of the same process
-  lifetimes, within `--context-ms` (0 to 600000, default 5000) of the closure. An incident or
+  lifetimes, within `--context-ms` (0 to 600000, default 5000) of the closure, and each of those
+  lifetimes' own `process.started` (its Node version, platform and architecture) wherever it lies,
+  even with `--context-ms 0`, so a long-running process keeps its runtime. An incident or
   fingerprint is resolved through the local support incidents. A reported incident also selects its
   whole pinned window and treats every correlation in it as a root. The three selectors exclude each
   other and do not combine with the event filters.

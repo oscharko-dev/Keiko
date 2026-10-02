@@ -45,6 +45,15 @@ const DEFAULT_FIELDS: Readonly<Record<string, Readonly<Record<string, unknown>>>
   "client.diagnostic": { clientNoteDigest: DIGEST },
   "cli.lifecycle.stop-requested": { channel: "sigterm" },
   "indexing.detached-run.launched": { capsuleIdDigest: DIGEST, jobIdMinted: true },
+  "process.started": {
+    nodeVersion: "v24.18.0",
+    platform: "linux",
+    arch: "x64",
+    host: "127.0.0.1",
+    port: 1983,
+    stateDirSource: "default",
+    logLevel: "info",
+  },
 };
 
 /** One persisted line (no newline), exactly as the production file sink formats it. */

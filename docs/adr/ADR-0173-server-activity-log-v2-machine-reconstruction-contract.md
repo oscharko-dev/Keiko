@@ -713,9 +713,14 @@ Analysis recomputes sufficiency from the decoded evidence and takes the union wi
 verdict: it can only downgrade a declared `complete`, never upgrade an `insufficient` one. The
 header's provenance must agree with the evidence: the declared integrity maps to its completeness
 and loss, the window is anchored at the incident's creation, a user report carries the unattributed
-constants, and the incident's own retained failure line (its operation under its own correlations)
-agrees on the error kind. Another request's failure of the same operation neither completes the
-incident nor refuses it. A contradiction is `unsafe-report`. Every narrowed view, the
+constants, and a registered incident's surface follows from its operation. When its own failing line
+(its operation under its own correlations) is retained, the incident's error kind, Keiko frame count
+and canonical fingerprint must be the ones the producer's rules derive from that line; when it is
+not, the analysis is insufficient (`evidence-not-retained`). Another request's failure of the same
+operation neither completes the incident nor refuses it. A contradiction is `unsafe-report`. Every
+closure member, each incident correlation and every parent a retained line names, needs a directly
+recorded line: a timeline derived only through a child never proves its parent
+(`parent-correlation-missing`, `evidence-not-retained`). Every narrowed view, the
 `--correlation-id` timeline and each seed, keeps the report's effective selection reasons, so a
 projection never reads more complete than the report it came from.
 
@@ -1496,7 +1501,9 @@ disable or defer manifests.
 **A closure is selected whole.** A correlation, an incident or a defect fingerprint selects the
 registered causal closure: the roots, every ancestor over `parentCorrelationId` and every
 descendant, and never an unrelated correlation. A narrow context adds only the uncorrelated process
-signals of the closure's own process lifetimes within a configured window (default 5 seconds). A
+signals of the closure's own process lifetimes within a configured window (default 5 seconds), and
+each lifetime's own `process.started` (its runtime) wherever it lies, outside the context cap, so a
+long-running process keeps its Node version, platform and architecture (#3534). A
 user-reported incident also selects its pinned window and takes every correlation in it as a root.
 
 **Nothing required is truncated.** A closure that does not fit the budget returns no events and is

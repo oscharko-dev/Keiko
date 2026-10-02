@@ -933,6 +933,69 @@ describe("received-report audit hardening (#3534)", () => {
     expect(dropped.seed?.sufficiency.reasons).toContain("events-dropped");
   });
 
+  // Review #3679: a registered incident's identity follows from its operation and its own failing
+  // line through the producer's rules, so a header that contradicts them is forged.
+  // Review #3679: a parent timeline synthesized from its child's lines never proves the parent was
+  // retained; every closure member needs a directly recorded line.
+  it("never accepts a causal parent that only its child's lines imply", () => {
+    const { report } = failureFixture();
+    const parent = "support-report-parent-0001";
+    const child = "support-report-child-0001";
+    const text = serializeSupportReport(
+      sealSupportReport(
+        {
+          ...report.incident,
+          correlation: { rootCorrelationId: parent, childCorrelationIds: [child] },
+        },
+        { ...report.selection, status: "complete", reasons: [] },
+        encodeSupportReportEvidence(
+          eventsOf(report).map((event) => ({
+            ...event,
+            record: { ...event.record, correlationId: child, parentCorrelationId: parent },
+          })),
+        ),
+      ),
+    );
+    const analyzed = analyzeSupportReport(text);
+    expect(analyzed.selection.status).toBe("insufficient");
+    expect(analyzed.selection.reasons).toEqual(
+      expect.arrayContaining(["evidence-not-retained", "parent-correlation-missing"]),
+    );
+    expect(analyzed.seed?.sufficiency.status).toBe("insufficient");
+  });
+
+  it("refuses a registered incident whose identity contradicts its own failing line", () => {
+    const { report } = failureFixture();
+    expect(parseSupportReport(serializeSupportReport(report)).incident.surface).toBe(
+      "model-gateway",
+    );
+    for (const contradiction of [
+      { surface: "ui" },
+      { frameCount: 8 },
+      { defectFingerprint: "0".repeat(64) },
+    ]) {
+      expect(() => parseSupportReport(withIncident(report, contradiction))).toThrow(
+        expect.objectContaining({ reason: "unsafe-report" }),
+      );
+    }
+  });
+
+  it("states insufficiency when the failing line that fixes the identity is not retained", () => {
+    const { report } = failureFixture();
+    const text = serializeSupportReport(
+      sealSupportReport(
+        { ...report.incident, frameCount: 8 },
+        report.selection,
+        encodeSupportReportEvidence(
+          eventsOf(report).filter((event) => event.record.op !== "gateway.chat.failed"),
+        ),
+      ),
+    );
+    const analyzed = analyzeSupportReport(text);
+    expect(analyzed.selection.status).toBe("insufficient");
+    expect(analyzed.selection.reasons).toContain("evidence-not-retained");
+  });
+
   it("refuses a registered failure whose error kind contradicts its retained failing line", () => {
     const { report } = failureFixture();
     expect(() => parseSupportReport(withIncident(report, { errorKind: "internal" }))).toThrow(

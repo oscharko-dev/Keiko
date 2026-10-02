@@ -352,6 +352,24 @@ describe("support query causal closure (#3531)", () => {
     expect(result.diagnosticSufficiency.reasons).toContain("segment-unreadable");
   });
 
+  // Review #3679: a long-running process's start names its runtime; it stays in the closure's
+  // context however far before the failure it lies, even without any context window.
+  it("keeps each closure lifetime's process start wherever it lies", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      fixtureLine(a, T0, { op: "process.started" }),
+      signal(a, T0 + 60_000),
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    for (const contextMs of [DEFAULT_SUPPORT_QUERY_LIMITS.contextMs, 0]) {
+      const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs });
+      const context = result.events.filter((event) => event.role === "context");
+      expect(context.map((event) => event.parsed.view.op)).toEqual(["process.started"]);
+      expect(context[0]?.parsed.view.extra).toMatchObject({ nodeVersion: "v24.18.0" });
+      expect(result.truncation.state).toBe("none");
+    }
+  });
+
   // #3534: a crashed writer's torn tail is truncated evidence, never a corrupt record, and the
   // fragment never becomes a selected event.
   it("declares a torn segment tail as truncated evidence and never selects the fragment", () => {

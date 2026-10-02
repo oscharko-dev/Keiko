@@ -14,7 +14,8 @@
 //             the frontier. Unrelated correlations — siblings included — are never selected. A narrow
 //             pre/post context then adds the uncorrelated process signals (lifecycle, resource, loss,
 //             backpressure, disk) of the closure's own process lifetimes inside
-//             [first closure event - contextMs, last closure event + contextMs], and nothing else. A
+//             [first closure event - contextMs, last closure event + contextMs], plus each of those
+//             lifetimes' own `process.started` (its runtime) wherever it lies, and nothing else. A
 //             user-reported incident also selects every event of its pinned window and takes every
 //             correlation that appears there as a root.
 //   events  — registered operation, error kind, failure class, parent correlation, and a bounded time
@@ -519,6 +520,15 @@ interface ContextScope {
   readonly selected: ReadonlySet<string>;
 }
 
+// Each closure lifetime's own start names its runtime (Node version, platform, architecture). It is
+// kept wherever it lies and outside the context cap: a long-running process started far before a
+// short context window would otherwise leave its failures without that dimension.
+const LIFETIME_ANCHOR_OP = "process.started";
+
+function isLifetimeAnchor(accepted: AcceptedLine): boolean {
+  return accepted.parsed.view.op === LIFETIME_ANCHOR_OP;
+}
+
 function contextScope(
   events: readonly SupportSelectedEvent[],
   contextMs: number,
@@ -533,9 +543,12 @@ function contextScope(
     first = Math.min(first, ms);
     last = Math.max(last, ms);
   }
-  if (contextMs <= 0 || lifetimes.size === 0 || !Number.isFinite(first)) return undefined;
+  if (lifetimes.size === 0 || !Number.isFinite(first)) return undefined;
   const selected = new Set(events.map((event) => eventKey(event.file, event.index)));
-  return { fromMs: first - contextMs, toMs: last + contextMs, lifetimes, selected };
+  // Without a context window only the lifetime anchors remain: an empty interval admits no time.
+  return contextMs > 0
+    ? { fromMs: first - contextMs, toMs: last + contextMs, lifetimes, selected }
+    : { fromMs: Number.POSITIVE_INFINITY, toMs: Number.NEGATIVE_INFINITY, lifetimes, selected };
 }
 
 function manifestMayHoldLifetimes(
@@ -552,12 +565,10 @@ function isContextLine(accepted: AcceptedLine, scope: ContextScope): boolean {
   if (knownCorrelation(accepted.parsed.correlationId)) return false;
   const key = lifetimeKey(accepted.parsed);
   if (key === undefined || !scope.lifetimes.has(key)) return false;
+  if (scope.selected.has(eventKey(accepted.line.file, accepted.line.index))) return false;
+  if (isLifetimeAnchor(accepted)) return true;
   const ms = lineMs(accepted.parsed);
-  return (
-    ms >= scope.fromMs &&
-    ms <= scope.toMs &&
-    !scope.selected.has(eventKey(accepted.line.file, accepted.line.index))
-  );
+  return ms >= scope.fromMs && ms <= scope.toMs;
 }
 
 function collectContext(
@@ -571,14 +582,16 @@ function collectContext(
   const files = candidateFiles(
     state,
     (loaded) =>
-      manifestTimeOverlaps(loaded.manifest, scope.fromMs, scope.toMs) &&
-      manifestMayHoldLifetimes(loaded.manifest, scope.lifetimes),
+      manifestMayHoldLifetimes(loaded.manifest, scope.lifetimes) &&
+      (manifestTimeOverlaps(loaded.manifest, scope.fromMs, scope.toMs) ||
+        hasCount(loaded.manifest.ops, LIFETIME_ANCHOR_OP)),
   );
   const collector = new EventCollector(budgetBytes);
   let omitted = 0;
   for (const accepted of acceptedLines(state, files, true)) {
     if (!isContextLine(accepted, scope)) continue;
-    if (collector.candidateCount < maxContextEvents) collector.add(accepted, "context");
+    if (isLifetimeAnchor(accepted) || collector.candidateCount < maxContextEvents)
+      collector.add(accepted, "context");
     else omitted += 1;
   }
   if (collector.exceeded) {

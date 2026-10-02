@@ -1,7 +1,11 @@
-import { computeDefectFingerprint } from "../defect-fingerprint.js";
+import {
+  computeDefectFingerprint,
+  registeredFailureFingerprintInput,
+} from "../defect-fingerprint.js";
 import { isRedactedLogLabel, projectSupportLogFields } from "../log-redaction.js";
 import { deflateSync, inflateSync } from "node:zlib";
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   SUPPORT_REPORT_KIND,
   SUPPORT_REPORT_SCHEMA_VERSION,
   MAX_SUPPORT_REPORT_BYTES,
@@ -17,6 +21,7 @@ import {
   diagnosticSufficiencyStatus,
   isActivityLogIdentityDigest,
   isActivityLogProductVersion,
+  normalizeKeikoFrameSignature,
   parseActivityLogSegmentId,
   parseSupportIncidentPrivateProjection,
   type SupportIncidentPrivateProjection,
@@ -437,6 +442,40 @@ function ownFailureLines(
   );
 }
 
+// The identity the producer derives from a failing line, recomputed through the same owning rules:
+// its closed error kind, its Keiko frame count and its canonical fingerprint.
+function failureIdentityMatches(
+  incident: SupportIncidentPrivateProjection,
+  event: SupportReportEvent,
+): boolean {
+  const input = registeredFailureFingerprintInput({
+    op: incident.op,
+    errorKind: event.record.errorKind,
+    frames: event.record.frames,
+  });
+  return (
+    input.errorKind === incident.errorKind &&
+    normalizeKeikoFrameSignature(input.frames).length === incident.frameCount &&
+    computeDefectFingerprint(input) === incident.defectFingerprint
+  );
+}
+
+// A registered incident's surface follows from its operation alone. When its own failing line is
+// retained, the error kind, frame count and fingerprint must be the ones that line produces; when
+// it is not, the missing-failure rule states the insufficiency instead.
+function validateRegisteredIdentity(
+  incident: SupportIncidentPrivateProjection,
+  events: readonly SupportReportEvent[],
+): void {
+  if (incident.surface !== registeredFailureFingerprintInput({ op: incident.op }).surface)
+    throw new SupportReportError("unsafe-report");
+  // Only a correlated incident names which retained line is its own failure.
+  if (incident.correlation.rootCorrelationId === undefined) return;
+  const failures = ownFailureLines(incident, events);
+  if (failures.length > 0 && !failures.some((event) => failureIdentityMatches(incident, event)))
+    throw new SupportReportError("unsafe-report");
+}
+
 /**
  * The relations the producer guarantees between the incident header and its evidence. A header
  * that contradicts them, or contradicts its own retained failure line, is refused: the declared
@@ -459,14 +498,7 @@ function validateIncidentProvenance(
     if (!unattributedIncident(incident)) throw new SupportReportError("unsafe-report");
     return;
   }
-  // Only a correlated incident names which retained line is its own failure.
-  if (incident.correlation.rootCorrelationId === undefined) return;
-  const failures = ownFailureLines(incident, events);
-  if (
-    failures.length > 0 &&
-    !failures.some((event) => (event.record.errorKind ?? "unknown") === incident.errorKind)
-  )
-    throw new SupportReportError("unsafe-report");
+  validateRegisteredIdentity(incident, events);
 }
 
 // A canonical report is exactly one line. The retired open JSONL bundle starts with its
@@ -555,6 +587,30 @@ function reportFailureClasses(
   return activityLogFailureClassesOf(ops, registry);
 }
 
+// The received closure must show its members directly, as the query engine requires of its own
+// closure: every incident correlation and every parent a retained line names needs at least one
+// directly recorded line. A timeline derived only through a child never proves its parent.
+function closureMemberReasons(
+  incident: SupportIncidentPrivateProjection,
+  events: readonly SupportReportEvent[],
+): readonly DiagnosticSufficiencyReason[] {
+  const observed = new Set(events.map((event) => event.record.correlationId));
+  const members = [
+    incident.correlation.rootCorrelationId,
+    ...incident.correlation.childCorrelationIds,
+  ].filter((value): value is string => value !== undefined);
+  const parents = events
+    .map((event) => event.record.parentCorrelationId)
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value !== ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    );
+  return [
+    ...(members.every((id) => observed.has(id)) ? [] : (["evidence-not-retained"] as const)),
+    ...(parents.every((id) => observed.has(id)) ? [] : (["parent-correlation-missing"] as const)),
+  ];
+}
+
 function projectedEvidenceReasons(
   incident: SupportIncidentPrivateProjection,
   events: readonly SupportReportEvent[],
@@ -565,20 +621,15 @@ function projectedEvidenceReasons(
     analysis.sufficiency,
     reportFailureClasses(incident, events, registry),
   ).reasons;
-  const correlations = [
-    incident.correlation.rootCorrelationId,
-    ...incident.correlation.childCorrelationIds,
-  ].filter((value): value is string => value !== undefined);
   // A registered failure is reconstructable only with its own failing line: without it neither the
   // failure site nor the cause chain can be localized, whatever else the closure retained.
   const failureRetained =
     incident.trigger !== "registered-failure" || ownFailureLines(incident, events).length > 0;
-  if (
-    !failureRetained ||
-    correlations.some((correlation) => findTimeline(analysis, correlation) === undefined)
-  )
-    return reasons([...projected, "evidence-not-retained"]);
-  return projected;
+  return reasons([
+    ...projected,
+    ...(failureRetained ? [] : (["evidence-not-retained"] as const)),
+    ...closureMemberReasons(incident, events),
+  ]);
 }
 
 /**

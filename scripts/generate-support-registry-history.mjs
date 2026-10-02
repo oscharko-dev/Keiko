@@ -65,6 +65,12 @@ function currentReleaseBound(version) {
   };
 }
 
+/** True when the stable `release` precedes the product `version` (a prerelease or a release). */
+export function releasePrecedes(release, version) {
+  const parsed = requiredStableVersion(release, "the release");
+  return compareStableVersions(parsed, currentReleaseBound(version).release) < 0;
+}
+
 /** Stable release tags from the first supported release up to the current product version. */
 export function supportedReleases(version, execute = execFileSync) {
   const bound = currentReleaseBound(version);

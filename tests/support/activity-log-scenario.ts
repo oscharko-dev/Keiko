@@ -180,13 +180,22 @@ async function queryEvents(
 }
 
 // Production records a registered-failure incident from the failing event itself, so the harness
-// takes the error kind of the persisted failing line, never the cluster's (an unvalidated
-// tool-catalog line's kind is withheld from its cluster).
-function persistedFailureErrorKind(stateDir: string, op: string): string | undefined {
+// takes the error kind and frames of the persisted failing line, never the cluster's (an
+// unvalidated tool-catalog line's kind is withheld from its cluster).
+function persistedFailureEvidence(
+  stateDir: string,
+  op: string,
+): { readonly errorKind?: string; readonly frames?: readonly unknown[] } {
   const [line] = persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
-  if (line === undefined) return undefined;
-  const { errorKind } = JSON.parse(line) as { readonly errorKind?: unknown };
-  return typeof errorKind === "string" ? errorKind : undefined;
+  if (line === undefined) return {};
+  const { errorKind, frames } = JSON.parse(line) as {
+    readonly errorKind?: unknown;
+    readonly frames?: unknown;
+  };
+  return {
+    ...(typeof errorKind === "string" ? { errorKind } : {}),
+    ...(Array.isArray(frames) ? { frames: frames as readonly unknown[] } : {}),
+  };
 }
 
 async function proveIncidentWindowCoversClosure(
@@ -202,7 +211,7 @@ async function proveIncidentWindowCoversClosure(
       ? incidents.recordUserReportedIncident(stateDir, {})
       : incidents.recordRegisteredFailureIncident(stateDir, {
           op: failure.op,
-          errorKind: persistedFailureErrorKind(stateDir, failure.op),
+          ...persistedFailureEvidence(stateDir, failure.op),
           correlationId,
         });
   expect(creation, `scenario ${scenario}: records an incident candidate for its failure`).not.toBe(

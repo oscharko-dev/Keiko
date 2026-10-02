@@ -37,13 +37,11 @@ import { join } from "node:path";
 import {
   ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
-  ACTIVITY_LOG_OPERATION_SURFACES,
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
   SUPPORT_INCIDENT_SLOT_COUNT,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
-  activityLogErrorKindOr,
   activityLogEvent,
   activityLogOperationSchema,
   defineActivityLogOperation,
@@ -76,10 +74,12 @@ import {
   type ActivityLogPinResult,
   type ServerLogEvent,
 } from "./server-log.js";
-import { computeDefectFingerprint } from "./defect-fingerprint.js";
+import {
+  computeDefectFingerprint,
+  registeredFailureFingerprintInput,
+} from "./defect-fingerprint.js";
 import { isRedactedLogLabel } from "./log-redaction.js";
 import { activityLogTestWriterInstalled } from "./server-logger.js";
-import { FRAME_SHAPE_PATTERN } from "./stack-frames.js";
 import {
   claimSupportIncidentFingerprint,
   claimSupportIncidentSlot,
@@ -527,22 +527,6 @@ export interface SupportIncidentFailureEvidence {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly frames?: readonly unknown[] | undefined;
-}
-
-function keikoFrames(frames: readonly unknown[] | undefined): readonly string[] {
-  if (frames === undefined) return [];
-  return frames.filter(
-    (frame): frame is string => typeof frame === "string" && FRAME_SHAPE_PATTERN.test(frame),
-  );
-}
-
-function failureFingerprintInput(evidence: SupportIncidentFailureEvidence): DefectFingerprintInput {
-  return {
-    surface: ACTIVITY_LOG_OPERATION_SURFACES[evidence.op] ?? "unattributed",
-    op: evidence.op,
-    errorKind: activityLogErrorKindOr(evidence.errorKind, "unknown"),
-    frames: keikoFrames(evidence.frames),
-  };
 }
 
 // A correlation id the writer would redact (a credential-shaped label) never enters an incident:
@@ -1047,7 +1031,7 @@ function registeredFailureDraft(evidence: SupportIncidentFailureEvidence): Candi
   const correlation = failureCorrelation(evidence);
   return {
     trigger: "registered-failure",
-    input: failureFingerprintInput(evidence),
+    input: registeredFailureFingerprintInput(evidence),
     correlation,
     // The failing operation's own correlation (validated), so the candidate's lines join it.
     evidenceCorrelationId:
@@ -1401,7 +1385,7 @@ function admittedEvidence(event: ServerLogEvent): AdmissionOutcome {
     parentCorrelationId: event.parentCorrelationId,
     frames: eventFrames(event),
   };
-  const defectFingerprint = computeDefectFingerprint(failureFingerprintInput(evidence));
+  const defectFingerprint = computeDefectFingerprint(registeredFailureFingerprintInput(evidence));
   const admission = admitEvaluation(defectFingerprint, Date.now());
   if (admission === "admitted") return { status: "admitted", evidence };
   return admission === "rate-limited"

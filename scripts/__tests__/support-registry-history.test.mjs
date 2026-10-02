@@ -11,9 +11,9 @@ import {
   generateSupportRegistryHistory,
   main,
   MAX_DECODED_SNAPSHOT_BYTES,
+  releasePrecedes,
   supportedReleases,
 } from "../generate-support-registry-history.mjs";
-import { compareStableVersions, parseStableVersion } from "../lib/stable-version.mjs";
 
 const HISTORY = "packages/keiko-activity-log/src/reader/support-registry-history.generated.ts";
 const VERSION = JSON.parse(readFileSync("package.json", "utf8")).version;
@@ -33,7 +33,7 @@ function shippedSnapshots() {
 }
 
 function olderThanCurrent(release) {
-  return compareStableVersions(parseStableVersion(release), parseStableVersion(VERSION)) < 0;
+  return releasePrecedes(release, VERSION);
 }
 
 // A fake git that answers exactly the three commands the generator issues.
@@ -119,6 +119,16 @@ describe("trusted support registry history", () => {
 
   // A prerelease bump (`set-version -- 1.2.0-rc.1`) precedes its release, so its history keeps every
   // older stable release and never the release it precedes.
+  // Review #3679: the shipped-history proof reads the current product version with the same
+  // prerelease-aware bound as the generator, so a prerelease bump never crashes it.
+  it("orders a stable release before a prerelease or release product version", () => {
+    expect(releasePrecedes("1.1.13", "1.1.14-rc.1")).toBe(true);
+    expect(releasePrecedes("1.1.14", "1.1.14-rc.1")).toBe(false);
+    expect(releasePrecedes("1.1.12", "1.1.13")).toBe(true);
+    expect(releasePrecedes("1.1.13", "1.1.13")).toBe(false);
+    expect(() => releasePrecedes("1.1.13-rc.1", "1.1.14")).toThrow(TypeError);
+  });
+
   it("stops a prerelease history strictly below the release it precedes", () => {
     const execute = fakeGit({
       tags: ["v1.1.9", "v1.1.10", "v1.2.0"],
