@@ -370,6 +370,42 @@ describe("support query causal closure (#3531)", () => {
     }
   });
 
+  // Review #3679: the runtime anchor is required evidence. It never consumes the optional context
+  // cap, and a budget that cannot hold it beside the closure states the bytes both need.
+  it("never counts a lifetime anchor against the optional context cap", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      fixtureLine(a, T0, { op: "process.started" }),
+      signal(a, T0 + 600_000),
+      diagnostic(a, T0 + 600_001, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { maxContextEvents: 1 });
+    expect(
+      result.events
+        .filter((event) => event.role === "context")
+        .map((event) => event.parsed.view.op),
+    ).toEqual(["process.started", SIGNAL]);
+    expect(result.truncation.state).toBe("none");
+    expect(result.diagnosticSufficiency.reasons).not.toContain("context-truncated");
+  });
+
+  it("states the closure and anchor bytes when the budget cannot hold the runtime", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    const start = fixtureLine(a, T0, { op: "process.started" });
+    const failure = diagnostic(a, T0 + 600_000, IDS.root);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [start, failure]);
+    const closureBytes = Buffer.byteLength(failure) + 1;
+    const bothBytes = closureBytes + Buffer.byteLength(start) + 1;
+    const { result } = query(stateDir, correlationSelection(IDS.root), {
+      contextMs: 0,
+      maxResultBytes: closureBytes,
+    });
+    expect(result.events).toEqual([]);
+    expect(result.diagnosticSufficiency.status).toBe("insufficient");
+    expect(result.diagnosticSufficiency.reasons).toContain("report-budget-exceeded");
+    expect(result.truncation).toMatchObject({ state: "budget-exceeded", requiredBytes: bothBytes });
+  });
+
   // #3534: a crashed writer's torn tail is truncated evidence, never a corrupt record, and the
   // fragment never becomes a selected event.
   it("declares a torn segment tail as truncated evidence and never selects the fragment", () => {

@@ -521,16 +521,42 @@ interface ContextScope {
 }
 
 // Each closure lifetime's own start names its runtime (Node version, platform, architecture). It is
-// kept wherever it lies and outside the context cap: a long-running process started far before a
-// short context window would otherwise leave its failures without that dimension.
+// required evidence, not optional context: it is charged to the selection's own budget wherever it
+// lies, never counted against the context cap and never dropped to fit optional context, because a
+// long-running process started far before any short window would otherwise lose that dimension.
 const LIFETIME_ANCHOR_OP = "process.started";
 
-function isLifetimeAnchor(accepted: AcceptedLine): boolean {
-  return accepted.parsed.view.op === LIFETIME_ANCHOR_OP;
+function selectedLifetimes(events: readonly SupportSelectedEvent[]): ReadonlySet<string> {
+  return new Set(
+    events.flatMap((event) => {
+      const key = lifetimeKey(event.parsed);
+      return key === undefined ? [] : [key];
+    }),
+  );
+}
+
+function collectLifetimeAnchors(state: EngineState, collector: EventCollector): void {
+  const lifetimes = selectedLifetimes(collector.events);
+  if (lifetimes.size === 0) return;
+  const selected = new Set(collector.events.map((event) => eventKey(event.file, event.index)));
+  const files = candidateFiles(
+    state,
+    (loaded) =>
+      hasCount(loaded.manifest.ops, LIFETIME_ANCHOR_OP) &&
+      manifestMayHoldLifetimes(loaded.manifest, lifetimes),
+  );
+  for (const accepted of acceptedLines(state, files, true)) {
+    const key = lifetimeKey(accepted.parsed);
+    if (accepted.parsed.view.op !== LIFETIME_ANCHOR_OP || key === undefined) continue;
+    if (!lifetimes.has(key) || selected.has(eventKey(accepted.line.file, accepted.line.index)))
+      continue;
+    collector.add(accepted, "context");
+  }
 }
 
 function contextScope(
   events: readonly SupportSelectedEvent[],
+  selectedEvents: readonly SupportSelectedEvent[],
   contextMs: number,
 ): ContextScope | undefined {
   const lifetimes = new Set<string>();
@@ -543,12 +569,9 @@ function contextScope(
     first = Math.min(first, ms);
     last = Math.max(last, ms);
   }
-  if (lifetimes.size === 0 || !Number.isFinite(first)) return undefined;
-  const selected = new Set(events.map((event) => eventKey(event.file, event.index)));
-  // Without a context window only the lifetime anchors remain: an empty interval admits no time.
-  return contextMs > 0
-    ? { fromMs: first - contextMs, toMs: last + contextMs, lifetimes, selected }
-    : { fromMs: Number.POSITIVE_INFINITY, toMs: Number.NEGATIVE_INFINITY, lifetimes, selected };
+  if (contextMs <= 0 || lifetimes.size === 0 || !Number.isFinite(first)) return undefined;
+  const selected = new Set(selectedEvents.map((event) => eventKey(event.file, event.index)));
+  return { fromMs: first - contextMs, toMs: last + contextMs, lifetimes, selected };
 }
 
 function manifestMayHoldLifetimes(
@@ -565,33 +588,36 @@ function isContextLine(accepted: AcceptedLine, scope: ContextScope): boolean {
   if (knownCorrelation(accepted.parsed.correlationId)) return false;
   const key = lifetimeKey(accepted.parsed);
   if (key === undefined || !scope.lifetimes.has(key)) return false;
-  if (scope.selected.has(eventKey(accepted.line.file, accepted.line.index))) return false;
-  if (isLifetimeAnchor(accepted)) return true;
   const ms = lineMs(accepted.parsed);
-  return ms >= scope.fromMs && ms <= scope.toMs;
+  return (
+    ms >= scope.fromMs &&
+    ms <= scope.toMs &&
+    !scope.selected.has(eventKey(accepted.line.file, accepted.line.index))
+  );
 }
 
+// Optional context: the window is set by the closure's own events; required lines already
+// selected (closure, window and lifetime anchors) are never selected twice.
 function collectContext(
   state: EngineState,
   events: readonly SupportSelectedEvent[],
+  selectedEvents: readonly SupportSelectedEvent[],
   budgetBytes: number,
 ): ContextSelection {
   const { contextMs, maxContextEvents } = state.input.limits;
-  const scope = contextScope(events, contextMs);
+  const scope = contextScope(events, selectedEvents, contextMs);
   if (scope === undefined) return NO_CONTEXT;
   const files = candidateFiles(
     state,
     (loaded) =>
-      manifestMayHoldLifetimes(loaded.manifest, scope.lifetimes) &&
-      (manifestTimeOverlaps(loaded.manifest, scope.fromMs, scope.toMs) ||
-        hasCount(loaded.manifest.ops, LIFETIME_ANCHOR_OP)),
+      manifestTimeOverlaps(loaded.manifest, scope.fromMs, scope.toMs) &&
+      manifestMayHoldLifetimes(loaded.manifest, scope.lifetimes),
   );
   const collector = new EventCollector(budgetBytes);
   let omitted = 0;
   for (const accepted of acceptedLines(state, files, true)) {
     if (!isContextLine(accepted, scope)) continue;
-    if (isLifetimeAnchor(accepted) || collector.candidateCount < maxContextEvents)
-      collector.add(accepted, "context");
+    if (collector.candidateCount < maxContextEvents) collector.add(accepted, "context");
     else omitted += 1;
   }
   if (collector.exceeded) {
@@ -964,6 +990,8 @@ function runClosureSelection(
   if (closure.exceeded || windowed.exceeded)
     return budgetExceededOutcome(selection, closure, state, 0);
   const collected = collectClosureEvents(state, closure.members, selection.windows);
+  const closureEvents = [...collected.collector.events];
+  if (!collected.collector.exceeded) collectLifetimeAnchors(state, collected.collector);
   if (collected.collector.exceeded) {
     return budgetExceededOutcome(
       selection,
@@ -974,7 +1002,7 @@ function runClosureSelection(
     );
   }
   const remaining = state.input.limits.maxResultBytes - collected.collector.requiredBytes;
-  const context = collectContext(state, collected.collector.events, remaining);
+  const context = collectContext(state, closureEvents, collected.collector.events, remaining);
   const reasons: DiagnosticSufficiencyReason[] = [
     ...missingClosureReasons(closure, collected.observed),
   ];
