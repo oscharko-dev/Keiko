@@ -76,7 +76,7 @@ export interface SupportReportEvent {
 }
 
 const SUPPORT_REPORT_FILE_NAME_PATTERN =
-  /^keiko-support-v[1-9][0-9]{0,3}-[a-f0-9]{12}-[0-9]{4}-[0-9]{2}-[0-9]{2}\.json$/u;
+  /^keiko-support-v[1-9]\d{0,3}-[a-f0-9]{12}-\d{4}-\d{2}-\d{2}\.json$/u;
 
 /**
  * The closed report file name: product prefix, schema version, incident prefix and the incident's

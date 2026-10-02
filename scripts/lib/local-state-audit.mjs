@@ -66,8 +66,8 @@ const SUPPORT_INCIDENT_SUBDIR = "support-incidents";
 // packages/keiko-security/src/fs-hardening.ts); it is Keiko's own, never a report.
 const SUPPORT_REPORT_SUBDIR = "support-reports";
 const SUPPORT_REPORT_FILE_PATTERN =
-  /^keiko-support-v[1-9][0-9]{0,3}-[a-f0-9]{12}-[0-9]{4}-[0-9]{2}-[0-9]{2}\.json$/u;
-const SUPPORT_REPORT_STAGE_PATTERN = /^\.keiko-publish-[0-9a-f]{24}-(?:0|[1-9][0-9]?)\.stage$/u;
+  /^keiko-support-v[1-9]\d{0,3}-[a-f0-9]{12}-\d{4}-\d{2}-\d{2}\.json$/u;
+const SUPPORT_REPORT_STAGE_PATTERN = /^\.keiko-publish-[0-9a-f]{24}-(?:0|[1-9]\d?)\.stage$/u;
 const MAX_SUPPORT_REPORT_BYTES = 10 * 1024 * 1024;
 // Source of truth: packages/keiko-contracts/src/activity-log-files.ts (ACTIVITY_LOG_DIRECTORY_NAME,
 // #3530). Every file the Activity Log writes there is owner-only: active segments 0o600, sealed

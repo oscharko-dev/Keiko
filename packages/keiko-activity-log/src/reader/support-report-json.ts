@@ -110,11 +110,10 @@ function canonicalObject(
 // Every value a report legitimately carries is a printable-ASCII machine token: the body-free
 // registry admits nothing else. Anything outside that range is refused rather than filtered, so
 // no control, escape, bidirectional, zero-width or surrogate code point can reach a renderer.
+const UNSAFE_REPORT_CHARACTER = /[^\x20-\x7e]/u;
+
 function safeString(value: string): string {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code < 0x20 || code > 0x7e) throw new SupportReportError("unsafe-report");
-  }
+  if (UNSAFE_REPORT_CHARACTER.test(value)) throw new SupportReportError("unsafe-report");
   if (value.length > MAX_SUPPORT_REPORT_BYTES) throw budgetExceeded();
   return value;
 }
@@ -136,10 +135,11 @@ const CLOSE_ARRAY = 0x5d;
 
 function stringEnd(text: string, start: number): number {
   let index = start + 1;
-  while (index < text.length) {
-    const code = text.charCodeAt(index);
+  let code = text.codePointAt(index);
+  while (code !== undefined) {
     if (code === QUOTE) return index + 1;
     index += code === BACKSLASH ? 2 : 1;
+    code = text.codePointAt(index);
   }
   return index;
 }
@@ -157,10 +157,11 @@ function isScalarStart(code: number): boolean {
 
 function scalarEnd(text: string, start: number): number {
   let index = start + 1;
-  while (index < text.length) {
-    const code = text.charCodeAt(index);
+  let code = text.codePointAt(index);
+  while (code !== undefined) {
     if (code === 0x2c || code === CLOSE_OBJECT || code === CLOSE_ARRAY || code <= 0x20) break;
     index += 1;
+    code = text.codePointAt(index);
   }
   return index;
 }
@@ -202,8 +203,8 @@ class JsonShapeScan {
 function checkJsonShape(text: string): void {
   const scan = new JsonShapeScan();
   let index = 0;
-  while (index < text.length) {
-    const code = text.charCodeAt(index);
+  let code = text.codePointAt(index);
+  while (code !== undefined) {
     if (code === QUOTE) {
       scan.value(false);
       index = stringEnd(text, index);
@@ -219,6 +220,7 @@ function checkJsonShape(text: string): void {
     } else {
       index += 1;
     }
+    code = text.codePointAt(index);
   }
 }
 

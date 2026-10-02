@@ -53,7 +53,7 @@ or reports that it cannot (D6). Lost events are counted in one bounded, closed l
 as summaries. Diagnostic readiness is a closed state that `/api/health`, `keiko status`,
 `keiko support export` and the desktop footer report. Every exit leaves one `process.exiting` line,
 and a fatal crash leaves `process.fatal` (D7). The raw `ui.log` channel is retired, and the support
-bundle never carries it (D8, D9).
+report never carries it (D8, D9).
 
 Amended by #3534 on 2026-09-30: D8/D9 now define the closed one-file private report, offline
 validation and explicit legacy treatment. D16 query bounds remain authoritative; an insufficient
@@ -276,7 +276,7 @@ backslash to a forward slash before anchoring, and splits the trailing `:LINE:CO
 two successive `lastIndexOf(":")` calls rather than a whole-string regex — a drive-letter colon
 earlier in the string must never be mistaken for the line/column separator.
 
-The consequence for an agent reading a bundle is stated in the playbook this ADR forward-references
+The consequence for an agent reading a report is stated in the playbook this ADR forward-references
 (`docs/observability/reproduction-harness.md`, Wave 6): a frame names the `dist` output of the
 **exact tagged product version** the customer ran. The agent checks out that tag and lets `tsc`
 reproduce the same `dist/<file>.js:LINE` deterministically — this works because Keiko's builds are
@@ -338,7 +338,7 @@ generic path instead.
   breaks early, only `MAX_LOG_FIELD_COUNT - 1` accepted fields survive, plus one synthetic
   `_truncatedFieldCount: true` key. Either way the configured cap (`MAX_LOG_ARRAY_LENGTH`,
   `MAX_LOG_FIELD_COUNT`) holds EXACTLY — never one over. An input at or under the cap is untouched
-  and carries no marker. An agent reading a bundle can distinguish "nothing more happened" from "more
+  and carries no marker. An agent reading a record can distinguish "nothing more happened" from "more
   happened and was cut for size."
 - A closed-vocabulary helper, `closeReasonVocabulary`, gives any future bounded-string-array field
   (starting with `unsupportedReasons`) the same structural `Set`-plus-fallback closure categories
@@ -1629,7 +1629,7 @@ rather than left implicit across the Decision section:
   this contract shipped can still appear in a retained legacy `server.log` or
   `server-YYYY-MM-DD.log` file. The analyzer never drops or misorders such a line — it orders it by file position, counts
   it in `legacyLineCount`, and surfaces exactly one `warnings[]` entry naming that count (D9, D10).
-  An agent must read `warnings[]` before trusting that every line in a bundle came from an ordered
+  An agent must read `warnings[]` before trusting that every line it analyzed came from an ordered
   v2 process lifetime.
 - Bounded immutable segments are the disk bound (D14): total use is at most the byte budget plus
   the pin quota. No process appends to another process's segment, publication never replaces an

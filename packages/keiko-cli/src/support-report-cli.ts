@@ -388,6 +388,10 @@ function reportRejectedDestination(
 
 // ─── Export ────────────────────────────────────────────────────────────────────────────────────
 
+function selectionReasonDetail(reasons: readonly string[], suffix = ""): string {
+  return reasons.length === 0 ? "" : ` (${reasons.join(", ")}${suffix})`;
+}
+
 function announceReportExport(
   io: CliIo,
   publication: SupportReportPublication,
@@ -395,10 +399,8 @@ function announceReportExport(
   staleStages: number,
 ): void {
   const { status, reasons, requiredBytes } = report.selection;
-  const detail =
-    reasons.length === 0
-      ? ""
-      : ` (${reasons.join(", ")}${requiredBytes > 0 ? `; ${String(requiredBytes)} bytes required` : ""})`;
+  const required = requiredBytes > 0 ? `; ${String(requiredBytes)} bytes required` : "";
+  const detail = selectionReasonDetail(reasons, required);
   io.out(
     `Saved support report: ${publication.path}\nDiagnostic sufficiency: ${status}${detail}\nNothing has been sent.\n`,
   );
@@ -543,7 +545,7 @@ function humanHeader(artifact: AnalyzedSupportReport): string {
   const { status, reasons } = artifact.selection;
   return (
     `Support incident ${artifact.incident.incidentId}\n` +
-    `Diagnostic sufficiency: ${status}${reasons.length === 0 ? "" : ` (${reasons.join(", ")})`}\n` +
+    `Diagnostic sufficiency: ${status}${selectionReasonDetail(reasons)}\n` +
     `Authenticity: unknown\n`
   );
 }

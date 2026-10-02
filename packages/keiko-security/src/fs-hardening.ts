@@ -1083,7 +1083,7 @@ interface PublicationIntent {
 type PublicationReceiptState = "active" | "complete" | "consumed";
 
 const PUBLICATION_SLOT_PATTERN = /^[0-9a-f]{24}$/u;
-const PUBLICATION_STAGE_NAME_PATTERN = /^\.keiko-publish-[0-9a-f]{24}-(?:0|[1-9][0-9]?)\.stage$/u;
+const PUBLICATION_STAGE_NAME_PATTERN = /^\.keiko-publish-[0-9a-f]{24}-(?:0|[1-9]\d?)\.stage$/u;
 const PUBLICATION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const PUBLICATION_OWNER_TOKEN_PATTERN = /^[0-9a-f]{24}$/u;
 // The owner file and in-process token identify one synchronous publish call, not a process. A peer
