@@ -1281,6 +1281,90 @@ describe("received-report audit hardening (#3534)", () => {
     expect(withoutBeginning.selection.reasons).toContain("evidence-not-retained");
   });
 
+  // Review #3679: a producer's confirmed drop (a seal's droppedEventCount) is the process losing
+  // evidence, so every class of that lifetime reads it, the incident's own class included, as it
+  // would a loss summary's process counters.
+  it("attributes a seal's confirmed drop to the incident class of its lifetime", () => {
+    const process = fixtureProcess(4747, "eeff0011");
+    const chat = { modelId: "test-model", streaming: false };
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      fixtureLine(process, T0, {
+        op: "gateway.chat.started",
+        correlationId: CORRELATION,
+        fields: {
+          ...chat,
+          costClass: "low",
+          timeoutMs: 100,
+          maxRetries: 0,
+          requestBudgetMs: 100,
+          upstreamStreaming: false,
+        },
+      }),
+      fixtureLine(process, T0, {
+        op: "activity-log.segment.sealed",
+        correlationId: "unknown-correlation-id",
+        fields: {
+          completeness: "partial",
+          loss: "event-dropped",
+          sealReason: "close",
+          segmentIndex: 1,
+          segmentFirstSeq: 1,
+          segmentLastSeq: 3,
+          segmentLineCount: 3,
+          segmentBytes: 512,
+          segmentDurationMs: 1,
+          droppedEventCount: 1,
+          segmentByteLimit: 1_048_576,
+          segmentSecondsLimit: 3600,
+        },
+      }),
+    ]);
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0 + 1, 2), [
+      fixtureLine(process, T0 + 1, {
+        op: "gateway.chat.failed",
+        correlationId: CORRELATION,
+        errorKind: "timeout",
+        level: "error",
+        fields: chat,
+      }),
+    ]);
+    const created = recordRegisteredFailureIncident(
+      stateDir,
+      { op: "gateway.chat.failed", errorKind: "timeout", correlationId: CORRELATION },
+      { nowMs: T0 + 2 },
+    );
+    if (created?.status !== "created") throw new TypeError("failure incident was not created");
+    const incident = supportIncidentPrivateProjection(
+      resolveSupportIncident(
+        created.record,
+        supportIncidentSegmentFiles(stateDir, created.record),
+        stateDir,
+      ),
+    );
+    const { result: query } = executeSupportQuery(
+      stateDir,
+      {
+        kind: "closure",
+        queryClass: "incident",
+        roots: [CORRELATION],
+        windows: [],
+        requiredClasses: { kind: "observed-failures" },
+        unresolved: false,
+      },
+      DEFAULT_SUPPORT_QUERY_LIMITS,
+      { trigger: "export" },
+    );
+    const report = buildSupportReport(incident, query);
+    expect(
+      eventsOf(report).some((event) => event.record.op === "activity-log.segment.sealed"),
+    ).toBe(true);
+    expect(report.selection.status).toBe("degraded");
+    expect(report.selection.reasons).toContain("activity-log-loss");
+    const analyzed = analyzeSupportReport(serializeSupportReport(report));
+    expect(analyzed.selection.reasons).toContain("activity-log-loss");
+  });
+
   it("keeps every supported record when one selected line belongs to another registry", () => {
     const { report, query } = fixture(3);
     const original = query.events[0];

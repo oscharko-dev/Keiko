@@ -18,7 +18,10 @@ import {
   listActivityLogStoreFiles,
   type ActivityLogStoreFile,
 } from "./support-segment-scan.js";
-import type { SegmentManifestSequenceAnomalies } from "./support-segment-manifest.js";
+import {
+  SEGMENT_MANIFEST_SCHEMA_VERSION,
+  type SegmentManifestSequenceAnomalies,
+} from "./support-segment-manifest.js";
 import {
   fixtureLine,
   fixtureProcess,
@@ -498,7 +501,8 @@ describe("support query causal closure (#3531)", () => {
 
   // Review #3679: an unsupported line, or an event the process recorded losing, in a start-less
   // lifetime's segments could be its start, so neither leaves the beginning proven. A seal's confirmed
-  // drop counts before any loss summary is written; the dropped event still claimed its seq.
+  // drop counts before any loss summary is written, even when the rejected event's claimed seq went
+  // to the sink's own line and no gap remains.
   it.each([
     [
       "an unsupported start",
@@ -528,7 +532,6 @@ describe("support query causal closure (#3531)", () => {
       "a seal's confirmed drop",
       (a: FixtureProcess): readonly string[] => {
         const before = signal(a, T0 + 1);
-        a.seq += 1; // the dropped event still claimed its seq
         const seal = fixtureLine(a, T0 + 2, {
           op: "activity-log.segment.sealed",
           correlationId: "unknown-correlation-id",
@@ -538,7 +541,7 @@ describe("support query causal closure (#3531)", () => {
             sealReason: "close",
             segmentIndex: 2,
             segmentFirstSeq: 2,
-            segmentLastSeq: 4,
+            segmentLastSeq: 3,
             segmentLineCount: 2,
             segmentBytes: 512,
             segmentDurationMs: 1,
@@ -797,7 +800,9 @@ describe("support query result projections (#3531)", () => {
     writeGraph(stateDir);
     const { result } = query(stateDir, correlationSelection(IDS.root));
 
-    expect(result.provenance).toMatchObject({ manifestSchemaVersion: 1 });
+    expect(result.provenance).toMatchObject({
+      manifestSchemaVersion: SEGMENT_MANIFEST_SCHEMA_VERSION,
+    });
     expect(result.integrity).toMatchObject({
       classification: "supported",
       completeness: "complete",

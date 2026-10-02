@@ -60,7 +60,6 @@ import {
 import {
   activityLogFailureClassesOf,
   projectActivityLogSufficiency,
-  reportsProcessEvidenceLoss,
   restrictActivityLogSufficiency,
   type ActivityLogClassSufficiency,
   type ActivityLogSufficiencyIntegrity,
@@ -635,9 +634,11 @@ function segmentManifest(
   return state.input.scanner.manifestOf(file) ?? state.input.manifests.get(file.name)?.manifest;
 }
 
-// A segment proves what it holds only when it is readable and every line in it is a supported
-// record: a legacy, unsupported, corrupt or incomplete line could be the start itself. A torn tail can
-// only end a lifetime's last segment, where a crash stops it, and is declared as truncated evidence.
+// A segment proves what it holds only when it is readable, every line in it is a supported record
+// and its process recorded losing none of its own evidence there: a legacy, unsupported, corrupt or
+// incomplete line, or a dropped event (a loss summary's process counters, a seal's confirmed drop),
+// could be the start itself. The manifest counts all of these, so no body is opened for it. A torn
+// tail can only end a lifetime's last segment, where a crash stops it, and is declared as truncated.
 function segmentIntact(state: EngineState, file: ActivityLogStoreFile, last: boolean): boolean {
   if (state.input.scanner.unreadable.has(file.name)) return false;
   const manifest = segmentManifest(state, file);
@@ -648,7 +649,8 @@ function segmentIntact(state: EngineState, file: ActivityLogStoreFile, last: boo
     evidence.unsupportedLineCount +
     evidence.corruptLineCount +
     evidence.incompleteLineCount +
-    (last ? 0 : evidence.truncatedLineCount);
+    (last ? 0 : evidence.truncatedLineCount) +
+    manifest.processLossLineCount;
   return unusable === 0;
 }
 
@@ -677,53 +679,6 @@ function firstSegmentLines(
   return firstLinePerLifetime(state, lifetimes, files, () => true);
 }
 
-const LOSS_SUMMARY_OP = "activity-log.loss";
-
-// Whether a segment can record its process losing its own evidence, read from manifests alone: it
-// holds a loss summary, or its process's seq skips a number inside it or before the next segment
-// (a dropped event still claimed its seq), which its seal then confirms. Every other body stays
-// unopened. A process list the manifest could not keep says nothing, so that segment is read.
-function mayRecordOwnLoss(
-  state: EngineState,
-  file: ActivityLogStoreFile,
-  next: ActivityLogStoreFile | undefined,
-): boolean {
-  const manifest = segmentManifest(state, file);
-  const entry = manifest?.processes.entries[0];
-  if (manifest === undefined || entry === undefined) return true;
-  const skippedInside = entry.lastSeq - entry.firstSeq + 1 - entry.lineCount;
-  const following = next === undefined ? undefined : segmentManifest(state, next);
-  const nextSeq = following?.processes.entries[0]?.firstSeq ?? entry.lastSeq + 1;
-  return (
-    hasCount(manifest.ops, LOSS_SUMMARY_OP) || skippedInside > 0 || nextSeq > entry.lastSeq + 1
-  );
-}
-
-function ownLossCandidates(
-  state: EngineState,
-  owned: LifetimeSegments | undefined,
-): readonly ActivityLogStoreFile[] {
-  const ordered = [...(owned ?? [])]
-    .sort(([left], [right]) => left - right)
-    .map(([, file]) => file);
-  return ordered.filter((file, position) => mayRecordOwnLoss(state, file, ordered[position + 1]));
-}
-
-// A lifetime whose process recorded losing its own Activity Log evidence (its loss summary's
-// process counters, a seal's confirmed drops) cannot show that no lost event was its start. A
-// browser report the server refused, or any other domain loss, loses no line of it.
-function lifetimesWithOwnLoss(
-  state: EngineState,
-  lifetimes: ReadonlySet<string>,
-  segments: ReadonlyMap<string, LifetimeSegments>,
-): ReadonlySet<string> {
-  const files = [...lifetimes].flatMap((key) => ownLossCandidates(state, segments.get(key)));
-  const losses = firstLinePerLifetime(state, lifetimes, files, (accepted) =>
-    reportsProcessEvidenceLoss(sufficiencyLine(accepted.parsed)),
-  );
-  return new Set(losses.keys());
-}
-
 interface LifetimeEvidence {
   readonly starts: ReadonlyMap<string, AcceptedLine>;
   readonly lost: ReadonlySet<string>;
@@ -738,9 +693,7 @@ function lifetimeEvidence(state: EngineState, closure: ClosureEvents): LifetimeE
   const starts = firstOperationLines(state, closure.lifetimes, LIFETIME_ANCHOR_OP);
   const segments = lifetimeSegments(state.input.files);
   const unanchored = [...closure.lifetimes].filter((key) => !starts.has(key));
-  const held = new Set(unanchored.filter((key) => beginningRetained(state, segments.get(key))));
-  const lossy = lifetimesWithOwnLoss(state, held, segments);
-  const lost = new Set(unanchored.filter((key) => !held.has(key) || lossy.has(key)));
+  const lost = new Set(unanchored.filter((key) => !beginningRetained(state, segments.get(key))));
   const unshown = new Set(
     unanchored.filter((key) => !lost.has(key) && !closure.beginnings.has(key)),
   );

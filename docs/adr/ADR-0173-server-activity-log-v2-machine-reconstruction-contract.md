@@ -553,13 +553,13 @@ and demonstrated evidence. Each is derived from the registry, never maintained b
 - **Per-failure-class sufficiency.** `keiko support analyze` projects every observed class to
   `complete`, `degraded` or `insufficient`. The closed reasons are `DIAGNOSTIC_SUFFICIENCY_REASONS`
   in the contracts, and there is one status rule, `diagnosticSufficiencyStatus`. The projection is
-  derived generically from the class's lifecycle and causal declarations. Artifact integrity,
-  parent correlation, the class's causal start on a failure's correlation, an unknown failure
-  correlation, own-line partial evidence and Activity Log evidence loss all feed it. Loss is
-  attributed to the named dropped operation, to the reporting package's classes for a port sink
-  failure, or else to the reporting process lifetime. A product loss that its own loss line fully
-  evidences keeps the report complete. The projection is carried by `--json`, `--seed` and
-  `support.analyze.classified`.
+  derived generically from the class's lifecycle and causal declarations. Artifact integrity, parent
+  correlation, the class's causal start on a failure's correlation, an unknown failure correlation,
+  own-line partial evidence and Activity Log evidence loss all feed it. Loss, including a producer's
+  confirmed drop such as a segment seal's `droppedEventCount`, is attributed to the named dropped
+  operation, to the reporting package's classes for a port sink failure, or else to the reporting
+  process lifetime. A product loss that its own loss line fully evidences keeps the report complete.
+  The projection is carried by `--json`, `--seed` and `support.analyze.classified`.
 - **A curated end-to-end scenario matrix.** For each surface and each applicable mode,
   `tests/activity-log-scenarios` drives a production entry point through the real file writer. The
   support analyzer must then reach `complete` (`expectActivityLogScenario`). Every failure class
@@ -1488,14 +1488,16 @@ by line and retains only the selected events, up to a report budget.
 owner-private, closed-grammar store `<stateDir>/activity-log-manifests/`
 (`manifest-<segmentId>.json`, at most 256 KiB). It carries the schema and catalog versions, the safe
 time range, the process and sequence ranges, the registered categories, operations, error kinds and
-failure classes with counts, the loss and integrity state, a Bloom filter over the correlation keys
-(hash bits only) and a SHA-256 digest. An `incidentId` or `defectFingerprint` appears only when a
-registered operation that declares that field carries it; a sealed segment is never touched to add
-one. Every value is a pure function of the segment's bytes and the build's catalog, so deleting the
-store and rebuilding it reproduces every manifest byte for byte. A stored manifest is accepted only
-when it re-serializes to its own bytes and its digest matches; anything else is rebuilt. Only the
-query, export and rebuild commands write manifests, never the Activity Log writer, and each pass
-removes the manifests of segments that retention deleted, so the store follows the log's own bound.
+failure classes with counts, the loss and integrity state, the count of lines in which its process
+recorded losing its own evidence (a loss summary's process counters or a producer's confirmed drop,
+such as the seal's), a Bloom filter over the correlation keys (hash bits only) and a SHA-256 digest.
+An `incidentId` or `defectFingerprint` appears only when a registered operation that declares that
+field carries it; a sealed segment is never touched to add one. Every value is a pure function of
+the segment's bytes and the build's catalog, so deleting the store and rebuilding it reproduces
+every manifest byte for byte. A stored manifest is accepted only when it re-serializes to its own
+bytes and its digest matches; anything else is rebuilt. Only the query, export and rebuild commands
+write manifests, never the Activity Log writer, and each pass removes the manifests of segments that
+retention deleted, so the store follows the log's own bound.
 
 **Residual same-user manifest forging.** The trust boundary is the same OS user as D14's segments.
 A process already executing as that user could hand-edit a stored manifest — for example, to make
@@ -1521,15 +1523,14 @@ writer numbers a lifetime's segments from 1 and retention prunes the oldest firs
 without a start is complete only while its segments still run unbroken from its first, every one
 readable with only supported records (a torn tail may end only the last, where a crash stops it),
 and its process recorded losing none of its own evidence (no process counter in its loss summary,
-never the browser ones, and no seal's confirmed drop; only segments whose manifests show a loss
-summary or a skipped seq are read for that): then it never wrote one, and the first line of its
-first segment travels with the selection when no other line shows that beginning. Otherwise its
-start may have been pruned or damaged, before or after its first heartbeat; the selection is
-`evidence-not-retained` and carries the lifetime's first heartbeat, when one is retained, as the
-proof a receiver recomputes. Legacy files carry no segment index and prove no beginning. The result
-accounts for each selected lifetime's start as `selected`, `absent` or `lost`, and a report carries
-that account. A user-reported incident also selects its pinned window and takes every correlation in
-it as a root.
+never the browser ones, and no seal's confirmed drop, which each manifest counts, so no body is read
+for it): then it never wrote one, and the first line of its first segment travels with the selection
+when no other line shows that beginning. Otherwise its start may have been pruned or damaged, before
+or after its first heartbeat; the selection is `evidence-not-retained` and carries the lifetime's
+first heartbeat, when one is retained, as the proof a receiver recomputes. Legacy files carry no
+segment index and prove no beginning. The result accounts for each selected lifetime's start as
+`selected`, `absent` or `lost`, and a report carries that account. A user-reported incident also
+selects its pinned window and takes every correlation in it as a root.
 
 **Nothing required is truncated.** A closure that does not fit the budget returns no events and is
 `insufficient` with `report-budget-exceeded`. Its `requiredBytes` counts the closure with every

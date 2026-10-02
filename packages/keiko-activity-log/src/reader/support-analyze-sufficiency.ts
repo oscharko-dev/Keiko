@@ -185,7 +185,7 @@ function lossAttribution(
   const lossLifetimes = new Set<string>();
   const ownerLosses = new Set<string>();
   for (const line of lines) {
-    if (!isEvidenceLossLine(line, registry)) continue;
+    if (!reportsProcessEvidenceLoss(line, registry)) continue;
     const dropped = droppedOperation(line, registry);
     if (dropped !== undefined) {
       for (const name of classesOf(dropped, registry)) droppedClasses.add(name);
@@ -203,7 +203,7 @@ function lineLostEvidence(
   loss: LossAttribution,
   registry: SupportReaderRegistry,
 ): boolean {
-  if (isEvidenceLossLine(line, registry)) return false;
+  if (reportsProcessEvidenceLoss(line, registry)) return false;
   return (
     loss.lossLifetimes.has(lifetimeKey(line)) ||
     loss.ownerLosses.has(ownerLossKey(line, ownerOf(line.op, registry)))
