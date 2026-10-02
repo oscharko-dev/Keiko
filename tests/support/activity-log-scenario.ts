@@ -252,13 +252,25 @@ function proveCanonicalScenarioReport(
   );
   expect(analyzed.analysis.evidence.classification).toBe("supported");
   expect(analyzed.selection.reasons).toEqual(report.selection.reasons);
-  if (
-    incident.sufficiencyStatus === "complete" &&
-    query.diagnosticSufficiency.status === "complete"
-  )
-    expect(analyzed.selection.status, `scenario ${scenario}: complete report reconstruction`).toBe(
-      "complete",
-    );
+  // A registered failure must reconstruct completely. A scenario whose failure class registers no
+  // failure operation is reported by the user instead (#3533): its evidence stays complete, and its
+  // one honest gap is the missing registered failure, never any other reason.
+  const expected =
+    incident.trigger === "registered-failure"
+      ? { status: "complete", reasons: [] }
+      : { status: "insufficient", reasons: ["no-registered-failure"] };
+  expect(
+    [
+      { status: incident.sufficiencyStatus, reasons: incident.sufficiencyReasons },
+      query.diagnosticSufficiency,
+      analyzed.selection,
+    ].map(({ status, reasons }) => ({ status, reasons })),
+    `scenario ${scenario}: report reconstruction`,
+  ).toEqual([expected, expected, expected]);
+  const incompleteClasses = analyzed.analysis.sufficiency.classes.filter(
+    (entry) => entry.status !== "complete",
+  );
+  expect(incompleteClasses, `scenario ${scenario}: report evidence classes`).toEqual([]);
 }
 
 /**
