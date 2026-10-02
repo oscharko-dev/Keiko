@@ -478,6 +478,24 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(scan.retained.map((r) => r.relPath)).toContain("support-incidents/incident-draft.json");
   });
 
+  // #3534: the default report directory owns exactly the closed report names.
+  it("owns only the closed report grammar under support-reports/", () => {
+    const stateDir = join(makeRoot(), ".keiko");
+    const reports = join(stateDir, "support-reports");
+    mkdirSync(reports, { recursive: true });
+    const report = `keiko-support-v1-${"a".repeat(12)}-2026-09-30.json`;
+    writeFileSync(join(reports, report), "{}\n");
+    writeFileSync(join(reports, "my-notes.json"), "{}\n");
+    const stage = `.keiko-publish-${"c".repeat(24)}-0.stage`;
+    writeFileSync(join(reports, stage), "{}\n");
+    const scan = scanRuntimeState(stateDir);
+    expect(categoryOf(scan, "support-reports")).toBe("support-report");
+    expect(categoryOf(scan, `support-reports/${report}`)).toBe("support-report");
+    expect(categoryOf(scan, `support-reports/${stage}`)).toBe("support-report");
+    expect(categoryOf(scan, "support-reports/my-notes.json")).toBeUndefined();
+    expect(scan.retained.map((r) => r.relPath)).toContain("support-reports/my-notes.json");
+  });
+
   // #3531: the rebuildable segment-manifest store owns exactly `manifest-<segmentId>.json`.
   it("owns only the closed segment-manifest grammar under activity-log-manifests/", () => {
     const stateDir = join(makeRoot(), ".keiko");

@@ -100,7 +100,7 @@ describe("support install-layout regression pins", () => {
       [INSTALL_LAYOUT_OVERRIDES_ENV]: "local-state-auditor",
       [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
     };
-    const refusedOut = join(outDir, "refused.jsonl");
+    const refusedOut = join(outDir, "refused");
 
     const code = await runSupportCli(
       ["export", "--state-dir", stateDir, "--out", refusedOut],

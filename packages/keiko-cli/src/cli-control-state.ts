@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 
@@ -62,6 +62,24 @@ export function cliTargetIsAtOrBelow(candidate: string, target: string): boolean
     canonicalizeWithMissingTail(target),
     process.platform,
   );
+}
+
+/**
+ * True when `candidate` or one of its existing ancestors is `target` itself by device and inode.
+ * This catches the aliases a path comparison cannot see: a macOS firmlink, a bind mount, or a
+ * second spelling on a case-folding volume.
+ */
+export function cliDirectoryIsWithin(candidate: string, target: string): boolean {
+  const identity = statSync(target, { throwIfNoEntry: false });
+  if (identity === undefined) return false;
+  let cursor = resolve(candidate);
+  for (;;) {
+    const stat = statSync(cursor, { throwIfNoEntry: false });
+    if (stat?.dev === identity.dev && stat.ino === identity.ino) return true;
+    const parent = dirname(cursor);
+    if (parent === cursor) return false;
+    cursor = parent;
+  }
 }
 
 /** True when either the control state or selected target contains the other. */

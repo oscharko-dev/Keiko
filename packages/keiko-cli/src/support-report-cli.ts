@@ -1,17 +1,23 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   ACTIVITY_LOG_DIRECTORY_NAME,
   MAX_SUPPORT_REPORT_BYTES,
   MAX_SUPPORT_REPORT_EVENT_BYTES,
+  SUPPORT_REPORT_DIRECTORY_NAME,
   supportIncidentPrivateProjection,
+  supportReportFileName,
   type SupportIncidentRecord,
   type SupportReport,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { SafeArtifactFileError } from "@oscharko-dev/keiko-security/fs-hardening";
+import {
+  SafeArtifactFileError,
+  ensureDirHardened,
+  isSafeArtifactStageFileName,
+} from "@oscharko-dev/keiko-security/fs-hardening";
 import {
   createFileServerLogSink,
   reportServerLogFailure,
@@ -24,6 +30,7 @@ import {
 import {
   analyzeSupportReport,
   buildSupportReport,
+  describeErrorKind,
   serializeSupportReport,
   SupportReportError,
   renderHumanAllTimelines,
@@ -34,26 +41,39 @@ import {
   prepareSupportReportSeed,
   renderHumanReproductionSeed,
   renderGatewayReplayScriptFixture,
+  supportReportTimeline,
   type AnalyzedSupportReport,
+  type ReproductionSeed,
   type SupportAnalyzeOptions,
 } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   cliControlStateConflictsWithTarget,
+  cliDirectoryIsWithin,
   cliTargetIsAtOrBelow,
   resolveCliControlStateDir,
 } from "./cli-control-state.js";
 import { resolveStateDir } from "./state-paths.js";
 import { loadActivityLog, loadToolLifecycle } from "./lazy-modules.js";
 import { collectSupportReportQuery } from "./support-selective-export.js";
-import { resolveSupportIncident } from "./support-incident.js";
-import { type SupportSelectorArgs } from "./support-query-cli.js";
+import {
+  resolveSupportIncident,
+  SupportIncidentWindowError,
+  unresolvedSupportIncident,
+} from "./support-incident.js";
+import { type SupportQueryRun, type SupportSelectorArgs } from "./support-query-cli.js";
 import {
   emitSupportReportStarted,
   emitSupportReportCompleted,
+  emitSupportReportDegraded,
   emitSupportReportFailed,
+  supportReportFailureReason,
   type SupportReportSurface,
 } from "./support-report-evidence.js";
-import { publishSupportReportFile, readSupportReportFile } from "./support-export.js";
+import {
+  publishSupportReportFile,
+  readSupportReportFile,
+  type SupportReportPublication,
+} from "./support-export.js";
 import type { SupportCliDeps } from "./support.js";
 import type { CliIo } from "./runner.js";
 
@@ -72,6 +92,17 @@ export interface SafeSupportAnalyzeArgs {
   readonly emitFixture: string | undefined;
 }
 
+// ─── Incident selection ────────────────────────────────────────────────────────────────────────
+
+function matchesIncident(candidate: SupportIncidentRecord, selector: SupportSelectorArgs): boolean {
+  return (
+    (selector.correlationId !== undefined &&
+      candidate.correlation.rootCorrelationId === selector.correlationId) ||
+    (selector.defectFingerprint !== undefined &&
+      candidate.fingerprint.defectFingerprint === selector.defectFingerprint)
+  );
+}
+
 function existingIncident(
   stateDir: string,
   selector: SupportSelectorArgs | undefined,
@@ -85,75 +116,163 @@ function existingIncident(
   return listSupportIncidents(stateDir).find((candidate) => matchesIncident(candidate, selector));
 }
 
-function matchesIncident(candidate: SupportIncidentRecord, selector: SupportSelectorArgs): boolean {
-  return (
-    (selector.correlationId !== undefined &&
-      candidate.correlation.rootCorrelationId === selector.correlationId) ||
-    (selector.defectFingerprint !== undefined &&
-      candidate.fingerprint.defectFingerprint === selector.defectFingerprint)
-  );
-}
-
-function selectedIncident(
+// Only an explicit "Report a problem" (no selector) or a correlation that still has evidence
+// records a new user-reported incident; a named incident or fingerprint must already exist.
+function createdIncident(
   stateDir: string,
-  args: SafeSupportExportArgs,
+  selector: SupportSelectorArgs | undefined,
   correlationId: string,
+  io: CliIo,
 ): SupportIncidentRecord {
-  const selector = args.selector;
-  const record = existingIncident(stateDir, selector);
-  if (record !== undefined) return record;
   if (selector?.defectFingerprint !== undefined)
     throw new SupportReportError("selection-unavailable");
   const creation = recordUserReportedIncident(stateDir, {
     correlationId: selector?.correlationId ?? correlationId,
   });
+  if (creation.status === "rejected")
+    io.err(`keiko support export: the incident was not recorded (${creation.reason})\n`);
   if (creation.status === "rejected" || creation.record === undefined)
     throw new SupportReportError("selection-unavailable");
   return creation.record;
 }
 
-function reportOutputPath(
-  cwd: string,
-  out: string | undefined,
+// A window that cannot be read whole still yields an honest report: its incident is described by
+// its segment references alone and is explicitly insufficient with the closed reason.
+function reportIncident(
+  record: SupportIncidentRecord,
   stateDir: string,
-  report: SupportReport,
-): string {
-  const date = new Date(report.incident.createdAtMs).toISOString().slice(0, 10);
-  const filename = `keiko-support-v${String(report.schemaVersion)}-${report.incident.incidentId.slice(0, 12)}-${date}.json`;
-  const directory = reportOutputDirectory(cwd, out, stateDir);
-  assertReportDestination(directory, stateDir);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  assertReportDestination(directory, stateDir);
-  return join(directory, filename);
+): SupportReport["incident"] {
+  const segments = supportIncidentSegmentFiles(stateDir, record);
+  try {
+    return supportIncidentPrivateProjection(resolveSupportIncident(record, segments, stateDir));
+  } catch (error) {
+    if (!(error instanceof SupportIncidentWindowError)) throw error;
+    return supportIncidentPrivateProjection(
+      unresolvedSupportIncident(record, segments, error.reason),
+    );
+  }
 }
 
-function reportOutputDirectory(cwd: string, out: string | undefined, stateDir: string): string {
-  return out === undefined ? join(stateDir, "support-reports") : resolve(cwd, out);
+async function selectionQuery(
+  selector: SupportSelectorArgs,
+  stateDir: string,
+  io: CliIo,
+  correlationId: string,
+): Promise<SupportQueryRun> {
+  const run = await collectSupportReportQuery(
+    selector,
+    stateDir,
+    MAX_SUPPORT_REPORT_EVENT_BYTES,
+    io,
+    await loadActivityLog(),
+    correlationId,
+  );
+  if (typeof run === "number") throw new SupportReportError("selection-unavailable");
+  return run;
 }
 
-function assertReportDestination(directory: string, stateDir: string): void {
-  if (cliTargetIsAtOrBelow(directory, join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME)))
-    throw new SafeArtifactFileError("support-report", "unsafe-target");
+async function makeReport(
+  stateDir: string,
+  args: SafeSupportExportArgs,
+  correlationId: string,
+  io: CliIo,
+): Promise<SupportReport> {
+  const existing = existingIncident(stateDir, args.selector);
+  const selected =
+    args.selector === undefined
+      ? undefined
+      : await selectionQuery(args.selector, stateDir, io, correlationId);
+  // An explicit causal selection is evaluated before any creation: a correlation without retained
+  // evidence never records an incident, so a mistyped id leaves no pinned window behind.
+  if (existing === undefined && selected?.result.events.length === 0)
+    throw new SupportReportError("selection-unavailable");
+  const record = existing ?? createdIncident(stateDir, args.selector, correlationId, io);
+  const query =
+    selected ??
+    (await selectionQuery(
+      {
+        incidentId: record.incidentId,
+        correlationId: undefined,
+        defectFingerprint: undefined,
+        filter: {},
+      },
+      stateDir,
+      io,
+      correlationId,
+    ));
+  return buildSupportReport(
+    reportIncident(record, stateDir),
+    query.result,
+    args.maxBytes ?? MAX_SUPPORT_REPORT_BYTES,
+  );
 }
 
-function reportFailureReason(error: unknown): string {
-  if (error instanceof SupportReportError) return error.reason;
-  if (error instanceof SafeArtifactFileError) return error.kind;
-  return "internal";
+// ─── Destination ───────────────────────────────────────────────────────────────────────────────
+
+function reportDirectory(cwd: string, out: string | undefined, stateDir: string): string {
+  return out === undefined ? join(stateDir, SUPPORT_REPORT_DIRECTORY_NAME) : resolve(cwd, out);
 }
+
+function reportFileName(report: SupportReport): string {
+  return supportReportFileName(
+    report.schemaVersion,
+    report.incident.incidentId,
+    report.incident.createdAtMs,
+  );
+}
+
+// A report never lands in an Activity Log directory, whether named directly, through a path
+// alias, or through a filesystem alias only device and inode reveal (a firmlink, a bind mount).
+function assertReportDestination(directory: string, logDirectories: readonly string[]): void {
+  for (const logs of logDirectories) {
+    if (cliTargetIsAtOrBelow(directory, logs) || cliDirectoryIsWithin(directory, logs))
+      throw new SafeArtifactFileError("support-report", "unsafe-target");
+  }
+}
+
+// Validated before and after creation. The default directory is Keiko's own and is held
+// owner-only; an explicit one is created owner-only and must not be writable by others.
+function prepareReportDirectory(
+  directory: string,
+  logDirectories: readonly string[],
+  keikoOwned: boolean,
+): void {
+  assertReportDestination(directory, logDirectories);
+  if (keikoOwned) ensureDirHardened(directory);
+  else mkdirSync(directory, { recursive: true, mode: 0o700 });
+  assertReportDestination(directory, logDirectories);
+}
+
+// An interrupted earlier publication can leave a private `.keiko-publish-*.stage` copy beside
+// the reports. It is never a report, but it would travel with a shared directory.
+function staleStageCount(directory: string): number {
+  return readdirSync(directory).filter(isSafeArtifactStageFileName).length;
+}
+
+function analysisControlState(deps: SupportCliDeps): string {
+  return (
+    deps.controlActivityStateDir ??
+    resolveCliControlStateDir(deps.platform ?? process.platform, (deps.homedir ?? homedir)())
+  );
+}
+
+// ─── Failure reporting ─────────────────────────────────────────────────────────────────────────
+
+const LEGACY_HINT =
+  "Only canonical keiko-support-v1 reports are accepted. Regenerate the report on its " +
+  "originating installation with keiko support export.\n";
 
 function reportFailure(error: unknown, io: CliIo): number {
-  const reason = reportFailureReason(error);
-  io.err(`keiko support: ${reason}\n`);
-  if (error instanceof SupportReportError && error.reason === "unsupported-report")
+  io.err(`keiko support: ${supportReportFailureReason(error)}\n`);
+  if (error instanceof SupportReportError && error.minimumAnalyzerVersion !== undefined)
     io.err(`Minimum analyzer version: ${error.minimumAnalyzerVersion}\n`);
+  if (error instanceof SupportReportError && error.reason === "legacy-input") io.err(LEGACY_HINT);
   return 1;
 }
 
 interface ReportRunContext {
   readonly io: CliIo;
   readonly surface: SupportReportSurface;
-  readonly maxBytes: number;
   readonly sink: ServerLogSink;
   readonly correlationId: string;
 }
@@ -171,79 +290,42 @@ function reportSupportReportFailure(context: ReportRunContext, error: unknown): 
   return reportFailure(error, context.io);
 }
 
-async function makeReport(
-  stateDir: string,
-  args: SafeSupportExportArgs,
-  correlationId: string,
+// The Activity Log is the command's own evidence: without it the command fails closed, naming the
+// unavailable log instead of a report failure.
+function reportActivityLogUnavailable(
+  error: unknown,
   io: CliIo,
-): Promise<SupportReport> {
-  const activityLog = await loadActivityLog();
-  const selectedQuery =
-    args.selector === undefined
-      ? undefined
-      : await collectSupportReportQuery(
-          args.selector,
-          stateDir,
-          MAX_SUPPORT_REPORT_EVENT_BYTES,
-          io,
-          activityLog,
-          correlationId,
-        );
-  if (typeof selectedQuery === "number") throw new SupportReportError("selection-unavailable");
-  const record = selectedIncident(stateDir, args, correlationId);
-  const incident = resolveSupportIncident(
-    record,
-    supportIncidentSegmentFiles(stateDir, record),
-    stateDir,
-  );
-  const query =
-    selectedQuery ??
-    (await collectSupportReportQuery(
-      {
-        incidentId: record.incidentId,
-        correlationId: undefined,
-        defectFingerprint: undefined,
-        filter: {},
-      },
-      stateDir,
-      MAX_SUPPORT_REPORT_EVENT_BYTES,
-      io,
-      activityLog,
-      correlationId,
-    ));
-  if (typeof query === "number") throw new SupportReportError("selection-unavailable");
-  return buildSupportReport(
-    supportIncidentPrivateProjection(incident),
-    query.result,
-    args.maxBytes ?? MAX_SUPPORT_REPORT_BYTES,
-  );
+  correlationId: string,
+  surface: SupportReportSurface,
+): number {
+  reportServerLogFailure(error, {
+    op: "support.report.started",
+    correlationId,
+    loss: "event-dropped",
+  });
+  io.err(`keiko support ${surface}: Activity Log unavailable (${describeErrorKind(error)})\n`);
+  return 1;
 }
 
+// A refused destination is evidenced in the operator's independent control-state log, never in the
+// refused target, as one complete started/failed lifecycle.
 function reportRejectedDestination(
   error: unknown,
   io: CliIo,
   env: EnvSource,
   deps: SupportCliDeps,
-  correlationId: string,
-  maxBytes: number | undefined,
+  maxBytes: number,
   stateDir: string,
 ): number {
+  const correlationId = randomUUID();
   try {
     const controlStateDir = analysisControlState(deps);
     if (cliControlStateConflictsWithTarget(controlStateDir, stateDir))
       return reportFailure(error, io);
     const sink = createFileServerLogSink(controlStateDir, { env });
     try {
-      return reportSupportReportFailure(
-        {
-          io,
-          sink,
-          correlationId,
-          surface: "export",
-          maxBytes: maxBytes ?? MAX_SUPPORT_REPORT_BYTES,
-        },
-        error,
-      );
+      emitSupportReportStarted(sink, correlationId, "export", maxBytes);
+      return reportSupportReportFailure({ io, sink, correlationId, surface: "export" }, error);
     } finally {
       sink.close?.();
     }
@@ -257,20 +339,74 @@ function reportRejectedDestination(
   }
 }
 
-function reportExportDestinationFailure(
-  args: SafeSupportExportArgs,
+// ─── Export ────────────────────────────────────────────────────────────────────────────────────
+
+function announceReportExport(
   io: CliIo,
-  env: EnvSource,
-  deps: SupportCliDeps,
-): number | undefined {
+  publication: SupportReportPublication,
+  report: SupportReport,
+  staleStages: number,
+): void {
+  const { status, reasons, requiredBytes } = report.selection;
+  const detail =
+    reasons.length === 0
+      ? ""
+      : ` (${reasons.join(", ")}${requiredBytes > 0 ? `; ${String(requiredBytes)} bytes required` : ""})`;
+  io.out(
+    `Saved support report: ${publication.path}\nDiagnostic sufficiency: ${status}${detail}\nNothing has been sent.\n`,
+  );
+  if (staleStages > 0)
+    io.err(
+      `keiko support export: ${String(staleStages)} private .keiko-publish-*.stage file(s) from an ` +
+        "interrupted earlier export remain in this directory. They are not reports; delete them " +
+        "before sharing the directory.\n",
+    );
+}
+
+interface ExportPlan {
+  readonly stateDir: string;
+  readonly directory: string;
+  readonly logDirectories: readonly string[];
+  readonly keikoOwned: boolean;
+  readonly maxBytes: number;
+}
+
+function exportPlan(args: SafeSupportExportArgs, env: EnvSource, deps: SupportCliDeps): ExportPlan {
   const cwd = deps.cwd ?? process.cwd();
   const stateDir = resolveStateDir(cwd, env, args.stateDir);
-  try {
-    assertReportDestination(reportOutputDirectory(cwd, args.out, stateDir), stateDir);
-    return undefined;
-  } catch (error) {
-    return reportRejectedDestination(error, io, env, deps, randomUUID(), args.maxBytes, stateDir);
-  }
+  return {
+    stateDir,
+    directory: reportDirectory(cwd, args.out, stateDir),
+    logDirectories: [
+      join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME),
+      join(analysisControlState(deps), ACTIVITY_LOG_DIRECTORY_NAME),
+    ],
+    keikoOwned: args.out === undefined,
+    maxBytes: args.maxBytes ?? MAX_SUPPORT_REPORT_BYTES,
+  };
+}
+
+async function publishExport(
+  plan: ExportPlan,
+  args: SafeSupportExportArgs,
+  context: ReportRunContext,
+): Promise<number> {
+  emitSupportReportStarted(context.sink, context.correlationId, "export", plan.maxBytes);
+  // The destination exists and is verified before any incident is recorded or any byte read.
+  prepareReportDirectory(plan.directory, plan.logDirectories, plan.keikoOwned);
+  const report = await makeReport(plan.stateDir, args, context.correlationId, context.io);
+  const text = serializeSupportReport(report);
+  const publication = publishSupportReportFile(join(plan.directory, reportFileName(report)), text);
+  emitSupportReportCompleted(context.sink, context.correlationId, "export", {
+    reportBytes: publication.reportBytes,
+    recordCount: report.evidence.recordCount,
+    sufficiency: report.selection.status,
+    sufficiencyReasons: report.selection.reasons,
+    reportDigest: report.integrity.reportDigest,
+    publication,
+  });
+  announceReportExport(context.io, publication, report, staleStageCount(plan.directory));
+  return 0;
 }
 
 export async function runSafeSupportExport(
@@ -279,63 +415,46 @@ export async function runSafeSupportExport(
   env: EnvSource,
   deps: SupportCliDeps,
 ): Promise<number> {
-  const cwd = deps.cwd ?? process.cwd();
-  const stateDir = resolveStateDir(cwd, env, args.stateDir);
+  const plan = exportPlan(args, env, deps);
+  try {
+    assertReportDestination(plan.directory, plan.logDirectories);
+  } catch (error) {
+    return reportRejectedDestination(error, io, env, deps, plan.maxBytes, plan.stateDir);
+  }
   const correlationId = randomUUID();
-  const refused = reportExportDestinationFailure(args, io, env, deps);
-  if (refused !== undefined) return refused;
   let sink: ServerLogSink;
   try {
-    sink = createFileServerLogSink(stateDir, { env });
+    sink = createFileServerLogSink(plan.stateDir, { env });
   } catch (error) {
-    reportServerLogFailure(error, {
-      op: "support.report.started",
-      correlationId,
-      loss: "event-dropped",
-    });
-    return reportFailure(error, io);
+    return reportActivityLogUnavailable(error, io, correlationId, "export");
   }
-  const context = {
-    io,
-    surface: "export" as const,
-    maxBytes: args.maxBytes ?? MAX_SUPPORT_REPORT_BYTES,
-    sink,
-    correlationId,
-  };
+  const context = { io, surface: "export" as const, sink, correlationId };
+  let code: number;
   try {
-    emitSupportReportStarted(sink, correlationId, context.surface, context.maxBytes);
-    const report = await makeReport(stateDir, args, correlationId, io);
-    const text = serializeSupportReport(report);
-    const path = reportOutputPath(cwd, args.out, stateDir, report);
-    publishSupportReportFile(path, text);
-    emitSupportReportCompleted(sink, correlationId, "export", {
-      reportBytes: Buffer.byteLength(text),
-      recordCount: report.evidence.recordCount,
-      sufficiency: report.selection.status,
-      sufficiencyReasons: report.selection.reasons,
-      reportDigest: report.integrity.reportDigest,
-    });
-    announceReportExport(io, path, report);
-    return 0;
+    code = await publishExport(plan, args, context);
   } catch (error) {
-    return reportSupportReportFailure(context, error);
+    code = reportSupportReportFailure(context, error);
   } finally {
     sink.close?.();
   }
+  if (code === 0) await reportSupportReadiness(plan.stateDir, env, io);
+  return code;
 }
 
-function announceReportExport(io: CliIo, path: string, report: SupportReport): void {
-  io.out(
-    `Saved support report: ${path}\nDiagnostic sufficiency: ${report.selection.status}\nNothing has been sent.\n`,
-  );
+// Export also states the exported directory's diagnostic readiness (#3532). The self-check
+// persists its own `activity-log.readiness` line after publication, so the report stays exactly
+// the evidence that existed when it was taken.
+async function reportSupportReadiness(stateDir: string, env: EnvSource, io: CliIo): Promise<void> {
+  const snapshot = (await loadActivityLog()).checkActivityLogReadiness({
+    stateDir,
+    env,
+    scope: "directory",
+  });
+  const reasons = snapshot.reasons.length === 0 ? "" : ` (${snapshot.reasons.join(", ")})`;
+  io.out(`Diagnostic evidence: ${snapshot.readiness}${reasons}.\n`);
 }
 
-function analysisControlState(deps: SupportCliDeps): string {
-  return (
-    deps.controlActivityStateDir ??
-    resolveCliControlStateDir(deps.platform ?? process.platform, (deps.homedir ?? homedir)())
-  );
-}
+// ─── Analyze ───────────────────────────────────────────────────────────────────────────────────
 
 // Emit one JSON value after complete validation, without allocating its whole rendered string.
 function* machineJsonTokens(value: unknown): Generator<string> {
@@ -373,6 +492,15 @@ function emitMachineProjection(value: unknown, io: CliIo): void {
   io.out(pending + "\n");
 }
 
+function humanHeader(artifact: AnalyzedSupportReport): string {
+  const { status, reasons } = artifact.selection;
+  return (
+    `Support incident ${artifact.incident.incidentId}\n` +
+    `Diagnostic sufficiency: ${status}${reasons.length === 0 ? "" : ` (${reasons.join(", ")})`}\n` +
+    `Authenticity: unknown\n`
+  );
+}
+
 function emitMachineOrHuman(
   artifact: AnalyzedSupportReport,
   args: SafeSupportAnalyzeArgs,
@@ -385,12 +513,17 @@ function emitMachineOrHuman(
   if (args.correlationId !== undefined && timeline === undefined)
     throw new SupportReportError("selection-unavailable");
   if (args.json) {
-    emitMachineProjection(artifact, io);
+    // --correlation-id narrows the machine view to that validated timeline, the LogTimeline shape
+    // `keiko investigate --from-timeline` reads; without it the complete envelope is emitted.
+    emitMachineProjection(
+      args.correlationId === undefined
+        ? artifact
+        : supportReportTimeline(artifact, args.correlationId),
+      io,
+    );
     return 0;
   }
-  io.out(
-    `Support incident ${artifact.incident.incidentId}\nDiagnostic sufficiency: ${artifact.selection.status}\nAuthenticity: unknown\n`,
-  );
+  io.out(humanHeader(artifact));
   if (args.clusters) io.out(renderHumanClusters(artifact.analysis.clusters));
   else
     io.out(
@@ -415,19 +548,58 @@ function needsToolLifecycle(artifact: AnalyzedSupportReport): boolean {
   );
 }
 
-async function reportAnalysisOptions(
-  artifact: AnalyzedSupportReport,
-): Promise<SupportAnalyzeOptions> {
-  if (!needsToolLifecycle(artifact)) return {};
-  const { validateToolLifecycleEvent, redactLogFields } = await loadToolLifecycle();
-  return {
-    toolLifecycleValidator: validateToolLifecycleEvent,
-    toolDiagnosticRedactor: redactLogFields,
-  };
+// The lifecycle validators load lazily. When they cannot load, the analysis proceeds without them
+// and says so, on stderr and as a degraded analysis in the Activity Log: the evidence then reads
+// lifecycle-validator-unavailable instead of failing.
+async function reportAnalysisOptions(context: ReportRunContext): Promise<SupportAnalyzeOptions> {
+  try {
+    const { validateToolLifecycleEvent, redactLogFields } = await loadToolLifecycle();
+    return {
+      toolLifecycleValidator: validateToolLifecycleEvent,
+      toolDiagnosticRedactor: redactLogFields,
+    };
+  } catch (error) {
+    emitSupportReportDegraded(context.sink, context.correlationId, "analyze", error);
+    context.io.err(
+      `keiko support analyze: tool lifecycle validator unavailable — ${describeErrorKind(error)}\n`,
+    );
+    return {};
+  }
 }
 
 /** Writes the selected fixture exclusively; throws the closed publication failure otherwise. */
 export type FixtureWriter = (path: string, text: string, io: CliIo) => void;
+
+// The correlation a seed is prepared for: an explicit one must name a validated timeline.
+function seedCorrelation(artifact: AnalyzedSupportReport, args: SafeSupportAnalyzeArgs): string {
+  const correlation = args.correlationId ?? artifact.incident.correlation.rootCorrelationId;
+  if (correlation === undefined) throw new SupportReportError("seed-unavailable");
+  if (
+    args.correlationId !== undefined &&
+    findTimeline(artifact.analysis, correlation) === undefined
+  )
+    throw new SupportReportError("selection-unavailable");
+  return correlation;
+}
+
+// Writes the explicitly selected replay fixture; undefined when none was requested.
+function writeSelectedFixture(
+  seed: ReproductionSeed,
+  args: SafeSupportAnalyzeArgs,
+  io: CliIo,
+  writeFixture: FixtureWriter,
+  cwd: string,
+): string | undefined {
+  if (args.emitFixture === undefined) return undefined;
+  const fixture =
+    seed.gatewayScript === undefined
+      ? undefined
+      : renderGatewayReplayScriptFixture(seed.gatewayScript);
+  if (fixture === undefined) throw new SupportReportError("seed-unavailable");
+  const fixturePath = resolve(cwd, args.emitFixture);
+  writeFixture(fixturePath, fixture, io);
+  return fixturePath;
+}
 
 function emitSafeSeed(
   artifact: AnalyzedSupportReport,
@@ -437,30 +609,46 @@ function emitSafeSeed(
   cwd: string,
   options: SupportAnalyzeOptions,
 ): number {
-  const correlation = args.correlationId ?? artifact.incident.correlation.rootCorrelationId;
-  if (correlation === undefined) throw new SupportReportError("seed-unavailable");
-  if (
-    args.correlationId !== undefined &&
-    findTimeline(artifact.analysis, correlation) === undefined
-  )
-    throw new SupportReportError("selection-unavailable");
-  const seed = prepareSupportReportSeed(artifact, correlation, options);
+  const seed = prepareSupportReportSeed(artifact, seedCorrelation(artifact, args), options);
   if (seed === undefined) throw new SupportReportError("seed-unavailable");
-  if (args.emitFixture !== undefined) {
-    const fixture =
-      seed.gatewayScript === undefined
-        ? undefined
-        : renderGatewayReplayScriptFixture(seed.gatewayScript);
-    if (fixture === undefined) throw new SupportReportError("seed-unavailable");
-    writeFixture(resolve(cwd, args.emitFixture), fixture, io);
-  }
+  const fixturePath = writeSelectedFixture(seed, args, io, writeFixture, cwd);
   if (args.json)
-    emitMachineProjection(
-      { ...artifact, seed, fixtureWritten: args.emitFixture !== undefined },
-      io,
-    );
-  else io.out(renderHumanReproductionSeed(seed));
+    emitMachineProjection({ ...artifact, seed, fixtureWritten: fixturePath !== undefined }, io);
+  else {
+    io.out(renderHumanReproductionSeed(seed));
+    if (fixturePath !== undefined) io.out(`Wrote replay fixture: ${fixturePath}\n`);
+  }
   return 0;
+}
+
+async function analyzeReceivedReport(
+  args: SafeSupportAnalyzeArgs,
+  context: ReportRunContext,
+  writeFixture: FixtureWriter,
+  cwd: string,
+): Promise<number> {
+  emitSupportReportStarted(
+    context.sink,
+    context.correlationId,
+    "analyze",
+    MAX_SUPPORT_REPORT_BYTES,
+  );
+  const text = readSupportReportFile(resolve(cwd, args.file));
+  const basic = analyzeSupportReport(text);
+  const options = needsToolLifecycle(basic) ? await reportAnalysisOptions(context) : {};
+  const artifact = Object.keys(options).length === 0 ? basic : analyzeSupportReport(text, options);
+  const exitCode =
+    args.seed || args.emitFixture !== undefined
+      ? emitSafeSeed(artifact, args, context.io, writeFixture, cwd, options)
+      : emitMachineOrHuman(artifact, args, context.io);
+  emitSupportReportCompleted(context.sink, context.correlationId, "analyze", {
+    reportBytes: Buffer.byteLength(text),
+    recordCount: artifact.analysis.evidence.supportedLineCount,
+    sufficiency: artifact.selection.status,
+    sufficiencyReasons: artifact.selection.reasons,
+    reportDigest: artifact.reportDigest,
+  });
+  return exitCode;
 }
 
 export async function runSafeSupportAnalyze(
@@ -476,38 +664,11 @@ export async function runSafeSupportAnalyze(
   try {
     sink = createFileServerLogSink(analysisControlState(deps), { env });
   } catch (error) {
-    reportServerLogFailure(error, {
-      op: "support.report.started",
-      correlationId,
-      loss: "event-dropped",
-    });
-    return reportFailure(error, io);
+    return reportActivityLogUnavailable(error, io, correlationId, "analyze");
   }
-  const context = {
-    io,
-    surface: "analyze" as const,
-    maxBytes: MAX_SUPPORT_REPORT_BYTES,
-    sink,
-    correlationId,
-  };
+  const context = { io, surface: "analyze" as const, sink, correlationId };
   try {
-    emitSupportReportStarted(sink, correlationId, "analyze", MAX_SUPPORT_REPORT_BYTES);
-    const text = readSupportReportFile(resolve(cwd, args.file));
-    const basic = analyzeSupportReport(text);
-    const options = await reportAnalysisOptions(basic);
-    const artifact = needsToolLifecycle(basic) ? analyzeSupportReport(text, options) : basic;
-    const exitCode =
-      args.seed || args.emitFixture !== undefined
-        ? emitSafeSeed(artifact, args, io, writeFixture, cwd, options)
-        : emitMachineOrHuman(artifact, args, io);
-    emitSupportReportCompleted(sink, correlationId, "analyze", {
-      reportBytes: Buffer.byteLength(text),
-      recordCount: artifact.analysis.evidence.supportedLineCount,
-      sufficiency: artifact.selection.status,
-      sufficiencyReasons: artifact.selection.reasons,
-      reportDigest: artifact.reportDigest,
-    });
-    return exitCode;
+    return await analyzeReceivedReport(args, context, writeFixture, cwd);
   } catch (error) {
     return reportSupportReportFailure(context, error);
   } finally {

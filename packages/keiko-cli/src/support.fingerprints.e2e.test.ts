@@ -126,7 +126,7 @@ function seedMemoryVault(stateDir: string, memoryKeyBase64: string): void {
   vault.close();
 }
 
-describe("keiko support export — store fingerprints acceptance (Wave 4a)", () => {
+describe("collectStoreFingerprints — real-store acceptance (Wave 4a)", () => {
   let stateDir: string;
   let outDir: string;
   let memoryKeyBase64: string;

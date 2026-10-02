@@ -255,6 +255,47 @@ export function resolveSupportIncident(
   };
 }
 
+/**
+ * The descriptor of an incident whose window cannot be read whole: a covered segment is unreadable,
+ * or the window exceeds its byte bound. Nothing is read. The window is described by its segment
+ * references alone and is explicitly insufficient with the closed reason, so an export can still
+ * publish an honest report instead of failing.
+ */
+export function unresolvedSupportIncident(
+  record: SupportIncidentRecord,
+  segments: readonly SupportIncidentSegmentFile[],
+  reason: SupportIncidentWindowError["reason"],
+): SupportIncident {
+  const required =
+    record.trigger === "registered-failure"
+      ? activityLogFailureClassesOf([record.fingerprint.op])
+      : [];
+  return {
+    ...record,
+    evidence: {
+      segments: segments.map(({ segmentId, state, sizeBytes }) => ({
+        segmentId,
+        state,
+        sizeBytes,
+      })),
+      lineCount: 0,
+      integrity: "incomplete",
+      ...ACTIVITY_LOG_EVIDENCE_INTEGRITY.incomplete,
+    },
+    sufficiency: {
+      status: "insufficient",
+      reasons: [reason === "window-too-large" ? "report-budget-exceeded" : "segment-unreadable"],
+      coverage: {
+        requiredClassCount: required.length,
+        presentClassCount: 0,
+        completeClassCount: 0,
+        degradedClassCount: 0,
+        insufficientClassCount: 0,
+      },
+    },
+  };
+}
+
 // ─── Rendering (the human forms are derived from the machine projections) ──────────────────────
 
 function renderFields(title: string, fields: object): string {

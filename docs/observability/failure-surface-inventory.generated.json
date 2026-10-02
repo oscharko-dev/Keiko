@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "1900c1694d0ee39baf4d21159f468665cb8426d38fdcfb66886cdebf70a6af48"
+    "catalogDigest": "f55b32b9b1b473cced80a84e096441f7bf75d5730bf5c2ed9de93f08e24e1629"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 495,
-    "proofCount": 502,
-    "resolvedProofCount": 502,
+    "operationCount": 496,
+    "proofCount": 503,
+    "resolvedProofCount": 503,
     "failureClassCount": 332,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -645,6 +645,7 @@
         "support.query.completed",
         "support.query.failed",
         "support.report.completed",
+        "support.report.degraded",
         "support.report.failed",
         "support.report.started",
         "update.candidate.consumed",
@@ -2242,6 +2243,9 @@
       "packages/keiko-cli/src/support-query.activity-log-proof.test.ts"
     ],
     "support.report.completed.report-lifecycle": [
+      "packages/keiko-cli/src/support-report-cli.test.ts"
+    ],
+    "support.report.degraded.lifecycle-validator": [
       "packages/keiko-cli/src/support-report-cli.test.ts"
     ],
     "support.report.failed.report-lifecycle": ["packages/keiko-cli/src/support-report-cli.test.ts"],

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1900c1694d0ee39baf4d21159f468665cb8426d38fdcfb66886cdebf70a6af48" as const;
+  "f55b32b9b1b473cced80a84e096441f7bf75d5730bf5c2ed9de93f08e24e1629" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -27751,12 +27751,86 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 64,
       },
+      publication: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["published", "recovered"],
+      },
+      permissionAssurance: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["verified-private", "platform-inherited"],
+      },
+      durabilityAssurance: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["verified", "directory-sync-unavailable"],
+      },
     },
     causal: "correlation",
     lifecycle: "end",
     analyzerProjection: "capability",
     failureClasses: ["support-report"],
     proofIds: ["support.report.completed.report-lifecycle"],
+    releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "support.report.degraded",
+    category: "diagnostic",
+    owner: "keiko-cli",
+    emitter: "support-report-evidence.emitSupportReportDegraded",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["export", "analyze"],
+      },
+      reportSchemaVersion: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["lifecycle-validator-unavailable"],
+      },
+      errorClass: {
+        type: "string",
+        dataClass: "error-kind",
+        required: true,
+        maxLength: 64,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxItems: 5,
+        maxLength: 64,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["support-report"],
+    proofIds: ["support.report.degraded.lifecycle-validator"],
     releaseImpact: "minor",
   },
   {
@@ -27797,6 +27871,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "unsafe-report",
           "unsupported-report",
           "report-budget-exceeded",
+          "legacy-input",
           "selection-unavailable",
           "seed-unavailable",
         ],
@@ -62293,10 +62368,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "support-report",
       requirementContract: "support-report",
       productSurfaces: ["keiko-cli"],
-      lifecycleTransitions: ["end", "failure", "start"],
+      lifecycleTransitions: ["end", "failure", "start", "state"],
       lifecycleOperations: {
         start: ["support.report.started"],
-        state: [],
+        state: ["support.report.degraded"],
         end: ["support.report.completed"],
         failure: ["support.report.failed"],
         loss: [],
@@ -62304,6 +62379,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       causalEdges: [
         {
           op: "support.report.completed",
+          mode: "correlation",
+        },
+        {
+          op: "support.report.degraded",
           mode: "correlation",
         },
         {
@@ -62316,7 +62395,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: [],
-      resourceSignals: ["support.report.completed", "support.report.started"],
+      resourceSignals: [
+        "support.report.completed",
+        "support.report.degraded",
+        "support.report.started",
+      ],
       replayReferences: [],
       operations: [
         {
@@ -62327,6 +62410,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           causal: "correlation",
           analyzerProjection: "capability",
           safeContextFields: [
+            {
+              name: "durabilityAssurance",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "permissionAssurance",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "publication",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
             {
               name: "recordCount",
               type: "integer",
@@ -62376,6 +62477,60 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["support.report.completed.report-lifecycle"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "support.report.degraded",
+          owner: "keiko-cli",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "errorClass",
+              type: "string",
+              dataClass: "error-kind",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "reportSchemaVersion",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "surface",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "error-kind",
+            "loss-state",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: true,
+          },
+          proofIds: ["support.report.degraded.lifecycle-validator"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -66645,6 +66800,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "support.query.completed": "runtime-packages",
     "support.query.failed": "runtime-packages",
     "support.report.completed": "runtime-packages",
+    "support.report.degraded": "runtime-packages",
     "support.report.failed": "runtime-packages",
     "support.report.started": "runtime-packages",
     "task-workspace.identity.creation-time-probe": "tools-workflows",

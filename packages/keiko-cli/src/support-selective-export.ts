@@ -18,13 +18,6 @@ import {
 } from "./support-query-cli.js";
 import { describeErrorKind } from "./support-export.js";
 
-export { selectedLogContent } from "@oscharko-dev/keiko-activity-log/reader";
-export type {
-  SelectedLogContent,
-  SelectedSourceLogFileLines,
-  SupportBundleSelection,
-} from "@oscharko-dev/keiko-activity-log/reader";
-
 type SelectorParse =
   | { readonly kind: "ok"; readonly selector: SupportSelectorArgs | undefined }
   | { readonly kind: "usage"; readonly message: string };

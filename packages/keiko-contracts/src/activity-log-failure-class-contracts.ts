@@ -8848,24 +8848,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-cli"],
     requiredLifecycleOperations: {
       start: ["support.report.started"],
-      state: [],
+      state: ["support.report.degraded"],
       end: ["support.report.completed"],
       failure: ["support.report.failed"],
       loss: [],
     },
     requiredCausalOperations: [
       "support.report.completed",
+      "support.report.degraded",
       "support.report.failed",
       "support.report.started",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "support.report.completed",
+      "support.report.degraded",
       "support.report.failed",
       "support.report.started",
     ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["support.report.completed", "support.report.started"],
+    requiredResourceOperations: [
+      "support.report.completed",
+      "support.report.degraded",
+      "support.report.started",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",
@@ -8876,6 +8882,6 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "opaque-id",
     ],
     requiredFrameOperations: ["support.report.failed"],
-    requiredCauseOperations: ["support.report.failed"],
+    requiredCauseOperations: ["support.report.degraded", "support.report.failed"],
   },
 ] as const satisfies readonly ActivityLogFailureClassContract[];

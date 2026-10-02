@@ -64,18 +64,24 @@ const USAGE = `Usage:
   keiko support query ... and keiko support manifest rebuild|verify
 
 Export creates one private canonical report, with embedded integrity and selective registered
-causal evidence. --out selects a private directory; the filename always uses the closed class.
-The default is <state-dir>/support-reports/keiko-support-v1-<incident-prefix>-<UTC-date>.json.
-The hard maximum is 10 MiB; --max-bytes may lower it. Required evidence never silently disappears:
-a closure that cannot fit is explicitly insufficient. Existing targets are never overwritten.
+causal evidence. --out selects a directory, never a file: a new one is created owner-only, and an
+existing one must not be writable by others. The filename always uses the closed class
+keiko-support-v1-<incident-prefix>-<UTC-date>.json; the default directory is
+<state-dir>/support-reports. The hard maximum is 10 MiB; --max-bytes may lower it. Required
+evidence never silently disappears: a closure that cannot fit is explicitly insufficient, with its
+closed reasons and the bytes it would need. Existing targets are never overwritten. An unknown
+incident or fingerprint, or a correlation without retained evidence, records nothing and exits 1.
 No attachments, raw logs, config snapshots, evidence manifests, sidecars or inclusion flags.
 Nothing is sent. Manually share only through your organization's approved channel.
 
-Analyze bounds and validates the entire untrusted report before human or machine output. It uses
-the recorded registry, performs no embedded filesystem or network lookup, and reports authenticity
-as unknown. --json emits the versioned body-free machine view. --seed prepares deterministic replay
-from the incident's correlation; --emit-fixture exclusively writes an explicitly selected fixture.
-Legacy bundles with open sections are refused: regenerate a report on the originating installation.
+Analyze bounds and validates the entire untrusted report before human or machine output. FILE must
+be a private (owner-only, single-link) regular file. Analyze uses the recorded registry, performs
+no embedded filesystem or network lookup, and reports authenticity as unknown. --json emits the
+versioned body-free machine view; with --correlation-id it emits only that validated timeline, the
+form keiko investigate --from-timeline reads. --seed prepares deterministic replay from the
+incident's correlation or --correlation-id; --emit-fixture exclusively writes an explicitly
+selected fixture. Legacy bundles and raw logs are refused as legacy-input: regenerate a report on
+the originating installation.
 `;
 
 export interface SupportCliDeps {
@@ -236,13 +242,53 @@ interface ExportArgs {
   readonly selector?: SupportSelectorArgs | undefined;
 }
 
-// The flags that once attached the raw `ui.log` (#3532). They are refused explicitly rather than
-// ignored, so an operator who still passes them learns that no report can carry raw UI output.
-const RETIRED_UI_LOG_FLAGS: readonly string[] = [
-  "--include-evidence",
-  "--include-ui-log",
-  "--i-understand-this-is-unredacted",
-];
+// The inclusion flags that once attached the raw `ui.log` or evidence manifests (#3532, #3534),
+// in every spelling. They are refused explicitly rather than ignored, so an operator who still
+// passes one learns that no report can carry raw output or attachments.
+const RETIRED_INCLUSION_FLAG_PREFIXES: readonly string[] = ["--include", "--i-understand"];
+
+// The query's event filters are recognized only so the selector parser can name its own rule:
+// export selects a closure, never an event filter.
+const EXPORT_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "--out",
+  "--state-dir",
+  "--max-bytes",
+  "--incident",
+  "--correlation-id",
+  "--defect-fingerprint",
+  "--op",
+  "--error-kind",
+  "--failure-class",
+  "--parent-correlation-id",
+  "--from",
+  "--to",
+]);
+const ANALYZE_VALUE_FLAGS: ReadonlySet<string> = new Set(["--correlation-id", "--emit-fixture"]);
+const ANALYZE_SWITCHES: ReadonlySet<string> = new Set(["--json", "--clusters", "--seed"]);
+
+// Every token is a known flag or its value. An unknown flag, a `--flag=value` spelling or a stray
+// value is a usage error, never silently ignored (an ignored `--out=dir` would write elsewhere).
+function unexpectedArgument(
+  args: readonly string[],
+  valueFlags: ReadonlySet<string>,
+  switches: ReadonlySet<string> = new Set(),
+): string | undefined {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (valueFlags.has(arg)) index += 1;
+    else if (!switches.has(arg)) return arg;
+  }
+  return undefined;
+}
+
+// --out names a directory. A file-shaped value is the retired bundle form, and an empty value
+// would silently mean the working directory.
+function invalidOutDirectory(out: string | undefined): string | undefined {
+  if (out === "") return "--out is missing its value.";
+  if (out !== undefined && /\.jsonl?$/u.test(out))
+    return "--out selects a directory; the report filename is fixed (keiko-support-v1-…json).";
+  return undefined;
+}
 
 interface AnalyzeArgs {
   readonly file: string;
@@ -279,53 +325,57 @@ function parsePositiveInteger(value: string): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-// The answers that need no flag parsing: help, and the refusal of a retired ui.log flag.
+// The answers that need no value parsing: help, a retired inclusion flag, an unknown argument.
 function exportArgsEarlyResult(args: readonly string[]): ParseResult<ExportArgs> | undefined {
   if (args.includes("--help") || args.includes("-h")) return { kind: "help" };
-  if (!RETIRED_UI_LOG_FLAGS.some((flag) => args.includes(flag))) return undefined;
-  return {
-    kind: "usage",
-    message:
-      "keiko support export: inclusion flags are no longer supported; raw output is never " +
-      `part of a support report. Every UI diagnostic is in the Activity Log.\n${USAGE}`,
-  };
+  if (
+    args.some((arg) => RETIRED_INCLUSION_FLAG_PREFIXES.some((prefix) => arg.startsWith(prefix)))
+  ) {
+    return {
+      kind: "usage",
+      message:
+        "keiko support export: inclusion flags are no longer supported; raw output is never " +
+        `part of a support report. Every UI diagnostic is in the Activity Log.\n${USAGE}`,
+    };
+  }
+  const unexpected = unexpectedArgument(args, EXPORT_VALUE_FLAGS);
+  return unexpected === undefined
+    ? undefined
+    : {
+        kind: "usage",
+        message: `keiko support export: unknown argument: ${unexpected}\n${USAGE}`,
+      };
+}
+
+type ExportValues = Pick<ExportArgs, "out" | "stateDir" | "maxBytes">;
+
+// The export flag values, or the usage problem that refuses them.
+function parseExportValues(args: readonly string[]): ExportValues | string {
+  const out = flagValue(args, "--out");
+  const stateDir = flagValue(args, "--state-dir");
+  const maxBytesRaw = flagValue(args, "--max-bytes");
+  if (out === null || stateDir === null || maxBytesRaw === null || stateDir === "")
+    return "a flag is missing its value.";
+  const outProblem = invalidOutDirectory(out);
+  if (outProblem !== undefined) return outProblem;
+  const maxBytes = maxBytesRaw === undefined ? undefined : parsePositiveInteger(maxBytesRaw);
+  if (maxBytesRaw !== undefined && (maxBytes === undefined || maxBytes > MAX_SUPPORT_REPORT_BYTES))
+    return "--max-bytes must be between 1 and 10485760.";
+  return { out, stateDir, maxBytes };
 }
 
 function parseExportArgs(args: readonly string[]): ParseResult<ExportArgs> {
   const early = exportArgsEarlyResult(args);
   if (early !== undefined) return early;
-  const out = flagValue(args, "--out");
-  const stateDir = flagValue(args, "--state-dir");
-  const maxBytesRaw = flagValue(args, "--max-bytes");
-  if (out === null || stateDir === null || maxBytesRaw === null) {
-    return {
-      kind: "usage",
-      message: `keiko support export: a flag is missing its value.\n${USAGE}`,
-    };
-  }
-  const maxBytes = maxBytesRaw === undefined ? undefined : parsePositiveInteger(maxBytesRaw);
-  if (
-    maxBytesRaw !== undefined &&
-    (maxBytes === undefined || maxBytes > MAX_SUPPORT_REPORT_BYTES)
-  ) {
-    return {
-      kind: "usage",
-      message: `keiko support export: --max-bytes must be between 1 and 10485760.\n${USAGE}`,
-    };
+  const values = parseExportValues(args);
+  if (typeof values === "string") {
+    return { kind: "usage", message: `keiko support export: ${values}\n${USAGE}` };
   }
   const selection = parseSupportExportSelector(args);
   if (selection.kind === "usage") {
     return { kind: "usage", message: `keiko support export: ${selection.message}\n${USAGE}` };
   }
-  return {
-    kind: "ok",
-    value: {
-      out,
-      stateDir,
-      maxBytes,
-      selector: selection.selector,
-    },
-  };
+  return { kind: "ok", value: { ...values, selector: selection.selector } };
 }
 
 function parseAnalyzeArgs(args: readonly string[]): ParseResult<AnalyzeArgs> {
@@ -338,6 +388,13 @@ function parseAnalyzeArgs(args: readonly string[]): ParseResult<AnalyzeArgs> {
     };
   }
   const rest = args.slice(1);
+  const unexpected = unexpectedArgument(rest, ANALYZE_VALUE_FLAGS, ANALYZE_SWITCHES);
+  if (unexpected !== undefined) {
+    return {
+      kind: "usage",
+      message: `keiko support analyze: unknown argument: ${unexpected}\n${USAGE}`,
+    };
+  }
   const correlationId = flagValue(rest, "--correlation-id");
   if (correlationId === null) {
     return {
@@ -346,7 +403,7 @@ function parseAnalyzeArgs(args: readonly string[]): ParseResult<AnalyzeArgs> {
     };
   }
   const emitFixture = flagValue(rest, "--emit-fixture");
-  if (emitFixture === null) {
+  if (emitFixture === null || emitFixture === "") {
     return {
       kind: "usage",
       message: `keiko support analyze: --emit-fixture is missing its value.\n${USAGE}`,
@@ -420,7 +477,7 @@ async function runSupportExport(
 // and the error is rethrown so the analysis settles as failed with that same closed kind.
 function writeExclusiveFixture(path: string, contents: string, io: CliIo): void {
   try {
-    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     const descriptor = openSafeArtifactFile(path, {
       artifactClass: "replay-fixture",
       mode: "exclusive-create",

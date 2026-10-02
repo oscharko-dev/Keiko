@@ -5,6 +5,8 @@ import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/
 import {
   openSafeArtifactFile,
   publishSafeArtifactFileSet,
+  type SafeArtifactDurabilityAssurance,
+  type SafeArtifactPermissionAssurance,
 } from "@oscharko-dev/keiko-security/fs-hardening";
 import { SupportReportError } from "@oscharko-dev/keiko-activity-log/reader";
 
@@ -37,14 +39,32 @@ export function readSupportReportFile(path: string): string {
   }
 }
 
+/** What one publication committed, with the assurances the platform could give it. */
+export interface SupportReportPublication {
+  readonly path: string;
+  // `recovered` when an identical interrupted publication of the same bytes was completed.
+  readonly status: "published" | "recovered";
+  readonly reportBytes: number;
+  readonly permissionAssurance: SafeArtifactPermissionAssurance;
+  readonly durabilityAssurance: SafeArtifactDurabilityAssurance;
+}
+
 /** Atomic, exclusive one-file publication. Intermediate stages cannot be mistaken for reports. */
-export function publishSupportReportFile(path: string, contents: string): void {
-  if (Buffer.byteLength(contents) > MAX_SUPPORT_REPORT_BYTES)
+export function publishSupportReportFile(path: string, contents: string): SupportReportPublication {
+  const reportBytes = Buffer.byteLength(contents);
+  if (reportBytes > MAX_SUPPORT_REPORT_BYTES)
     throw new SupportReportError("report-budget-exceeded");
-  publishSafeArtifactFileSet([{ path, contents, artifactClass: "support-report" }], {
+  const result = publishSafeArtifactFileSet([{ path, contents, artifactClass: "support-report" }], {
     commitPath: path,
     trustedRoot: dirname(path),
   });
+  return {
+    path,
+    status: result.status,
+    reportBytes,
+    permissionAssurance: result.permissionAssurance,
+    durabilityAssurance: result.durabilityAssurance,
+  };
 }
 
 export { describeErrorKind } from "@oscharko-dev/keiko-activity-log/reader";

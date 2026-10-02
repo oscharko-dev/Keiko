@@ -501,12 +501,6 @@
     },
     {
       "path": "packages/keiko-cli/src/support.ts",
-      "owner": "writeFixtureOrExitCode",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
       "owner": "writeSupportInstallLayoutEvidence",
       "kind": "unregistered-catch",
       "count": 1

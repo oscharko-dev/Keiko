@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -9,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inflateSync } from "node:zlib";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
@@ -300,7 +302,7 @@ function readExportedReport(directory: string): string {
 }
 
 describe("keiko support export with a selector (#3531)", () => {
-  it("losslessly reconstructs the causal closure with a validated versioned verdict", async () => {
+  it("exports only the causal closure, field for field, with a validated versioned verdict", async () => {
     const { stateDir, lines } = stateWithHistory();
     const outDir = makeRoot("keiko-query-cli-out-");
     const { io } = makeIo();
@@ -315,19 +317,22 @@ describe("keiko support export with a selector (#3531)", () => {
     expect(code).toBe(0);
     const text = readExportedReport(outDir);
     const report = parseSupportReport(text);
-    const analysis = analyzeSupportReport(text).analysis;
-    const selected = analysis.timelines
-      .filter((timeline) => timeline.correlationId === ROOT_ID)
-      .flatMap((timeline) => timeline.lines);
-    expect(selected).toHaveLength(2);
-    const decoded = JSON.stringify(analysis);
-    expect(decoded).not.toContain(OTHER_ID);
+    // The report re-encodes each line canonically, so the pin compares the decoded records with
+    // the retained lines value for value, in order: exactly the closure, nothing lost or added.
+    const decoded = JSON.parse(
+      inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8"),
+    ) as readonly { readonly record: unknown }[];
+    expect(decoded.map((event) => event.record)).toEqual(
+      lines.slice(0, 2).map((line) => JSON.parse(line) as unknown),
+    );
+    expect(JSON.stringify(decoded)).not.toContain(OTHER_ID);
     expect(report.selection.status).toBe("complete");
-    expect(analysis.evidence.corruptLineCount).toBe(0);
-    for (const original of lines.slice(0, 2)) {
-      const record = JSON.parse(original) as { correlationId: string; seq: number };
-      expect(selected).toContainEqual(expect.objectContaining({ seq: record.seq }));
-    }
+    const analysis = analyzeSupportReport(text).analysis;
+    expect(analysis.evidence).toMatchObject({
+      classification: "supported",
+      supportedLineCount: 2,
+      corruptLineCount: 0,
+    });
   });
 
   it("writes nothing and exits 1 when the closure does not fit the budget", async () => {
@@ -357,10 +362,10 @@ describe("keiko support export with a selector (#3531)", () => {
     expect(err()).toContain("report-budget-exceeded");
   });
 
-  it("writes an explicitly insufficient validated report when the selection is not retained", async () => {
+  it("records nothing and writes nothing for a correlation without retained evidence", async () => {
     const { stateDir } = stateWithHistory();
     const outDir = makeRoot("keiko-query-cli-out-");
-    const { io } = makeIo();
+    const { io, err } = makeIo();
 
     const code = await runSupportCli(
       [
@@ -377,11 +382,11 @@ describe("keiko support export with a selector (#3531)", () => {
       exportDeps(outDir),
     );
 
-    expect(code).toBe(0);
-    const report = parseSupportReport(readExportedReport(outDir));
-    expect(report.selection.status).toBe("insufficient");
-    expect(report.selection.reasons).toContain("evidence-not-retained");
-    expect(analyzeSupportReport(readExportedReport(outDir)).selection.status).toBe("insufficient");
+    expect(code).toBe(1);
+    expect(err()).toContain("keiko support: selection-unavailable");
+    expect(readdirSync(outDir)).toEqual([]);
+    // A mistyped correlation never pins a fourteen-day incident window.
+    expect(existsSync(join(stateDir, "support-incidents"))).toBe(false);
   });
 
   // Audit (#3531/#3533): a user-reported incident's window is never empty — it always captures at
