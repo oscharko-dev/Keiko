@@ -1521,9 +1521,10 @@ writer numbers a lifetime's segments from 1 and retention prunes the oldest firs
 without a start is complete only while its segments still run unbroken from its first, every one
 readable with only supported records (a torn tail may end only the last, where a crash stops it),
 and its process recorded losing none of its own evidence (no process counter in its loss summary,
-never the browser ones, and no seal's confirmed drop): then it never wrote one, and the first line
-of its first segment travels with the selection when no other line shows that beginning. Otherwise
-its start may have been pruned or damaged, before or after its first heartbeat; the selection is
+never the browser ones, and no seal's confirmed drop; only segments whose manifests show a loss
+summary or a skipped seq are read for that): then it never wrote one, and the first line of its
+first segment travels with the selection when no other line shows that beginning. Otherwise its
+start may have been pruned or damaged, before or after its first heartbeat; the selection is
 `evidence-not-retained` and carries the lifetime's first heartbeat, when one is retained, as the
 proof a receiver recomputes. Legacy files carry no segment index and prove no beginning. The result
 accounts for each selected lifetime's start as `selected`, `absent` or `lost`, and a report carries

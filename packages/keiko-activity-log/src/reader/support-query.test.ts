@@ -498,19 +498,20 @@ describe("support query causal closure (#3531)", () => {
 
   // Review #3679: an unsupported line, or an event the process recorded losing, in a start-less
   // lifetime's segments could be its start, so neither leaves the beginning proven. A seal's confirmed
-  // drop counts before any loss summary is written.
+  // drop counts before any loss summary is written; the dropped event still claimed its seq.
   it.each([
     [
       "an unsupported start",
-      (a: FixtureProcess): string =>
+      (a: FixtureProcess): readonly string[] => [
         fixtureLine(a, T0 + 1, { op: "process.started" }).replace(
           '"schemaVersion":2',
           '"schemaVersion":3',
         ),
+      ],
     ],
     [
       "a recorded loss",
-      (a: FixtureProcess): string =>
+      (a: FixtureProcess): readonly string[] => [
         fixtureLine(a, T0 + 1, {
           op: "activity-log.loss",
           fields: {
@@ -521,11 +522,14 @@ describe("support query causal closure (#3531)", () => {
             schemaRejected: 1,
           },
         }),
+      ],
     ],
     [
       "a seal's confirmed drop",
-      (a: FixtureProcess): string =>
-        fixtureLine(a, T0 + 1, {
+      (a: FixtureProcess): readonly string[] => {
+        const before = signal(a, T0 + 1);
+        a.seq += 1; // the dropped event still claimed its seq
+        const seal = fixtureLine(a, T0 + 2, {
           op: "activity-log.segment.sealed",
           correlationId: "unknown-correlation-id",
           fields: {
@@ -534,22 +538,22 @@ describe("support query causal closure (#3531)", () => {
             sealReason: "close",
             segmentIndex: 2,
             segmentFirstSeq: 2,
-            segmentLastSeq: 2,
-            segmentLineCount: 1,
+            segmentLastSeq: 4,
+            segmentLineCount: 2,
             segmentBytes: 512,
             segmentDurationMs: 1,
             droppedEventCount: 1,
             segmentByteLimit: 1_048_576,
             segmentSecondsLimit: 3600,
           },
-        }),
+        });
+        return [before, seal];
+      },
     ],
   ])("states a missing start behind %s in its beginning", (_label, damaged) => {
     const a = fixtureProcess(4101, "aaaaaaa1");
     writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [signal(a, T0)]);
-    const line = damaged(a);
-    expect(line).toContain('"op":"');
-    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), [line]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), damaged(a));
     writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 600_000, 3), [
       diagnostic(a, T0 + 600_000, IDS.root),
     ]);
@@ -580,6 +584,21 @@ describe("support query causal closure (#3531)", () => {
     const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
     expect(result.diagnosticSufficiency.status).toBe("complete");
     expect(result.lifetimes).toEqual([{ pid: 4101, instanceId: "aaaaaaa1", start: "absent" }]);
+  });
+
+  // Review #3679: proving a long start-less lifetime lossless reads only the segments whose manifests
+  // could record a loss (a loss summary, a sequence break); every other body stays unopened.
+  it("proves a start-less beginning without opening a segment that cannot record a loss", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [diagnostic(a, T0, IDS.root)]);
+    const quiet = writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), [signal(a, T0 + 1)]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 2, 3), [
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    const { result, opened } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("complete");
+    expect(result.lifetimes).toEqual([{ pid: 4101, instanceId: "aaaaaaa1", start: "absent" }]);
+    expect([...opened]).not.toContain(quiet.split("/").at(-1));
   });
 
   // Review #3679: a torn tail ends only a lifetime's last segment, where a crash stops it; a torn

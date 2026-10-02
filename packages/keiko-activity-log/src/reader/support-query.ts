@@ -627,13 +627,20 @@ function lifetimeSegments(
   return segments;
 }
 
+// This pass's own derivation of a segment's manifest, else the stored one.
+function segmentManifest(
+  state: EngineState,
+  file: ActivityLogStoreFile,
+): SegmentManifest | undefined {
+  return state.input.scanner.manifestOf(file) ?? state.input.manifests.get(file.name)?.manifest;
+}
+
 // A segment proves what it holds only when it is readable and every line in it is a supported
 // record: a legacy, unsupported, corrupt or incomplete line could be the start itself. A torn tail can
 // only end a lifetime's last segment, where a crash stops it, and is declared as truncated evidence.
 function segmentIntact(state: EngineState, file: ActivityLogStoreFile, last: boolean): boolean {
   if (state.input.scanner.unreadable.has(file.name)) return false;
-  const manifest =
-    state.input.scanner.manifestOf(file) ?? state.input.manifests.get(file.name)?.manifest;
+  const manifest = segmentManifest(state, file);
   if (manifest === undefined) return false;
   const { evidence } = manifest;
   const unusable =
@@ -670,6 +677,38 @@ function firstSegmentLines(
   return firstLinePerLifetime(state, lifetimes, files, () => true);
 }
 
+const LOSS_SUMMARY_OP = "activity-log.loss";
+
+// Whether a segment can record its process losing its own evidence, read from manifests alone: it
+// holds a loss summary, or its process's seq skips a number inside it or before the next segment
+// (a dropped event still claimed its seq), which its seal then confirms. Every other body stays
+// unopened. A process list the manifest could not keep says nothing, so that segment is read.
+function mayRecordOwnLoss(
+  state: EngineState,
+  file: ActivityLogStoreFile,
+  next: ActivityLogStoreFile | undefined,
+): boolean {
+  const manifest = segmentManifest(state, file);
+  const entry = manifest?.processes.entries[0];
+  if (manifest === undefined || entry === undefined) return true;
+  const skippedInside = entry.lastSeq - entry.firstSeq + 1 - entry.lineCount;
+  const following = next === undefined ? undefined : segmentManifest(state, next);
+  const nextSeq = following?.processes.entries[0]?.firstSeq ?? entry.lastSeq + 1;
+  return (
+    hasCount(manifest.ops, LOSS_SUMMARY_OP) || skippedInside > 0 || nextSeq > entry.lastSeq + 1
+  );
+}
+
+function ownLossCandidates(
+  state: EngineState,
+  owned: LifetimeSegments | undefined,
+): readonly ActivityLogStoreFile[] {
+  const ordered = [...(owned ?? [])]
+    .sort(([left], [right]) => left - right)
+    .map(([, file]) => file);
+  return ordered.filter((file, position) => mayRecordOwnLoss(state, file, ordered[position + 1]));
+}
+
 // A lifetime whose process recorded losing its own Activity Log evidence (its loss summary's
 // process counters, a seal's confirmed drops) cannot show that no lost event was its start. A
 // browser report the server refused, or any other domain loss, loses no line of it.
@@ -678,7 +717,7 @@ function lifetimesWithOwnLoss(
   lifetimes: ReadonlySet<string>,
   segments: ReadonlyMap<string, LifetimeSegments>,
 ): ReadonlySet<string> {
-  const files = [...lifetimes].flatMap((key) => [...(segments.get(key)?.values() ?? [])]);
+  const files = [...lifetimes].flatMap((key) => ownLossCandidates(state, segments.get(key)));
   const losses = firstLinePerLifetime(state, lifetimes, files, (accepted) =>
     reportsProcessEvidenceLoss(sufficiencyLine(accepted.parsed)),
   );
