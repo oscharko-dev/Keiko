@@ -659,77 +659,87 @@ prose/route hatches (`path`, `routeTemplate`, `clientNote`, `diagnosticSummary`)
 redaction markers in the report projection. They never import narratives or usable addresses.
 Frames and causes are reverified through the existing owning reducers, and every other received
 producer field must be a fixed point of the existing `redactLogFields` redaction: a value that
-redaction would still change (an endpoint, a secret shape, a home path) refuses the report.
+redaction would still change (an endpoint, a secret shape, a home path) refuses the report. Envelope
+labels (`op`, `errorKind`, correlation ids) and the incident's correlation references must
+likewise be fixed points of the writer's label redaction, so a credential-shaped correlation id that
+the correlation grammar admits is refused; the incident producer never adopts such an id.
 
 ### D9 — Export, offline validation and replay preparation (#3534)
 
 `keiko support export [--out DIRECTORY] [--state-dir PATH] [--max-bytes N]` optionally selects
 `--incident ID`, `--correlation-id ID` or `--defect-fingerprint SHA256`. Without a selector it
-creates a user-reported incident. An explicit causal selection is evaluated before that creation,
-so recording a new incident cannot manufacture retained evidence for an absent correlation.
+creates a user-reported incident. An explicit causal selection is evaluated before that creation, so
+recording a new incident cannot manufacture retained evidence for an absent correlation.
 
-The default location is `<stateDir>/support-reports/`. Its directory is owner-only (0700), and
-`keiko-support-v1-<12 hex incident prefix>-<UTC date>.json` is owner-only (0600). The name contains
-no host, user, workspace or path name; its date is the incident's UTC creation date. Explicit
-`--out` selects a directory, never a file: a new one is created owner-only, an existing one must
-not be writable by group or others, and no directory inside the state or control-state Activity
-Log is accepted (compared by device and inode as well as by path, so a firmlink or bind-mount alias
-cannot pass). The closed filename class always applies. The directory never enters the report or
-Activity Log. An unknown `--incident` or `--defect-fingerprint` records nothing and exits 1. Publication reuses `publishSafeArtifactFileSet` with one entry
-and no fixed publication slot. It atomically and exclusively commits the fully prepared file,
-cleans intermediate stages on success, and never replaces an existing destination. A crash leaves
-private, recognizable staging/recovery state. Retrying the exact bytes may recover; changed bytes,
-a conflicting target or unsafe recovery state fail closed. No stage is treated as a valid report
-merely because it exists: the next export into the directory names how many
-`.keiko-publish-<24 hex>-<n>.stage` files it found, and the runtime-state contract classifies
-them, with the closed report names, as Keiko-owned in `support-reports/`. The strict reader
-rejects incomplete bytes and invalid digests.
+The default location is `<stateDir>/support-reports/`. Its directory is owner-only (0700): it is
+created so, or it must already be a real directory of this user, and it is hardened through a
+descriptor that refuses a final symlink, so a redirected `support-reports` never has its target
+changed. The report `keiko-support-v1-<12 hex incident prefix>-<UTC date>.json` is owner-only
+(0600). The name contains no host, user, workspace or path name; its date is the incident's UTC
+creation date. Explicit `--out` selects a directory, never a file: a new one is created owner-only,
+an existing one must not be writable by group or others, and no directory inside the state or
+control-state Activity Log is accepted (compared by device and inode as well as by path, so a
+firmlink or bind-mount alias cannot pass). The closed filename class always applies. The directory
+never enters the report or Activity Log. An unknown `--incident` or `--defect-fingerprint` records
+nothing and exits 1. Publication reuses `publishSafeArtifactFileSet` with one entry and no fixed
+publication slot. It atomically and exclusively commits the fully prepared file, cleans intermediate
+stages on success, and never replaces an existing destination. A crash leaves private, recognizable
+staging/recovery state. Retrying the exact bytes may recover; changed bytes, a conflicting target or
+unsafe recovery state fail closed. No stage is treated as a valid report merely because it exists:
+the next export into the directory names how many `.keiko-publish-<24 hex>-<n>.stage` files it
+found, and the runtime-state contract classifies them, with the closed report names, as Keiko-owned
+in `support-reports/`. The strict reader rejects incomplete bytes and invalid digests.
 
-`keiko support analyze FILE [--correlation-id ID] [--json] [--clusters] [--seed]
-[--emit-fixture PATH]` reads only the explicitly chosen owner-private, single-link regular file.
-It reads bounded chunks, checks UTF-8, canonical JSON, nesting, every section and record, identity
-and provenance, all digests, and failure-class sufficiency **before** any rendering. Duplicate
-keys, controls (including escaped terminal/bidi controls), unknown sections, unsafe fields,
-trailing compressed bytes and decompression bombs fail closed. Embedded segment identifiers are
-closed provenance values; analysis never resolves them against local files or the network and
-never executes report content or probes its recorded PIDs.
+`keiko support analyze FILE [--correlation-id ID] [--json] [--clusters] [--seed] [--emit-fixture PATH]`
+reads only the explicitly chosen owner-private, single-link regular file. It reads bounded chunks,
+checks UTF-8, canonical JSON, nesting, every section and record, identity and provenance, all
+digests, and failure-class sufficiency **before** any rendering. Duplicate keys, controls (including
+escaped terminal/bidi controls), unknown sections, unsafe fields, trailing compressed bytes and
+decompression bombs fail closed. Embedded segment identifiers are closed provenance values; analysis
+never resolves them against local files or the network and never executes report content or probes
+its recorded PIDs.
 
 The reader uses the report's exact registry/schema/catalog identity. Trusted immutable snapshots
 cover every stable release from 1.1.9 up to the current version, generated from the release tags
-into a data-only module; `npm run set-version` regenerates it, and a drift test fails when a
-shipped release is missing or differs from its release commit. The frozen pre-move production
-fixture (#3558) reconstructs against its recorded release registry. Only a matching snapshot is
-inflated, on demand. Unknown registries or schemas fail closed as `unsupported-report`; a report
-whose bounded declared minimum analyzer version is newer than the reader names that version. The
-current registry is never substituted for an older report. A local Activity Log line without an
-explicit registry is judged by the registry it records, so evidence written before an upgrade
-stays evidence.
+into a data-only module; `npm run set-version` regenerates it, and a drift test fails when a shipped
+release is missing or differs from its release commit. The frozen pre-move production fixture
+(#3558) reconstructs against its recorded release registry. Only a matching snapshot is inflated, on
+demand. Unknown registries or schemas fail closed as `unsupported-report`; a report whose bounded
+declared minimum analyzer version is newer than the reader names that version. The current registry
+is never substituted for an older report. A local Activity Log line without an explicit registry is
+judged by the registry it records, so evidence written before an upgrade stays evidence.
 
 Analysis recomputes sufficiency from the decoded evidence and takes the union with the declared
 verdict: it can only downgrade a declared `complete`, never upgrade an `insufficient` one. The
 header's provenance must agree with the evidence: the declared integrity maps to its completeness
-and loss, the window is anchored at the incident's creation, a user report carries the
-unattributed constants, and a retained failure line agrees on the error kind. A contradiction is
-`unsafe-report`.
+and loss, the window is anchored at the incident's creation, a user report carries the unattributed
+constants, and the incident's own retained failure line (its operation under its own correlations)
+agrees on the error kind. Another request's failure of the same operation neither completes the
+incident nor refuses it. A contradiction is `unsafe-report`. Every narrowed view, the
+`--correlation-id` timeline and each seed, keeps the report's effective selection reasons, so a
+projection never reads more complete than the report it came from.
 
-`--json` streams a fully validated `keiko.support.report-analysis` in bounded chunks, schema version 1: validated private incident,
-selection verdict, unknown authenticity, section/report and exact-file digests, the existing
-ordered timelines, process summaries, failure clusters and a deterministic ReproductionSeed when
-the incident correlation has evidence. With `--correlation-id`, `--json` emits only that validated
-timeline as `keiko.support.report-timeline`, schema version 1, which `keiko investigate
---from-timeline` consumes. The seed uses the incident timestamp, not the receiver's clock. `--seed` uses that correlation by default or an explicit `--correlation-id`; safe gateway
-replay preparation reuses the existing builder and exclusive fixture writer. Missing replay
-capability remains explicit. Human output derives from this validated analysis. No output claims
-a recorded historical PID is currently running. Support execution emits correlated body-free
+`--json` streams a fully validated `keiko.support.report-analysis` in bounded chunks, schema version
+1: validated private incident, selection verdict, unknown authenticity, section/report and
+exact-file digests, the existing ordered timelines, process summaries, failure clusters and a
+deterministic ReproductionSeed when the incident correlation has evidence. With `--correlation-id`,
+`--json` emits only that validated timeline as `keiko.support.report-timeline`, schema version 1,
+which `keiko investigate --from-timeline` consumes. The seed uses the incident timestamp, not the
+receiver's clock. `--seed` uses that correlation by default or an explicit `--correlation-id`; safe
+gateway replay preparation reuses the existing builder and exclusive fixture writer. Missing replay
+capability remains explicit. Human output derives from this validated analysis. No output claims a
+recorded historical PID is currently running. Support execution emits correlated body-free
 `support.report.started`, `support.report.completed` or `support.report.failed`, alongside the
 existing query/manifest evidence; a failure names its closed reason and a completion that is
 `insufficient` is a warning. An analysis that proceeds without the lazily loaded tool-lifecycle
-validator records `support.report.degraded` (`lifecycle-validator-unavailable`, the error class and
-cause classes) before its completion. Export writes them to the selected state directory's Activity Log,
-analysis and a refused destination to the CLI control state. After a successful export the CLI
-states the exported directory's diagnostic readiness (#3532), persisted after the report so the
-report stays the evidence that existed when it was taken. Logger failure uses its existing
-independent loss channel.
+validator records `support.report.degraded` (`lifecycle-validator-unavailable` with error kind
+`unavailable`, the error class, cause classes and Keiko frames) before its completion. An analysis
+completion names the view it produced (`analysis`, `clusters`, `timeline`, `seed`), whose
+correlation a seed used (`incident` or `selected`, never the id) and a published replay fixture.
+Export writes them to the selected state directory's Activity Log, analysis and a refused
+destination to the CLI control state. After a successful export the CLI states the exported
+directory's diagnostic readiness (#3532), persisted after the report so the report stays the
+evidence that existed when it was taken. Logger failure uses its existing independent loss channel.
 
 **Compatibility:** legacy JSONL bundles and raw logs are not accepted as received support reports;
 they are refused by the closed reason `legacy-input`.
