@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f55b32b9b1b473cced80a84e096441f7bf75d5730bf5c2ed9de93f08e24e1629" as const;
+  "2582f250fa05a683c982c0b063882c3b018876518d307066d8c2c42393046bcb" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -27769,6 +27769,24 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["verified", "directory-sync-unavailable"],
       },
+      analysisView: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["analysis", "clusters", "timeline", "seed"],
+      },
+      seedCorrelation: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["incident", "selected"],
+      },
+      fixture: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["published"],
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -27824,6 +27842,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxItems: 5,
         maxLength: 64,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxItems: 8,
+        maxLength: 512,
       },
     },
     causal: "correlation",
@@ -62411,7 +62436,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "capability",
           safeContextFields: [
             {
+              name: "analysisView",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "durabilityAssurance",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "fixture",
               type: "string",
               dataClass: "closed-enum",
               required: false,
@@ -62451,6 +62488,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "seedCorrelation",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "sufficiency",
@@ -62501,6 +62544,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "reason",
               type: "string",
               dataClass: "closed-enum",
@@ -62525,9 +62574,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "count",
             "error-kind",
             "loss-state",
+            "opaque-id",
           ],
           frameCauseEvidence: {
-            frames: false,
+            frames: true,
             causeChain: true,
           },
           proofIds: ["support.report.degraded.lifecycle-validator"],

@@ -77,6 +77,7 @@ import {
   type ServerLogEvent,
 } from "./server-log.js";
 import { computeDefectFingerprint } from "./defect-fingerprint.js";
+import { isRedactedLogLabel } from "./log-redaction.js";
 import { activityLogTestWriterInstalled } from "./server-logger.js";
 import { FRAME_SHAPE_PATTERN } from "./stack-frames.js";
 import {
@@ -544,13 +545,15 @@ function failureFingerprintInput(evidence: SupportIncidentFailureEvidence): Defe
   };
 }
 
+// A correlation id the writer would redact (a credential-shaped label) never enters an incident:
+// the persisted lines carry only its marker, so it could leak a secret but never join evidence.
+function incidentCorrelationId(value: unknown): string | undefined {
+  return isActivityLogCorrelationId(value) && isRedactedLogLabel(value) ? value : undefined;
+}
+
 function failureCorrelation(evidence: SupportIncidentFailureEvidence): SupportIncidentCorrelation {
-  const own = isActivityLogCorrelationId(evidence.correlationId)
-    ? evidence.correlationId
-    : undefined;
-  const parent = isActivityLogCorrelationId(evidence.parentCorrelationId)
-    ? evidence.parentCorrelationId
-    : undefined;
+  const own = incidentCorrelationId(evidence.correlationId);
+  const parent = incidentCorrelationId(evidence.parentCorrelationId);
   const root = parent ?? own;
   const children = parent !== undefined && own !== undefined && own !== parent ? [own] : [];
   return {
@@ -1074,9 +1077,7 @@ export function recordUserReportedIncident(
   stateDir: string,
   options: SupportIncidentOptions = {},
 ): SupportIncidentCreation {
-  const correlationId = isActivityLogCorrelationId(options.correlationId)
-    ? options.correlationId
-    : randomUUID();
+  const correlationId = incidentCorrelationId(options.correlationId) ?? randomUUID();
   return createCandidate(
     stateDir,
     {

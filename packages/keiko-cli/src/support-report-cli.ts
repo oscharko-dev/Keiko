@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -15,7 +24,6 @@ import {
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   SafeArtifactFileError,
-  ensureDirHardened,
   isSafeArtifactStageFileName,
 } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
@@ -67,6 +75,7 @@ import {
   emitSupportReportDegraded,
   emitSupportReportFailed,
   supportReportFailureReason,
+  type SupportReportAnalysisOutcome,
   type SupportReportSurface,
 } from "./support-report-evidence.js";
 import {
@@ -230,6 +239,44 @@ function assertReportDestination(directory: string, logDirectories: readonly str
   }
 }
 
+function unsafeReportDirectory(): SafeArtifactFileError {
+  return new SafeArtifactFileError("support-report", "unsafe-target");
+}
+
+// Holds the default directory owner-only through a descriptor that refuses a final symlink, so a
+// redirected `support-reports` can never have its target's permissions changed.
+function hardenOwnedReportDirectory(directory: string): void {
+  if (process.platform === "win32") return;
+  let descriptor: number;
+  try {
+    descriptor = openSync(
+      directory,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+  } catch (error) {
+    // A final symlink (ELOOP) or a non-directory is a redirected destination; anything else is the
+    // filesystem failure itself.
+    const code: unknown = error instanceof Error ? Reflect.get(error, "code") : undefined;
+    if (code === "ELOOP" || code === "ENOTDIR") throw unsafeReportDirectory();
+    throw error;
+  }
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isDirectory() || stat.uid !== process.getuid?.()) throw unsafeReportDirectory();
+    fchmodSync(descriptor, 0o700);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+// The default directory is Keiko's own: created owner-only, or an existing real directory of this
+// user. A symlink or any other redirect is refused before anything is changed.
+function prepareDefaultReportDirectory(directory: string): void {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (!lstatSync(directory).isDirectory()) throw unsafeReportDirectory();
+  hardenOwnedReportDirectory(directory);
+}
+
 // Validated before and after creation. The default directory is Keiko's own and is held
 // owner-only; an explicit one is created owner-only and must not be writable by others.
 function prepareReportDirectory(
@@ -238,7 +285,7 @@ function prepareReportDirectory(
   keikoOwned: boolean,
 ): void {
   assertReportDestination(directory, logDirectories);
-  if (keikoOwned) ensureDirHardened(directory);
+  if (keikoOwned) prepareDefaultReportDirectory(directory);
   else mkdirSync(directory, { recursive: true, mode: 0o700 });
   assertReportDestination(directory, logDirectories);
 }
@@ -505,7 +552,7 @@ function emitMachineOrHuman(
   artifact: AnalyzedSupportReport,
   args: SafeSupportAnalyzeArgs,
   io: CliIo,
-): number {
+): SupportReportAnalysisOutcome {
   const timeline =
     args.correlationId === undefined
       ? undefined
@@ -521,7 +568,7 @@ function emitMachineOrHuman(
         : supportReportTimeline(artifact, args.correlationId),
       io,
     );
-    return 0;
+    return { analysisView: args.correlationId === undefined ? "analysis" : "timeline" };
   }
   io.out(humanHeader(artifact));
   if (args.clusters) io.out(renderHumanClusters(artifact.analysis.clusters));
@@ -531,7 +578,12 @@ function emitMachineOrHuman(
         ? renderHumanAllTimelines(artifact.analysis)
         : renderHumanTimeline(timeline),
     );
-  return 0;
+  return { analysisView: humanView(args) };
+}
+
+function humanView(args: SafeSupportAnalyzeArgs): SupportReportAnalysisOutcome["analysisView"] {
+  if (args.clusters) return "clusters";
+  return args.correlationId === undefined ? "analysis" : "timeline";
 }
 
 function needsToolLifecycle(artifact: AnalyzedSupportReport): boolean {
@@ -608,7 +660,7 @@ function emitSafeSeed(
   writeFixture: FixtureWriter,
   cwd: string,
   options: SupportAnalyzeOptions,
-): number {
+): SupportReportAnalysisOutcome {
   const seed = prepareSupportReportSeed(artifact, seedCorrelation(artifact, args), options);
   if (seed === undefined) throw new SupportReportError("seed-unavailable");
   const fixturePath = writeSelectedFixture(seed, args, io, writeFixture, cwd);
@@ -618,7 +670,11 @@ function emitSafeSeed(
     io.out(renderHumanReproductionSeed(seed));
     if (fixturePath !== undefined) io.out(`Wrote replay fixture: ${fixturePath}\n`);
   }
-  return 0;
+  return {
+    analysisView: "seed",
+    seedCorrelation: args.correlationId === undefined ? "incident" : "selected",
+    ...(fixturePath === undefined ? {} : { fixture: "published" }),
+  };
 }
 
 async function analyzeReceivedReport(
@@ -637,7 +693,7 @@ async function analyzeReceivedReport(
   const basic = analyzeSupportReport(text);
   const options = needsToolLifecycle(basic) ? await reportAnalysisOptions(context) : {};
   const artifact = Object.keys(options).length === 0 ? basic : analyzeSupportReport(text, options);
-  const exitCode =
+  const analysis =
     args.seed || args.emitFixture !== undefined
       ? emitSafeSeed(artifact, args, context.io, writeFixture, cwd, options)
       : emitMachineOrHuman(artifact, args, context.io);
@@ -647,8 +703,9 @@ async function analyzeReceivedReport(
     sufficiency: artifact.selection.status,
     sufficiencyReasons: artifact.selection.reasons,
     reportDigest: artifact.reportDigest,
+    analysis,
   });
-  return exitCode;
+  return 0;
 }
 
 export async function runSafeSupportAnalyze(

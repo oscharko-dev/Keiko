@@ -112,7 +112,26 @@ describe("trusted support registry history", () => {
     const empty = fakeGit({ tags: [], commits: {}, catalogs: {} });
     expect(() => supportedReleases("1.1.14", empty)).toThrow("fetch the tags");
     expect(supportedReleases(FIRST_SUPPORTED_RELEASE, empty)).toEqual([]);
-    expect(() => supportedReleases("1.2.0-rc.1", empty)).toThrow(TypeError);
+    for (const version of ["1.2", "1.2.0-", "v1.2.0", "1.2.0-01"]) {
+      expect(() => supportedReleases(version, empty)).toThrow(TypeError);
+    }
+  });
+
+  // A prerelease bump (`set-version -- 1.2.0-rc.1`) precedes its release, so its history keeps every
+  // older stable release and never the release it precedes.
+  it("stops a prerelease history strictly below the release it precedes", () => {
+    const execute = fakeGit({
+      tags: ["v1.1.9", "v1.1.10", "v1.2.0"],
+      commits: { "v1.1.9": "9".repeat(40), "v1.1.10": "a".repeat(40), "v1.2.0": "b".repeat(40) },
+      catalogs: {},
+    });
+    expect(supportedReleases("1.2.0-rc.1", execute)).toEqual([
+      { release: "1.1.9", sourceCommit: "9".repeat(40) },
+      { release: "1.1.10", sourceCommit: "a".repeat(40) },
+    ]);
+    expect(supportedReleases("1.1.9-beta.0", execute)).toEqual([]);
+    const empty = fakeGit({ tags: [], commits: {}, catalogs: {} });
+    expect(() => supportedReleases("1.1.10-rc.1", empty)).toThrow("fetch the tags");
   });
 
   it("keeps one snapshot per registry identity and refuses refs or oversized registries", () => {

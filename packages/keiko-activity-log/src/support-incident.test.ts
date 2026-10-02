@@ -328,6 +328,27 @@ describe("SupportIncident candidates", () => {
       });
     });
 
+    // Review #3679: the writer redacts a credential-shaped correlation label, so an incident never
+    // adopts one: it could only leak the secret, never join the persisted evidence.
+    it("never adopts a correlation label the writer would redact", () => {
+      const token =
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+      const failure = created(
+        recordRegisteredFailureIncident(stateDir, {
+          op: FAILURE_OP,
+          correlationId: token,
+          parentCorrelationId: "root-correlation-2",
+        }),
+      ).record;
+      expect(failure.correlation).toEqual({
+        rootCorrelationId: "root-correlation-2",
+        childCorrelationIds: [],
+      });
+      const report = created(recordUserReportedIncident(stateDir, { correlationId: token })).record;
+      expect(report.correlation.rootCorrelationId).not.toBe(token);
+      expect(JSON.stringify([failure, report])).not.toContain(token);
+    });
+
     it("maps an open errorKind outside the closed vocabulary to unknown", () => {
       const { record } = created(
         recordRegisteredFailureIncident(stateDir, { op: FAILURE_OP, errorKind: "ECONNREFUSED" }),

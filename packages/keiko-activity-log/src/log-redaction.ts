@@ -929,6 +929,14 @@ export function redactLogLabel(value: string): string {
   return redactLogString(value);
 }
 
+/** True when the writer's label redaction leaves `value` unchanged: no credential shape. */
+export function isRedactedLogLabel(value: unknown): value is string {
+  return typeof value === "string" && redactLogLabel(value) === value;
+}
+
+// The envelope labels the writer passes through `redactLogLabel` before persisting.
+const SUPPORT_LABEL_FIELDS = ["op", "errorKind", "correlationId", "parentCorrelationId"] as const;
+
 // A closed-vocabulary array field (e.g. `unsupportedReasons`) is meant to carry only the fixed set
 // of reason codes a producer's own type declares — but the type is a compile-time promise, not a
 // runtime one: nothing stops a future producer, or a bug in an existing one, from putting unbounded
@@ -971,8 +979,9 @@ export function projectSupportLogFields(
  * Reuse the owning reducers; an untrusted sender cannot claim producer redaction. Every field
  * outside the envelope must already be a fixed point of the same redaction the writer applies
  * before persisting, so a received report cannot carry an endpoint, credential, identity or path
- * that a Keiko writer would have replaced with a marker. Frames and causes, when present, must be
- * non-empty arrays their reducer leaves unchanged.
+ * that a Keiko writer would have replaced with a marker. Envelope labels must be fixed points of the
+ * label redaction the writer applies, so a credential-shaped correlation id is refused. Frames and
+ * causes, when present, must be non-empty arrays their reducer leaves unchanged.
  */
 export function areSupportLogFieldsSafe(
   fields: Readonly<Record<string, unknown>>,
@@ -980,6 +989,12 @@ export function areSupportLogFieldsSafe(
 ): boolean {
   const projected = projectSupportLogFields(fields);
   if (!Object.entries(fields).every(([name, value]) => value === projected[name])) return false;
+  if (
+    !SUPPORT_LABEL_FIELDS.every(
+      (name) => fields[name] === undefined || isRedactedLogLabel(fields[name]),
+    )
+  )
+    return false;
   const producerFields = Object.fromEntries(
     Object.entries(fields).filter(
       ([name]) =>

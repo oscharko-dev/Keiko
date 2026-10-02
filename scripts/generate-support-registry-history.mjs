@@ -37,15 +37,37 @@ function git(execute, args) {
   });
 }
 
+function belowBound(release, bound) {
+  const order = compareStableVersions(release, bound.release);
+  return order < 0 || (bound.inclusive && order === 0);
+}
+
 function requiredStableVersion(value, label) {
   const parsed = parseStableVersion(value);
   if (parsed === undefined) throw new TypeError(`${label} is not a stable product version`);
   return parsed;
 }
 
-/** Stable release tags from the first supported release up to and including `version`. */
+const PRERELEASE_IDENTIFIER = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
+const PRODUCT_VERSION = new RegExp(
+  `^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-(${PRERELEASE_IDENTIFIER}(?:\\.${PRERELEASE_IDENTIFIER})*))?$`,
+  "u",
+);
+
+// The current product version bounds the history. A stable version includes its own tag once it
+// exists; a prerelease precedes its release (SemVer 11), so its history ends strictly below it.
+function currentReleaseBound(version) {
+  const match = PRODUCT_VERSION.exec(version);
+  if (match === null) throw new TypeError("the current version is not a product version");
+  return {
+    release: match.slice(1, 4).map((part) => Number.parseInt(part, 10)),
+    inclusive: match[4] === undefined,
+  };
+}
+
+/** Stable release tags from the first supported release up to the current product version. */
 export function supportedReleases(version, execute = execFileSync) {
-  const current = requiredStableVersion(version, "the current version");
+  const bound = currentReleaseBound(version);
   const floor = requiredStableVersion(FIRST_SUPPORTED_RELEASE, "the first supported release");
   const releases = git(execute, ["tag", "--list", "v[0-9]*"])
     .split(/\r?\n/u)
@@ -54,10 +76,10 @@ export function supportedReleases(version, execute = execFileSync) {
       ({ parsed }) =>
         parsed !== undefined &&
         compareStableVersions(parsed, floor) >= 0 &&
-        compareStableVersions(parsed, current) <= 0,
+        belowBound(parsed, bound),
     )
     .sort((left, right) => compareStableVersions(left.parsed, right.parsed));
-  if (releases.length === 0 && compareStableVersions(current, floor) > 0) {
+  if (releases.length === 0 && compareStableVersions(bound.release, floor) > 0) {
     throw new Error(
       "support-registry-history: no release tag is available; fetch the tags (git fetch --tags).",
     );

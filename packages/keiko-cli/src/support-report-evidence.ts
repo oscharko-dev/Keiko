@@ -89,6 +89,21 @@ export const SUPPORT_REPORT_COMPLETED = defineActivityLogOperation({
       required: false,
       values: ["verified", "directory-sync-unavailable"],
     },
+    // Analyze only: which view was produced, whose correlation a seed used, and whether an
+    // explicitly selected replay fixture was published beside it.
+    analysisView: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["analysis", "clusters", "timeline", "seed"],
+    },
+    seedCorrelation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["incident", "selected"],
+    },
+    fixture: { type: "string", dataClass: "closed-enum", required: false, values: ["published"] },
   },
   proofIds: ["support.report.completed.report-lifecycle"],
 });
@@ -150,11 +165,25 @@ export const SUPPORT_REPORT_DEGRADED = defineActivityLogOperation({
       maxItems: 5,
       maxLength: 64,
     },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxItems: 8,
+      maxLength: 512,
+    },
   },
   proofIds: ["support.report.degraded.lifecycle-validator"],
 });
 
 export type SupportReportSurface = "export" | "analyze";
+
+/** What an analysis produced: its view, a seed's correlation, and a published replay fixture. */
+export interface SupportReportAnalysisOutcome {
+  readonly analysisView: "analysis" | "clusters" | "timeline" | "seed";
+  readonly seedCorrelation?: "incident" | "selected" | undefined;
+  readonly fixture?: "published" | undefined;
+}
 export function emitSupportReportStarted(
   sink: ServerLogSink,
   correlationId: string,
@@ -180,9 +209,10 @@ export function emitSupportReportCompleted(
     sufficiencyReasons: readonly DiagnosticSufficiencyReason[];
     reportDigest: string;
     publication?: SupportReportPublication | undefined;
+    analysis?: SupportReportAnalysisOutcome | undefined;
   },
 ): void {
-  const { publication, ...counts } = summary;
+  const { publication, analysis, ...counts } = summary;
   sink.write(
     activityLogEvent(
       SUPPORT_REPORT_COMPLETED,
@@ -200,6 +230,7 @@ export function emitSupportReportCompleted(
               permissionAssurance: publication.permissionAssurance,
               durabilityAssurance: publication.durabilityAssurance,
             }),
+        ...analysisOutcomeFields(analysis),
       },
     ),
   );
@@ -213,17 +244,38 @@ export function emitSupportReportDegraded(
   sink.write(
     activityLogEvent(
       SUPPORT_REPORT_DEGRADED,
-      { level: "warn", correlationId },
+      { level: "warn", correlationId, errorKind: "unavailable" },
       {
         surface,
         reportSchemaVersion: SUPPORT_REPORT_SCHEMA_VERSION,
         reason: "lifecycle-validator-unavailable",
         errorClass: describeErrorKind(error),
         causeChain: [...causeChain(error)],
+        frames: [...keikoStackFrames(error)],
       },
     ),
   );
 }
+// The persisted fields carry no explicit undefined: an absent outcome adds nothing.
+interface AnalysisOutcomeFields {
+  readonly analysisView?: SupportReportAnalysisOutcome["analysisView"];
+  readonly seedCorrelation?: "incident" | "selected";
+  readonly fixture?: "published";
+}
+
+function analysisOutcomeFields(
+  analysis: SupportReportAnalysisOutcome | undefined,
+): AnalysisOutcomeFields {
+  if (analysis === undefined) return {};
+  return {
+    analysisView: analysis.analysisView,
+    ...(analysis.seedCorrelation === undefined
+      ? {}
+      : { seedCorrelation: analysis.seedCorrelation }),
+    ...(analysis.fixture === undefined ? {} : { fixture: analysis.fixture }),
+  };
+}
+
 export function emitSupportReportFailed(
   sink: ServerLogSink,
   correlationId: string,

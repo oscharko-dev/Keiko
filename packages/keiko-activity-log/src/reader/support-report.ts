@@ -1,5 +1,5 @@
 import { computeDefectFingerprint } from "../defect-fingerprint.js";
-import { projectSupportLogFields } from "../log-redaction.js";
+import { isRedactedLogLabel, projectSupportLogFields } from "../log-redaction.js";
 import { deflateSync, inflateSync } from "node:zlib";
 import {
   SUPPORT_REPORT_KIND,
@@ -406,6 +406,16 @@ function unattributedIncident(incident: SupportIncidentPrivateProjection): boole
   );
 }
 
+// The writer redacts every correlation label before persisting, so a header reference it would
+// have redacted (a credential-shaped id) is refused rather than surfaced to a renderer or agent.
+function incidentCorrelationsRedacted(incident: SupportIncidentPrivateProjection): boolean {
+  const { rootCorrelationId, childCorrelationIds } = incident.correlation;
+  return (
+    (rootCorrelationId === undefined || isRedactedLogLabel(rootCorrelationId)) &&
+    childCorrelationIds.every(isRedactedLogLabel)
+  );
+}
+
 // The incident's own failing lines: its operation under its own correlations. Another correlation
 // may fail the same operation with another error kind, so only these lines bind the header. An
 // uncorrelated incident can only be bound by its operation.
@@ -486,7 +496,12 @@ function parseValidatedSupportReport(text: string): ValidatedSupportReport {
     parseCanonicalSupportJson(text.slice(0, -1), MAX_SUPPORT_REPORT_BYTES - 1),
   );
   const incident = parseSupportIncidentPrivateProjection(value.incident);
-  if (incident === undefined || !validSelection(value.selection) || !validEvidence(value.evidence))
+  if (
+    incident === undefined ||
+    !incidentCorrelationsRedacted(incident) ||
+    !validSelection(value.selection) ||
+    !validEvidence(value.evidence)
+  )
     throw new SupportReportError("unsafe-report");
   if (Buffer.byteLength(canonicalSupportJson(incident)) > MAX_SUPPORT_REPORT_INCIDENT_BYTES)
     throw new SupportReportError("report-budget-exceeded");
@@ -630,6 +645,16 @@ export function analyzeSupportReport(
   return seed === undefined ? artifact : { ...artifact, seed };
 }
 
+// A projection narrows the report, never its known loss: the effective selection's reasons stay on
+// every timeline and seed derived from it, so a narrowed view cannot read falsely complete.
+function withSelectionReasons(
+  sufficiency: ActivityLogSufficiency,
+  selection: SupportReportSelection,
+): ActivityLogSufficiency {
+  const merged = reasons([...sufficiency.reasons, ...selection.reasons]);
+  return { ...sufficiency, status: diagnosticSufficiencyStatus(merged), reasons: merged };
+}
+
 /** Seed preparation shares the exact validated historical registry and deterministic clock. */
 export function prepareSupportReportSeed(
   artifact: AnalyzedSupportReport,
@@ -638,7 +663,7 @@ export function prepareSupportReportSeed(
 ): ReproductionSeed | undefined {
   if (correlationId === undefined) return undefined;
   const registry = reportRegistry(artifact.incident);
-  return buildReproductionSeedFromAnalysis(
+  const seed = buildReproductionSeedFromAnalysis(
     artifact.analysis,
     {
       kind: "support-report",
@@ -650,6 +675,9 @@ export function prepareSupportReportSeed(
     new Date(artifact.incident.createdAtMs),
     { ...options, registry },
   );
+  return seed === undefined
+    ? undefined
+    : { ...seed, sufficiency: withSelectionReasons(seed.sufficiency, artifact.selection) };
 }
 
 export interface AnalyzedSupportReportTimeline extends LogTimeline {
@@ -677,10 +705,9 @@ export function supportReportTimeline(
     reportDigest: artifact.reportDigest,
     sourceArtifactDigest: artifact.sourceArtifactDigest,
     ...timeline,
-    sufficiency: timelineSufficiency(
-      artifact.analysis,
-      timeline,
-      reportRegistry(artifact.incident),
+    sufficiency: withSelectionReasons(
+      timelineSufficiency(artifact.analysis, timeline, reportRegistry(artifact.incident)),
+      artifact.selection,
     ),
   };
 }

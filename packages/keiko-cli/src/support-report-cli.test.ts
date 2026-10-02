@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,16 +16,30 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
 import {
   analyzeLogText,
   analyzeSupportReport,
+  findTimeline,
   parseSupportReport,
+  renderHumanAllTimelines,
+  renderHumanClusters,
+  renderHumanReproductionSeed,
+  renderHumanTimeline,
   serializeSupportReport,
   SupportReportError,
+  type AnalyzedSupportReport,
+  type ReproductionSeed,
 } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
   fixtureLine,
   fixtureProcess,
@@ -39,6 +55,7 @@ import { expectActivityLogScenario } from "../../../tests/support/activity-log-s
 import {
   resealSupportReport,
   resealSupportReportWithParentFanOut,
+  supportReportDigest,
 } from "../../../tests/support/support-report-fixtures.js";
 import * as lazyModules from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
@@ -148,6 +165,84 @@ async function analyze(
   return { code, ...result };
 }
 
+// What `shasum -a 256` prints for the bytes: independent of the production digest helper.
+function sha256Of(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+async function runExport(out: string): Promise<{ code: number } & ReturnType<typeof capture>> {
+  const result = capture();
+  const code = await runSupportCli(
+    ["export", "--state-dir", stateDir, "--correlation-id", CORRELATION, "--out", out],
+    result.io,
+    {},
+    { cwd: root, controlActivityStateDir: controlStateDir },
+  );
+  return { code, ...result };
+}
+// One failed run is one complete started/failed lifecycle in the log that owns it and no further
+// completion; its closed kind is the only thing it says about the failure.
+function expectFailureEvidence(
+  logRoot: string,
+  surface: "export" | "analyze",
+  errorKind: string,
+  completions = 0,
+): void {
+  const log = readPersistedActivityLog(logRoot);
+  const [failed, ...otherFailures] = persistedActivityLogLines(log, "support.report.failed");
+  expect(otherFailures).toEqual([]);
+  expect(persistedActivityLogLines(log, "support.report.completed")).toHaveLength(completions);
+  const record = expectActivityLogProof("support.report.failed.report-lifecycle", failed ?? "");
+  expect(record).toMatchObject({
+    surface,
+    level: "error",
+    errorKind,
+    completeness: "complete",
+    loss: "none",
+  });
+  expect(record).not.toHaveProperty("reason");
+  const started = persistedActivityLogLines(log, "support.report.started").at(-1);
+  expect(record.correlationId).toBe(
+    (JSON.parse(started ?? "{}") as { readonly correlationId?: unknown }).correlationId,
+  );
+  expect(failed).not.toContain(root);
+}
+// The production analysis of the exported report, with the seed a gateway failure always yields.
+function analyzedReport(): { artifact: AnalyzedSupportReport; seed: ReproductionSeed } {
+  const artifact = analyzeSupportReport(readSupportReportFile(path));
+  if (artifact.seed === undefined) throw new TypeError("missing reproduction seed");
+  return { artifact, seed: artifact.seed };
+}
+// An Activity Log entry that must never be read, planted at the name of a valid segment.
+const UNSAFE_SEGMENT_ENTRIES = [
+  "permissions",
+  "symlink",
+  "hard-link",
+  "dangling-symlink",
+  "directory",
+] as const;
+function plantUnsafeSegment(
+  kind: (typeof UNSAFE_SEGMENT_ENTRIES)[number],
+  segment: string,
+  victim: string,
+): void {
+  if (kind === "permissions") {
+    chmodSync(segment, 0o444);
+    return;
+  }
+  rmSync(segment, { recursive: true, force: true });
+  if (kind === "symlink") symlinkSync(victim, segment);
+  else if (kind === "hard-link") linkSync(victim, segment);
+  else if (kind === "dangling-symlink") symlinkSync(join(root, "missing-victim"), segment);
+  else mkdirSync(segment, { mode: 0o700 });
+}
+// A replay fixture destination that exists or links elsewhere; a dangling link has no victim yet.
+function plantFixtureTarget(kind: string, target: string, victim: string): void {
+  if (kind !== "dangling-symlink") writeFileSync(victim, "existing-private-work", { mode: 0o600 });
+  if (kind === "symlink" || kind === "dangling-symlink") symlinkSync(victim, target);
+  else if (kind === "hard-link") linkSync(victim, target);
+  else writeFileSync(target, "existing-private-work", { mode: 0o600 });
+}
+
 function analyzeBuiltCli(): { code: number; output: string[]; errors: string[] } {
   const cliUrl = new URL("../dist/support.js", import.meta.url).href;
   const program = `
@@ -200,6 +295,9 @@ describe("support report CLI and private publication", () => {
     const artifact = analyzeSupportReport(readSupportReportFile(path));
     expect(artifact.selection.status).toBe("complete");
     expect(artifact.seed?.correlationId).toBe(CORRELATION);
+    // The analysis states the SHA-256 of the exact bytes on disk and names the analyzer itself.
+    expect(artifact.sourceArtifactDigest).toBe(sha256Of(readFileSync(path)));
+    expect(artifact.analyzerVersion).toBe(KEIKO_PRODUCT_VERSION);
     const analyzed = await analyze(["--json"]);
     expect(analyzed.code, analyzed.errors.join("")).toBe(0);
     expect(JSON.parse(analyzed.output.join(""))).toEqual(artifact);
@@ -246,16 +344,68 @@ describe("support report CLI and private publication", () => {
     );
     expect(state).toMatchObject({
       level: "warn",
+      errorKind: "unavailable",
       surface: "analyze",
       reason: "lifecycle-validator-unavailable",
       errorClass: "TypeError",
       causeChain: ["RangeError"],
     });
+    // Review #3679: the failing loader site stays reconstructable from dist-anchored frames.
+    const frames = (state as { readonly frames?: unknown }).frames;
+    expect(Array.isArray(frames) && frames.length > 0).toBe(true);
+    for (const frame of frames as readonly unknown[]) {
+      expect(frame).toMatch(/^packages\/keiko-[a-z-]+\/(?:dist|src)\/[^:]+:\d+:\d+$/u);
+    }
     expect(
       expectActivityLogProof("support.report.completed.report-lifecycle", completed ?? ""),
     ).toMatchObject({ correlationId: state.correlationId, surface: "analyze" });
     expect(log).not.toMatch(/private-(?:import|cause)-token/u);
   });
+
+  // Review #3679: the completion distinguishes reading a report from creating a replay fixture.
+  it("records which view an analysis produced and a published replay fixture", async () => {
+    seedGatewayFailure();
+    await exportReport();
+    expect((await analyze(["--json"])).code).toBe(0);
+    const fixture = await analyze(["--seed", "--json", "--emit-fixture", "replay-outcome.ts"]);
+    expect(fixture.code, fixture.errors.join("")).toBe(0);
+    const completions = persistedActivityLogLines(
+      readPersistedActivityLog(controlStateDir),
+      "support.report.completed",
+    ).map((line) => expectActivityLogProof("support.report.completed.report-lifecycle", line));
+    expect(completions.at(-2)).toMatchObject({ surface: "analyze", analysisView: "analysis" });
+    expect(completions.at(-2)).not.toHaveProperty("fixture");
+    expect(completions.at(-1)).toMatchObject({
+      surface: "analyze",
+      analysisView: "seed",
+      seedCorrelation: "incident",
+      fixture: "published",
+    });
+    expect(JSON.stringify(completions)).not.toContain("replay-outcome");
+  });
+
+  // Review #3679: a redirected default directory is refused before anything changes its target.
+  it.skipIf(process.platform === "win32")(
+    "refuses a symlinked default report directory without changing its target",
+    async () => {
+      const target = join(root, "elsewhere");
+      mkdirSync(target);
+      chmodSync(target, 0o755);
+      symlinkSync(target, join(stateDir, "support-reports"));
+      const result = capture();
+      const code = await runSupportCli(
+        ["export", "--state-dir", stateDir, "--correlation-id", CORRELATION],
+        result.io,
+        {},
+        { cwd: root, controlActivityStateDir: controlStateDir },
+      );
+      // The target keeps its own permissions: nothing was changed through the link.
+      expect(statSync(target).mode & 0o777).toBe(0o755);
+      expect(readdirSync(target)).toEqual([]);
+      expect(code).toBe(1);
+      expect(result.errors.join("")).toContain("keiko support: unsafe-target");
+    },
+  );
 
   it("persists the started and completed proofs against the committed digest and byte count", async () => {
     await exportReport();
@@ -277,6 +427,10 @@ describe("support report CLI and private publication", () => {
       sufficiencyReasons: [],
       completeness: "complete",
       loss: "none",
+      // Export states how the one file was committed and what the platform could assure for it.
+      publication: "published",
+      permissionAssurance: process.platform === "win32" ? "platform-inherited" : "verified-private",
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
     expect(completed).not.toContain(path);
   });
@@ -612,26 +766,31 @@ describe("support report CLI and private publication", () => {
       seed: artifact.seed,
       fixtureWritten: true,
     });
+    // The seed binds to the exact artifact bytes and to the records the analysis supported.
+    expect(artifact.seed?.sourceArtifact).toEqual({
+      kind: "support-report",
+      lineCount: artifact.analysis.evidence.supportedLineCount,
+      sha256: sha256Of(readFileSync(path)),
+    });
     expect(readFileSync(join(root, "replay.ts"), "utf8")).toContain('"status": 504');
     expect(statSync(join(root, "replay.ts")).mode & 0o777).toBe(0o600);
   });
 
-  it.each(["existing", "symlink", "hard-link"])(
+  it.each(["existing", "symlink", "dangling-symlink", "hard-link"])(
     "settles replay publication failure for a %s destination without success evidence",
     async (kind) => {
       seedGatewayFailure();
       await exportReport();
       const target = join(root, "replay.ts");
       const victim = join(root, "victim.ts");
-      writeFileSync(victim, "existing-private-work", { mode: 0o600 });
-      if (kind === "symlink") symlinkSync(victim, target);
-      else if (kind === "hard-link") linkSync(victim, target);
-      else writeFileSync(target, "existing-private-work", { mode: 0o600 });
+      plantFixtureTarget(kind, target, victim);
       const result = await analyze(["--seed", "--json", "--emit-fixture", target]);
       expect(result.code).toBe(1);
       expect(result.output).toEqual([]);
       expect(result.errors.join("")).toContain("keiko support: target-exists\n");
-      expect(readFileSync(victim, "utf8")).toBe("existing-private-work");
+      // Nothing is written through a link: a victim keeps its bytes, a dangling target is never created.
+      if (kind === "dangling-symlink") expect(existsSync(victim)).toBe(false);
+      else expect(readFileSync(victim, "utf8")).toBe("existing-private-work");
       const log = readPersistedActivityLog(controlStateDir);
       expect(persistedActivityLogLines(log, "support.report.completed")).toEqual([]);
       const failed = persistedActivityLogLines(log, "support.report.failed");
@@ -644,11 +803,28 @@ describe("support report CLI and private publication", () => {
   it("provides thin human cluster, timeline and seed views after validation", async () => {
     seedGatewayFailure();
     await exportReport();
-    for (const args of [[], ["--clusters"], ["--correlation-id", CORRELATION], ["--seed"]]) {
+    const { artifact, seed } = analyzedReport();
+    const timeline = findTimeline(artifact.analysis, CORRELATION);
+    if (timeline === undefined) throw new TypeError("missing fixture timeline");
+    const header = `Support incident ${artifact.incident.incidentId}\nDiagnostic sufficiency: complete\nAuthenticity: unknown\n`;
+    // Each argument set selects its own view, and every view is the production renderer's text.
+    const views: readonly (readonly [readonly string[], string])[] = [
+      [[], header + renderHumanAllTimelines(artifact.analysis)],
+      [["--correlation-id", CORRELATION], header + renderHumanTimeline(timeline)],
+      [["--clusters"], header + renderHumanClusters(artifact.analysis.clusters)],
+      [["--seed"], renderHumanReproductionSeed(seed)],
+    ];
+    for (const [args, expected] of views) {
       const result = await analyze(args);
+      const text = result.output.join("");
       expect(result.code, result.errors.join("")).toBe(0);
-      expect(result.output.join("")).toContain("gateway");
+      expect(text, args.join(" ")).toBe(expected);
+      // Human text, never a JSON document.
+      expect(() => {
+        JSON.parse(text);
+      }, args.join(" ")).toThrow(SyntaxError);
     }
+    expect(new Set(views.map(([, expected]) => expected)).size).toBe(views.length);
   });
   it("streams a large validated machine projection in bounded chunks", async () => {
     const process = fixtureProcess(5353, "aabbccdd");
@@ -752,6 +928,8 @@ describe("support report CLI and private publication", () => {
       schemaVersion: 1,
       authenticity: "unknown",
       reportDigest: artifact.reportDigest,
+      analyzerVersion: KEIKO_PRODUCT_VERSION,
+      sourceArtifactDigest: sha256Of(readFileSync(path)),
       correlationId: CORRELATION,
     });
     expect(timeline.errorKinds).toContain("timeout");
@@ -759,35 +937,34 @@ describe("support report CLI and private publication", () => {
     expect(timeline).not.toHaveProperty("analysis");
   });
 
-  it("publishes an honest insufficient report when a window segment is unreadable or a symlink", async () => {
-    const correlationId = "window-segment-0001";
-    const process = fixtureProcess(6161, "c0ffee00");
-    const segment = writeFixtureSegment(stateDir, segmentIdentity(process, Date.now(), 1), [
-      fixtureLine(process, Date.now(), { op: "client.diagnostic", correlationId }),
-    ]);
-    const first = capture();
-    const out = join(root, "first");
-    expect(
-      await runSupportCli(
-        ["export", "--state-dir", stateDir, "--correlation-id", correlationId, "--out", out],
-        first.io,
-        {},
-        { cwd: root, controlActivityStateDir: controlStateDir },
-      ),
-    ).toBe(0);
-    const [name] = readdirSync(out);
-    const incidentId = parseSupportReport(readSupportReportFile(join(out, name ?? ""))).incident
-      .incidentId;
-    const victim = join(root, "victim.jsonl");
-    writeFileSync(victim, "customer-private-segment\n", { mode: 0o600 });
-    for (const unsafe of ["permissions", "symlink"]) {
-      if (unsafe === "permissions") chmodSync(segment, 0o444);
-      else {
-        rmSync(segment, { force: true });
-        symlinkSync(victim, segment);
-      }
+  // A window segment that is not a private regular file is never read: it is named unreadable, the
+  // report is honestly insufficient, and the export still completes without touching the victim.
+  it.each(UNSAFE_SEGMENT_ENTRIES)(
+    "publishes an honest insufficient report when a window segment is a %s entry",
+    async (kind) => {
+      const correlationId = "window-segment-0001";
+      const process = fixtureProcess(6161, "c0ffee00");
+      const segment = writeFixtureSegment(stateDir, segmentIdentity(process, Date.now(), 1), [
+        fixtureLine(process, Date.now(), { op: "client.diagnostic", correlationId }),
+      ]);
+      const first = capture();
+      const out = join(root, "first");
+      expect(
+        await runSupportCli(
+          ["export", "--state-dir", stateDir, "--correlation-id", correlationId, "--out", out],
+          first.io,
+          {},
+          { cwd: root, controlActivityStateDir: controlStateDir },
+        ),
+      ).toBe(0);
+      const [name] = readdirSync(out);
+      const incidentId = parseSupportReport(readSupportReportFile(join(out, name ?? ""))).incident
+        .incidentId;
+      const victim = join(root, "victim.jsonl");
+      writeFileSync(victim, "customer-private-segment\n", { mode: 0o600 });
+      plantUnsafeSegment(kind, segment, victim);
       const result = capture();
-      const next = join(root, unsafe);
+      const next = join(root, "unsafe");
       expect(
         await runSupportCli(
           ["export", "--state-dir", stateDir, "--incident", incidentId, "--out", next],
@@ -803,7 +980,21 @@ describe("support report CLI and private publication", () => {
       expect(report.selection.status).toBe("insufficient");
       expect(report.selection.reasons).toContain("segment-unreadable");
       expect(result.output.join("")).toContain("Diagnostic sufficiency: insufficient (");
-    }
+      // The victim behind the entry was never read, written or re-moded, and no link target was made.
+      expect(readFileSync(victim, "utf8")).toBe("customer-private-segment\n");
+      expect(statSync(victim).mode & 0o777).toBe(0o600);
+      expect(existsSync(join(root, "missing-victim"))).toBe(false);
+    },
+  );
+
+  it("publishes an honest insufficient report when the legacy current log is a directory", async () => {
+    mkdirSync(join(stateDir, "logs", ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME), { mode: 0o700 });
+    const out = join(root, "legacy");
+    const result = await runExport(out);
+    expect(result.code, result.errors.join("")).toBe(0);
+    const report = parseSupportReport(readSupportReportFile(join(out, readdirSync(out)[0] ?? "")));
+    expect(report.selection.status).toBe("insufficient");
+    expect(report.selection.reasons).toContain("segment-unreadable");
   });
 
   it("keeps the failure evidence above a raised log threshold and settles a refused destination", async () => {
@@ -851,14 +1042,24 @@ describe("support report CLI and private publication", () => {
     await exportReport();
     const human = await analyze(["--seed", "--emit-fixture", "replay-human.ts"]);
     expect(human.code, human.errors.join("")).toBe(0);
-    expect(human.output.join("")).toContain(
-      `Wrote replay fixture: ${join(root, "replay-human.ts")}\n`,
+    // The human seed and then the confirmation line, nothing else.
+    expect(human.output.join("")).toBe(
+      `${renderHumanReproductionSeed(analyzedReport().seed)}Wrote replay fixture: ${join(root, "replay-human.ts")}\n`,
     );
     const log = readPersistedActivityLog(controlStateDir);
     const [completed] = persistedActivityLogLines(log, "support.report.completed");
-    expect(
-      expectActivityLogProof("support.report.completed.report-lifecycle", completed ?? ""),
-    ).toMatchObject({ surface: "analyze", sufficiency: "complete", sufficiencyReasons: [] });
+    const record = expectActivityLogProof(
+      "support.report.completed.report-lifecycle",
+      completed ?? "",
+    );
+    expect(record).toMatchObject({
+      surface: "analyze",
+      sufficiency: "complete",
+      sufficiencyReasons: [],
+    });
+    // Only an export publishes a file, so only its completion states how it was published.
+    for (const field of ["publication", "permissionAssurance", "durabilityAssurance"])
+      expect(record).not.toHaveProperty(field);
   });
 
   it("names a missing replay preparation as seed-unavailable", async () => {
@@ -931,5 +1132,266 @@ describe("support report CLI and private publication", () => {
     ).toBe(1);
     expect(result.errors.join("")).toBe("keiko support: unsafe-target\n");
     expect(existsSync(join(stateDir, "logs", "reports"))).toBe(false);
+  });
+
+  // ─── State directory resolution ──────────────────────────────────────────────────────────────
+  it("resolves the state directory from KEIKO_STATE_DIR when --state-dir is absent", async () => {
+    const out = join(root, "from-env");
+    const result = capture();
+    const code = await runSupportCli(
+      ["export", "--correlation-id", CORRELATION, "--out", out],
+      result.io,
+      { KEIKO_STATE_DIR: stateDir },
+      { cwd: root, controlActivityStateDir: controlStateDir },
+    );
+    expect(code, result.errors.join("")).toBe(0);
+    const exported = analyzeSupportReport(
+      readSupportReportFile(join(out, readdirSync(out)[0] ?? "")),
+    );
+    expect(exported.analysis.timelines.map((timeline) => timeline.correlationId)).toContain(
+      CORRELATION,
+    );
+    // The default location was never consulted, let alone created.
+    expect(existsSync(join(root, ".keiko"))).toBe(false);
+  });
+
+  it("lets --state-dir win over KEIKO_STATE_DIR", async () => {
+    const out = join(root, "flag-wins");
+    const wrongState = join(root, "wrong-state");
+    const result = capture();
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--correlation-id", CORRELATION, "--out", out],
+      result.io,
+      { KEIKO_STATE_DIR: wrongState },
+      { cwd: root, controlActivityStateDir: controlStateDir },
+    );
+    expect(code, result.errors.join("")).toBe(0);
+    expect(readdirSync(out)).toHaveLength(1);
+    expect(existsSync(wrongState)).toBe(false);
+  });
+
+  it("uses <cwd>/.keiko when neither --state-dir nor KEIKO_STATE_DIR names a state directory", async () => {
+    const workdir = join(root, "work");
+    const process = fixtureProcess(4343, "bbccddee");
+    const now = Date.now();
+    writeFixtureSegment(join(workdir, ".keiko"), segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, { op: "client.diagnostic", correlationId: "default-state-0001" }),
+    ]);
+    const out = join(root, "from-default");
+    const result = capture();
+    const code = await runSupportCli(
+      ["export", "--correlation-id", "default-state-0001", "--out", out],
+      result.io,
+      {},
+      { cwd: workdir, controlActivityStateDir: controlStateDir },
+    );
+    expect(code, result.errors.join("")).toBe(0);
+    const exported = analyzeSupportReport(
+      readSupportReportFile(join(out, readdirSync(out)[0] ?? "")),
+    );
+    expect(exported.analysis.timelines.map((timeline) => timeline.correlationId)).toContain(
+      "default-state-0001",
+    );
+    // The seeded state directory next to it was not consulted: it holds nothing of this export.
+    expect(readdirSync(stateDir)).toEqual(["logs"]);
+  });
+
+  // ─── Export publication failures ─────────────────────────────────────────────────────────────
+  it("refuses to export the same incident twice into one directory and keeps the first report", async () => {
+    const out = join(root, "twice");
+    await exportReport(out);
+    const first = readFileSync(path);
+    const second = await runExport(out);
+    expect(second.code).toBe(1);
+    expect(second.output).toEqual([]);
+    expect(second.errors.join("")).toBe("keiko support: target-exists\n");
+    expect(readdirSync(out)).toEqual([basename(path)]);
+    expect(readFileSync(path).equals(first)).toBe(true);
+    expectFailureEvidence(stateDir, "export", "target-exists", 1);
+  });
+
+  it.each(["live-symlink", "dangling-symlink", "hard-link"])(
+    "refuses a %s at the fixed report filename without touching what it names",
+    async (kind) => {
+      // The report filename is closed over the incident, so a first export tells where to plant.
+      await exportReport(join(root, "learn"));
+      const out = join(root, "planted");
+      mkdirSync(out, { mode: 0o700 });
+      const target = join(out, basename(path));
+      const victim = join(root, "victim");
+      writeFileSync(victim, "customer-private", { mode: 0o600 });
+      if (kind === "hard-link") linkSync(victim, target);
+      else symlinkSync(kind === "live-symlink" ? victim : join(root, "missing-victim"), target);
+      const result = await runExport(out);
+      expect(result.code).toBe(1);
+      expect(result.output).toEqual([]);
+      expect(result.errors.join("")).toBe("keiko support: target-exists\n");
+      // The link is all the directory holds: no report, sidecar or stage was made beside it.
+      expect(readdirSync(out)).toEqual([basename(path)]);
+      expect(lstatSync(target).isSymbolicLink()).toBe(kind !== "hard-link");
+      expect(readFileSync(victim, "utf8")).toBe("customer-private");
+      expect(existsSync(join(root, "missing-victim"))).toBe(false);
+      expectFailureEvidence(stateDir, "export", "target-exists", 1);
+    },
+  );
+
+  it.each([
+    ["an existing regular file", "plain-file"],
+    ["a path below a regular file", join("plain-file", "reports")],
+  ])(
+    "reports a closed failure when --out names %s, never the raw filesystem error",
+    async (_label, out) => {
+      writeFileSync(join(root, "plain-file"), "not-a-directory", { mode: 0o600 });
+      const result = await runExport(join(root, out));
+      expect(result.code).toBe(1);
+      expect(result.output).toEqual([]);
+      expect(result.errors.join("")).toBe("keiko support: unsafe-target\n");
+      expect(readFileSync(join(root, "plain-file"), "utf8")).toBe("not-a-directory");
+      expectFailureEvidence(stateDir, "export", "unsafe-target");
+    },
+  );
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "reports a closed permission failure when the parent of --out is read-only",
+    async () => {
+      const parent = join(root, "read-only-parent");
+      mkdirSync(parent, { mode: 0o700 });
+      chmodSync(parent, 0o500);
+      try {
+        const result = await runExport(join(parent, "reports"));
+        expect(result.code).toBe(1);
+        expect(result.output).toEqual([]);
+        expect(result.errors.join("")).toBe("keiko support: permission-denied\n");
+      } finally {
+        chmodSync(parent, 0o700);
+      }
+      expect(readdirSync(parent)).toEqual([]);
+      expectFailureEvidence(stateDir, "export", "permission-denied");
+    },
+  );
+
+  // ─── Analyze input handling ──────────────────────────────────────────────────────────────────
+  it("resolves a relative FILE against the launch directory, never the process directory", async () => {
+    await exportReport();
+    const absolute = await analyze(["--json"]);
+    expect(absolute.code, absolute.errors.join("")).toBe(0);
+    for (const [cwd, file] of [
+      [root, basename(path)],
+      [stateDir, join("..", basename(path))],
+    ] as const) {
+      const result = capture();
+      const code = await runSupportCli(
+        ["analyze", file, "--json"],
+        result.io,
+        {},
+        { cwd, controlActivityStateDir: controlStateDir },
+      );
+      expect(code, `${file}: ${result.errors.join("")}`).toBe(0);
+      expect(result.output.join(""), file).toBe(absolute.output.join(""));
+    }
+  });
+
+  it.each([
+    ["a missing file", "missing-report.json", "open-failed"],
+    ["a directory", "a-directory", "unsafe-target"],
+  ])(
+    "settles %s as one closed failure without its path or the raw system error",
+    async (_label, name, errorKind) => {
+      mkdirSync(join(root, "a-directory"), { mode: 0o700 });
+      const result = capture();
+      const code = await runSupportCli(
+        ["analyze", join(root, name)],
+        result.io,
+        {},
+        { cwd: root, controlActivityStateDir: controlStateDir },
+      );
+      expect(code).toBe(1);
+      expect(result.output).toEqual([]);
+      expect(result.errors.join("")).toBe(`keiko support: ${errorKind}\n`);
+      expectFailureEvidence(controlStateDir, "analyze", errorKind);
+    },
+  );
+
+  // ─── Identity and digest in the machine view ─────────────────────────────────────────────────
+  it("states the analyzer's own version and the producing build's registry identity", async () => {
+    await exportReport();
+    const analyzed = await analyze(["--json"]);
+    expect(analyzed.code, analyzed.errors.join("")).toBe(0);
+    expect(JSON.parse(analyzed.output.join("")) as Record<string, unknown>).toMatchObject({
+      analyzerVersion: KEIKO_PRODUCT_VERSION,
+      incident: {
+        build: {
+          productVersion: KEIKO_PRODUCT_VERSION,
+          registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+          schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+          catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+        },
+      },
+    });
+  });
+
+  // The digest every artifact binds to is a plain SHA-256 of the text: the FIPS 180 vectors.
+  it.each([
+    ["abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"],
+    ["", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
+    [
+      "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+      "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+    ],
+  ])("digests %j as the NIST SHA-256 vector", (text, digest) => {
+    expect(supportReportDigest(text)).toBe(digest);
+  });
+
+  // ─── Replay fixture emission ─────────────────────────────────────────────────────────────────
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "names the closed failure, not the directory, when the fixture location is not writable",
+    async () => {
+      seedGatewayFailure();
+      await exportReport();
+      const directory = join(root, "read-only-fixtures");
+      mkdirSync(directory, { mode: 0o700 });
+      chmodSync(directory, 0o500);
+      try {
+        const result = await analyze([
+          "--seed",
+          "--json",
+          "--emit-fixture",
+          join(directory, "r.ts"),
+        ]);
+        expect(result.code).toBe(1);
+        expect(result.output).toEqual([]);
+        expect(result.errors.join("")).toBe(
+          "keiko support analyze: could not write fixture: open-failed\nkeiko support: open-failed\n",
+        );
+      } finally {
+        chmodSync(directory, 0o700);
+      }
+      expect(readdirSync(directory)).toEqual([]);
+      expectFailureEvidence(controlStateDir, "analyze", "open-failed");
+    },
+  );
+
+  it("writes a replay fixture without --seed, naming it for a human and flagging it in JSON", async () => {
+    seedGatewayFailure();
+    await exportReport();
+    const { artifact, seed } = analyzedReport();
+    const fixture = join(root, "replay-no-seed.ts");
+    const human = await analyze(["--emit-fixture", "replay-no-seed.ts"]);
+    expect(human.code, human.errors.join("")).toBe(0);
+    expect(human.output.join("")).toBe(
+      `${renderHumanReproductionSeed(seed)}Wrote replay fixture: ${fixture}\n`,
+    );
+    expect(readFileSync(fixture, "utf8")).toContain('"status": 504');
+    const machine = await analyze(["--json", "--emit-fixture", "replay-no-seed.json.ts"]);
+    expect(machine.code, machine.errors.join("")).toBe(0);
+    // One JSON document: the analysis, its seed and the flag that a fixture was written.
+    expect(JSON.parse(machine.output.join(""))).toEqual({
+      ...artifact,
+      seed,
+      fixtureWritten: true,
+    });
+    expect(readFileSync(join(root, "replay-no-seed.json.ts"), "utf8")).toBe(
+      readFileSync(fixture, "utf8"),
+    );
   });
 });

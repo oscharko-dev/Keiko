@@ -158,6 +158,7 @@ describe("support argv", () => {
     [
       ["unknown"],
       ["analyze"],
+      ["analyze", "--json"],
       ["export", "--out"],
       ["export", "--max-bytes", "0"],
       ["export", "--max-bytes", "-1"],
@@ -174,5 +175,38 @@ describe("support argv", () => {
       kind: "analyze",
       value: { file: "report.json", seed: true, json: true },
     });
+  });
+  // A flag where the FILE belongs is a missing FILE, never a file named after the flag.
+  it.each([["--json"], ["--seed"], ["--clusters"], ["--correlation-id", "id"]])(
+    "names the missing FILE when analyze starts with the flag %s",
+    (...args) => {
+      const parsed = parseSupportArgs(["analyze", ...args]);
+      expect(parsed.kind).toBe("usage");
+      expect(parsed.kind === "usage" ? parsed.message : "").toContain(
+        "keiko support analyze: a FILE argument is required.",
+      );
+    },
+  );
+  it("parses --clusters as its own switch, off by default", () => {
+    expect(parseSupportArgs(["analyze", "report.json", "--clusters"])).toMatchObject({
+      kind: "analyze",
+      value: { file: "report.json", clusters: true, json: false, seed: false },
+    });
+    expect(parseSupportArgs(["analyze", "report.json", "--json", "--seed"])).toMatchObject({
+      kind: "analyze",
+      value: { clusters: false },
+    });
+  });
+});
+
+describe("support usage", () => {
+  it.each(
+    [[], ["--help"], ["-h"], ["export", "--help"], ["analyze", "--help"]].map((args) => [args]),
+  )("prints the usage on stdout and exits 0 for %j", async (args) => {
+    const c = makeIo();
+    expect(await runSupportCli(args, c.io)).toBe(0);
+    expect(c.out()).toContain("keiko support export");
+    expect(c.out()).toContain("keiko support analyze");
+    expect(c.err()).toBe("");
   });
 });

@@ -8881,7 +8881,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "loss-state",
       "opaque-id",
     ],
-    requiredFrameOperations: ["support.report.failed"],
+    requiredFrameOperations: ["support.report.degraded", "support.report.failed"],
     requiredCauseOperations: ["support.report.degraded", "support.report.failed"],
   },
 ] as const satisfies readonly ActivityLogFailureClassContract[];

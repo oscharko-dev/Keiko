@@ -41,6 +41,7 @@ import {
   encodeSupportReportEvidence,
   sealSupportReport,
   supportReportDigest,
+  supportReportTimeline,
 } from "./support-report.js";
 import { parseCanonicalSupportJson } from "./support-report-json.js";
 
@@ -851,6 +852,85 @@ describe("received-report audit hardening (#3534)", () => {
     });
     expect(produced.selection.status).toBe("insufficient");
     expect(produced.selection.reasons).toContain("evidence-not-retained");
+  });
+
+  // Review #3679: a credential-shaped label passes the correlation grammar, but the writer would
+  // have replaced it with its marker, so a received report carrying one is forged.
+  it("refuses credential-shaped correlation labels a writer would have redacted", () => {
+    const { report } = failureFixture();
+    const token =
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+    const forgedLabel = resealed(report, (events) =>
+      events.map((event, index) =>
+        index === 0 ? { ...event, record: { ...event.record, parentCorrelationId: token } } : event,
+      ),
+    );
+    expect(() => parseSupportReport(forgedLabel)).toThrow(
+      expect.objectContaining({ reason: "unsafe-report" }),
+    );
+    const forgedReference = withIncident(report, {
+      correlation: { rootCorrelationId: token, childCorrelationIds: [] },
+    });
+    expect(() => parseSupportReport(forgedReference)).toThrow(
+      expect.objectContaining({ reason: "unsafe-report" }),
+    );
+  });
+
+  // Review #3679: only the incident's own correlation binds its failing line. Another request's
+  // failure of the same operation neither completes the incident nor refuses a genuine report.
+  it("never takes another correlation's failure as the incident's own failing line", () => {
+    const { report } = failureFixture();
+    const other = "support-report-fixture-0002";
+    const forged = resealed(
+      report,
+      (events) => {
+        const [started, failed] = events;
+        if (started === undefined || failed === undefined) throw new TypeError("missing lines");
+        const seq = Number(failed.record.seq);
+        return [
+          started,
+          { ...started, record: { ...started.record, correlationId: other, seq: seq + 1 } },
+          {
+            ...failed,
+            record: { ...failed.record, correlationId: other, errorKind: "internal", seq: seq + 2 },
+          },
+        ];
+      },
+      { ...report.selection, status: "complete", reasons: [] },
+    );
+    const analyzed = analyzeSupportReport(forged);
+    expect(analyzed.selection.status).toBe("insufficient");
+    expect(analyzed.selection.reasons).toContain("evidence-not-retained");
+  });
+
+  // Review #3679: narrowing a report to one timeline or a seed never drops its known loss.
+  it("keeps the report's loss reasons on every narrowed timeline and seed", () => {
+    const { report } = failureFixture();
+    const withoutFailure = analyzeSupportReport(
+      resealed(report, (events) =>
+        events.filter((event) => event.record.op !== "gateway.chat.failed"),
+      ),
+    );
+    expect(withoutFailure.selection.reasons).toContain("evidence-not-retained");
+    expect(supportReportTimeline(withoutFailure, CORRELATION)?.sufficiency).toMatchObject({
+      status: "insufficient",
+      reasons: expect.arrayContaining(["evidence-not-retained"]) as unknown,
+    });
+    expect(withoutFailure.seed?.sufficiency.status).toBe("insufficient");
+    expect(prepareSupportReportSeed(withoutFailure)?.sufficiency.reasons).toContain(
+      "evidence-not-retained",
+    );
+    const dropped = analyzeSupportReport(
+      resealed(report, (events) => events, {
+        status: "degraded",
+        reasons: ["events-dropped"],
+        requiredBytes: report.selection.requiredBytes,
+      }),
+    );
+    expect(supportReportTimeline(dropped, CORRELATION)?.sufficiency.reasons).toContain(
+      "events-dropped",
+    );
+    expect(dropped.seed?.sufficiency.reasons).toContain("events-dropped");
   });
 
   it("refuses a registered failure whose error kind contradicts its retained failing line", () => {

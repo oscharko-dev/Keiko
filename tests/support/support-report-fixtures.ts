@@ -7,6 +7,9 @@ import {
   encodeSupportReportEvidence,
   sealSupportReport,
 } from "../../packages/keiko-activity-log/src/reader/support-report.js";
+
+// The report digest owner, for tests outside the reader package that must not reach its source.
+export { supportReportDigest } from "../../packages/keiko-activity-log/src/reader/support-report.js";
 import { fixtureLine, fixtureProcess } from "./activity-log-segments.js";
 
 /** Creates a resealed hostile graph through the production formatter, encoder and integrity owner. */
