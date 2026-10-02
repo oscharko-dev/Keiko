@@ -79,7 +79,7 @@ function existingIncident(
   if (selector === undefined) return undefined;
   if (selector.incidentId !== undefined) {
     const record = readSupportIncident(stateDir, selector.incidentId);
-    if (record === undefined) throw new SupportReportError("unsafe-report");
+    if (record === undefined) throw new SupportReportError("selection-unavailable");
     return record;
   }
   return listSupportIncidents(stateDir).find((candidate) => matchesIncident(candidate, selector));
@@ -102,12 +102,13 @@ function selectedIncident(
   const selector = args.selector;
   const record = existingIncident(stateDir, selector);
   if (record !== undefined) return record;
-  if (selector?.defectFingerprint !== undefined) throw new SupportReportError("unsafe-report");
+  if (selector?.defectFingerprint !== undefined)
+    throw new SupportReportError("selection-unavailable");
   const creation = recordUserReportedIncident(stateDir, {
     correlationId: selector?.correlationId ?? correlationId,
   });
   if (creation.status === "rejected" || creation.record === undefined)
-    throw new SupportReportError("unsafe-report");
+    throw new SupportReportError("selection-unavailable");
   return creation.record;
 }
 
@@ -188,7 +189,7 @@ async function makeReport(
           activityLog,
           correlationId,
         );
-  if (typeof selectedQuery === "number") throw new SupportReportError("unsafe-report");
+  if (typeof selectedQuery === "number") throw new SupportReportError("selection-unavailable");
   const record = selectedIncident(stateDir, args, correlationId);
   const incident = resolveSupportIncident(
     record,
@@ -210,7 +211,7 @@ async function makeReport(
       activityLog,
       correlationId,
     ));
-  if (typeof query === "number") throw new SupportReportError("unsafe-report");
+  if (typeof query === "number") throw new SupportReportError("selection-unavailable");
   return buildSupportReport(
     supportIncidentPrivateProjection(incident),
     query.result,
@@ -311,6 +312,7 @@ export async function runSafeSupportExport(
       reportBytes: Buffer.byteLength(text),
       recordCount: report.evidence.recordCount,
       sufficiency: report.selection.status,
+      sufficiencyReasons: report.selection.reasons,
       reportDigest: report.integrity.reportDigest,
     });
     announceReportExport(io, path, report);
@@ -381,7 +383,7 @@ function emitMachineOrHuman(
       ? undefined
       : findTimeline(artifact.analysis, args.correlationId);
   if (args.correlationId !== undefined && timeline === undefined)
-    throw new SupportReportError("unsafe-report");
+    throw new SupportReportError("selection-unavailable");
   if (args.json) {
     emitMachineProjection(artifact, io);
     return 0;
@@ -424,7 +426,8 @@ async function reportAnalysisOptions(
   };
 }
 
-export type FixtureWriter = (path: string, text: string, io: CliIo) => number | undefined;
+/** Writes the selected fixture exclusively; throws the closed publication failure otherwise. */
+export type FixtureWriter = (path: string, text: string, io: CliIo) => void;
 
 function emitSafeSeed(
   artifact: AnalyzedSupportReport,
@@ -435,16 +438,21 @@ function emitSafeSeed(
   options: SupportAnalyzeOptions,
 ): number {
   const correlation = args.correlationId ?? artifact.incident.correlation.rootCorrelationId;
-  if (correlation === undefined) throw new SupportReportError("unsafe-report");
+  if (correlation === undefined) throw new SupportReportError("seed-unavailable");
+  if (
+    args.correlationId !== undefined &&
+    findTimeline(artifact.analysis, correlation) === undefined
+  )
+    throw new SupportReportError("selection-unavailable");
   const seed = prepareSupportReportSeed(artifact, correlation, options);
-  if (seed === undefined) throw new SupportReportError("unsafe-report");
+  if (seed === undefined) throw new SupportReportError("seed-unavailable");
   if (args.emitFixture !== undefined) {
-    if (seed.gatewayScript === undefined) throw new SupportReportError("unsafe-report");
-    const path = resolve(cwd, args.emitFixture);
-    const fixture = renderGatewayReplayScriptFixture(seed.gatewayScript);
-    if (fixture === undefined) throw new SupportReportError("unsafe-report");
-    const failed = writeFixture(path, fixture, io);
-    if (failed !== undefined) throw new SupportReportError("unsafe-report");
+    const fixture =
+      seed.gatewayScript === undefined
+        ? undefined
+        : renderGatewayReplayScriptFixture(seed.gatewayScript);
+    if (fixture === undefined) throw new SupportReportError("seed-unavailable");
+    writeFixture(resolve(cwd, args.emitFixture), fixture, io);
   }
   if (args.json)
     emitMachineProjection(
@@ -496,6 +504,7 @@ export async function runSafeSupportAnalyze(
       reportBytes: Buffer.byteLength(text),
       recordCount: artifact.analysis.evidence.supportedLineCount,
       sufficiency: artifact.selection.status,
+      sufficiencyReasons: artifact.selection.reasons,
       reportDigest: artifact.reportDigest,
     });
     return exitCode;

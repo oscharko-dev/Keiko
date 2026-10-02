@@ -251,8 +251,7 @@ interface AnalyzeArgs {
   // Wave 6 (epic #3233 closeout, gap #1): a whole-file view of `analyzeLogText`'s own `clusters`
   // field, independent of --correlation-id.
   readonly clusters: boolean;
-  // Both require --correlation-id (parseAnalyzeArgs rejects them otherwise) since both are built
-  // from `buildReproductionSeed`, which is defined for exactly one correlationId.
+  // Both build one ReproductionSeed: for --correlation-id, or else the incident's root correlation.
   readonly seed: boolean;
   readonly emitFixture: string | undefined;
 }
@@ -417,8 +416,9 @@ async function runSupportExport(
 // dangling symlink, hard link, or FIFO at PATH is refused as an existing target, nothing is ever
 // created at a link's target, and no staging or recovery files are left beside it. The parent
 // directory is created first so `--emit-fixture some/new/dir/fixture.ts` does not require the
-// operator to `mkdir -p`. Content-free error reporting: only the closed failure kind is printed.
-function writeFixtureOrExitCode(path: string, contents: string, io: CliIo): number | undefined {
+// operator to `mkdir -p`. Content-free error reporting: only the closed failure kind is printed,
+// and the error is rethrown so the analysis settles as failed with that same closed kind.
+function writeExclusiveFixture(path: string, contents: string, io: CliIo): void {
   try {
     mkdirSync(dirname(path), { recursive: true });
     const descriptor = openSafeArtifactFile(path, {
@@ -431,7 +431,6 @@ function writeFixtureOrExitCode(path: string, contents: string, io: CliIo): numb
     } finally {
       closeSync(descriptor);
     }
-    return undefined;
   } catch (error) {
     const kind = describeErrorKind(error);
     io.err(
@@ -439,7 +438,7 @@ function writeFixtureOrExitCode(path: string, contents: string, io: CliIo): numb
         ? `keiko support analyze: refusing to overwrite existing file: ${path}\n`
         : `keiko support analyze: could not write fixture: ${kind}\n`,
     );
-    return 1;
+    throw error;
   }
 }
 
@@ -477,6 +476,6 @@ export async function runSupportCli(
     io,
     env,
     deps,
-    writeFixtureOrExitCode,
+    writeExclusiveFixture,
   );
 }

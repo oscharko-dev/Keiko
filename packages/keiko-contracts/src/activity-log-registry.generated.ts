@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "6e0272da7fcca4aad704454ef65dd31315071ae7f73e99a16e25fc602a934d0e" as const;
+  "1900c1694d0ee39baf4d21159f468665cb8426d38fdcfb66886cdebf70a6af48" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -27720,6 +27720,31 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["complete", "degraded", "insufficient"],
       },
+      sufficiencyReasons: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: false,
+        maxItems: 17,
+        values: [
+          "no-registered-evidence",
+          "no-registered-failure",
+          "corrupt-evidence",
+          "parent-correlation-missing",
+          "lifecycle-start-missing",
+          "report-budget-exceeded",
+          "evidence-not-retained",
+          "segment-unreadable",
+          "truncated-evidence",
+          "unsupported-evidence",
+          "incomplete-evidence",
+          "sequence-anomaly",
+          "activity-log-loss",
+          "events-dropped",
+          "correlation-unknown",
+          "evidence-partial",
+          "context-truncated",
+        ],
+      },
       reportDigest: {
         type: "string",
         dataClass: "digest",
@@ -27762,6 +27787,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "corrupt-report",
+          "unsafe-report",
+          "unsupported-report",
+          "report-budget-exceeded",
+          "selection-unavailable",
+          "seed-unavailable",
+        ],
       },
       causeChain: {
         type: "string-array",
@@ -62320,6 +62358,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "sufficiencyReasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "surface",
               type: "string",
               dataClass: "closed-enum",
@@ -62353,6 +62397,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "frames",
               type: "string-array",
               dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {

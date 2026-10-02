@@ -3,11 +3,9 @@ import {
   MAX_SUPPORT_REPORT_DEPTH,
   MAX_SUPPORT_REPORT_RECORDS,
   MAX_SUPPORT_REPORT_BYTES,
+  type SupportReportFailure,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
-
-export type SupportReportFailure =
-  "corrupt-report" | "unsafe-report" | "unsupported-report" | "report-budget-exceeded";
 
 export class SupportReportError extends Error {
   public readonly reason: SupportReportFailure;

@@ -12,6 +12,21 @@ export const MAX_SUPPORT_REPORT_DEPTH = 12;
 export const MAX_SUPPORT_REPORT_TIMELINE_RECORDS = 80_000;
 export const MAX_SUPPORT_REPORT_TIMELINE_BYTES = 64 * 1024 * 1024;
 
+/**
+ * Why a report export or analysis stopped. The first four judge a report; selection-unavailable
+ * names a requested incident, correlation or fingerprint that does not exist or cannot be read,
+ * and seed-unavailable a replay preparation the validated evidence cannot support.
+ */
+export const SUPPORT_REPORT_FAILURES = [
+  "corrupt-report",
+  "unsafe-report",
+  "unsupported-report",
+  "report-budget-exceeded",
+  "selection-unavailable",
+  "seed-unavailable",
+] as const;
+export type SupportReportFailure = (typeof SUPPORT_REPORT_FAILURES)[number];
+
 export interface SupportReportSelection {
   readonly status: DiagnosticSufficiencyStatus;
   readonly reasons: readonly DiagnosticSufficiencyReason[];

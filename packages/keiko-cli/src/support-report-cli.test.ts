@@ -216,6 +216,7 @@ describe("support report CLI and private publication", () => {
       reportBytes: bytes.length,
       reportDigest: parseSupportReport(bytes.toString()).integrity.reportDigest,
       sufficiency: "complete",
+      sufficiencyReasons: [],
       completeness: "complete",
       loss: "none",
     });
@@ -240,6 +241,7 @@ describe("support report CLI and private publication", () => {
     ).toMatchObject({
       surface: "analyze",
       errorKind: "validation-failed",
+      reason: "unsafe-report",
       completeness: "complete",
       loss: "none",
     });
@@ -475,6 +477,9 @@ describe("support report CLI and private publication", () => {
     [new SafeArtifactFileError("support-report", "open-failed"), "open-failed"],
     [new SafeArtifactFileError("support-report", "read-failed"), "read-failed"],
     [new SupportReportError("corrupt-report"), "validation-failed"],
+    [new SupportReportError("unsupported-report", "9.0.0"), "validation-failed"],
+    [new SupportReportError("selection-unavailable"), "invalid-request"],
+    [new SupportReportError("seed-unavailable"), "unavailable"],
     [new Error("private message"), "internal"],
   ])("classifies report failures without exposing content (%s)", (error, errorKind) => {
     const events: unknown[] = [];
@@ -490,14 +495,45 @@ describe("support report CLI and private publication", () => {
     );
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ op: "support.report.failed", errorKind });
+    expect((events[0] as { extra?: Record<string, unknown> }).extra?.reason).toBe(
+      error instanceof SupportReportError ? error.reason : undefined,
+    );
     expect(JSON.stringify(events)).not.toContain("private message");
   });
 
   it("reports missing requested correlation without emitting a machine view", async () => {
     await exportReport();
-    const result = await analyze(["--json", "--correlation-id", "missing-correlation"]);
-    expect(result.code).toBe(1);
-    expect(result.output).toEqual([]);
+    for (const extra of [[], ["--seed"]]) {
+      const result = await analyze(["--json", "--correlation-id", "missing-correlation", ...extra]);
+      expect(result.code).toBe(1);
+      expect(result.output).toEqual([]);
+      expect(result.errors.join("")).toBe("keiko support: selection-unavailable\n");
+    }
+    const failed = persistedActivityLogLines(
+      readPersistedActivityLog(controlStateDir),
+      "support.report.failed",
+    ).map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(failed).toHaveLength(2);
+    for (const line of failed)
+      expect(line).toMatchObject({ errorKind: "invalid-request", reason: "selection-unavailable" });
+  });
+
+  it("names an unknown incident or fingerprint selection instead of calling it unsafe", async () => {
+    for (const selector of [
+      ["--incident", "0".repeat(32)],
+      ["--defect-fingerprint", "0".repeat(64)],
+    ]) {
+      const result = capture();
+      const code = await runSupportCli(
+        ["export", "--state-dir", stateDir, ...selector, "--out", join(root, "out")],
+        result.io,
+        {},
+        { cwd: root, controlActivityStateDir: controlStateDir },
+      );
+      expect(code).toBe(1);
+      expect(result.errors.join("")).toContain("selection-unavailable");
+      expect(existsSync(join(root, "out"))).toBe(false);
+    }
   });
   it("prepares deterministic replay and failure localization solely from a complete report", async () => {
     seedGatewayFailure();
@@ -533,10 +569,14 @@ describe("support report CLI and private publication", () => {
       const result = await analyze(["--seed", "--json", "--emit-fixture", target]);
       expect(result.code).toBe(1);
       expect(result.output).toEqual([]);
+      expect(result.errors.join("")).toContain("keiko support: target-exists\n");
       expect(readFileSync(victim, "utf8")).toBe("existing-private-work");
       const log = readPersistedActivityLog(controlStateDir);
       expect(persistedActivityLogLines(log, "support.report.completed")).toEqual([]);
-      expect(persistedActivityLogLines(log, "support.report.failed")).toHaveLength(1);
+      const failed = persistedActivityLogLines(log, "support.report.failed");
+      expect(failed).toHaveLength(1);
+      expect(JSON.parse(failed[0] ?? "{}")).toMatchObject({ errorKind: "target-exists" });
+      expect(failed[0]).not.toContain('"reason"');
     },
   );
 

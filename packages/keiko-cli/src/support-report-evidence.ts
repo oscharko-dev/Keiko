@@ -3,9 +3,13 @@ import {
   isActivityLogErrorKind,
   type ActivityLogErrorKind,
   defineActivityLogOperation,
+  DIAGNOSTIC_SUFFICIENCY_REASONS,
   DIAGNOSTIC_SUFFICIENCY_STATUSES,
+  SUPPORT_REPORT_FAILURES,
   SUPPORT_REPORT_SCHEMA_VERSION,
+  type DiagnosticSufficiencyReason,
   type DiagnosticSufficiencyStatus,
+  type SupportReportFailure,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 
@@ -55,6 +59,13 @@ export const SUPPORT_REPORT_COMPLETED = defineActivityLogOperation({
       required: true,
       values: [...DIAGNOSTIC_SUFFICIENCY_STATUSES],
     },
+    sufficiencyReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 17,
+      values: [...DIAGNOSTIC_SUFFICIENCY_REASONS],
+    },
     reportDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
   },
   proofIds: ["support.report.completed.report-lifecycle"],
@@ -68,6 +79,12 @@ export const SUPPORT_REPORT_FAILED = defineActivityLogOperation({
   fields: {
     surface: SURFACE,
     reportSchemaVersion: COUNT,
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...SUPPORT_REPORT_FAILURES],
+    },
     causeChain: {
       type: "string-array",
       dataClass: "error-kind",
@@ -109,6 +126,7 @@ export function emitSupportReportCompleted(
     reportBytes: number;
     recordCount: number;
     sufficiency: DiagnosticSufficiencyStatus;
+    sufficiencyReasons: readonly DiagnosticSufficiencyReason[];
     reportDigest: string;
   },
 ): void {
@@ -116,7 +134,12 @@ export function emitSupportReportCompleted(
     activityLogEvent(
       SUPPORT_REPORT_COMPLETED,
       { correlationId },
-      { surface, reportSchemaVersion: SUPPORT_REPORT_SCHEMA_VERSION, ...summary },
+      {
+        surface,
+        reportSchemaVersion: SUPPORT_REPORT_SCHEMA_VERSION,
+        ...summary,
+        sufficiencyReasons: [...summary.sufficiencyReasons],
+      },
     ),
   );
 }
@@ -133,6 +156,7 @@ export function emitSupportReportFailed(
       {
         surface,
         reportSchemaVersion: SUPPORT_REPORT_SCHEMA_VERSION,
+        ...(error instanceof SupportReportError ? { reason: error.reason } : {}),
         frames: [...keikoStackFrames(error)],
         causeChain: [...causeChain(error)],
       },
@@ -140,9 +164,18 @@ export function emitSupportReportFailed(
   );
 }
 
+const REPORT_FAILURE_ERROR_KINDS: Readonly<Record<SupportReportFailure, ActivityLogErrorKind>> = {
+  "corrupt-report": "validation-failed",
+  "unsafe-report": "validation-failed",
+  "unsupported-report": "validation-failed",
+  "report-budget-exceeded": "validation-failed",
+  "selection-unavailable": "invalid-request",
+  "seed-unavailable": "unavailable",
+};
+
 function supportReportErrorKind(error: unknown): ActivityLogErrorKind {
   if (error instanceof SafeArtifactFileError && isActivityLogErrorKind(error.kind))
     return error.kind;
-  if (error instanceof SupportReportError) return "validation-failed";
+  if (error instanceof SupportReportError) return REPORT_FAILURE_ERROR_KINDS[error.reason];
   return "internal";
 }
