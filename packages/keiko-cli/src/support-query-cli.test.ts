@@ -302,6 +302,35 @@ function readExportedReport(directory: string): string {
 }
 
 describe("keiko support export with a selector (#3531)", () => {
+  // #3534: a report over a crashed writer's torn tail says truncated, never corrupt, so the intact
+  // evidence before the crash is degraded rather than refused as insufficient.
+  it("reports a torn segment tail as truncated evidence, never corrupt", async () => {
+    const stateDir = makeRoot("keiko-query-cli-torn-");
+    const a = fixtureProcess(7102, "0badc0d2");
+    writeFixtureSegment(
+      stateDir,
+      segmentIdentity(a, T0, 1),
+      [fixtureLine(a, T0, { op: "client.diagnostic", correlationId: ROOT_ID })],
+      { state: "active", tail: '{"ts":"2026-09-18T12:00:01.000Z","op":"client.d' },
+    );
+    const outDir = makeRoot("keiko-query-cli-out-");
+    const { io, err } = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outDir],
+      io,
+      AUDIT_ENV,
+      exportDeps(outDir),
+    );
+
+    expect(code, err()).toBe(0);
+    const text = readExportedReport(outDir);
+    const { reasons } = parseSupportReport(text).selection;
+    expect(reasons).toContain("truncated-evidence");
+    expect(reasons).not.toContain("corrupt-evidence");
+    expect(analyzeSupportReport(text).selection.reasons).not.toContain("corrupt-evidence");
+  });
+
   it("exports only the causal closure, field for field, with a validated versioned verdict", async () => {
     const { stateDir, lines } = stateWithHistory();
     const outDir = makeRoot("keiko-query-cli-out-");

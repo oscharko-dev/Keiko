@@ -352,6 +352,24 @@ describe("support query causal closure (#3531)", () => {
     expect(result.diagnosticSufficiency.reasons).toContain("segment-unreadable");
   });
 
+  // #3534: a crashed writer's torn tail is truncated evidence, never a corrupt record, and the
+  // fragment never becomes a selected event.
+  it("declares a torn segment tail as truncated evidence and never selects the fragment", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(
+      stateDir,
+      segmentIdentity(a, T0, 1),
+      [diagnostic(a, T0, IDS.root), diagnostic(a, T0 + 100, IDS.root)],
+      { state: "active", tail: '{"ts":"2026-09-18T12:00:01.000Z","op":"client.d' },
+    );
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+
+    expect(result.integrity).toMatchObject({ truncatedLineCount: 1, corruptLineCount: 0 });
+    expect(result.diagnosticSufficiency.reasons).toContain("truncated-evidence");
+    expect(result.diagnosticSufficiency.reasons).not.toContain("corrupt-evidence");
+    expect(result.events.map((event) => event.parsed.correlationId)).toEqual([IDS.root, IDS.root]);
+  });
+
   it("selects a user-reported window and the closure of every correlation inside it", () => {
     writeGraph(stateDir);
     const files = listActivityLogStoreFiles(stateDir);

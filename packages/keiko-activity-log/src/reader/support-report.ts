@@ -406,11 +406,33 @@ function unattributedIncident(incident: SupportIncidentPrivateProjection): boole
   );
 }
 
+// The incident's own failing lines: its operation under its own correlations. Another correlation
+// may fail the same operation with another error kind, so only these lines bind the header. An
+// uncorrelated incident can only be bound by its operation.
+function ownFailureLines(
+  incident: SupportIncidentPrivateProjection,
+  events: readonly SupportReportEvent[],
+): readonly SupportReportEvent[] {
+  const { rootCorrelationId, childCorrelationIds } = incident.correlation;
+  const own = new Set(
+    rootCorrelationId === undefined
+      ? childCorrelationIds
+      : [rootCorrelationId, ...childCorrelationIds],
+  );
+  return events.filter(
+    (event) =>
+      event.record.op === incident.op &&
+      (own.size === 0 ||
+        (typeof event.record.correlationId === "string" && own.has(event.record.correlationId))),
+  );
+}
+
 /**
  * The relations the producer guarantees between the incident header and its evidence. A header
  * that contradicts them, or contradicts its own retained failure line, is refused: the declared
  * integrity maps to its completeness and loss, the window is anchored at creation, a user report
- * carries the unattributed constants, and a retained failure line agrees on its error kind.
+ * carries the unattributed constants, and the incident's own retained failure line agrees on its
+ * error kind.
  */
 function validateIncidentProvenance(
   incident: SupportIncidentPrivateProjection,
@@ -427,7 +449,9 @@ function validateIncidentProvenance(
     if (!unattributedIncident(incident)) throw new SupportReportError("unsafe-report");
     return;
   }
-  const failures = events.filter((event) => event.record.op === incident.op);
+  // Only a correlated incident names which retained line is its own failure.
+  if (incident.correlation.rootCorrelationId === undefined) return;
+  const failures = ownFailureLines(incident, events);
   if (
     failures.length > 0 &&
     !failures.some((event) => (event.record.errorKind ?? "unknown") === incident.errorKind)
@@ -533,8 +557,7 @@ function projectedEvidenceReasons(
   // A registered failure is reconstructable only with its own failing line: without it neither the
   // failure site nor the cause chain can be localized, whatever else the closure retained.
   const failureRetained =
-    incident.trigger !== "registered-failure" ||
-    events.some((event) => event.record.op === incident.op);
+    incident.trigger !== "registered-failure" || ownFailureLines(incident, events).length > 0;
   if (
     !failureRetained ||
     correlations.some((correlation) => findTimeline(analysis, correlation) === undefined)

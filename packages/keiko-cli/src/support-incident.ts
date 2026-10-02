@@ -141,12 +141,11 @@ function openIncidentSegment(path: string, stateDir: string): number {
 // Streams every covered segment's lines, in order, through the same hardened, state-dir-rooted
 // safe-artifact open and bounded chunked reader the query engine uses
 // (support-segment-scan.ts's `ActivityLogScanner`) — never a whole segment, let alone the whole
-// window, in one buffer (#3531 audit). Every yielded line is reported `terminated: true`, matching
-// `support-export.ts`'s own reconstruction (`readKeptFiles` rejoins every kept line with its own
-// trailing "\n" before the analyzer ever sees it), so a torn tail classifies identically through
-// either path — this migration changes memory shape only, never a verdict. `onChunk` is the reader's
-// own observability seam (never used in production): it lets a test prove every read stayed inside
-// one bounded chunk instead of trusting the implementation by inspection.
+// window, in one buffer (#3531 audit). Each line keeps the reader's own termination, so a crashed
+// writer's torn tail is truncated evidence here exactly as in the query engine, never a corrupt
+// record (#3534). `onChunk` is the reader's own observability seam (never used in production): it
+// lets a test prove every read stayed inside one bounded chunk instead of trusting the
+// implementation by inspection.
 function* supportIncidentWindowLines(
   segments: readonly SupportIncidentSegmentFile[],
   stateDir: string,
@@ -158,7 +157,7 @@ function* supportIncidentWindowLines(
         () => openIncidentSegment(segment.path, stateDir),
         onChunk === undefined ? {} : { onChunk },
       )) {
-        yield { text: line.text, terminated: true };
+        yield { text: line.text, terminated: line.terminated };
       }
     } catch (error) {
       if (!(error instanceof ActivityLogReadError)) throw error;

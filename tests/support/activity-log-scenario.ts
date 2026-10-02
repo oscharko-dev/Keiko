@@ -54,7 +54,7 @@ import {
   executeSupportQuery,
   resolveSupportSelection,
 } from "../../packages/keiko-cli/src/support-query-cli.js";
-import { readPersistedActivityLog } from "./activity-log-proof.js";
+import { persistedActivityLogLines, readPersistedActivityLog } from "./activity-log-proof.js";
 import { resolveSupportIncident } from "../../packages/keiko-cli/src/support-incident.js";
 
 export interface ActivityLogScenarioRun {
@@ -179,6 +179,16 @@ async function queryEvents(
   }).result;
 }
 
+// Production records a registered-failure incident from the failing event itself, so the harness
+// takes the error kind of the persisted failing line, never the cluster's (an unvalidated
+// tool-catalog line's kind is withheld from its cluster).
+function persistedFailureErrorKind(stateDir: string, op: string): string | undefined {
+  const [line] = persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
+  if (line === undefined) return undefined;
+  const { errorKind } = JSON.parse(line) as { readonly errorKind?: unknown };
+  return typeof errorKind === "string" ? errorKind : undefined;
+}
+
 async function proveIncidentWindowCoversClosure(
   scenario: string,
   stateDir: string,
@@ -192,7 +202,7 @@ async function proveIncidentWindowCoversClosure(
       ? incidents.recordUserReportedIncident(stateDir, {})
       : incidents.recordRegisteredFailureIncident(stateDir, {
           op: failure.op,
-          errorKind: failure.errorKind ?? undefined,
+          errorKind: persistedFailureErrorKind(stateDir, failure.op),
           correlationId,
         });
   expect(creation, `scenario ${scenario}: records an incident candidate for its failure`).not.toBe(
