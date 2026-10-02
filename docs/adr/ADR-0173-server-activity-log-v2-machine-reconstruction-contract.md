@@ -720,9 +720,9 @@ not, the analysis is insufficient (`evidence-not-retained`). Another request's f
 operation neither completes the incident nor refuses it. A contradiction is `unsafe-report`. Every
 closure member, each incident correlation and every parent a retained line names, needs a directly
 recorded line: a timeline derived only through a child never proves its parent
-(`parent-correlation-missing`, `evidence-not-retained`). Every narrowed view, the
-`--correlation-id` timeline and each seed, keeps the report's effective selection reasons, so a
-projection never reads more complete than the report it came from.
+(`parent-correlation-missing`, `evidence-not-retained`). Every narrowed view, the `--correlation-id`
+timeline and each seed, keeps the report's effective selection reasons, so a projection never reads
+more complete than the report it came from.
 
 `--json` streams a fully validated `keiko.support.report-analysis` in bounded chunks, schema version
 1: validated private incident, selection verdict, unknown authenticity, section/report and
@@ -740,11 +740,13 @@ existing query/manifest evidence; a failure names its closed reason and a comple
 validator records `support.report.degraded` (`lifecycle-validator-unavailable` with error kind
 `unavailable`, the error class, cause classes and Keiko frames) before its completion. An analysis
 completion names the view it produced (`analysis`, `clusters`, `timeline`, `seed`), whose
-correlation a seed used (`incident` or `selected`, never the id) and a published replay fixture.
-Export writes them to the selected state directory's Activity Log, analysis and a refused
-destination to the CLI control state. After a successful export the CLI states the exported
-directory's diagnostic readiness (#3532), persisted after the report so the report stays the
-evidence that existed when it was taken. Logger failure uses its existing independent loss channel.
+correlation a seed used (`incident` or `selected`, never the id, but its SHA-256 digest) and a
+published replay fixture. A degraded line whose error carries no Keiko frame (a native loader
+rejection) names the catch site's own dist-anchored frames. Export writes them to the selected state
+directory's Activity Log, analysis and a refused destination to the CLI control state. After a
+successful export the CLI states the exported directory's diagnostic readiness (#3532), persisted
+after the report so the report stays the evidence that existed when it was taken. Logger failure
+uses its existing independent loss channel.
 
 **Compatibility:** legacy JSONL bundles and raw logs are not accepted as received support reports;
 they are refused by the closed reason `legacy-input`.

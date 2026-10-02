@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -360,6 +361,80 @@ describe("support report CLI and private publication", () => {
       expectActivityLogProof("support.report.completed.report-lifecycle", completed ?? ""),
     ).toMatchObject({ correlationId: state.correlationId, surface: "analyze" });
     expect(log).not.toMatch(/private-(?:import|cause)-token/u);
+  });
+
+  // Review #3679: two explicit selectors prepare two reproductions the log tells apart.
+  it("binds each prepared reproduction to the digest of its own seed correlation", async () => {
+    rmSync(join(stateDir, "logs"), { recursive: true });
+    const process = fixtureProcess(4242, "aabbccdd");
+    const now = Date.now();
+    const child = "support-report-cli-child-01";
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, { op: "client.diagnostic", correlationId: CORRELATION }),
+      fixtureLine(process, now + 1, {
+        op: "client.diagnostic",
+        correlationId: child,
+        parentCorrelationId: CORRELATION,
+      }),
+    ]);
+    await exportReport();
+    for (const selected of [CORRELATION, child]) {
+      const result = await analyze(["--seed", "--json", "--correlation-id", selected]);
+      expect(result.code, result.errors.join("")).toBe(0);
+    }
+    const completions = persistedActivityLogLines(
+      readPersistedActivityLog(controlStateDir),
+      "support.report.completed",
+    ).map((line) => expectActivityLogProof("support.report.completed.report-lifecycle", line));
+    const digest = (id: string): string => createHash("sha256").update(id, "utf8").digest("hex");
+    expect(completions.slice(-2)).toEqual([
+      expect.objectContaining({
+        seedCorrelation: "selected",
+        seedCorrelationDigest: digest(CORRELATION),
+      }),
+      expect.objectContaining({
+        seedCorrelation: "selected",
+        seedCorrelationDigest: digest(child),
+      }),
+    ]);
+    expect(JSON.stringify(completions)).not.toContain(child);
+  });
+
+  // Review #3679: a real native import rejection still leaves a Keiko failure site on the line.
+  it("names the Keiko site of a native lifecycle-validator import rejection", async () => {
+    rmSync(join(stateDir, "logs"), { recursive: true });
+    const process = fixtureProcess(4242, "aabbccdd");
+    const now = Date.now();
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, {
+        op: "coding-repository-handler.started",
+        correlationId: CORRELATION,
+      }),
+    ]);
+    await exportReport();
+    const missing = pathToFileURL(join(root, "missing-tool-catalog-lifecycle.js")).href;
+    vi.spyOn(lazyModules, "loadToolLifecycle").mockImplementation(async () => {
+      await import(/* @vite-ignore */ missing);
+      throw new TypeError("the missing module unexpectedly loaded");
+    });
+    const result = await analyze(["--json"]);
+    expect(result.code, result.errors.join("")).toBe(0);
+    const [degraded] = persistedActivityLogLines(
+      readPersistedActivityLog(controlStateDir),
+      "support.report.degraded",
+    );
+    const state = expectActivityLogProof(
+      "support.report.degraded.lifecycle-validator",
+      degraded ?? "",
+    );
+    const frames = (state as { readonly frames?: unknown }).frames;
+    expect(Array.isArray(frames)).toBe(true);
+    expect(
+      (frames as readonly string[]).some((frame) =>
+        /^packages\/keiko-cli\/(?:dist|src)\/support-report-(?:evidence|cli)\./u.test(frame),
+      ),
+    ).toBe(true);
+    expect(degraded).not.toContain(root);
   });
 
   // Review #3679: the completion distinguishes reading a report from creating a replay fixture.

@@ -103,6 +103,8 @@ export const SUPPORT_REPORT_COMPLETED = defineActivityLogOperation({
       required: false,
       values: ["incident", "selected"],
     },
+    // The SHA-256 of the seed's correlation id: which reproduction was prepared, never the id.
+    seedCorrelationDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     fixture: { type: "string", dataClass: "closed-enum", required: false, values: ["published"] },
   },
   proofIds: ["support.report.completed.report-lifecycle"],
@@ -182,6 +184,7 @@ export type SupportReportSurface = "export" | "analyze";
 export interface SupportReportAnalysisOutcome {
   readonly analysisView: "analysis" | "clusters" | "timeline" | "seed";
   readonly seedCorrelation?: "incident" | "selected" | undefined;
+  readonly seedCorrelationDigest?: string | undefined;
   readonly fixture?: "published" | undefined;
 }
 export function emitSupportReportStarted(
@@ -235,6 +238,16 @@ export function emitSupportReportCompleted(
     ),
   );
 }
+// A native loader rejection (ERR_MODULE_NOT_FOUND) carries no Keiko frame. The catch site's own
+// dist-anchored frames then locate the failing load, so the degraded line always names its site.
+function degradedSiteFrames(error: unknown): readonly string[] {
+  const frames = keikoStackFrames(error);
+  if (frames.length > 0) return frames;
+  const site: { stack?: string } = {};
+  Error.captureStackTrace(site);
+  return keikoStackFrames(site);
+}
+
 export function emitSupportReportDegraded(
   sink: ServerLogSink,
   correlationId: string,
@@ -251,7 +264,7 @@ export function emitSupportReportDegraded(
         reason: "lifecycle-validator-unavailable",
         errorClass: describeErrorKind(error),
         causeChain: [...causeChain(error)],
-        frames: [...keikoStackFrames(error)],
+        frames: [...degradedSiteFrames(error)],
       },
     ),
   );
@@ -260,6 +273,7 @@ export function emitSupportReportDegraded(
 interface AnalysisOutcomeFields {
   readonly analysisView?: SupportReportAnalysisOutcome["analysisView"];
   readonly seedCorrelation?: "incident" | "selected";
+  readonly seedCorrelationDigest?: string;
   readonly fixture?: "published";
 }
 
@@ -272,6 +286,9 @@ function analysisOutcomeFields(
     ...(analysis.seedCorrelation === undefined
       ? {}
       : { seedCorrelation: analysis.seedCorrelation }),
+    ...(analysis.seedCorrelationDigest === undefined
+      ? {}
+      : { seedCorrelationDigest: analysis.seedCorrelationDigest }),
     ...(analysis.fixture === undefined ? {} : { fixture: analysis.fixture }),
   };
 }

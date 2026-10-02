@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   constants,
@@ -673,6 +673,7 @@ function emitSafeSeed(
   return {
     analysisView: "seed",
     seedCorrelation: args.correlationId === undefined ? "incident" : "selected",
+    seedCorrelationDigest: createHash("sha256").update(seed.correlationId, "utf8").digest("hex"),
     ...(fixturePath === undefined ? {} : { fixture: "published" }),
   };
 }

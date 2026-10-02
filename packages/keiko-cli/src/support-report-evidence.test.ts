@@ -6,6 +6,7 @@ import {
 import { SupportReportError } from "@oscharko-dev/keiko-activity-log/reader";
 import { SafeArtifactFileError } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
+  emitSupportReportDegraded,
   emitSupportReportFailed,
   supportReportErrorKind,
   supportReportFailureReason,
@@ -143,5 +144,35 @@ describe("support report failure classification", () => {
     const fileFailure = failureEvent(new SafeArtifactFileError("support-report", "target-exists"));
     expect(fileFailure).toMatchObject({ errorKind: "target-exists" });
     expect((fileFailure.extra as Record<string, unknown>).reason).toBeUndefined();
+  });
+});
+
+// Review #3679: a native loader rejection carries only Node-internal frames; the degraded line
+// still names the dist- or source-anchored Keiko site that handled it.
+describe("degraded analysis failure site", () => {
+  it("names the Keiko catch site when the loader error has no Keiko frame", () => {
+    const error = Object.assign(new Error("Cannot find package"), { code: "ERR_MODULE_NOT_FOUND" });
+    error.stack = [
+      "Error: Cannot find package",
+      "    at packageResolve (node:internal/modules/esm/resolve:873:9)",
+      "    at moduleResolve (node:internal/modules/esm/resolve:946:18)",
+    ].join("\n");
+    const events: Record<string, unknown>[] = [];
+    emitSupportReportDegraded(
+      {
+        write: (event): void => {
+          events.push(event as unknown as Record<string, unknown>);
+        },
+      },
+      CORRELATION,
+      "analyze",
+      error,
+    );
+    const extra = events[0]?.extra as { readonly frames?: readonly string[] } | undefined;
+    expect(extra?.frames?.length).toBeGreaterThan(0);
+    expect(extra?.frames?.[0]).toMatch(
+      /^packages\/keiko-cli\/(?:dist|src)\/support-report-evidence\./u,
+    );
+    expect(JSON.stringify(events)).not.toContain("node:internal");
   });
 });

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "2582f250fa05a683c982c0b063882c3b018876518d307066d8c2c42393046bcb" as const;
+  "8a1da027102f13bf1664aa55682bcf9aba1e33834713e9f8058e3940a25fb53b" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -27780,6 +27780,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["incident", "selected"],
+      },
+      seedCorrelationDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
       },
       fixture: {
         type: "string",
@@ -62493,6 +62499,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "seedCorrelation",
               type: "string",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "seedCorrelationDigest",
+              type: "string",
+              dataClass: "digest",
               required: false,
             },
             {
