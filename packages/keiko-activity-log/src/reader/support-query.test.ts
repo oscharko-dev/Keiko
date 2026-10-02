@@ -389,6 +389,8 @@ describe("support query causal closure (#3531)", () => {
     expect(result.diagnosticSufficiency.reasons).not.toContain("context-truncated");
   });
 
+  // Review #3679: the requirement names the closure and its anchors on both sides of the budget,
+  // including when the closure alone already overflows it, so the stated size is one that fits.
   it("states the closure and anchor bytes when the budget cannot hold the runtime", () => {
     const a = fixtureProcess(4101, "aaaaaaa1");
     const start = fixtureLine(a, T0, { op: "process.started" });
@@ -396,14 +398,107 @@ describe("support query causal closure (#3531)", () => {
     writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [start, failure]);
     const closureBytes = Buffer.byteLength(failure) + 1;
     const bothBytes = closureBytes + Buffer.byteLength(start) + 1;
+    for (const maxResultBytes of [closureBytes - 1, closureBytes, bothBytes - 1]) {
+      const { result } = query(stateDir, correlationSelection(IDS.root), {
+        contextMs: 0,
+        maxResultBytes,
+      });
+      expect(result.events).toEqual([]);
+      expect(result.diagnosticSufficiency.status).toBe("insufficient");
+      expect(result.diagnosticSufficiency.reasons).toContain("report-budget-exceeded");
+      expect(result.truncation).toMatchObject({
+        state: "budget-exceeded",
+        requiredBytes: bothBytes,
+      });
+    }
     const { result } = query(stateDir, correlationSelection(IDS.root), {
       contextMs: 0,
-      maxResultBytes: closureBytes,
+      maxResultBytes: bothBytes,
+    });
+    expect(result.diagnosticSufficiency.status).toBe("complete");
+    expect(result.metrics.selectedBytes).toBe(bothBytes);
+  });
+
+  // Review #3679: a heartbeat begins only after its process's start. When retention removed the
+  // segment holding the start, the heartbeat proves it was written, so the loss is stated.
+  it("states a lifetime start that retention removed and keeps the heartbeat that proves it", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    const startup = writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      fixtureLine(a, T0, { op: "process.started" }),
+      fixtureLine(a, T0 + 60_000, { op: "process.heartbeat" }),
+    ]);
+    const heartbeat = fixtureLine(a, T0 + 120_000, { op: "process.heartbeat" });
+    const laterHeartbeat = fixtureLine(a, T0 + 180_000, { op: "process.heartbeat" });
+    const failure = diagnostic(a, T0 + 600_000, IDS.root);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 120_000, 2), [
+      heartbeat,
+      laterHeartbeat,
+      failure,
+    ]);
+    const retained = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 }).result;
+    expect(retained.diagnosticSufficiency.status).toBe("complete");
+    expect(retained.events.map((event) => event.parsed.view.op)).toEqual([
+      "process.started",
+      DIAGNOSTIC,
+    ]);
+
+    rmSync(startup);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("insufficient");
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
+    expect(result.events.map((event) => event.parsed.view.op)).toEqual([
+      "process.heartbeat",
+      DIAGNOSTIC,
+    ]);
+    // The first heartbeat in log order is the proof.
+    expect(result.events[0]?.text).toBe(heartbeat);
+    const bothBytes = Buffer.byteLength(heartbeat) + Buffer.byteLength(failure) + 2;
+    const overflow = query(stateDir, correlationSelection(IDS.root), {
+      contextMs: 0,
+      maxResultBytes: Buffer.byteLength(failure),
+    }).result;
+    expect(overflow.truncation).toMatchObject({
+      state: "budget-exceeded",
+      requiredBytes: bothBytes,
+    });
+  });
+
+  // A one-shot command writes no start (its fatal and exit lines come without one) and no heartbeat,
+  // so its lifetime has no start to lose.
+  it("never asks a start of a lifetime that wrote neither a start nor a heartbeat", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      signal(a, T0),
+      diagnostic(a, T0 + 1, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+    expect(result.diagnosticSufficiency.status).toBe("complete");
+    expect(result.diagnosticSufficiency.reasons).toEqual([]);
+  });
+
+  // Review #3679: the lifetimes whose starts are measured are bounded like the closure itself.
+  it("never partially selects a closure whose lifetimes exceed the closure bound", () => {
+    const processes = [
+      fixtureProcess(4101, "aaaaaaa1"),
+      fixtureProcess(4202, "bbbbbbb2"),
+      fixtureProcess(4303, "ccccccc3"),
+    ];
+    for (const [index, process] of processes.entries()) {
+      writeFixtureSegment(stateDir, segmentIdentity(process, T0 + index, 1), [
+        diagnostic(process, T0 + index, IDS.root),
+      ]);
+    }
+    const { result } = query(stateDir, correlationSelection(IDS.root), {
+      maxClosureCorrelations: 1,
     });
     expect(result.events).toEqual([]);
-    expect(result.diagnosticSufficiency.status).toBe("insufficient");
     expect(result.diagnosticSufficiency.reasons).toContain("report-budget-exceeded");
-    expect(result.truncation).toMatchObject({ state: "budget-exceeded", requiredBytes: bothBytes });
+    expect(result.truncation).toMatchObject({ state: "budget-exceeded", requiredBytes: 0 });
+    expect(result.closure).toMatchObject({ correlationCount: 1, missingCorrelationCount: 0 });
+    expect(
+      query(stateDir, correlationSelection(IDS.root), { maxClosureCorrelations: 3 }).result
+        .diagnosticSufficiency.status,
+    ).toBe("complete");
   });
 
   // #3534: a crashed writer's torn tail is truncated evidence, never a corrupt record, and the

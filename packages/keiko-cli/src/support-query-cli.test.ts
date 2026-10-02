@@ -334,6 +334,42 @@ describe("keiko support export with a selector (#3531)", () => {
     );
   });
 
+  // Review #3679: retention removed the startup segment of a long-running process. Its retained
+  // heartbeat proves the start was written, so export and analyze both state the loss.
+  it("states a long-running process's start that retention removed", async () => {
+    const stateDir = makeRoot("keiko-query-cli-retention-");
+    const a = fixtureProcess(7104, "0badc0d4");
+    const startup = writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      fixtureLine(a, T0, { op: "process.started" }),
+      fixtureLine(a, T0 + 60_000, { op: "process.heartbeat" }),
+    ]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 120_000, 2), [
+      fixtureLine(a, T0 + 120_000, { op: "process.heartbeat" }),
+      fixtureLine(a, T0 + 600_000, { op: "client.diagnostic", correlationId: ROOT_ID }),
+    ]);
+    rmSync(startup);
+    const outDir = makeRoot("keiko-query-cli-out-");
+    const { io, err } = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outDir],
+      io,
+      AUDIT_ENV,
+      exportDeps(outDir),
+    );
+
+    expect(code, err()).toBe(0);
+    const text = readExportedReport(outDir);
+    expect(parseSupportReport(text).selection).toMatchObject({
+      status: "insufficient",
+      reasons: expect.arrayContaining(["evidence-not-retained"]) as unknown,
+    });
+    const analyzed = analyzeSupportReport(text);
+    expect(analyzed.selection.status).toBe("insufficient");
+    expect(analyzed.selection.reasons).toContain("evidence-not-retained");
+    expect(analyzed.seed?.sufficiency.status).toBe("insufficient");
+  });
+
   // #3534: a report over a crashed writer's torn tail says truncated, never corrupt, so the intact
   // evidence before the crash is degraded rather than refused as insufficient.
   it("reports a torn segment tail as truncated evidence, never corrupt", async () => {

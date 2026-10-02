@@ -38,14 +38,12 @@ import {
   ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
-  MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
   SUPPORT_INCIDENT_SLOT_COUNT,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   activityLogEvent,
   activityLogOperationSchema,
   defineActivityLogOperation,
-  isActivityLogCorrelationId,
   normalizeKeikoFrameSignature,
   recordActivityLogLoss,
   supportIncidentBuild,
@@ -76,9 +74,10 @@ import {
 } from "./server-log.js";
 import {
   computeDefectFingerprint,
+  incidentCorrelationId,
+  registeredFailureCorrelation,
   registeredFailureFingerprintInput,
 } from "./defect-fingerprint.js";
-import { isRedactedLogLabel } from "./log-redaction.js";
 import { activityLogTestWriterInstalled } from "./server-logger.js";
 import {
   claimSupportIncidentFingerprint,
@@ -527,23 +526,6 @@ export interface SupportIncidentFailureEvidence {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly frames?: readonly unknown[] | undefined;
-}
-
-// A correlation id the writer would redact (a credential-shaped label) never enters an incident:
-// the persisted lines carry only its marker, so it could leak a secret but never join evidence.
-function incidentCorrelationId(value: unknown): string | undefined {
-  return isActivityLogCorrelationId(value) && isRedactedLogLabel(value) ? value : undefined;
-}
-
-function failureCorrelation(evidence: SupportIncidentFailureEvidence): SupportIncidentCorrelation {
-  const own = incidentCorrelationId(evidence.correlationId);
-  const parent = incidentCorrelationId(evidence.parentCorrelationId);
-  const root = parent ?? own;
-  const children = parent !== undefined && own !== undefined && own !== parent ? [own] : [];
-  return {
-    ...(root === undefined ? {} : { rootCorrelationId: root }),
-    childCorrelationIds: children.slice(0, MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS),
-  };
 }
 
 // ─── Candidate creation ────────────────────────────────────────────────────────────────────────
@@ -1028,7 +1010,7 @@ function createCandidate(
 }
 
 function registeredFailureDraft(evidence: SupportIncidentFailureEvidence): CandidateDraft {
-  const correlation = failureCorrelation(evidence);
+  const correlation = registeredFailureCorrelation(evidence);
   return {
     trigger: "registered-failure",
     input: registeredFailureFingerprintInput(evidence),

@@ -16,14 +16,16 @@
 //             backpressure, disk) of the closure's own process lifetimes inside
 //             [first closure event - contextMs, last closure event + contextMs], plus each of those
 //             lifetimes' own `process.started` (its runtime) wherever it lies, and nothing else. A
-//             user-reported incident also selects every event of its pinned window and takes every
-//             correlation that appears there as a root.
+//             lifetime whose start retention removed keeps one heartbeat as the proof of that loss.
+//             A user-reported incident also selects every event of its pinned window and takes
+//             every correlation that appears there as a root.
 //   events  — registered operation, error kind, failure class, parent correlation, and a bounded time
 //             window, combined with AND; matching events only.
 //
 // NEVER A SILENT TRUNCATION. A closure that does not fit the report budget (or exceeds the
-// correlation bound) returns no events and is `insufficient` with `report-budget-exceeded`; a
-// selection the log no longer holds is `insufficient` with `evidence-not-retained`; an unreadable
+// correlation bound, which also bounds its process lifetimes) returns no events and is
+// `insufficient` with `report-budget-exceeded`; a selection the log no longer holds (a closure
+// member, or a lifetime's start) is `insufficient` with `evidence-not-retained`; an unreadable
 // candidate segment is `segment-unreadable`; only optional context is ever dropped, and that is
 // declared as `context-truncated`. Every result carries exactly one diagnostic sufficiency status,
 // derived by the same per-failure-class projection `keiko support analyze` uses.
@@ -70,6 +72,7 @@ import {
   type LoadedSegmentManifest,
   type SegmentManifest,
 } from "./support-segment-manifest.js";
+import { LIFETIME_ANCHOR_OP, LIFETIME_PROOF_OP } from "./support-lifetime.js";
 import type {
   ActivityLogScanner,
   ActivityLogStoreFile,
@@ -466,6 +469,10 @@ interface ClosureEvents {
   readonly collector: EventCollector;
   readonly observed: ReadonlySet<string>;
   readonly edges: ReadonlySet<string>;
+  // Every selected line's process lifetime. It is kept when the bodies are released for the budget,
+  // so the required starts are still measured, and it is bounded like the closure's correlations.
+  readonly lifetimes: ReadonlySet<string>;
+  readonly lifetimesExceeded: boolean;
 }
 
 function closureRole(
@@ -476,6 +483,11 @@ function closureRole(
   const id = accepted.parsed.correlationId;
   if (knownCorrelation(id) && members.has(id)) return "closure";
   return windows.some((window) => lineInWindow(window, accepted)) ? "window" : undefined;
+}
+
+function noteLifetime(lifetimes: Set<string>, parsed: ParsedLine, limit: number): void {
+  const key = lifetimeKey(parsed);
+  if (key !== undefined && lifetimes.size <= limit) lifetimes.add(key);
 }
 
 function collectClosureEvents(
@@ -489,20 +501,29 @@ function collectClosureEvents(
     (loaded, file) =>
       manifestMayContainAnyKey(loaded, keys) || windowCandidate(windows, loaded, file),
   );
-  const collector = new EventCollector(state.input.limits.maxResultBytes);
+  const { maxResultBytes, maxClosureCorrelations } = state.input.limits;
+  const collector = new EventCollector(maxResultBytes);
   const observed = new Set<string>();
   const edges = new Set<string>();
+  const lifetimes = new Set<string>();
   for (const accepted of acceptedLines(state, files, true)) {
     const role = closureRole(accepted, members, windows);
     if (role === undefined) continue;
     collector.add(accepted, role);
+    noteLifetime(lifetimes, accepted.parsed, maxClosureCorrelations);
     const id = accepted.parsed.correlationId;
     const parent = accepted.parsed.view.parentCorrelationId;
     if (role !== "closure" || !knownCorrelation(id)) continue;
     observed.add(id);
     if (knownCorrelation(parent) && members.has(parent)) edges.add(`${parent}\u0000${id}`);
   }
-  return { collector, observed, edges };
+  return {
+    collector,
+    observed,
+    edges,
+    lifetimes,
+    lifetimesExceeded: lifetimes.size > maxClosureCorrelations,
+  };
 }
 
 interface ContextSelection {
@@ -520,38 +541,54 @@ interface ContextScope {
   readonly selected: ReadonlySet<string>;
 }
 
-// Each closure lifetime's own start names its runtime (Node version, platform, architecture). It is
-// required evidence, not optional context: it is charged to the selection's own budget wherever it
-// lies, never counted against the context cap and never dropped to fit optional context, because a
-// long-running process started far before any short window would otherwise lose that dimension.
-const LIFETIME_ANCHOR_OP = "process.started";
-
-function selectedLifetimes(events: readonly SupportSelectedEvent[]): ReadonlySet<string> {
-  return new Set(
-    events.flatMap((event) => {
-      const key = lifetimeKey(event.parsed);
-      return key === undefined ? [] : [key];
-    }),
-  );
-}
-
-function collectLifetimeAnchors(state: EngineState, collector: EventCollector): void {
-  const lifetimes = selectedLifetimes(collector.events);
-  if (lifetimes.size === 0) return;
-  const selected = new Set(collector.events.map((event) => eventKey(event.file, event.index)));
+/**
+ * The first line of `op` that each lifetime wrote, in log order. Every candidate is streamed to its
+ * end: a scan cut short would leave that segment without the derived manifest its integrity is read
+ * from.
+ */
+function firstLifetimeLines(
+  state: EngineState,
+  lifetimes: ReadonlySet<string>,
+  op: string,
+): ReadonlyMap<string, AcceptedLine> {
+  const found = new Map<string, AcceptedLine>();
+  if (lifetimes.size === 0) return found;
   const files = candidateFiles(
     state,
     (loaded) =>
-      hasCount(loaded.manifest.ops, LIFETIME_ANCHOR_OP) &&
-      manifestMayHoldLifetimes(loaded.manifest, lifetimes),
+      hasCount(loaded.manifest.ops, op) && manifestMayHoldLifetimes(loaded.manifest, lifetimes),
   );
   for (const accepted of acceptedLines(state, files, true)) {
     const key = lifetimeKey(accepted.parsed);
-    if (accepted.parsed.view.op !== LIFETIME_ANCHOR_OP || key === undefined) continue;
-    if (!lifetimes.has(key) || selected.has(eventKey(accepted.line.file, accepted.line.index)))
-      continue;
-    collector.add(accepted, "context");
+    if (accepted.parsed.view.op !== op || key === undefined || !lifetimes.has(key)) continue;
+    if (!found.has(key)) found.set(key, accepted);
   }
+  return found;
+}
+
+/**
+ * Each closure lifetime's own start names its runtime (Node version, platform, architecture). It is
+ * required evidence, not optional context: it is charged to the selection's own budget wherever it
+ * lies, never counted against the context cap and never dropped to fit optional context, because a
+ * long-running process started far before any short window would otherwise lose that dimension. A
+ * start retention removed is stated with the heartbeat that proves it (support-lifetime.ts). Lines
+ * the closure already selected are never added twice; when the closure's bodies were released for
+ * the budget, their bytes are still measured. Returns the number of starts lost.
+ */
+function collectLifetimeAnchors(
+  state: EngineState,
+  lifetimes: ReadonlySet<string>,
+  collector: EventCollector,
+  alreadySelected: (accepted: AcceptedLine) => boolean,
+): number {
+  const anchors = firstLifetimeLines(state, lifetimes, LIFETIME_ANCHOR_OP);
+  // Only a lifetime without its start is searched for a heartbeat.
+  const unanchored = new Set([...lifetimes].filter((key) => !anchors.has(key)));
+  const proofs = firstLifetimeLines(state, unanchored, LIFETIME_PROOF_OP);
+  for (const accepted of [...anchors.values(), ...proofs.values()]) {
+    if (!alreadySelected(accepted)) collector.add(accepted, "context");
+  }
+  return proofs.size;
 }
 
 function contextScope(
@@ -981,6 +1018,21 @@ function budgetExceededOutcome(
   };
 }
 
+// A closure is never partially selected. Its lifetimes are bounded like its correlations: beyond
+// that bound the starts cannot all be measured, so the requirement is stated as unknown (0).
+function closureOverflow(
+  state: EngineState,
+  selection: SupportClosureSelection,
+  closure: ClosureState,
+  collected: ClosureEvents,
+): SelectionOutcome | undefined {
+  if (collected.lifetimesExceeded)
+    return budgetExceededOutcome(selection, closure, state, 0, collected);
+  if (!collected.collector.exceeded) return undefined;
+  const { requiredBytes } = collected.collector;
+  return budgetExceededOutcome(selection, closure, state, requiredBytes, collected);
+}
+
 function runClosureSelection(
   state: EngineState,
   selection: SupportClosureSelection,
@@ -991,22 +1043,22 @@ function runClosureSelection(
     return budgetExceededOutcome(selection, closure, state, 0);
   const collected = collectClosureEvents(state, closure.members, selection.windows);
   const closureEvents = [...collected.collector.events];
-  if (!collected.collector.exceeded) collectLifetimeAnchors(state, collected.collector);
-  if (collected.collector.exceeded) {
-    return budgetExceededOutcome(
-      selection,
-      closure,
-      state,
-      collected.collector.requiredBytes,
-      collected,
-    );
-  }
+  const lostStarts = collected.lifetimesExceeded
+    ? 0
+    : collectLifetimeAnchors(
+        state,
+        collected.lifetimes,
+        collected.collector,
+        (accepted) => closureRole(accepted, closure.members, selection.windows) !== undefined,
+      );
+  const overflow = closureOverflow(state, selection, closure, collected);
+  if (overflow !== undefined) return overflow;
   const remaining = state.input.limits.maxResultBytes - collected.collector.requiredBytes;
   const context = collectContext(state, closureEvents, collected.collector.events, remaining);
   const reasons: DiagnosticSufficiencyReason[] = [
     ...missingClosureReasons(closure, collected.observed),
   ];
-  if (selection.unresolved) reasons.push("evidence-not-retained");
+  if (selection.unresolved || lostStarts > 0) reasons.push("evidence-not-retained");
   if (context.truncated) reasons.push("context-truncated");
   const events = [...collected.collector.events, ...context.events].sort(
     (left, right) => left.file.order - right.file.order || left.index - right.index,

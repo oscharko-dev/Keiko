@@ -1,5 +1,6 @@
 import {
   computeDefectFingerprint,
+  registeredFailureCorrelation,
   registeredFailureFingerprintInput,
 } from "../defect-fingerprint.js";
 import { isRedactedLogLabel, projectSupportLogFields } from "../log-redaction.js";
@@ -53,6 +54,7 @@ import {
   restrictActivityLogSufficiency,
   type ActivityLogSufficiency,
 } from "./support-analyze-sufficiency.js";
+import { LIFETIME_ANCHOR_OP, LIFETIME_PROOF_OP } from "./support-lifetime.js";
 import type { SupportQueryResult } from "./support-query.js";
 import { findSupportRegistry, type SupportReaderRegistry } from "./support-registry.js";
 import {
@@ -421,29 +423,25 @@ function incidentCorrelationsRedacted(incident: SupportIncidentPrivateProjection
   );
 }
 
-// The incident's own failing lines: its operation under its own correlations. Another correlation
-// may fail the same operation with another error kind, so only these lines bind the header. An
-// uncorrelated incident can only be bound by its operation.
+// The incident's own failing lines: its operation under the correlation its failure carried, the
+// spawned child when the header names one, else the root. Another correlation (the root included)
+// may fail the same operation with another error kind or edge, so only these lines bind the header.
+// An uncorrelated incident can only be bound by its operation.
 function ownFailureLines(
   incident: SupportIncidentPrivateProjection,
   events: readonly SupportReportEvent[],
 ): readonly SupportReportEvent[] {
   const { rootCorrelationId, childCorrelationIds } = incident.correlation;
-  const own = new Set(
-    rootCorrelationId === undefined
-      ? childCorrelationIds
-      : [rootCorrelationId, ...childCorrelationIds],
-  );
+  const own = childCorrelationIds[0] ?? rootCorrelationId;
   return events.filter(
     (event) =>
-      event.record.op === incident.op &&
-      (own.size === 0 ||
-        (typeof event.record.correlationId === "string" && own.has(event.record.correlationId))),
+      event.record.op === incident.op && (own === undefined || event.record.correlationId === own),
   );
 }
 
 // The identity the producer derives from a failing line, recomputed through the same owning rules:
-// its closed error kind, its Keiko frame count and its canonical fingerprint.
+// its closed error kind, its Keiko frame count, its canonical fingerprint and the parent edge that
+// makes its correlation a child of the incident root.
 function failureIdentityMatches(
   incident: SupportIncidentPrivateProjection,
   event: SupportReportEvent,
@@ -456,13 +454,15 @@ function failureIdentityMatches(
   return (
     input.errorKind === incident.errorKind &&
     normalizeKeikoFrameSignature(input.frames).length === incident.frameCount &&
-    computeDefectFingerprint(input) === incident.defectFingerprint
+    computeDefectFingerprint(input) === incident.defectFingerprint &&
+    canonicalSupportJson(registeredFailureCorrelation(event.record)) ===
+      canonicalSupportJson(incident.correlation)
   );
 }
 
 // A registered incident's surface follows from its operation alone. When its own failing line is
-// retained, the error kind, frame count and fingerprint must be the ones that line produces; when
-// it is not, the missing-failure rule states the insufficiency instead.
+// retained, the error kind, frame count, fingerprint and correlation must be the ones that line
+// produces; when it is not, the missing-failure rule states the insufficiency instead.
 function validateRegisteredIdentity(
   incident: SupportIncidentPrivateProjection,
   events: readonly SupportReportEvent[],
@@ -481,7 +481,7 @@ function validateRegisteredIdentity(
  * that contradicts them, or contradicts its own retained failure line, is refused: the declared
  * integrity maps to its completeness and loss, the window is anchored at creation, a user report
  * carries the unattributed constants, and the incident's own retained failure line agrees on its
- * error kind.
+ * identity and on the parent edge of a declared child.
  */
 function validateIncidentProvenance(
   incident: SupportIncidentPrivateProjection,
@@ -611,6 +611,22 @@ function closureMemberReasons(
   ];
 }
 
+// The export selects every lifetime's start, and a heartbeat begins only after that start: a
+// lifetime whose heartbeat the report holds without its start lost that start, as the query states.
+function lifetimeStartReasons(
+  events: readonly SupportReportEvent[],
+): readonly DiagnosticSufficiencyReason[] {
+  const started = new Set<string>();
+  const beating = new Set<string>();
+  for (const event of events) {
+    // Every validated record carries its process identity.
+    const lifetime = canonicalSupportJson([event.record.pid, event.record.instanceId]);
+    if (event.record.op === LIFETIME_ANCHOR_OP) started.add(lifetime);
+    if (event.record.op === LIFETIME_PROOF_OP) beating.add(lifetime);
+  }
+  return [...beating].every((lifetime) => started.has(lifetime)) ? [] : ["evidence-not-retained"];
+}
+
 function projectedEvidenceReasons(
   incident: SupportIncidentPrivateProjection,
   events: readonly SupportReportEvent[],
@@ -629,6 +645,7 @@ function projectedEvidenceReasons(
     ...projected,
     ...(failureRetained ? [] : (["evidence-not-retained"] as const)),
     ...closureMemberReasons(incident, events),
+    ...lifetimeStartReasons(events),
   ]);
 }
 

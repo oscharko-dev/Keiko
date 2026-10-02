@@ -27,6 +27,7 @@ import {
   fixtureProcess,
   segmentIdentity,
   writeFixtureSegment,
+  type FixtureProcess,
 } from "../../../../tests/support/activity-log-segments.js";
 import { analyzeLogText } from "./support-analyze.js";
 import { DEFAULT_SUPPORT_QUERY_LIMITS, type SupportQueryResult } from "./support-query.js";
@@ -53,12 +54,12 @@ function fixture(
   count = 1,
   fields: Readonly<Record<string, unknown>> = {},
   parentAt?: (index: number) => string,
+  lead: (process: FixtureProcess) => readonly string[] = () => [],
 ): { report: SupportReport; query: SupportQueryResult } {
   const process = fixtureProcess(4242, "aabbccdd");
-  writeFixtureSegment(
-    stateDir,
-    segmentIdentity(process, T0, 1),
-    Array.from({ length: count }, (_, index) =>
+  writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+    ...lead(process),
+    ...Array.from({ length: count }, (_, index) =>
       fixtureLine(process, T0 + index, {
         op: "client.diagnostic",
         correlationId: CORRELATION,
@@ -66,7 +67,7 @@ function fixture(
         fields,
       }),
     ),
-  );
+  ]);
   const created = recordUserReportedIncident(stateDir, { nowMs: T0, correlationId: CORRELATION });
   if (created.status !== "created") throw new TypeError("incident fixture was not created");
   const record = created.record;
@@ -606,12 +607,19 @@ describe("historical report reconstruction", () => {
   });
 });
 
-function failureFixture(): { report: SupportReport; query: SupportQueryResult } {
+// A registered failure; with `parent`, the failing operation was spawned under that root, which
+// recorded its own line first.
+function failureFixture(parent?: string): { report: SupportReport; query: SupportQueryResult } {
   const process = fixtureProcess(4343, "bbccddee");
+  const spawned = parent === undefined ? {} : { parentCorrelationId: parent };
   writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+    ...(parent === undefined
+      ? []
+      : [fixtureLine(process, T0, { op: "client.diagnostic", correlationId: parent })]),
     fixtureLine(process, T0, {
       op: "gateway.chat.started",
       correlationId: CORRELATION,
+      ...spawned,
       fields: {
         modelId: "test-model",
         costClass: "low",
@@ -625,6 +633,7 @@ function failureFixture(): { report: SupportReport; query: SupportQueryResult } 
     fixtureLine(process, T0 + 1, {
       op: "gateway.chat.failed",
       correlationId: CORRELATION,
+      ...spawned,
       errorKind: "timeout",
       level: "error",
       fields: { modelId: "test-model", streaming: false },
@@ -632,7 +641,7 @@ function failureFixture(): { report: SupportReport; query: SupportQueryResult } 
   ]);
   const created = recordRegisteredFailureIncident(
     stateDir,
-    { op: "gateway.chat.failed", errorKind: "timeout", correlationId: CORRELATION },
+    { op: "gateway.chat.failed", errorKind: "timeout", correlationId: CORRELATION, ...spawned },
     { nowMs: T0 + 2 },
   );
   if (created?.status !== "created") throw new TypeError("failure incident was not created");
@@ -648,7 +657,7 @@ function failureFixture(): { report: SupportReport; query: SupportQueryResult } 
     {
       kind: "closure",
       queryClass: "incident",
-      roots: [CORRELATION],
+      roots: [parent ?? CORRELATION],
       windows: [],
       requiredClasses: { kind: "observed-failures" },
       unresolved: false,
@@ -657,6 +666,13 @@ function failureFixture(): { report: SupportReport; query: SupportQueryResult } 
     { trigger: "export" },
   );
   return { report: buildSupportReport(incident, query), query };
+}
+
+function withoutKey(
+  record: Readonly<Record<string, unknown>>,
+  key: string,
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
 }
 
 function resealed(
@@ -933,8 +949,6 @@ describe("received-report audit hardening (#3534)", () => {
     expect(dropped.seed?.sufficiency.reasons).toContain("events-dropped");
   });
 
-  // Review #3679: a registered incident's identity follows from its operation and its own failing
-  // line through the producer's rules, so a header that contradicts them is forged.
   // Review #3679: a parent timeline synthesized from its child's lines never proves the parent was
   // retained; every closure member needs a directly recorded line.
   it("never accepts a causal parent that only its child's lines imply", () => {
@@ -964,6 +978,8 @@ describe("received-report audit hardening (#3534)", () => {
     expect(analyzed.seed?.sufficiency.status).toBe("insufficient");
   });
 
+  // Review #3679: a registered incident's identity follows from its operation and its own failing
+  // line through the producer's rules, so a header that contradicts them is forged.
   it("refuses a registered incident whose identity contradicts its own failing line", () => {
     const { report } = failureFixture();
     expect(parseSupportReport(serializeSupportReport(report)).incident.surface).toBe(
@@ -1004,6 +1020,74 @@ describe("received-report audit hardening (#3534)", () => {
     expect(() => parseSupportReport(withIncident(report, { op: "gateway.chat.started" }))).toThrow(
       expect.objectContaining({ reason: "unsafe-report" }),
     );
+  });
+
+  // Review #3679: the producer derives a spawned failure's root and child from its failing line, so
+  // only that line's parent edge connects the declared child to the root the report selects.
+  it("refuses a declared child whose own failing line no longer names its parent", () => {
+    const parent = "support-report-parent-0002";
+    const { report } = failureFixture(parent);
+    expect(report.incident.correlation).toEqual({
+      rootCorrelationId: parent,
+      childCorrelationIds: [CORRELATION],
+    });
+    expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe("complete");
+    const detached = resealed(report, (events) =>
+      events.map((event) =>
+        event.record.correlationId === CORRELATION
+          ? { ...event, record: withoutKey(event.record, "parentCorrelationId") }
+          : event,
+      ),
+    );
+    expect(() => parseSupportReport(detached)).toThrow(
+      expect.objectContaining({ reason: "unsafe-report" }),
+    );
+  });
+
+  // Review #3679: the root failing the same operation is another failure; it neither stands in for
+  // the declared child's missing failing line nor refuses the report.
+  it("never takes the root's failure of the same operation as its child's failing line", () => {
+    const parent = "support-report-parent-0003";
+    const { report } = failureFixture(parent);
+    const rootFailure = resealed(
+      report,
+      (events) =>
+        events.map((event) =>
+          event.record.op === "gateway.chat.failed"
+            ? {
+                ...event,
+                record: {
+                  ...withoutKey(event.record, "parentCorrelationId"),
+                  correlationId: parent,
+                },
+              }
+            : event,
+        ),
+      { ...report.selection, status: "complete", reasons: [] },
+    );
+    const analyzed = analyzeSupportReport(rootFailure);
+    expect(analyzed.selection.status).toBe("insufficient");
+    expect(analyzed.selection.reasons).toContain("evidence-not-retained");
+  });
+
+  // Review #3679: a heartbeat begins only after its process's start, so a received report holding a
+  // lifetime's heartbeat without that start lost the start, whatever verdict it declares.
+  it("recomputes a lifetime start the report lost from the heartbeat it still holds", () => {
+    const { report } = fixture(1, {}, undefined, (process) => [
+      fixtureLine(process, T0 - 2, { op: "process.started" }),
+      fixtureLine(process, T0 - 1, { op: "process.heartbeat" }),
+    ]);
+    const held = eventsOf(report).map((event) => event.record.op);
+    expect(held).toEqual(expect.arrayContaining(["process.started", "process.heartbeat"]));
+    expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe("complete");
+    const withoutStart = resealed(
+      report,
+      (events) => events.filter((event) => event.record.op !== "process.started"),
+      { ...report.selection, status: "complete", reasons: [] },
+    );
+    const analyzed = analyzeSupportReport(withoutStart);
+    expect(analyzed.selection.status).toBe("insufficient");
+    expect(analyzed.selection.reasons).toContain("evidence-not-retained");
   });
 
   it("keeps every supported record when one selected line belongs to another registry", () => {

@@ -55,6 +55,7 @@ import {
   expectActivityLogScenario,
   type ScenarioIncidentRecorders,
 } from "../support/activity-log-scenario.js";
+import { fixtureEvent } from "../support/activity-log-segments.js";
 
 // The ui scenarios write through the built package, so their incidents come from it too: one
 // Activity Log writer instance per process (activity-log-scenario.ts).
@@ -283,6 +284,10 @@ describe("Activity Log scenario: ui", () => {
   // injected fault evidences both classes this scenario id maps to.
   it("persists a heartbeat observing a stalled event loop", async () => {
     const startedAtMs = Date.now();
+    // `reportProcessStarted` writes the lifetime's start right before it starts the heartbeat. A
+    // heartbeat without that start is one whose start retention removed, so the scenario keeps the
+    // production order.
+    activityLog.write(fixtureEvent({ op: "process.started" }));
     const stop = startProcessHeartbeat(activityLog, 10, stalledHistogram);
     try {
       await vi.waitFor(() => {
