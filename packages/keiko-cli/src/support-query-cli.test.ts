@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogOperationSchema,
@@ -28,6 +28,7 @@ import { loadActivityLog } from "./lazy-modules.js";
 import { parseSupportArgs, runSupportCli, type SupportCliDeps } from "./support.js";
 import { analyzeSupportReport, parseSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 import {
+  fixtureEvent,
   fixtureLine,
   fixtureProcess,
   segmentIdentity,
@@ -434,6 +435,131 @@ describe("keiko support export with a selector (#3531)", () => {
       sufficiency: "insufficient",
       sufficiencyReasons: ["evidence-not-retained"],
     });
+  });
+
+  // Review #3679: a writer's confirmed drop degrades the report, and every line export and analyze
+  // complete with must say why: without the reason on them, the loss behind the verdict could not be
+  // reconstructed from the log. The real writer produces the evidence — a gateway event the registry
+  // rejects, the seal that counts the drop, then the failure — so no fixture restates its formula.
+  it("states a writer's confirmed drop on every completion export and analyze persist", async () => {
+    const stateDir = makeRoot("keiko-query-cli-drop-");
+    const controlStateDir = makeRoot("keiko-query-cli-control-");
+    const chat = { modelId: "test-model", streaming: false };
+    const started = { costClass: "low", timeoutMs: 100, maxRetries: 0, requestBudgetMs: 100 };
+    // The rejected write announces its drop on the independent stderr channel.
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const writer = createFileServerLogSink(stateDir);
+    writer.write(fixtureEvent({ op: "process.started" }));
+    writer.write(
+      fixtureEvent({
+        op: "gateway.chat.started",
+        correlationId: ROOT_ID,
+        fields: { ...chat, ...started, upstreamStreaming: false },
+      }),
+    );
+    writer.write(
+      fixtureEvent({
+        op: "gateway.chat.started",
+        correlationId: ROOT_ID,
+        fields: { ...chat, ...started, costClass: "unbounded", upstreamStreaming: false },
+      }),
+    );
+    writer.close?.();
+    createFileServerLogSink(stateDir).write(
+      fixtureEvent({
+        op: "gateway.chat.failed",
+        correlationId: ROOT_ID,
+        errorKind: "timeout",
+        level: "error",
+        fields: chat,
+      }),
+    );
+    closeFileServerLogSinks();
+    expect(stderr).toHaveBeenCalled();
+    stderr.mockRestore();
+    const sources = readPersistedActivityLog(stateDir);
+    expect(
+      persistedActivityLogLines(sources, "activity-log.segment.sealed").map(
+        (line) => JSON.parse(line) as Readonly<Record<string, unknown>>,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        droppedEventCount: 1,
+        completeness: "partial",
+        loss: "event-dropped",
+      }),
+    );
+    const outDir = makeRoot("keiko-query-cli-out-");
+    const deps = { cwd: outDir, controlActivityStateDir: controlStateDir };
+    const { io, err } = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outDir],
+      io,
+      AUDIT_ENV,
+      deps,
+    );
+
+    expect(code, err()).toBe(0);
+    const text = readExportedReport(outDir);
+    const report = parseSupportReport(text);
+    // The seal that counts the drop also declares its own segment partial.
+    const reasons = ["activity-log-loss", "evidence-partial"];
+    expect(report.selection).toMatchObject({ status: "degraded", reasons });
+    const exportLog = readPersistedActivityLog(stateDir);
+    const [queried] = persistedActivityLogLines(exportLog, "support.query.completed");
+    const [exported] = persistedActivityLogLines(exportLog, "support.report.completed");
+    const query = expectActivityLogProof("support.query.completed.query-evidence", queried ?? "");
+    const completed = expectActivityLogProof(
+      "support.report.completed.report-lifecycle",
+      exported ?? "",
+    );
+    expect(query).toMatchObject({
+      surface: "export",
+      queryClass: "correlation",
+      resultEventCount: report.evidence.recordCount,
+      truncation: "none",
+      sufficiency: "degraded",
+      sufficiencyReasons: reasons,
+    });
+    expect(completed).toMatchObject({
+      surface: "export",
+      recordCount: report.evidence.recordCount,
+      reportBytes: Buffer.byteLength(text),
+      sufficiency: "degraded",
+      sufficiencyReasons: reasons,
+    });
+    expect(completed.correlationId).toBe(query.correlationId);
+
+    const analysis = makeIo();
+    const analyzed = await runSupportCli(
+      ["analyze", join(outDir, readdirSync(outDir)[0] ?? ""), "--json"],
+      analysis.io,
+      {},
+      deps,
+    );
+    expect(analyzed, analysis.err()).toBe(0);
+    expect(JSON.parse(analysis.out())).toMatchObject({
+      selection: { status: "degraded", reasons },
+    });
+    const [analyzedLine] = persistedActivityLogLines(
+      readPersistedActivityLog(controlStateDir),
+      "support.report.completed",
+    );
+    const analyzedRecord = expectActivityLogProof(
+      "support.report.completed.report-lifecycle",
+      analyzedLine ?? "",
+    );
+    expect(analyzedRecord).toMatchObject({
+      surface: "analyze",
+      analysisView: "analysis",
+      recordCount: report.evidence.recordCount,
+      reportBytes: Buffer.byteLength(text),
+      reportDigest: completed.reportDigest,
+      sufficiency: "degraded",
+      sufficiencyReasons: reasons,
+    });
+    expect(analyzedRecord.correlationId).not.toBe(query.correlationId);
   });
 
   // #3534: a report over a crashed writer's torn tail says truncated, never corrupt, so the intact
