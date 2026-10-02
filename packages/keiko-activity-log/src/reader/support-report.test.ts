@@ -396,6 +396,27 @@ describe("hostile report admission", () => {
       expect.objectContaining({ reason: "unsupported-report", minimumAnalyzerVersion: "9.0.0" }),
     );
   });
+  it("names the minimum analyzer for a newer schema that adds a section", () => {
+    const report = fixture().report;
+    const text =
+      canonicalSupportJson({
+        ...report,
+        schemaVersion: 2,
+        minimumAnalyzerVersion: "9.0.0",
+        attestations: [],
+      }) + "\n";
+    expect(() => parseSupportReport(text)).toThrow(
+      expect.objectContaining({ reason: "unsupported-report", minimumAnalyzerVersion: "9.0.0" }),
+    );
+    const sameMinimum = canonicalSupportJson({ ...report, schemaVersion: 2, attestations: [] });
+    expect(() => parseSupportReport(`${sameMinimum}\n`)).toThrow(
+      expect.objectContaining({ reason: "unsupported-report" }),
+    );
+    const unknownSection = canonicalSupportJson({ ...report, attestations: [] });
+    expect(() => parseSupportReport(`${unknownSection}\n`)).toThrow(
+      expect.objectContaining({ reason: "unsafe-report" }),
+    );
+  });
   it("refuses an unknown registry with valid integrity instead of using its own catalog", () => {
     const report = fixture().report;
     const incident = {

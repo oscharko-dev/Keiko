@@ -222,15 +222,16 @@ export function serializeSupportReport(report: SupportReport): string {
   return `${canonicalSupportJson(report)}\n`;
 }
 
+// A newer schema may add sections, so its declared minimum analyzer and schema are judged before
+// the closed section set: an unsupported report names the analyzer it needs instead of "unsafe".
 function readHeader(value: unknown): Record<string, unknown> {
-  if (!reportObject(value) || !reportKeys(value, REPORT_KEYS))
-    throw new SupportReportError("unsafe-report");
-  if (!isActivityLogProductVersion(value.minimumAnalyzerVersion))
+  if (!reportObject(value) || !isActivityLogProductVersion(value.minimumAnalyzerVersion))
     throw new SupportReportError("unsafe-report");
   validateMinimumAnalyzerVersion(value.minimumAnalyzerVersion);
   if (value.kind !== SUPPORT_REPORT_KIND || value.schemaVersion !== SUPPORT_REPORT_SCHEMA_VERSION) {
     throw new SupportReportError("unsupported-report", value.minimumAnalyzerVersion);
   }
+  if (!reportKeys(value, REPORT_KEYS)) throw new SupportReportError("unsafe-report");
   return value;
 }
 
