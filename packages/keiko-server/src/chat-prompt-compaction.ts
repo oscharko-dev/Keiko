@@ -9,6 +9,10 @@ import {
 import { callChatCompactionModel } from "./chat-compaction-model-call.js";
 import { logChatContextManagement } from "./chat-context-log.js";
 import { correlationIdOrUnknown } from "./correlation.js";
+import {
+  AUTOMATIC_COMPACTION_TARGET,
+  AUTOMATIC_COMPACTION_THRESHOLD,
+} from "./chat-compaction-thresholds.js";
 
 const MAX_COMPACTION_CALLS = 32;
 const MAX_COMPACTION_ROUNDS = 3;
@@ -45,10 +49,12 @@ export async function compactCurrentChatPrompt(
 ): Promise<string> {
   input.signal.throwIfAborted();
   const before = promptTokens(input.content, input.profile);
-  if (before <= input.profile.effectiveInputBudget * 0.9) return input.content;
+  if (before <= input.profile.effectiveInputBudget * AUTOMATIC_COMPACTION_THRESHOLD) {
+    return input.content;
+  }
   let content = input.content;
   const originalFragments = originalPromptFragments(input);
-  const target = Math.floor(input.profile.effectiveInputBudget * 0.7);
+  const target = Math.floor(input.profile.effectiveInputBudget * AUTOMATIC_COMPACTION_TARGET);
   const counter = { calls: 0, deadline: Date.now() + 90_000 };
   try {
     for (let round = 0; round < MAX_COMPACTION_ROUNDS; round += 1) {

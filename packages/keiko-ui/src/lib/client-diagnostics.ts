@@ -41,6 +41,9 @@ import {
   type ClientSessionRepairStream,
   type ClientDiagnosticGitChangeDescription,
   type ClientDiagnosticGitClientOperation,
+  type ClientDiagnosticAnswerCopy,
+  type ClientDiagnosticAnswerSpeech,
+  type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
   type ClientMarkdownLayout,
@@ -143,6 +146,15 @@ export interface ClientDiagnosticMeta {
   // An open `KeikoSelect` menu dismissed by Escape (PR #3625 review): the closed reason and which
   // focus location — trigger, search or option — Escape acted from, never a label or option text.
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
+  // The chat's Knowledge Pod picker offered no usable pod (PR #3678 review): counts only, sent as
+  // structured evidence rather than folded into the message the server reduces to a digest.
+  readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
+  // A chat answer copy (PR #3678 review): its outcome and the marker groups removed and kept,
+  // never the copied text.
+  readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
+  // An answer prepared for the voice dialogue (PR #3678 review): the marker groups removed and kept,
+  // under the correlation its synthesis request carries, never the spoken text.
+  readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

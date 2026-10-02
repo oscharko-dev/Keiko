@@ -24,6 +24,10 @@ import {
   type ReactNode,
 } from "react";
 import type { EditorAgentConflictCode } from "@oscharko-dev/keiko-contracts";
+import {
+  findCitationMarkerGroups,
+  type CitationMarkerGroup,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { parseSafeUserInput, parseSafeMarkdown, type SafeMarkdownNode } from "@/lib/safe-markdown";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
@@ -619,7 +623,6 @@ function renderTableNode(
   }
 }
 
-const INLINE_CITATION_MARKER_PATTERN = /(\[\d+\]|【\d+】|［\d+］)/gu;
 const BLOCKED_CITATION_MESSAGE = "PDF preview unavailable";
 
 function markerButtonLabel(marker: string, state: "available" | "recoverable" | "blocked"): string {
@@ -674,6 +677,32 @@ function InlineCitationMarker({
   );
 }
 
+// One bracket pair holding one or more cited indices (`[1]`, `[1, 7, 8]`, `【2】`). Every index with
+// structured metadata renders as its OWN marker link (the whole group used to be dead text); a group
+// with no linkable index keeps its original text untouched, and an unlinked index inside a linked
+// group stays plain text.
+function InlineCitationGroup({
+  group,
+  preview,
+}: {
+  readonly group: CitationMarkerGroup;
+  readonly preview: CitationPreviewController;
+}): ReactNode {
+  if (!group.entries.some((entry) => preview.forMarker(entry.marker) !== undefined)) {
+    return group.text;
+  }
+  return (
+    <>
+      {group.entries.map((entry, position) => (
+        <Fragment key={`${entry.marker}-${String(position)}`}>
+          {position > 0 ? " " : null}
+          <InlineCitationMarker marker={entry.marker} preview={preview} />
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
 function renderCitationText(
   text: string,
   key: string,
@@ -688,27 +717,22 @@ function renderCitationText(
       </span>
     );
   }
-  INLINE_CITATION_MARKER_PATTERN.lastIndex = 0;
   const fragments: ReactNode[] = [];
   let cursor = 0;
-  let match = INLINE_CITATION_MARKER_PATTERN.exec(text);
-  while (match !== null) {
-    const marker = match[0];
-    const index = match.index;
-    if (index > cursor) {
+  for (const group of findCitationMarkerGroups(text)) {
+    if (group.start > cursor) {
       fragments.push(
-        <span key={`${key}-text-${String(cursor)}`}>{text.slice(cursor, index)}</span>,
+        <span key={`${key}-text-${String(cursor)}`}>{text.slice(cursor, group.start)}</span>,
       );
     }
     fragments.push(
-      <InlineCitationMarker
-        key={`${key}-marker-${String(index)}`}
-        marker={marker}
+      <InlineCitationGroup
+        key={`${key}-marker-${String(group.start)}`}
+        group={group}
         preview={citationPreview}
       />,
     );
-    cursor = index + marker.length;
-    match = INLINE_CITATION_MARKER_PATTERN.exec(text);
+    cursor = group.end;
   }
   if (cursor < text.length) {
     fragments.push(<span key={`${key}-tail`}>{text.slice(cursor)}</span>);

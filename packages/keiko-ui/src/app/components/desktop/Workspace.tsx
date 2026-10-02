@@ -26,7 +26,7 @@ import {
   workspaceInteractionLocked,
 } from "./interactionGuards";
 import { WindowFrame } from "./windows/WindowFrame";
-import { localizedWindowTitle } from "./windows/WindowsRegistry";
+import { KNOWLEDGE_CONNECTOR_NODE_SIZE, localizedWindowTitle } from "./windows/WindowsRegistry";
 import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection, SnapPrev } from "./windows/types";
 import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
@@ -100,7 +100,6 @@ interface WorkspaceProps {
   readonly children?: ReactNode;
 }
 
-const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
 const FIGMA_VIEW_NODE_SIZE = { w: 360, h: 360 } as const;
 const FIGMA_JSON_NODE_SIZE = { w: 520, h: 540 } as const;
 const FIGMA_IMAGE_NODE_SIZE = { w: 560, h: 420 } as const;

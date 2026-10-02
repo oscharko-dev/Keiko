@@ -1064,6 +1064,42 @@ describe("commit draft — explicit model-backed generation", () => {
     expect(captured?.maxOutputTokens).toBe(expected);
   });
 
+  // PR #3678 review: an assumed window's stored value is the setup placeholder (4,096), which capped
+  // every draft at a quarter of it, 1,024 output tokens — the #3591 empty-answer class.
+  it("sizes the draft output for an assumed window by the planned window, not the placeholder", async () => {
+    let captured: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: {
+          ...DRAFT_GATEWAY_CONFIG,
+          capabilities: [
+            {
+              ...DRAFT_MODEL_CAPABILITY,
+              contextWindow: 4_096,
+              contextWindowAssumed: true,
+              maxOutputTokens: 0,
+            },
+          ],
+        },
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            captured = request;
+            return draftResponse({ subject: "fix: repair", body: "Detail." });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(captured?.maxOutputTokens).toBe(COMMIT_DRAFT_MAX_OUTPUT_TOKENS);
+  });
+
   // Review of #3591: the route deadline can fire while the gateway sleeps before a retry, which
   // the gateway reports as CancelledError. The composed signal's reason still names the deadline,
   // so the draft must report the timeout code, not the generic failure.

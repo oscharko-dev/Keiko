@@ -130,6 +130,14 @@ describe("toSpeakableText", () => {
     expect(spoken).not.toContain("More citation text");
   });
 
+  // PR #3678 review: this route receives only text and cannot tell grouped citations from a
+  // numeric list, so groups stay content; the UI strips a grounded answer's markers before synthesis.
+  it("keeps ordinary numeric lists in an answer it cannot know to be grounded", () => {
+    expect(toSpeakableText("The valid values are [1, 2] and the coordinates are [7, 8].")).toBe(
+      "The valid values are [1, 2] and the coordinates are [7, 8].",
+    );
+  });
+
   it("strips citation markers with an arbitrarily long digit run -- never leaves the marker unstripped (#2906 round 3)", () => {
     // Regression test: the module's own contract is that citation syntax must never reach TTS,
     // regardless of length. An earlier fix bounded the digit run to `\d{1,100}` for S8786

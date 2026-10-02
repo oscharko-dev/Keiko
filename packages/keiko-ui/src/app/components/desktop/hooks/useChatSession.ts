@@ -60,6 +60,7 @@ import {
 import { sortProjects } from "@/lib/sidebar-sort";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { clientErrorSummary } from "@/lib/client-error-summary";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { bffRequestErrorKind } from "@/lib/http";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -414,7 +415,7 @@ export function isInFlight(status: SendStatus): boolean {
 // conversation exceeded the model's context window. Exported so the test can
 // pin the exact string without duplicating it.
 export const CONTEXT_OVERSIZED_USER_MESSAGE =
-  "The conversation context exceeded the model's window. Open a new chat or pick a larger-context model.";
+  "The request exceeds the model's context window. If the provider reports its window, Keiko adopts it.";
 export const GROUNDED_ATTACHMENT_NOTICE =
   "Attachments are not supported for grounded chats. Remove the attachment or switch to a non-grounded chat.";
 // KEIKO-0793: the voice "admit-and-drop" case (executeSendAttempt's grounded branch, when a
@@ -432,10 +433,10 @@ export const EMPTY_MODEL_RESPONSE_USER_MESSAGE =
 // A typed BFF overflow surfaces under the conversation-layer code; a raw provider
 // overflow surfaces under the gateway-layer code (CB-F2). Both map to the single
 // actionable user message below.
-const CONTEXT_OVERSIZED_API_CODES = new Set([
-  "CONVERSATION_OVERSIZED_CONTEXT",
-  "GATEWAY_CONTEXT_OVERFLOW",
-]);
+// CONVERSATION_OVERSIZED_CONTEXT is an oversized attachment, not a context-window overflow: it keeps
+// its own localized notice (format-error), which tells the user to shorten the attachment instead
+// of resending a request that fails the same way (PR #3678 review).
+const CONTEXT_OVERSIZED_API_CODES = new Set(["GATEWAY_CONTEXT_OVERFLOW"]);
 const CONTEXT_OVERSIZED_PHRASES = [
   "context length",
   "context_length_exceeded",
@@ -461,9 +462,18 @@ function isEmptyModelResponseError(error: unknown): boolean {
   return EMPTY_MODEL_RESPONSE_PHRASES.some((phrase) => text.includes(phrase));
 }
 
+function contextOversizedMessage(error: unknown): string {
+  const overflow = new ApiError("GATEWAY_CONTEXT_OVERFLOW", CONTEXT_OVERSIZED_USER_MESSAGE, 400);
+  if (error instanceof ApiError && error.correlationId !== undefined) {
+    overflow.correlationId = error.correlationId;
+  }
+  return formatUserError(overflow, CONTEXT_OVERSIZED_USER_MESSAGE);
+}
+
 function errorMessage(error: unknown): string {
-  // AC#3 — context-overflow provider errors map to a single actionable message.
-  if (isContextOversizedError(error)) return CONTEXT_OVERSIZED_USER_MESSAGE;
+  // AC#3 — context-overflow provider errors map to a single actionable message. The trailing code
+  // lets the notice localize it (format-error GATEWAY_ERROR_KEYS) and keeps the support id.
+  if (isContextOversizedError(error)) return contextOversizedMessage(error);
   if (isEmptyModelResponseError(error)) {
     return error instanceof ApiError
       ? `${EMPTY_MODEL_RESPONSE_USER_MESSAGE} (${error.code})`
@@ -2276,6 +2286,15 @@ function handleStreamUngroundedTransportFailure(
   setError: Dispatch<SetStateAction<string | undefined>>,
   resolve: (outcome: SendAttemptOutcome) => void,
 ): void {
+  // A stalled stream leaves no server-side failure line of its own: record it body-free so the
+  // Activity Log shows why the turn stopped (field report 1.1.13).
+  if (caught instanceof ApiError && caught.code === "DESKTOP_CHAT_STREAM_STALLED") {
+    reportClientDiagnostic("[keiko] chat stream stalled: no byte within the idle limit", {
+      kind: "sse-error",
+      errorKind: "timeout",
+      correlationId: caught.correlationId,
+    });
+  }
   setError(errorMessage(caught));
   resolve({ status: "failed" });
 }

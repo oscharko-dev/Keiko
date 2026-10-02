@@ -999,25 +999,30 @@ export function withActivityLogCorrelation<Event extends object>(
   event: Event,
   correlationId: string,
 ): Event & { readonly correlationId: string } {
-  return withActivityLogEnvelope(event, { correlationId });
+  return reboundActivityLogEvent(event, { ...event, correlationId });
 }
 
-/** Adds a causal parent without losing registration or fail-closed rejection provenance. */
+/**
+ * Copies an event with the parent correlation id of the operation that spawned it, unless the
+ * event already names its own parent. Like `withActivityLogCorrelation`, it keeps the markers a
+ * plain spread drops: a readiness probe's `{ parentCorrelationId, ...event }` once turned every
+ * startup probe line into an "unregistered operation" the sink discarded (PR #3678).
+ */
 export function withActivityLogParentCorrelation<Event extends object>(
   event: Event,
   parentCorrelationId: string,
-): Event & { readonly parentCorrelationId: string } {
-  return withActivityLogEnvelope(event, { parentCorrelationId });
+): Event {
+  const own: unknown = Reflect.get(event, "parentCorrelationId");
+  if (typeof own === "string") return event;
+  return reboundActivityLogEvent(event, { ...event, parentCorrelationId });
 }
 
-function withActivityLogEnvelope<Event extends object, Envelope extends object>(
+// Carries the registration and rejection markers of `event` over to its copy `rebound`.
+function reboundActivityLogEvent<Event extends object, Copy extends Event>(
   event: Event,
-  envelope: Envelope,
-): Event & Envelope {
-  const rebound = attachActivityLogEventRegistration(
-    { ...event, ...envelope },
-    activityLogEventRegistration(event),
-  );
+  rebound: Copy,
+): Copy {
+  attachActivityLogEventRegistration(rebound, activityLogEventRegistration(event));
   const rejection = activityLogEventRejection(event);
   if (rejection !== undefined) markActivityLogEventRejection(rebound, rejection);
   return rebound;

@@ -233,11 +233,7 @@ describe("ConnectorGraph — with capsules", () => {
         embeddingCompatibilityReason: "legacy-unverified-profile",
         reindexRecommended: true,
         queryEmbeddingAllowed: false,
-        guidance: {
-          label: "Reindex recommended",
-          description: "Compatibility is unverified; lexical fallback remains available.",
-          tone: "warning",
-        },
+        guidance: { code: "reindex-recommended", scope: "pod", tone: "warning" },
       },
     });
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
@@ -265,11 +261,7 @@ describe("ConnectorGraph — with capsules", () => {
         embeddingCompatibilityReason: "fingerprint-mismatch",
         reindexRecommended: true,
         queryEmbeddingAllowed: false,
-        guidance: {
-          label: "Embedding mismatch",
-          description: "Semantic retrieval is disabled for this pod until it is reindexed locally.",
-          tone: "danger",
-        },
+        guidance: { code: "embedding-mismatch", scope: "pod", tone: "danger" },
       },
     });
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
@@ -296,12 +288,7 @@ describe("ConnectorGraph — with capsules", () => {
         sealed: true,
         reindexRecommended: false,
         queryEmbeddingAllowed: false,
-        guidance: {
-          label: "Policy denied",
-          description:
-            "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
-          tone: "danger",
-        },
+        guidance: { code: "policy-denied", scope: "pod", tone: "danger" },
       },
     });
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
@@ -379,11 +366,7 @@ describe("ConnectorGraph — with capsules", () => {
         degradationReasons: ["legacy-unverified-profile"],
         reindexRecommended: true,
         queryEmbeddingAllowed: false,
-        guidance: {
-          label: "Reindex recommended",
-          description: "Compatibility is unverified; lexical fallback remains available.",
-          tone: "warning",
-        },
+        guidance: { code: "reindex-recommended", scope: "pod", tone: "warning" },
       },
     });
     const workspace = document.createElement("main");
@@ -669,6 +652,216 @@ describe("ConnectorGraph — with capsules", () => {
     window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
     document.elementFromPoint = originalElementFromPoint;
     workspace.remove();
+  });
+});
+
+describe("ConnectorGraph — localized row actions", () => {
+  it("names every Knowledge Pod row action in German", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const capsule = makeCapsule({ id: makeCapsuleId("de-row"), displayName: "Fachkonzept" });
+    render(
+      <I18nProvider>
+        <ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />
+      </I18nProvider>,
+    );
+
+    const actions = await screen.findByRole("group", {
+      name: "Aktionen für Knowledge Pod Fachkonzept",
+    });
+    expect(
+      within(actions).getByRole("button", {
+        name: "Knowledge Pod Fachkonzept zum Arbeitsbereich hinzufügen",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(actions).getByRole("button", { name: "Details zu Knowledge Pod Fachkonzept öffnen" }),
+    ).toHaveTextContent("Details");
+    expect(
+      within(actions).getByRole("button", { name: "Knowledge Pod Fachkonzept trennen" }),
+    ).toHaveTextContent("Trennen");
+    expect(screen.getByText("Indexiert")).toBeInTheDocument();
+  });
+});
+
+// 1.1.13 audit (PR #3678): the German UI kept English text on the Knowledge Pod row and Set row
+// (aria-labels, busy labels, readiness badges, counts, guidance) beside the German "Details" and
+// "Trennen" buttons. Every string below now comes from the Local Knowledge catalog.
+describe("ConnectorGraph — German Knowledge Pod surfaces", () => {
+  function renderGerman(ui: ReactNode): void {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(<I18nProvider>{ui}</I18nProvider>);
+  }
+
+  it("localizes the indexing actions, their busy labels and the missing-source hint", async () => {
+    const user = userEvent.setup();
+    const drafts = makeCapsule({
+      id: makeCapsuleId("de-draft"),
+      displayName: "Entwurfspod",
+      lifecycleState: "draft",
+    });
+    const running = makeCapsule({
+      id: makeCapsuleId("de-run"),
+      displayName: "Laufender Pod",
+      lifecycleState: "indexing",
+    });
+    const empty = makeCapsule({
+      id: makeCapsuleId("de-empty"),
+      displayName: "Leerer Pod",
+      lifecycleState: "draft",
+      sourceCount: 0,
+    });
+    let resolveStart: (value: CapsuleActionResponse) => void = () => undefined;
+    let resolveCancel: (value: CapsuleActionResponse) => void = () => undefined;
+    const startIndexingImpl = vi.fn().mockImplementation(
+      () =>
+        new Promise<CapsuleActionResponse>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const cancelIndexingImpl = vi.fn().mockImplementation(
+      () =>
+        new Promise<CapsuleActionResponse>((resolve) => {
+          resolveCancel = resolve;
+        }),
+    );
+    renderGerman(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([drafts, running, empty])}
+        startIndexingImpl={startIndexingImpl}
+        cancelIndexingImpl={cancelIndexingImpl}
+      />,
+    );
+
+    const missingSource = await screen.findByRole("button", {
+      name: "Indexierung für Knowledge Pod Leerer Pod starten",
+    });
+    expect(missingSource).toHaveAttribute(
+      "title",
+      "Verbinde eine Quelle, bevor du diesen Knowledge Pod indexierst.",
+    );
+    expect(missingSource).toHaveAccessibleDescription("Verbinde eine Quelle vor dem Indexieren.");
+
+    const start = screen.getByRole("button", {
+      name: "Indexierung für Knowledge Pod Entwurfspod starten",
+    });
+    expect(start).toHaveTextContent("Indexieren");
+    await user.click(start);
+    expect(start).toHaveTextContent("Wird indexiert…");
+    resolveStart({ ok: true, capsuleId: drafts.id });
+
+    const cancel = screen.getByRole("button", {
+      name: "Indexierung für Knowledge Pod Laufender Pod abbrechen",
+    });
+    expect(cancel).toHaveTextContent("Abbrechen");
+    await user.click(cancel);
+    expect(cancel).toHaveTextContent("Wird abgebrochen…");
+    resolveCancel({ ok: true, capsuleId: running.id });
+  });
+
+  it("localizes the Knowledge Pod Set row: pod count, readiness, counts and reasons", async () => {
+    const capsuleSet = makeCapsuleSet({
+      id: makeCapsuleSetId("de-release"),
+      displayName: "Release Readiness",
+      capsuleCount: 3,
+      knowledgePod: {
+        readiness: "degraded",
+        counts: {
+          capsuleCount: 3,
+          sourceCount: 3,
+          documentCount: 4,
+          chunkCount: 5,
+          vectorCount: 6,
+        },
+        setReadiness: {
+          readyCount: 0,
+          draftCount: 0,
+          degradedCount: 1,
+          unavailableCount: 1,
+          deniedCount: 1,
+          indexingCount: 1,
+          staleCount: 0,
+          errorCount: 0,
+          missingCount: 1,
+          reasonCodes: ["member-indexing", "missing-member", "policy-denied", "no-vectors"],
+        },
+        reindexRecommended: false,
+        queryEmbeddingAllowed: true,
+      },
+    });
+    renderGerman(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule()])}
+        fetchCapsuleSetsImpl={fetchSetsWith([capsuleSet])}
+      />,
+    );
+
+    const row = await screen.findByRole("article", {
+      name: "Knowledge Pod Set: Release Readiness",
+    });
+    expect(within(row).getByText("Eingeschränkt")).toBeInTheDocument();
+    expect(within(row).getByText("3 Pods")).toBeInTheDocument();
+    const description = row.getAttribute("aria-describedby");
+    expect(description).not.toBeNull();
+    expect(row).toHaveAccessibleDescription(
+      /Bereitschaft des Knowledge Pod Sets: Eingeschränkt\..*Quellen:? 3.*Dokumente:? 4.*Chunks:? 5.*Vektoren:? 6.*bereit:? 0.*eingeschränkt:? 1.*nicht verfügbar:? 1.*durch Richtlinie gesperrt:? 1.*wird indexiert:? 1.*veraltet:? 0.*fehlgeschlagen:? 0.*fehlend:? 1.*Gründe: wird indexiert, fehlend, durch Richtlinie gesperrt, keine Vektoren/,
+    );
+  });
+
+  it("localizes the readiness badge of a Knowledge Pod Set for every state", async () => {
+    const states = [
+      ["ready", "Bereit"],
+      ["indexing", "Wird indexiert"],
+      ["stale", "Veraltet"],
+      ["unavailable", "Nicht verfügbar"],
+      ["error", "Fehlgeschlagen"],
+      ["draft", "Entwurf"],
+    ] as const;
+    const sets = states.map(([readiness], index) =>
+      makeCapsuleSet({
+        id: makeCapsuleSetId(`de-state-${String(index)}`),
+        displayName: `Set ${readiness}`,
+        knowledgePod: {
+          readiness,
+          reindexRecommended: false,
+          queryEmbeddingAllowed: true,
+        },
+      }),
+    );
+    renderGerman(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule()])}
+        fetchCapsuleSetsImpl={fetchSetsWith(sets)}
+      />,
+    );
+
+    for (const [readiness, label] of states) {
+      const row = await screen.findByRole("article", {
+        name: `Knowledge Pod Set: Set ${readiness}`,
+      });
+      expect(within(row).getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("localizes the guidance badge and description of a Knowledge Pod", async () => {
+    const capsule = makeCapsule({
+      displayName: "Legacy Vectors",
+      knowledgePod: {
+        readiness: "degraded",
+        embeddingCompatibilityStatus: "unknown",
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+        guidance: { code: "reindex-recommended", scope: "pod", tone: "warning" },
+      },
+    });
+    renderGerman(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    expect(await screen.findByText("Neuindexierung empfohlen")).toBeInTheDocument();
+    const description =
+      "Hinweis zum Knowledge Pod: Neuindexierung empfohlen. Die Kompatibilität ist ungeprüft; der lexikalische Fallback bleibt verfügbar.";
+    expect(screen.getByText(description)).toBeInTheDocument();
+    expect(
+      screen.getByRole("article", { name: "Knowledge Pod: Legacy Vectors" }),
+    ).toHaveAccessibleDescription(description);
   });
 });
 
@@ -1170,11 +1363,7 @@ describe("ConnectorGraph — a11y", () => {
           embeddingCompatibilityReason: "policy-denied",
           reindexRecommended: false,
           queryEmbeddingAllowed: false,
-          guidance: {
-            label: "Embedding unavailable",
-            description: "Semantic retrieval cannot run under the current local policy.",
-            tone: "danger",
-          },
+          guidance: { code: "embedding-unavailable", scope: "pod", tone: "danger" },
         },
       }),
       makeCapsule({ id: makeCapsuleId("4"), displayName: "D Doc", lifecycleState: "error" }),
@@ -1199,12 +1388,7 @@ describe("ConnectorGraph — a11y", () => {
           embeddingCompatibilityReason: "fingerprint-mismatch",
           reindexRecommended: true,
           queryEmbeddingAllowed: false,
-          guidance: {
-            label: "Embedding mismatch",
-            description:
-              "Semantic retrieval is disabled for this pod until it is reindexed locally.",
-            tone: "danger",
-          },
+          guidance: { code: "embedding-mismatch", scope: "pod", tone: "danger" },
         },
       }),
       makeCapsule({
@@ -1216,12 +1400,7 @@ describe("ConnectorGraph — a11y", () => {
           sealed: true,
           reindexRecommended: false,
           queryEmbeddingAllowed: false,
-          guidance: {
-            label: "Policy denied",
-            description:
-              "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
-            tone: "danger",
-          },
+          guidance: { code: "policy-denied", scope: "pod", tone: "danger" },
         },
       }),
     ];
@@ -1407,6 +1586,50 @@ describe("ConnectorGraph — manual refresh diagnostics panel (Epic #1856, Issue
       },
     });
   }
+
+  it("renders the panel, counts and reason guidance in German", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const capsule = manualRefreshCapsule({
+      manualRefresh: {
+        schemaVersion: "1",
+        outcome: "partial",
+        sourceKind: "html-manual-local",
+        counts: {
+          addedPages: 1,
+          changedPages: 0,
+          removedPages: 0,
+          movedPages: 0,
+          unchangedPages: 5,
+          failedPages: 2,
+          deniedLinks: 1,
+        },
+        removalDetection: "not-evaluated-page-limit",
+        crawlRunFingerprint: "fp-de-1",
+        reasonCodes: ["pages-failed", "links-denied"],
+        refreshedAt: 1_700_000_100_000,
+      },
+    });
+    render(
+      <I18nProvider>
+        <ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Letzte Aktualisierung")).toBeInTheDocument();
+    expect(screen.getByText("Teilweise")).toBeInTheDocument();
+    expect(screen.getByText("Abgelehnte Links")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Entfernte Seiten konnten in diesem Lauf nicht erkannt werden (der Crawl hat sein Seitenlimit erreicht).",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Einige Links wurden übersprungen, weil sie außerhalb des freigegebenen Umfangs lagen.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Last refresh")).toBeNull();
+  });
 
   it("renders no panel when manualRefresh is absent", async () => {
     const { container } = render(

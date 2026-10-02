@@ -2,6 +2,8 @@
 // Missing markers are not treated as "no evidence", but the server must not claim that every
 // prompt reference was cited after the fact.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +35,7 @@ import {
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import {
   AuthenticationError,
   ConfigInvalidError,
@@ -40,6 +43,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { OWN_ASSESSMENT_PROMPT_RULE } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import {
   applyReferenceRerankResults,
   buildKnowledgePodRetrievalActivity,
@@ -636,6 +640,512 @@ describe("local-knowledge answer-only memory boundary", () => {
       }
     },
   );
+});
+
+describe("grounded prompt context evidence", () => {
+  it("persists the provider-measured request size beside Keiko's own estimate", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Prompt Context Capsule",
+      capsuleId: "cap-prompt-context",
+      sourceId: "src-prompt-context",
+      text: "alpha is the grounded answer",
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    const project = rescueStore.createProject(rescueTmp, "prompt-context-project");
+    const created = rescueStore.createChat(project.path, "Prompt context", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const fakeModel: ModelPort = {
+      call: (request) => {
+        const isQueryTransform = request.messages[0]?.content.includes("Rewrite broad") === true;
+        return Promise.resolve({
+          modelId: "chat-model",
+          content: isQueryTransform ? '{"queries":["alpha"]}' : "Alpha is the grounded answer [1].",
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "prompt-context",
+            promptTokens: 321,
+            completionTokens: 12,
+            latencyMs: 1,
+            costClass: "medium" as const,
+          },
+        });
+      },
+    };
+    const adapter = scriptedAdapter();
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => fakeModel,
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: adapter.request,
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "What is alpha?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const persisted = rescueStore
+      .listMessages(chat.id)
+      .find((message) => message.role === "assistant")?.groundedAnswer;
+    const promptContext = persisted?.promptContext;
+    expect(promptContext).toMatchObject({
+      promptTokens: 321,
+      promptTokensMeasured: true,
+      sentReferenceCount: 5,
+      availableReferenceCount: 5,
+    });
+    expect(promptContext?.estimatedPromptTokens).toBeGreaterThan(0);
+    expect(promptContext?.sourceTokens).toBeGreaterThan(0);
+    expect(promptContext?.instructionTokens).toBeGreaterThan(0);
+  });
+});
+
+// PR #3678 review: a model window too small for every retrieved reference trims the prompt. The
+// prompt then names only the references it carries, and the answer and its evidence report the
+// fitted count — never the retrieved total the model did not see.
+describe("window-fitted Knowledge Pod prompt", () => {
+  it("reports the fitted reference count to the model, the evidence panel and the meter", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Kontoführung",
+      capsuleId: "cap-fitted-window",
+      sourceId: "src-fitted-window",
+      text: Array.from(
+        { length: 40 },
+        (_, index) => `Abschnitt ${String(index)}: alpha beta ${"Kontoführung Regel ".repeat(30)}`,
+      ).join(" "),
+      chunkingOptions: { maxTokens: 120, minTokens: 0, overlapTokens: 0 },
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    const project = rescueStore.createProject(rescueTmp, "fitted-window");
+    const created = rescueStore.createChat(project.path, "Fitted window", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const answerPrompts: string[] = [];
+    const fakeModel: ModelPort = {
+      call: (request) => {
+        const prompt = request.messages.map((message) => message.content).join("\n");
+        const isQueryTransform = request.messages[0]?.content.includes("Rewrite broad") === true;
+        if (!isQueryTransform) answerPrompts.push(prompt);
+        return Promise.resolve({
+          modelId: "chat-model",
+          content: isQueryTransform ? '{"queries":["alpha"]}' : "Die Regel steht in [1].",
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "fitted-window",
+            promptTokens: 0,
+            completionTokens: 8,
+            latencyMs: 1,
+            costClass: "medium" as const,
+          },
+        });
+      },
+    };
+    const adapter = scriptedAdapter();
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          { ...chatCapability("chat-model"), contextWindow: 3_000, maxOutputTokens: 512 },
+          embeddingCapability(embeddingModelId),
+        ],
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => fakeModel,
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: adapter.request,
+    };
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "Was sagt die Regel zu alpha?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    const context = answer.promptContext;
+    if (context === undefined) throw new Error("expected a prompt context");
+    expect(context.sentReferenceCount).toBeGreaterThan(0);
+    expect(context.sentReferenceCount).toBeLessThan(context.availableReferenceCount);
+    expect(answer.contextPack.referencesUsed).toBe(context.sentReferenceCount);
+    expect(answerPrompts.at(-1)).toContain(
+      `${String(context.sentReferenceCount)} retrieved reference(s)`,
+    );
+  });
+});
+
+// PR #3678 review (the SOC2 pin): an in-range marker whose claim shares no wording with its excerpt
+// stays attached for navigation, but the answer must not present it as confirmed support.
+function firstLexicalSupport(answer: GroundedAnswer): "weak" | undefined {
+  if (answer.groundingKind !== "local-knowledge")
+    throw new TypeError("expected a Knowledge Pod answer");
+  return answer.citations[0]?.lexicalSupport;
+}
+
+interface AskOptions {
+  readonly groundedAnswers?: { readonly ownAssessment?: "allowed" | "disabled" };
+  // Receives the system prompt of every answer-generation call.
+  readonly systemPrompts?: string[];
+}
+
+function lexicalSupports(answer: GroundedAnswer): readonly ("weak" | undefined)[] {
+  if (answer.groundingKind !== "local-knowledge")
+    throw new TypeError("expected a Knowledge Pod answer");
+  return answer.citations.map((citation) => citation.lexicalSupport);
+}
+
+describe("weakly supported citations", () => {
+  // `judgeVerdict` configures a structured-output chat model, so the numeric entailment stage runs
+  // and its judge answers every claim with that verdict.
+  async function askWith(
+    answerText: string,
+    capsuleSuffix: string,
+    judgeVerdict?: "supported" | "unsupported",
+    correlationId?: string,
+    options: AskOptions = {},
+  ): Promise<GroundedAnswer> {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Release Checklist",
+      capsuleId: `cap-weak-${capsuleSuffix}`,
+      sourceId: `src-weak-${capsuleSuffix}`,
+      text: "The release checklist covers signing, notarization and upload.",
+      // One chunk, so reference [1] is the whole sentence the claims are compared with.
+      chunkingOptions: { maxTokens: 64, minTokens: 0, overlapTokens: 0 },
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    const project = rescueStore.createProject(rescueTmp, `weak-${capsuleSuffix}`);
+    const created = rescueStore.createChat(project.path, "Weak support", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const fakeModel: ModelPort = {
+      call: (request) => {
+        const isQueryTransform = request.messages[0]?.content.includes("Rewrite broad") === true;
+        const isJudge = judgeVerdict !== undefined && request.responseFormat !== undefined;
+        if (!isQueryTransform && !isJudge)
+          options.systemPrompts?.push(request.messages[0]?.content ?? "");
+        const reply = isQueryTransform ? '{"queries":["release"]}' : answerText;
+        return Promise.resolve({
+          modelId: "chat-model",
+          content: isJudge ? JSON.stringify({ verdict: judgeVerdict }) : reply,
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "weak-support",
+            promptTokens: 40,
+            completionTokens: 12,
+            latencyMs: 1,
+            costClass: "medium" as const,
+          },
+        });
+      },
+    };
+    const adapter = scriptedAdapter();
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          {
+            ...chatCapability("chat-model"),
+            ...(judgeVerdict === undefined ? {} : { supportsResponseFormat: true }),
+          },
+          embeddingCapability(embeddingModelId),
+        ],
+        ...(options.groundedAnswers === undefined
+          ? {}
+          : { groundedAnswers: options.groundedAnswers }),
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => fakeModel,
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: adapter.request,
+    };
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "What does the release checklist cover?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+      undefined,
+      correlationId,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    return result.body as GroundedAnswer;
+  }
+
+  it("keeps the unrelated-evidence citation navigable but marks its support unverified", async () => {
+    const answer = await askWith("The SOC2 control requires quarterly access reviews [1].", "soc2");
+    expect(answer.citations).toHaveLength(1);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+    // The citation itself says which source the caveat is about.
+    expect(firstLexicalSupport(answer)).toBe("weak");
+  });
+
+  it("leaves the verdict to the entailment judge when it ran", async () => {
+    // The judge read the weak claim against its excerpt: its verdict replaces the caveat.
+    const supported = await askWith(
+      "The SOC2 control requires quarterly access reviews [1].",
+      "judged-supported",
+      "supported",
+    );
+    const unsupported = await askWith(
+      "The SOC2 control requires quarterly access reviews [1].",
+      "judged-unsupported",
+      "unsupported",
+    );
+
+    expect(supported.uncertainty.map((marker) => marker.kind)).toEqual([]);
+    expect(unsupported.uncertainty.map((marker) => marker.kind)).toEqual(["unsupported-claim"]);
+  });
+
+  // PR #3678 review (P1): a stage that ran is no verdict on a weak citation whose claim it could
+  // not read — the claim stripper leaves nothing of a bracketed claim, so no judge call covers [1].
+  it("keeps the caveat for a weak citation whose claim the judge never read", async () => {
+    const answer = await askWith("[The repository enforces MFA] [1]", "judged-unread", "supported");
+
+    expect(answer.citations).toHaveLength(1);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+  });
+
+  // PR #3678 review (P1): a judged claim that reuses the weak citation's marker is no verdict on the
+  // weak occurrence the judge never read.
+  it("keeps the caveat when a judged claim only reuses the weak citation's marker", async () => {
+    const answer = await askWith(
+      "The release checklist covers signing, notarization and upload [1]. [The repository enforces MFA] [1]",
+      "judged-reused",
+      "supported",
+    );
+
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+  });
+
+  // PR #3678 review (P1): equal marker totals do not prove the weak claim was judged. The stripper
+  // removes the bracketed MFA assertion, so the judge reads the checklist claim twice and supports
+  // both while the visible assertion goes unread.
+  it("keeps the caveat when a judged claim hides a bracketed assertion from the judge", async () => {
+    const answer = await askWith(
+      "The release checklist covers signing, notarization and upload [1]. The checklist covers signing [The repository enforces mandatory MFA and denies all anonymous requests] [1]",
+      "judged-hidden",
+      "supported",
+    );
+
+    expect(lexicalSupports(answer)).toEqual([undefined, "weak"]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+  });
+
+  // PR #3678 review (P1): hidden claim text is undecidable at the entailment layer whatever the
+  // lexical overlap. The TLS half shares the excerpt's wording, so [1] is not weak, yet the judge
+  // would read only that half; the bracketed MFA assertion keeps the answer unverified. The settled
+  // reason and the hidden-claim count are on the log (PR #3678 review, P2).
+  it("keeps an answer unverified when a strongly cited claim hides bracketed prose", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const answer = await askWith(
+        "The release checklist covers signing, notarization and upload [MFA is mandatory for every release] [1].",
+        "judged-hidden-strong",
+        "supported",
+        "corr-hidden-prose",
+      );
+
+      expect(lexicalSupports(answer)).toEqual([undefined]);
+      expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+      const judged = sink.events.find((event) => event.op === "search.entailment.judged");
+      expect(judged?.extra).toMatchObject({ judgedClaimCount: 0, hiddenProseClaimCount: 1 });
+      const settled = sink.events.find((event) => event.op === "search.citations.support-settled");
+      expect(settled?.extra).toMatchObject({
+        supportCaveat: "judge-undecided",
+        weakCitationCount: 0,
+        hiddenProseClaimCount: 1,
+      });
+      expect(judged?.correlationId).toBe("corr-hidden-prose");
+      expect(settled?.correlationId).toBe("corr-hidden-prose");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  // PR #3678 review (P1): without any judge a claim hiding bracketed prose is still unverified,
+  // however well its visible half matches the excerpt.
+  it("keeps a hidden-prose claim unverified when no judge is available", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const answer = await askWith(
+        "The release checklist covers signing, notarization and upload [MFA is mandatory for every release] [1].",
+        "no-judge-hidden",
+      );
+
+      expect(lexicalSupports(answer)).toEqual([undefined]);
+      expect(answer.uncertainty.map((marker) => marker.kind)).toContain("entailment-unavailable");
+      const settled = sink.events.find((event) => event.op === "search.citations.support-settled");
+      expect(settled?.extra).toMatchObject({ supportCaveat: "no-judge", hiddenProseClaimCount: 1 });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("records a supported answer as settled without a caveat", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      await askWith(
+        "The release checklist covers signing, notarization and upload [1].",
+        "judged-clean",
+        "supported",
+      );
+
+      const settled = sink.events.find((event) => event.op === "search.citations.support-settled");
+      expect(settled?.extra).toMatchObject({ supportCaveat: "none", hiddenProseClaimCount: 0 });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  // PR #3678 (ADR-0144): Keiko's own, labelled assessment beside the source-backed part.
+  it("lets the model add its own assessment by default and not when the operator disables it", async () => {
+    const allowedPrompts: string[] = [];
+    const disabledPrompts: string[] = [];
+    const answer = "The release checklist covers signing, notarization and upload [1].";
+    await askWith(answer, "assess-prompt-a", undefined, undefined, {
+      systemPrompts: allowedPrompts,
+    });
+    await askWith(answer, "assess-prompt-b", undefined, undefined, {
+      groundedAnswers: { ownAssessment: "disabled" },
+      systemPrompts: disabledPrompts,
+    });
+
+    expect(allowedPrompts.length).toBeGreaterThan(0);
+    expect(allowedPrompts.every((prompt) => prompt.includes(OWN_ASSESSMENT_PROMPT_RULE))).toBe(
+      true,
+    );
+    expect(disabledPrompts.length).toBeGreaterThan(0);
+    expect(disabledPrompts.some((prompt) => prompt.includes("<assessment>"))).toBe(false);
+  });
+
+  it("stores Keiko's assessment beside the model's own no-evidence statement", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const answer = await askWith(
+        "The documents do not specify a Java version.\n\n<assessment>My own assessment, not from the sources: use Java 21.</assessment>",
+        "assess-content",
+        undefined,
+        "corr-own-assessment",
+      );
+
+      expect(answer.content).toBe(
+        "The documents do not specify a Java version.\n\n<assessment>\nMy own assessment, not from the sources: use Java 21.\n</assessment>",
+      );
+      expect(answer.groundingKind === "local-knowledge" && answer.noEvidence).toBe(true);
+      const line = sink.events.find((event) => event.op === "search.answer.assessed");
+      expect(line?.correlationId).toBe("corr-own-assessment");
+      expect(line?.extra).toMatchObject({
+        policy: "allowed",
+        outcome: "assessment",
+        sourceBackedChars: 44,
+        assessmentChars: 53,
+      });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("drops an assessment the operator disables", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const answer = await askWith(
+        "The release checklist covers signing, notarization and upload [1]. <assessment>Use Java 21.</assessment>",
+        "assess-disabled",
+        undefined,
+        undefined,
+        { groundedAnswers: { ownAssessment: "disabled" } },
+      );
+
+      expect(answer.content).toBe(
+        "The release checklist covers signing, notarization and upload [1].",
+      );
+      const line = sink.events.find((event) => event.op === "search.answer.assessed");
+      expect(line?.extra).toMatchObject({ policy: "disabled", outcome: "neutralized" });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("adds no caveat when the claim shares its wording with the cited excerpt", async () => {
+    const answer = await askWith(
+      "The release checklist covers signing, notarization and upload [1].",
+      "aligned",
+    );
+    expect(answer.citations).toHaveLength(1);
+    expect(answer.uncertainty.map((marker) => marker.kind)).not.toContain("entailment-unavailable");
+    expect(firstLexicalSupport(answer)).toBeUndefined();
+  });
 });
 
 describe("redactText fallback — non-string redactor output strips unsafe chars instead of returning raw", () => {
@@ -1549,7 +2059,7 @@ describe("local-knowledge reranker diagnostics", () => {
       failureKind: "not-configured",
       latencyMs: 0,
     });
-    // A reranker that was simply never configured is the default, fully-supported install state — it
+    // A reranker that was simply never configured is a fully-supported install state — it
     // must NOT degrade the Knowledge Pod activity row (#1922 regression: the single-scope path now
     // matches the hybrid path, which already suppresses not-configured). The redacted diagnostics
     // still surface on the context pack for observability, but the activity pod stays "searched".
@@ -3224,7 +3734,7 @@ async function askWithNumericEntailmentJudge(
 }
 
 describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
-  it("marks a substantive markerless answer over retrieved references as unsupported-citation", async () => {
+  it("marks a substantive markerless answer over retrieved references as uncited-answer", async () => {
     const chat = await seedFailClosedChat("markerless");
 
     const answer = await askFailClosedChat(
@@ -3236,10 +3746,111 @@ describe("local-knowledge uncited-answer fail-closed (AC6, #2670)", () => {
     // #189 mechanics stay: not a no-evidence state, and nothing is cited after the fact.
     expect(answer.noEvidence).toBe(false);
     expect(answer.citations).toEqual([]);
-    // Fail closed like the sibling grounded paths: the shared missing-citation marker.
+    // Fail closed like the sibling grounded paths: the shared missing-citation marker. It is its own
+    // kind — nothing was fabricated, so it must never be reported as an unsupported citation.
+    expect(answer.uncertainty).toHaveLength(1);
+    expect(answer.uncertainty[0]?.kind).toBe("uncited-answer");
+    expect(answer.uncertainty[0]?.claim).toContain("without a supported inline citation");
+  });
+
+  // Customer defect: a natural German refusal matched none of the stock refusal phrases, so it was
+  // reported as an answer with "1 unsupported citation" (and a needless repair call was spent on it).
+  it("treats a natural German refusal as no-evidence, never as an unsupported citation", async () => {
+    const chat = await seedFailClosedChat("german-refusal");
+
+    const answer = await askFailClosedChat(
+      chat,
+      "In den bereitgestellten Dokumenten wurden keine Informationen oder Vorgaben zur Java-Version gefunden.",
+      "fail-closed-german-refusal",
+    );
+
+    expect(answer.noEvidence).toBe(true);
+    expect(answer.citations).toEqual([]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toEqual(["no-evidence"]);
+  });
+
+  // The lexical claim/excerpt overlap check used to drop an in-range marker whose claim shared no
+  // token with the excerpt (every German paraphrase). The marker stayed in the text with no link and
+  // was then reported as unsupported. It now stays linked and is never called a fabricated
+  // citation, but its support is stated as unverified (PR #3678 review).
+  it("keeps an in-range marker attached, never unsupported, but unverified when the claim shares no token with the excerpt", async () => {
+    const chat = await seedFailClosedChat("weak-overlap");
+
+    const answer = await askFailClosedChat(
+      chat,
+      "Ein Nachweis ohne gemeinsame Woerter steht im Dokument [1].",
+      "fail-closed-weak-overlap",
+    );
+
+    expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toEqual(["entailment-unavailable"]);
+  });
+
+  // Customer defect: an answer ending "[1], [5], [6]" showed "0 citations". The claim before the
+  // trailing list is all the marker list can be attributed to, and a lone "," used to count as the
+  // claim, so the marker was dropped by the lexical gate.
+  it("keeps the in-range marker of a trailing marker list and reports the dangling ones", async () => {
+    const chat = await seedFailClosedChat("trailing-list");
+
+    const answer = await askFailClosedChat(
+      chat,
+      "Ein Nachweis ohne gemeinsame Woerter steht im Dokument. [1], [5], [6]",
+      "fail-closed-trailing-list",
+    );
+
+    expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
+    expect(answer.uncertainty.map((marker) => marker.kind)).toEqual([
+      "unsupported-citation",
+      "entailment-unavailable",
+    ]);
+    expect(answer.uncertainty[0]?.claim).toContain("[5]");
+    expect(answer.uncertainty[0]?.claim).toContain("[6]");
+  });
+
+  // Rule 1 (AGENTS.md §8): the counts that decided what the reader sees are on the activity log, so
+  // this defect class is reconstructable from the customer's log file alone.
+  it("logs the body-free citation reconciliation counts for the answer", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const chat = await seedFailClosedChat("reconcile-log");
+
+      await askFailClosedChat(
+        chat,
+        "Alpha beta grounded evidence is decisive [1, 7].",
+        "fail-closed-reconcile-log",
+      );
+
+      const line = sink.events.find((event) => event.op === "search.citations.reconciled");
+      expect(line?.extra).toMatchObject({
+        outcome: "cited-with-dangling",
+        referenceCount: 1,
+        attachedCount: 1,
+        groupedMarkerCount: 1,
+        danglingMarkerCount: 1,
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(sink.lines().join("\n")).not.toContain("decisive");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("attaches the in-range index of a grouped marker and reports the out-of-range one", async () => {
+    const chat = await seedFailClosedChat("grouped");
+
+    const answer = await askFailClosedChat(
+      chat,
+      "Alpha beta grounded evidence is decisive [1, 7].",
+      "fail-closed-grouped",
+    );
+
+    expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]"]);
     expect(answer.uncertainty).toHaveLength(1);
     expect(answer.uncertainty[0]?.kind).toBe("unsupported-citation");
-    expect(answer.uncertainty[0]?.claim).toContain("without a supported inline citation");
+    expect(answer.uncertainty[0]?.claim).toContain("[7]");
+    expect(answer.uncertainty[0]?.claim).not.toContain("[1]");
   });
 
   it("marks out-of-range [n] markers as unsupported instead of silently dropping them", async () => {

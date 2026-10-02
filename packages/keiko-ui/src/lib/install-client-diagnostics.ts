@@ -274,6 +274,9 @@ function clientMessagePostBody(
     workspaceTrustBinding: meta.workspaceTrustBinding,
     gitClientOperation: meta.gitClientOperation,
     selectDismissal: meta.selectDismissal,
+    knowledgeCatalog: meta.knowledgeCatalog,
+    answerCopy: meta.answerCopy,
+    answerSpeech: meta.answerSpeech,
     composerActivity: meta.composerActivity,
     composerFocusIndicator: meta.composerFocusIndicator,
     composerCodeStage: meta.composerCodeStage,
@@ -353,10 +356,21 @@ function gitClientOperationPostBudget(
 // Escape dismissal (PR #3625 review — there is no failure variant of that report at all). Everything
 // else is a failure report. The binding, repair and git-client rules are the server's own
 // (keiko-contracts), so the two budgets never drift.
+// The closed report shapes, by the server's own rule (client-diagnostics-routes closedReportBudget).
+function closedReportPostBudget(
+  meta: ClientDiagnosticMeta,
+): ClientDiagnosticPostBudget | undefined {
+  if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
+  if (meta.selectDismissal !== undefined || meta.knowledgeCatalog !== undefined) return "routine";
+  if (meta.answerSpeech !== undefined) return "routine";
+  if (meta.answerCopy === undefined) return undefined;
+  return meta.answerCopy.outcome === "failed" ? "failure" : "routine";
+}
+
 function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {
   if (meta === undefined) return "failure";
-  if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
-  if (meta.selectDismissal !== undefined) return "routine";
+  const closed = closedReportPostBudget(meta);
+  if (closed !== undefined) return closed;
   if (routineComposerOrVoiceEvidence(meta)) return "routine";
   if (meta.bindingReport !== undefined) return bindingPostBudget(meta.bindingReport.outcome);
   if (meta.sessionRepairReport !== undefined) {

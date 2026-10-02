@@ -76,9 +76,9 @@ function useContextRefresh(
   key: string,
   controller: { current: AbortController | null },
   setState: Dispatch<SetStateAction<ContextState>>,
-): (compact: boolean) => Promise<number | undefined> {
+): (compact: boolean) => Promise<ChatContextStatusWire | undefined> {
   return useCallback(
-    async (compact: boolean): Promise<number | undefined> => {
+    async (compact: boolean): Promise<ChatContextStatusWire | undefined> => {
       if (controller.current !== null) {
         if (!compact) return undefined;
         controller.current.abort();
@@ -131,12 +131,12 @@ async function settleContextRequest(
   key: string,
   setState: Dispatch<SetStateAction<ContextState>>,
   compact: boolean,
-): Promise<number | undefined> {
+): Promise<ChatContextStatusWire | undefined> {
   try {
     const status = await promise;
     if (request.signal.aborted) return undefined;
     setState({ key, status, compacting: false, error: false });
-    return status.estimatedInputTokens;
+    return status;
   } catch (error) {
     if (request.signal.aborted) return undefined;
     reportClientDiagnostic(
@@ -154,9 +154,21 @@ async function settleContextRequest(
   }
 }
 
+// A running turn reads again until its persisted answer changes the estimate. A window probe the
+// server is still waiting for reads again until its answer is in, even in an idle chat — otherwise
+// the meter kept the assumed window until the next send (PR #3678 review).
+function shouldReadAgain(
+  status: ChatContextStatusWire,
+  busy: boolean,
+  baseline: number | undefined,
+): boolean {
+  if (status.contextWindowProbePending === true) return true;
+  return busy && (baseline === undefined || status.estimatedInputTokens === baseline);
+}
+
 /** Serial, bounded refresh until the persisted turn changes the estimate; never per-token polling. */
 function pollPendingContext(
-  refresh: (compact: boolean) => Promise<number | undefined>,
+  refresh: (compact: boolean) => Promise<ChatContextStatusWire | undefined>,
   busy: boolean,
   baseline: number | undefined,
 ): () => void {
@@ -164,10 +176,10 @@ function pollPendingContext(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let attempts = 0;
   const next = async (): Promise<void> => {
-    const tokens = await refresh(false);
-    if (cancelled || !busy || tokens === undefined || attempts >= 6) return;
-    if (baseline !== undefined && tokens !== baseline) return;
-    baseline = tokens;
+    const status = await refresh(false);
+    if (cancelled || status === undefined || attempts >= 6) return;
+    if (!shouldReadAgain(status, busy, baseline)) return;
+    baseline = status.estimatedInputTokens;
     const delay = Math.min(1_000 * 2 ** attempts++, 8_000);
     timer = setTimeout(() => {
       void next();

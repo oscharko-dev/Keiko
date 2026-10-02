@@ -1,27 +1,6 @@
 import type { MessageCatalog } from "./i18n-messages.en";
 
 export const DE_MESSAGES = {
-  "chat.context.title": "Gesprächskontext",
-  "chat.context.heading": "Gesprächskontext {percent} %",
-  "chat.context.label": "Gesprächskontext: ungefähr {percent}% belegt",
-  "chat.context.used": "Geschätzt belegte Tokens",
-  "chat.context.inputBudget": "Nutzbare Eingabe-Tokens",
-  "chat.context.window": "Gesamtes Kontextfenster",
-  "chat.context.outputReserve": "Für die Antwort reserviert",
-  "chat.context.safetyMargin": "Sicherheitsreserve",
-  "chat.context.saved": "{tokens} Tokens bei {count} zusammengefassten Nachrichten eingespart.",
-  "chat.context.unavailable": "Kontextschätzung nicht verfügbar",
-  "chat.context.estimate":
-    "Geschätzter Gesprächsverlauf. Entwurf, Anhänge und abgerufene Quellen kommen beim Senden hinzu.",
-  "chat.context.automatic":
-    "Keiko kompaktiert ab 90% der nutzbaren Eingabe-Kapazität automatisch vor der nächsten Anfrage.",
-  "chat.context.retained":
-    "Kompaktierung fasst frühere Nachrichten zusammen. Der vollständige Verlauf bleibt gespeichert; Zusammenfassungen können Details auslassen.",
-  "chat.context.error": "Der Kontext konnte nicht aktualisiert werden.",
-  "chat.context.retry": "Erneut versuchen",
-  "chat.context.compact": "Kontext jetzt kompaktieren",
-  "chat.context.compacting": "Kontext wird kompaktiert…",
-  "chat.context.wait": "Nach Abschluss der aktuellen Antwort verfügbar.",
   "app.skipToContent": "Zum Inhalt springen",
   "app.workspaceHeading": "Keiko-Arbeitsbereich",
   "header.tileAll": "Alle Fenster kacheln",
@@ -598,6 +577,18 @@ export const DE_MESSAGES = {
     "Das Modell hat sein gesamtes Ausgabebudget verbraucht, bevor eine Antwort entstand – meist durch Reasoning. Lass das Gateway ein größeres max_output_tokens für dieses Modell melden oder wähle ein Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
   "chat.error.gatewayOutputExhausted.remediation":
     "Erhöhe in den Einstellungen die maximalen Ausgabe-Tokens des Modells oder wechsle zu einem Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
+  "chat.error.streamStalled.title": "Verbindung zur Antwort unterbrochen",
+  "chat.error.streamStalled.message":
+    "Die Verbindung zu Keiko hat eine Minute lang nichts mehr geliefert. Die Antwort wurde abgebrochen.",
+  "chat.error.streamStalled.remediation":
+    "Sende die Nachricht erneut. Tritt es wiederholt auf, prüfe Netzwerk, Proxy oder ob Keiko neu gestartet wurde.",
+  "chat.error.contextOverflow.title": "Anfrage größer als das Kontextfenster",
+  "chat.error.contextOverflow.message":
+    "Die Anfrage überschreitet das Kontextfenster des Modells. Meldet der Anbieter sein Fenster, übernimmt Keiko es.",
+  "chat.error.contextOverflow.remediation":
+    "Kürze die Nachricht oder wähle ein Modell mit größerem Kontextfenster.",
+  "chat.error.attachmentOversized.message":
+    "Angehängte Inhalte sind zu groß. Kürze oder entferne sie.",
   "chat.keikoLogo": "Keiko-Logo",
   "chat.keikoResponding": "Keiko antwortet",
   "chat.copy.copiedStatus": "Antwort kopiert",
@@ -750,6 +741,13 @@ export const DE_MESSAGES = {
   "chat.grounding.unavailable": "{label} (nicht verfügbar)",
   "chat.grounding.catalogLoading": "Verfügbare Knowledge Pods werden aktualisiert…",
   "chat.grounding.catalogEmpty": "Keine bereiten Knowledge Pods oder Pod Sets sind verfügbar.",
+  "chat.grounding.catalogRetry": "Erneut versuchen",
+  "chat.grounding.withState": "{label} ({state})",
+  "chat.grounding.state.draft": "Entwurf",
+  "chat.grounding.state.indexing": "wird indexiert",
+  "chat.grounding.state.stale": "veraltet",
+  "chat.grounding.state.deleting": "wird gelöscht",
+  "chat.grounding.state.error": "fehlgeschlagen",
   "chat.grounding.sourceLimit":
     "Quellenlimit erreicht — dieser Chat hat bereits {connectedCount} von {cap} verbundenen Quellen. Trenne eine Quelle, bevor du eine weitere verbindest.",
   "chat.grounding.readyChatRequired":
@@ -1167,7 +1165,6 @@ export const DE_MESSAGES = {
   "scope.pressure.moderate": "Moderat",
   "scope.pressure.high": "Hoch",
   "scope.pressure.exceeded": "Überschritten",
-  "scope.budgetSummary": "Letzter Grounding-Lauf: {tokens} Token, {files} Dateien",
   "scope.connectedFolder": "Verbundener Ordner",
   "scope.folder": "Ordner: {name}",
   "scope.repository": "Repository-Bereich",
@@ -1180,8 +1177,6 @@ export const DE_MESSAGES = {
     "Keiko darf nur den verbundenen Ordner prüfen; Safe-Read-Ausschlüsse und Kontextbudget-Limits gelten vor jeder Antwort.",
   "scope.boundary.file":
     "Keiko darf nur den verbundenen Dateibereich prüfen; Safe-Read-Ausschlüsse und Kontextbudget-Limits gelten vor jeder Antwort.",
-  "scope.disconnect": "{label} vom Chat trennen",
-  "scope.disconnectWithPath": "{label} vom Chat trennen ({path})",
   "scope.disconnectError": "Bereich konnte nicht getrennt werden.",
   "settings.title": "Einstellungen",
   "settings.language.compactLabel": "Sprache",

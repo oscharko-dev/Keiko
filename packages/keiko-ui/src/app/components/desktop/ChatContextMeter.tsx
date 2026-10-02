@@ -3,8 +3,15 @@
 import { useId, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useContextDisclosure } from "./useContextDisclosure";
-import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { useLocale, useTranslate } from "@/lib/i18n";
+import type {
+  ChatContextSegmentWire,
+  ChatContextStatusWire,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import { useLocale } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
 import styles from "./ChatContextMeter.module.css";
 
 export interface ChatContextMeterProps {
@@ -44,14 +51,227 @@ function ContextMetrics({ status }: { readonly status: ChatContextStatusWire }):
           </div>
         ))}
       </dl>
+      <ContextFootnotes status={status} />
+    </>
+  );
+}
+
+// ─── Window breakdown (field report 1.1.13) ──────────────────────────────────────────────────
+// One bar over the whole window and one legend row per share, in the order the server stacks them.
+// Input shares use the design system's categorical data colours; space that is not input (free,
+// compaction buffer, reserves) is drawn neutral or hatched, never distinguished by colour alone.
+
+function segmentLabel(t: I18nTranslate, segment: ChatContextSegmentWire): string {
+  const labels: Record<ChatContextSegmentWire["id"], string> = {
+    system: t("chat.context.segment.system"),
+    summary: t("chat.context.segment.summary"),
+    messages: t("chat.context.segment.messages"),
+    knowledge: t("chat.context.segment.knowledge"),
+    free: t("chat.context.segment.free"),
+    "compaction-buffer": t("chat.context.segment.compactionBuffer"),
+    "output-reserve": t("chat.context.outputReserve"),
+    "safety-margin": t("chat.context.safetyMargin"),
+  };
+  return labels[segment.id];
+}
+
+function segmentDetail(
+  t: I18nTranslate,
+  segment: ChatContextSegmentWire,
+  status: ChatContextStatusWire,
+): string | undefined {
+  const count = segment.count ?? 0;
+  if (segment.id === "messages" && count > 0)
+    return t(count === 1 ? "chat.context.count.messages.one" : "chat.context.count.messages", {
+      count,
+    });
+  if (segment.id === "summary" && count > 0)
+    return t(count === 1 ? "chat.context.count.summary.one" : "chat.context.count.summary", {
+      count,
+    });
+  const sources = status.knowledgeSources;
+  if (segment.id !== "knowledge" || sources === undefined) return undefined;
+  return t("chat.context.count.references", {
+    sent: sources.sentReferenceCount,
+    available: sources.availableReferenceCount,
+  });
+}
+
+function visibleSegments(segments: readonly ChatContextSegmentWire[]): ChatContextSegmentWire[] {
+  // An empty summary is noise; every other share stays listed so the window always adds up.
+  return segments.filter((segment) => segment.id !== "summary" || segment.tokens > 0);
+}
+
+function SegmentBar({
+  segments,
+  window,
+}: {
+  readonly segments: readonly ChatContextSegmentWire[];
+  readonly window: number;
+}): ReactNode {
+  return (
+    <div className={styles.cmpBar} aria-hidden="true">
+      {segments.map((segment) => (
+        <span
+          key={segment.id}
+          className={styles.cmpBarSegment}
+          data-segment={segment.id}
+          style={{ flexGrow: segment.tokens / Math.max(1, window) }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SegmentRow({
+  segment,
+  status,
+}: {
+  readonly segment: ChatContextSegmentWire;
+  readonly status: ChatContextStatusWire;
+}): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const detail = segmentDetail(t, segment, status);
+  const share = (segment.tokens / Math.max(1, status.contextWindowTokens)) * 100;
+  return (
+    <li className={styles.cmpLegendRow} data-segment={segment.id}>
+      <span className={styles.cmpSwatch} data-segment={segment.id} aria-hidden="true" />
+      <span className={styles.cmpLegendLabel}>
+        {segmentLabel(t, segment)}
+        {detail === undefined ? null : <span className={styles.cmpLegendDetail}>{detail}</span>}
+      </span>
+      <span className={styles.cmpLegendValue}>{segment.tokens.toLocaleString(locale)}</span>
+      <span className={styles.cmpLegendShare}>
+        {t("chat.context.percent", { percent: formatContextPercent(share, locale) })}
+      </span>
+    </li>
+  );
+}
+
+function ContextBreakdown({
+  status,
+  segments,
+}: {
+  readonly status: ChatContextStatusWire;
+  readonly segments: readonly ChatContextSegmentWire[];
+}): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const shown = visibleSegments(segments);
+  return (
+    <>
+      <p className={styles.cmpTotal}>
+        {t("chat.context.total", {
+          used: status.estimatedInputTokens.toLocaleString(locale),
+          usable: status.inputBudgetTokens.toLocaleString(locale),
+          window: status.contextWindowTokens.toLocaleString(locale),
+        })}
+      </p>
+      <SegmentBar segments={shown} window={status.contextWindowTokens} />
+      <ul className={styles.cmpLegend} aria-label={t("chat.context.breakdown")}>
+        {shown.map((segment) => (
+          <SegmentRow key={segment.id} segment={segment} status={status} />
+        ))}
+      </ul>
+      <ContextNotes status={status} />
+    </>
+  );
+}
+
+// A provider measurement differs from Keiko's admission estimate, the unit of every share above;
+// stating both keeps the breakdown and the measured request comparable.
+function lastRequestText(
+  t: I18nTranslate,
+  number: (value: number) => string,
+  request: NonNullable<ChatContextStatusWire["lastRequest"]>,
+): string {
+  const tokens = number(request.promptTokens);
+  if (!request.measured) return t("chat.context.lastRequestEstimated", { tokens });
+  if (request.estimatedTokens === undefined || request.estimatedTokens === request.promptTokens) {
+    return t("chat.context.lastRequestMeasured", { tokens });
+  }
+  return t("chat.context.lastRequestMeasuredWithEstimate", {
+    tokens,
+    estimated: number(request.estimatedTokens),
+  });
+}
+
+function ContextNotes({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const number = (value: number): string => value.toLocaleString(locale);
+  const sources = status.knowledgeSources;
+  const trimmed =
+    sources !== undefined && sources.sentReferenceCount < sources.availableReferenceCount;
+  const until =
+    status.autoCompactionAtTokens === undefined
+      ? undefined
+      : Math.max(0, status.autoCompactionAtTokens - status.estimatedInputTokens);
+  return (
+    <>
+      {trimmed ? (
+        <p className={styles.cmpWarning} role="note">
+          {t("chat.context.referencesTrimmed", {
+            sent: number(sources.sentReferenceCount),
+            available: number(sources.availableReferenceCount),
+          })}
+        </p>
+      ) : null}
+      {status.lastRequest === undefined ? null : (
+        <p className={styles.cmpHelp}>{lastRequestText(t, number, status.lastRequest)}</p>
+      )}
+      {until === undefined ? null : (
+        <p className={styles.cmpHelp}>
+          {t("chat.context.untilCompaction", { tokens: number(until) })}
+        </p>
+      )}
+    </>
+  );
+}
+
+function ContextSummary({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
+  return status.segments === undefined ? (
+    <ContextMetrics status={status} />
+  ) : (
+    <>
+      <ContextBreakdown status={status} segments={status.segments} />
+      <ContextFootnotes status={status} />
+    </>
+  );
+}
+
+// Savings, pending compaction and the assumed-window hint, shared by both presentations.
+function ContextFootnotes({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const number = (value: number): string => value.toLocaleString(locale);
+  return (
+    <>
       {status.compaction === undefined ? null : (
         <p className={styles.cmpSavings}>
-          {t("chat.context.saved", {
-            tokens: number(status.compaction.tokensSaved),
-            count: number(status.compaction.messagesCompacted),
+          {t(
+            status.compaction.messagesCompacted === 1
+              ? "chat.context.saved.one"
+              : "chat.context.saved",
+            {
+              tokens: number(status.compaction.tokensSaved),
+              count: number(status.compaction.messagesCompacted),
+            },
+          )}
+        </p>
+      )}
+      {status.pendingCompaction === undefined ? null : (
+        <p className={styles.cmpSavings}>
+          {t("chat.context.pending", {
+            before: number(status.pendingCompaction.tokensBefore),
+            after: number(status.pendingCompaction.tokensAfter),
           })}
         </p>
       )}
+      {status.contextWindowAssumed === true ? (
+        <p className={styles.cmpHelp}>{t("chat.context.windowAssumed")}</p>
+      ) : null}
     </>
   );
 }
@@ -63,11 +283,14 @@ function ContextDetails(props: ChatContextMeterProps): ReactNode {
       {props.status === undefined ? (
         <p>{t("chat.context.unavailable")}</p>
       ) : (
-        <ContextMetrics status={props.status} />
+        <ContextSummary status={props.status} />
       )}
       <p className={styles.cmpHelp}>{t("chat.context.estimate")}</p>
       <p className={styles.cmpHelp}>{t("chat.context.automatic")}</p>
       <p className={styles.cmpHelp}>{t("chat.context.retained")}</p>
+      {props.status?.knowledgeSources === undefined ? null : (
+        <p className={styles.cmpHelp}>{t("chat.context.sourcesPolicy")}</p>
+      )}
       {props.error ? (
         <p>
           <output>

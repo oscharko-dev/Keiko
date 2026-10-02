@@ -35,6 +35,7 @@ export interface AssistantSpeechStreamingSink {
     input: { readonly text: string; readonly persona?: VoicePersona },
     signal: AbortSignal,
     handlers: AssistantSpeechStreamHandlers,
+    correlationId?: string,
   ): Promise<boolean>;
   // Immediate flush for stop / mute / interrupt (barge-in).
   stop(): void;
@@ -143,9 +144,10 @@ export function createBrowserAssistantSpeechStreamingSink():
   async function requestSpeechResponse(
     input: { readonly text: string; readonly persona?: VoicePersona },
     signal: AbortSignal,
+    correlationId: string | undefined,
   ): Promise<Response | "cancelled" | "fallback"> {
     try {
-      return await streamAssistantSpeech(input, signal);
+      return await streamAssistantSpeech(input, signal, correlationId);
     } catch (error) {
       if (isAbortError(error)) return "cancelled";
       reportClientDiagnostic("[keiko] assistant speech stream failed; using buffered playback", {
@@ -313,7 +315,7 @@ export function createBrowserAssistantSpeechStreamingSink():
       });
     },
 
-    async play(input, signal, handlers): Promise<boolean> {
+    async play(input, signal, handlers, correlationId): Promise<boolean> {
       let lease: AssistantSpeechNodeLease;
       try {
         lease = await ensureNode();
@@ -343,7 +345,7 @@ export function createBrowserAssistantSpeechStreamingSink():
         }
       };
 
-      const response = await requestSpeechResponse(input, signal);
+      const response = await requestSpeechResponse(input, signal, correlationId);
       if (response === "cancelled") return true;
       if (response === "fallback") return false;
       if (!leaseIsCurrent(lease, signal)) {

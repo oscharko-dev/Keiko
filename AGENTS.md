@@ -544,6 +544,44 @@ candidates. `counterSource` identifies a winning retained floor as `retained-mea
 `imageAccounting` uses that disposition when only the retained positive measurement replaces the
 image reserve. Neither retained value is presented as a new provider observation.
 
+A chat model whose window nobody declared is planned as `contextWindowAssumed` until the provider
+states it. `gateway.context-window.probe` records the one-per-deployment window probe (`reported`,
+`not-reported`, `failed`, `skipped-spend-budget`) under its own correlation joined by
+`parentCorrelationId` to the reading that spawned it. `gateway.context-window.adoption` records the
+adopted window with its source (`window-probe`, `provider-overflow`), the previous window and
+whether it was assumed, or `stale-deployment` when the stating deployment was replaced.
+`gateway.context-window.retry` records the single re-planned retry of an admitted turn, with its
+surface and the planned and adopted windows. All three carry a correlation id and a model digest,
+never provider text.
+`search.prompt.window-fitted` records a Knowledge Pod answer prompt that dropped trailing references
+to fit the model (`trimmed`) or could not fit a single one (`refused`), with the reference counts,
+the prompt size and the input budget.
+`client.knowledge-catalog.unavailable` records the six counts of a Knowledge Pod picker that offered
+no usable pod (pods, ready pods, sets, bound, missing, not ready), never a name, path or id.
+`search.citations.reconciled` records how a Knowledge Pod answer's markers met its sent references
+(`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`) with the reference,
+attached, weak-overlap, grouped and dangling counts. `gateway.discovery.alias-intersection` carries
+the `role` discovery gave each alias (`chat`, `embedding`, `voice`, `rerank`, `unsupported`), and
+`gateway.reranker.setup.resolved` records once per committed setup whether a discovered reranker was
+`wired`, `kept-existing` or `probe-failed` (at `warn`, with a diagnostic), with candidate and probe
+counts. The `inspected` `chat.context.management` line also carries the meter reading's optional
+counts: stored and projected history, knowledge-source tokens, the sent and available reference
+counts, the last knowledge request (measured and estimated), the system, summary and message shares,
+the automatic-compaction trigger, and the assumed-window and pending-probe flags.
+`search.entailment.judged` records, per grounded answer the judge read, the judged, unsupported and
+undecided claim counts, so the displayed "N unsupported claims" is reconstructable, and
+`hiddenProseClaimCount` counts the claims it could not judge because bracketed prose was stripped.
+`search.citations.support-settled` records the settled caveat of a Knowledge Pod answer (`none`,
+`judge-undecided`, `no-judge`, `unjudged-citation`) with its weak-citation and hidden-claim counts. The multi-source
+prompt reports a trim or refusal on `search.prompt.window-fitted` like the Knowledge Pod and hybrid
+prompts. `client.answer.copied` records each chat answer copy (`copied` or `failed` at `warn` with
+its error kind and frames), whether the answer was grounded, and how many marker groups the copy
+removed and kept, never the copied text. `client.answer.speech-prepared` records the same counts
+for an answer read aloud in the voice dialogue, under the correlation its synthesis request carries.
+`search.answer.assessed` records per Knowledge Pod answer whether it carried Keiko's own, labelled
+assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which operator policy
+(`allowed`, `disabled`), and the character sizes of the source-backed part and the assessment.
+
 ### Rule 2 — when you debug, the log is your primary source
 
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product

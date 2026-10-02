@@ -693,6 +693,69 @@ describe("SafeMarkdown — PDF citation markers", () => {
   });
 });
 
+// Models cite with grouped markers ("[1, 7, 8]"). The renderer used to match one integer per bracket
+// pair, so a whole group was dead text: no link for any index in it.
+describe("SafeMarkdown — grouped citation markers", () => {
+  const SECOND_CITATION: LocalKnowledgeEvidenceCitation = {
+    ...PDF_CITATION,
+    stableId: "lk-3",
+    marker: "[3]",
+    label: "handbook.pdf",
+  };
+
+  function groupedPreviewController(): CitationPreviewController {
+    // The real controller normalizes any bracket glyph to its index; key on the digits the same way.
+    const affordances = new Map([
+      ["1", { citation: PDF_CITATION, state: "available" as const }],
+      ["3", { citation: SECOND_CITATION, state: "available" as const }],
+    ]);
+    return {
+      forCitation: vi.fn(() => undefined),
+      forMarker: vi.fn((marker) => affordances.get(String(marker).replace(/\D/gu, ""))),
+      isOpening: vi.fn(() => false),
+      openCitation: vi.fn<() => Promise<string | null>>().mockResolvedValue("pdf-window-1"),
+    };
+  }
+
+  it("links every index of a grouped marker that has structured metadata", () => {
+    const citationPreview = groupedPreviewController();
+    render(
+      <SafeMarkdown source="Java 17 wird verwendet [1, 2, 3]." citationPreview={citationPreview} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open PDF preview for citation [1]" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open PDF preview for citation [3]" }));
+
+    expect(citationPreview.openCitation).toHaveBeenNthCalledWith(1, PDF_CITATION, "inline-marker");
+    expect(citationPreview.openCitation).toHaveBeenNthCalledWith(
+      2,
+      SECOND_CITATION,
+      "inline-marker",
+    );
+    expect(screen.queryByRole("button", { name: /citation \[2\]/ })).toBeNull();
+    expect(document.body.textContent).toContain("[2]");
+  });
+
+  it("keeps a grouped marker without any linkable index exactly as written", () => {
+    render(<SafeMarkdown source="Java 17 [7, 8]." citationPreview={groupedPreviewController()} />);
+
+    expect(screen.queryByRole("button", { name: /PDF preview/ })).toBeNull();
+    expect(document.body.textContent).toContain("Java 17 [7, 8].");
+  });
+
+  it("links a marker written with CJK glyphs inside a group", () => {
+    const citationPreview = groupedPreviewController();
+    render(<SafeMarkdown source="Siehe 【1, 3】." citationPreview={citationPreview} />);
+
+    expect(
+      screen.getByRole("button", { name: "Open PDF preview for citation 【1】" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Open PDF preview for citation 【3】" }),
+    ).toBeDefined();
+  });
+});
+
 describe("SafeMarkdown — streaming trailing content", () => {
   it("keeps trailing content inside plain streaming code fences", (): void => {
     render(

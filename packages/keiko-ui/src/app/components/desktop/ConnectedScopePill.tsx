@@ -27,13 +27,6 @@ export interface ConnectedScopePillProps {
 
 type GroundedBudgetPressure = "low" | "moderate" | "high" | "exceeded";
 
-const PRESSURE_LABEL: Readonly<Record<GroundedBudgetPressure, string>> = {
-  low: "Low",
-  moderate: "Moderate",
-  high: "High",
-  exceeded: "Exceeded",
-};
-
 const PRESSURE_CLASS: Readonly<Record<GroundedBudgetPressure, string>> = {
   low: "cmp-budget-badge cmp-budget-badge-low",
   moderate: "cmp-budget-badge cmp-budget-badge-moderate",
@@ -41,10 +34,10 @@ const PRESSURE_CLASS: Readonly<Record<GroundedBudgetPressure, string>> = {
   exceeded: "cmp-budget-badge cmp-budget-badge-exceeded",
 };
 
+// Counts and a closed pressure only: the pill renders them in the user's language (the badge and
+// the summary are catalog entries), so no English text is carried here.
 export interface LastGroundedBudgetStatus {
   readonly pressure: GroundedBudgetPressure;
-  readonly label: string;
-  readonly summary: string;
   readonly totalTokens: number;
   readonly filesRead: number;
 }
@@ -89,13 +82,7 @@ export function buildLastGroundedBudgetStatus(
   const maxRatio = ratios.length === 0 ? 0 : Math.max(...ratios);
   const pressure: GroundedBudgetPressure = pressureFromRatio(maxRatio);
   const totalTokens = usage.modelInputTokens + usage.modelOutputTokens;
-  return {
-    pressure,
-    label: PRESSURE_LABEL[pressure],
-    summary: `Last grounded run: ${formatTokenCount(totalTokens)} tokens, ${String(usage.filesRead)} files`,
-    totalTokens,
-    filesRead: usage.filesRead,
-  };
+  return { pressure, totalTokens, filesRead: usage.filesRead };
 }
 
 // Strip trailing "/" characters with a bounded scan instead of the unanchored `/\/+$/`: without a

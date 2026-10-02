@@ -1,3 +1,5 @@
+import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
+import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 import { logChatResponseMessage } from "./chat-activity.js";
 import {
@@ -25,6 +27,7 @@ import {
   resolveCostClass,
   type ChatMessage as GatewayChatMessage,
   type ModelCapability,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
@@ -831,17 +834,24 @@ export function withPromptExcerptBudget(
   return withPromptExcerptTotalByteBudget(pack, totalExcerptBytes);
 }
 
-function promptBudgetedMessages(
+type GroundedPromptBuilder = (
   question: string,
   pack: ConnectedContextPack,
   redactor: Redactor,
-  build: (
-    question: string,
-    pack: ConnectedContextPack,
-    redactor: Redactor,
-  ) => readonly GatewayChatMessage[],
+) => readonly GatewayChatMessage[];
+
+interface FittedPromptPack {
+  readonly messages: readonly GatewayChatMessage[];
+  readonly pack: ConnectedContextPack;
+}
+
+function fitGroundedPrompt(
+  question: string,
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+  build: GroundedPromptBuilder,
   options: GroundedGatewayPromptOptions = {},
-): readonly GatewayChatMessage[] {
+): FittedPromptPack {
   const budgetedPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
   const limit = modelInputPromptByteLimit(budgetedPack.budget.modelInputTokensMax);
   const fits = (candidate: readonly GatewayChatMessage[]): boolean =>
@@ -849,7 +859,7 @@ function promptBudgetedMessages(
     countGatewayPromptTokens({ messages: candidate }, options.tokenAccounting) <=
       budgetedPack.budget.modelInputTokensMax;
   const messages = build(question, budgetedPack, redactor);
-  if (fits(messages)) return messages;
+  if (fits(messages)) return { messages, pack: budgetedPack };
 
   const emptyPack = withPromptExcerptBudget(budgetedPack, 0);
   const emptyMessages = build(question, emptyPack, redactor);
@@ -864,22 +874,73 @@ function promptBudgetedMessages(
   }
   let low = 0;
   let high = Math.max(0, limit - overheadBytes);
-  let best = emptyMessages;
+  let best: FittedPromptPack = { messages: emptyMessages, pack: emptyPack };
   while (low <= high) {
     const totalExcerptBytes = Math.floor((low + high) / 2);
-    const candidate = build(
-      question,
-      withPromptExcerptBudget(budgetedPack, totalExcerptBytes),
-      redactor,
-    );
+    const candidatePack = withPromptExcerptBudget(budgetedPack, totalExcerptBytes);
+    const candidate = build(question, candidatePack, redactor);
     if (fits(candidate)) {
-      best = candidate;
+      best = { messages: candidate, pack: candidatePack };
       low = totalExcerptBytes + 1;
     } else {
       high = totalExcerptBytes - 1;
     }
   }
   return best;
+}
+
+function promptBudgetedMessages(
+  question: string,
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+  build: GroundedPromptBuilder,
+  options: GroundedGatewayPromptOptions = {},
+): readonly GatewayChatMessage[] {
+  return fitGroundedPrompt(question, pack, redactor, build, options).messages;
+}
+
+/** Excerpts that carry content: what a rendered folder prompt actually shows the model. */
+export function promptExcerptCount(packs: readonly ConnectedContextPack[]): number {
+  return packs.reduce(
+    (total, pack) =>
+      total +
+      pack.files.reduce(
+        (count, file) =>
+          count + file.excerpts.filter((excerpt) => excerpt.content.length > 0).length,
+        0,
+      ),
+    0,
+  );
+}
+
+/**
+ * The folder prompt exactly as it is sent — fitted to the model's input budget — with the same
+ * prompt rendered without excerpts, so the context meter can count the share the sources took
+ * (grounded-prompt-context.ts).
+ */
+export function fittedGroundedGatewayPrompt(
+  question: string,
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+  options?: GroundedGatewayPromptOptions,
+): SentGroundedPrompt {
+  const fitted = fitGroundedPrompt(
+    question,
+    pack,
+    redactor,
+    buildRawGroundedGatewayMessages,
+    options,
+  );
+  return {
+    messages: fitted.messages,
+    withoutSources: buildRawGroundedGatewayMessages(
+      question,
+      withPromptExcerptBudget(fitted.pack, 0),
+      redactor,
+    ),
+    sentReferenceCount: promptExcerptCount([fitted.pack]),
+    availableReferenceCount: promptExcerptCount([pack]),
+  };
 }
 
 export function packBudgetSummary(pack: ConnectedContextPack): string {
@@ -986,29 +1047,32 @@ export function buildGroundedGatewayMessages(
 }
 
 function createGatewayAnswerer(
+  deps: UiHandlerDeps,
   model: ModelPort,
   modelId: string,
-  redactor: Redactor,
   signal: AbortSignal,
-  modelInputTokensMax: number | undefined,
   correlationId: string | undefined,
   tokenAccounting: ContextProfile["tokenAccounting"],
 ): GroundedAnswerer {
+  // The input budget is read per attempt, not captured once: when the provider's overflow answer
+  // taught Keiko the model's real window, the retry re-budgets the excerpts to fit it. The prompt
+  // of the last attempt is kept for the context meter's share of this answer.
+  let sent: SentGroundedPrompt | undefined;
+  const call = (question: string, pack: ConnectedContextPack): Promise<NormalizedResponse> => {
+    const promptOptions = groundedPromptOptions(deps, modelId, tokenAccounting);
+    sent = fittedGroundedGatewayPrompt(question, pack, deps.redactor, promptOptions);
+    return model.call(
+      { modelId, messages: sent.messages, stream: false, logContext: { correlationId } },
+      signal,
+    );
+  };
   return {
     answer: async (question, pack): Promise<GroundedAnswerResult> => {
       ensureNotCancelled(signal);
-      const promptOptions = {
-        ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
-        ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
-      };
-      const response = await model.call(
-        {
-          modelId,
-          messages: buildGroundedGatewayMessages(question, pack, redactor, promptOptions),
-          stream: false,
-          logContext: { correlationId },
-        },
-        signal,
+      const response = await withAdoptedContextWindowRetry(
+        deps,
+        { modelId, surface: "grounded", correlationId },
+        () => call(question, pack),
       );
       const content = response.content.trim();
       assertUsableAssistantContent(content, modelId);
@@ -1021,9 +1085,33 @@ function createGatewayAnswerer(
         // GEN-AI-GATEWAY-001 (RB-4): carry the finishReason so a truncated ("length") completion is
         // surfaced by runGroundedExploration instead of being consumed as a complete answer.
         finishReason: response.finishReason,
+        ...sentPromptContextField(sent, response, currentContextProfileForModel(deps, modelId)),
       };
     },
   };
+}
+
+// The input budget of one attempt, read from the model's current capability.
+export function groundedPromptOptions(
+  deps: UiHandlerDeps,
+  modelId: string,
+  tokenAccounting: ContextProfile["tokenAccounting"],
+): GroundedGatewayPromptOptions {
+  const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
+  return {
+    ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
+    ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
+  };
+}
+
+function sentPromptContextField(
+  sent: SentGroundedPrompt | undefined,
+  response: NormalizedResponse,
+  profile: ContextProfile | undefined,
+): Pick<GroundedAnswerResult, "promptContext"> {
+  return sent === undefined
+    ? {}
+    : { promptContext: sentPromptContext(sent, response.usage.promptTokens, profile) };
 }
 
 function resolveGroundedAnswerModel(
@@ -1044,7 +1132,6 @@ interface DefaultRunnerContext {
   readonly signal: AbortSignal;
   readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly model: ModelPort;
-  readonly modelInputTokensMax: number | undefined;
   readonly entailmentStage: EntailmentStage | undefined;
   readonly correlationId: string | undefined;
 }
@@ -1055,8 +1142,7 @@ function runDefaultGroundedExploration(
   runnerCtx: DefaultRunnerContext,
   input: OrchestratorInput,
 ): Promise<OrchestratorOutput> {
-  const { deps, modelId, signal, contextProfile, model, modelInputTokensMax, entailmentStage } =
-    runnerCtx;
+  const { deps, modelId, signal, contextProfile, model, entailmentStage } = runnerCtx;
   const nowMs = Date.now;
   const budgetedInput =
     input.budget === undefined
@@ -1070,11 +1156,10 @@ function runDefaultGroundedExploration(
   );
   return runGroundedExploration(budgetedInput, {
     answerer: createGatewayAnswerer(
+      deps,
       model,
       modelId,
-      deps.redactor,
       signal,
-      modelInputTokensMax,
       runnerCtx.correlationId,
       contextProfile?.tokenAccounting,
     ),
@@ -1109,7 +1194,6 @@ function defaultRunner(
 ): GroundedRunner | RouteResult {
   const model = resolveGroundedAnswerModel(deps, modelId, readinessAdmission);
   if ("status" in model) return model;
-  const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   // Knowledge M1.2 (#2563): the folder grounded-ask has no knowledge capsule, so entailment is
   // governed only by whether a compatible judge model is configured (empty capsules ⇒ no policy to
   // deny). Undefined ⇒ the stage is inert and the assembled pack is byte-identical to today.
@@ -1117,7 +1201,8 @@ function defaultRunner(
     deps,
     [],
     modelId,
-    { diagnostics: deps.diagnostics },
+    // The request's correlation, so the verdict line joins the ask (PR #3678 review).
+    { diagnostics: deps.diagnostics, correlationId },
     signal,
   );
   const runnerCtx: DefaultRunnerContext = {
@@ -1126,7 +1211,6 @@ function defaultRunner(
     signal,
     contextProfile,
     model,
-    modelInputTokensMax,
     entailmentStage,
     correlationId,
   };
@@ -1562,6 +1646,9 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     omittedCount: output.pack.omitted.length,
     elapsedMs: output.elapsedMs,
     contextPack,
+    ...(modelInvoked && output.promptContext !== undefined
+      ? { promptContext: output.promptContext }
+      : {}),
   };
   deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   if (sourceEvidenceAvailable) {
@@ -1708,7 +1795,7 @@ function resolveMultiSourceSeam(
   );
   return {
     retriever: defaultRetriever(signal, deps, correlationId),
-    answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal, correlationId),
+    answerer: createMultiSourceAnswerer(deps, model, modelId, signal, correlationId),
   };
 }
 
@@ -1753,6 +1840,7 @@ async function dispatchMultiSourceAsk(
       ? { entailmentStageFactory: seam.entailmentStageFactory }
       : {}),
     preSkipped: skippedFolders.map((s) => ({ label: s.label, message: s.message })),
+    correlationId: args.correlationId,
   });
 }
 

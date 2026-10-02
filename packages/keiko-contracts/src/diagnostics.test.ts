@@ -19,6 +19,7 @@ import {
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   CLIENT_SESSION_REPAIR_STREAMS,
   CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS,
+  CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX,
   CLIENT_SELECT_DISMISSAL_REASONS,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
@@ -358,6 +359,57 @@ describe("isClientDiagnosticIngestRequest", () => {
       { reason: "escape", focus: "trigger", label: "Model only" },
     ]) {
       expect(isClientDiagnosticIngestRequest({ ...validRequest(), selectDismissal: invalid })).toBe(
+        false,
+      );
+    }
+  });
+
+  // PR #3678 review: the Knowledge Pod catalog's availability picture is six bounded counts, never
+  // a name, path or id, and never a field beyond them.
+  it("accepts only the six bounded knowledge catalog counts", () => {
+    const counts = {
+      podCount: 2,
+      readyPodCount: 0,
+      setCount: 1,
+      boundCount: 1,
+      missingCount: 1,
+      notReadyCount: 0,
+    };
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), knowledgeCatalog: counts })).toBe(
+      true,
+    );
+    const { notReadyCount: _omitted, ...missingField } = counts;
+    for (const invalid of [
+      missingField,
+      { ...counts, podName: "Customer contracts" },
+      { ...counts, podCount: -1 },
+      { ...counts, podCount: 1.5 },
+      { ...counts, podCount: CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX + 1 },
+      "pods=2",
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), knowledgeCatalog: invalid }),
+      ).toBe(false);
+    }
+  });
+});
+
+// PR #3678 review: a chat answer copy reports a closed outcome, the grounded flag and two bounded
+// counts, never the copied text and never another field.
+describe("client answer copy evidence", () => {
+  it("accepts only the closed copy outcome, the grounded flag and two bounded counts", () => {
+    const copy = { outcome: "copied", grounded: true, strippedGroupCount: 3, keptGroupCount: 1 };
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), answerCopy: copy })).toBe(true);
+    for (const invalid of [
+      { ...copy, outcome: "pasted" },
+      { ...copy, grounded: "yes" },
+      { ...copy, strippedGroupCount: -1 },
+      { ...copy, keptGroupCount: 1.5 },
+      { ...copy, text: "The API uses TLS." },
+      { outcome: "copied", grounded: true, strippedGroupCount: 3 },
+      "copied",
+    ]) {
+      expect(isClientDiagnosticIngestRequest({ ...validRequest(), answerCopy: invalid })).toBe(
         false,
       );
     }

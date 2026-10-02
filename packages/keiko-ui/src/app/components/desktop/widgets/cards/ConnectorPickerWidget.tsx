@@ -12,7 +12,8 @@
 // it with Tab/Enter. All interactive targets are ≥24×24 px (WCAG 2.5.8).
 // Color contrast follows the design system tokens (ink on surface — all ≥4.5:1).
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import styles from "./ConnectorPickerWidget.module.css";
 import {
   capsulesForKnowledgePodUi,
@@ -21,13 +22,21 @@ import {
   fetchCapsuleSets,
   type CapsuleListEntry,
   type CapsuleSetListEntry,
-  type KnowledgePodUiGuidance,
 } from "@/lib/local-knowledge-api";
 import { ApiError } from "@/lib/api";
 import { useTranslate } from "@/lib/i18n";
+import {
+  knowledgePodGuidanceText,
+  readinessLabelText,
+  useLocalKnowledgeTranslate,
+  type I18nTranslate as LocalKnowledgeTranslate,
+  type LocalKnowledgeMessageKey,
+} from "@/app/local-knowledge/local-knowledge-i18n";
+import { STATUS_LABEL_KEYS } from "@/app/local-knowledge/connector-graph-types";
 import { Icons } from "../../Icons";
 import KeikoSelect from "../../KeikoSelect";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
+import { useKnowledgeCatalog } from "../../knowledge-catalog";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const ServerIcon = Icons.server;
@@ -54,14 +63,17 @@ export interface ConnectorPickerWidgetProps {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function lifecycleLabel(state: CapsuleListEntry["lifecycleState"]): string {
+function lifecycleLabel(
+  t: LocalKnowledgeTranslate,
+  state: CapsuleListEntry["lifecycleState"],
+): string {
   switch (state) {
     case "ready":
-      return "Ready";
+      return t("localKnowledge.picker.state.ready");
     case "indexing":
-      return "Indexing…";
+      return t("localKnowledge.picker.state.indexing");
     case "error":
-      return "Failed";
+      return t("localKnowledge.picker.state.error");
     default:
       return state;
   }
@@ -94,20 +106,27 @@ function isSelectableKnowledgePodSet(set: CapsuleSetListEntry): boolean {
   return readiness === undefined || SELECTABLE_SET_READINESS.has(readiness);
 }
 
-function formatLoadError(error: unknown): string {
+// A load failure keeps the server's message; without one, ErrorState states the failure in the
+// user's language.
+interface LoadFailure {
+  readonly message: string | undefined;
+}
+
+function loadFailure(error: unknown): LoadFailure {
   // uiux-fix F018 C124: lead with the human message; the machine code follows as a
   // parenthesised detail instead of a bold "INTERNAL:" prefix.
-  if (error instanceof ApiError) return `${error.message} (${error.code})`;
-  if (error instanceof Error) return error.message;
-  return "Failed to load Knowledge Pods.";
+  if (error instanceof ApiError) return { message: `${error.message} (${error.code})` };
+  if (error instanceof Error) return { message: error.message };
+  return { message: undefined };
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function LoadingState(): ReactNode {
+  const t = useLocalKnowledgeTranslate();
   return (
     <div className="connector-picker-status" role="status" aria-live="polite">
-      Loading Knowledge Pods…
+      {t("localKnowledge.picker.loading")}
     </div>
   );
 }
@@ -116,14 +135,15 @@ function ErrorState({
   message,
   onRetry,
 }: {
-  readonly message: string;
+  readonly message: string | undefined;
   readonly onRetry: () => void;
 }): ReactNode {
+  const t = useLocalKnowledgeTranslate();
   return (
     <div className="connector-picker-error" role="alert">
-      <p>{message}</p>
+      <p>{message ?? t("localKnowledge.picker.loadFailed")}</p>
       <button type="button" className="connector-picker-retry" onClick={onRetry}>
-        Try again
+        {t("localKnowledge.picker.retry")}
       </button>
     </div>
   );
@@ -134,6 +154,7 @@ function EmptyState({
 }: {
   readonly onManageConnectors: () => void;
 }): ReactNode {
+  const t = useLocalKnowledgeTranslate();
   return (
     <div className="connector-picker-empty">
       <button
@@ -141,12 +162,15 @@ function EmptyState({
         className="lk-btn lk-btn-primary connector-picker-create-link"
         onClick={onManageConnectors}
       >
-        Create a Knowledge Pod
+        {t("localKnowledge.picker.create")}
       </button>
     </div>
   );
 }
 
+// `capsules` and `capsuleSets` are every listed entry in any state — the picker's own options are
+// narrowed to the selectable ones — so a selection that stopped being selectable still names its
+// entry and its real state.
 interface SelectedBadgeProps {
   readonly capsules: readonly CapsuleListEntry[];
   readonly capsuleSets: readonly CapsuleSetListEntry[];
@@ -172,24 +196,39 @@ function selectedEntry(
   return null;
 }
 
+// The state a listed entry is not offered for, named next to it; `null` for a selectable one.
+function withheldStateLabel(
+  entry: KnowledgePodPickerEntry,
+  t: LocalKnowledgeTranslate,
+): string | null {
+  if ("lifecycleState" in entry) {
+    return isSelectableKnowledgePod(entry) ? null : t(STATUS_LABEL_KEYS[entry.lifecycleState]);
+  }
+  return isSelectableKnowledgePodSet(entry)
+    ? null
+    : readinessLabelText(entry.knowledgePod?.readiness, t);
+}
+
+// A selection is named by its display name (plus its state while it is not selectable). One the
+// catalog does not list at all reads as unavailable; the raw id is never shown.
 function selectedLabel(
   capsules: readonly CapsuleListEntry[],
   capsuleSets: readonly CapsuleSetListEntry[],
   kind: string | undefined,
   id: string | undefined,
+  t: LocalKnowledgeTranslate,
 ): string | null {
   const entry = selectedEntry(capsules, capsuleSets, kind, id);
-  if (entry !== null) return entry.displayName;
+  if (entry !== null) {
+    const state = withheldStateLabel(entry, t);
+    return state === null
+      ? entry.displayName
+      : t("localKnowledge.picker.selectedWithState", { name: entry.displayName, state });
+  }
   if (kind === undefined || id === undefined || id.length === 0) return null;
-  if (kind === "capsule") return `Knowledge Pod ${id}`;
-  if (kind === "capsule-set") return `Knowledge Pod Set ${id}`;
+  if (kind === "capsule") return t("localKnowledge.picker.unavailablePod");
+  if (kind === "capsule-set") return t("localKnowledge.picker.unavailableSet");
   return null;
-}
-
-function guidanceForEntry(
-  entry: KnowledgePodPickerEntry | null,
-): KnowledgePodUiGuidance | undefined {
-  return entry?.knowledgePod?.guidance;
 }
 
 function SelectedBadge({
@@ -198,56 +237,86 @@ function SelectedBadge({
   selectedKind,
   selectedId,
 }: SelectedBadgeProps): ReactNode {
-  const label = selectedLabel(capsules, capsuleSets, selectedKind, selectedId);
-  const guidance = guidanceForEntry(selectedEntry(capsules, capsuleSets, selectedKind, selectedId));
+  const t = useLocalKnowledgeTranslate();
+  const label = selectedLabel(capsules, capsuleSets, selectedKind, selectedId, t);
   if (label === null) return null;
+  const guidance = selectedEntry(capsules, capsuleSets, selectedKind, selectedId)?.knowledgePod
+    ?.guidance;
+  const guidanceText = guidance === undefined ? undefined : knowledgePodGuidanceText(guidance, t);
   return (
     <>
       <div className="connector-picker-selected" role="status" aria-live="polite">
         <span aria-hidden="true">●</span>
         <span>{label}</span>
-        {guidance !== undefined ? (
+        {guidance !== undefined && guidanceText !== undefined ? (
           <span className="connector-picker-guidance" data-tone={guidance.tone}>
-            {guidance.label}
+            {guidanceText.label}
           </span>
         ) : null}
       </div>
-      {guidance !== undefined ? (
+      {guidance !== undefined && guidanceText !== undefined ? (
         <p className="connector-picker-notice" data-tone={guidance.tone}>
-          {guidance.description}
+          {guidanceText.description}
         </p>
       ) : null}
     </>
   );
 }
 
-function pickerOptionGuidance(entry: KnowledgePodPickerEntry): {
+// Nothing is selectable, yet a selection that is listed (a pod that is indexing again, say) is still
+// named with its state, above the way to create or manage pods.
+function EmptyPicker({
+  capsules,
+  capsuleSets,
+  selectedKind,
+  selectedId,
+  onManageConnectors,
+}: SelectedBadgeProps & { readonly onManageConnectors: () => void }): ReactNode {
+  const listed = selectedEntry(capsules, capsuleSets, selectedKind, selectedId) !== null;
+  if (!listed) return <EmptyState onManageConnectors={onManageConnectors} />;
+  return (
+    <div className={`connector-picker ${styles.lazyWidgetScope}`}>
+      <SelectedBadge
+        capsules={capsules}
+        capsuleSets={capsuleSets}
+        selectedKind={selectedKind}
+        selectedId={selectedId}
+      />
+      <EmptyState onManageConnectors={onManageConnectors} />
+    </div>
+  );
+}
+
+function pickerOptionGuidance(
+  entry: KnowledgePodPickerEntry,
+  t: LocalKnowledgeTranslate,
+): {
   readonly description?: string;
   readonly badge?: string;
 } {
   const guidance = entry.knowledgePod?.guidance;
   if (guidance === undefined) return {};
-  return {
-    description: guidance.description,
-    badge: guidance.label,
-  };
+  const text = knowledgePodGuidanceText(guidance, t);
+  return { description: text.description, badge: text.label };
 }
 
-function connectorNodeStateLabel(state: string | undefined): string {
-  switch (state) {
-    case "ready":
-      return "Indexed";
-    case "draft":
-      return "Draft";
-    case "indexing":
-      return "Indexing";
-    case "stale":
-      return "Stale";
-    case "error":
-      return "Failed";
-    default:
-      return "Local Knowledge";
-  }
+// The node's state when the catalog answered and does not list the pod any more.
+const CONNECTOR_NODE_UNAVAILABLE = "unavailable";
+
+// The lifecycle states a connector node names; anything else reads as the unselected node.
+const CONNECTOR_NODE_STATE_KEYS: ReadonlyMap<string, LocalKnowledgeMessageKey> = new Map([
+  ["ready", STATUS_LABEL_KEYS.ready],
+  ["draft", STATUS_LABEL_KEYS.draft],
+  ["indexing", STATUS_LABEL_KEYS.indexing],
+  ["stale", STATUS_LABEL_KEYS.stale],
+  ["error", STATUS_LABEL_KEYS.error],
+  ["deleting", STATUS_LABEL_KEYS.deleting],
+  [CONNECTOR_NODE_UNAVAILABLE, "localKnowledge.node.unavailable"],
+]);
+
+function connectorNodeStateLabel(t: LocalKnowledgeTranslate, state: string | undefined): string {
+  const key = state === undefined ? undefined : CONNECTOR_NODE_STATE_KEYS.get(state);
+  return t(key ?? "localKnowledge.node.unselected");
 }
 
 function KnowledgeConnectorNode({
@@ -259,28 +328,72 @@ function KnowledgeConnectorNode({
   readonly selectedState: string | undefined;
   readonly onManageConnectors: () => void;
 }): ReactNode {
+  const t = useLocalKnowledgeTranslate();
   const label =
     selectedLabel !== undefined && selectedLabel.trim().length > 0
       ? selectedLabel.trim()
-      : "Knowledge Pod";
+      : t("localKnowledge.node.defaultLabel");
   return (
     <div className="connector-node" data-testid="knowledge-connector-node">
       <div className="connector-node-icon" aria-hidden="true">
         <ServerIcon size={42} />
       </div>
       <div className="connector-node-copy">
-        <p className="connector-node-kicker">{connectorNodeStateLabel(selectedState)}</p>
+        <p className="connector-node-kicker">{connectorNodeStateLabel(t, selectedState)}</p>
         {/* Non-heading element: this compact Knowledge Pod node is a leaf card with no
             sectioning context, so a real <h2> was an orphan heading (GEN-UI-A11Y-018). */}
         <p className="connector-node-title" title={label}>
           {label}
         </p>
-        <p className="connector-node-meta">Local Knowledge Pod</p>
+        <p className="connector-node-meta">{t("localKnowledge.node.meta")}</p>
       </div>
       <button type="button" className="connector-node-manage" onClick={onManageConnectors}>
-        Manage
+        {t("localKnowledge.node.manage")}
       </button>
     </div>
+  );
+}
+
+// The node's name and state come from the shared Knowledge Pod catalog, not from the label and state
+// frozen into the window's cfg when the pod was dropped: a pod that was renamed, is re-indexing or
+// was deleted since must not keep reading as it did at drop time. The dropped values remain the
+// fallback while the catalog loads or cannot be read (an unreadable catalog says nothing about the
+// pod), and a catalog that loaded and no longer lists the pod reads as unavailable.
+function BoundKnowledgeConnectorNode({
+  capsuleId,
+  selectedLabel,
+  selectedState,
+  onManageConnectors,
+}: {
+  readonly capsuleId: string;
+  readonly selectedLabel: string | undefined;
+  readonly selectedState: string | undefined;
+  readonly onManageConnectors: () => void;
+}): ReactNode {
+  const boundScopes = useMemo(
+    () => [
+      { kind: "capsule" as const, capsuleId: capsuleId as KnowledgeCapsuleId, connectedAtMs: 0 },
+    ],
+    [capsuleId],
+  );
+  const catalog = useKnowledgeCatalog(boundScopes);
+  const entry = catalog.capsules.find((capsule) => String(capsule.id) === capsuleId);
+  const catalogAnswered = !catalog.loading && catalog.loadError === null;
+  if (entry !== undefined) {
+    return (
+      <KnowledgeConnectorNode
+        selectedLabel={entry.displayName}
+        selectedState={entry.lifecycleState}
+        onManageConnectors={onManageConnectors}
+      />
+    );
+  }
+  return (
+    <KnowledgeConnectorNode
+      selectedLabel={selectedLabel}
+      selectedState={catalogAnswered ? CONNECTOR_NODE_UNAVAILABLE : selectedState}
+      onManageConnectors={onManageConnectors}
+    />
   );
 }
 
@@ -296,10 +409,18 @@ export function ConnectorPickerWidget({
   onManageConnectors = () => undefined,
 }: ConnectorPickerWidgetProps): ReactNode {
   const t = useTranslate();
-  const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
-  const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
+  const lkT = useLocalKnowledgeTranslate();
+  // Every listed entry, in any state: a selection that is no longer selectable still resolves to its
+  // name and state. The selectable subsets below are what the picker offers.
+  const [listedCapsules, setListedCapsules] = useState<readonly CapsuleListEntry[]>([]);
+  const [listedCapsuleSets, setListedCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
+  const capsules = useMemo(() => listedCapsules.filter(isSelectableKnowledgePod), [listedCapsules]);
+  const capsuleSets = useMemo(
+    () => listedCapsuleSets.filter(isSelectableKnowledgePodSet),
+    [listedCapsuleSets],
+  );
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LoadFailure | null>(null);
   // Sets that loaded fine but cannot ground an answer. Counted rather than silently dropped: a set
   // the user just composed must not simply disappear from the picker with no explanation.
   const [withheldSetCount, setWithheldSetCount] = useState(0);
@@ -329,22 +450,19 @@ export function ConnectorPickerWidget({
         ]);
         if (cancelled) return;
         if (capsuleResult.status === "fulfilled") {
-          setCapsules(
-            capsulesForKnowledgePodUi(capsuleResult.value).filter(isSelectableKnowledgePod),
-          );
+          setListedCapsules(capsulesForKnowledgePodUi(capsuleResult.value));
         } else {
-          setError(formatLoadError(capsuleResult.reason));
+          setError(loadFailure(capsuleResult.reason));
         }
         if (capsuleSetResult.status === "fulfilled") {
           const loaded = capsuleSetsForKnowledgePodUi(capsuleSetResult.value);
-          const selectable = loaded.filter(isSelectableKnowledgePodSet);
-          setCapsuleSets(selectable);
-          setWithheldSetCount(loaded.length - selectable.length);
+          setListedCapsuleSets(loaded);
+          setWithheldSetCount(loaded.filter((set) => !isSelectableKnowledgePodSet(set)).length);
         } else {
           setSetsFailed(true);
         }
-      } catch (caught) {
-        if (!cancelled) setError(formatLoadError(caught));
+      } catch (error_) {
+        if (!cancelled) setError(loadFailure(error_));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -357,7 +475,8 @@ export function ConnectorPickerWidget({
 
   if (isConnectorNode) {
     return (
-      <KnowledgeConnectorNode
+      <BoundKnowledgeConnectorNode
+        capsuleId={selectedId}
         selectedLabel={selectedLabel}
         selectedState={selectedState}
         onManageConnectors={onManageConnectors}
@@ -369,7 +488,7 @@ export function ConnectorPickerWidget({
   if (error !== null) {
     return (
       <ErrorState
-        message={error}
+        message={error.message}
         onRetry={() => {
           setReloadToken((t) => t + 1);
         }}
@@ -379,7 +498,17 @@ export function ConnectorPickerWidget({
 
   const hasCapsules = capsules.length > 0;
   const hasSets = capsuleSets.length > 0;
-  if (!hasCapsules && !hasSets) return <EmptyState onManageConnectors={onManageConnectors} />;
+  if (!hasCapsules && !hasSets) {
+    return (
+      <EmptyPicker
+        capsules={listedCapsules}
+        capsuleSets={listedCapsuleSets}
+        selectedKind={selectedKind}
+        selectedId={selectedId}
+        onManageConnectors={onManageConnectors}
+      />
+    );
+  }
 
   const currentValue =
     selectedKind !== undefined && selectedId !== undefined && selectedId.length > 0
@@ -399,28 +528,28 @@ export function ConnectorPickerWidget({
   return (
     <div className={`connector-picker ${styles.lazyWidgetScope}`}>
       <SelectedBadge
-        capsules={capsules}
-        capsuleSets={capsuleSets}
+        capsules={listedCapsules}
+        capsuleSets={listedCapsuleSets}
         selectedKind={selectedKind}
         selectedId={selectedId}
       />
 
-      <div className="connector-picker-label">Select Knowledge Pod source</div>
+      <div className="connector-picker-label">{lkT("localKnowledge.picker.label")}</div>
       <KeikoSelect
         triggerClassName="connector-picker-select"
         value={currentValue}
-        ariaLabel="Select Knowledge Pod source"
-        placeholder="— choose a Knowledge Pod source —"
-        menuTitle="Available Knowledge Pod sources"
+        ariaLabel={lkT("localKnowledge.picker.label")}
+        placeholder={lkT("localKnowledge.picker.placeholder")}
+        menuTitle={lkT("localKnowledge.picker.menuTitle")}
         sections={[
           ...(hasCapsules
             ? [
                 {
-                  label: "Knowledge Pods",
+                  label: lkT("localKnowledge.picker.sectionPods"),
                   options: capsules.map((cap) => ({
                     value: `capsule:${cap.id}`,
-                    label: `${cap.displayName} (${lifecycleLabel(cap.lifecycleState)})`,
-                    ...pickerOptionGuidance(cap),
+                    label: `${cap.displayName} (${lifecycleLabel(lkT, cap.lifecycleState)})`,
+                    ...pickerOptionGuidance(cap, lkT),
                   })),
                 },
               ]
@@ -428,11 +557,14 @@ export function ConnectorPickerWidget({
           ...(hasSets
             ? [
                 {
-                  label: "Knowledge Pod Sets",
+                  label: lkT("localKnowledge.picker.sectionSets"),
                   options: capsuleSets.map((set) => ({
                     value: `capsule-set:${set.id}`,
-                    label: `${set.displayName} (${String(set.capsuleCount)} pods)`,
-                    ...pickerOptionGuidance(set),
+                    label: lkT("localKnowledge.picker.setOption", {
+                      name: set.displayName,
+                      count: String(set.capsuleCount),
+                    }),
+                    ...pickerOptionGuidance(set, lkT),
                   })),
                 },
               ]
@@ -445,7 +577,7 @@ export function ConnectorPickerWidget({
 
       {setsFailed ? (
         <output className="connector-picker-notice" style={NATIVE_BLOCK_STYLE}>
-          Knowledge Pod Sets could not be loaded.
+          {lkT("localKnowledge.picker.setsFailed")}
         </output>
       ) : null}
 
@@ -457,7 +589,7 @@ export function ConnectorPickerWidget({
 
       <div className="connector-picker-footer">
         <button type="button" className="connector-picker-create-link" onClick={onManageConnectors}>
-          Create or manage Knowledge Pods
+          {lkT("localKnowledge.picker.manage")}
         </button>
       </div>
     </div>

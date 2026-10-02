@@ -1,5 +1,9 @@
 import { readChatContextStatus, compactChatContext } from "./chat-context-status.js";
 import { logChatContextManagement } from "./chat-context-log.js";
+import {
+  contextWindowProbeInFlight,
+  discoverAssumedContextWindow,
+} from "./gateway-context-window.js";
 // ADR-0013 D7 — Route handlers for UI-local store routes. All inputs are validated;
 // every error path uses the redacted `{ error: { code, message } }` envelope; SECURITY_HEADERS are
 // applied uniformly by the server layer. JSON body reading is bounded by MAX_STORE_BODY_BYTES.
@@ -12,7 +16,10 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ChatContextStatusWire,
+  ProjectWithAvailability,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
@@ -1433,17 +1440,57 @@ export async function handleUpdateMessage(
 // barrel-level NOT_FOUND helper used by future delete-missing paths
 export { notFoundResult };
 
-export function handleChatContextStatus(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  return runHandlerSync(() => {
+export function handleChatContextStatus(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
     const chatId = requireQuery(ctx, "chatId");
     const projectPath = requireQuery(ctx, "projectPath");
     if (!chatBelongsToProject(deps, projectPath, chatId)) return notFoundResult("Chat not found.");
     const modelId = requireQuery(ctx, "modelId");
     assertChatModelId(deps, modelId);
-    const status = readChatContextStatus(deps, chatId, modelId, ctx.correlationId);
+    const status = await contextStatusWithMeasuredWindow(deps, chatId, modelId, ctx.correlationId);
     logChatContextManagement("inspected", status, 0, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
     return { status: 200, body: status };
   });
+}
+
+// The meter shows this model: ask its deployment once for the window its gateway never declared,
+// and wait briefly so the first reading already carries the real window. vLLM answers the probe
+// without generating; a slow gateway only delays the reading, never fails it.
+const CONTEXT_WINDOW_PROBE_WAIT_MS = 3_000;
+
+async function contextStatusWithMeasuredWindow(
+  deps: UiHandlerDeps,
+  chatId: string,
+  modelId: string,
+  correlationId: string | undefined,
+): Promise<ChatContextStatusWire> {
+  const status = readChatContextStatus(deps, chatId, modelId, correlationId);
+  const probe = discoverAssumedContextWindow(
+    deps,
+    modelId,
+    correlationId ?? UNKNOWN_CORRELATION_ID,
+  );
+  // A provider-reported window is re-checked in the background; only an assumed one delays.
+  if (status.contextWindowAssumed === true) {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, CONTEXT_WINDOW_PROBE_WAIT_MS);
+    });
+    await Promise.race([probe, deadline]);
+    clearTimeout(timer);
+  }
+  const measured =
+    status.contextWindowAssumed === true
+      ? readChatContextStatus(deps, chatId, modelId, correlationId)
+      : status;
+  // A probe still running — a slow one, or the background re-check of a reported window — tells
+  // the meter to read again until its answer is in (PR #3678 review).
+  return contextWindowProbeInFlight(deps, modelId)
+    ? { ...measured, contextWindowProbePending: true }
+    : measured;
 }
 
 export async function handleCompactChatContext(

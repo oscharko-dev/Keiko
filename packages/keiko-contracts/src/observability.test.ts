@@ -610,34 +610,48 @@ describe("canonical Activity Log event validation", () => {
     );
   });
 
+  // PR #3678: a startup readiness probe added its parent with a plain spread, so every probe line
+  // lost its registration and the sink discarded it as an unregistered operation.
+  it("keeps the markers when a spawned event gets its parent correlation", () => {
+    const canonical = canonicalFixtureRegistration();
+    const source = attachActivityLogEventRegistration(
+      {
+        category: canonical.category,
+        op: canonical.op,
+        correlationId: "probe-00000001",
+        extra: { completeness: "complete", loss: "none", generation: 1 },
+      },
+      canonical,
+    );
+
+    const rebound = withActivityLogParentCorrelation(source, "boot-00000001");
+
+    expect(rebound).toMatchObject({
+      correlationId: "probe-00000001",
+      parentCorrelationId: "boot-00000001",
+    });
+    expect(validateRegisteredActivityLogEvent(rebound)).toBe(canonical);
+    expect(() =>
+      validateRegisteredActivityLogEvent({ parentCorrelationId: "boot-00000001", ...source }),
+    ).toThrow(new ActivityLogEventValidationError("unregistered-operation"));
+    const rejected = chatRequestDispatchEvent({ modelId: "/etc/passwd" });
+    expect(() =>
+      validateRegisteredActivityLogEvent(
+        withActivityLogParentCorrelation(rejected, "boot-00000001"),
+      ),
+    ).toThrow(new ActivityLogEventValidationError("invalid-field-vocabulary"));
+  });
+
+  it("never overrides the parent an event names itself", () => {
+    const own = { op: "unregistered.fixture", parentCorrelationId: "own-00000001" };
+    expect(withActivityLogParentCorrelation(own, "boot-00000001")).toBe(own);
+  });
+
   it("leaves an event without a registration unmarked", () => {
     const rebound = withActivityLogCorrelation({ op: "unregistered.fixture" }, "req-00000001");
 
     expect(activityLogEventRegistration(rebound)).toBeUndefined();
     expect(Object.getOwnPropertySymbols(rebound)).toEqual([]);
-  });
-
-  it("adds a parent without replacing the operation correlation or registration", () => {
-    const source = withActivityLogCorrelation(chatRequestDispatchEvent({}), "req-00000001");
-    const rebound = withActivityLogParentCorrelation(source, "parent-00000001");
-    expect(rebound).not.toBe(source);
-    expect(rebound.parentCorrelationId).toBe("parent-00000001");
-    expect(rebound.correlationId).toBe(source.correlationId);
-    expect(Reflect.get(source, "parentCorrelationId")).toBeUndefined();
-    expect(validateRegisteredActivityLogEvent(rebound)).toBe(activityLogEventRegistration(source));
-  });
-
-  it("preserves rejection provenance and never registers unknown events when adding a parent", () => {
-    const rejected = withActivityLogParentCorrelation(
-      chatRequestDispatchEvent({ modelId: "/etc/passwd" }),
-      "parent-00000001",
-    );
-    expect(() => validateRegisteredActivityLogEvent(rejected)).toThrow(
-      new ActivityLogEventValidationError("invalid-field-vocabulary"),
-    );
-    const unknown = withActivityLogParentCorrelation({ op: "unregistered.fixture" }, "parent-id");
-    expect(activityLogEventRegistration(unknown)).toBeUndefined();
-    expect(Object.getOwnPropertySymbols(unknown)).toEqual([]);
   });
 
   it.each([

@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -37,10 +37,13 @@ import {
   type GroundedRunner,
   type MultiSourceSeam,
 } from "./grounded-qa.js";
+import { sentPromptContext } from "./grounded-prompt-context.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
   buildLabeledAnswerCitations,
   buildConnectedScopes,
   buildMultiSourceGatewayMessages,
+  fittedMultiSourcePrompt,
   createMultiSourceAnswerer,
   mergeContextPackSummaries,
   runMultiSourceAsk,
@@ -54,7 +57,16 @@ import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contr
 import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
-import type { UiHandlerDeps } from "./deps.js";
+import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import { adoptReportedContextWindow } from "./gateway-context-window.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
@@ -64,7 +76,9 @@ import {
   WorkspaceNotFoundError,
 } from "@oscharko-dev/keiko-workspace";
 import {
+  assumedChatCapability,
   ContextOverflowError,
+  parseGatewayConfig,
   type GatewayCallRequest,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -480,6 +494,81 @@ describe("buildMultiSourceGatewayMessages", () => {
     expect(messages[1]?.content).toContain("Source 1: api");
     expect(messages[1]?.content).toContain("Source 2: web");
     expect(messages[1]?.content).toContain("[source:1|src/file.ts:10-20]");
+    // PR #3678 review: the meter's share is that of the fitted prompt, never the unfitted packs.
+    const sent = fittedMultiSourcePrompt(
+      "explain both",
+      [
+        { label: "api", pack: budgetedA ?? packA },
+        { label: "web", pack: budgetedB ?? packB },
+      ],
+      buildRedactor({}, undefined),
+    );
+    expect(sent.messages).toEqual(messages);
+    const context = sentPromptContext(sent, 0, undefined);
+    expect(context.promptTokens).toBe(countGatewayPromptTokens({ messages }));
+    expect(context.sourceTokens).toBeLessThan(context.promptTokens);
+  });
+
+  // PR #3678 review: per-source budgets add up, so three sources could send three windows' worth
+  // of excerpts to one model. The merged prompt must also fit the answering model's input budget.
+  it("fits the merged prompt to the model's input budget, not the summed pack budgets", () => {
+    const labeledPacks = ["a", "b", "c"].map((name) => {
+      const pack = scopePack(`src/${name}.ts`, 0.5, name);
+      return {
+        label: name,
+        pack: {
+          ...pack,
+          budget: { ...pack.budget, modelInputTokensMax: 64_000 },
+          files: pack.files.map((file) => ({
+            ...file,
+            excerpts: file.excerpts.map((excerpt) => ({
+              ...excerpt,
+              content: `${name} evidence `.repeat(4_000),
+              contentBytes: 44_000,
+            })),
+          })),
+        },
+      };
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const sent = fittedMultiSourcePrompt(
+      "explain all",
+      labeledPacks,
+      buildRedactor({}),
+      { modelInputTokensMax: 6_000 },
+      "corr-ms-window-fit",
+    );
+
+    expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(6_000);
+    expect(sent.availableReferenceCount).toBe(3);
+    expect(JSON.stringify(sent.messages)).toContain("a evidence");
+    // The fit decision lands on the existing window-fit port, on the request's correlation.
+    const trimmed = expectActivityLogProof(
+      "search.prompt.window-fitted.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(trimmed).toMatchObject({
+      correlationId: "corr-ms-window-fit",
+      state: "trimmed",
+      referenceCount: 3,
+      sentReferenceCount: sent.sentReferenceCount,
+      inputBudget: 6_000,
+    });
+    expect(() =>
+      fittedMultiSourcePrompt(
+        "explain all",
+        labeledPacks,
+        buildRedactor({}),
+        { modelInputTokensMax: 16 },
+        "corr-ms-window-refused",
+      ),
+    ).toThrow(ContextOverflowError);
+    expect(sink.events.at(-1)).toMatchObject({
+      correlationId: "corr-ms-window-refused",
+      extra: { state: "refused", sentReferenceCount: 0, inputBudget: 16 },
+    });
+    resetServerLogger();
   });
 
   it("throws ContextOverflowError when a 0-byte combined prompt budget cannot fit framing overhead", () => {
@@ -642,6 +731,38 @@ describe("mergeContextPackSummaries", () => {
 // ─── Handler branch ───────────────────────────────────────────────────────────
 
 describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
+  // PR #3678 review: a local window refusal reached the error mapping without the request's
+  // correlation, so its structured diagnostic fell back to the unknown correlation.
+  it("joins an answer overflow's diagnostic to the ask's correlation", async () => {
+    const scopes: ChatConnectedScope[] = [
+      { kind: "directory", relativePaths: ["src/a.ts"], connectedAtMs: NOW, root: tempRoot("x") },
+      { kind: "directory", relativePaths: ["src/b.ts"], connectedAtMs: NOW, root: tempRoot("y") },
+    ];
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new Error("chat fixture missing");
+    const records: ServerDiagnosticRecord[] = [];
+    const packs = new Map<string, ConnectedContextPack>([
+      ["src/a.ts", scopePack("src/a.ts", 0.8, "a")],
+      ["src/b.ts", scopePack("src/b.ts", 0.7, "b")],
+    ]);
+
+    const result = await runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "Where is the handler?",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([], { diagnostics: { record: (record) => records.push(record) } }),
+      retriever: packPerScope(packs),
+      answerer: () => Promise.reject(new ContextOverflowError("prompt overhead exceeds the limit")),
+      signal: new AbortController().signal,
+      correlationId: "corr-ms-overflow",
+    });
+
+    expect(result.status).toBeGreaterThanOrEqual(400);
+    expect(records.map((record) => record.correlationId)).toContain("corr-ms-overflow");
+  });
+
   it("keeps answer-only memory context out of every source retrieval query", async () => {
     const scopes: ChatConnectedScope[] = [
       {
@@ -833,7 +954,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answer.uncertainty).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          kind: "unsupported-citation",
+          kind: "uncited-answer",
           claim: expect.stringContaining("without a supported inline citation") as unknown,
         }),
       ]),
@@ -1760,9 +1881,9 @@ describe("createMultiSourceAnswerer correlation threading", () => {
     };
 
     const answerer = createMultiSourceAnswerer(
+      recordingDeps([], { redactor: buildRedactor({}) }),
       recordingModel,
       "example-chat-model",
-      buildRedactor({}),
       new AbortController().signal,
       "cid-multi-source-answerer-000001",
     );
@@ -1776,5 +1897,110 @@ describe("createMultiSourceAnswerer correlation threading", () => {
     expect(result.content).toBe("multi-source answer");
     expect(seenRequests).toHaveLength(1);
     expect(seenRequests[0]?.logContext?.correlationId).toBe("cid-multi-source-answerer-000001");
+    // PR #3678 review: the answer reports the share of the prompt it actually sent.
+    expect(result.promptContext).toMatchObject({
+      promptTokens: 3,
+      promptTokensMeasured: true,
+      sentReferenceCount: 0,
+      availableReferenceCount: 0,
+    });
+  });
+
+  // PR #3678 review: the multi-source answer never re-planned after the provider's overflow taught
+  // Keiko the real window. The second attempt must be re-fitted to the adopted window.
+  it("re-fits and sends once more after the provider's overflow taught Keiko the real window", async () => {
+    const root = realpathSync(tmp);
+    const built = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: join(root, "evidence"),
+      uiDbPath: join(root, "ui.db"),
+      env: {},
+    });
+    const holder = built.gatewayConfig;
+    if (holder === undefined) throw new Error("expected a runtime gateway config");
+    holder.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "assumed-chat",
+            baseUrl: "https://litellm.example.invalid/v1",
+            apiKey: "fake-test-key",
+            timeoutMs: 5_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 1,
+          },
+        ],
+        capabilities: [assumedChatCapability("assumed-chat")],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+      }),
+      true,
+    );
+    const labeledPacks = ["a", "b"].map((name) => {
+      const pack = scopePack(`src/${name}.ts`, 0.5, name);
+      return {
+        label: name,
+        pack: {
+          ...pack,
+          budget: { ...pack.budget, modelInputTokensMax: 64_000 },
+          files: pack.files.map((file) => ({
+            ...file,
+            excerpts: file.excerpts.map((excerpt) => ({
+              ...excerpt,
+              content: `${name} evidence `.repeat(3_000),
+              contentBytes: 33_000,
+            })),
+          })),
+        },
+      };
+    });
+    const sentTokens: number[] = [];
+    const model: ModelPort = {
+      call: (request) => {
+        sentTokens.push(countGatewayPromptTokens({ messages: request.messages }));
+        if (sentTokens.length === 1) {
+          adoptReportedContextWindow(
+            built,
+            { modelId: "assumed-chat", contextWindowTokens: 8_192, correlationId: "corr-ms-retry" },
+            "provider-overflow",
+          );
+          const error = new ContextOverflowError("provider reported context overflow");
+          error.reportedContextWindowTokens = 8_192;
+          return Promise.reject(error);
+        }
+        return Promise.resolve({
+          modelId: "assumed-chat",
+          content: "answer",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "r",
+            promptTokens: 0,
+            completionTokens: 1,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+
+    try {
+      const answerer = createMultiSourceAnswerer(
+        built,
+        model,
+        "assumed-chat",
+        new AbortController().signal,
+        "corr-ms-retry",
+      );
+      const result = normalizeGroundedAnswerPayload(await answerer("explain", labeledPacks));
+
+      expect(result.content).toBe("answer");
+      expect(sentTokens).toHaveLength(2);
+      expect(sentTokens[1]).toBeLessThan(sentTokens[0] ?? 0);
+      expect(sentTokens[1]).toBeLessThanOrEqual(8_192);
+      expect(result.promptContext?.contextWindowTokens).toBe(8_192);
+    } finally {
+      await built.dispose?.();
+    }
   });
 });

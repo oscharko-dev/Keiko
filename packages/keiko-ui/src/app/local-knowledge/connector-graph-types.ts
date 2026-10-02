@@ -16,6 +16,7 @@ import type {
   CapsuleListEntry,
   CapsuleSetListEntry,
 } from "@/lib/local-knowledge-api";
+import type { LocalKnowledgeMessageKey } from "./local-knowledge-i18n";
 export type { CapsuleActionResponse } from "@/lib/local-knowledge-api";
 
 export type { CapsuleListEntry, CapsuleSetListEntry };
@@ -62,11 +63,12 @@ export interface ConnectorGraphState {
   readonly handleDeleteCapsuleSet: (id: CapsuleSetId) => void;
 }
 
-export const STATUS_LABELS: Record<CapsuleLifecycleState, string> = {
-  draft: "Draft",
-  indexing: "Indexing",
-  ready: "Indexed",
-  stale: "Stale",
-  deleting: "Deleting",
-  error: "Failed",
+// Catalog keys of the lifecycle badges, translated where they render.
+export const STATUS_LABEL_KEYS: Record<CapsuleLifecycleState, LocalKnowledgeMessageKey> = {
+  draft: "localKnowledge.state.draft",
+  indexing: "localKnowledge.state.indexing",
+  ready: "localKnowledge.state.ready",
+  stale: "localKnowledge.state.stale",
+  deleting: "localKnowledge.state.deleting",
+  error: "localKnowledge.state.error",
 };

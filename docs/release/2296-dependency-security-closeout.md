@@ -48,14 +48,14 @@ The two `brace-expansion` majors are pinned under their respective `minimatch` c
 receives an incompatible major. `npm ci`, `npm audit`, and the exact OSV Scanner 2.6.0 scan pass
 with the updated lockfile.
 
-The later 2026-09-30 scan in [#3679](https://github.com/oscharko-dev/Keiko/pull/3679)
-identified newly published advisories in Next.js 16.3.5 and DOMPurify 3.4.13. Next.js and its ESLint
-configuration now resolve 16.3.6, fixing
-[GHSA-vcvr-r3jv-pc5j](https://github.com/advisories/GHSA-vcvr-r3jv-pc5j). The existing repository-wide
-DOMPurify override now resolves 3.4.16, fixing
-[GHSA-p98j-92pf-mc4p](https://github.com/advisories/GHSA-p98j-92pf-mc4p). The full npm audit and exact
-OSV Scanner 2.6.0 repository scan both report zero vulnerabilities with these patches; no waiver or
-gate threshold changed.
+A later 2026-09-30 scan identified newly published advisories in Next.js 16.3.5 and DOMPurify
+3.4.13. [#3678](https://github.com/oscharko-dev/Keiko/pull/3678) moved Next.js and its ESLint
+configuration to 16.3.6, fixing
+[GHSA-vcvr-r3jv-pc5j](https://github.com/advisories/GHSA-vcvr-r3jv-pc5j), and the existing
+repository-wide DOMPurify override to 3.4.16, fixing
+[GHSA-p98j-92pf-mc4p](https://github.com/advisories/GHSA-p98j-92pf-mc4p). The full npm audit and
+exact OSV Scanner 2.6.0 repository scan both report zero vulnerabilities with these patches; no
+waiver or gate threshold changed.
 
 ### How this queue must be queried — and the trap in it
 
@@ -148,7 +148,7 @@ or peer graph).
 | `eslint`                      | keiko-ui              | 10.10.0 | current        | Deduplicated onto the root node by #2777; the workspace no longer pins its own copy.                                                                                                                                                                                                                         |
 | `@eslint/js`                  | root                  | 10.0.1  | current        | Realigned with the `eslint` 10 lane by #2777; one family, one major again.                                                                                                                                                                                                                                   |
 | `typescript-eslint`           | root                  | 8.70.0  | current        | Includes rule correctness fixes and one opt-in rule. The dependency rollup regenerates the lockfile-bound tool-catalog evidence and runs the full lint lane before delivery.                                                                                                                                 |
-| `next`                        | keiko-ui              | 16.3.6  | current        | Security patch reviewed 2026-09-30 in #3679 for GHSA-vcvr-r3jv-pc5j; moved together with `eslint-config-next`.                                                                                                                                                                                               |
+| `next`                        | keiko-ui              | 16.3.6  | current        | Security patch on the 16.3 line taken 2026-09-30 for GHSA-vcvr-r3jv-pc5j (critical, fixed in 16.3.6; PR #3678); moved together with `eslint-config-next`.                                                                                                                                                    |
 | `eslint-config-next`          | keiko-ui              | 16.3.6  | current        | Kept exactly aligned with `next`; the two move together or not at all.                                                                                                                                                                                                                                       |
 | `react`                       | keiko-ui              | 19.3.0  | current        | React and its declarations move together across the UI and editor test/runtime surfaces; the UI, editor, static export, accessibility, and E2E lanes are authoritative.                                                                                                                                      |
 | `react-dom`                   | keiko-ui              | 19.3.0  | current        | Matches `react` across the UI and editor surfaces.                                                                                                                                                                                                                                                           |

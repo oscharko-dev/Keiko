@@ -1,26 +1,4 @@
 export const EN_MESSAGES = {
-  "chat.context.title": "Conversation context",
-  "chat.context.heading": "Conversation context {percent}%",
-  "chat.context.label": "Conversation context: approximately {percent}% used",
-  "chat.context.used": "Estimated tokens used",
-  "chat.context.inputBudget": "Usable input tokens",
-  "chat.context.window": "Full context window",
-  "chat.context.outputReserve": "Reserved for the answer",
-  "chat.context.safetyMargin": "Safety margin",
-  "chat.context.saved": "{tokens} tokens saved across {count} summarized messages.",
-  "chat.context.unavailable": "Context estimate unavailable",
-  "chat.context.estimate":
-    "Estimated conversation history. Drafts, attachments and retrieved sources add context when you send.",
-  "chat.context.automatic":
-    "Keiko compacts automatically at 90% of usable input capacity before sending the next request.",
-  "chat.context.retained":
-    "Compaction summarizes earlier messages. The full conversation stays saved; summaries can omit details.",
-  "chat.context.error": "Context could not be updated.",
-  "chat.context.retry": "Retry",
-  "chat.context.compact": "Compact context now",
-  "chat.context.compacting": "Compacting context…",
-  "chat.context.wait": "Available after the current response finishes.",
-
   "app.skipToContent": "Skip to content",
   "app.workspaceHeading": "Keiko workspace",
   "header.tileAll": "Tile all windows",
@@ -582,6 +560,17 @@ export const EN_MESSAGES = {
     "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.",
   "chat.error.gatewayOutputExhausted.remediation":
     "Raise the model's max output tokens in Settings, or switch to a model with a smaller reasoning share, then retry.",
+  "chat.error.streamStalled.title": "Connection to the answer interrupted",
+  "chat.error.streamStalled.message":
+    "The connection to Keiko delivered nothing for a minute. The answer was stopped.",
+  "chat.error.streamStalled.remediation":
+    "Send the message again. If it keeps happening, check the network, the proxy, or whether Keiko restarted.",
+  "chat.error.contextOverflow.title": "Request larger than the context window",
+  "chat.error.contextOverflow.message":
+    "The request exceeds the model's context window. If the provider reports its window, Keiko adopts it.",
+  "chat.error.contextOverflow.remediation":
+    "Shorten the message or choose a model with a larger context window.",
+  "chat.error.attachmentOversized.message": "Attached content is too large. Shorten or remove it.",
   "chat.keikoLogo": "Keiko logo",
   "chat.keikoResponding": "Keiko is responding",
   "chat.copy.copiedStatus": "Answer copied",
@@ -729,6 +718,13 @@ export const EN_MESSAGES = {
   "chat.grounding.unavailable": "{label} (unavailable)",
   "chat.grounding.catalogLoading": "Refreshing available Knowledge Pods…",
   "chat.grounding.catalogEmpty": "No ready Knowledge Pods or Pod Sets are available.",
+  "chat.grounding.catalogRetry": "Try again",
+  "chat.grounding.withState": "{label} ({state})",
+  "chat.grounding.state.draft": "not indexed",
+  "chat.grounding.state.indexing": "indexing",
+  "chat.grounding.state.stale": "stale",
+  "chat.grounding.state.deleting": "deleting",
+  "chat.grounding.state.error": "failed",
   "chat.grounding.sourceLimit":
     "Source limit reached — this chat already has {connectedCount} of {cap} connected sources. Disconnect a source before connecting another.",
   "chat.grounding.readyChatRequired": "Open a ready chat window before connecting a source.",
@@ -1138,7 +1134,6 @@ export const EN_MESSAGES = {
   "scope.pressure.moderate": "Moderate",
   "scope.pressure.high": "High",
   "scope.pressure.exceeded": "Exceeded",
-  "scope.budgetSummary": "Last grounded run: {tokens} tokens, {files} files",
   "scope.connectedFolder": "Connected folder",
   "scope.folder": "Folder: {name}",
   "scope.repository": "Repository scope",
@@ -1151,8 +1146,6 @@ export const EN_MESSAGES = {
     "Keiko may inspect only the connected folder; safe-read exclusions and context budget limits apply before each answer.",
   "scope.boundary.file":
     "Keiko may inspect only the connected file scope; safe-read exclusions and context budget limits apply before each answer.",
-  "scope.disconnect": "Disconnect {label} from chat",
-  "scope.disconnectWithPath": "Disconnect {label} from chat ({path})",
   "scope.disconnectError": "Unable to disconnect scope.",
   "settings.title": "Settings",
   "settings.language.compactLabel": "Language",

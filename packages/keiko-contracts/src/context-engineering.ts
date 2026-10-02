@@ -739,15 +739,32 @@ export function undeclaredOutputReserveTokens(maxInputTokens: number): number {
   return Math.max(scaled, floor);
 }
 
+/**
+ * The context window a surface plans with: the declared (or provider-reported) window, or the
+ * DEFAULT_CONTEXT_PROFILE window for an unknown (0) or assumed (`contextWindowAssumed`) one. An
+ * undeclared window is not evidence of a small model, and the provider's own statement corrects the
+ * assumption (customer report on 1.1.13). Every consumer reads the window through this one rule;
+ * a raw `capability.contextWindow` of an assumed model is the setup placeholder, not a window
+ * (PR #3678 review: commit drafts, PR descriptions and spend reservations read it raw).
+ */
+export function effectiveContextWindow(
+  capability: Pick<ModelCapability, "contextWindow" | "contextWindowAssumed">,
+): number {
+  return capability.contextWindow > 0 && capability.contextWindowAssumed !== true
+    ? capability.contextWindow
+    : DEFAULT_CONTEXT_PROFILE.maxInputTokens;
+}
+
 // Derives a model-keyed ContextProfile from a configured chat capability. Unknown/placeholder
-// runtime capabilities (0 window / 0 output) fall back to the DEFAULT_CONTEXT_PROFILE geometry.
+// runtime capabilities (0 window / 0 output, or a window flagged `contextWindowAssumed`) fall back
+// to the DEFAULT_CONTEXT_PROFILE geometry through `effectiveContextWindow`.
 export function deriveContextProfileFromCapability(
-  capability: Pick<ModelCapability, "id" | "contextWindow" | "maxOutputTokens" | "tokenAccounting">,
+  capability: Pick<
+    ModelCapability,
+    "id" | "contextWindow" | "maxOutputTokens" | "tokenAccounting" | "contextWindowAssumed"
+  >,
 ): ContextProfile {
-  const maxInputTokens =
-    capability.contextWindow > 0
-      ? capability.contextWindow
-      : DEFAULT_CONTEXT_PROFILE.maxInputTokens;
+  const maxInputTokens = effectiveContextWindow(capability);
   const reservedOutputTokens =
     capability.maxOutputTokens > 0
       ? Math.min(undeclaredOutputReserveTokens(maxInputTokens), capability.maxOutputTokens)

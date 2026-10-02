@@ -455,6 +455,9 @@ export interface ClientDiagnosticIngestRequest {
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
+  readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
+  readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
+  readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
@@ -644,6 +647,16 @@ function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
   );
 }
 
+// The closed, routine report shapes that may ride a message report (select dismissal, catalog).
+function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal) &&
+    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
+    isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
+    isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech)
+  );
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
   const { errorKind, loss, parentCorrelationId } = value;
   if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
@@ -652,7 +665,7 @@ function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolea
   if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
   if (!hasValidVoiceCaptureContext(value)) return false;
   if (!hasValidGitContext(value)) return false;
-  if (!isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal)) return false;
+  if (!hasValidClosedReportContext(value)) return false;
   return (
     hasValidComposerContext(value) &&
     hasValidCodingContext(value) &&
@@ -1310,6 +1323,123 @@ export function isClientDiagnosticSelectDismissal(
   return (
     isSetMember(value.reason, SELECT_DISMISSAL_REASON_SET) &&
     isSetMember(value.focus, SELECT_DISMISSAL_FOCUS_SET)
+  );
+}
+
+// ─── Knowledge Pod catalog availability (PR #3678 review) ─────────────────────────
+//
+// The chat's Knowledge Pod picker offered no usable pod: every bound pod is missing or not ready,
+// or no pod is ready at all. Counts only — never a pod name, path or id — so the Activity Log can
+// tell a missing bound pod from one that is still indexing without a free-text message.
+
+export const CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX = 100_000;
+
+export interface ClientDiagnosticKnowledgeCatalog {
+  readonly podCount: number;
+  readonly readyPodCount: number;
+  readonly setCount: number;
+  readonly boundCount: number;
+  readonly missingCount: number;
+  readonly notReadyCount: number;
+}
+
+const KNOWLEDGE_CATALOG_COUNT_KEYS: ReadonlySet<string> = new Set([
+  "podCount",
+  "readyPodCount",
+  "setCount",
+  "boundCount",
+  "missingCount",
+  "notReadyCount",
+]);
+
+/** True for exactly the six bounded, non-negative catalog counts and no other field. */
+export function isClientDiagnosticKnowledgeCatalog(
+  value: unknown,
+): value is ClientDiagnosticKnowledgeCatalog {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== KNOWLEDGE_CATALOG_COUNT_KEYS.size) return false;
+  return keys.every(
+    (key) =>
+      KNOWLEDGE_CATALOG_COUNT_KEYS.has(key) &&
+      isBoundedNonNegativeInteger(value[key], CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX),
+  );
+}
+
+// ─── Chat answer copy (PR #3678 review) ─────────────────────────────────────────
+//
+// The copy button removes a grounded answer's in-range citation markers and keeps every other
+// bracket (code, an ordinary answer, an index beyond the references). Counts only — never the
+// copied text — so the log shows that the path ran, what it removed and kept, and a failure.
+
+export const CLIENT_ANSWER_COPY_OUTCOMES = ["copied", "failed"] as const;
+export type ClientAnswerCopyOutcome = (typeof CLIENT_ANSWER_COPY_OUTCOMES)[number];
+
+export interface ClientDiagnosticAnswerCopy {
+  readonly outcome: ClientAnswerCopyOutcome;
+  readonly grounded: boolean;
+  /** Citation marker groups removed from the copied text. */
+  readonly strippedGroupCount: number;
+  /** Numeric bracket groups outside code kept as content. */
+  readonly keptGroupCount: number;
+}
+
+const ANSWER_COPY_OUTCOME_SET: ReadonlySet<string> = new Set(CLIENT_ANSWER_COPY_OUTCOMES);
+const ANSWER_COPY_KEYS: ReadonlySet<string> = new Set([
+  "outcome",
+  "grounded",
+  "strippedGroupCount",
+  "keptGroupCount",
+]);
+
+/** True for exactly the closed copy outcome, the grounded flag and the two bounded counts. */
+export function isClientDiagnosticAnswerCopy(value: unknown): value is ClientDiagnosticAnswerCopy {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== ANSWER_COPY_KEYS.size || keys.some((key) => !ANSWER_COPY_KEYS.has(key))) {
+    return false;
+  }
+  return (
+    isSetMember(value.outcome, ANSWER_COPY_OUTCOME_SET) &&
+    typeof value.grounded === "boolean" &&
+    isBoundedNonNegativeInteger(value.strippedGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX) &&
+    isBoundedNonNegativeInteger(value.keptGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX)
+  );
+}
+
+// ─── Chat answer read aloud (PR #3678 review) ───────────────────────────────────
+//
+// The voice dialogue reads an answer aloud without its grounded citation markers and keeps every
+// other bracket, a repository path included. Counts only — never the spoken text — reported under
+// the correlation the synthesis request carries, so the spoken turn and its preparation join.
+
+export interface ClientDiagnosticAnswerSpeech {
+  readonly grounded: boolean;
+  /** Citation marker groups removed from the spoken text. */
+  readonly strippedGroupCount: number;
+  /** Numeric bracket groups outside code kept as spoken content. */
+  readonly keptGroupCount: number;
+}
+
+const ANSWER_SPEECH_KEYS: ReadonlySet<string> = new Set([
+  "grounded",
+  "strippedGroupCount",
+  "keptGroupCount",
+]);
+
+/** True for exactly the grounded flag and the two bounded counts. */
+export function isClientDiagnosticAnswerSpeech(
+  value: unknown,
+): value is ClientDiagnosticAnswerSpeech {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== ANSWER_SPEECH_KEYS.size || keys.some((key) => !ANSWER_SPEECH_KEYS.has(key))) {
+    return false;
+  }
+  return (
+    typeof value.grounded === "boolean" &&
+    isBoundedNonNegativeInteger(value.strippedGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX) &&
+    isBoundedNonNegativeInteger(value.keptGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX)
   );
 }
 

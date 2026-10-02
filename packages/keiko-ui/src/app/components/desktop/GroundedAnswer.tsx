@@ -9,8 +9,17 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
+import {
+  citationFindingTotal,
+  citationMarkerIndices,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { formatBytes, formatMs } from "@/lib/format";
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+import type { OptionalWidgetMessageKey as MessageKey } from "@/lib/i18n-messages.optional.en";
 import {
   RepositoryReferenceInline,
   type OpenRepositoryReference,
@@ -363,6 +372,7 @@ function CitationDisclosureButton({
   readonly expanded: boolean;
   readonly onToggle: () => void;
 }): ReactNode {
+  const t = useTranslate();
   if (total <= CITATION_DISPLAY_CAP) return null;
   return (
     <button
@@ -371,7 +381,9 @@ function CitationDisclosureButton({
       aria-expanded={expanded}
       onClick={onToggle}
     >
-      {expanded ? "Show fewer citations" : `Show all ${String(total)} citations`}
+      {expanded
+        ? t("grounded.citations.showFewer")
+        : t("grounded.citations.showAll", { count: total })}
     </button>
   );
 }
@@ -407,6 +419,7 @@ function CitationList({
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
 }): ReactNode {
+  const t = useTranslate();
   const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
   // Defensive re-sort: the wire delivers folder citations score-sorted already, but the cap
@@ -418,8 +431,8 @@ function CitationList({
   // use real <ul>/<li> elements.
   return (
     <div className="grounded-citations-wrap">
-      <span className="grounded-citations-label">Evidence</span>
-      <ul className="grounded-citations" aria-label="Evidence citations">
+      <span className="grounded-citations-label">{t("grounded.title.evidence")}</span>
+      <ul className="grounded-citations" aria-label={t("grounded.citations.evidenceAria")}>
         {visible.map((citation) => (
           <li key={citationIdentity(citation)} className="grounded-citations-item">
             <CitationReference
@@ -445,26 +458,53 @@ function uniqueCitationCount<T extends CitationIdentityInput>(items: readonly T[
   return uniqueByCitationIdentity(items).length;
 }
 
-function connectedEvidenceSummary(answer: ConnectedGroundedAnswer): string {
+function citationCountLabel(
+  t: I18nTranslate,
+  count: number,
+  keys: { readonly one: MessageKey; readonly other: MessageKey },
+  values: Readonly<Record<string, string | number>> = {},
+): string {
+  return t(count === 1 ? keys.one : keys.other, { ...values, count: formatCount(count) });
+}
+
+function connectedEvidenceSummary(answer: ConnectedGroundedAnswer, t: I18nTranslate): string {
   const citationCount = uniqueCitationCount(answer.citations);
-  const filesRead = answer.contextPack.usage.filesRead;
-  const filesMax = formatCap(answer.contextPack.budget.filesReadMax);
   const omittedCount = answer.contextPack.omittedCount;
-  const citationLabel = pluralize(citationCount, "citation");
-  const omitted = omittedCount > 0 ? ` · ${formatCount(omittedCount)} not used` : "";
-  return `${formatCount(citationCount)} ${citationLabel} · ${formatCount(filesRead)} / ${filesMax} files read${omitted}`;
+  return citationCountLabel(
+    t,
+    citationCount,
+    { one: "grounded.summary.connected.one", other: "grounded.summary.connected.other" },
+    {
+      read: formatCount(answer.contextPack.usage.filesRead),
+      max: formatCap(answer.contextPack.budget.filesReadMax),
+      omitted:
+        omittedCount > 0 ? t("grounded.summary.notUsed", { count: formatCount(omittedCount) }) : "",
+    },
+  );
 }
 
-function knowledgeEvidenceSummary(answer: KnowledgeGroundedAnswer): string {
-  const citationCount = uniqueCitationCount(answer.citations);
-  const sourceLabel = pluralize(citationCount, "citation");
-  return `${formatCount(citationCount)} ${sourceLabel} · ${formatCount(answer.contextPack.referencesUsed)} / ${formatCount(answer.contextPack.referenceBudget)} references`;
+function knowledgeEvidenceSummary(answer: KnowledgeGroundedAnswer, t: I18nTranslate): string {
+  return citationCountLabel(
+    t,
+    uniqueCitationCount(answer.citations),
+    { one: "grounded.summary.knowledge.one", other: "grounded.summary.knowledge.other" },
+    {
+      used: formatCount(answer.contextPack.referencesUsed),
+      budget: formatCount(answer.contextPack.referenceBudget),
+    },
+  );
 }
 
-function hybridEvidenceSummary(answer: HybridGroundedAnswer): string {
-  const fileCount = uniqueCitationCount(answer.citations);
-  const knowledgeCount = uniqueCitationCount(answer.knowledgeCitations);
-  return `${formatCount(fileCount)} file ${pluralize(fileCount, "citation")} · ${formatCount(knowledgeCount)} knowledge ${pluralize(knowledgeCount, "citation")}`;
+function hybridEvidenceSummary(answer: HybridGroundedAnswer, t: I18nTranslate): string {
+  const files = citationCountLabel(t, uniqueCitationCount(answer.citations), {
+    one: "grounded.summary.hybrid.file.one",
+    other: "grounded.summary.hybrid.file.other",
+  });
+  const knowledge = citationCountLabel(t, uniqueCitationCount(answer.knowledgeCitations), {
+    one: "grounded.summary.hybrid.knowledge.one",
+    other: "grounded.summary.hybrid.knowledge.other",
+  });
+  return `${files} · ${knowledge}`;
 }
 
 const ACTIVITY_STATE_LABELS: Record<KnowledgePodRetrievalActivityState, string> = {
@@ -592,13 +632,14 @@ function GroundedEvidenceDisclosure({
   readonly hasCoverageWarning?: boolean;
   readonly children: ReactNode;
 }): ReactNode {
+  const t = useTranslate();
   return (
     <details className="grounded-evidence-disclosure">
       <summary className="grounded-evidence-summary">
         <span className="grounded-evidence-summary-title">{title}</span>
         <span className="grounded-evidence-summary-meta">{summary}</span>
         {hasCoverageWarning ? (
-          <span className="grounded-evidence-summary-badge">Partial coverage</span>
+          <span className="grounded-evidence-summary-badge">{t("grounded.partialCoverage")}</span>
         ) : null}
       </summary>
       <div className="grounded-evidence-body">{children}</div>
@@ -606,32 +647,59 @@ function GroundedEvidenceDisclosure({
   );
 }
 
+// PR #3678 review: a citation whose claim shares little wording with its excerpt stays linked, but
+// while no entailment judge verified the answer (its `entailment-unavailable` caveat) the chip says
+// the support is unverified, so the reader knows WHICH source the caveat is about.
+function supportUnverified(markers: readonly GroundedUncertainty[]): boolean {
+  return markers.some((marker) => marker.kind === "entailment-unavailable");
+}
+
+// A chip whose aria-label replaces its content names the unverified support in that label too, so a
+// screen reader hears it on the HTML-manual and PDF-preview chips as well (PR #3678 review).
+function useSupportAwareLabel(label: string, unverified: boolean): string {
+  const t = useTranslate();
+  return unverified ? `${label} · ${t("grounded.citation.unverified")}` : label;
+}
+
+function UnverifiedSupportBadge(): ReactNode {
+  const t = useTranslate();
+  return (
+    <span className={activityBadgeStyles.cmpCitationUnverified}>
+      {t("grounded.citation.unverified")}
+    </span>
+  );
+}
+
+function knowledgeCitationLabel(citation: LocalKnowledgeEvidenceCitation): string {
+  if (citation.htmlManual !== undefined) {
+    return manualCitationLabel(citation);
+  }
+  return citation.source === undefined
+    ? `${citation.marker} ${citation.label}`
+    : `${citation.marker} ${citation.source} · ${citation.label}`;
+}
+
 function LocalKnowledgeCitationList({
   citations,
   citationPreview,
   openDocumentationTarget,
+  unverifiedSupport = false,
 }: {
   readonly citations: readonly LocalKnowledgeEvidenceCitation[];
   readonly citationPreview: CitationPreviewController | undefined;
   readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
+  readonly unverifiedSupport?: boolean;
 }): ReactNode {
+  const t = useTranslate();
   const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
-  function labelForCitation(citation: LocalKnowledgeEvidenceCitation): string {
-    if (citation.htmlManual !== undefined) {
-      return manualCitationLabel(citation);
-    }
-    return citation.source === undefined
-      ? `${citation.marker} ${citation.label}`
-      : `${citation.marker} ${citation.source} · ${citation.label}`;
-  }
   // uiux-fix F012 C091 — same cap + disclosure as CitationList above.
   const sorted = uniqueByCitationIdentity([...citations].sort((a, b) => b.score - a.score));
   const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
   return (
     <div className="grounded-citations-wrap">
-      <span className="grounded-citations-label">Knowledge citations</span>
-      <ul className="grounded-citations" aria-label="Knowledge citations">
+      <span className="grounded-citations-label">{t("grounded.citations.knowledge")}</span>
+      <ul className="grounded-citations" aria-label={t("grounded.citations.knowledge")}>
         {visible.map((citation) => (
           <li
             key={citationIdentity(citation)}
@@ -640,8 +708,9 @@ function LocalKnowledgeCitationList({
             <KnowledgeCitationChip
               citation={citation}
               citationPreview={citationPreview}
-              label={labelForCitation(citation)}
+              label={knowledgeCitationLabel(citation)}
               openDocumentationTarget={openDocumentationTarget}
+              unverified={unverifiedSupport && citation.lexicalSupport === "weak"}
             />
           </li>
         ))}
@@ -715,13 +784,16 @@ function ManualCitationChip({
   citation,
   label,
   openDocumentationTarget,
+  unverified = false,
 }: {
   readonly citation: LocalKnowledgeEvidenceCitation;
   readonly label: string;
   readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
+  readonly unverified?: boolean;
 }): ReactNode {
   const manual = citation.htmlManual;
   const [state, setState] = useState<"idle" | "opened" | "failed">("idle");
+  const accessibleLabel = useSupportAwareLabel(label, unverified);
   if (manual === undefined) return null;
   const unavailable = manual.open.state === "unavailable";
   const actionLabel = manualCitationChipActionLabel(state, manual);
@@ -732,7 +804,7 @@ function ManualCitationChip({
       type="button"
       className={`grounded-citation grounded-citation-action ${activityBadgeStyles.manualCitationAction}${modifier}`}
       aria-disabled={unavailable ? "true" : undefined}
-      aria-label={`${label} · ${actionLabel}`}
+      aria-label={`${accessibleLabel} · ${actionLabel}`}
       title={`${knowledgeCitationTitle(citation)} · ${actionLabel}`}
       onClick={() => {
         if (target === undefined || unavailable || openDocumentationTarget === undefined) return;
@@ -745,6 +817,7 @@ function ManualCitationChip({
       <span className={`grounded-citation-range ${activityBadgeStyles.manualCitationRange}`}>
         {label}
       </span>
+      {unverified ? <UnverifiedSupportBadge /> : null}
       <span className="grounded-citation-action-label" aria-live="polite">
         {actionLabel}
       </span>
@@ -753,23 +826,39 @@ function ManualCitationChip({
   );
 }
 
+function pdfPreviewActionText(state: string): {
+  readonly actionLabel: string;
+  readonly actionTitle: string;
+} {
+  if (state === "recoverable")
+    return { actionLabel: "Recover PDF", actionTitle: "Open PDF recovery" };
+  if (state === "blocked") {
+    return { actionLabel: "PDF unavailable", actionTitle: "PDF preview unavailable" };
+  }
+  return { actionLabel: "Open PDF", actionTitle: "Open PDF preview" };
+}
+
 function KnowledgeCitationChip({
   citation,
   citationPreview,
   label,
   openDocumentationTarget,
+  unverified,
 }: {
   readonly citation: LocalKnowledgeEvidenceCitation;
   readonly citationPreview: CitationPreviewController | undefined;
   readonly label: string;
   readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
+  readonly unverified: boolean;
 }): ReactNode {
+  const accessibleLabel = useSupportAwareLabel(label, unverified);
   if (citation.htmlManual !== undefined) {
     return (
       <ManualCitationChip
         citation={citation}
         label={label}
         openDocumentationTarget={openDocumentationTarget}
+        unverified={unverified}
       />
     );
   }
@@ -778,6 +867,7 @@ function KnowledgeCitationChip({
     return (
       <span className="grounded-citation" title={knowledgeCitationTitle(citation)}>
         <span className="grounded-citation-range">{label}</span>
+        {unverified ? <UnverifiedSupportBadge /> : null}
         <CitationScore score={citation.score} />
       </span>
     );
@@ -785,25 +875,14 @@ function KnowledgeCitationChip({
 
   const blocked = affordance.state === "blocked";
   const opening = citationPreview?.isOpening(citation) ?? false;
-  let actionLabel: string;
-  let actionTitle: string;
-  if (affordance.state === "recoverable") {
-    actionLabel = "Recover PDF";
-    actionTitle = "Open PDF recovery";
-  } else if (affordance.state === "blocked") {
-    actionLabel = "PDF unavailable";
-    actionTitle = "PDF preview unavailable";
-  } else {
-    actionLabel = "Open PDF";
-    actionTitle = "Open PDF preview";
-  }
+  const { actionLabel, actionTitle } = pdfPreviewActionText(affordance.state);
 
   return (
     <button
       type="button"
       className={`grounded-citation grounded-citation-action grounded-citation-action--${affordance.state}`}
       aria-disabled={blocked || opening ? "true" : undefined}
-      aria-label={`${label} · ${actionLabel}`}
+      aria-label={`${accessibleLabel} · ${actionLabel}`}
       data-tip={actionTitle}
       title={`${knowledgeCitationTitle(citation)} · ${actionLabel}`}
       onClick={() => {
@@ -812,10 +891,56 @@ function KnowledgeCitationChip({
       }}
     >
       <span className="grounded-citation-range">{label}</span>
+      {unverified ? <UnverifiedSupportBadge /> : null}
       <span className="grounded-citation-action-label">{actionLabel}</span>
       <CitationScore score={citation.score} />
     </button>
   );
+}
+
+const UNCERTAINTY_KIND_LABEL_KEYS: ReadonlyMap<string, MessageKey> = new Map([
+  ["no-evidence", "grounded.uncertainty.kind.noEvidence"],
+  ["stale-evidence", "grounded.uncertainty.kind.staleEvidence"],
+  ["scope-incomplete", "grounded.uncertainty.kind.scopeIncomplete"],
+  ["budget-clipped", "grounded.uncertainty.kind.budgetClipped"],
+  ["tool-unavailable", "grounded.uncertainty.kind.toolUnavailable"],
+  ["low-confidence", "grounded.uncertainty.kind.lowConfidence"],
+  ["unsupported-citation", "grounded.uncertainty.kind.unsupportedCitation"],
+  ["uncited-answer", "grounded.uncertainty.kind.uncitedAnswer"],
+  ["incomplete-answer", "grounded.uncertainty.kind.incompleteAnswer"],
+  ["unsupported-claim", "grounded.uncertainty.kind.unsupportedClaim"],
+  ["entailment-unavailable", "grounded.uncertainty.kind.entailmentUnavailable"],
+]);
+
+// The kinds whose meaning is fixed by the kind alone: their line is the localised description, not
+// the server's English claim text. Any other kind keeps its claim (it can carry answer-specific text).
+const UNCERTAINTY_KIND_DETAIL_KEYS: ReadonlyMap<string, MessageKey> = new Map([
+  ["unsupported-citation", "grounded.detail.unsupportedCitation"],
+  ["uncited-answer", "grounded.detail.uncitedAnswer"],
+  ["incomplete-answer", "grounded.detail.incomplete"],
+  ["unsupported-claim", "grounded.detail.unsupportedClaim"],
+  ["entailment-unavailable", "grounded.detail.entailmentUnavailable"],
+]);
+
+// uiux-fix F012 C160 — marker kinds are internal enums ("no-evidence"); show the localised label,
+// and humanize an unknown kind like the omission reasons below.
+function uncertaintyKindLabel(kind: string, t: I18nTranslate): string {
+  const key = UNCERTAINTY_KIND_LABEL_KEYS.get(kind);
+  return key === undefined ? humanizeToken(kind) : t(key);
+}
+
+function uncertaintyLineText(marker: GroundedUncertainty, t: I18nTranslate): string {
+  const detailKey = UNCERTAINTY_KIND_DETAIL_KEYS.get(marker.kind);
+  if (detailKey === undefined) return marker.claim;
+  const detail = t(detailKey);
+  if (marker.kind !== "unsupported-citation") return detail;
+  // Keep WHICH markers dangle: the indices are already visible in the answer text, so naming them
+  // discloses nothing new and lets the reader find them.
+  const named = citationMarkerIndices(marker.claim).map((index) => `[${String(index)}]`);
+  // A marker that lists only part of its dangling indices says so instead of implying it is all.
+  const unlisted = (citationFindingTotal(marker.claim) ?? named.length) > named.length;
+  if (named.length === 0) return detail;
+  return `${detail} ${named.join(", ")}${unlisted ? ", …" : ""}`;
 }
 
 function UncertaintyLine({
@@ -823,18 +948,17 @@ function UncertaintyLine({
 }: {
   readonly markers: readonly GroundedUncertainty[];
 }): ReactNode {
+  const t = useTranslate();
   if (markers.length === 0) return null;
-  // uiux-fix F012 C160 — marker kinds are internal enums ("no-evidence"); humanize them
-  // like the omission reasons below.
-  const kinds = Array.from(new Set(markers.map((m) => humanizeToken(m.kind)))).join(", ");
+  const kinds = Array.from(new Set(markers.map((m) => uncertaintyKindLabel(m.kind, t)))).join(", ");
   return (
     <div className="grounded-uncertainty" role="note">
-      <div>{`Uncertainty (${String(markers.length)} markers — ${kinds})`}</div>
+      <div>{t("grounded.uncertainty.summary", { count: markers.length, kinds })}</div>
       <ul className="grounded-uncertainty-list">
         {markers.map((marker, index) => (
-          <li
-            key={`${marker.kind}-${String(index)}`}
-          >{`${humanizeToken(marker.kind)}: ${marker.claim}`}</li>
+          <li key={`${marker.kind}-${String(index)}`}>
+            {`${uncertaintyKindLabel(marker.kind, t)}: ${uncertaintyLineText(marker, t)}`}
+          </li>
         ))}
       </ul>
     </div>
@@ -1017,6 +1141,7 @@ const DEGRADED_RERANKER_STATUSES: ReadonlySet<string> = new Set([
 
 function rerankerDegradationNote(
   reranker: GroundedRerankerDiagnostics | undefined,
+  t: I18nTranslate,
 ): string | undefined {
   if (reranker === undefined || reranker.failureKind === "not-configured") {
     return undefined;
@@ -1024,48 +1149,113 @@ function rerankerDegradationNote(
   if (!DEGRADED_RERANKER_STATUSES.has(reranker.status)) {
     return undefined;
   }
-  return "Ranking: reranker unavailable — showing fused retrieval order.";
+  return t("grounded.warning.rerankerUnavailable");
+}
+
+// The out-of-evidence citations the answer used. One server marker stands for EVERY dangling
+// citation of the answer ("...evidence markers not present in the retrieved evidence: [7], [9]"),
+// so counting marker objects reported "1 unsupported citation" for an answer with five bad markers.
+// A marker that lists only part of its findings states their total (`citationFindingTotal`, PR
+// #3678 review); otherwise its distinct named indices count, and a marker naming no numeric index
+// (a `[path:line]` reference) counts as one.
+function unsupportedCitationCount(markers: readonly GroundedUncertainty[]): number {
+  const indices = new Set<number>();
+  let counted = 0;
+  for (const marker of markers) {
+    if (marker.kind !== "unsupported-citation") continue;
+    const total = citationFindingTotal(marker.claim);
+    const named = citationMarkerIndices(marker.claim);
+    if (total !== undefined) counted += total;
+    else if (named.length === 0) counted += 1;
+    else for (const index of named) indices.add(index);
+  }
+  return indices.size + counted;
+}
+
+// One `unsupported-claim` marker stands for every unentailed claim of the answer and states their
+// total when there is more than one.
+function unsupportedClaimCount(markers: readonly GroundedUncertainty[]): number {
+  return markers
+    .filter((marker) => marker.kind === "unsupported-claim")
+    .reduce((sum, marker) => sum + (citationFindingTotal(marker.claim) ?? 1), 0);
+}
+
+function countedWarning(
+  t: I18nTranslate,
+  count: number,
+  keys: { readonly one: MessageKey; readonly other: MessageKey },
+  detail: MessageKey,
+): string {
+  return `${t(count === 1 ? keys.one : keys.other, { count: formatCount(count) })} — ${t(detail)}`;
+}
+
+// Citation-related summary warnings, each in its own kind: a fabricated citation
+// (`unsupported-citation`), a claim its cited source does not support (`unsupported-claim`) and an
+// answer that carries no citation at all (`uncited-answer`) are three different problems.
+function citationWarnings(markers: readonly GroundedUncertainty[], t: I18nTranslate): string[] {
+  const warnings: string[] = [];
+  const unsupported = unsupportedCitationCount(markers);
+  if (unsupported > 0) {
+    warnings.push(
+      countedWarning(
+        t,
+        unsupported,
+        {
+          one: "grounded.count.unsupportedCitation.one",
+          other: "grounded.count.unsupportedCitation.other",
+        },
+        "grounded.detail.unsupportedCitation",
+      ),
+    );
+  }
+  if (markers.some((m) => m.kind === "uncited-answer")) {
+    warnings.push(t("grounded.detail.uncitedAnswer"));
+  }
+  // Knowledge M1.2 (#2563): a citation that was in the pack but does not SUPPORT its claim.
+  const unsupportedClaims = unsupportedClaimCount(markers);
+  if (unsupportedClaims > 0) {
+    warnings.push(
+      countedWarning(
+        t,
+        unsupportedClaims,
+        {
+          one: "grounded.count.unsupportedClaim.one",
+          other: "grounded.count.unsupportedClaim.other",
+        },
+        "grounded.detail.unsupportedClaim",
+      ),
+    );
+  }
+  return warnings;
 }
 
 // GEN-AI-GROUNDING-007 (RB-4): compute the SUMMARY-LEVEL warnings that must be visible without
-// expanding the evidence disclosure — abstention, unsupported (fabricated) citations, a truncated
-// answer, and silent reranker degradation. Returns [] when the answer is fully grounded.
-function groundedSummaryWarnings(answer: GroundedAnswer): readonly string[] {
+// expanding the evidence disclosure — abstention, unsupported (fabricated) citations, uncited
+// answers, a truncated answer, and silent reranker degradation. Returns [] when the answer is
+// fully grounded. Every line is localised by marker KIND, never taken from the server's English
+// claim text.
+function groundedSummaryWarnings(answer: GroundedAnswer, t: I18nTranslate): readonly string[] {
   const warnings: string[] = [];
   const markers = answer.uncertainty;
   const noEvidence =
     markers.some((m) => m.kind === "no-evidence") ||
     (answer.groundingKind === "local-knowledge" && answer.noEvidence);
   if (noEvidence) {
-    warnings.push("No supporting evidence was found — this answer is not grounded.");
+    warnings.push(t("grounded.warning.noEvidence"));
   }
-  const unsupported = markers.filter((m) => m.kind === "unsupported-citation").length;
-  if (unsupported > 0) {
-    warnings.push(
-      `${String(unsupported)} unsupported citation${unsupported === 1 ? "" : "s"} — the answer ` +
-        `references sources that were not in the retrieved evidence.`,
-    );
-  }
-  // Knowledge M1.2 (#2563): a citation that was in the pack but does not SUPPORT its claim.
-  const unsupportedClaims = markers.filter((m) => m.kind === "unsupported-claim").length;
-  if (unsupportedClaims > 0) {
-    warnings.push(
-      `${String(unsupportedClaims)} unsupported claim${unsupportedClaims === 1 ? "" : "s"} — the ` +
-        `answer states something its cited source does not support.`,
-    );
-  }
+  warnings.push(...citationWarnings(markers, t));
   // Knowledge M1.2 (#2563): the entailment verification step could not run (fail-closed caveat).
   if (markers.some((m) => m.kind === "entailment-unavailable")) {
-    warnings.push("Citation support could not be verified for part of this answer.");
+    warnings.push(t("grounded.detail.entailmentUnavailable"));
   }
   if (markers.some((m) => m.kind === "incomplete-answer")) {
-    warnings.push("The answer was cut off before completion and may be partial.");
+    warnings.push(t("grounded.detail.incomplete"));
   }
   const reranker =
     answer.groundingKind === "local-knowledge" || answer.groundingKind === "hybrid"
       ? answer.contextPack.reranker
       : undefined;
-  const rerankNote = rerankerDegradationNote(reranker);
+  const rerankNote = rerankerDegradationNote(reranker, t);
   if (rerankNote !== undefined) {
     warnings.push(rerankNote);
   }
@@ -1076,14 +1266,15 @@ function groundedSummaryWarnings(answer: GroundedAnswer): readonly string[] {
 // (GEN-AI-GROUNDING-007 / GEN-AI-RETRIEVAL-001). Reuses existing grounded CSS classes so it does not
 // touch the SHA-pinned globals.css surface.
 function GroundedAnswerWarnings({ answer }: { readonly answer: GroundedAnswer }): ReactNode {
-  const warnings = groundedSummaryWarnings(answer);
+  const t = useTranslate();
+  const warnings = groundedSummaryWarnings(answer, t);
   if (warnings.length === 0) {
     return null;
   }
   return (
     <div className="grounded-uncertainty" role="alert">
       <div>
-        <span className="grounded-evidence-summary-badge">Needs review</span>
+        <span className="grounded-evidence-summary-badge">{t("grounded.reviewBadge")}</span>
       </div>
       <ul className="grounded-uncertainty-list">
         {warnings.map((warning, index) => (
@@ -1102,12 +1293,13 @@ export function GroundedAnswer({
   citationPreview,
   openDocumentationTarget,
 }: GroundedAnswerProps): ReactNode {
+  const t = useTranslate();
   if (answer === undefined) {
     // uiux-fix F012 C163 — the panel also serves capsule/connector-only chats where no
     // repository is involved; keep the loading text source-neutral.
     return busy ? (
       <div className="grounded-meta" role="status" aria-live="polite" aria-busy="true">
-        Searching connected sources and asking Keiko…
+        {t("grounded.loading")}
       </div>
     ) : null;
   }
@@ -1116,13 +1308,14 @@ export function GroundedAnswer({
       <div className="grounded-answer">
         <GroundedAnswerWarnings answer={answer} />
         <GroundedEvidenceDisclosure
-          title="Knowledge evidence"
-          summary={knowledgeEvidenceSummary(answer)}
+          title={t("grounded.title.knowledge")}
+          summary={knowledgeEvidenceSummary(answer, t)}
         >
           <LocalKnowledgeCitationList
             citations={answer.citations}
             citationPreview={citationPreview}
             openDocumentationTarget={openDocumentationTarget}
+            unverifiedSupport={supportUnverified(answer.uncertainty)}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />
@@ -1137,8 +1330,8 @@ export function GroundedAnswer({
       <div className="grounded-answer">
         <GroundedAnswerWarnings answer={answer} />
         <GroundedEvidenceDisclosure
-          title="Grounding evidence"
-          summary={hybridEvidenceSummary(answer)}
+          title={t("grounded.title.grounding")}
+          summary={hybridEvidenceSummary(answer, t)}
           hasCoverageWarning={hasCoverageWarning(answer.contextPack.folder.omittedCounts)}
         >
           <CoverageNotice omittedCounts={answer.contextPack.folder.omittedCounts} />
@@ -1153,6 +1346,7 @@ export function GroundedAnswer({
             citations={answer.knowledgeCitations}
             citationPreview={citationPreview}
             openDocumentationTarget={openDocumentationTarget}
+            unverifiedSupport={supportUnverified(answer.uncertainty)}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />
@@ -1170,8 +1364,8 @@ export function GroundedAnswer({
     <div className="grounded-answer">
       <GroundedAnswerWarnings answer={answer} />
       <GroundedEvidenceDisclosure
-        title="Evidence"
-        summary={connectedEvidenceSummary(answer)}
+        title={t("grounded.title.evidence")}
+        summary={connectedEvidenceSummary(answer, t)}
         hasCoverageWarning={hasCoverageWarning(answer.contextPack.omittedCounts)}
       >
         <CoverageNotice omittedCounts={answer.contextPack.omittedCounts} />

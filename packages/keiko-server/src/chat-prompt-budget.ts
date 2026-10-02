@@ -14,6 +14,10 @@ import {
   type ContextLaneInput,
 } from "@oscharko-dev/keiko-workflows/context-budget";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  AUTOMATIC_COMPACTION_TARGET,
+  AUTOMATIC_COMPACTION_THRESHOLD,
+} from "./chat-compaction-thresholds.js";
 import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatMessage } from "./store/index.js";
 import {
@@ -568,12 +572,15 @@ export function selectGatewayPromptAssembly(
     { messages: candidate.messages },
     input.profile.tokenAccounting,
   );
-  if (before < input.profile.effectiveInputBudget * 0.9) return candidate;
+  if (before < input.profile.effectiveInputBudget * AUTOMATIC_COMPACTION_THRESHOLD)
+    return candidate;
   const compacted = assembleSelectedGatewayPrompt({
     ...adjusted,
     profile: {
       ...adjusted.profile,
-      effectiveInputBudget: Math.floor(adjusted.profile.effectiveInputBudget * 0.7),
+      effectiveInputBudget: Math.floor(
+        adjusted.profile.effectiveInputBudget * AUTOMATIC_COMPACTION_TARGET,
+      ),
     },
   });
   if (compacted?.compaction === undefined) return candidate;

@@ -298,6 +298,10 @@ export interface WindowTypeDef {
 }
 
 export const CHAT_MINI_W = 430;
+// The compact node a Knowledge Pod becomes when it is dragged onto the canvas (Workspace.tsx). The
+// connector window's "too small" threshold must sit below it: the node used to be created at this
+// size and immediately rendered "Zu klein für Knowledge Pod" (customer screenshots, 1.1.11-1.1.13).
+export const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
 
 const DEFAULT_MIN: WindowSize = { w: 150, h: 110 };
 const DEFAULT_TINY: WindowSize = { w: 290, h: 190 };
@@ -717,6 +721,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 320,
     h: 380,
     min: { w: 220, h: 180 },
+    tiny: { w: 200, h: 140 },
     config: [],
   },
   localKnowledge: {

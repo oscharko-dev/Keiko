@@ -1,5 +1,6 @@
 import {
   Gateway,
+  type ContextWindowReport,
   type GatewayConfig,
   type GatewaySpendBudget,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -17,21 +18,28 @@ import { processServerLogSink } from "./process-log-sink.js";
 // gateway was selected while saying nothing about what it did.
 const GATEWAY_LOG_DEPS = { log: processServerLogSink() };
 
+type ContextWindowReporter = (report: ContextWindowReport) => void;
+
 function newGateway(
   config: GatewayConfig,
   spendBudget?: GatewaySpendBudget,
   configurationCorrelationId?: string,
+  onContextWindowReported?: ContextWindowReporter,
 ): Gateway {
   return new Gateway(config, {
     ...GATEWAY_LOG_DEPS,
     spendBudget,
     ...(configurationCorrelationId === undefined ? {} : { configurationCorrelationId }),
+    ...(onContextWindowReported === undefined ? {} : { onContextWindowReported }),
   });
 }
 
 export interface RuntimeGatewayConfigSource {
   readonly spendBudget?: GatewaySpendBudget | undefined;
   readonly initializationCorrelationId?: string | undefined;
+  // Receives every provider-stated context window a Gateway built for this source observes, so the
+  // host can adopt the deployment's real window (gateway-context-window.ts). Must not throw.
+  readonly onContextWindowReported?: ContextWindowReporter | undefined;
   current(): GatewayConfig | undefined;
   generation(): number;
 }
@@ -224,15 +232,36 @@ function logRuntimeUnavailable(
   );
 }
 
+// A Gateway reports the windows its providers state; the host learns which configuration generation
+// that Gateway was built for, so a report from replaced routing can be told apart (PR #3678 review).
+function generationStampedReporter(
+  reporter: ContextWindowReporter | undefined,
+  generation: number,
+): ContextWindowReporter | undefined {
+  if (reporter === undefined) return undefined;
+  return (report): void => {
+    reporter({ ...report, configurationGeneration: generation });
+  };
+}
+
 class GatewayInstanceCache {
   constructor(private readonly spendBudget?: GatewaySpendBudget) {}
   private readonly byConfig = new WeakMap<GatewayConfig, Gateway>();
   private readonly byRuntimeConfig = new WeakMap<RuntimeGatewayConfigSource, RuntimeGatewayEntry>();
 
-  forConfig(config: GatewayConfig, configurationCorrelationId?: string): Gateway {
+  forConfig(
+    config: GatewayConfig,
+    configurationCorrelationId?: string,
+    onContextWindowReported?: ContextWindowReporter,
+  ): Gateway {
     const existing = this.byConfig.get(config);
     if (existing !== undefined) return existing;
-    const gateway = newGateway(config, this.spendBudget, configurationCorrelationId);
+    const gateway = newGateway(
+      config,
+      this.spendBudget,
+      configurationCorrelationId,
+      onContextWindowReported,
+    );
     this.byConfig.set(config, gateway);
     return gateway;
   }
@@ -254,9 +283,10 @@ class GatewayInstanceCache {
     // A runtime generation change invalidates circuit-breaker and request state even when a caller
     // reused the same parsed config object. A config change inside the SAME generation is not an
     // invalidation, so it must still converge with direct callers on the config-keyed instance.
+    const reporter = generationStampedReporter(source.onContextWindowReported, generation);
     const gateway = isLifecycleResetReason(reason)
-      ? newGateway(config, this.spendBudget)
-      : this.forConfig(config, initializationCorrelationId);
+      ? newGateway(config, this.spendBudget, undefined, reporter)
+      : this.forConfig(config, initializationCorrelationId, reporter);
     this.byRuntimeConfig.set(source, { kind: "available", config, gateway, generation });
     return gateway;
   }

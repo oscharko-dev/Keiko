@@ -439,9 +439,43 @@ export interface ChatsResponse {
 }
 
 /** Body-free projection of the selected model's usable conversation window. */
+/**
+ * One share of the model's context window, in stacking order. The set is closed per contract
+ * version and grows additively (MCP tools and other tool catalogs are planned as new ids):
+ *   system            — Keiko's system instructions for the chat's mode
+ *   summary           — compacted earlier conversation (a checkpoint or the pending compaction)
+ *   messages          — the conversation messages the next request carries verbatim
+ *   knowledge         — retrieved Knowledge Pod / folder excerpts (never compacted; trimmed by rank)
+ *   free              — room left before automatic compaction starts
+ *   compaction-buffer — the usable input above the 90 % automatic-compaction threshold
+ *   output-reserve    — tokens reserved for the answer
+ *   safety-margin     — estimation headroom that is never planned for input
+ */
+export type ChatContextSegmentId =
+  | "system"
+  | "summary"
+  | "messages"
+  | "knowledge"
+  | "free"
+  | "compaction-buffer"
+  | "output-reserve"
+  | "safety-margin";
+
+export interface ChatContextSegmentWire {
+  readonly id: ChatContextSegmentId;
+  readonly tokens: number;
+  /** Items behind the share: messages, compacted messages, or references sent. */
+  readonly count?: number | undefined;
+}
+
 export interface ChatContextStatusWire {
   readonly modelId: string;
   readonly contextWindowTokens: number;
+  /**
+   * The gateway declared no window for this model and Keiko has not measured it yet, so the window
+   * above is the planning assumption, replaced automatically once the provider states its window.
+   */
+  readonly contextWindowAssumed?: boolean | undefined;
   readonly inputBudgetTokens: number;
   readonly reservedOutputTokens: number;
   readonly safetyMarginTokens: number;
@@ -455,6 +489,54 @@ export interface ChatContextStatusWire {
         readonly messagesCompacted: number;
       }
     | undefined;
+  /**
+   * The stored history has reached the automatic-compaction threshold: the next request compacts it
+   * to `tokensAfter` before sending. `estimatedInputTokens` already reports that projection, so the
+   * meter shows what the next request carries, never the raw stored history.
+   */
+  readonly pendingCompaction?:
+    | {
+        readonly tokensBefore: number;
+        readonly tokensAfter: number;
+        readonly messagesCompacted: number;
+      }
+    | undefined;
+  /**
+   * The retrieved-source share of the chat's latest grounded request. While the chat is grounded,
+   * `estimatedInputTokens` includes `tokens` as the expected share of the next question (the
+   * request itself trims sources to fit, so the estimate is capped at the input budget).
+   */
+  readonly knowledgeSources?:
+    | {
+        readonly tokens: number;
+        readonly sentReferenceCount: number;
+        readonly availableReferenceCount: number;
+      }
+    | undefined;
+  /**
+   * The complete size of the chat's latest grounded request, provider-measured when reported.
+   * `estimatedTokens` is Keiko's own admission estimate of that request — the unit every share in
+   * `segments` uses — present beside a measurement so the meter can state both.
+   */
+  readonly lastRequest?:
+    | {
+        readonly promptTokens: number;
+        readonly measured: boolean;
+        readonly estimatedTokens?: number | undefined;
+      }
+    | undefined;
+  /**
+   * The whole window broken down into its shares; the tokens sum to `contextWindowTokens`.
+   * Absent from servers that predate the breakdown.
+   */
+  readonly segments?: readonly ChatContextSegmentWire[] | undefined;
+  /** Input tokens at which Keiko compacts automatically before the next request (90 %). */
+  readonly autoCompactionAtTokens?: number | undefined;
+  /**
+   * True while the probe that asks the deployment for its undeclared window is still running: the
+   * meter reads the status again until the answer is in, instead of keeping the assumption.
+   */
+  readonly contextWindowProbePending?: boolean | undefined;
 }
 
 export interface ChatResponse {
@@ -1158,8 +1240,9 @@ export interface GroundedUncertainty {
   readonly claim: string;
 }
 
-// "not-configured" is intentionally not a member here: a not-configured reranker is the default,
-// fully-supported install state and always carries status "disabled" with
+// "not-configured" is intentionally not a member here: a not-configured reranker is a
+// fully-supported install state (Gateway Setup wires a discovered reranker only when it passes the
+// probe) and always carries status "disabled" with
 // failureKind: "not-configured" (see `disabledDiagnostics` in
 // keiko-server/src/grounded-rerank-facade.ts, and local-knowledge-grounded-qa.ts). Branch on
 // failureKind, not status, to detect it.
@@ -1431,6 +1514,10 @@ export interface LocalKnowledgeEvidenceCitation {
   // (the capsule/capsule-set displayName). Absent for legacy single-connector answers, which carry
   // no per-source attribution (mirrors GroundedEvidenceCitation.source for folder evidence).
   readonly source?: string;
+  // PR #3678 review: the claim around this citation shares little wording with the cited excerpt
+  // (the citation attacher's soft signal). Never a filter — the citation stays linked. While no
+  // entailment judge verified the answer, the UI marks the citation as unverified.
+  readonly lexicalSupport?: "weak" | undefined;
   readonly htmlManual?: HtmlManualCitationMetadata;
 }
 
@@ -1516,10 +1603,36 @@ export interface HybridGroundedAnswer {
   readonly retrievalActivity?: KnowledgePodRetrievalActivity | undefined;
 }
 
+/**
+ * How much of the model's context the grounded answer's request occupied — counts only, never an
+ * excerpt. `promptTokens` is the provider's usage when it reported one, else Keiko's admission
+ * estimate; `sourceTokens` is the estimated share of the retrieved excerpts in that prompt.
+ * `sentReferenceCount < availableReferenceCount` means references were left out to fit the model's
+ * window. The context meter shows this and plans the next grounded question with it.
+ */
+export interface GroundedPromptContextWire {
+  readonly promptTokens: number;
+  readonly promptTokensMeasured: boolean;
+  /** Keiko's admission estimate of the same prompt; absent from answers that predate it. */
+  readonly estimatedPromptTokens?: number | undefined;
+  /** Estimated tokens of the grounded system instructions of that prompt. */
+  readonly instructionTokens: number;
+  readonly sourceTokens: number;
+  readonly sentReferenceCount: number;
+  readonly availableReferenceCount: number;
+  /**
+   * The model window the request was planned for. A context reading under another window (a model
+   * switch, an adopted window) treats the counts as history, not as the current request's shape.
+   * Absent from answers that predate it.
+   */
+  readonly contextWindowTokens?: number | undefined;
+}
+
 export type GroundedAnswer = (
   ConnectedContextGroundedAnswer | LocalKnowledgeGroundedAnswer | HybridGroundedAnswer
 ) & {
   readonly memory?: ConversationMemoryResultWire | undefined;
+  readonly promptContext?: GroundedPromptContextWire | undefined;
 };
 
 // ─── BFF error envelope ───────────────────────────────────────────────────────────

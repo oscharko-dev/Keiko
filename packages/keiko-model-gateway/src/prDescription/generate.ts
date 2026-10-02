@@ -1,3 +1,4 @@
+import { effectiveContextWindow } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { isGitChangeSnapshotReference } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import {
   activityLogEvent,
@@ -397,7 +398,7 @@ function reserveCall(
   if (
     generation.calls >= generation.limits.maxCalls ||
     cost.tokens > remainingBudget(generation.budget) ||
-    cost.tokens > capability.contextWindow ||
+    cost.tokens > effectiveContextWindow(capability) ||
     generation.inputBytes + cost.bytes > generation.limits.maxInputBytes ||
     generation.outputBytes >= generation.limits.maxOutputBytes
   ) {

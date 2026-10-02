@@ -20,13 +20,16 @@ import {
   ChatWindow,
   clearKnowledgeCatalogCacheForTests,
   copyableMessageText,
+  speakableAnswerText,
+  speechPreparationEvidence,
   messageForSelectedResponseVersion,
   MemoryActionForgetButtons,
   normalizeMemoryBudgetInput,
   rootDisplayName,
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
-import { translate, type I18nTranslate } from "@/lib/i18n";
+import { I18N_STORAGE_KEY, I18nProvider, translate, type I18nTranslate } from "@/lib/i18n";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { PdfCitationPreviewWindowApi } from "./hooks/usePdfCitationPreview";
 import type {
@@ -1541,7 +1544,11 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(2));
     expect(screen.getByRole("option", { name: "Knowledge Pod: Fresh knowledge" })).toBeVisible();
     expect(screen.queryByRole("option", { name: "Knowledge Pod: Stale knowledge" })).toBeNull();
-    expect(screen.getByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeDisabled();
+    // The bound pod is listed but no longer ready: it keeps its name and its real state, and is
+    // not selectable. Only a pod the catalog does not list at all reads as "(unavailable)".
+    expect(
+      screen.getByRole("option", { name: "Knowledge Pod: Stale knowledge (indexing)" }),
+    ).toBeDisabled();
 
     await user.keyboard("{Escape}");
     await openCombobox(user, "Grounding mode");
@@ -1611,6 +1618,168 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       ).toBeVisible();
     });
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("names a bound pod that is not ready with its real state instead of its id", async () => {
+    const user = userEvent.setup();
+    const capsuleId = makeCapsuleId("87251961-0000-4000-8000-000000000001");
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "test",
+          lifecycleState: "indexing",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScopes: [{ kind: "capsule", capsuleId, connectedAtMs: 1 }],
+        }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+        "Knowledge Pod: test (indexing)",
+      );
+    });
+    // The scope chip names the pod and its state; the raw id never reaches the person.
+    expect(screen.getByLabelText("test (indexing)")).toBeInTheDocument();
+    expect(screen.queryByText(/87251961/u)).toBeNull();
+    await openCombobox(user, "Grounding mode");
+    expect(screen.getByRole("option", { name: "Knowledge Pod: test (indexing)" })).toBeDisabled();
+    expect(screen.queryByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeNull();
+  });
+
+  // PR #3678: the header pill of a bound pod the catalog does not list showed "Knowledge Pod: <id>".
+  it("names a bound pod the catalog does not list by its kind, never by its raw id", async () => {
+    const capsuleId = makeCapsuleId("87251961-0000-4000-8000-00000000000f");
+    let answerCatalog: (value: { capsules: [] }) => void = () => undefined;
+    fetchCapsulesMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answerCatalog = resolve;
+      }),
+    );
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScopes: [{ kind: "capsule", capsuleId, connectedAtMs: 1 }],
+        }),
+      }),
+    );
+
+    // While the catalog has not answered, the pill names only the kind.
+    expect(await screen.findByLabelText("Knowledge Pod")).toBeInTheDocument();
+    answerCatalog({ capsules: [] });
+    expect(await screen.findByLabelText("Knowledge Pod (unavailable)")).toBeInTheDocument();
+    expect(screen.queryByText(/87251961/u)).toBeNull();
+  });
+
+  it("shows a failed bound pod as failed by name, never as unavailable or by id", async () => {
+    const capsuleId = makeCapsuleId("87251961-0000-4000-8000-000000000002");
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "test",
+          lifecycleState: "error",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScopes: [{ kind: "capsule", capsuleId, connectedAtMs: 1 }],
+        }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
+        "Knowledge Pod: test (failed)",
+      );
+    });
+    expect(screen.getByLabelText("test (failed)")).toBeInTheDocument();
+    expect(screen.queryByText(/87251961/u)).toBeNull();
+  });
+
+  it("reports a failed catalog load as retryable instead of as an empty catalog", async () => {
+    const user = userEvent.setup();
+    const capsuleId = makeCapsuleId("cap-after-retry");
+    fetchCapsulesMock.mockRejectedValueOnce(new Error("knowledge catalog offline"));
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("knowledge catalog offline");
+    });
+    // A failed load is not "no ready pods": the empty-catalog hint must stay hidden.
+    expect(screen.queryByText("No ready Knowledge Pods or Pod Sets are available.")).toBeNull();
+
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "After retry",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 2,
+        },
+      ],
+    });
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await openCombobox(user, "Grounding mode");
+    expect(await screen.findByRole("option", { name: "Knowledge Pod: After retry" })).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+
+  it("says no ready pods only after a successful load", async () => {
+    fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    expect(
+      await screen.findByText("No ready Knowledge Pods or Pod Sets are available."),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+
+  it("refreshes on the first picker open once the mount-time snapshot has aged", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const user = userEvent.setup();
+      fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] }).mockResolvedValueOnce({
+        capsules: [
+          {
+            id: makeCapsuleId("cap-reindexed"),
+            displayName: "Reindexed since mount",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 2,
+          },
+        ],
+      });
+      renderWindow(makeSession({ activeChat: makeChat() }));
+      await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+      await screen.findByText("No ready Knowledge Pods or Pod Sets are available.");
+
+      vi.setSystemTime(Date.now() + 6_000);
+      await openCombobox(user, "Grounding mode");
+
+      expect(
+        await screen.findByRole("option", { name: "Knowledge Pod: Reindexed since mount" }),
+      ).toBeVisible();
+      expect(fetchCapsulesMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shares the capsule catalog request across mounted chat windows", async () => {
@@ -1684,6 +1853,51 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.getByText(/blocks grounded answer synthesis/u)).toBeVisible();
     expect(screen.queryByText(/\/Users\/alice/u)).toBeNull();
     expect(screen.queryByText(/client_secret/u)).toBeNull();
+  });
+
+  // PR #3678 audit O3: the option badge and description came from the producer in English whatever
+  // the UI language; they are now resolved from the Local Knowledge catalog at render time.
+  it("shows the Knowledge Pod option guidance in German", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const user = userEvent.setup();
+    const capsuleId = makeCapsuleId("cap-sealed-de");
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Vertragswerk",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        {
+          ...knowledgePodSummary(capsuleId, "pod", "Vertragswerk"),
+          governance: {
+            locationKind: "local",
+            sealingPosture: "sealed-pod-policy",
+            policyPosture: "policy-pack",
+            managedServiceDependency: false,
+          },
+          modelUsePolicy: resolveKnowledgePodModelUsePolicy(sealedLocalPodModelUsePolicy()),
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+
+    render(
+      <I18nProvider>
+        <ChatSessionProvider value={makeSession({ activeChat: makeChat() })}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      </I18nProvider>,
+    );
+    await openCombobox(user, "Grounding-Modus");
+
+    expect(await screen.findByText("Durch Richtlinie gesperrt")).toBeVisible();
+    expect(screen.getByText(/blockiert geerdete Antwortsynthese/u)).toBeVisible();
+    expect(screen.queryByText("Policy denied")).toBeNull();
   });
 
   it("surfaces HTML manual pod readiness and selects it through the existing grounding flow", async () => {
@@ -3582,6 +3796,7 @@ describe("ChatWindow message copy", () => {
             workflowStatus: undefined,
             shortResult: undefined,
             taskType: undefined,
+            groundedAnswer: copyTestGroundedAnswer("Paris 【1】 is the capital [2].", 2),
           },
         ],
       }),
@@ -3610,12 +3825,348 @@ describe("ChatWindow message copy", () => {
     }
   });
 
+  // ADR-0144: Keiko's own assessment is shown apart from the cited answer under a visible label,
+  // never linked as evidence, and copied as plain words without its tags.
+  it("shows Keiko's own assessment as a labelled note and copies it without tags", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const content =
+      "The documents set no Java version [1].\n\n<assessment>\nMy own assessment: use Java 21.\n</assessment>";
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content,
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+            groundedAnswer: copyTestGroundedAnswer(content, 1),
+          },
+        ],
+      }),
+    );
+
+    const note = await screen.findByRole("note", { name: /own assessment/i });
+    expect(note).toHaveTextContent("My own assessment: use Java 21.");
+    expect(note).toHaveTextContent(/not from the sources/i);
+    expect(screen.queryByText(/<assessment>/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "The documents set no Java version.\n\nMy own assessment: use Java 21.",
+      );
+    });
+
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
+  it("leaves an ordinary answer that mentions the tag untouched", () => {
+    const content = "Write <assessment> in your prompt.";
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content,
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+
+    expect(screen.queryByRole("note", { name: /own assessment/i })).toBeNull();
+    expect(screen.getByText(/in your prompt/)).toBeInTheDocument();
+  });
+
+  // PR #3678 review: every copy leaves body-free evidence — outcome, grounded flag and the marker
+  // groups removed and kept — and a failed copy its error kind; never the copied text.
+  it("reports each copy's outcome and marker counts without the copied text", async () => {
+    const reports: { readonly message: string; readonly meta: unknown }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
+    const writeText = vi
+      .fn<(text: string) => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("clipboard denied"));
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const content = "Paris [1] is the capital [80, 443].";
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content,
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+            groundedAnswer: copyTestGroundedAnswer(content, 2),
+          },
+        ],
+      }),
+    );
+
+    const copyButton = screen.getByRole("button", { name: "Copy answer" });
+    fireEvent.click(copyButton);
+    await waitFor(() => {
+      expect(reports.some((report) => report.message === "Keiko chat answer copied.")).toBe(true);
+    });
+    fireEvent.click(copyButton);
+    await waitFor(() => {
+      expect(reports.some((report) => report.message === "Keiko chat answer copy failed.")).toBe(
+        true,
+      );
+    });
+
+    const copyReports = reports.filter((report) => report.message.includes("answer cop"));
+    expect(copyReports.map((report) => report.meta)).toEqual([
+      {
+        answerCopy: { outcome: "copied", grounded: true, strippedGroupCount: 1, keptGroupCount: 1 },
+      },
+      expect.objectContaining({
+        answerCopy: { outcome: "failed", grounded: true, strippedGroupCount: 1, keptGroupCount: 1 },
+        errorKind: "unavailable",
+      }),
+    ]);
+    expect(JSON.stringify(copyReports)).not.toContain("Paris");
+    resetClientDiagnosticWriter();
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
+  // PR #3678 review: a grounded refusal with no reference is still a grounded copy.
+  it("reports a zero-reference grounded answer's copy as grounded", async () => {
+    const reports: { readonly meta: unknown }[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      reports.push({ meta });
+    });
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    const content = "No evidence found in the selected knowledge scope.";
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content,
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+            groundedAnswer: copyTestGroundedAnswer(content, 0),
+          },
+        ],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+    await waitFor(() => {
+      expect(reports.map((report) => report.meta)).toContainEqual({
+        answerCopy: { outcome: "copied", grounded: true, strippedGroupCount: 0, keptGroupCount: 0 },
+      });
+    });
+    resetClientDiagnosticWriter();
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
+  it("copies an ordinary answer's brackets unchanged: only grounded citations are stripped", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const content = "Open the ports [80, 443] and set `const a = [1, 2, 3];` [1].";
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content,
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(content);
+    });
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+
   it("removes grounded source labels and duplicate repository references from copied answers", () => {
     expect(
       copyableMessageText(
         "Check [packages/keiko-harness/src/context.ts:49-58] [source: api] packages/keiko-harness/src/context.ts:49-58 【1】.",
+        1,
       ),
     ).toBe("Check packages/keiko-harness/src/context.ts:49-58.");
+  });
+
+  it("removes grouped citation markers from copied answers like single ones", () => {
+    expect(copyableMessageText("Java 17 wird verwendet [1, 7, 8]. Maven [2]; 【3, 4】.", 8)).toBe(
+      "Java 17 wird verwendet. Maven;.",
+    );
+    expect(copyableMessageText("Not a marker [1, x] and [note].", 8)).toBe(
+      "Not a marker [1, x] and [note].",
+    );
+  });
+
+  // PR #3678 review: read-aloud text must drop a grounded answer's markers, grouped and CJK
+  // included, while an ordinary answer's numeric lists stay spoken content.
+  it("reads a grounded answer aloud without its markers and an ordinary answer unchanged", () => {
+    const base = {
+      id: "m2",
+      chatId: "chat-1",
+      role: "assistant" as const,
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    };
+    const grounded = "Java 17 wird verwendet [1, 2]. Maven 【2】.";
+    expect(
+      speakableAnswerText({
+        ...base,
+        content: grounded,
+        groundedAnswer: copyTestGroundedAnswer(grounded, 2),
+      }),
+    ).toBe("Java 17 wird verwendet. Maven.");
+    const ordinary = "The valid values are [1, 2] and the coordinates are [7, 8].";
+    expect(speakableAnswerText({ ...base, content: ordinary })).toBe(ordinary);
+  });
+
+  // The voice parity smoke: speech is the visible answer without its numeric markers, so a
+  // bracketed repository path stays spoken exactly as the answer wrote it. The copy's evidence
+  // tidy-up is no speech rule.
+  it("reads a grounded answer's bracketed repository path aloud unchanged", () => {
+    const answer = "repositoryParityStatus is defined in [src/repository-parity.ts:2] [1].";
+    expect(
+      speakableAnswerText({
+        id: "m3",
+        chatId: "chat-1",
+        role: "assistant",
+        timestamp: 3,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+        content: answer,
+        groundedAnswer: copyTestGroundedAnswer(answer, 1),
+      }),
+    ).toBe("repositoryParityStatus is defined in [src/repository-parity.ts:2].");
+  });
+
+  it("reads Keiko's own assessment aloud as plain words after the cited answer", () => {
+    const content =
+      "The documents set no Java version [1].\n\n<assessment>\nMy own assessment: use Java 21.\n</assessment>";
+    expect(
+      speakableAnswerText({
+        id: "m5",
+        chatId: "chat-1",
+        role: "assistant",
+        timestamp: 5,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+        content,
+        groundedAnswer: copyTestGroundedAnswer(content, 1),
+      }),
+    ).toBe("The documents set no Java version.\n\nMy own assessment: use Java 21.");
+  });
+
+  it("describes the read-aloud preparation by the same rule, body-free", () => {
+    const answer = "Values are [2, 3] and the path is [src/a.ts:2] [1].";
+    const message = {
+      id: "m4",
+      chatId: "chat-1",
+      role: "assistant" as const,
+      timestamp: 4,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+      content: answer,
+    };
+    expect(
+      speechPreparationEvidence({ ...message, groundedAnswer: copyTestGroundedAnswer(answer, 1) }),
+    ).toEqual({ grounded: true, strippedGroupCount: 1, keptGroupCount: 1 });
+    expect(speechPreparationEvidence(message)).toEqual({
+      grounded: false,
+      strippedGroupCount: 0,
+      keptGroupCount: 2,
+    });
+  });
+
+  it("keeps brackets that name no reference of the grounded answer", () => {
+    // Beyond the references ([80, 443]), partly beyond ([2, 9]) and index 0 are content.
+    expect(copyableMessageText("Ports [80, 443] and [2, 9] and [0], per [1, 2].", 3)).toBe(
+      "Ports [80, 443] and [2, 9] and [0], per.",
+    );
+    // An ordinary answer (no references) strips nothing at all.
+    expect(copyableMessageText("Use a[1] and [1, 2, 3].")).toBe("Use a[1] and [1, 2, 3].");
+  });
+
+  it("keeps brackets inside Markdown code of a grounded answer", () => {
+    const content = "Set it [1]:\n```ts\nconst a = [1, 2, 3];\n```\nor `b = [2]` [2].";
+
+    expect(copyableMessageText(content, 3)).toBe(
+      "Set it:\n```ts\nconst a = [1, 2, 3];\n```\nor `b = [2]`.",
+    );
   });
 
   it("removes standalone source labels without corrupting answer spacing", () => {
@@ -4440,3 +4991,36 @@ it("preserves literal user line breaks, indentation and path punctuation in the 
   expect(prompt?.textContent).toBe(content);
   expect(prompt?.querySelector("strong")).toBeNull();
 });
+
+function copyTestGroundedAnswer(content: string, sentReferenceCount: number): GroundedAnswer {
+  return {
+    groundingKind: "local-knowledge",
+    userMessageId: "m1",
+    assistantMessageId: "m2",
+    content,
+    citations: [],
+    uncertainty: [],
+    omittedCount: 0,
+    elapsedMs: 5,
+    noEvidence: false,
+    contextPack: {
+      kind: "local-knowledge",
+      scopeKind: "capsule",
+      scopeId: "lk-1",
+      scopeLabel: "Caps",
+      capsuleCount: 1,
+      sourceCount: 1,
+      citationCount: 0,
+      referenceBudget: 10,
+      referencesUsed: sentReferenceCount,
+    },
+    promptContext: {
+      promptTokens: 900,
+      promptTokensMeasured: false,
+      instructionTokens: 200,
+      sourceTokens: 600,
+      sentReferenceCount,
+      availableReferenceCount: sentReferenceCount,
+    },
+  };
+}

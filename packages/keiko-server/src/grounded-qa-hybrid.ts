@@ -47,8 +47,10 @@ import {
   buildGroundedAnswerContextPackSummary,
   type ChatConnectedScope,
   type ChatLocalKnowledgeScope,
+  type GroundedAnswer,
   type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
+  type GroundedPromptContextWire,
   type GroundedRerankerDiagnostics,
   type GroundedUncertainty,
   type HybridGroundedAnswer,
@@ -61,7 +63,14 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
-import { currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
+import {
+  currentContextProfileForModel,
+  currentGroundingLimits,
+  currentRedactionSecrets,
+} from "./deps.js";
+import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
+import type { GatewayPromptTokenInput } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { fitKnowledgePrompt } from "./knowledge-prompt-window.js";
 import type { Chat, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
@@ -92,6 +101,7 @@ import {
 } from "./local-knowledge-grounded-qa.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { sentPromptContext } from "./grounded-prompt-context.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import {
   normalizeGroundedAnswerPayload,
@@ -102,7 +112,7 @@ import {
   buildPackCitationIndex,
   GROUNDED_NO_EVIDENCE_ANSWER,
   incompleteAnswerMarker,
-  missingCitationMarker,
+  missingCitationMarkerFor,
   noEvidenceMarker,
   reconcileInlineCitations,
   reconcileNumericCitations,
@@ -1141,6 +1151,28 @@ function folderUncertainty(
   );
 }
 
+// The folder evidence the model was shown: every retrieved folder pack restricted to the excerpts
+// of the sent (reranked and window-fitted) folder candidates. A `[path:line]` citation and its
+// entailment judgment obey the same sent-evidence boundary as a numeric `[n]`; an excerpt the fit or
+// the rerank cap left out of the prompt supports nothing (PR #3678 review).
+function sentFolderPacks(
+  folders: readonly RetrievedFolder[],
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): readonly ConnectedContextPack[] {
+  const sent = new Set(
+    selected.filter(isFolderCandidate).map((candidate) => candidate.payload.stableId),
+  );
+  return folders.map(({ pack }) => ({
+    ...pack,
+    files: pack.files
+      .map((file) => ({
+        ...file,
+        excerpts: file.excerpts.filter((excerpt) => sent.has(excerpt.atom.stableId)),
+      }))
+      .filter((file) => file.excerpts.length > 0),
+  }));
+}
+
 // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the hybrid answer's inline `[path:line]` citations
 // against the FOLDER evidence packs the model actually received. Connector citations use marker
 // labels rather than repo paths, so path-shaped inline references are validated against folder
@@ -1155,7 +1187,7 @@ function hybridReconciliationUncertainty(
   const nowMs = Date.now();
   const reconciliation = reconcileInlineCitations(
     assistant.content,
-    buildPackCitationIndex(folders.map((f) => f.pack)),
+    buildPackCitationIndex(sentFolderPacks(folders, selected)),
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   const supportedNumericMarkers = new Set(selected.map((candidate) => candidate.marker));
@@ -1173,7 +1205,7 @@ function hybridReconciliationUncertainty(
     unsupportedNumeric === undefined &&
     reconciliation.citedScopePaths.size === 0 &&
     numericReconciliation.citedMarkers.size === 0
-      ? missingCitationMarker(nowMs)
+      ? missingCitationMarkerFor(assistant.content, nowMs)
       : undefined;
   const markers = [
     ...(unsupported === undefined ? [] : [unsupported]),
@@ -1197,7 +1229,8 @@ function hybridEntailmentStage(
         ctx.deps,
         capsules,
         ctx.modelId,
-        { diagnostics: ctx.deps.diagnostics },
+        // The request's correlation, so the verdict line joins the ask (PR #3678 review).
+        { diagnostics: ctx.deps.diagnostics, correlationId: ctx.correlationId },
         ctx.signal,
       );
 }
@@ -1233,10 +1266,11 @@ async function applyHybridEntailment(
   if (stage === undefined) {
     return answer;
   }
+  const sentPacks = sentFolderPacks(folders, selected);
   if (stage.evaluateHybrid !== undefined) {
     const markers = await stage.evaluateHybrid(
       answerContent,
-      folders.map((folder) => folder.pack),
+      sentPacks,
       numericEntailmentEvidence(selected),
       Date.now(),
     );
@@ -1246,7 +1280,7 @@ async function applyHybridEntailment(
     answer,
     stage,
     answerContent,
-    folders.map((folder) => folder.pack),
+    sentPacks,
     ctx.deps.redactor,
   );
   return appendGroundedAnswerNumericEntailment(
@@ -1648,9 +1682,43 @@ interface AssembleHybridAnswerInput {
   readonly reranker: GroundedRerankerDiagnostics;
   readonly ids: { readonly userMessageId: string; readonly assistantMessageId: string };
   readonly sourceEvidenceAvailable?: boolean;
+  /** Candidates before the window fit; defaults to `selected.length` (nothing trimmed). */
+  readonly availableReferenceCount?: number;
 }
 
-function assembleHybridAnswer(input: AssembleHybridAnswerInput): HybridGroundedAnswer {
+// The context meter's view of a hybrid prompt: the exact system and user messages the answerer sent
+// (the same pure builder over the same selected candidates) and the same prompt without candidates
+// (grounded-prompt-context.ts). The selected set is already capped, so every candidate is sent.
+function hybridPromptContext(
+  ctx: HybridGroundedAskCtx,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  assistant: GroundedAnswerResult,
+  availableReferenceCount: number,
+): GroundedPromptContextWire {
+  const question = ctx.answerContent ?? ctx.content;
+  const { redactor } = ctx.deps;
+  const system = { role: "system" as const, content: HYBRID_SYSTEM_PROMPT };
+  return sentPromptContext(
+    {
+      messages: [
+        system,
+        { role: "user", content: buildRerankedHybridUserMessage(question, selected, redactor) },
+      ],
+      withoutSources: [
+        system,
+        { role: "user", content: buildRerankedHybridUserMessage(question, [], redactor) },
+      ],
+      sentReferenceCount: selected.length,
+      availableReferenceCount,
+    },
+    assistant.usage.promptTokens,
+    currentContextProfileForModel(ctx.deps, ctx.modelId),
+  );
+}
+
+function assembleHybridAnswer(
+  input: AssembleHybridAnswerInput,
+): HybridGroundedAnswer & Pick<GroundedAnswer, "promptContext"> {
   const {
     ctx,
     sources,
@@ -1694,6 +1762,22 @@ function assembleHybridAnswer(input: AssembleHybridAnswerInput): HybridGroundedA
       knowledgeCitationCount: projection.knowledgeCitations.length,
       reranker,
     }),
+    ...hybridPromptContextField(input),
+  };
+}
+
+// A deterministic abstention sends no prompt and reports none. An answer-only request (governed
+// memory context, no source evidence) does call the model, so its prompt is reported like every
+// other grounded request (PR #3678 review).
+function hybridPromptContextField(
+  input: AssembleHybridAnswerInput,
+): Pick<GroundedAnswer, "promptContext"> {
+  const modelInvoked =
+    input.sourceEvidenceAvailable !== false || input.ctx.answerOnlyContextAvailable === true;
+  if (!modelInvoked) return {};
+  const available = input.availableReferenceCount ?? input.selected.length;
+  return {
+    promptContext: hybridPromptContext(input.ctx, input.selected, input.assistant, available),
   };
 }
 
@@ -1742,14 +1826,9 @@ async function noEvidenceAssistant(
   }
   const answerer = resolveHybridAnswerer(ctx);
   if ("status" in answerer) return answerer;
-  const user = buildRerankedHybridUserMessage(
-    ctx.answerContent ?? ctx.content,
-    selected,
-    ctx.deps.redactor,
-  );
-  const answer = normalizeGroundedAnswerPayload(await answerer.answer(HYBRID_SYSTEM_PROMPT, user));
+  const { assistant } = await answerHybridWithinWindow(ctx, answerer, selected);
   ensureNotCancelled(ctx.signal);
-  return answer;
+  return assistant;
 }
 
 function noEvidenceSources(meta: AnswerMeta): RetrievedSources {
@@ -2075,18 +2154,13 @@ async function answerAndAssemble(
   }
   const answerer = resolveHybridAnswerer(ctx);
   if ("status" in answerer) return answerer;
-  const user = buildRerankedHybridUserMessage(
-    ctx.answerContent ?? ctx.content,
-    selected,
-    ctx.deps.redactor,
-  );
-  const assistant = normalizeGroundedAnswerPayload(
-    await answerer.answer(HYBRID_SYSTEM_PROMPT, user),
-  );
+  const { assistant, sent } = await answerHybridWithinWindow(ctx, answerer, selected);
   ensureNotCancelled(ctx.signal);
   const [userMessage, assistantMessage] = persistHybridGroundedExchange(ctx, assistant.content);
+  // Citations and the prompt share follow the candidates the model was actually shown.
   return finalizeHybridAnswer(ctx, store, meta, {
-    selected,
+    selected: sent,
+    availableReferenceCount: selected.length,
     limits,
     assistant,
     reranker,
@@ -2094,8 +2168,67 @@ async function answerAndAssemble(
   });
 }
 
+// The highest-ranked candidates whose prompt fits the model's current input budget. Candidates keep
+// their markers, so a prefix keeps `[1]..[n]` consistent with the citations derived from it.
+function hybridCandidatesWithinWindow(
+  ctx: HybridGroundedAskCtx,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): readonly SelectedCandidate<HybridPayload>[] {
+  const question = ctx.answerContent ?? ctx.content;
+  const render = (count: number): GatewayPromptTokenInput => ({
+    messages: [
+      { role: "system", content: HYBRID_SYSTEM_PROMPT },
+      {
+        role: "user",
+        content: buildRerankedHybridUserMessage(
+          question,
+          selected.slice(0, count),
+          ctx.deps.redactor,
+        ),
+      },
+    ],
+  });
+  const fitted = fitKnowledgePrompt(
+    selected.length,
+    render,
+    currentContextProfileForModel(ctx.deps, ctx.modelId),
+    { correlationId: ctx.correlationId, diagnostics: ctx.deps.diagnostics },
+  );
+  return selected.slice(0, fitted.referenceCount);
+}
+
+// Like the folder, multi-source and Knowledge Pod answerers: each attempt fits the candidates to the
+// model's current input budget, and a provider overflow that states the real window re-fits and
+// sends once more (withAdoptedContextWindowRetry, PR #3678 review).
+async function answerHybridWithinWindow(
+  ctx: HybridGroundedAskCtx,
+  answerer: ResolvedAnswerer,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): Promise<{
+  readonly assistant: GroundedAnswerResult;
+  readonly sent: readonly SelectedCandidate<HybridPayload>[];
+}> {
+  let sent = selected;
+  const assistant = await withAdoptedContextWindowRetry(
+    ctx.deps,
+    { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
+    async () => {
+      sent = hybridCandidatesWithinWindow(ctx, selected);
+      const user = buildRerankedHybridUserMessage(
+        ctx.answerContent ?? ctx.content,
+        sent,
+        ctx.deps.redactor,
+      );
+      return normalizeGroundedAnswerPayload(await answerer.answer(HYBRID_SYSTEM_PROMPT, user));
+    },
+  );
+  return { assistant, sent };
+}
+
 interface HybridFinalizeInput {
   readonly selected: readonly SelectedCandidate<HybridPayload>[];
+  /** Candidates selected before the window fit; more than `selected` means the window trimmed. */
+  readonly availableReferenceCount: number;
   readonly limits: ReturnType<typeof currentGroundingLimits>;
   readonly assistant: GroundedAnswerResult;
   readonly reranker: GroundedRerankerDiagnostics;
@@ -2110,7 +2243,7 @@ async function finalizeHybridAnswer(
   meta: AnswerMeta,
   input: HybridFinalizeInput,
 ): Promise<RouteResult> {
-  const { selected, limits, assistant, reranker, ids } = input;
+  const { selected, availableReferenceCount, limits, assistant, reranker, ids } = input;
   const folders = meta.folderResult.retrieved;
   const answer = assembleHybridAnswer({
     ctx,
@@ -2124,6 +2257,7 @@ async function finalizeHybridAnswer(
     },
     store,
     selected,
+    availableReferenceCount,
     limits,
     assistant,
     reranker,
