@@ -8,18 +8,24 @@ records why the underlying fields exist and what each one does and does not prom
 
 ## The recipe: artifact → seed → replay → red/green test
 
-1. **Receive privately and validate first.** Follow the [support workspace guide](support-workspace.md).
-   Use one canonical report from `keiko support export --incident <id>` or
-   `--correlation-id <id>`. Raw logs and legacy open JSONL bundles are not accepted at this boundary.
+1. **Receive privately and validate first.** Follow the
+   [support workspace guide](support-workspace.md). Use one canonical report from
+   `keiko support export --incident <id>` or `--correlation-id <id>`. Raw logs and legacy open
+   JSONL bundles are refused at this boundary (`legacy-input`).
 2. **Use only the analyzed machine view.** `keiko support analyze report.json --json` validates
    every byte before emitting `keiko.support.report-analysis` (schema version 1). Read `selection`
    and `analysis.sufficiency` first. Its `analysis.timelines` identify the ordered events and
-   failure-site frames; `seed` carries deterministic replay preparation for the incident correlation.
-   Authenticity remains unknown even with valid integrity. Do not give the unvalidated file to an agent.
-3. **Build a reproduction seed.** `buildReproductionSeed(text, correlationId, generatedAt)`
-   (`packages/keiko-activity-log/src/reader/support-analyze.ts`) assembles everything reconstructable for that
+   failure-site frames; `seed` carries deterministic replay preparation for the incident
+   correlation. Authenticity remains unknown even with valid integrity. Do not give the unvalidated
+   file to an agent. With `--correlation-id <id>`, `--json` emits only that validated timeline, the
+   form `keiko investigate --from-timeline` reads.
+3. **Build a reproduction seed.**
+   `keiko support analyze report.json --correlation-id <id> --seed --json`
+   (or `prepareSupportReportSeed` on the validated view, from
+   `@oscharko-dev/keiko-activity-log/reader`) assembles everything reconstructable for that
    correlation id into one `ReproductionSeed`: the ordered `timeline`, a `gatewayScript` when the
-   timeline includes a model-gateway call, an `httpRequest` seed, a `storeFingerprint` when a registered event provides one, an `indexingJob` seed, `stackFrames`/`causeChain`, and — always — a `warnings` array
+   timeline includes a model-gateway call, an `httpRequest` seed, an `indexingJob` seed,
+   `stackFrames`/`causeChain`, and — always — a `warnings` array
    naming exactly what could _not_ be reconstructed and why (starting with the standing
    by-design warning that no prompt or response body is ever logged). Read `warnings` before
    trusting that a seed is complete; a warning names the actual gap rather than the seed silently
@@ -96,8 +102,9 @@ records why the underlying fields exist and what each one does and does not prom
    only the second one.
 
 For a failure with no gateway call — an indexing job, an HTTP route, a store operation — the same
-`ReproductionSeed` still carries `httpRequest`/`indexingJob`/`storeFingerprint`, each read back
-from the timeline the same way; scaffold the test against the real handler or store function
+`ReproductionSeed` still carries `httpRequest`/`indexingJob`, each read back from the timeline the
+same way (a report never opens a store, so its seed warns instead of carrying a
+`storeFingerprint`); scaffold the test against the real handler or store function
 instead of `Gateway`, seeded with those fields.
 
 **Current scope, stated plainly.** `buildReproductionSeed` and `renderGatewayReplayScriptFixture`
@@ -106,11 +113,11 @@ also wired directly onto `support analyze` itself: `keiko support analyze FILE -
 --seed` prints the `ReproductionSeed` for that id (as text, or as JSON alongside `--json`), and
 `keiko support analyze FILE --correlation-id ID --emit-fixture PATH` writes the pasteable
 gateway-replay-script fixture straight to `PATH` instead of requiring a manual copy-paste — it
-refuses to overwrite a file already at `PATH`, creates missing parent directories, and reports the
-written path. `--clusters` (no `--correlation-id` required) renders the whole-file
-`(category, op, errorKind)` grouping the same way. Importing the builder functions directly (from
-within the `keiko-cli` package, or from its built `dist/` output) remains available for callers
-that want the `ReproductionSeed` object itself rather than its rendered text/JSON/fixture form; see
+refuses to overwrite a file already at `PATH`, creates missing parent directories owner-only, and
+reports the written path. `--clusters` (no `--correlation-id` required) renders the whole-report
+`(category, op, errorKind)` grouping the same way. Importing the builder functions directly from
+`@oscharko-dev/keiko-activity-log/reader` remains available for callers that want the
+`ReproductionSeed` object itself rather than its rendered text/JSON/fixture form; see
 [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md) D9.
 
 ## Reading a Keiko-code stack frame: the dist-vs-src playbook

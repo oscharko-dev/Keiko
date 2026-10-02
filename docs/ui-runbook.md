@@ -117,7 +117,7 @@ Path validation is host-independent for these structural rules; the directory ex
 
 | Symptom                | Check                                                                                |
 | ---------------------- | ------------------------------------------------------------------------------------ |
-| UI is not reachable    | Run `keiko status`, then `keiko support analyze` on a `keiko support export` bundle. |
+| UI is not reachable    | Run `keiko status`, then `keiko support analyze` on a `keiko support export` report. |
 | Port conflict          | Stop the conflicting process or start Keiko with another port.                       |
 | No model appears       | Re-run Settings credential test and confirm the gateway exposes chat models.         |
 | Credential test fails  | Confirm the base URL points to an OpenAI-compatible API and that the token is valid. |

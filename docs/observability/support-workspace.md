@@ -13,25 +13,41 @@ Select an existing incident with `keiko support incident list`, then run:
 keiko support export --incident <incident-id>
 ```
 
-The terminal names the private file in `<stateDir>/support-reports/` and its diagnostic sufficiency.
-The filename contains only the product prefix, schema version, incident prefix and UTC date. The
-hard maximum is 10 MiB; use `--max-bytes` to lower it for a narrower sharing policy. There is one
-file, with embedded integrity, and no attachments or sidecar. Raw logs, screenshots, free-text
-notes, arbitrary files, configuration snapshots and evidence manifests cannot be included.
-All former inclusion flags are refused.
+`--correlation-id <id>` selects one operation's registered causal closure instead, and
+`--defect-fingerprint <sha256>` an existing incident by its fingerprint. Without a selector the
+export records a user-reported incident ("Report a problem") and exports its window. An unknown
+incident or fingerprint, or a correlation without retained evidence, records nothing, writes
+nothing and exits 1, so a mistyped id never pins an incident window.
 
-A report can honestly be `insufficient`: its closed reasons and required event-byte count explain
-what is missing. If its header cannot fit, nothing is published. Existing destinations are never
-replaced. An interrupted publication leaves private recognizable staging/recovery state; the
-shared safe publisher recovers only the exact intended bytes or fails closed. Do not rename a
-stage into a report, delete recovery metadata to obtain success, or treat a partial file as valid.
-Choose a fresh private output directory only after preserving and inspecting the prior failure evidence.
+The terminal names the private file and its diagnostic sufficiency. The default directory is
+`<stateDir>/support-reports/`; `--out` names another directory, never a file. A new directory is
+created owner-only, an existing one must not be writable by group or others, and no directory
+inside an Activity Log is accepted. The filename contains only the product prefix, schema version,
+incident prefix and the incident's UTC creation date. The hard maximum is 10 MiB; use `--max-bytes`
+to lower it for a narrower sharing policy. There is one file, with embedded integrity, and no
+attachments or sidecar. Raw logs, screenshots, free-text notes, arbitrary files, configuration
+snapshots and evidence manifests cannot be included. All former inclusion flags are refused.
+
+A report can honestly be `insufficient`: its closed reasons and required byte count explain what
+is missing. If its header cannot fit, nothing is published. Existing destinations are never
+replaced. The report is staged as a private `.keiko-publish-<24 hex>-<n>.stage` copy beside its
+destination and then linked into place; an interrupted export can leave that stage behind, and
+the next export into the directory names how many it found. A stage is never a report: do not
+rename it into one or share it, and delete it once the failure evidence is preserved.
+
+Exit status 0 means a report was written; 1 means a closed refusal; 2 is a usage error. Each
+export records body-free `support.report.started` and `support.report.completed` or
+`support.report.failed` lines (closed reasons, byte counts and publication assurance, never a
+path) in the selected state directory's Activity Log; a refused destination is recorded in the
+CLI control state instead.
 
 ## On the support team's machine
 
 1. Receive the file manually into an access-controlled workspace, under a locally chosen filename.
-   Keep the directory owner-only (0700 on POSIX) and the file owner-only (0600). Do not grant an
-   agent broader filesystem/network authority just to handle the report. Do not preview its raw
+   Transfer it byte for byte (binary mode, no line-ending or encoding conversion): any changed byte
+   fails validation. Keep the directory owner-only (0700 on POSIX) and the file owner-only (0600).
+   Do not grant an agent broader filesystem/network authority just to handle the report. Do not
+   preview its raw
    contents in a terminal, editor, model context or automation before validation.
 2. Use a supported Keiko analyzer offline. It reads only the explicitly selected private,
    single-link regular file, bounds the read, validates every section and decoded event, rejects
@@ -43,14 +59,17 @@ Choose a fresh private output directory only after preserving and inspecting the
    keiko support analyze ./received-report.json --json > ./analyzed-report.json
    ```
 
-3. Require exit status 0 before using the generated machine view. A rejected input produces no
-   analyzed report data; keep the closed failure reason as the finding. An unsupported schema or
-   catalog names its declared minimum analyzer version. The declared minimum is also enforced for
-   a known schema and catalog; product-version comparison is bounded, rejects malformed versions
-   and uses numeric release/prerelease precedence. Obtain a trusted supported analyzer through the
-   normal governed update process; the report cannot supply a schema, binary or installation
-   command. Legacy raw logs/open JSONL bundles are refused: ask for regeneration on the originating
-   installation, without importing their config/evidence sections.
+3. Require exit status 0 before using the generated machine view. A rejected input exits 1 and
+   produces no analyzed report data; keep its closed failure reason as the finding:
+   `corrupt-report` (bytes, encoding or digests do not hold), `unsafe-report` (a value or relation
+   the producer never writes), `unsupported-report` (an unknown schema or registry, or a newer
+   declared minimum analyzer version, which the message then names), `report-budget-exceeded` (a
+   hard bound), `legacy-input` (a raw log or a retired open JSONL bundle), `selection-unavailable`
+   or `seed-unavailable` (the requested correlation or seed is not in the report). Product-version
+   comparison is bounded, rejects malformed versions and uses numeric release/prerelease
+   precedence. Obtain a trusted supported analyzer through the normal governed update process; the
+   report cannot supply a schema, binary or installation command. For `legacy-input`, ask for
+   regeneration on the originating installation, without importing old config/evidence sections.
 4. Give an authorized agent only `analyzed-report.json`, the versioned
    `keiko.support.report-analysis` projection. Read `selection.status/reasons`,
    `analysis.sufficiency`, loss and coverage before asserting that an absence proves anything.
@@ -58,7 +77,10 @@ Choose a fresh private output directory only after preserving and inspecting the
    reconstructable report. A sender who can rewrite every checksum can forge self-consistency.
 5. Use its ordered timelines, failure clusters, safe frames/causes and available deterministic
    `seed`. `keiko support analyze ./received-report.json --seed` selects the incident correlation
-   by default; `--correlation-id` selects another known timeline. `--emit-fixture PATH` prepares
+   by default; `--correlation-id` selects another known timeline, and with `--json` emits only that
+   validated timeline (`keiko.support.report-timeline`) for `keiko investigate --from-timeline`.
+   Each analysis records body-free `support.report.*` lines in the CLI control state.
+   `--emit-fixture PATH` prepares
    an existing safe gateway replay fixture and never overwrites a target. Follow the
    [red/green reproduction recipe](reproduction-harness.md); no user-authored reproduction text
    or captured prompt/response is required. Missing replay capabilities remain explicit.
@@ -72,7 +94,9 @@ are future hardening requiring a real separately governed lifecycle.
 
 Schema 1 uses canonical JSON with incident, selection, losslessly compacted registered events and
 embedded SHA-256 section/overall digests. The bounds are independent: 10 MiB final file, 1 MiB
-incident, 16 MiB decoded events, 64 KiB per event, 20,000 records, and depth 12. Derived ordinary and
+incident, 16 MiB decoded events, 64 KiB per event, 20,000 records, depth 12, 250,000 containers,
+3,000,000 values and 256 keys per object, checked on the raw text before it is parsed. Strings are
+printable ASCII only. Derived ordinary and
 update timelines together permit at most 80,000 record occurrences and 64 MiB of UTF-8 record-view
 payloads. Parent fan-out is checked before expansion; excessive export evidence is marked
 insufficient, and excessive received evidence is rejected before output. Private permissions,
@@ -88,10 +112,11 @@ Frames and causes are rechecked through their owning reducers, including travers
 
 Historical catalog snapshots are immutable repository-owned data, shipped with the reader and
 selected by exact registry/schema/catalog identity. Supported coverage starts at release 1.1.9;
-unknown identities fail closed rather than using the current schema. Maintain snapshots with
-`scripts/generate-support-registry-history.mjs`, from reviewed repository commits only. The
-frozen pre-extraction production fixture proves historical reconstruction without restating the
-writer's identity formula.
+unknown identities fail closed rather than using the current schema. `npm run set-version`
+regenerates the snapshots from the stable release tags, so every release older than the current
+version ships its registry; a drift test fails when one is missing or differs from its release
+commit. The frozen pre-move production fixture (#3558) proves historical reconstruction without
+restating the writer's identity formula.
 
 The old CLI bundle/sidecar/config/evidence serializers are retired. Their security invariants now
 run through the canonical CLI and file-I/O tests: no secret/environment/UI/file capture, exclusive
@@ -102,8 +127,6 @@ pin remains against the owning `collectStoreFingerprints` production entry point
 open stores merely to add a diagnostic snapshot. Local raw-log analysis helpers remain developer
 facilities, not an admission boundary for received files.
 
-Operator scripts remove inclusion flags and the sidecar step, pass a private directory to `--out`
-instead of a filename, and read the new versioned machine
-envelope (`analysis.timelines`, `analysis.clusters`, `seed`). The release impact is new-additions,
-high priority, behavioral, supported from the next release after merge (issue #3534). Existing
-published release entries are not changed.
+Operator scripts drop inclusion flags and the sidecar step, pass a private directory to `--out`
+instead of a filename, and read the versioned machine envelope (`analysis.timelines`,
+`analysis.clusters`, `seed`).

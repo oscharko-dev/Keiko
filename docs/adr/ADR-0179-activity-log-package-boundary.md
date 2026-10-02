@@ -72,15 +72,18 @@ depends on route-template reduction.
 `keiko-server` keeps its `observability` barrel and its exported `./observability/server-log`
 subpath as re-exports of this package, never as a second implementation. The CLI's static module
 graph imports no `keiko-server` module; commands that need the server load it lazily. The Activity
-Log-only support commands (`keiko support query`, `keiko support manifest`, and
-`keiko support incident`, `keiko support export`, and `keiko support analyze`) therefore load this package and never the server.
+Log-only support commands (`keiko support query`, `keiko support manifest`,
+`keiko support incident` and `keiko support export`) therefore load this package and never the
+server. `keiko support analyze` additionally loads only the narrow
+`keiko-server/runtime/tool-catalog-lifecycle` subpath, lazily, for the tool-lifecycle validator,
+and states `lifecycle-validator-unavailable` when it cannot load.
 
 The generated operation catalog records the new package as the owner/emitter location. This changes
-the catalog digest once while the persisted line format remains byte-compatible. The canonical report reader now selects a repository-owned immutable registry snapshot by the
-recorded identity (ADR-0173 D9, #3534); it never receives schemas from a report or substitutes the
-current catalog. Unsupported registries fail closed. CLI owns private file publication and
-argument/rendering concerns; the package owns canonical parsing, integrity, compatibility and
-reconstruction.
+the catalog digest once while the persisted line format remains byte-compatible. The canonical
+report reader selects a repository-owned immutable registry snapshot by the recorded identity
+(ADR-0173 D9, #3534); it never receives schemas from a report or substitutes the current catalog.
+Unsupported registries fail closed. CLI owns private file publication and argument/rendering
+concerns; the package owns canonical parsing, integrity, compatibility and reconstruction.
 
 ## Enforcement
 

@@ -25,7 +25,7 @@ npm package carries neither, so until 1.1.2 an npm installation could never star
 
 **Diagnostic Steps**
 
-1. `keiko support export --out bundle.jsonl`, then `keiko support analyze bundle.jsonl`.
+1. `keiko support export`, then `keiko support analyze <report.json>` on the report path it prints.
 2. Look for `coding-runtime.dev-lane.activated` with `lane: "npm-runtime-package"`. When it is
    absent, no runtime package is installed.
 3. `coding-runtime.dev-lane.refused` with `lane: "npm-runtime-package"` means a runtime package is

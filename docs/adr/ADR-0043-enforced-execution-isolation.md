@@ -335,7 +335,7 @@ refuses the launch outright with the identical `GATEWAY_UNSUPPORTED_ON_HOST_REAS
 `planIsolatedRun` would produce, rather than a silent unconfined spawn — its native launch-packet
 protocol has no field for a network policy and cannot enforce one; the refusal is also recorded as a
 body-free `runtime.confinement.failed` activity-log line, matching the macOS dev-lane path, so a
-Windows refusal leaves the same evidence a support bundle can reconstruct. Production composition
+Windows refusal leaves the same evidence a support report can reconstruct. Production composition
 (`productionOpenCodeBackend.ts`) always supplies the exact gateway policy, including Windows dev
 and release-qualified native lanes. Process-tree qualification alone cannot authorize an unconfined
 network launch. Until a native backend can enforce the policy, starting that run refuses before

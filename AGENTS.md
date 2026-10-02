@@ -595,8 +595,9 @@ already recorded:
    versioned body-free machine view only after complete offline validation. Give agents that
    analyzed projection, never unvalidated report bytes. Human views, clusters, deterministic
    seeds and explicitly selected replay fixtures derive from the same validated evidence.
-3. **Investigate from the validated timeline.** Select the appropriate `analysis.timelines`
-   member; `keiko investigate --from-timeline <timeline.json>` consumes that governed timeline.
+3. **Investigate from the validated timeline.**
+   `keiko support analyze report.json --correlation-id <id> --json > timeline.json` emits that
+   validated timeline; `keiko investigate --from-timeline timeline.json` consumes it.
 4. **Read sufficiency and integrity before trusting a seed.** Closed reasons, coverage and loss
    expose missing causal evidence, lifecycle transitions and unsupported identities. Authenticity
    stays unknown. The seed warnings name unavailable evidence classes; never replace them with

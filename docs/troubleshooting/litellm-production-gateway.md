@@ -87,8 +87,8 @@ may still need the explicit output-token parameter described below.
 ## Coding Workbench turn has no assistant reply
 
 For a Workbench run that accepted a message but has no assistant reply, note the run id and export a
-body-free bundle with `keiko support export --out keiko-bundle.jsonl`. Analyze that bundle with
-`keiko support analyze keiko-bundle.jsonl --correlation-id <runId>`. The run timeline includes
+body-free report with `keiko support export --correlation-id <runId>`. Analyze the report with
+`keiko support analyze <report.json> --correlation-id <runId>`. The run timeline includes
 `coding-sidecar.gateway.request-validated`, any closed `coding-sidecar.gateway.rejected` reason,
 the provider dispatch, and a redacted diagnostic for a failed model call. The analyzer follows the
 request's explicit parent link and includes its entire request timeline; the request ID still
@@ -141,8 +141,8 @@ run failed after the two-minute start timeout without a reason.
 
 **Diagnostic Steps**
 
-Export a bundle and analyze the run with
-`keiko support analyze keiko-bundle.jsonl --correlation-id <runId>`. The `coding-runtime.start`
+Export a report with `keiko support export --correlation-id <runId>` and analyze the run with
+`keiko support analyze <report.json> --correlation-id <runId>`. The `coding-runtime.start`
 diagnostic reads
 `stage=start:reason=launch-resolution:model-unavailable:model-context-window-insufficient`, or
 `...:model-verification-pending` while the probe runs. `gateway.readiness.automatic.completed`
@@ -487,7 +487,7 @@ message policy/shape — and reports each with its own code and safe message:
 **Diagnostic Steps**
 
 `keiko support export --correlation-id <id>` (the id shown with the failure) and
-`keiko support analyze <bundle> --correlation-id <id>` reconstruct the `git.commit.draft.completed`
+`keiko support analyze <report.json> --correlation-id <id>` reconstruct the `git.commit.draft.completed`
 line for that request: its `failureCode` field names exactly one of the three codes above, and
 `errorKind` is `timeout` for the first, `validation-failed` for the other two. Neither the diff nor
 the model's raw output ever appears in the log or in the export.
@@ -590,7 +590,7 @@ answer with `finish_reason: length` and no content) does not.
 **Diagnostic Steps**
 
 For a chat failure: `keiko support export --correlation-id <id>` and
-`keiko support analyze <bundle> --correlation-id <id>` reconstruct the `gateway.stream.started` /
+`keiko support analyze <report.json> --correlation-id <id>` reconstruct the `gateway.stream.started` /
 `gateway.stream.failed` (or `gateway.chat.started` / `gateway.chat.failed`) pair for that request.
 `gateway.stream.failed`'s `errorKind` is `timeout` only once the read has actually exceeded the
 floored silence or budget bound reported on the paired `chat.response.streamed` line
@@ -644,7 +644,7 @@ probed there again and dropped when the new gateway does not host it.
 
 **Diagnostic Steps**
 
-`keiko support analyze <bundle>` shows one `gateway.discovery.alias-intersection` line per
+`keiko support analyze <report.json>` shows one `gateway.discovery.alias-intersection` line per
 discovered alias whose `role` names its lane, and one `gateway.reranker.setup.resolved` line per
 committed setup that found a rerank model: `outcome` is `wired`, `kept-existing` (an existing
 reranker blocked the wiring; probed once only when it moved to a new endpoint) or `probe-failed`

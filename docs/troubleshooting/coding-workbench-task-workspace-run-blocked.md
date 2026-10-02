@@ -332,7 +332,7 @@ the log.
 
 **Diagnostic Steps**
 
-1. `keiko support analyze bundle.jsonl --correlation-id <run id> --json`; locate the first
+1. `keiko support analyze <report.json> --correlation-id <run id> --json`; locate the first
    `OpenCodeHistoryFailure`. Since 2026-09-10 its `code` names the refused row body-free:
    `:part=<type>:tool=<alias>:status=<pending|running|completed|error>:partBytes=<n>:gate=<gate>`.
    `gate=argument-bound` means the arguments exceeded the catalog ceilings (`TOOL_CATALOG_LIMITS`:
@@ -385,7 +385,7 @@ through the plain node port, which re-admits the root under the user-workspace r
 
 **Diagnostic Steps**
 
-1. `keiko support analyze bundle.jsonl --correlation-id <run id>`; the first
+1. `keiko support analyze <report.json> --correlation-id <run id>`; the first
    `coding-runtime.verification` failure names the gate in its `frames`
    (`git-index-stat.js` → `indexStatMatches`, or `gitIndexTransaction.js` → `readGitStageFile`).
 2. Confirm the worktree root lies below a `.keiko` segment (`task-workspace.lifecycle` lines carry the
@@ -430,7 +430,7 @@ edited or staged by Keiko — so its presence says nothing about the snapshot's 
 
 **Diagnostic Steps**
 
-1. `keiko support analyze bundle.jsonl --correlation-id <run id>`; the first
+1. `keiko support analyze <report.json> --correlation-id <run id>`; the first
    `coding-runtime.verification` failure names `code: "git-raw-snapshot-incomplete"` (a real content
    or path-count budget overrun) or another closed code of the reader.
 2. On a build with the repair, a `git.raw-status.denied-paths-excluded` line with
@@ -477,7 +477,7 @@ property had failed either.
 
 **Diagnostic Steps**
 
-1. `keiko support analyze bundle.jsonl --correlation-id <chat correlation id>`. Since 2026-09-10 the
+1. `keiko support analyze <report.json> --correlation-id <chat correlation id>`. Since 2026-09-10 the
    `gateway.tool-catalog.rejected` line carries the schema's own account: `missingRequired` (schema
    property paths), `invalidPaths`, `missingRequiredCount`, `invalidPathCount` and
    `unexpectedPropertyCount` — declared names and counts only, never the arguments. The
@@ -531,7 +531,7 @@ delivering. Ad-hoc runs are exempt, because one legitimately ends with no commit
 1. Reconstruct the run's timeline and read it from the beginning, not from the end.
 
    ```bash
-   keiko support analyze bundle.jsonl --correlation-id <runId> --json
+   keiko support analyze <report.json> --correlation-id <runId> --json
    ```
 
 2. Look for the last blocking refusal before the run stopped. The two that end a run this way are a
@@ -667,7 +667,7 @@ service does not hold (never proposed, already redeemed, or expired after five m
 1. Reconstruct the run's timeline and find the `stage-propose` line(s):
 
    ```bash
-   keiko support analyze bundle.jsonl --correlation-id <runId> --json
+   keiko support analyze <report.json> --correlation-id <runId> --json
    ```
 
 2. `state: "blocked"`: read the `reason`. For `selection-unreviewed`, compare the request's

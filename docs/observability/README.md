@@ -236,7 +236,7 @@ unreadable. `keiko support manifest verify` reports it.
 | ---------------------------------- | -------------------------------------------------------------------- |
 | `keiko status`                     | `Diagnostic evidence: <state> (<reasons>); lost events: N.`          |
 | `keiko ui` (foreground)            | A line naming the state and reasons when readiness is not `ready`.   |
-| `keiko support export`             | The report records closed diagnostic sufficiency and loss.           |
+| `keiko support export`             | The exported directory's readiness, after the report is written.     |
 | `GET /api/health`                  | The `diagnostics` block: state, reasons, writer kind, lost events.   |
 | The desktop footer                 | A badge when readiness is `degraded` or `unavailable`, with reasons. |
 | The log (`activity-log.readiness`) | The startup state and every later transition.                        |
@@ -568,8 +568,8 @@ keiko support analyze keiko-support-v1-0123456789ab-2026-09-30.json --seed
 The entire untrusted file is bounded and validated before output. The versioned
 `keiko.support.report-analysis` envelope contains the incident, sufficiency, unknown authenticity,
 ordered timelines, process summaries, failure clusters and available deterministic seed. It uses
-the report's exact recorded registry. A newer/unknown schema or catalog is unsupported and names
-the declared minimum analyzer version. The reader never follows embedded references, accesses a
+the report's exact recorded registry. A report whose declared minimum analyzer version is newer
+names that version; an unknown schema or registry is unsupported. The reader never follows embedded references, accesses a
 network, executes content or tests a historical PID on the receiver's machine. Digests prove
 self-consistency, not sender authenticity.
 
@@ -577,6 +577,53 @@ Legacy raw logs and open JSONL bundles are refused as received reports. Regenera
 originating installation; do not copy legacy config/evidence sections into a new report. Local
 log exploration continues through `keiko support query`. See the [controlled support workspace
 guide](support-workspace.md) before sharing or giving an artifact to an agent.
+
+### What a validated timeline shows
+
+Chat context selection emits `chat.context.selected` before the provider call for buffered,
+streaming and regenerated turns. Its request correlation joins the compacted/retained history
+counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
+effective input budget and image reserve. This evidence survives generation timeout or
+cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
+not provider-measured usage, and no conversation or image content is recorded.
+
+Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
+`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
+`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+replaces the image reserve even when the local text/tool/schema floor determines the final total;
+a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
+
+On retries, `reportedPromptTokens` always describes only the current counter response and is
+absent when that response has no count. `providerPromptTokens` adds the current response-schema
+cost to that raw count; `retainedPromptTokens` separately records the carried measurement floor
+plus schema cost. Admission preserves the maximum of local, current-provider and retained
+candidates. `counterSource` identifies a winning retained floor as `retained-measurement`, and
+`imageAccounting` uses that disposition when only the retained positive measurement replaces the
+image reserve. Neither retained value is presented as a new provider observation.
+
+Epic #3384's repository-delivery journey (intake, mutation authority, verified commit, push, draft
+PR, CI readiness — including the `pr-mark-ready` draft-to-ready transition (#3389) — description
+generation/apply, and the recorded journey outcome) reconstructs on the same per-correlation
+timeline as every other operation — `git.delivery.*` (including
+`git.delivery.pr-mark-ready.approval.required`/`.minted`/`.executed`/`.drift`),
+`git.pr-description`/`git.pr-description.receipt`, `pr-description.chat.turn.admitted`/`.denied`
+(Chat's own description-generation admission gate ahead of the Model Gateway),
+`coding-runtime.description` (the server-side automatic-description dispatch lifecycle — dispatched,
+coalesced, superseded, blocked, generated, failed — named in its own `event` extra field),
+`git.journey-observation`/`git.journey-outcome.recorded`, `coding-context.github*` and
+`git-change.chat.*` lines simply appear on it like any other line, and `--clusters` groups them the
+same way. `keiko support
+analyze <report.json> --seed --correlation-id <id>` additionally assembles an `issueToPrJourney` view onto the
+`ReproductionSeed`: one step per recognised line, tagged with a closed `phase`
+(`intake`/`authority`/`commit`/`push`/`pr`/`readiness`/`description`/`outcome`) and carrying the
+emitter's own `status`/`reason` and the digest/id fields (`runId`, `headSha`, `evidenceRef`,
+`snapshotDigest`, …) a replay needs — every value copied verbatim off the producer's own
+closed-vocabulary `extra`, never invented. Each step's fields are read back through the SAME
+`redactLogFields` choke point the activity-log sink itself writes through; a line whose `extra`
+carries a body-bearing value under an otherwise-innocuous name is reported by field name under that
+step's `redactionViolations` and withheld from the seed instead of rendered, and a `redactionVerified:
+false` step (no redactor supplied) carries no content fields at all rather than trusting an
+unverified line.
 
 ## Local support incidents
 
@@ -733,8 +780,9 @@ the integrity, coverage, loss and truncation of the selection. The human output 
 
 - **Versioned output.** Query/manifest wire kinds stay at version 1. Canonical report analysis
   emits `keiko.support.report-analysis`, version 1, including its full validated analysis and
-  available seed. `--clusters --json` uses that envelope too; scripts must select
-  `analysis.clusters`, and per-correlation consumers use `analysis.timelines`.
+  available seed. `--clusters --json` uses that envelope too; scripts select `analysis.clusters`.
+  With `--correlation-id`, `--json` emits only that validated timeline as
+  `keiko.support.report-timeline`, version 1, the form `keiko investigate --from-timeline` reads.
 - **Bounded analysis.** Report file reads use bounded chunks; JSON and decompression have separate
   hard byte, record and depth limits. Validation completes before any human or machine rendering.
   A seed's `sourceArtifact.sha256` is the SHA-256 of the exact received file bytes; section and
@@ -747,7 +795,7 @@ the integrity, coverage, loss and truncation of the selection. The human output 
 
 - [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md) — the full
   design record: why each envelope field is reserved, the ordering guarantee's exact limit, the
-  redaction escape hatches, and the support-bundle format.
+  redaction escape hatches, and the support report format.
 - [`reproduction-harness.md`](reproduction-harness.md) — turning one correlation id's evidence into
   a red-then-green regression test.
 - [Troubleshooting guide](../troubleshooting/README.md) — the `logs/` row in the
