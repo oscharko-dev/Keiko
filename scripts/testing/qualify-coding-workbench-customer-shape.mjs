@@ -29,6 +29,7 @@ import {
   customerShapeFailureSummary,
   customerShapeRequestEvidence,
   customerShapeSupportReportEvidence,
+  customerShapeSupportTimelineEvidence,
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
 
@@ -189,30 +190,39 @@ function assertAnalyzableFailure(project, stateDir, lines, runId, forbidden) {
   if (evidence === undefined) throw new Error("failed turn lacks linked installed-build evidence");
   const { diagnostic } = evidence;
   const bin = join(project, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
-  const bundle = exportFailureReport(project, stateDir, runId, bin);
-  const analyzed = run(
-    process.execPath,
-    [bin, "support", "analyze", bundle, "--correlation-id", diagnostic.correlationId, "--json"],
-    { cwd: project },
-  );
-  const analyzedRun = run(
-    process.execPath,
-    [bin, "support", "analyze", bundle, "--correlation-id", runId, "--json"],
-    { cwd: project },
-  );
-  if (analyzedRun !== analyzed)
+  const report = exportFailureReport(project, stateDir, runId, bin);
+  const analyze = (...args) =>
+    run(process.execPath, [bin, "support", "analyze", report, ...args], { cwd: project });
+  const analyzed = analyze("--json");
+  if (analyze("--json") !== analyzed)
     throw new Error("support report reconstruction is nondeterministic");
-  const content = readFileSync(bundle);
+  const content = readFileSync(report);
   if (forbidden.some((value) => value.length > 0 && content.includes(value)))
     throw new Error("support report retained prohibited synthetic content");
+  const machineView = JSON.parse(analyzed);
   const summary = customerShapeSupportReportEvidence(
-    JSON.parse(analyzedRun),
+    machineView,
     evidence,
     runId,
     content.length,
     forbidden,
   );
-  process.stdout.write(`customer-shape support reconstruction: ${JSON.stringify(summary)}\n`);
+  // `--correlation-id --json` narrows the same validated report to one timeline.
+  const runTimeline = customerShapeSupportTimelineEvidence(
+    JSON.parse(analyze("--correlation-id", runId, "--json")),
+    machineView,
+    runId,
+    "coding-sidecar.gateway.turn-failed",
+  );
+  const diagnosticTimeline = customerShapeSupportTimelineEvidence(
+    JSON.parse(analyze("--correlation-id", diagnostic.correlationId, "--json")),
+    machineView,
+    diagnostic.correlationId,
+    "server.diagnostic.failure",
+  );
+  process.stdout.write(
+    `customer-shape support reconstruction: ${JSON.stringify({ ...summary, runTimeline, diagnosticTimeline })}\n`,
+  );
   if (summary.selection.status !== "complete" || summary.sufficiency.status !== "complete")
     throw new Error("supported installed failure did not reconstruct completely from its report");
 }

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { customerShapeSupportReportEvidence } from "../lib/customer-shape-evidence.mjs";
+import {
+  customerShapeSupportReportEvidence,
+  customerShapeSupportTimelineEvidence,
+} from "../lib/customer-shape-evidence.mjs";
 
 const RUN = "synthetic-run";
 const DIAGNOSTIC = {
@@ -166,5 +169,55 @@ describe("installed support-report diagnostic qualification", () => {
       "activity-log.segment.sealed",
       "[redacted]",
     ]);
+  });
+});
+
+function timelineFixture(report, correlationId = RUN) {
+  const timeline = report.analysis.timelines.find((entry) => entry.correlationId === correlationId);
+  return {
+    kind: "keiko.support.report-timeline",
+    schemaVersion: 1,
+    authenticity: "unknown",
+    analyzerVersion: "1.1.13",
+    reportDigest: report.reportDigest,
+    sourceArtifactDigest: report.sourceArtifactDigest,
+    ...structuredClone(timeline),
+    sufficiency: { status: "complete", reasons: [] },
+  };
+}
+
+describe("installed support-report timeline qualification", () => {
+  it("accepts the validated timeline of one correlation of the same report", () => {
+    const report = reportFixture();
+    expect(
+      customerShapeSupportTimelineEvidence(timelineFixture(report), report, RUN, FAILURE.op),
+    ).toEqual({ lineCount: 1, sufficiency: { status: "complete", reasons: [] } });
+  });
+
+  it("refuses another envelope, another report, another correlation or a missing operation", () => {
+    const report = reportFixture();
+    const refusals = [
+      { ...timelineFixture(report), kind: "keiko.support.report-analysis" },
+      { ...timelineFixture(report), reportDigest: "c".repeat(64) },
+      timelineFixture(report, DIAGNOSTIC.correlationId),
+      { ...timelineFixture(report), lines: [] },
+      undefined,
+    ];
+    for (const timeline of refusals) {
+      expect(() => customerShapeSupportTimelineEvidence(timeline, report, RUN, FAILURE.op)).toThrow(
+        TypeError,
+      );
+    }
+  });
+
+  it("refuses a timeline whose sufficiency contradicts its own reasons", () => {
+    const report = reportFixture();
+    const timeline = {
+      ...timelineFixture(report),
+      sufficiency: { status: "complete", reasons: ["segment-unreadable"] },
+    };
+    expect(() => customerShapeSupportTimelineEvidence(timeline, report, RUN, FAILURE.op)).toThrow(
+      "contradictory sufficiency",
+    );
   });
 });

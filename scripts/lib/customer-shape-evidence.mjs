@@ -344,6 +344,31 @@ function partialReportOperations(report) {
   return [...new Set(partial.map(({ op }) => (REGISTERED_OPERATIONS.has(op) ? op : "[redacted]")))];
 }
 
+function timelineOfReport(timeline, report, correlationId) {
+  return (
+    timeline?.kind === "keiko.support.report-timeline" &&
+    timeline.schemaVersion === 1 &&
+    timeline.authenticity === "unknown" &&
+    timeline.reportDigest === report.reportDigest &&
+    timeline.sourceArtifactDigest === report.sourceArtifactDigest &&
+    timeline.correlationId === correlationId
+  );
+}
+
+/**
+ * Called on the installed CLI's `--correlation-id --json` view: the validated timeline of one
+ * correlation of the same report, the input `keiko investigate --from-timeline` reads.
+ */
+export function customerShapeSupportTimelineEvidence(timeline, report, correlationId, op) {
+  if (
+    !timelineOfReport(timeline, report, correlationId) ||
+    !Array.isArray(timeline.lines) ||
+    !timeline.lines.some((line) => line.op === op)
+  )
+    throw new TypeError("support report timeline is not the validated view of its correlation");
+  return { lineCount: timeline.lines.length, sufficiency: reportSufficiency(timeline.sufficiency) };
+}
+
 /** Called on the installed CLI's validated machine view; emits only closed values and counts. */
 export function customerShapeSupportReportEvidence(report, evidence, runId, bytes, forbidden) {
   assertReportEnvelope(report);
