@@ -420,7 +420,8 @@ describe("support query causal closure (#3531)", () => {
   });
 
   // Review #3679: only `keiko ui` writes a start, and retention prunes a lifetime's oldest segment
-  // first. A start that went with the first segment is stated whether or not a heartbeat followed it.
+  // first. A start that went with the first segment is stated whether or not a heartbeat followed it,
+  // and a retained heartbeat travels as the proof a receiver recomputes the loss from.
   it.each([
     ["after its first heartbeat", true],
     ["before its first heartbeat", false],
@@ -446,29 +447,67 @@ describe("support query causal closure (#3531)", () => {
     const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
     expect(result.diagnosticSufficiency.status).toBe("insufficient");
     expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
-    expect(result.events.map((event) => event.text)).toEqual([failure]);
+    const required = heartbeats ? [...later, failure] : [failure];
+    expect(result.events.map((event) => event.text)).toEqual(required);
     const overflow = query(stateDir, correlationSelection(IDS.root), {
       contextMs: 0,
       maxResultBytes: Buffer.byteLength(failure),
     }).result;
     expect(overflow.truncation).toMatchObject({
       state: "budget-exceeded",
-      requiredBytes: Buffer.byteLength(failure) + 1,
+      requiredBytes: required.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0),
     });
   });
 
   // A one-shot command writes no start (its fatal and exit lines come without one). With all of its
-  // segments retained from the first, it never wrote one, so nothing is missing.
+  // segments retained from the first, it never wrote one, so nothing is missing; the first line of
+  // its first segment travels along so a receiver can see that beginning too.
   it("never asks a start of a lifetime whose segments run unbroken from its first", () => {
     const a = fixtureProcess(4101, "aaaaaaa1");
-    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [signal(a, T0)]);
-    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), [
-      signal(a, T0 + 1),
-      diagnostic(a, T0 + 2, IDS.root),
-    ]);
-    const { result } = query(stateDir, correlationSelection(IDS.root));
+    const beginning = signal(a, T0);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [beginning]);
+    const later = signal(a, T0 + 1);
+    const failure = diagnostic(a, T0 + 2, IDS.root);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), [later, failure]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
     expect(result.diagnosticSufficiency.status).toBe("complete");
     expect(result.diagnosticSufficiency.reasons).toEqual([]);
+    expect(result.events.map((event) => event.text)).toEqual([beginning, failure]);
+  });
+
+  // Review #3679: a segment name proves nothing when its contents are unusable. A damaged line in
+  // a start-less lifetime's segments could be the start itself, so its beginning is not proven.
+  it.each([
+    ["a corrupt start", (line: string): string => line.replace('"v24.18.0"', "24")],
+    [
+      "an incomplete start",
+      (line: string): string => line.replace(',"nodeVersion":"v24.18.0"', ""),
+    ],
+  ])("states a missing start behind %s in the first segment", (_label, damage) => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    const start = fixtureLine(a, T0, { op: "process.started" });
+    expect(damage(start)).not.toBe(start);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [damage(start)]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 600_000, 2), [
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("insufficient");
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
+  });
+
+  // Review #3679: a torn tail ends only a lifetime's last segment, where a crash stops it; a torn
+  // first segment followed by another cannot prove that its beginning held no start.
+  it("states a missing start behind a torn first segment", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    const torn = '{"ts":"2026-09-18T12:00:00.000Z","op":"process.st';
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [signal(a, T0)], { tail: torn });
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 600_000, 2), [
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("insufficient");
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
   });
 
   // A lifetime whose segments no longer run unbroken from its first may have lost its start with the
@@ -527,6 +566,9 @@ describe("support query causal closure (#3531)", () => {
     expect(result.integrity).toMatchObject({ truncatedLineCount: 1, corruptLineCount: 0 });
     expect(result.diagnosticSufficiency.reasons).toContain("truncated-evidence");
     expect(result.diagnosticSufficiency.reasons).not.toContain("corrupt-evidence");
+    // A crash tears only the last segment of a lifetime, so its beginning still holds (review #3679).
+    expect(result.diagnosticSufficiency).toMatchObject({ status: "degraded" });
+    expect(result.diagnosticSufficiency.reasons).not.toContain("evidence-not-retained");
     expect(result.events.map((event) => event.parsed.correlationId)).toEqual([IDS.root, IDS.root]);
   });
 

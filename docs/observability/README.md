@@ -701,9 +701,10 @@ bounded memory. There are two kinds of question:
   lifetimes, within `--context-ms` (0 to 600000, default 5000) of the closure, and each of those
   lifetimes' own `process.started` (its Node version, platform and architecture) wherever it lies,
   even with `--context-ms 0`, so a long-running process keeps its runtime. A process without its
-  start whose segments no longer run unbroken from its first may have lost that start to retention,
-  before or after its first heartbeat, and is insufficient (`evidence-not-retained`); a one-shot
-  command writes no start, so with its segments retained nothing is missing. An incident or
+  start whose segments no longer run unbroken and undamaged from its first may have lost that start,
+  before or after its first heartbeat, and is insufficient (`evidence-not-retained`), with its first
+  retained heartbeat as the proof; a one-shot command writes no start, so with its segments intact
+  nothing is missing and the first line of its first segment shows that beginning. An incident or
   fingerprint is resolved through the local support incidents. A reported incident also selects its
   whole pinned window and treats every correlation in it as a root. The three selectors exclude each
   other and do not combine with the event filters.

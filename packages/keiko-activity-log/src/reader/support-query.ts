@@ -16,9 +16,9 @@
 //             backpressure, disk) of the closure's own process lifetimes inside
 //             [first closure event - contextMs, last closure event + contextMs], plus each of those
 //             lifetimes' own `process.started` (its runtime) wherever it lies, and nothing else. A
-//             lifetime without a start is complete only while its segments still run unbroken from
-//             its first one. A user-reported incident also selects every event of its pinned window
-//             and takes every correlation that appears there as a root.
+//             lifetime without a start is complete only while its segments still run unbroken and
+//             intact from its first one. A user-reported incident also selects every event of its
+//             pinned window and takes every correlation that appears there as a root.
 //   events  — registered operation, error kind, failure class, parent correlation, and a bounded time
 //             window, combined with AND; matching events only.
 //
@@ -73,7 +73,7 @@ import {
   type LoadedSegmentManifest,
   type SegmentManifest,
 } from "./support-segment-manifest.js";
-import { LIFETIME_ANCHOR_OP } from "./support-lifetime.js";
+import { LIFETIME_ANCHOR_OP, LIFETIME_PROOF_OP } from "./support-lifetime.js";
 import type {
   ActivityLogScanner,
   ActivityLogStoreFile,
@@ -470,9 +470,11 @@ interface ClosureEvents {
   readonly collector: EventCollector;
   readonly observed: ReadonlySet<string>;
   readonly edges: ReadonlySet<string>;
-  // Every selected line's process lifetime. It is kept when the bodies are released for the budget,
-  // so the required starts are still measured, and it is bounded like the closure's correlations.
+  // Every selected line's process lifetime, and those with a selected line from their first segment.
+  // Both are kept when the bodies are released for the budget, so the required starts and beginnings
+  // are still measured, and both are bounded like the closure's correlations.
   readonly lifetimes: ReadonlySet<string>;
+  readonly beginnings: ReadonlySet<string>;
   readonly lifetimesExceeded: boolean;
 }
 
@@ -486,9 +488,21 @@ function closureRole(
   return windows.some((window) => lineInWindow(window, accepted)) ? "window" : undefined;
 }
 
-function noteLifetime(lifetimes: Set<string>, parsed: ParsedLine, limit: number): void {
-  const key = lifetimeKey(parsed);
-  if (key !== undefined && lifetimes.size <= limit) lifetimes.add(key);
+function isFirstSegment(file: ActivityLogStoreFile): boolean {
+  return file.segmentId !== undefined && parseActivityLogSegmentId(file.segmentId)?.index === 1;
+}
+
+interface LifetimeNotes {
+  readonly lifetimes: Set<string>;
+  readonly beginnings: Set<string>;
+  readonly limit: number;
+}
+
+function noteLifetime(notes: LifetimeNotes, accepted: AcceptedLine): void {
+  const key = lifetimeKey(accepted.parsed);
+  if (key === undefined || notes.lifetimes.size > notes.limit) return;
+  notes.lifetimes.add(key);
+  if (isFirstSegment(accepted.line.file)) notes.beginnings.add(key);
 }
 
 function collectClosureEvents(
@@ -506,12 +520,16 @@ function collectClosureEvents(
   const collector = new EventCollector(maxResultBytes);
   const observed = new Set<string>();
   const edges = new Set<string>();
-  const lifetimes = new Set<string>();
+  const notes: LifetimeNotes = {
+    lifetimes: new Set(),
+    beginnings: new Set(),
+    limit: maxClosureCorrelations,
+  };
   for (const accepted of acceptedLines(state, files, true)) {
     const role = closureRole(accepted, members, windows);
     if (role === undefined) continue;
     collector.add(accepted, role);
-    noteLifetime(lifetimes, accepted.parsed, maxClosureCorrelations);
+    noteLifetime(notes, accepted);
     const id = accepted.parsed.correlationId;
     const parent = accepted.parsed.view.parentCorrelationId;
     if (role !== "closure" || !knownCorrelation(id)) continue;
@@ -522,8 +540,9 @@ function collectClosureEvents(
     collector,
     observed,
     edges,
-    lifetimes,
-    lifetimesExceeded: lifetimes.size > maxClosureCorrelations,
+    lifetimes: notes.lifetimes,
+    beginnings: notes.beginnings,
+    lifetimesExceeded: notes.lifetimes.size > maxClosureCorrelations,
   };
 }
 
@@ -543,52 +562,100 @@ interface ContextScope {
 }
 
 /**
- * Each lifetime's first start line, in log order. Every candidate is streamed to its end: a scan cut
- * short would leave that segment without the derived manifest its integrity is read from.
+ * The first line each lifetime wrote among `files` that `matches`, in log order. Every file is
+ * streamed to its end: a scan cut short would leave that segment without the derived manifest its
+ * integrity is read from.
  */
-function lifetimeStarts(
+function firstLinePerLifetime(
   state: EngineState,
   lifetimes: ReadonlySet<string>,
+  files: readonly ActivityLogStoreFile[],
+  matches: (accepted: AcceptedLine) => boolean,
 ): ReadonlyMap<string, AcceptedLine> {
   const found = new Map<string, AcceptedLine>();
-  if (lifetimes.size === 0) return found;
-  const files = candidateFiles(
-    state,
-    (loaded) =>
-      hasCount(loaded.manifest.ops, LIFETIME_ANCHOR_OP) &&
-      manifestMayHoldLifetimes(loaded.manifest, lifetimes),
-  );
+  if (lifetimes.size === 0 || files.length === 0) return found;
   for (const accepted of acceptedLines(state, files, true)) {
     const key = lifetimeKey(accepted.parsed);
-    if (accepted.parsed.view.op !== LIFETIME_ANCHOR_OP || key === undefined) continue;
-    if (lifetimes.has(key) && !found.has(key)) found.set(key, accepted);
+    if (key === undefined || !lifetimes.has(key) || found.has(key) || !matches(accepted)) continue;
+    found.set(key, accepted);
   }
   return found;
 }
 
-/** Each lifetime's retained segment indexes, read from the store's closed segment names alone. */
-function lifetimeSegmentIndexes(
+/** Each lifetime's first line of `op` (its start, or a heartbeat), wherever it lies. */
+function firstOperationLines(
+  state: EngineState,
+  lifetimes: ReadonlySet<string>,
+  op: string,
+): ReadonlyMap<string, AcceptedLine> {
+  if (lifetimes.size === 0) return new Map();
+  const files = candidateFiles(
+    state,
+    (loaded) =>
+      hasCount(loaded.manifest.ops, op) && manifestMayHoldLifetimes(loaded.manifest, lifetimes),
+  );
+  return firstLinePerLifetime(
+    state,
+    lifetimes,
+    files,
+    (accepted) => accepted.parsed.view.op === op,
+  );
+}
+
+type LifetimeSegments = ReadonlyMap<number, ActivityLogStoreFile>;
+
+/** Each lifetime's retained segments by index, read from the store's closed segment names alone. */
+function lifetimeSegments(
   files: readonly ActivityLogStoreFile[],
-): ReadonlyMap<string, readonly number[]> {
-  const indexes = new Map<string, number[]>();
+): ReadonlyMap<string, LifetimeSegments> {
+  const segments = new Map<string, Map<number, ActivityLogStoreFile>>();
   for (const file of files) {
     const identity =
       file.segmentId === undefined ? undefined : parseActivityLogSegmentId(file.segmentId);
     if (identity === undefined) continue;
     const key = `${String(identity.pid)}:${identity.instanceId}`;
-    const list = indexes.get(key);
-    if (list === undefined) indexes.set(key, [identity.index]);
-    else list.push(identity.index);
+    const byIndex = segments.get(key) ?? new Map<number, ActivityLogStoreFile>();
+    byIndex.set(identity.index, file);
+    segments.set(key, byIndex);
   }
-  return indexes;
+  return segments;
+}
+
+// A segment proves what it holds only when it is readable and undamaged: a corrupt or incomplete
+// line could be the start itself. A torn tail can only end a lifetime's last segment, where a crash
+// stops it, and is declared as truncated evidence there.
+function segmentIntact(state: EngineState, file: ActivityLogStoreFile, last: boolean): boolean {
+  if (state.input.scanner.unreadable.has(file.name)) return false;
+  const manifest =
+    state.input.scanner.manifestOf(file) ?? state.input.manifests.get(file.name)?.manifest;
+  if (manifest === undefined) return false;
+  const { corruptLineCount, incompleteLineCount, truncatedLineCount } = manifest.evidence;
+  return corruptLineCount === 0 && incompleteLineCount === 0 && (last || truncatedLineCount === 0);
 }
 
 // The writer numbers a lifetime's segments from 1 and retention prunes the oldest first, so a
-// lifetime whose segments still run unbroken from its first one holds everything it ever wrote: a
-// start it wrote would be found. Legacy files carry no segment index and prove no beginning.
-function beginningRetained(indexes: readonly number[] | undefined): boolean {
-  const ordered = [...new Set(indexes)].sort((left, right) => left - right);
-  return ordered.length > 0 && ordered.every((index, position) => index === position + 1);
+// lifetime whose segments still run unbroken and intact from its first holds everything it ever
+// wrote: a start it wrote would have been found. Legacy files carry no index and prove no beginning.
+function beginningRetained(state: EngineState, segments: LifetimeSegments | undefined): boolean {
+  if (segments === undefined) return false;
+  for (let index = 1; index <= segments.size; index += 1) {
+    const file = segments.get(index);
+    if (file === undefined || !segmentIntact(state, file, index === segments.size)) return false;
+  }
+  return true;
+}
+
+/** The first line of each lifetime's first segment: what shows a receiver that its beginning held. */
+function firstSegmentLines(
+  state: EngineState,
+  lifetimes: ReadonlySet<string>,
+  segments: ReadonlyMap<string, LifetimeSegments>,
+): ReadonlyMap<string, AcceptedLine> {
+  const files = [...lifetimes].flatMap((key) => {
+    const file = segments.get(key)?.get(1);
+    return file === undefined ? [] : [file];
+  });
+  return firstLinePerLifetime(state, lifetimes, files, () => true);
 }
 
 /**
@@ -596,25 +663,32 @@ function beginningRetained(indexes: readonly number[] | undefined): boolean {
  * required evidence, not optional context: it is charged to the selection's own budget wherever it
  * lies, never counted against the context cap and never dropped to fit optional context, because a
  * long-running process started far before any short window would otherwise lose that dimension.
- * Only `keiko ui` writes one (support-lifetime.ts), so a lifetime without it is complete only while
- * its whole beginning is retained; otherwise its start may have been pruned before any heartbeat.
- * Lines the closure already selected are never added twice; when the closure's bodies were released
- * for the budget, their bytes are still measured. Returns the number of lifetimes whose start the
- * log can no longer account for.
+ * Only `keiko ui` writes one (support-lifetime.ts). A lifetime without it is complete only while its
+ * whole beginning is retained intact, and one line of its first segment then travels with the
+ * selection; otherwise its start is lost, and its first heartbeat, written only after a start,
+ * travels as the proof. Either way a receiver recomputes the verdict from the report alone. Lines
+ * the closure already selected are never added twice; when the closure's bodies were released for
+ * the budget, their bytes are still measured. Returns the number of lifetimes whose start the log
+ * can no longer account for.
  */
 function collectLifetimeAnchors(
   state: EngineState,
-  lifetimes: ReadonlySet<string>,
-  collector: EventCollector,
+  closure: ClosureEvents,
   alreadySelected: (accepted: AcceptedLine) => boolean,
 ): number {
-  const starts = lifetimeStarts(state, lifetimes);
-  for (const accepted of starts.values()) {
-    if (!alreadySelected(accepted)) collector.add(accepted, "context");
+  const starts = firstOperationLines(state, closure.lifetimes, LIFETIME_ANCHOR_OP);
+  const segments = lifetimeSegments(state.input.files);
+  const unanchored = [...closure.lifetimes].filter((key) => !starts.has(key));
+  const lost = new Set(unanchored.filter((key) => !beginningRetained(state, segments.get(key))));
+  const unshown = new Set(
+    unanchored.filter((key) => !lost.has(key) && !closure.beginnings.has(key)),
+  );
+  const beginnings = firstSegmentLines(state, unshown, segments);
+  const proofs = firstOperationLines(state, lost, LIFETIME_PROOF_OP);
+  for (const accepted of [...starts.values(), ...beginnings.values(), ...proofs.values()]) {
+    if (!alreadySelected(accepted)) closure.collector.add(accepted, "context");
   }
-  const segments = lifetimeSegmentIndexes(state.input.files);
-  return [...lifetimes].filter((key) => !starts.has(key) && !beginningRetained(segments.get(key)))
-    .length;
+  return lost.size + unshown.size - beginnings.size;
 }
 
 function contextScope(
@@ -1073,8 +1147,7 @@ function runClosureSelection(
     ? 0
     : collectLifetimeAnchors(
         state,
-        collected.lifetimes,
-        collected.collector,
+        collected,
         (accepted) => closureRole(accepted, closure.members, selection.windows) !== undefined,
       );
   const overflow = closureOverflow(state, selection, closure, collected);

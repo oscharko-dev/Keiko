@@ -14,6 +14,7 @@ import {
   MAX_SUPPORT_REPORT_OBJECT_KEYS,
   MAX_SUPPORT_REPORT_RECORDS,
   MAX_SUPPORT_REPORT_VALUES,
+  parseActivityLogFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   recordRegisteredFailureIncident,
@@ -566,16 +567,21 @@ describe("historical report reconstruction", () => {
     const frozen = JSON.parse(gunzipSync(Buffer.from(packed.payload, "base64")).toString()) as {
       files: { name: string; bytes: string }[];
     };
-    const records = frozen.files
-      .filter((file) => file.name.endsWith(".jsonl"))
-      .flatMap((file) =>
-        Buffer.from(file.bytes, "base64")
-          .toString()
-          .trimEnd()
-          .split("\n")
-          .map((line) => JSON.parse(line) as Record<string, unknown>),
-      );
-    const first = records[0];
+    // Each record keeps the segment it was written to, so its process identity is checked against
+    // that segment and the lifetime's first segment shows its beginning (review #3679).
+    const events = frozen.files.flatMap((file) => {
+      const parsed = parseActivityLogFileName(file.name);
+      if (parsed === undefined || !("segmentId" in parsed)) return [];
+      return Buffer.from(file.bytes, "base64")
+        .toString()
+        .trimEnd()
+        .split("\n")
+        .map((line) => ({
+          sourceSegmentId: parsed.segmentId,
+          record: JSON.parse(line) as Record<string, unknown>,
+        }));
+    });
+    const first = events[0]?.record;
     if (first === undefined) throw new TypeError("empty historical production fixture");
     const { report } = fixture();
     const incident = {
@@ -594,7 +600,7 @@ describe("historical report reconstruction", () => {
     const historical = sealSupportReport(
       incident,
       report.selection,
-      encodeSupportReportEvidence(records.map((record) => ({ sourceSegmentId: "legacy", record }))),
+      encodeSupportReportEvidence(events),
     );
     const analyzed = analyzeSupportReport(serializeSupportReport(historical));
     expect(analyzed.incident.productVersion).toBe("1.1.9");
@@ -1101,6 +1107,108 @@ describe("received-report audit hardening (#3534)", () => {
     const analyzed = analyzeSupportReport(withoutStart);
     expect(analyzed.selection.status).toBe("insufficient");
     expect(analyzed.selection.reasons).toContain("evidence-not-retained");
+  });
+
+  // Review #3679: a received report recomputes a lost start from its own evidence. A retained
+  // heartbeat proves the start was written; without one, a lifetime the report shows with neither
+  // its start nor a line of its first segment has no beginning it can stand on.
+  it.each([
+    ["a heartbeat it still holds", true],
+    ["the beginning it cannot show", false],
+  ])("recomputes a lost start from %s even when resealed complete", (_label, beat) => {
+    const process = fixtureProcess(4545, "ccddeeff");
+    const startup = writeFixtureSegment(stateDir, segmentIdentity(process, T0 - 600_000, 1), [
+      fixtureLine(process, T0 - 600_000, { op: "process.started" }),
+    ]);
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0 - 540_000, 2), [
+      beat
+        ? fixtureLine(process, T0 - 540_000, { op: "process.heartbeat" })
+        : fixtureLine(process, T0 - 540_000, {
+            op: "client.diagnostic",
+            correlationId: "other-0001",
+          }),
+      fixtureLine(process, T0, { op: "client.diagnostic", correlationId: CORRELATION }),
+    ]);
+    rmSync(startup);
+    const created = recordUserReportedIncident(stateDir, { nowMs: T0, correlationId: CORRELATION });
+    if (created.status !== "created") throw new TypeError("incident fixture was not created");
+    const incident = supportIncidentPrivateProjection(
+      resolveSupportIncident(
+        created.record,
+        supportIncidentSegmentFiles(stateDir, created.record),
+        stateDir,
+      ),
+    );
+    const { result: query } = executeSupportQuery(
+      stateDir,
+      {
+        kind: "closure",
+        queryClass: "incident",
+        roots: [CORRELATION],
+        windows: [],
+        requiredClasses: { kind: "observed-failures" },
+        unresolved: false,
+      },
+      { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0 },
+      { trigger: "export" },
+    );
+    const report = buildSupportReport(incident, query);
+    expect(report.selection.reasons).toContain("evidence-not-retained");
+    expect(eventsOf(report).some((event) => event.record.op === "process.heartbeat")).toBe(beat);
+    const forged = analyzeSupportReport(
+      resealed(report, (events) => events, {
+        ...report.selection,
+        status: "complete",
+        reasons: [],
+      }),
+    );
+    expect(forged.selection.status).toBe("insufficient");
+    expect(forged.selection.reasons).toContain("evidence-not-retained");
+    expect(forged.seed?.sufficiency.status).toBe("insufficient");
+  });
+
+  // Review #3679: a start-less lifetime's first-segment line is what shows a receiver its beginning
+  // held; dropping it leaves the report without that proof.
+  it("keeps a start-less lifetime complete only while it shows its first segment", () => {
+    const process = fixtureProcess(4646, "ddeeff00");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0 - 2, 1), [
+      fixtureLine(process, T0 - 2, { op: "client.diagnostic", correlationId: "other-0002" }),
+    ]);
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0 - 1, 2), [
+      fixtureLine(process, T0, { op: "client.diagnostic", correlationId: CORRELATION }),
+    ]);
+    const created = recordUserReportedIncident(stateDir, { nowMs: T0, correlationId: CORRELATION });
+    if (created.status !== "created") throw new TypeError("incident fixture was not created");
+    const incident = supportIncidentPrivateProjection(
+      resolveSupportIncident(
+        created.record,
+        supportIncidentSegmentFiles(stateDir, created.record),
+        stateDir,
+      ),
+    );
+    const { result: query } = executeSupportQuery(
+      stateDir,
+      {
+        kind: "closure",
+        queryClass: "incident",
+        roots: [CORRELATION],
+        windows: [],
+        requiredClasses: { kind: "observed-failures" },
+        unresolved: false,
+      },
+      { ...DEFAULT_SUPPORT_QUERY_LIMITS, contextMs: 0 },
+      { trigger: "export" },
+    );
+    const report = buildSupportReport(incident, query);
+    expect(report.selection.status).toBe("complete");
+    expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe("complete");
+    const withoutBeginning = analyzeSupportReport(
+      resealed(report, (events) =>
+        events.filter((event) => !event.sourceSegmentId.endsWith("-000001")),
+      ),
+    );
+    expect(withoutBeginning.selection.status).toBe("insufficient");
+    expect(withoutBeginning.selection.reasons).toContain("evidence-not-retained");
   });
 
   it("keeps every supported record when one selected line belongs to another registry", () => {

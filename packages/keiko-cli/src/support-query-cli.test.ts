@@ -389,20 +389,22 @@ describe("keiko support export with a selector (#3531)", () => {
       "support.report.completed.report-lifecycle",
       exported ?? "",
     );
-    const failureBytes = Buffer.byteLength(failure) + 1;
+    // A retained heartbeat travels as the proof a receiver recomputes the lost start from.
+    const selected = beat ? [later, failure] : [failure];
+    const selectedBytes = selected.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
     expect(query).toMatchObject({
       surface: "export",
       queryClass: "correlation",
-      resultEventCount: 1,
-      selectedBytes: failureBytes,
-      requiredBytes: failureBytes,
+      resultEventCount: selected.length,
+      selectedBytes,
+      requiredBytes: selectedBytes,
       truncation: "none",
       sufficiency: "insufficient",
       sufficiencyReasons: ["evidence-not-retained"],
     });
     expect(completed).toMatchObject({
       surface: "export",
-      recordCount: 1,
+      recordCount: selected.length,
       reportBytes: Buffer.byteLength(text),
       sufficiency: "insufficient",
       sufficiencyReasons: ["evidence-not-retained"],
@@ -428,7 +430,7 @@ describe("keiko support export with a selector (#3531)", () => {
       expectActivityLogProof("support.report.completed.report-lifecycle", analyzedLine ?? ""),
     ).toMatchObject({
       surface: "analyze",
-      recordCount: 1,
+      recordCount: selected.length,
       sufficiency: "insufficient",
       sufficiencyReasons: ["evidence-not-retained"],
     });

@@ -612,20 +612,27 @@ function closureMemberReasons(
   ];
 }
 
-// The export selects every lifetime's start, and a heartbeat begins only after that start: a
-// lifetime whose heartbeat the report holds without its start lost that start, as the query states.
+// The export selects every lifetime's start, else one line of its first segment while its beginning
+// is held. A lifetime the report shows with neither lost its start, and so did one whose heartbeat it
+// holds without that start, because the heartbeat begins only after it (support-lifetime.ts).
 function lifetimeStartReasons(
   events: readonly SupportReportEvent[],
 ): readonly DiagnosticSufficiencyReason[] {
   const started = new Set<string>();
   const beating = new Set<string>();
+  const beginning = new Set<string>();
   for (const event of events) {
     // Every validated record carries its process identity.
     const lifetime = canonicalSupportJson([event.record.pid, event.record.instanceId]);
     if (event.record.op === LIFETIME_ANCHOR_OP) started.add(lifetime);
     if (event.record.op === LIFETIME_PROOF_OP) beating.add(lifetime);
+    if (parseActivityLogSegmentId(event.sourceSegmentId)?.index === 1) beginning.add(lifetime);
   }
-  return [...beating].every((lifetime) => started.has(lifetime)) ? [] : ["evidence-not-retained"];
+  const lost = events.some((event) => {
+    const lifetime = canonicalSupportJson([event.record.pid, event.record.instanceId]);
+    return !started.has(lifetime) && (beating.has(lifetime) || !beginning.has(lifetime));
+  });
+  return lost ? ["evidence-not-retained"] : [];
 }
 
 function projectedEvidenceReasons(
