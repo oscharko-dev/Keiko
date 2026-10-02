@@ -256,8 +256,16 @@ describe("the closed record schema", () => {
       "an unbounded child list",
       {
         ...record(),
-        correlation: { childCorrelationIds: Array.from({ length: 9 }, () => "child-corr-1") },
+        correlation: {
+          rootCorrelationId: "root-correlation-1",
+          childCorrelationIds: Array.from({ length: 9 }, () => "child-corr-1"),
+        },
       },
+    ],
+    // Review #3679: a child is spawned under its root, so no producer names one without the other.
+    [
+      "a child without its root",
+      { ...record(), correlation: { childCorrelationIds: ["child-corr-1"] } },
     ],
     ["a window out of order", { ...record(), window: { fromMs: 5, incidentAtMs: 4, toMs: 6 } }],
     [
@@ -425,6 +433,10 @@ describe("received private incident projection", () => {
   it.each([
     ["non-object", null],
     ["unknown section", { ...projection, prompt: "private" }],
+    [
+      "a child without its root",
+      { ...projection, correlation: { childCorrelationIds: ["child-corr-1"] } },
+    ],
     ["invalid underlying record", { ...projection, incidentId: "../private" }],
     ["contradictory product version", { ...projection, productVersion: "9.0.0" }],
     ["contradictory platform", { ...projection, platformClass: "linux-x64" }],

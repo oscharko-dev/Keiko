@@ -33,6 +33,11 @@ import {
   segmentIdentity,
   writeFixtureSegment,
 } from "../../../tests/support/activity-log-segments.js";
+import {
+  expectActivityLogProof,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
 
 const REAL_TMPDIR = realpathSync(tmpdir());
 const roots: string[] = [];
@@ -334,40 +339,99 @@ describe("keiko support export with a selector (#3531)", () => {
     );
   });
 
-  // Review #3679: retention removed the startup segment of a long-running process. Its retained
-  // heartbeat proves the start was written, so export and analyze both state the loss.
-  it("states a long-running process's start that retention removed", async () => {
+  // Review #3679: retention removed the startup segment of a long-running process, before or after
+  // its first heartbeat. Export and analyze state the loss, and so do the lines they persist: the
+  // log alone must explain the missing runtime.
+  it.each([
+    ["after its first heartbeat", true],
+    ["before its first heartbeat", false],
+  ])("states a long-running process's start that retention removed %s", async (_label, beat) => {
     const stateDir = makeRoot("keiko-query-cli-retention-");
+    const controlStateDir = makeRoot("keiko-query-cli-control-");
     const a = fixtureProcess(7104, "0badc0d4");
     const startup = writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
       fixtureLine(a, T0, { op: "process.started" }),
-      fixtureLine(a, T0 + 60_000, { op: "process.heartbeat" }),
+      ...(beat ? [fixtureLine(a, T0 + 60_000, { op: "process.heartbeat" })] : []),
     ]);
-    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 120_000, 2), [
-      fixtureLine(a, T0 + 120_000, { op: "process.heartbeat" }),
-      fixtureLine(a, T0 + 600_000, { op: "client.diagnostic", correlationId: ROOT_ID }),
-    ]);
+    // In write order: each line takes the next seq.
+    const later = beat
+      ? fixtureLine(a, T0 + 120_000, { op: "process.heartbeat" })
+      : fixtureLine(a, T0 + 120_000, { op: "client.diagnostic", correlationId: OTHER_ID });
+    const failure = fixtureLine(a, T0 + 600_000, {
+      op: "client.diagnostic",
+      correlationId: ROOT_ID,
+    });
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 120_000, 2), [later, failure]);
     rmSync(startup);
     const outDir = makeRoot("keiko-query-cli-out-");
+    const deps = { cwd: outDir, controlActivityStateDir: controlStateDir };
     const { io, err } = makeIo();
 
     const code = await runSupportCli(
       ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outDir],
       io,
       AUDIT_ENV,
-      exportDeps(outDir),
+      deps,
     );
 
     expect(code, err()).toBe(0);
     const text = readExportedReport(outDir);
-    expect(parseSupportReport(text).selection).toMatchObject({
+    const report = parseSupportReport(text);
+    expect(report.selection).toMatchObject({
       status: "insufficient",
       reasons: expect.arrayContaining(["evidence-not-retained"]) as unknown,
     });
-    const analyzed = analyzeSupportReport(text);
-    expect(analyzed.selection.status).toBe("insufficient");
-    expect(analyzed.selection.reasons).toContain("evidence-not-retained");
-    expect(analyzed.seed?.sufficiency.status).toBe("insufficient");
+    const exportLog = readPersistedActivityLog(stateDir);
+    const [queried] = persistedActivityLogLines(exportLog, "support.query.completed");
+    const [exported] = persistedActivityLogLines(exportLog, "support.report.completed");
+    const query = expectActivityLogProof("support.query.completed.query-evidence", queried ?? "");
+    const completed = expectActivityLogProof(
+      "support.report.completed.report-lifecycle",
+      exported ?? "",
+    );
+    const failureBytes = Buffer.byteLength(failure) + 1;
+    expect(query).toMatchObject({
+      surface: "export",
+      queryClass: "correlation",
+      resultEventCount: 1,
+      selectedBytes: failureBytes,
+      requiredBytes: failureBytes,
+      truncation: "none",
+      sufficiency: "insufficient",
+      sufficiencyReasons: ["evidence-not-retained"],
+    });
+    expect(completed).toMatchObject({
+      surface: "export",
+      recordCount: 1,
+      reportBytes: Buffer.byteLength(text),
+      sufficiency: "insufficient",
+      sufficiencyReasons: ["evidence-not-retained"],
+    });
+    expect(completed.correlationId).toBe(query.correlationId);
+
+    const analysis = makeIo();
+    const analyzed = await runSupportCli(
+      ["analyze", join(outDir, readdirSync(outDir)[0] ?? ""), "--json"],
+      analysis.io,
+      {},
+      deps,
+    );
+    expect(analyzed, analysis.err()).toBe(0);
+    expect(JSON.parse(analysis.out())).toMatchObject({
+      selection: { status: "insufficient", reasons: ["evidence-not-retained"] },
+    });
+    const [analyzedLine] = persistedActivityLogLines(
+      readPersistedActivityLog(controlStateDir),
+      "support.report.completed",
+    );
+    expect(
+      expectActivityLogProof("support.report.completed.report-lifecycle", analyzedLine ?? ""),
+    ).toMatchObject({
+      surface: "analyze",
+      recordCount: 1,
+      sufficiency: "insufficient",
+      sufficiencyReasons: ["evidence-not-retained"],
+    });
   });
 
   // #3534: a report over a crashed writer's torn tail says truncated, never corrupt, so the intact

@@ -424,7 +424,9 @@ function validCorrelation(value: unknown): value is SupportIncidentCorrelation {
       isActivityLogCorrelationId(value.rootCorrelationId)) &&
     Array.isArray(children) &&
     children.length <= MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS &&
-    children.every(isActivityLogCorrelationId)
+    children.every(isActivityLogCorrelationId) &&
+    // A child is an operation spawned under its root: no producer names one without the other.
+    (children.length === 0 || value.rootCorrelationId !== undefined)
   );
 }
 

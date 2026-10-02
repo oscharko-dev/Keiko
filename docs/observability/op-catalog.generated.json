@@ -77656,7 +77656,7 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-query-cli.ts:169",
+      "site": "packages/keiko-cli/src/support-query-cli.ts:170",
       "package": "keiko-cli"
     },
     {
@@ -77878,13 +77878,13 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-contracts/src/support-incident.ts:629",
+      "site": "packages/keiko-contracts/src/support-incident.ts:631",
       "package": "keiko-contracts"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-contracts/src/support-incident.ts:702",
+      "site": "packages/keiko-contracts/src/support-incident.ts:704",
       "package": "keiko-contracts"
     },
     {

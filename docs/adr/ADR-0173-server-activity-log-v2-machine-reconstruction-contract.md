@@ -718,10 +718,11 @@ constants, and a registered incident's surface follows from its operation. When 
 retained, the incident's error kind, Keiko frame count, canonical fingerprint and correlation must
 be the ones the producer's rules derive from that line, so a declared child is connected to its root
 only through that line's parent edge; when it is not retained, the analysis is insufficient
-(`evidence-not-retained`). Another request's failure of the same operation, the root's own included,
-neither completes the incident nor refuses it. A contradiction is `unsafe-report`. Every closure
-member, each incident correlation and every parent a retained line names, needs a directly recorded
-line: a timeline derived only through a child never proves its parent (`parent-correlation-missing`,
+(`evidence-not-retained`). A child declared without its root, which no producer emits, is refused.
+Another request's failure of the same operation, the root's own included, neither completes the
+incident nor refuses it. A contradiction is `unsafe-report`. Every closure member, each incident
+correlation and every parent a retained line names, needs a directly recorded line: a timeline
+derived only through a child never proves its parent (`parent-correlation-missing`,
 `evidence-not-retained`). A heartbeat begins only after its process's start, so a lifetime whose
 heartbeat the report holds without that start lost it (`evidence-not-retained`). Every narrowed
 view, the `--correlation-id` timeline and each seed, keeps the report's effective selection reasons,
@@ -1509,21 +1510,21 @@ descendant, and never an unrelated correlation. A narrow context adds only the u
 signals of the closure's own process lifetimes within a configured window (default 5 seconds), and
 each lifetime's own `process.started` (its runtime) wherever it lies, outside the context cap, so a
 long-running process keeps its Node version, platform and architecture (#3534). Only `keiko ui`
-writes a start, and its heartbeat begins after it: a lifetime whose heartbeat is retained but whose
-start is not lost that start to retention, so one heartbeat is selected as the proof and the
-selection is `evidence-not-retained`. A one-shot command writes neither (its fatal and exit lines
-come without a start), so it has no start to lose. A user-reported incident also selects its pinned
-window and takes every correlation in it as a root.
+writes a start; a one-shot command writes none (its fatal and exit lines come without one). The
+writer numbers a lifetime's segments from 1 and retention prunes the oldest first, so a lifetime
+without a start is complete only while its segments still run unbroken from its first: then it never
+wrote one. Otherwise its start may have been pruned, before or after its first heartbeat, and the
+selection is `evidence-not-retained`. Legacy files carry no segment index and prove no beginning. A
+user-reported incident also selects its pinned window and takes every correlation in it as a root.
 
 **Nothing required is truncated.** A closure that does not fit the budget returns no events and is
 `insufficient` with `report-budget-exceeded`. Its `requiredBytes` counts the closure with every
-start and proof it requires, measured even when the closure alone exceeds the budget, so the stated
-size is one that fits. The lifetimes measured are bounded like the closure's correlations; beyond
-that bound the requirement is unknown (0). Evidence retention removed is `evidence-not-retained`; an
-unreadable candidate segment is `segment-unreadable`. Only optional context may be dropped, declared
-as `context-truncated`. Every result carries its provenance, integrity, coverage, loss and
-truncation, and exactly one sufficiency status from the per-class projection `keiko support analyze`
-uses.
+start it requires, measured even when the closure alone exceeds the budget, so the stated size is
+one that fits. The lifetimes measured are bounded like the closure's correlations; beyond that bound
+the requirement is unknown (0). Evidence retention removed is `evidence-not-retained`; an unreadable
+candidate segment is `segment-unreadable`. Only optional context may be dropped, declared as
+`context-truncated`. Every result carries its provenance, integrity, coverage, loss and truncation,
+and exactly one sufficiency status from the per-class projection `keiko support analyze` uses.
 
 **No database.** Manifests and streaming meet the measured need: a checked-in long-history test
 bounds peak memory and proves that manifest-pruned segment bodies are never opened. A database

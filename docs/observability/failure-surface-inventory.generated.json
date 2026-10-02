@@ -2237,12 +2237,14 @@
       "packages/keiko-cli/src/support-query.activity-log-proof.test.ts"
     ],
     "support.query.completed.query-evidence": [
+      "packages/keiko-cli/src/support-query-cli.test.ts",
       "packages/keiko-cli/src/support-query.activity-log-proof.test.ts"
     ],
     "support.query.failed.failure-evidence": [
       "packages/keiko-cli/src/support-query.activity-log-proof.test.ts"
     ],
     "support.report.completed.report-lifecycle": [
+      "packages/keiko-cli/src/support-query-cli.test.ts",
       "packages/keiko-cli/src/support-report-cli.test.ts"
     ],
     "support.report.degraded.lifecycle-validator": [

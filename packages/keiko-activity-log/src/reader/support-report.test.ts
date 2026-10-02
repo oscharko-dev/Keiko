@@ -1044,6 +1044,19 @@ describe("received-report audit hardening (#3534)", () => {
     );
   });
 
+  // Review #3679: a header naming the child without its root cannot come from any failing line, so
+  // a received report carrying one is refused rather than validated as uncorrelated.
+  it("refuses a declared child whose header omits its root", () => {
+    const parent = "support-report-parent-0004";
+    const { report } = failureFixture(parent);
+    expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe("complete");
+    expect(() =>
+      parseSupportReport(
+        withIncident(report, { correlation: { childCorrelationIds: [CORRELATION] } }),
+      ),
+    ).toThrow(expect.objectContaining({ reason: "unsafe-report" }));
+  });
+
   // Review #3679: the root failing the same operation is another failure; it neither stands in for
   // the declared child's missing failing line nor refuses the report.
   it("never takes the root's failure of the same operation as its child's failing line", () => {

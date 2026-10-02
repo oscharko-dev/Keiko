@@ -469,7 +469,8 @@ function validateRegisteredIdentity(
 ): void {
   if (incident.surface !== registeredFailureFingerprintInput({ op: incident.op }).surface)
     throw new SupportReportError("unsafe-report");
-  // Only a correlated incident names which retained line is its own failure.
+  // Only a correlated incident names which retained line is its own failure. The contract admits no
+  // child without its root, so an incident without a root is genuinely uncorrelated.
   if (incident.correlation.rootCorrelationId === undefined) return;
   const failures = ownFailureLines(incident, events);
   if (failures.length > 0 && !failures.some((event) => failureIdentityMatches(incident, event)))

@@ -16,9 +16,9 @@
 //             backpressure, disk) of the closure's own process lifetimes inside
 //             [first closure event - contextMs, last closure event + contextMs], plus each of those
 //             lifetimes' own `process.started` (its runtime) wherever it lies, and nothing else. A
-//             lifetime whose start retention removed keeps one heartbeat as the proof of that loss.
-//             A user-reported incident also selects every event of its pinned window and takes
-//             every correlation that appears there as a root.
+//             lifetime without a start is complete only while its segments still run unbroken from
+//             its first one. A user-reported incident also selects every event of its pinned window
+//             and takes every correlation that appears there as a root.
 //   events  — registered operation, error kind, failure class, parent correlation, and a bounded time
 //             window, combined with AND; matching events only.
 //
@@ -38,6 +38,7 @@ import {
   DIAGNOSTIC_SUFFICIENCY_REASONS,
   activityLogOperationSchema,
   diagnosticSufficiencyStatus,
+  parseActivityLogSegmentId,
   type ActivityLogCompletenessState,
   type ActivityLogLossState,
   type DiagnosticSufficiencyReason,
@@ -72,7 +73,7 @@ import {
   type LoadedSegmentManifest,
   type SegmentManifest,
 } from "./support-segment-manifest.js";
-import { LIFETIME_ANCHOR_OP, LIFETIME_PROOF_OP } from "./support-lifetime.js";
+import { LIFETIME_ANCHOR_OP } from "./support-lifetime.js";
 import type {
   ActivityLogScanner,
   ActivityLogStoreFile,
@@ -542,38 +543,64 @@ interface ContextScope {
 }
 
 /**
- * The first line of `op` that each lifetime wrote, in log order. Every candidate is streamed to its
- * end: a scan cut short would leave that segment without the derived manifest its integrity is read
- * from.
+ * Each lifetime's first start line, in log order. Every candidate is streamed to its end: a scan cut
+ * short would leave that segment without the derived manifest its integrity is read from.
  */
-function firstLifetimeLines(
+function lifetimeStarts(
   state: EngineState,
   lifetimes: ReadonlySet<string>,
-  op: string,
 ): ReadonlyMap<string, AcceptedLine> {
   const found = new Map<string, AcceptedLine>();
   if (lifetimes.size === 0) return found;
   const files = candidateFiles(
     state,
     (loaded) =>
-      hasCount(loaded.manifest.ops, op) && manifestMayHoldLifetimes(loaded.manifest, lifetimes),
+      hasCount(loaded.manifest.ops, LIFETIME_ANCHOR_OP) &&
+      manifestMayHoldLifetimes(loaded.manifest, lifetimes),
   );
   for (const accepted of acceptedLines(state, files, true)) {
     const key = lifetimeKey(accepted.parsed);
-    if (accepted.parsed.view.op !== op || key === undefined || !lifetimes.has(key)) continue;
-    if (!found.has(key)) found.set(key, accepted);
+    if (accepted.parsed.view.op !== LIFETIME_ANCHOR_OP || key === undefined) continue;
+    if (lifetimes.has(key) && !found.has(key)) found.set(key, accepted);
   }
   return found;
+}
+
+/** Each lifetime's retained segment indexes, read from the store's closed segment names alone. */
+function lifetimeSegmentIndexes(
+  files: readonly ActivityLogStoreFile[],
+): ReadonlyMap<string, readonly number[]> {
+  const indexes = new Map<string, number[]>();
+  for (const file of files) {
+    const identity =
+      file.segmentId === undefined ? undefined : parseActivityLogSegmentId(file.segmentId);
+    if (identity === undefined) continue;
+    const key = `${String(identity.pid)}:${identity.instanceId}`;
+    const list = indexes.get(key);
+    if (list === undefined) indexes.set(key, [identity.index]);
+    else list.push(identity.index);
+  }
+  return indexes;
+}
+
+// The writer numbers a lifetime's segments from 1 and retention prunes the oldest first, so a
+// lifetime whose segments still run unbroken from its first one holds everything it ever wrote: a
+// start it wrote would be found. Legacy files carry no segment index and prove no beginning.
+function beginningRetained(indexes: readonly number[] | undefined): boolean {
+  const ordered = [...new Set(indexes)].sort((left, right) => left - right);
+  return ordered.length > 0 && ordered.every((index, position) => index === position + 1);
 }
 
 /**
  * Each closure lifetime's own start names its runtime (Node version, platform, architecture). It is
  * required evidence, not optional context: it is charged to the selection's own budget wherever it
  * lies, never counted against the context cap and never dropped to fit optional context, because a
- * long-running process started far before any short window would otherwise lose that dimension. A
- * start retention removed is stated with the heartbeat that proves it (support-lifetime.ts). Lines
- * the closure already selected are never added twice; when the closure's bodies were released for
- * the budget, their bytes are still measured. Returns the number of starts lost.
+ * long-running process started far before any short window would otherwise lose that dimension.
+ * Only `keiko ui` writes one (support-lifetime.ts), so a lifetime without it is complete only while
+ * its whole beginning is retained; otherwise its start may have been pruned before any heartbeat.
+ * Lines the closure already selected are never added twice; when the closure's bodies were released
+ * for the budget, their bytes are still measured. Returns the number of lifetimes whose start the
+ * log can no longer account for.
  */
 function collectLifetimeAnchors(
   state: EngineState,
@@ -581,14 +608,13 @@ function collectLifetimeAnchors(
   collector: EventCollector,
   alreadySelected: (accepted: AcceptedLine) => boolean,
 ): number {
-  const anchors = firstLifetimeLines(state, lifetimes, LIFETIME_ANCHOR_OP);
-  // Only a lifetime without its start is searched for a heartbeat.
-  const unanchored = new Set([...lifetimes].filter((key) => !anchors.has(key)));
-  const proofs = firstLifetimeLines(state, unanchored, LIFETIME_PROOF_OP);
-  for (const accepted of [...anchors.values(), ...proofs.values()]) {
+  const starts = lifetimeStarts(state, lifetimes);
+  for (const accepted of starts.values()) {
     if (!alreadySelected(accepted)) collector.add(accepted, "context");
   }
-  return proofs.size;
+  const segments = lifetimeSegmentIndexes(state.input.files);
+  return [...lifetimes].filter((key) => !starts.has(key) && !beginningRetained(segments.get(key)))
+    .length;
 }
 
 function contextScope(

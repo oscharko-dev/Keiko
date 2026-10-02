@@ -419,22 +419,22 @@ describe("support query causal closure (#3531)", () => {
     expect(result.metrics.selectedBytes).toBe(bothBytes);
   });
 
-  // Review #3679: a heartbeat begins only after its process's start. When retention removed the
-  // segment holding the start, the heartbeat proves it was written, so the loss is stated.
-  it("states a lifetime start that retention removed and keeps the heartbeat that proves it", () => {
+  // Review #3679: only `keiko ui` writes a start, and retention prunes a lifetime's oldest segment
+  // first. A start that went with the first segment is stated whether or not a heartbeat followed it.
+  it.each([
+    ["after its first heartbeat", true],
+    ["before its first heartbeat", false],
+  ])("states a lifetime start that retention removed %s", (_label, heartbeats) => {
     const a = fixtureProcess(4101, "aaaaaaa1");
     const startup = writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
       fixtureLine(a, T0, { op: "process.started" }),
-      fixtureLine(a, T0 + 60_000, { op: "process.heartbeat" }),
+      ...(heartbeats ? [fixtureLine(a, T0 + 60_000, { op: "process.heartbeat" })] : []),
     ]);
-    const heartbeat = fixtureLine(a, T0 + 120_000, { op: "process.heartbeat" });
-    const laterHeartbeat = fixtureLine(a, T0 + 180_000, { op: "process.heartbeat" });
+    const later = heartbeats
+      ? [fixtureLine(a, T0 + 120_000, { op: "process.heartbeat" })]
+      : [diagnostic(a, T0 + 120_000, IDS.unrelated)];
     const failure = diagnostic(a, T0 + 600_000, IDS.root);
-    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 120_000, 2), [
-      heartbeat,
-      laterHeartbeat,
-      failure,
-    ]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 120_000, 2), [...later, failure]);
     const retained = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 }).result;
     expect(retained.diagnosticSufficiency.status).toBe("complete");
     expect(retained.events.map((event) => event.parsed.view.op)).toEqual([
@@ -446,34 +446,45 @@ describe("support query causal closure (#3531)", () => {
     const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
     expect(result.diagnosticSufficiency.status).toBe("insufficient");
     expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
-    expect(result.events.map((event) => event.parsed.view.op)).toEqual([
-      "process.heartbeat",
-      DIAGNOSTIC,
-    ]);
-    // The first heartbeat in log order is the proof.
-    expect(result.events[0]?.text).toBe(heartbeat);
-    const bothBytes = Buffer.byteLength(heartbeat) + Buffer.byteLength(failure) + 2;
+    expect(result.events.map((event) => event.text)).toEqual([failure]);
     const overflow = query(stateDir, correlationSelection(IDS.root), {
       contextMs: 0,
       maxResultBytes: Buffer.byteLength(failure),
     }).result;
     expect(overflow.truncation).toMatchObject({
       state: "budget-exceeded",
-      requiredBytes: bothBytes,
+      requiredBytes: Buffer.byteLength(failure) + 1,
     });
   });
 
-  // A one-shot command writes no start (its fatal and exit lines come without one) and no heartbeat,
-  // so its lifetime has no start to lose.
-  it("never asks a start of a lifetime that wrote neither a start nor a heartbeat", () => {
+  // A one-shot command writes no start (its fatal and exit lines come without one). With all of its
+  // segments retained from the first, it never wrote one, so nothing is missing.
+  it("never asks a start of a lifetime whose segments run unbroken from its first", () => {
     const a = fixtureProcess(4101, "aaaaaaa1");
-    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
-      signal(a, T0),
-      diagnostic(a, T0 + 1, IDS.root),
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [signal(a, T0)]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), [
+      signal(a, T0 + 1),
+      diagnostic(a, T0 + 2, IDS.root),
     ]);
     const { result } = query(stateDir, correlationSelection(IDS.root));
     expect(result.diagnosticSufficiency.status).toBe("complete");
     expect(result.diagnosticSufficiency.reasons).toEqual([]);
+  });
+
+  // A lifetime whose segments no longer run unbroken from its first may have lost its start with the
+  // missing segment, so the start is unaccounted for even though the first segment survived.
+  it("states a missing start when a lifetime's segments no longer run unbroken", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [signal(a, T0)]);
+    const gap = writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), [signal(a, T0 + 1)]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 2, 3), [diagnostic(a, T0 + 2, IDS.root)]);
+    expect(
+      query(stateDir, correlationSelection(IDS.root)).result.diagnosticSufficiency.status,
+    ).toBe("complete");
+    rmSync(gap);
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+    expect(result.diagnosticSufficiency.status).toBe("insufficient");
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
   });
 
   // Review #3679: the lifetimes whose starts are measured are bounded like the closure itself.
