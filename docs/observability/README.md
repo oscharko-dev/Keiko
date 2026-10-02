@@ -701,13 +701,14 @@ bounded memory. There are two kinds of question:
   lifetimes, within `--context-ms` (0 to 600000, default 5000) of the closure, and each of those
   lifetimes' own `process.started` (its Node version, platform and architecture) wherever it lies,
   even with `--context-ms 0`, so a long-running process keeps its runtime. A process without its
-  start whose segments no longer run unbroken and undamaged from its first may have lost that start,
-  before or after its first heartbeat, and is insufficient (`evidence-not-retained`), with its first
-  retained heartbeat as the proof; a one-shot command writes no start, so with its segments intact
-  nothing is missing and the first line of its first segment shows that beginning. An incident or
-  fingerprint is resolved through the local support incidents. A reported incident also selects its
-  whole pinned window and treats every correlation in it as a root. The three selectors exclude each
-  other and do not combine with the event filters.
+  start whose segments no longer run unbroken from its first, each holding only supported records,
+  or whose own loss ledger recorded a lost event, may have lost that start, before or after its
+  first heartbeat, and is insufficient (`evidence-not-retained`), with its first retained heartbeat
+  as the proof; a one-shot command writes no start, so with its segments intact nothing is missing
+  and the first line of its first segment shows that beginning. An incident or fingerprint is
+  resolved through the local support incidents. A reported incident also selects its whole pinned
+  window and treats every correlation in it as a root. The three selectors exclude each other and do
+  not combine with the event filters.
 - **Matching events.** `--parent-correlation-id`, `--op`, `--error-kind`, `--failure-class`, `--from`
   and `--to` select single events and combine with AND. An operation, error kind or failure class
   must be one the registry declares.

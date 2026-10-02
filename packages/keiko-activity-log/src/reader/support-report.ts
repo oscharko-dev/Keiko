@@ -21,11 +21,15 @@ import {
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   diagnosticSufficiencyStatus,
   isActivityLogIdentityDigest,
+  isActivityLogInstanceId,
+  isActivityLogProcessId,
   isActivityLogProductVersion,
   normalizeKeikoFrameSignature,
   parseActivityLogSegmentId,
   parseSupportIncidentPrivateProjection,
   type SupportIncidentPrivateProjection,
+  type SupportLifetimeProvenance,
+  type SupportLifetimeStart,
   type SupportReport,
   type SupportReportEvent,
   type SupportReportEvidence,
@@ -54,7 +58,13 @@ import {
   restrictActivityLogSufficiency,
   type ActivityLogSufficiency,
 } from "./support-analyze-sufficiency.js";
-import { LIFETIME_ANCHOR_OP, LIFETIME_PROOF_OP } from "./support-lifetime.js";
+import {
+  LIFETIME_ANCHOR_OP,
+  LIFETIME_PROOF_OP,
+  MAX_SUPPORT_REPORT_LIFETIMES,
+  SUPPORT_LIFETIME_STARTS,
+  compareLifetimes,
+} from "./support-lifetime.js";
 import type { SupportQueryResult } from "./support-query.js";
 import { findSupportRegistry, type SupportReaderRegistry } from "./support-registry.js";
 import {
@@ -162,6 +172,70 @@ interface SelectedEvidence {
   readonly evidence: SupportReportEvidence;
   readonly selectedReasons: readonly DiagnosticSufficiencyReason[];
   readonly requiredBytes: number;
+  readonly lifetimes: readonly SupportLifetimeProvenance[];
+}
+
+interface ShownLifetime {
+  readonly pid: number;
+  readonly instanceId: string;
+  started: boolean;
+  beating: boolean;
+  beginning: boolean;
+}
+
+function lifetimeId(pid: unknown, instanceId: unknown): string {
+  return canonicalSupportJson([pid, instanceId]);
+}
+
+// What the evidence shows of each process lifetime: its start, a heartbeat (written only after a
+// start) and a line of its first segment. Every validated record carries its process identity.
+function shownLifetimes(events: readonly SupportReportEvent[]): ReadonlyMap<string, ShownLifetime> {
+  const shown = new Map<string, ShownLifetime>();
+  for (const event of events) {
+    const { pid, instanceId, op } = event.record;
+    const id = lifetimeId(pid, instanceId);
+    const lifetime = shown.get(id) ?? {
+      pid: Number(pid),
+      instanceId: String(instanceId),
+      started: false,
+      beating: false,
+      beginning: false,
+    };
+    lifetime.started ||= op === LIFETIME_ANCHOR_OP;
+    lifetime.beating ||= op === LIFETIME_PROOF_OP;
+    lifetime.beginning ||= parseActivityLogSegmentId(event.sourceSegmentId)?.index === 1;
+    shown.set(id, lifetime);
+  }
+  return shown;
+}
+
+function retainedStart(
+  declared: SupportLifetimeStart | undefined,
+  started: boolean,
+): SupportLifetimeStart {
+  if (started) return "selected";
+  return declared === "absent" ? "absent" : "lost";
+}
+
+// The query's account of each start, narrowed to the lifetimes the retained evidence shows: a start
+// the query selected but the incident registry could not keep no longer travels with the report.
+function reportLifetimes(
+  query: SupportQueryResult,
+  events: readonly SupportReportEvent[],
+): readonly SupportLifetimeProvenance[] {
+  const declared = new Map(
+    query.lifetimes.map((lifetime) => [
+      lifetimeId(lifetime.pid, lifetime.instanceId),
+      lifetime.start,
+    ]),
+  );
+  return [...shownLifetimes(events)]
+    .map(([id, shown]) => ({
+      pid: shown.pid,
+      instanceId: shown.instanceId,
+      start: retainedStart(declared.get(id), shown.started),
+    }))
+    .sort(compareLifetimes);
 }
 
 // A record the incident's exact registry cannot validate (for example one written by another
@@ -178,14 +252,18 @@ function selectedEvidence(
     ...incident.sufficiencyReasons,
     ...(events.length < selected.length ? (["unsupported-evidence"] as const) : []),
   ]);
+  const lifetimes = reportLifetimes(query, events);
   try {
+    if (lifetimes.length > MAX_SUPPORT_REPORT_LIFETIMES)
+      throw new SupportReportError("report-budget-exceeded");
     return {
       evidence: encodeSupportReportEvidence(events),
       selectedReasons: reasons([
         ...selectedReasons,
-        ...projectedEvidenceReasons(incident, events, registry),
+        ...projectedEvidenceReasons(incident, events, registry, lifetimes),
       ]),
       requiredBytes: query.truncation.requiredBytes,
+      lifetimes,
     };
   } catch (error) {
     if (!(error instanceof SupportReportError) || error.reason !== "report-budget-exceeded")
@@ -195,9 +273,10 @@ function selectedEvidence(
       selectedReasons: reasons([
         ...selectedReasons,
         "report-budget-exceeded",
-        ...projectedEvidenceReasons(incident, [], registry),
+        ...projectedEvidenceReasons(incident, [], registry, []),
       ]),
       requiredBytes: query.truncation.requiredBytes,
+      lifetimes: [],
     };
   }
 }
@@ -216,11 +295,16 @@ export function buildSupportReport(
     throw new SupportReportError("report-budget-exceeded");
   const registry = findSupportRegistry(incident.build);
   if (registry === undefined) throw new SupportReportError("unsupported-report");
-  const { evidence, selectedReasons, requiredBytes } = selectedEvidence(incident, query, registry);
+  const { evidence, selectedReasons, requiredBytes, lifetimes } = selectedEvidence(
+    incident,
+    query,
+    registry,
+  );
   const selection = {
     status: diagnosticSufficiencyStatus(selectedReasons),
     reasons: selectedReasons,
     requiredBytes,
+    lifetimes,
   };
   let report = sealSupportReport(incident, selection, evidence);
   const completeBytes = Buffer.byteLength(serializeSupportReport(report));
@@ -228,13 +312,18 @@ export function buildSupportReport(
     const budgetReasons = reasons([
       ...selectedReasons,
       "report-budget-exceeded",
-      ...projectedEvidenceReasons(incident, [], registry),
+      ...projectedEvidenceReasons(incident, [], registry, []),
     ]);
     // The report-budget metric names what the complete report would need: --max-bytes at least
     // this large (within the hard ceiling) carries the whole selection.
     report = sealSupportReport(
       incident,
-      { status: "insufficient", reasons: budgetReasons, requiredBytes: completeBytes },
+      {
+        status: "insufficient",
+        reasons: budgetReasons,
+        requiredBytes: completeBytes,
+        lifetimes: [],
+      },
       encodeSupportReportEvidence([]),
     );
   }
@@ -271,8 +360,36 @@ function validateMinimumAnalyzerVersion(version: string): void {
   if (comparison > 0) throw new SupportReportError("unsupported-report", version);
 }
 
+function validLifetime(value: unknown): value is SupportLifetimeProvenance {
+  return (
+    reportObject(value) &&
+    reportKeys(value, ["pid", "instanceId", "start"]) &&
+    isActivityLogProcessId(value.pid) &&
+    isActivityLogInstanceId(value.instanceId) &&
+    typeof value.start === "string" &&
+    SUPPORT_LIFETIME_STARTS.has(value.start)
+  );
+}
+
+// One entry per lifetime in strictly ascending (pid, instanceId) order, so the bytes are canonical.
+function validLifetimes(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length > MAX_SUPPORT_REPORT_LIFETIMES) return false;
+  const lifetimes: readonly unknown[] = value;
+  return (
+    lifetimes.every(validLifetime) &&
+    lifetimes.every((lifetime, index) => {
+      const previous = lifetimes[index - 1];
+      return previous === undefined || compareLifetimes(previous, lifetime) < 0;
+    })
+  );
+}
+
 function validSelection(value: unknown): value is SupportReportSelection {
-  if (!reportObject(value) || !reportKeys(value, ["status", "reasons", "requiredBytes"]))
+  if (
+    !reportObject(value) ||
+    !reportKeys(value, ["status", "reasons", "requiredBytes", "lifetimes"]) ||
+    !validLifetimes(value.lifetimes)
+  )
     return false;
   const declared = value.reasons;
   if (
@@ -543,6 +660,7 @@ function parseValidatedSupportReport(text: string): ValidatedSupportReport {
   const events = decodeEvidence(value.evidence, registry);
   validateIncidentProvenance(incident, events);
   const report = value as unknown as SupportReport;
+  validateLifetimeProvenance(report.selection, events);
   const analysis = eventAnalysis(events, registry);
   const selection = effectiveSelection(report, events, registry, analysis);
   return { report, events, registry, analysis, selection };
@@ -612,33 +730,51 @@ function closureMemberReasons(
   ];
 }
 
-// The export selects every lifetime's start, else one line of its first segment while its beginning
-// is held. A lifetime the report shows with neither lost its start, and so did one whose heartbeat it
-// holds without that start, because the heartbeat begins only after it (support-lifetime.ts).
+function contradictsStart(start: SupportLifetimeStart, shown: ShownLifetime): boolean {
+  if (start === "selected") return !shown.started;
+  return shown.started || (start === "absent" && shown.beating);
+}
+
+/**
+ * The selection accounts for exactly the lifetimes its evidence shows, and the evidence carries each
+ * account (support-lifetime.ts): a selected start that is missing, a start beside a lost or absent
+ * one, or a heartbeat (written only after a start) beside an absent one contradicts it. Dropping a
+ * start from a report therefore never reads as a lifetime that never had one.
+ */
+function validateLifetimeProvenance(
+  selection: SupportReportSelection,
+  events: readonly SupportReportEvent[],
+): void {
+  const shown = shownLifetimes(events);
+  if (selection.lifetimes.length !== shown.size) throw new SupportReportError("unsafe-report");
+  for (const lifetime of selection.lifetimes) {
+    const evidence = shown.get(lifetimeId(lifetime.pid, lifetime.instanceId));
+    if (evidence === undefined || contradictsStart(lifetime.start, evidence))
+      throw new SupportReportError("unsafe-report");
+  }
+}
+
+// A lost start is evidence the report cannot hold, and so is an absent one whose first segment the
+// report no longer shows: nothing then stands for the beginning that held no start.
 function lifetimeStartReasons(
+  lifetimes: readonly SupportLifetimeProvenance[],
   events: readonly SupportReportEvent[],
 ): readonly DiagnosticSufficiencyReason[] {
-  const started = new Set<string>();
-  const beating = new Set<string>();
-  const beginning = new Set<string>();
-  for (const event of events) {
-    // Every validated record carries its process identity.
-    const lifetime = canonicalSupportJson([event.record.pid, event.record.instanceId]);
-    if (event.record.op === LIFETIME_ANCHOR_OP) started.add(lifetime);
-    if (event.record.op === LIFETIME_PROOF_OP) beating.add(lifetime);
-    if (parseActivityLogSegmentId(event.sourceSegmentId)?.index === 1) beginning.add(lifetime);
-  }
-  const lost = events.some((event) => {
-    const lifetime = canonicalSupportJson([event.record.pid, event.record.instanceId]);
-    return !started.has(lifetime) && (beating.has(lifetime) || !beginning.has(lifetime));
-  });
-  return lost ? ["evidence-not-retained"] : [];
+  const shown = shownLifetimes(events);
+  const missing = lifetimes.some(
+    (lifetime) =>
+      lifetime.start === "lost" ||
+      (lifetime.start === "absent" &&
+        shown.get(lifetimeId(lifetime.pid, lifetime.instanceId))?.beginning !== true),
+  );
+  return missing ? ["evidence-not-retained"] : [];
 }
 
 function projectedEvidenceReasons(
   incident: SupportIncidentPrivateProjection,
   events: readonly SupportReportEvent[],
   registry: SupportReaderRegistry,
+  lifetimes: readonly SupportLifetimeProvenance[],
   analysis = eventAnalysis(events, registry),
 ): readonly DiagnosticSufficiencyReason[] {
   const projected = restrictActivityLogSufficiency(
@@ -653,7 +789,7 @@ function projectedEvidenceReasons(
     ...projected,
     ...(failureRetained ? [] : (["evidence-not-retained"] as const)),
     ...closureMemberReasons(incident, events),
-    ...lifetimeStartReasons(events),
+    ...lifetimeStartReasons(lifetimes, events),
   ]);
 }
 
@@ -670,7 +806,13 @@ function effectiveSelection(
   analysis: AnalyzeAllResult,
 ): SupportReportSelection {
   const effective = reasons([
-    ...projectedEvidenceReasons(report.incident, events, registry, analysis),
+    ...projectedEvidenceReasons(
+      report.incident,
+      events,
+      registry,
+      report.selection.lifetimes,
+      analysis,
+    ),
     ...report.incident.sufficiencyReasons,
     ...report.selection.reasons,
   ]);
@@ -678,6 +820,7 @@ function effectiveSelection(
     status: diagnosticSufficiencyStatus(effective),
     reasons: effective,
     requiredBytes: report.selection.requiredBytes,
+    lifetimes: report.selection.lifetimes,
   };
 }
 

@@ -38,10 +38,25 @@ export const SUPPORT_REPORT_FAILURES = [
 ] as const;
 export type SupportReportFailure = (typeof SUPPORT_REPORT_FAILURES)[number];
 
+/**
+ * How a process lifetime the evidence shows accounts for its start (#3534): `selected` travels in
+ * the evidence, `absent` means its whole beginning is held and never had one (a one-shot command),
+ * and `lost` means the log can no longer account for it.
+ */
+export type SupportLifetimeStart = "selected" | "absent" | "lost";
+
+export interface SupportLifetimeProvenance {
+  readonly pid: number;
+  readonly instanceId: string;
+  readonly start: SupportLifetimeStart;
+}
+
 export interface SupportReportSelection {
   readonly status: DiagnosticSufficiencyStatus;
   readonly reasons: readonly DiagnosticSufficiencyReason[];
   readonly requiredBytes: number;
+  // Exactly the lifetimes the evidence shows, in (pid, instanceId) order.
+  readonly lifetimes: readonly SupportLifetimeProvenance[];
 }
 
 export interface SupportReportEvidence {

@@ -496,6 +496,64 @@ describe("support query causal closure (#3531)", () => {
     expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
   });
 
+  // Review #3679: an unsupported line or a recorded loss in a start-less lifetime's segments could be
+  // its start, so neither leaves the beginning proven.
+  it.each([
+    [
+      "an unsupported start",
+      (a: FixtureProcess): string =>
+        fixtureLine(a, T0 + 1, { op: "process.started" }).replace(
+          '"schemaVersion":2',
+          '"schemaVersion":3',
+        ),
+    ],
+    [
+      "a recorded loss",
+      (a: FixtureProcess): string =>
+        fixtureLine(a, T0 + 1, {
+          op: "activity-log.loss",
+          fields: {
+            completeness: "partial",
+            loss: "event-dropped",
+            trigger: "heartbeat",
+            totalLost: 1,
+          },
+        }),
+    ],
+  ])("states a missing start behind %s in its beginning", (_label, damaged) => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [signal(a, T0)]);
+    const line = damaged(a);
+    expect(line).toContain('"op":"');
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), [line]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 600_000, 3), [
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("insufficient");
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
+    expect(result.lifetimes).toEqual([{ pid: 4101, instanceId: "aaaaaaa1", start: "lost" }]);
+  });
+
+  // Only the writer's own ledger reporting a lost event leaves a start unaccounted for; a ledger
+  // that lost nothing, like a domain loss of other evidence, loses no line of the lifetime.
+  it("keeps a beginning proven beside a loss ledger that lost nothing", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      signal(a, T0),
+      fixtureLine(a, T0 + 1, {
+        op: "activity-log.loss",
+        fields: { trigger: "exit", totalLost: 0 },
+      }),
+    ]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 600_000, 2), [
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("complete");
+    expect(result.lifetimes).toEqual([{ pid: 4101, instanceId: "aaaaaaa1", start: "absent" }]);
+  });
+
   // Review #3679: a torn tail ends only a lifetime's last segment, where a crash stops it; a torn
   // first segment followed by another cannot prove that its beginning held no start.
   it("states a missing start behind a torn first segment", () => {

@@ -70,8 +70,8 @@ opened. --correlation-id, --incident and --defect-fingerprint select the full re
 closure: the correlation, every ancestor over parentCorrelationId, and every descendant, plus the
 uncorrelated process signals of those processes within --context-ms (default 5000) of the closure
 and each of those processes' own process.started (its runtime), wherever it lies. A process
-without its start whose segments no longer run unbroken and undamaged from its first is
-insufficient (evidence-not-retained).
+without its start whose segments no longer run unbroken and intact from its first, or whose
+own loss ledger recorded a lost event, is insufficient (evidence-not-retained).
 An incident or fingerprint resolves through the local SupportIncident records. The other selectors
 filter single events and combine with AND. --max-bytes (default 16777216) bounds the selection: a
 closure that does not fit returns no events and is insufficient (report-budget-exceeded) instead of

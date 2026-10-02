@@ -609,14 +609,15 @@ error kind and Keiko-code frames only.
 
 ### D8 — One canonical private support report (#3534)
 
-The export is one canonical UTF-8 JSON file, kind `keiko.support.report`, schema version 1.
-It contains only the validated private SupportIncident projection, a closed selection verdict,
-registered causal events, and integrity metadata. It does not copy raw log text. The event section
-is canonical structured JSON, losslessly compacted with deflate/base64; every decoded record is
-validated against its exact repository-owned registry. No sender-provided registration or
-self-asserted redaction flag is authority. The recorded product version identifies the bundled
-package versions, which the product's version-consistency gate keeps in lockstep; persisted events
-retain their exact build/release/platform classes and registry/schema/catalog digests.
+The export is one canonical UTF-8 JSON file, kind `keiko.support.report`, schema version 1. It
+contains only the validated private SupportIncident projection, a closed selection verdict with each
+process lifetime's start account (`selected`, `absent` or `lost`), registered causal events, and
+integrity metadata. It does not copy raw log text. The event section is canonical structured JSON,
+losslessly compacted with deflate/base64; every decoded record is validated against its exact
+repository-owned registry. No sender-provided registration or self-asserted redaction flag is
+authority. The recorded product version identifies the bundled package versions, which the product's
+version-consistency gate keeps in lockstep; persisted events retain their exact
+build/release/platform classes and registry/schema/catalog digests.
 
 The fixed bounds are 10 MiB for the entire file, 1 MiB for the incident projection, 16 MiB for the
 decoded event section, 64 KiB per event, 20,000 records, 12 JSON nesting levels, 250,000
@@ -723,11 +724,15 @@ Another request's failure of the same operation, the root's own included, neithe
 incident nor refuses it. A contradiction is `unsafe-report`. Every closure member, each incident
 correlation and every parent a retained line names, needs a directly recorded line: a timeline
 derived only through a child never proves its parent (`parent-correlation-missing`,
-`evidence-not-retained`). Every lifetime the report shows needs its start or a line of its first
-segment, and a heartbeat begins only after its process's start: a lifetime with neither, or with a
-heartbeat but no start, lost that start (`evidence-not-retained`). Every narrowed view, the
-`--correlation-id` timeline and each seed, keeps the report's effective selection reasons, so a
-projection never reads more complete than the report it came from.
+`evidence-not-retained`). The selection accounts for exactly the process lifetimes the evidence
+shows, and the evidence must carry that account: a `selected` start missing from it, a start beside
+a `lost` or `absent` one, or a heartbeat (written only after a start) beside an `absent` one is
+`unsafe-report`, so dropping a start never reads as a lifetime that had none; a `lost` start, or an
+`absent` one whose first segment the report no longer shows, is `evidence-not-retained`. A sender
+who rewrites the account and the evidence together stays indistinguishable from an honest one, which
+is why authenticity is reported as unknown. Every narrowed view, the `--correlation-id` timeline and
+each seed, keeps the report's effective selection reasons, so a projection never reads more complete
+than the report it came from.
 
 `--json` streams a fully validated `keiko.support.report-analysis` in bounded chunks, schema version
 1: validated private incident, selection verdict, unknown authenticity, section/report and
@@ -1514,13 +1519,15 @@ long-running process keeps its Node version, platform and architecture (#3534). 
 writes a start; a one-shot command writes none (its fatal and exit lines come without one). The
 writer numbers a lifetime's segments from 1 and retention prunes the oldest first, so a lifetime
 without a start is complete only while its segments still run unbroken from its first, every one
-readable and undamaged (a torn tail may end only the last, where a crash stops it): then it never
-wrote one, and the first line of its first segment travels with the selection when no other line
-shows that beginning. Otherwise its start may have been pruned or damaged, before or after its first
-heartbeat; the selection is `evidence-not-retained` and carries the lifetime's first heartbeat, when
-one is retained, as the proof a receiver recomputes. Legacy files carry no segment index and prove
-no beginning. A user-reported incident also selects its pinned window and takes every correlation in
-it as a root.
+readable with only supported records (a torn tail may end only the last, where a crash stops it),
+and its own loss ledger (`activity-log.loss`) records no lost event: then it never wrote one, and
+the first line of its first segment travels with the selection when no other line shows that
+beginning. Otherwise its start may have been pruned or damaged, before or after its first heartbeat;
+the selection is `evidence-not-retained` and carries the lifetime's first heartbeat, when one is
+retained, as the proof a receiver recomputes. Legacy files carry no segment index and prove no
+beginning. The result accounts for each selected lifetime's start as `selected`, `absent` or `lost`,
+and a report carries that account. A user-reported incident also selects its pinned window and takes
+every correlation in it as a root.
 
 **Nothing required is truncated.** A closure that does not fit the budget returns no events and is
 `insufficient` with `report-budget-exceeded`. Its `requiredBytes` counts the closure with every

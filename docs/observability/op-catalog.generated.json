@@ -77362,13 +77362,13 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-activity-log/src/reader/support-report.ts:450",
+      "site": "packages/keiko-activity-log/src/reader/support-report.ts:567",
       "package": "keiko-activity-log"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-activity-log/src/reader/support-report.ts:470",
+      "site": "packages/keiko-activity-log/src/reader/support-report.ts:587",
       "package": "keiko-activity-log"
     },
     {

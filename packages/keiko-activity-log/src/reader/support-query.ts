@@ -43,6 +43,8 @@ import {
   type ActivityLogLossState,
   type DiagnosticSufficiencyReason,
   type DiagnosticSufficiencyStatus,
+  type SupportLifetimeProvenance,
+  type SupportLifetimeStart,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
@@ -73,7 +75,7 @@ import {
   type LoadedSegmentManifest,
   type SegmentManifest,
 } from "./support-segment-manifest.js";
-import { LIFETIME_ANCHOR_OP, LIFETIME_PROOF_OP } from "./support-lifetime.js";
+import { LIFETIME_ANCHOR_OP, LIFETIME_PROOF_OP, compareLifetimes } from "./support-lifetime.js";
 import type {
   ActivityLogScanner,
   ActivityLogStoreFile,
@@ -217,6 +219,9 @@ export interface SupportQueryResult {
       readonly correlationId: string;
     }[];
   } | null;
+  // How each selected process lifetime accounts for its start; empty for an event selection or a
+  // closure that returned no events.
+  readonly lifetimes: readonly SupportLifetimeProvenance[];
   readonly integrity: SupportQueryIntegrity;
   readonly loss: {
     readonly state: ActivityLogLossState;
@@ -587,6 +592,7 @@ function firstOperationLines(
   state: EngineState,
   lifetimes: ReadonlySet<string>,
   op: string,
+  matches: (accepted: AcceptedLine) => boolean = () => true,
 ): ReadonlyMap<string, AcceptedLine> {
   if (lifetimes.size === 0) return new Map();
   const files = candidateFiles(
@@ -598,7 +604,7 @@ function firstOperationLines(
     state,
     lifetimes,
     files,
-    (accepted) => accepted.parsed.view.op === op,
+    (accepted) => accepted.parsed.view.op === op && matches(accepted),
   );
 }
 
@@ -621,16 +627,22 @@ function lifetimeSegments(
   return segments;
 }
 
-// A segment proves what it holds only when it is readable and undamaged: a corrupt or incomplete
-// line could be the start itself. A torn tail can only end a lifetime's last segment, where a crash
-// stops it, and is declared as truncated evidence there.
+// A segment proves what it holds only when it is readable and every line in it is a supported
+// record: a legacy, unsupported, corrupt or incomplete line could be the start itself. A torn tail can
+// only end a lifetime's last segment, where a crash stops it, and is declared as truncated evidence.
 function segmentIntact(state: EngineState, file: ActivityLogStoreFile, last: boolean): boolean {
   if (state.input.scanner.unreadable.has(file.name)) return false;
   const manifest =
     state.input.scanner.manifestOf(file) ?? state.input.manifests.get(file.name)?.manifest;
   if (manifest === undefined) return false;
-  const { corruptLineCount, incompleteLineCount, truncatedLineCount } = manifest.evidence;
-  return corruptLineCount === 0 && incompleteLineCount === 0 && (last || truncatedLineCount === 0);
+  const { evidence } = manifest;
+  const unusable =
+    evidence.legacyLineCount +
+    evidence.unsupportedLineCount +
+    evidence.corruptLineCount +
+    evidence.incompleteLineCount +
+    (last ? 0 : evidence.truncatedLineCount);
+  return unusable === 0;
 }
 
 // The writer numbers a lifetime's segments from 1 and retention prunes the oldest first, so a
@@ -658,37 +670,86 @@ function firstSegmentLines(
   return firstLinePerLifetime(state, lifetimes, files, () => true);
 }
 
+// The writer's own loss ledger. A lifetime that recorded losing any of its own events cannot show that
+// none of them was its start; a domain loss (a refused client report, say) loses no line of it.
+const OWN_LOSS_OP = "activity-log.loss";
+
+function lifetimesWithOwnLoss(
+  state: EngineState,
+  lifetimes: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const losses = firstOperationLines(
+    state,
+    lifetimes,
+    OWN_LOSS_OP,
+    (accepted) => Number(accepted.parsed.view.extra?.totalLost) > 0,
+  );
+  return new Set(losses.keys());
+}
+
+interface LifetimeEvidence {
+  readonly starts: ReadonlyMap<string, AcceptedLine>;
+  readonly lost: ReadonlySet<string>;
+  readonly beginnings: ReadonlyMap<string, AcceptedLine>;
+  readonly proofs: ReadonlyMap<string, AcceptedLine>;
+}
+
+// Each lifetime's start; else, while its whole beginning is held intact, one line of its first
+// segment unless the closure already shows one; else its start is lost, and its first heartbeat,
+// written only after a start, is the proof a receiver recomputes the loss from.
+function lifetimeEvidence(state: EngineState, closure: ClosureEvents): LifetimeEvidence {
+  const starts = firstOperationLines(state, closure.lifetimes, LIFETIME_ANCHOR_OP);
+  const segments = lifetimeSegments(state.input.files);
+  const unanchored = [...closure.lifetimes].filter((key) => !starts.has(key));
+  const held = new Set(unanchored.filter((key) => beginningRetained(state, segments.get(key))));
+  const lossy = lifetimesWithOwnLoss(state, held);
+  const lost = new Set(unanchored.filter((key) => !held.has(key) || lossy.has(key)));
+  const unshown = new Set(
+    unanchored.filter((key) => !lost.has(key) && !closure.beginnings.has(key)),
+  );
+  const beginnings = firstSegmentLines(state, unshown, segments);
+  // A held beginning whose first segment yields no line shows nothing a receiver can check.
+  for (const key of unshown) if (!beginnings.has(key)) lost.add(key);
+  return { starts, lost, beginnings, proofs: firstOperationLines(state, lost, LIFETIME_PROOF_OP) };
+}
+
+function lifetimeStart(evidence: LifetimeEvidence, key: string): SupportLifetimeStart {
+  if (evidence.starts.has(key)) return "selected";
+  return evidence.lost.has(key) ? "lost" : "absent";
+}
+
 /**
  * Each closure lifetime's own start names its runtime (Node version, platform, architecture). It is
  * required evidence, not optional context: it is charged to the selection's own budget wherever it
  * lies, never counted against the context cap and never dropped to fit optional context, because a
  * long-running process started far before any short window would otherwise lose that dimension.
- * Only `keiko ui` writes one (support-lifetime.ts). A lifetime without it is complete only while its
- * whole beginning is retained intact, and one line of its first segment then travels with the
- * selection; otherwise its start is lost, and its first heartbeat, written only after a start,
- * travels as the proof. Either way a receiver recomputes the verdict from the report alone. Lines
- * the closure already selected are never added twice; when the closure's bodies were released for
- * the budget, their bytes are still measured. Returns the number of lifetimes whose start the log
- * can no longer account for.
+ * Only `keiko ui` writes one (support-lifetime.ts); every lifetime's start is accounted for as
+ * selected, absent or lost, with the evidence a receiver checks that account against. Lines the
+ * closure already selected are never added twice; when the closure's bodies were released for the
+ * budget, their bytes are still measured.
  */
 function collectLifetimeAnchors(
   state: EngineState,
   closure: ClosureEvents,
   alreadySelected: (accepted: AcceptedLine) => boolean,
-): number {
-  const starts = firstOperationLines(state, closure.lifetimes, LIFETIME_ANCHOR_OP);
-  const segments = lifetimeSegments(state.input.files);
-  const unanchored = [...closure.lifetimes].filter((key) => !starts.has(key));
-  const lost = new Set(unanchored.filter((key) => !beginningRetained(state, segments.get(key))));
-  const unshown = new Set(
-    unanchored.filter((key) => !lost.has(key) && !closure.beginnings.has(key)),
-  );
-  const beginnings = firstSegmentLines(state, unshown, segments);
-  const proofs = firstOperationLines(state, lost, LIFETIME_PROOF_OP);
+): ReadonlyMap<string, SupportLifetimeStart> {
+  const evidence = lifetimeEvidence(state, closure);
+  const { starts, beginnings, proofs } = evidence;
   for (const accepted of [...starts.values(), ...beginnings.values(), ...proofs.values()]) {
     if (!alreadySelected(accepted)) closure.collector.add(accepted, "context");
   }
-  return lost.size + unshown.size - beginnings.size;
+  return new Map([...closure.lifetimes].map((key) => [key, lifetimeStart(evidence, key)]));
+}
+
+function lifetimeProvenance(
+  starts: ReadonlyMap<string, SupportLifetimeStart>,
+): readonly SupportLifetimeProvenance[] {
+  return [...starts]
+    .map(([key, start]) => {
+      const [pid = "", instanceId = ""] = key.split(":");
+      return { pid: Number(pid), instanceId, start };
+    })
+    .sort(compareLifetimes);
 }
 
 function contextScope(
@@ -1056,6 +1117,7 @@ interface SelectionOutcome {
   readonly reasons: readonly DiagnosticSufficiencyReason[];
   readonly required: SupportRequiredClasses;
   readonly closure: SupportQueryResult["closure"];
+  readonly lifetimes: readonly SupportLifetimeProvenance[];
 }
 
 function closureSummary(
@@ -1115,6 +1177,7 @@ function budgetExceededOutcome(
     reasons: ["report-budget-exceeded"],
     required: selection.requiredClasses,
     closure: closureSummary(closure, collected, state.passCount),
+    lifetimes: [],
   };
 }
 
@@ -1143,8 +1206,8 @@ function runClosureSelection(
     return budgetExceededOutcome(selection, closure, state, 0);
   const collected = collectClosureEvents(state, closure.members, selection.windows);
   const closureEvents = [...collected.collector.events];
-  const lostStarts = collected.lifetimesExceeded
-    ? 0
+  const starts = collected.lifetimesExceeded
+    ? new Map<string, SupportLifetimeStart>()
     : collectLifetimeAnchors(
         state,
         collected,
@@ -1157,7 +1220,8 @@ function runClosureSelection(
   const reasons: DiagnosticSufficiencyReason[] = [
     ...missingClosureReasons(closure, collected.observed),
   ];
-  if (selection.unresolved || lostStarts > 0) reasons.push("evidence-not-retained");
+  if (selection.unresolved || [...starts.values()].includes("lost"))
+    reasons.push("evidence-not-retained");
   if (context.truncated) reasons.push("context-truncated");
   const events = [...collected.collector.events, ...context.events].sort(
     (left, right) => left.file.order - right.file.order || left.index - right.index,
@@ -1171,6 +1235,7 @@ function runClosureSelection(
     reasons,
     required: selection.requiredClasses,
     closure: closureSummary(closure, collected, state.passCount),
+    lifetimes: lifetimeProvenance(starts),
   };
 }
 
@@ -1185,6 +1250,7 @@ function runEventSelection(state: EngineState, selection: SupportEventSelection)
     reasons: collector.exceeded ? ["report-budget-exceeded"] : [],
     required: { kind: "observed" },
     closure: null,
+    lifetimes: [],
   };
 }
 
@@ -1251,6 +1317,7 @@ function queryResult(
     query: { class: queryClass, limits: state.input.limits },
     segments: segmentSummary(state),
     closure: outcome.closure,
+    lifetimes: outcome.lifetimes,
     integrity: integrity.summary,
     loss: { state: integrity.summary.loss, lossEventCount: lossEventCount(outcome.events) },
     truncation: {

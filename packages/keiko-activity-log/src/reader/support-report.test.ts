@@ -15,6 +15,7 @@ import {
   MAX_SUPPORT_REPORT_RECORDS,
   MAX_SUPPORT_REPORT_VALUES,
   parseActivityLogFileName,
+  type SupportLifetimeProvenance,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   recordRegisteredFailureIncident,
@@ -174,15 +175,14 @@ describe("canonical body-free offline report", () => {
     expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe(
       "insufficient",
     );
+    const amplified = query.events.map((event) => ({
+      sourceSegmentId: event.file.segmentId ?? "legacy",
+      record: JSON.parse(event.text) as Record<string, unknown>,
+    }));
     const hostile = sealSupportReport(
       report.incident,
-      report.selection,
-      encodeSupportReportEvidence(
-        query.events.map((event) => ({
-          sourceSegmentId: event.file.segmentId ?? "legacy",
-          record: JSON.parse(event.text) as Record<string, unknown>,
-        })),
-      ),
+      { ...report.selection, lifetimes: accountFor(amplified) },
+      encodeSupportReportEvidence(amplified),
     );
     expect(() =>
       analyzeSupportReport(serializeSupportReport(hostile), {
@@ -471,7 +471,7 @@ describe("hostile report admission", () => {
     const report = fixture().report;
     const hostile = sealSupportReport(
       report.incident,
-      { ...report.selection, status: "complete", reasons: [] },
+      { ...report.selection, status: "complete", reasons: [], lifetimes: [] },
       encodeSupportReportEvidence([]),
     );
     const analyzed = analyzeSupportReport(serializeSupportReport(hostile));
@@ -599,7 +599,7 @@ describe("historical report reconstruction", () => {
     };
     const historical = sealSupportReport(
       incident,
-      report.selection,
+      { ...report.selection, lifetimes: accountFor(events) },
       encodeSupportReportEvidence(events),
     );
     const analyzed = analyzeSupportReport(serializeSupportReport(historical));
@@ -681,16 +681,40 @@ function withoutKey(
   return Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
 }
 
+// The lifetime account of a sender who keeps the selection consistent with the evidence it seals:
+// a lifetime the evidence still shows keeps its declared start, and one never declared is accounted
+// for by what its evidence carries.
+function accountFor(
+  events: ReturnType<typeof eventsOf>,
+  declared: readonly SupportLifetimeProvenance[] = [],
+): SupportLifetimeProvenance[] {
+  const starts = new Map(declared.map((lifetime) => [lifetime.instanceId, lifetime.start]));
+  const shown = new Map<string, SupportLifetimeProvenance>();
+  for (const { record } of events) {
+    const instanceId = String(record.instanceId);
+    const started = record.op === "process.started" || shown.get(instanceId)?.start === "selected";
+    shown.set(instanceId, {
+      pid: Number(record.pid),
+      instanceId,
+      start: starts.get(instanceId) ?? (started ? "selected" : "absent"),
+    });
+  }
+  return [...shown.values()].sort(
+    (left, right) => left.pid - right.pid || left.instanceId.localeCompare(right.instanceId),
+  );
+}
+
 function resealed(
   report: SupportReport,
   change: (events: ReturnType<typeof eventsOf>) => ReturnType<typeof eventsOf>,
   selection = report.selection,
 ): string {
+  const events = change(eventsOf(report));
   return serializeSupportReport(
     sealSupportReport(
       report.incident,
-      selection,
-      encodeSupportReportEvidence(change(eventsOf(report))),
+      { ...selection, lifetimes: accountFor(events, selection.lifetimes) },
+      encodeSupportReportEvidence(events),
     ),
   );
 }
@@ -947,6 +971,7 @@ describe("received-report audit hardening (#3534)", () => {
         status: "degraded",
         reasons: ["events-dropped"],
         requiredBytes: report.selection.requiredBytes,
+        lifetimes: report.selection.lifetimes,
       }),
     );
     expect(supportReportTimeline(dropped, CORRELATION)?.sufficiency.reasons).toContain(
@@ -1089,24 +1114,67 @@ describe("received-report audit hardening (#3534)", () => {
     expect(analyzed.selection.reasons).toContain("evidence-not-retained");
   });
 
-  // Review #3679: a heartbeat begins only after its process's start, so a received report holding a
-  // lifetime's heartbeat without that start lost the start, whatever verdict it declares.
-  it("recomputes a lifetime start the report lost from the heartbeat it still holds", () => {
+  // Review #3679: a report accounts for each lifetime's start, and the evidence must carry that
+  // account. Dropping a selected start never reads as a lifetime that had none, before or after its
+  // first heartbeat; a sender that declares it lost reads insufficient, and a heartbeat (written only
+  // after a start) never sits beside a start declared absent.
+  it.each([
+    ["before its first heartbeat", false],
+    ["after its first heartbeat", true],
+  ])("refuses a report whose selected start was dropped %s", (_label, beat) => {
     const { report } = fixture(1, {}, undefined, (process) => [
       fixtureLine(process, T0 - 2, { op: "process.started" }),
-      fixtureLine(process, T0 - 1, { op: "process.heartbeat" }),
+      ...(beat ? [fixtureLine(process, T0 - 1, { op: "process.heartbeat" })] : []),
     ]);
-    const held = eventsOf(report).map((event) => event.record.op);
-    expect(held).toEqual(expect.arrayContaining(["process.started", "process.heartbeat"]));
+    const started = report.selection.lifetimes.find((lifetime) => lifetime.pid === 4242);
+    expect(started?.start).toBe("selected");
     expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe("complete");
-    const withoutStart = resealed(
-      report,
-      (events) => events.filter((event) => event.record.op !== "process.started"),
-      { ...report.selection, status: "complete", reasons: [] },
+    const withoutStart = (events: ReturnType<typeof eventsOf>): ReturnType<typeof eventsOf> =>
+      events.filter((event) => event.record.op !== "process.started");
+    const complete = { ...report.selection, status: "complete" as const, reasons: [] };
+    expect(() => parseSupportReport(resealed(report, withoutStart, complete))).toThrow(
+      expect.objectContaining({ reason: "unsafe-report" }),
     );
-    const analyzed = analyzeSupportReport(withoutStart);
-    expect(analyzed.selection.status).toBe("insufficient");
-    expect(analyzed.selection.reasons).toContain("evidence-not-retained");
+    const declaring = (start: "lost" | "absent"): string =>
+      resealed(report, withoutStart, {
+        ...complete,
+        lifetimes: report.selection.lifetimes.map((lifetime) =>
+          lifetime.pid === 4242 ? { ...lifetime, start } : lifetime,
+        ),
+      });
+    const lost = analyzeSupportReport(declaring("lost"));
+    expect(lost.selection.status).toBe("insufficient");
+    expect(lost.selection.reasons).toContain("evidence-not-retained");
+    if (beat) {
+      expect(() => parseSupportReport(declaring("absent"))).toThrow(
+        expect.objectContaining({ reason: "unsafe-report" }),
+      );
+    }
+  });
+
+  // Review #3679: the account names exactly the lifetimes the evidence shows, once each, in order.
+  it("refuses a lifetime account that does not match its evidence", () => {
+    const { report } = fixture();
+    const [first] = report.selection.lifetimes;
+    if (first === undefined) throw new TypeError("missing lifetime account");
+    const sealWith = (lifetimes: readonly SupportLifetimeProvenance[]): string =>
+      serializeSupportReport(
+        sealSupportReport(
+          report.incident,
+          { ...report.selection, lifetimes },
+          encodeSupportReportEvidence(eventsOf(report)),
+        ),
+      );
+    for (const lifetimes of [
+      report.selection.lifetimes.slice(1),
+      [...report.selection.lifetimes, { pid: 1, instanceId: "00000001", start: "absent" as const }],
+      [first, ...report.selection.lifetimes],
+      report.selection.lifetimes.map((lifetime) => ({ ...lifetime, start: "selected" as const })),
+    ]) {
+      expect(() => parseSupportReport(sealWith(lifetimes))).toThrow(
+        expect.objectContaining({ reason: "unsafe-report" }),
+      );
+    }
   });
 
   // Review #3679: a received report recomputes a lost start from its own evidence. A retained
@@ -1204,7 +1272,9 @@ describe("received-report audit hardening (#3534)", () => {
     expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe("complete");
     const withoutBeginning = analyzeSupportReport(
       resealed(report, (events) =>
-        events.filter((event) => !event.sourceSegmentId.endsWith("-000001")),
+        events.filter(
+          (event) => event.record.pid !== 4646 || !event.sourceSegmentId.endsWith("-000001"),
+        ),
       ),
     );
     expect(withoutBeginning.selection.status).toBe("insufficient");
