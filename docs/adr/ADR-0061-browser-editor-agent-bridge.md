@@ -73,6 +73,18 @@ discovery, or receive actions. Owned cleanup settles the state when a window is 
 connection loss must not silently erase knowledge of unsaved edits. This reuses the existing
 registry and dirty-buffer checks rather than introducing another workspace or execution system.
 
+The browser persists its safety-only capability and unresolved dirty paths before its first
+publication. Each live tab holds an exclusive Web Lock for its publication record; duplicate tabs
+publish independently, while a reopened tab can recover a released record without claiming another
+publisher's authority. Missing or invalid ownership storage refuses publication. Acknowledgements
+cannot replace the caller's capability, and cleanup rechecks current references and dirty state
+after asynchronous work before removing a persisted record.
+
+Publication timestamps are durably monotonic, including after a wall-clock rollback or reopen.
+The passive registry rejects an older snapshot or an equal timestamp with different state, while
+accepting an identical retry. A delayed clean request therefore cannot erase a newer dirty state.
+These rules apply only to safety-only publications; the action bridge is unchanged.
+
 The independent Coding Workbench continues to use its existing headless changeset bridge and
 shared server contracts. Retaining those active consumers is not an ordinary Editor integration.
 No Coding Workbench behavior changes are authorized by this retirement.
