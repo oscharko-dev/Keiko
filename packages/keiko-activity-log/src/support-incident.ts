@@ -115,6 +115,8 @@ export const SUPPORT_INCIDENT_WINDOW_AFTER_MS = 5 * MINUTE_MS;
 export const MAX_SUPPORT_INCIDENTS = SUPPORT_INCIDENT_SLOT_COUNT;
 /** Of those, registered-failure candidates may occupy at most this many. */
 export const MAX_REGISTERED_FAILURE_INCIDENTS = 24;
+// Browser occurrences cannot occupy the sixteen slots reserved for server failures.
+const MAX_BROWSER_FAILURE_INCIDENTS = 8;
 /** A process re-evaluates one defectFingerprint at most this often. */
 export const SUPPORT_INCIDENT_SUPPRESSION_MS = MINUTE_MS;
 /**
@@ -683,14 +685,16 @@ function buildRecord(
 // MAX_SUPPORT_INCIDENTS-MAX_REGISTERED_FAILURE_INCIDENTS slots, so those stay available to a user
 // report even when automatics hold their full share -- reproducing quotaAllows's old count-based
 // reserve atomically, one exclusive-create attempt at a time instead of one racy directory count.
-function slotSearchOrder(trigger: SupportIncidentTrigger): readonly number[] {
+function slotSearchOrder(trigger: SupportIncidentTrigger, op: string): readonly number[] {
   if (trigger === "user-report") {
     return Array.from(
       { length: MAX_SUPPORT_INCIDENTS },
       (_, index) => MAX_SUPPORT_INCIDENTS - 1 - index,
     );
   }
-  return Array.from({ length: MAX_REGISTERED_FAILURE_INCIDENTS }, (_, index) => index);
+  const length =
+    op === "client.diagnostic" ? MAX_BROWSER_FAILURE_INCIDENTS : MAX_REGISTERED_FAILURE_INCIDENTS;
+  return Array.from({ length }, (_, index) => index);
 }
 
 /**
@@ -703,8 +707,9 @@ function claimQuotaSlot(
   stateDir: string,
   trigger: SupportIncidentTrigger,
   incidentId: string,
+  op: string,
 ): number | undefined {
-  for (const slotIndex of slotSearchOrder(trigger)) {
+  for (const slotIndex of slotSearchOrder(trigger, op)) {
     if (claimSupportIncidentSlot(stateDir, slotIndex, incidentId)) return slotIndex;
   }
   return undefined;
@@ -1015,7 +1020,7 @@ function createCandidate(
     if (handled.done) return handled.result;
   }
 
-  const slotIndex = claimQuotaSlot(stateDir, draft.trigger, incidentId);
+  const slotIndex = claimQuotaSlot(stateDir, draft.trigger, incidentId, draft.input.op);
   if (slotIndex === undefined) {
     if (dedupFingerprint !== undefined) {
       releaseSupportIncidentFingerprintClaim(stateDir, dedupFingerprint);
@@ -1314,6 +1319,7 @@ export function dismissSupportIncident(
 
 /** A process evaluates at most this many new candidates per rolling minute (all fingerprints). */
 export const MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE = 6;
+const MAX_BROWSER_INCIDENT_EVALUATIONS_PER_MINUTE = 2;
 const MAX_REMEMBERED_FINGERPRINTS = 128;
 
 interface PendingCandidate {
@@ -1330,6 +1336,7 @@ let drainScheduled = false;
 let exitFlushInstalled = false;
 const recentFingerprints = new Map<string, number>();
 const recentEvaluations: number[] = [];
+const recentBrowserEvaluations: number[] = [];
 const pendingCandidates: PendingCandidate[] = [];
 // The last time a rate-limited evaluation was evidenced (#3533 audit): throttled by the same
 // SUPPORT_INCIDENT_SUPPRESSION_MS window as everything else here, so a storm that keeps hitting
@@ -1342,6 +1349,7 @@ export function setSupportIncidentTriggerForTests(enabled: boolean | undefined):
   triggerOverride = enabled;
   recentFingerprints.clear();
   recentEvaluations.length = 0;
+  recentBrowserEvaluations.length = 0;
   pendingCandidates.length = 0;
   lastRateLimitEvidenceAtMs = undefined;
 }
@@ -1359,15 +1367,27 @@ type EvaluationAdmission = "admitted" | "suppressed" | "rate-limited";
 // pinned window and the Activity Log's own retention already cover it -- but a rate-limited
 // evaluation can be a defect Keiko has never seen before, dropped purely because the shared cap was
 // already spent; the caller evidences that case explicitly (#3533 audit).
-function admitEvaluation(fingerprint: string, nowMs: number): EvaluationAdmission {
+function expireEvaluations(evaluations: number[], nowMs: number): void {
+  while (evaluations.length > 0 && nowMs - (evaluations[0] ?? nowMs) >= MINUTE_MS) {
+    evaluations.shift();
+  }
+}
+
+function admitEvaluation(
+  fingerprint: string,
+  nowMs: number,
+  browser: boolean,
+): EvaluationAdmission {
   const last = recentFingerprints.get(fingerprint);
   if (last !== undefined && nowMs - last < SUPPORT_INCIDENT_SUPPRESSION_MS) return "suppressed";
-  while (recentEvaluations.length > 0 && nowMs - (recentEvaluations[0] ?? nowMs) >= MINUTE_MS) {
-    recentEvaluations.shift();
-  }
+  expireEvaluations(recentEvaluations, nowMs);
+  expireEvaluations(recentBrowserEvaluations, nowMs);
+  if (browser && recentBrowserEvaluations.length >= MAX_BROWSER_INCIDENT_EVALUATIONS_PER_MINUTE)
+    return "rate-limited";
   if (recentEvaluations.length >= MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE)
     return "rate-limited";
   recentEvaluations.push(nowMs);
+  if (browser) recentBrowserEvaluations.push(nowMs);
   if (recentFingerprints.size >= MAX_REMEMBERED_FINGERPRINTS) recentFingerprints.clear();
   recentFingerprints.set(fingerprint, nowMs);
   return "admitted";
@@ -1409,7 +1429,7 @@ function admittedEvidence(event: ServerLogEvent): AdmissionOutcome {
     defectFingerprint,
     registeredFailureCorrelation(evidence),
   );
-  const admission = admitEvaluation(key, Date.now());
+  const admission = admitEvaluation(key, Date.now(), event.op === "client.diagnostic");
   if (admission === "admitted") return { status: "admitted", evidence };
   return admission === "rate-limited"
     ? { status: "rate-limited", defectFingerprint, fingerprintAlgorithm: input.algorithm ?? 1 }

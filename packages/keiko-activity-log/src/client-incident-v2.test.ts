@@ -46,6 +46,7 @@ beforeEach((): void => {
 });
 afterEach((): void => {
   race.hook = undefined;
+  vi.restoreAllMocks();
   setSupportIncidentTriggerForTests(undefined);
   closeFileServerLogSinks();
   rmSync(stateDir, { recursive: true, force: true });
@@ -98,7 +99,7 @@ function writeStage(
     ),
   );
 }
-function writeFailure(frame = FRAME): void {
+function writeFailure(frame = FRAME, correlationId = "CustomerPayroll.xlsx"): void {
   const operation = ACTIVITY_LOG_OPERATION_REGISTRY.find(
     (entry) => entry.op === "client.diagnostic",
   );
@@ -111,7 +112,7 @@ function writeFailure(frame = FRAME): void {
       {
         level: "error",
         errorKind: "internal",
-        correlationId: "CustomerPayroll.xlsx",
+        correlationId,
         parentCorrelationId: "CustomerNotebook.docx",
       },
       {
@@ -127,6 +128,25 @@ function writeFailure(frame = FRAME): void {
   writeStage(sink, "client.stage.settled");
   sink.close?.();
 }
+function writeServerFailure(): void {
+  const operation = ACTIVITY_LOG_OPERATION_REGISTRY.find(
+    (entry) => entry.op === "coding-runtime.readiness.failed",
+  );
+  if (operation === undefined) throw new TypeError("Missing server failure operation.");
+  const sink = createFileServerLogSink(stateDir, { level: "debug" });
+  sink.write(
+    activityLogEvent(
+      operation,
+      {
+        level: "error",
+        errorKind: "unavailable",
+        correlationId: "retained-server-failure",
+      },
+      { phase: "endpoint", frames: [], causeChain: ["Error"] },
+    ),
+  );
+  sink.close?.();
+}
 function report(): ReturnType<typeof parseSupportReport> {
   const response = createDesktopSupportReport(stateDir, "CustomerNotebook.docx");
   const parsed = parseSupportReport(response.reportJson);
@@ -140,6 +160,38 @@ function report(): ReturnType<typeof parseSupportReport> {
   return parsed;
 }
 describe("canonical client incident version compatibility and occurrence claims", (): void => {
+  it("reserves automatic evaluation capacity for server failures after distinct browser noise", (): void => {
+    setSupportIncidentTriggerForTests(true);
+    for (let index = 0; index < 6; index += 1)
+      writeFailure(FRAME, `browser-noise-${String(index)}`);
+    writeServerFailure();
+    drainSupportIncidentCandidates();
+    expect(
+      listSupportIncidents(stateDir).some(
+        (record) => record.fingerprint.op === "coding-runtime.readiness.failed",
+      ),
+    ).toBe(true);
+  });
+  it("reserves automatic retention slots for server failures across browser noise windows", (): void => {
+    setSupportIncidentTriggerForTests(true);
+    const start = Date.now();
+    const clock = vi.spyOn(Date, "now");
+    for (let index = 0; index < 24; index += 1) {
+      clock.mockReturnValue(start + Math.floor(index / 2) * 61_000);
+      writeFailure(FRAME, `browser-retention-${String(index)}`);
+      drainSupportIncidentCandidates();
+    }
+    writeServerFailure();
+    drainSupportIncidentCandidates();
+    const records = listSupportIncidents(stateDir);
+    expect(
+      records.some((record) => record.fingerprint.op === "coding-runtime.readiness.failed"),
+    ).toBe(true);
+    expect(
+      records.filter((record) => record.fingerprint.op === "client.diagnostic").length,
+    ).toBeLessThanOrEqual(8);
+    clock.mockRestore();
+  });
   it("exports a raw browser chunk failure through the real sink and automatic trigger", (): void => {
     setSupportIncidentTriggerForTests(true);
     const rawFrame = "dist/ui/static/_next/static/chunks/customerpayroll.js:4:2";

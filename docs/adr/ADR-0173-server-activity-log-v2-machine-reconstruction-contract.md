@@ -1518,7 +1518,11 @@ closed feature context. Their retention claim is therefore scoped to the occurre
 causal reference as well as its defect fingerprint. Replaying the same request deduplicates; a later
 request retains its own window instead of discarding it under a fourteen-day coarse defect claim.
 The local claim key is a hash and is never exported as a customer reference. Existing automatic
-slot quotas and evaluation rate limits apply; full quotas surface explicit loss. Server failures
+slot quotas and evaluation rate limits apply; full quotas surface explicit loss. Browser candidates
+may use only eight of the twenty-four automatic slots and at most two of the six evaluations per
+rolling minute. This reserves sixteen automatic slots and four evaluations for server failures
+without enlarging the shared bounds. The same atomic slot claims and closed rejection evidence
+apply to both classes. Server failures
 and historical version-one browser records keep their fingerprint-scoped deduplication.
 
 The descriptor has a strict public projection and a richer, still body-free private projection from
