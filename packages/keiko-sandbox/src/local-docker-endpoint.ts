@@ -131,7 +131,7 @@ function selectedHost(env: NodeJS.ProcessEnv, root: string, platform: NodeJS.Pla
   return contextHost(directory, currentContext(directory, root), root, platform);
 }
 
-/** Canonical local Unix sockets or the exact Windows local pipe; never a remote engine. */
+/** Canonical local Unix sockets or local Windows named pipes; never a remote engine. */
 export function resolveLocalDockerEndpoint(
   env: NodeJS.ProcessEnv,
   workspaceRoot: string,
@@ -139,8 +139,10 @@ export function resolveLocalDockerEndpoint(
 ): LocalDockerEndpoint {
   try {
     const host = selectedHost(env, workspaceRoot, platform);
-    if (platform === "win32" && host === WINDOWS_LOCAL_ENDPOINT) {
-      return { kind: "available", host };
+    if (platform === "win32") {
+      return /^npipe:\/\/\/\/\.\/pipe\/[a-zA-Z0-9][a-zA-Z0-9_.-]{0,255}$/u.test(host)
+        ? { kind: "available", host }
+        : { kind: "unavailable", reason: "docker-context-unsupported" };
     }
     if (!host.startsWith("unix:///") || host.length > 4096 || host.includes("\0")) {
       return { kind: "unavailable", reason: "docker-context-unsupported" };

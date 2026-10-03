@@ -98,6 +98,19 @@ describe.skipIf(process.platform === "win32")("resolveLocalDockerEndpoint Unix s
     ).toEqual({ kind: "unavailable", reason: "docker-context-unsupported" });
   });
 
+  it("preserves the Docker Desktop Linux engine from a Windows context", async () => {
+    const host = "npipe:////./pipe/dockerDesktopLinuxEngine";
+    await writeContext("desktop-linux", host);
+    await writeFile(
+      join(directory, "config.json"),
+      JSON.stringify({ currentContext: "desktop-linux" }),
+    );
+    expect(resolveLocalDockerEndpoint({ DOCKER_CONFIG: directory }, root, "win32")).toEqual({
+      kind: "available",
+      host,
+    });
+  });
+
   it("rejects configuration rooted in the untrusted workspace, including symlinks", async () => {
     await symlink(root, join(parent, "configuration-link"));
     expect(() =>
@@ -157,6 +170,18 @@ it("preserves only Docker's exact Windows local named-pipe fallback", () => {
       "win32",
     ),
   ).toEqual({
+    kind: "unavailable",
+    reason: "docker-context-unsupported",
+  });
+});
+
+it.each([
+  "npipe:////remote/pipe/dockerDesktopLinuxEngine",
+  "npipe:////./pipe/../dockerDesktopLinuxEngine",
+  "npipe:////./pipe/dockerDesktopLinuxEngine/child",
+  "npipe:////./pipe/dockerDesktopLinuxEngine?remote=host",
+])("rejects nonlocal or malformed Windows pipe %s", (host) => {
+  expect(resolveLocalDockerEndpoint({ DOCKER_HOST: host }, process.cwd(), "win32")).toEqual({
     kind: "unavailable",
     reason: "docker-context-unsupported",
   });

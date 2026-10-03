@@ -176,7 +176,7 @@ execution fails closed before spawning. A network compatibility setting never re
 filesystem boundary. Sandbox attestations report network and filesystem enforcement separately.
 
 The Docker fallback resolves only the selected local engine endpoint before spawning: a canonical
-Unix socket outside the execution root, or Docker's exact local Windows named pipe. Remote or
+Unix socket outside the execution root, or a Windows named pipe under the local `npipe:////./pipe/` namespace (including Docker Desktop's Linux engine). Remote or
 unavailable contexts fail closed with a body-free reason. The CLI receives the local endpoint
 explicitly while HOME stays empty; Docker configuration and credentials are never forwarded.
 Container commands use the allowlisted executable name from the image's PATH, not a host symlink
