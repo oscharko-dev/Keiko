@@ -681,6 +681,21 @@ describe("dev quality workflows", () => {
     expect(regressionIndex).toBeGreaterThan(buildIndex);
   });
 
+  it("runs local checkout binding on the required Windows host after building packages", () => {
+    const steps = ciWorkflow.jobs["cross-platform-smoke"].steps;
+    const regressionIndex = steps.findIndex(
+      (step) => step.name === "Verify Windows workbench checkout binding",
+    );
+    const regression = steps[regressionIndex];
+    expect(regression).toBeDefined();
+    expect(regression.if).toBe("runner.os == 'Windows'");
+    expect(regression.run).toBe(
+      "node node_modules/vitest/vitest.mjs run packages/keiko-server/src/task-workspace/local-checkout.test.ts",
+    );
+    expect(regression["continue-on-error"]).toBeUndefined();
+    expect(regressionIndex).toBeGreaterThan(steps.findIndex((step) => step.name === "Build"));
+  });
+
   it("contains no privileged pull-request trigger", () => {
     expect(mutation).not.toContain("pull_request_target");
     expect(mutation).not.toContain("workflow_run");

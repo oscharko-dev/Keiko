@@ -10,7 +10,6 @@ import {
   realpathSync,
   renameSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -155,30 +154,33 @@ describe("production workspace HEAD reader worktree layouts", () => {
     );
   });
 
-  it("rejects a git-dir whose canonical ancestor differs from the common root only by case", () => {
-    const fixture = worktreeFixture();
-    const actualCommon = realpathSync(fixture.commonGitDir);
-    const disguisedCommon = join(dirname(fixture.repoRoot), "REPO", ".git");
-    const disguisedGitDir = join(disguisedCommon, "worktrees", "wt");
-    writeFileSync(join(fixture.worktreeRoot, ".git"), `gitdir: ${disguisedGitDir}\n`);
-    const actualPath = (path: string): string =>
-      path.startsWith(disguisedCommon)
-        ? `${actualCommon}${path.slice(disguisedCommon.length)}`
-        : path;
-    const fileSystem: ProductionWorkspaceHeadFileSystem = {
-      close: closeSync,
-      fstat: fstatSync,
-      lstat: (path) => lstatSync(actualPath(path)),
-      open: (path) => openSync(actualPath(path), "r"),
-      read: readSync,
-      realpath: (path) =>
-        path.startsWith(disguisedCommon) ? path : realpathSync(actualPath(path)),
-    };
+  it.skipIf(process.platform === "win32")(
+    "rejects a git-dir whose canonical ancestor differs from the common root only by case",
+    () => {
+      const fixture = worktreeFixture();
+      const actualCommon = realpathSync(fixture.commonGitDir);
+      const disguisedCommon = join(dirname(fixture.repoRoot), "REPO", ".git");
+      const disguisedGitDir = join(disguisedCommon, "worktrees", "wt");
+      writeFileSync(join(fixture.worktreeRoot, ".git"), `gitdir: ${disguisedGitDir}\n`);
+      const actualPath = (path: string): string =>
+        path.startsWith(disguisedCommon)
+          ? `${actualCommon}${path.slice(disguisedCommon.length)}`
+          : path;
+      const fileSystem: ProductionWorkspaceHeadFileSystem = {
+        close: closeSync,
+        fstat: fstatSync,
+        lstat: (path) => lstatSync(actualPath(path)),
+        open: (path) => openSync(actualPath(path), "r"),
+        read: readSync,
+        realpath: (path) =>
+          path.startsWith(disguisedCommon) ? path : realpathSync(actualPath(path)),
+      };
 
-    expect(
-      readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot, fileSystem),
-    ).toBeUndefined();
-  });
+      expect(
+        readProductionWorkspaceHead(fixture.worktreeRoot, fixture.repoRoot, fileSystem),
+      ).toBeUndefined();
+    },
+  );
 
   it("fails closed when the commondir pointer escapes the repository git directory", () => {
     const fixture = worktreeFixture();
@@ -194,12 +196,27 @@ describe("production workspace HEAD reader worktree layouts", () => {
     const symlinked = worktreeFixture();
     mkdirSync(join(symlinked.commonGitDir, "refs", "heads"), { recursive: true });
     writeFileSync(join(symlinked.commonGitDir, "loose-target"), `${TAG_SHA}\n`);
-    symlinkSync(
-      join(symlinked.commonGitDir, "loose-target"),
-      join(symlinked.commonGitDir, "refs", "heads", "main"),
-    );
+    const linkedRef = join(symlinked.commonGitDir, "refs", "heads", "main");
+    writeFileSync(linkedRef, `${TAG_SHA}\n`);
+    writeFileSync(join(symlinked.commonGitDir, "packed-refs"), `${MAIN_SHA} refs/heads/main\n`);
+    const fileSystem: ProductionWorkspaceHeadFileSystem = {
+      close: closeSync,
+      fstat: fstatSync,
+      lstat: (path) => {
+        const stat = lstatSync(path);
+        if (path.toLowerCase() === linkedRef.toLowerCase()) {
+          Object.defineProperty(stat, "isSymbolicLink", { value: (): boolean => true });
+        }
+        return stat;
+      },
+      open: (path) => openSync(path, "r"),
+      read: readSync,
+      realpath: realpathSync,
+    };
     // The symlinked loose ref must be ignored; the packed ref stays authoritative.
-    expect(readProductionWorkspaceHead(symlinked.worktreeRoot, symlinked.repoRoot)).toBe(MAIN_SHA);
+    expect(
+      readProductionWorkspaceHead(symlinked.worktreeRoot, symlinked.repoRoot, fileSystem),
+    ).toBe(MAIN_SHA);
   });
 
   it("returns nothing for a packed ref whose recorded object id is malformed", () => {

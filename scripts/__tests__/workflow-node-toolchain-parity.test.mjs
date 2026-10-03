@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 
@@ -97,7 +97,7 @@ function classify(steps) {
 function allGroups() {
   const groups = [];
   for (const path of [...collectYaml(WORKFLOW_DIR), ...collectYaml(ACTION_DIR)]) {
-    const label = relative(repoRoot, path);
+    const label = relative(repoRoot, path).split(sep).join("/");
     groups.push(...stepGroups(parse(readFileSync(path, "utf8")), label));
   }
   return groups;
