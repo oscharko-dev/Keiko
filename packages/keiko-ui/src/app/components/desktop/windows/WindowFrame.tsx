@@ -18,6 +18,7 @@ import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
   WorkspaceBinding,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
@@ -181,6 +182,7 @@ interface SelectBodyOptions {
   readonly selectedRoot: string | null;
   readonly activeRoot: string | null;
   readonly activeBinding: WorkspaceBinding | null;
+  readonly activeInstance: WorkspaceInstance | null;
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly focusWindow: (id: string) => void;
@@ -202,6 +204,7 @@ function selectBody({
   selectedRoot,
   activeRoot,
   activeBinding,
+  activeInstance,
   updateCfg,
   openWindow,
   focusWindow,
@@ -236,6 +239,7 @@ function selectBody({
         selectedRoot,
         activeRoot,
         activeBinding,
+        activeInstance,
         updateCfg,
         openWindow,
         focusWindow,
@@ -266,6 +270,7 @@ function selectBody({
       selectedRoot,
       activeRoot,
       activeBinding,
+      activeInstance,
       updateCfg,
       openWindow,
       focusWindow,
@@ -945,6 +950,7 @@ function WindowFrameImpl({
   const selectedRoot = activeProject?.available === true ? activeProject.path : null;
   const activeRoot = activeWorkspace?.activeRoot ?? null;
   const activeBinding = activeWorkspace?.activeBinding ?? null;
+  const activeInstance = activeWorkspace?.activeInstance ?? null;
   const [draggingWindow, setDraggingWindow] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<((flushPending?: boolean) => void) | null>(null);
@@ -1028,6 +1034,7 @@ function WindowFrameImpl({
         selectedRoot,
         activeRoot,
         activeBinding,
+        activeInstance,
         updateCfg,
         openWindow,
         focusWindow,
@@ -1048,6 +1055,7 @@ function WindowFrameImpl({
       selectedRoot,
       activeRoot,
       activeBinding,
+      activeInstance,
       updateCfg,
       openWindow,
       focusWindow,

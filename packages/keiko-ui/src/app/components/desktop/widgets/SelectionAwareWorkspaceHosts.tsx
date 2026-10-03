@@ -49,7 +49,7 @@ import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/Edit
 import { ManagedTaskWorkspaceUnavailable } from "./cards/ManagedTaskWorkspaceUnavailable";
 import { MultiRootFilesWidget } from "./cards/MultiRootFilesWidget";
 import { gitObjectId } from "./gitObjectId";
-import { managedTaskWorkspaceAccess } from "./ManagedTaskWorkspaceGate";
+import { isManagedTaskWorkspaceRoot, managedTaskWorkspaceAccess } from "./ManagedTaskWorkspaceGate";
 import { MultiRootEditorHost } from "./MultiRootEditorHost";
 import { useEditorAgentTranslate, type EditorAgentMessageKey } from "./cards/editor-agent-i18n";
 import { createWindowChunkFallback } from "./WindowChunkFallback";
@@ -1711,8 +1711,7 @@ function editorSessionBaseProps(
     linkedFilePath: ctx.linkedFilePath,
     linkedCapsuleIds: ctx.linkedCapsuleIds,
     linkedCapsuleSetIds: ctx.linkedCapsuleSetIds,
-    workspaceTrustUiAvailable:
-      ctx.activeBinding === null || targetRoot !== ctx.activeBinding.activeRoot,
+    workspaceTrustUiAvailable: !isManagedTaskWorkspaceRoot(ctx, targetRoot),
     windowId: ctx.windowId,
     openEditorFile: ctx.openEditorFile,
     onOpenGitCommit: (projectPath, commit) => {
