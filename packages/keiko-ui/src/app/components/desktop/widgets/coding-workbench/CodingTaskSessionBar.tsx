@@ -96,11 +96,7 @@ export function CodingTaskTranscript({
                 : "codingWorkbench.history.agent",
             )}
           </strong>
-          <SafeMarkdownBoundary
-            source={message.content}
-            applyScopeId={`coding-history:${message.id}`}
-            diagnosticMessageId={message.id}
-          />
+          <SafeMarkdownBoundary source={message.content} diagnosticMessageId={message.id} />
         </article>
       ))}
     </section>

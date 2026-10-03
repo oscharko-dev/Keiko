@@ -112,7 +112,7 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
 }
 
 function formatAction(): HTMLButtonElement | null {
-  fireEvent.click(screen.getByRole("button", { name: "More file actions" }));
+  fireEvent.click(screen.getByLabelText("More file actions"));
   return screen.queryByRole("button", { name: "Format" });
 }
 

@@ -55,7 +55,7 @@ export function EditorDocumentActions({ label, actions }: Props): ReactNode {
   };
   return (
     <details ref={details} className={`ed-tab-summary-menu ${styles.documentActions}`}>
-      <summary ref={trigger} role="button" aria-label={label} title={label}>
+      <summary ref={trigger} aria-label={label} title={label}>
         <DotsIcon size={20} />
       </summary>
       <div className={`ed-tab-summary-panel ${styles.documentActionPanel}`}>

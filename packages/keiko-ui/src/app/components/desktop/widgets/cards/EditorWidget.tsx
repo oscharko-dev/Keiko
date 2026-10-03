@@ -1688,16 +1688,6 @@ export function EditorWidget({
     [commitLayout, draggedTab],
   );
 
-  // Stable cross-pane tab move (used by the per-pane binding so it does not churn on every render).
-  const moveTabAction = useCallback(
-    (fromPaneId: string, toPaneId: string, file: string): void => {
-      commitLayout(
-        editorLayoutReducer(layoutRef.current, { type: "move-tab", fromPaneId, toPaneId, file }),
-      );
-    },
-    [commitLayout],
-  );
-
   // ── Command/keybinding/palette actions (Wave 2 items 2.3/2.4/2.5) ──────────────────────────────
   // All read the live layout from `layoutRef`, so they act on the active pane regardless of where
   // focus is, and route through the existing close/select/split/save callbacks.
@@ -2096,6 +2086,7 @@ export function EditorWidget({
     } satisfies EditorOutlineSnapshot);
 
   const trustSettled = resolveTrustSettledAttribute(verification);
+  const filesRootChangeProps = rootSelectionLocked ? {} : { onRootChange: openRoot };
 
   return (
     <div
@@ -2144,7 +2135,7 @@ export function EditorWidget({
               root={workspaceRoot}
               activeFilePath={activeFile.length > 0 ? activeFile : undefined}
               openFilesDirectly
-              {...(rootSelectionLocked ? {} : { onRootChange: openRoot })}
+              {...filesRootChangeProps}
               onOpenFile={openFile}
               onFilesMutated={handleFilesMutated}
               onBeforeEntryMutation={confirmFilesEntryMutation}

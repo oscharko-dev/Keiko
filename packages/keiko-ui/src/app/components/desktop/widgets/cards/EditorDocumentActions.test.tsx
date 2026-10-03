@@ -14,7 +14,7 @@ describe("secondary document actions", () => {
         actions={[{ label: "File history", run }]}
       />,
     );
-    const trigger = screen.getByRole("button", { name: "More file actions" });
+    const trigger = screen.getByLabelText("More file actions");
     await user.tab();
     expect(trigger).toHaveFocus();
     await user.click(trigger);

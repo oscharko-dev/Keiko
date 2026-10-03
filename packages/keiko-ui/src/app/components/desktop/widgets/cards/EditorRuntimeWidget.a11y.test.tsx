@@ -299,7 +299,7 @@ describe("EditorRuntimeWidget toolbar — no-op announcement (GEN-UI-INTERACTION
     expect(screen.queryByRole("button", { name: "Tests" })).toBeNull();
     expect(screen.getByRole("button", { name: "Open file history" })).not.toBeVisible();
     expect(screen.getByRole("button", { name: "Save" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "More file actions" }));
+    await user.click(screen.getByLabelText("More file actions"));
     expect(screen.getByRole("button", { name: "Open file history" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Show this file's diff in Git" }));
     expect(openDiff).toHaveBeenCalledWith("/repo", "src/app.ts");

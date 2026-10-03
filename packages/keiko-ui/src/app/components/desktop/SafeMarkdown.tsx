@@ -54,7 +54,6 @@ export interface SafeMarkdownProps {
   readonly source: string;
   readonly diagnosticCorrelationId?: string | undefined;
   readonly diagnosticMessageId?: string | undefined;
-  readonly applyScopeId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
@@ -832,7 +831,6 @@ export interface SafeMarkdownBoundaryProps {
   readonly source: string;
   readonly diagnosticCorrelationId?: string | undefined;
   readonly diagnosticMessageId?: string | undefined;
-  readonly applyScopeId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
