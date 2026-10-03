@@ -606,7 +606,6 @@ describe("EditorWidget workspace session", () => {
     expect(beforePane1).toBeDefined();
     const renderTabHandleBefore = beforePane1?.renderTabHandle;
     const onSelectBefore = beforePane1?.onSelectOpenFile;
-    const onMoveTabBefore = beforePane1?.onMoveTab;
     // pane-1 is not held, so its held-tab scalar is undefined before AND after.
     expect(beforePane1?.heldTabFile).toBeUndefined();
 
@@ -624,7 +623,6 @@ describe("EditorWidget workspace session", () => {
     // React.memo shallow compare would bail pane-1 out entirely.
     expect(afterPane1?.renderTabHandle).toBe(renderTabHandleBefore);
     expect(afterPane1?.onSelectOpenFile).toBe(onSelectBefore);
-    expect(afterPane1?.onMoveTab).toBe(onMoveTabBefore);
     expect(afterPane1?.heldTabFile).toBeUndefined();
 
     // Release the pointer so the window-level drag listeners installed by the hold are torn

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5b4920b32a9a30e6d23a1486ae415fbdc8487d9226714bc5fc55e4072a4249ea",
+    "catalogDigest": "eb0e92975c7a3c89e49a6273393a2feb1f633321714fde161fb0afe91b842336",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -9686,6 +9686,45 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/dap/debugLaunchPlan.ts:54",
         "emitterSites": ["packages/keiko-server/src/editor/dap/debugLaunchPlan.ts:763"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "editor.buffer-safety.state",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "editor.bufferSafetyEvidence.recordBufferSafetyState",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["registered", "refreshed", "released", "refused"]
+          },
+          "dirtyFileCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["git-delivery-dirty-buffer"],
+        "proofIds": ["editor.buffer-safety.state.lifecycle"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/editor/bufferSafetyEvidence.ts:9",
+        "emitterSites": ["packages/keiko-server/src/editor/bufferSafetyEvidence.ts:41"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36690,16 +36729,19 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["git.delivery.buffers.checked"],
+          "state": ["editor.buffer-safety.state", "git.delivery.buffers.checked"],
           "end": [],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["git.delivery.buffers.checked"],
+        "requiredCausalOperations": ["editor.buffer-safety.state", "git.delivery.buffers.checked"],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["git.delivery.buffers.checked"],
+        "requiredProofOperations": ["editor.buffer-safety.state", "git.delivery.buffers.checked"],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["git.delivery.buffers.checked"],
+        "requiredResourceOperations": [
+          "editor.buffer-safety.state",
+          "git.delivery.buffers.checked"
+        ],
         "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
@@ -62016,21 +62058,55 @@
           "lifecycleTransitions": ["state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["git.delivery.buffers.checked"],
+            "state": ["editor.buffer-safety.state", "git.delivery.buffers.checked"],
             "end": [],
             "failure": [],
             "loss": []
           },
           "causalEdges": [
             {
+              "op": "editor.buffer-safety.state",
+              "mode": "correlation"
+            },
+            {
               "op": "git.delivery.buffers.checked",
               "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["git.delivery.buffers.checked"],
+          "resourceSignals": ["editor.buffer-safety.state", "git.delivery.buffers.checked"],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "editor.buffer-safety.state",
+              "owner": "keiko-server",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "dirtyFileCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["editor.buffer-safety.state.lifecycle"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "git.delivery.buffers.checked",
               "owner": "keiko-server",
@@ -78068,7 +78144,7 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-activity-log/src/defect-fingerprint.ts:52",
+      "site": "packages/keiko-activity-log/src/defect-fingerprint.ts:53",
       "package": "keiko-activity-log"
     },
     {
@@ -79836,14 +79912,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentRoutes.ts:3070",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:3083",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentRoutes.ts:3168",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:3181",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -81182,21 +81258,21 @@
     {
       "op": "editor.agent.applyChangeset",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentRoutes.ts:1761",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:1856",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.agent.applyChangeset",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentRoutes.ts:771",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:773",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.agent.applyPatch",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentRoutes.ts:893",
+      "site": "packages/keiko-server/src/editor/agentRoutes.ts:895",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -81205,6 +81281,12 @@
       "category": "diagnostic",
       "site": "packages/keiko-server/src/editor/agentRootBoundary.ts:357",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.buffer-safety.state",
+      "category": "security",
+      "site": "packages/keiko-server/src/editor/bufferSafetyEvidence.ts:12",
       "package": "keiko-server"
     },
     {
@@ -82951,14 +83033,14 @@
     {
       "op": "verification.dependency-bootstrap",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:182",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:191",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "verification.isolation-probe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationExecution.ts:97",
+      "site": "packages/keiko-server/src/editor/verificationExecution.ts:101",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -83285,6 +83367,7 @@
     "editor.agent.applyChangeset",
     "editor.agent.applyPatch",
     "editor.agent.root-containment",
+    "editor.buffer-safety.state",
     "editor.inlineCompletion",
     "editor.local-history.rekey.completed",
     "editor.local-history.rekey.failed",

@@ -5,11 +5,8 @@ import { useEffect, useLayoutEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorDiagnostic } from "@oscharko-dev/keiko-editor";
 import type {
-  EditorAgentAction,
-  EditorAgentActionResult,
   EditorCompletionWireResponse,
   EditorInlineCompletionWireResponse,
-  EditorTestGenerationWireResponse,
   FilesContentResponse,
   LanguageServiceCapabilities,
 } from "../../../../../lib/types";
@@ -18,11 +15,8 @@ import {
   fetchEditorLanguageCapabilities,
   fetchEditorSettings,
   fetchWorkspaceSnippets,
-  fetchEditorAgentAudit,
   fetchFilesContent,
   fetchGitStatus,
-  postEditorAgentActionResult,
-  postEditorAgentSessionSnapshot,
   reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
   requestEditorCodeActions,
@@ -41,9 +35,9 @@ import {
   requestEditorRenamePrepare,
   requestEditorSignatureHelp,
   requestEditorSymbols,
-  requestEditorTestGeneration,
   saveFilesContent,
   mutateWorkspaceSnippets,
+  postEditorBufferSafetyRequest,
 } from "../../../../../lib/api";
 import type {
   EditorM7CommandDefinition,
@@ -75,9 +69,9 @@ import {
   type EffectiveKeyboardShortcutRegistry,
 } from "../../keyboardShortcutsRegistry";
 import { requestEditorBufferReconciliation } from "./editor-buffer-reconciliation-events";
-import { _resetEditorAgentBridgeStateForTests } from "./editorAgentBridge";
 import { getEditorProblems, resetEditorProblemsStoreForTests } from "./editorProblemsStore";
 import { resetSharedEventSourcesForTests } from "./sharedEventSource";
+import { resetEditorBufferSafetyForTests } from "./useEditorBufferSafety";
 import { resetEditorVerificationRunStateForTests } from "./useEditorVerificationRun";
 import {
   useWorkspaceReplaceBuffers,
@@ -122,11 +116,8 @@ vi.mock("../../../../../lib/api", async () => {
     fetchEditorLanguageCapabilities: vi.fn(),
     fetchEditorSettings: vi.fn(),
     fetchWorkspaceSnippets: vi.fn(),
-    fetchEditorAgentAudit: vi.fn(),
     fetchFilesContent: vi.fn(),
     fetchGitStatus: vi.fn(),
-    postEditorAgentActionResult: vi.fn(),
-    postEditorAgentSessionSnapshot: vi.fn(),
     saveFilesContent: vi.fn(),
     mutateWorkspaceSnippets: vi.fn(),
     requestEditorCompletion: vi.fn(),
@@ -147,7 +138,7 @@ vi.mock("../../../../../lib/api", async () => {
     requestEditorRenameApply: vi.fn(),
     requestEditorCodeActions: vi.fn(),
     requestEditorSignatureHelp: vi.fn(),
-    requestEditorTestGeneration: vi.fn(),
+    postEditorBufferSafetyRequest: vi.fn(),
   };
 });
 
@@ -269,50 +260,11 @@ class FakeEventSource {
     this.listeners.set(type, listeners);
   }
 
-  emitAction(action: EditorAgentAction): void {
-    // Emit the full editor-agent event envelope the server actually sends, so the widget's
-    // contract-guarded SSE listener (isEditorAgentEvent) accepts the frame.
-    this.emitRaw(
-      JSON.stringify({
-        schemaVersion: "1",
-        eventId: `evt-${action.actionId}`,
-        type: "action",
-        action,
-      }),
-    );
-  }
-
-  emitResult(result: EditorAgentActionResult): void {
-    const event = new MessageEvent<string>("editor-agent:result", {
-      data: JSON.stringify({
-        schemaVersion: "1",
-        eventId: `evt-result-${result.actionId}`,
-        type: "result",
-        result,
-      }),
-    });
-    for (const listener of this.listeners.get("editor-agent:result") ?? []) {
-      if (typeof listener === "function") listener(event);
-      else listener.handleEvent(event);
-    }
-  }
-
   emit(type: string, data: unknown): void {
     const event = new MessageEvent<string>(type, { data: JSON.stringify(data) });
     for (const listener of this.listeners.get(type) ?? []) {
       if (typeof listener === "function") listener(event);
       else listener.handleEvent(event);
-    }
-  }
-
-  emitRaw(data: string): void {
-    const event = new MessageEvent<string>("editor-agent:action", { data });
-    for (const listener of this.listeners.get("editor-agent:action") ?? []) {
-      if (typeof listener === "function") {
-        listener(event);
-      } else {
-        listener.handleEvent(event);
-      }
     }
   }
 }
@@ -339,52 +291,10 @@ function restoreEventSource(): void {
   });
 }
 
-function agentEventSources(sources: readonly FakeEventSource[]): readonly FakeEventSource[] {
-  return sources.filter((source) => source.url.startsWith("/api/editor/agent/events"));
-}
-
-function latestAgentEventSource(sources: readonly FakeEventSource[]): FakeEventSource | undefined {
-  return agentEventSources(sources).at(-1);
-}
-
-function liveAgentEventSources(sources: readonly FakeEventSource[]): readonly FakeEventSource[] {
-  return agentEventSources(sources).filter((source) => source.close.mock.calls.length === 0);
-}
-
 function workspaceWatchEventSources(
   sources: readonly FakeEventSource[],
 ): readonly FakeEventSource[] {
   return sources.filter((source) => source.url.startsWith("/api/editor/workspace-watch/events"));
-}
-
-let agentActionSequence = 0;
-const INITIAL_AGENT_BUFFER_HASH =
-  "8de5c07db8deb3b75dedd9b5bc999669936cea181ae0033c27c4e2071a6e434d";
-const AGENT_WRITE_ACTION_TYPES = new Set<EditorAgentAction["type"]>([
-  "format",
-  "save",
-  "applyTextEdits",
-  "applyPatch",
-  "applyChangeset",
-]);
-
-function agentAction(
-  sessionId: string,
-  type: EditorAgentAction["type"],
-  overrides: Partial<EditorAgentAction> = {},
-): EditorAgentAction {
-  agentActionSequence += 1;
-  return {
-    schemaVersion: "1",
-    actionId: `action-${agentActionSequence}`,
-    idempotencyKey: `idempotency-${agentActionSequence}`,
-    sessionId,
-    type,
-    ...(AGENT_WRITE_ACTION_TYPES.has(type)
-      ? { expectedContentHash: INITIAL_AGENT_BUFFER_HASH }
-      : {}),
-    ...overrides,
-  };
 }
 
 function fileResponse(over?: Partial<FilesContentResponse>): FilesContentResponse {
@@ -474,15 +384,27 @@ function workspaceSnippetSnapshot(
 afterEach(() => {
   delete document.documentElement.dataset.theme;
   restoreEventSource();
-  _resetEditorAgentBridgeStateForTests();
   resetSharedEventSourcesForTests();
   resetEditorProblemsStoreForTests();
-  agentActionSequence = 0;
   window.localStorage.removeItem(I18N_STORAGE_KEY);
   vi.clearAllMocks();
 });
 
 beforeEach(() => {
+  window.sessionStorage.clear();
+  resetEditorBufferSafetyForTests();
+  vi.mocked(postEditorBufferSafetyRequest).mockImplementation((request) =>
+    Promise.resolve(
+      request.kind === "buffer-release"
+        ? { snapshot: null }
+        : {
+            snapshot: request.snapshot,
+            ...(request.bufferSnapshotCapability === undefined
+              ? { bufferSnapshotCapability: "s".repeat(43) }
+              : {}),
+          },
+    ),
+  );
   // Zeroed HERE, not in `afterEach`: Testing Library's automatic cleanup unmounts the previous
   // test's tree from its own `afterEach`, which runs after this file's, so resetting there left
   // the tear-down to land in the next test's baseline. `beforeEach` is the only point nothing
@@ -503,7 +425,6 @@ beforeEach(() => {
     etag: '"edsn-0-test"',
     snapshot: workspaceSnippetSnapshot(),
   });
-  vi.mocked(fetchEditorAgentAudit).mockResolvedValue({ records: [] });
   vi.mocked(fetchGitStatus).mockResolvedValue({
     schemaVersion: "1",
     root: "/repo",
@@ -519,22 +440,12 @@ beforeEach(() => {
     truncated: false,
     maxChanges: 500,
   });
-  vi.mocked(fetchFilesContent).mockResolvedValue(fileResponse());
+  vi.mocked(fetchFilesContent).mockReset().mockResolvedValue(fileResponse());
   vi.mocked(saveFilesContent).mockResolvedValue(fileResponse());
   vi.mocked(requestEditorSymbols).mockResolvedValue({ symbols: [], truncated: false });
   vi.mocked(requestEditorSemanticTokens).mockResolvedValue({
     schemaVersion: "1",
     supported: false,
-  });
-  vi.mocked(postEditorAgentSessionSnapshot).mockReset();
-  vi.mocked(postEditorAgentSessionSnapshot).mockImplementation(
-    async (_snapshot, currentCapability) => ({
-      snapshot: null,
-      ...(currentCapability === undefined ? { bridgeDecisionCapability: "A".repeat(43) } : {}),
-    }),
-  );
-  vi.mocked(postEditorAgentActionResult).mockResolvedValue({
-    result: { schemaVersion: "1", actionId: "queued", sessionId: "queued", status: "queued" },
   });
 });
 
@@ -768,8 +679,8 @@ describe("EditorWidget — load", () => {
   });
 
   it.each([
-    [new Error("Plain load failure."), /plain load failure/i],
-    ["non-error throw", /the file could not be loaded/i],
+    [new Error("Plain load failure."), /file could not be opened/i],
+    ["non-error throw", /file could not be opened/i],
   ])(
     "normalizes non-API load failures without exposing raw transport details",
     async (failure, message) => {
@@ -863,210 +774,33 @@ describe("EditorWidget — load", () => {
   });
 });
 
-describe("EditorWidget — selection-to-chat handoff", () => {
-  it("forwards only Worker A's active Monaco selection with root-relative metadata", async () => {
-    const onAskSelection = vi.fn(() => true);
-    await renderLoaded({ onAskSelection });
-
-    act(() => {
-      surface.props?.onAskKeikoAboutSelection?.({
-        textMode: "selection",
-        range: { start: { line: 0, column: 6 }, end: { line: 1, column: 4 } },
-        text: "value\r\nnext",
-      });
-    });
-
-    expect(onAskSelection).toHaveBeenCalledOnce();
-    expect(onAskSelection).toHaveBeenCalledWith({
-      file: "src/app.ts",
-      range: { start: { line: 0, column: 6 }, end: { line: 1, column: 4 } },
-      text: "value\r\nnext",
-      truncated: false,
-    });
-  });
-
-  it("announces an empty selection without falling back to the active file", async () => {
-    const onAskSelection = vi.fn(() => true);
-    const view = await renderLoaded({ onAskSelection });
-
-    act(() => {
-      surface.props?.onAskKeikoAboutSelection?.({
-        textMode: "selection",
-        range: { start: { line: 0, column: 6 }, end: { line: 0, column: 6 } },
-        text: "",
-      });
-    });
-
-    expect(onAskSelection).not.toHaveBeenCalled();
-    expect(screen.getByTestId("editor-toolbar-notice")).toHaveTextContent(
-      "Select text in the active editor before asking Keiko.",
-    );
-    expect(await axe(view.container)).toHaveNoViolations();
-  });
-});
-
-describe("EditorWidget — test generation (Issue #1202)", () => {
-  const NOT_RUN_FUNNEL = {
-    executionEnabled: false,
-    candidatesGenerated: 0,
-    candidatesSurfaced: 0,
-    stabilityRunsRequired: 5,
-    build: "not-run",
-    pass: "not-run",
-    stability: "not-run",
-    coverage: "not-run",
-    mutation: "not-run",
-    antiTautology: "not-run",
-  } as const;
-
-  const DISABLED_RESPONSE: EditorTestGenerationWireResponse = {
-    schemaVersion: "1",
-    status: "disabled",
-    reason: "Editor-driven test generation is disabled in this build.",
-    funnel: NOT_RUN_FUNNEL,
-  };
-
-  it("offers a Tests action for a TS file and surfaces the switched-off status", async () => {
-    await renderLoaded();
-    // Issue #1205: the unified status bar carries the single polite live region; the governed
-    // test-generation run status feeds its "run" field, which is absent until a run starts.
-    const status = screen.getByRole("status");
-    expect(status).toHaveAttribute("aria-live", "polite");
-    expect(status).toHaveAttribute("aria-atomic", "true");
-    expect(status).not.toHaveTextContent(/disabled in this build/i);
-    const button = screen.getByRole("button", { name: "Tests" });
-    expect(button).toBeInTheDocument();
-    expect(button).not.toHaveAttribute("data-tip");
-    expect(button).not.toHaveAttribute("title");
-    vi.mocked(requestEditorTestGeneration).mockResolvedValueOnce(DISABLED_RESPONSE);
-
-    await userEvent.click(button);
-
-    expect(requestEditorTestGeneration).toHaveBeenCalledWith(
-      expect.objectContaining({
-        root: "/repo",
-        editorSessionId: expect.any(String),
-        target: expect.objectContaining({ kind: "file" }),
-      }),
-      expect.any(AbortSignal),
-    );
-    await waitFor(() => {
-      expect(status).toHaveTextContent("Tests off");
-    });
-    // The editor surface stays mounted and usable after the run resolves.
-    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
-    expect(status).toHaveTextContent("Tests off");
-  });
-
-  it("uses a selection target when the editor reports a reliable non-empty selection", async () => {
-    await renderLoaded();
-    vi.mocked(requestEditorTestGeneration).mockResolvedValueOnce(DISABLED_RESPONSE);
-    act(() => {
-      surface.props?.onSelectionChange?.({
-        start: { line: 0, column: 6 },
-        end: { line: 0, column: 11 },
-      });
-    });
-
-    await userEvent.click(screen.getByRole("button", { name: "Tests" }));
-
-    expect(requestEditorTestGeneration).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: expect.objectContaining({
-          kind: "selection",
-          range: {
-            start: { line: 0, character: 6 },
-            end: { line: 0, character: 11 },
-          },
-        }),
-      }),
-      expect.any(AbortSignal),
-    );
-  });
-
-  it("aborts an in-flight test-generation request when cancelled", async () => {
-    await renderLoaded();
-    let signal: AbortSignal | undefined;
-    vi.mocked(requestEditorTestGeneration).mockImplementationOnce((_input, requestSignal) => {
-      signal = requestSignal;
-      return new Promise<EditorTestGenerationWireResponse>(() => {});
-    });
-
-    await userEvent.click(screen.getByRole("button", { name: "Tests" }));
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-
-    expect(signal?.aborted).toBe(true);
-    expect(screen.getByRole("status")).toHaveTextContent(/cancelled/i);
-  });
-
-  it("ignores palette and shortcut Generate Tests commands while a run is busy", async () => {
-    await renderLoaded();
-    let signal: AbortSignal | undefined;
-    vi.mocked(requestEditorTestGeneration).mockImplementationOnce((_input, requestSignal) => {
-      signal = requestSignal;
-      return new Promise<EditorTestGenerationWireResponse>(() => {});
-    });
-
-    await userEvent.click(screen.getByRole("button", { name: "Tests" }));
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
-
-    act(() => {
-      surface.props?.onGenerateTests?.();
-    });
-
-    expect(requestEditorTestGeneration).toHaveBeenCalledTimes(1);
-    expect(signal?.aborted).toBe(false);
-  });
-
-  it("renders a generated test patch in the review diff surface with apply disabled", async () => {
-    await renderLoaded();
-    vi.mocked(requestEditorTestGeneration).mockResolvedValueOnce({
-      schemaVersion: "1",
-      status: "generated",
-      assurance: "unverified",
-      funnel: { ...NOT_RUN_FUNNEL, candidatesGenerated: 1, candidatesSurfaced: 1 },
-      patch: {
-        patchId: "p1",
-        files: [
-          {
-            path: "src/app.test.ts",
-            changeKind: "added",
-            edits: [
-              {
-                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
-                newText: "it('renders', () => {});\n",
-              },
-            ],
-          },
-        ],
-      },
-      provenance: { modelId: "m", gatewayPolicyVersion: "v", promptHash: "h", producedAt: 1 },
-    });
-
-    await userEvent.click(screen.getByRole("button", { name: "Tests" }));
-
-    expect(await screen.findByTestId("editor-diff-surface")).toBeInTheDocument();
-    const tab = screen.getByRole("tab", { name: /app\.ts/ });
-    const tabpanel = screen.getByRole("tabpanel");
-    expect(tabpanel).toContainElement(screen.getByTestId("editor-diff-surface"));
-    expect(tab).toHaveAttribute("aria-controls", tabpanel.id);
-    expect(tabpanel).toHaveAttribute("aria-labelledby", tab.id);
-    expect(diffSurface.props?.model.files[0]?.uri).toBe("src/app.test.ts");
-    expect(diffSurface.props?.actions?.canApply).toBe(false);
-    expect(diffSurface.props?.actions?.canRunVerification).toBe(false);
-
-    act(() => {
-      diffSurface.props?.onReject?.();
-    });
-    await waitFor(() => {
-      expect(screen.queryByTestId("editor-diff-surface")).toBeNull();
-    });
-    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
-  });
-});
-
 describe("EditorWidget — edit and save", () => {
+  it("shows manual editing without an AI test generation action", async (): Promise<void> => {
+    await renderLoaded();
+    expect(screen.queryByRole("button", { name: "Tests" })).toBeNull();
+    expect(screen.queryByText("Recent agent actions")).toBeNull();
+    expect(FakeEventSource.instances.some((source) => source.url.includes("/editor/agent/"))).toBe(
+      false,
+    );
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+    act(() => {
+      surface.props?.onContentChange({ text: "const manual = true;\n", sizeBytes: 21 }, "human");
+    });
+    await waitFor(() => {
+      expect(postEditorBufferSafetyRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "buffer-snapshot",
+          snapshot: expect.objectContaining({
+            dirtyFiles: ["src/app.ts"],
+            cursor: null,
+            selection: null,
+            diagnosticsSummary: null,
+            textMode: "none",
+          }),
+        }),
+      );
+    });
+  });
   it("does not re-emit unchanged dirty state when the callback identity changes", async () => {
     const firstDirtyChange = vi.fn();
     const { rerender } = await renderLoaded({ onDirtyChange: firstDirtyChange });
@@ -1562,6 +1296,59 @@ describe("EditorWidget — edit and save", () => {
     expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
   });
 
+  it.each([
+    ["own", 2, false],
+    ["external", 3, true],
+  ] as const)(
+    "reconciles an %s watch event after an in-flight save acknowledges the written version",
+    async (_origin, observedModifiedAt, expectsWarning) => {
+      const FakeSource = installFakeEventSource();
+      await renderLoaded();
+      await waitFor(() => expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1));
+      const pendingSave = deferred<FilesContentResponse>();
+      const saved = fileResponse({
+        modifiedAt: 2,
+        sizeBytes: 17,
+        content: "const value = 2;\n",
+        session: {
+          schemaVersion: "1",
+          version: { sizeBytes: 17, modifiedAt: 2, contentHash: "b".repeat(64) },
+        },
+      });
+      vi.mocked(saveFilesContent).mockReturnValueOnce(pendingSave.promise);
+      act(() => {
+        surface.props?.onContentChange({ text: saved.content, sizeBytes: 17 }, "human");
+      });
+      await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+      await waitFor(() => expect(saveFilesContent).toHaveBeenCalledTimes(1));
+      if (!expectsWarning) vi.mocked(fetchFilesContent).mockResolvedValueOnce(saved);
+      await act(async () => {
+        workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+          schemaVersion: "1",
+          sequence: 5,
+          kind: "changed",
+          relativePath: "src/app.ts",
+          sizeBytes: 17,
+          modifiedAt: observedModifiedAt,
+          metadataHash: "0011223344556677",
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        pendingSave.resolve(saved);
+        await pendingSave.promise;
+      });
+      await waitFor(() => expect(surface.props?.saveStatus).toBe("saved"));
+      if (expectsWarning) {
+        expect(await screen.findByTestId("editor-external-change-banner")).toBeInTheDocument();
+      } else {
+        await waitFor(() => expect(fetchFilesContent).toHaveBeenCalledTimes(2));
+        expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+      }
+    },
+  );
+
   it("still surfaces a genuine external write that lands right after its own save", async () => {
     const FakeSource = installFakeEventSource();
     await renderLoaded();
@@ -1763,11 +1550,7 @@ describe("EditorWidget — edit and save", () => {
         },
       ]);
     });
-    await waitFor(() => {
-      expect(vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0]).toHaveProperty(
-        "diagnosticsDetail",
-      );
-    });
+    expect(getEditorProblems("/repo")).toHaveLength(1);
 
     act(() => {
       workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
@@ -1779,11 +1562,7 @@ describe("EditorWidget — edit and save", () => {
       });
     });
 
-    await waitFor(() => {
-      const latest = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
-      expect(latest?.diagnosticsSummary).toBeNull();
-      expect(latest).not.toHaveProperty("diagnosticsDetail");
-    });
+    await waitFor(() => expect(getEditorProblems("/repo")).toHaveLength(0));
   });
 
   it("formats once through the governed formatter before format-on-save persists", async () => {
@@ -2249,7 +2028,6 @@ describe("EditorWidget — completion wiring (Issue #1199)", () => {
     expect(requestEditorCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
         root: "/repo",
-        editorSessionId: expect.any(String),
         path: "src/app.ts",
         languageId: "typescript",
         text: "const value = {};\nvalue.\n",
@@ -2462,7 +2240,6 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     expect(requestEditorInlineCompletion).toHaveBeenCalledWith(
       expect.objectContaining({
         root: "/repo",
-        editorSessionId: expect.any(String),
         path: "src/app.ts",
         languageId: "typescript",
         text: "function add(a, b) {\n  return \n}\n",
@@ -3253,7 +3030,7 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
     }
   });
 
-  it("keeps unavailable providers non-blocking and content-free in status and agent snapshots", async () => {
+  it("keeps unavailable language providers non-blocking in the editor status", async () => {
     installFakeEventSource();
     vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValueOnce({
       schemaVersion: "1",
@@ -3296,16 +3073,6 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
       "Language provider unavailable: Required host language tool is blocked by host execution policy.",
     );
     expect(fetchEditorLanguageCapabilities).toHaveBeenCalledWith("/repo");
-
-    await waitFor(() => {
-      const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
-      expect(snapshot?.languageCapability).toEqual({
-        languageId: "python",
-        providerId: "python-lsp",
-        available: false,
-        unavailableReason: "Required host language tool is blocked by host execution policy.",
-      });
-    });
   });
 
   it("wires Rust semantic tokens and preserves syntax fallback when the server declines", async () => {
@@ -3864,48 +3631,6 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     }
   });
 
-  it("keeps the Tests toolbar action visible but disabled for unsupported files", async () => {
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
-      fileResponse({
-        path: "README.md",
-        name: "README.md",
-        extension: "md",
-        content: "# README\n",
-      }),
-    );
-    const view = render(
-      <EditorRuntimeWidget
-        windowId="editor-generate-tests-slot"
-        root="/repo"
-        file="README.md"
-        openFiles={["README.md", "src/app.ts"]}
-      />,
-    );
-    await screen.findByTestId("editor-surface");
-    const unsupportedTestsButton = screen.getByRole("button", { name: "Tests" });
-    expect(unsupportedTestsButton).toHaveClass("ed-generate-tests");
-    expect(unsupportedTestsButton).toHaveAttribute("aria-disabled", "true");
-    await userEvent.click(unsupportedTestsButton);
-    expect(requestEditorTestGeneration).not.toHaveBeenCalled();
-
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse({ path: "src/app.ts" }));
-    view.rerender(
-      <EditorRuntimeWidget
-        windowId="editor-generate-tests-slot"
-        root="/repo"
-        file="src/app.ts"
-        openFiles={["README.md", "src/app.ts"]}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Tests" })).toHaveAttribute(
-        "aria-disabled",
-        "false",
-      );
-    });
-  });
-
   it("does not re-encode the full buffer on cursor-only status updates", async () => {
     const encodeSpy = vi.spyOn(TextEncoder.prototype, "encode");
     try {
@@ -3951,11 +3676,6 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     );
   });
 
-  it("wires the Generate Tests command to the surface for source files", async () => {
-    await renderLoaded();
-    expect(surface.props?.onGenerateTests).toBeTypeOf("function");
-  });
-
   it("sends a format request to the editor surface from the Format button", async () => {
     await renderLoaded();
     expect(surface.props?.formatRequestNonce).toBe(0);
@@ -3975,7 +3695,6 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     );
     render(<EditorRuntimeWidget root="/repo" file="notes.md" />);
     await screen.findByTestId("editor-surface");
-    expect(surface.props?.onGenerateTests).toBeUndefined();
     expect(surface.props?.onDiagnosticsSummary).toBeUndefined();
     expect(statusField("completions")).toHaveTextContent("Completions off");
     expect(statusField("problems")).toBeNull();
@@ -4000,7 +3719,6 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     expect(surface.props?.provideSymbols).toBeUndefined();
     expect(surface.props?.provideFormatting).toBeUndefined();
     expect(surface.props?.onDiagnosticsSummary).toBeUndefined();
-    expect(surface.props?.onGenerateTests).toBeUndefined();
     expect(statusField("large-file")).toHaveTextContent("Large file mode");
     expect(statusField("completions")).toHaveTextContent("Completions off");
     expect(screen.getByTestId("editor-status-bar-live")).toHaveTextContent(
@@ -4012,7 +3730,6 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     expect(requestEditorHover).not.toHaveBeenCalled();
     expect(requestEditorSymbols).not.toHaveBeenCalled();
     expect(requestEditorFormatting).not.toHaveBeenCalled();
-    expect(requestEditorTestGeneration).not.toHaveBeenCalled();
   });
 });
 
@@ -4077,1473 +3794,6 @@ describe("EditorWidget — Problems panel diagnostics eviction (Issue #2213 fix-
     expect(getEditorProblems("/repo")).toHaveLength(1);
     view.unmount();
     expect(getEditorProblems("/repo")).toHaveLength(0);
-  });
-});
-
-describe("EditorWidget — agent bridge", () => {
-  function agentResults(): readonly Parameters<typeof postEditorAgentActionResult>[0]["result"][] {
-    return vi.mocked(postEditorAgentActionResult).mock.calls.map(([body]) => body.result);
-  }
-
-  async function renderedAgentSession(): Promise<{
-    readonly source: FakeEventSource;
-    readonly sessionId: string;
-  }> {
-    const FakeSource = installFakeEventSource();
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-    render(
-      <EditorRuntimeWidget
-        windowId="agent-window"
-        root="/repo"
-        file="src/app.ts"
-        openFiles={["src/app.ts", "README.md"]}
-        dirtyFiles={["README.md"]}
-        paneId="pane-1"
-        activePaneId="pane-1"
-        layoutPanes={[
-          { paneId: "pane-1", activeFile: "src/app.ts", openFiles: ["src/app.ts"] },
-          { paneId: "pane-2", activeFile: "README.md", openFiles: ["README.md"] },
-        ]}
-        onSelectOpenFile={vi.fn()}
-      />,
-    );
-    await screen.findByTestId("editor-surface");
-    await waitFor(() => {
-      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(agentEventSources(FakeSource.instances).length).toBeGreaterThan(0);
-    });
-    const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
-    expect(snapshot).toEqual(
-      expect.objectContaining({
-        windowId: "agent-window",
-        workspaceRoot: "/repo",
-        activePaneId: "pane-1",
-        activeFile: "src/app.ts",
-        dirtyFiles: ["README.md"],
-        textMode: "none",
-      }),
-    );
-    expect(snapshot?.panes).toEqual([
-      { paneId: "pane-1", activeFile: "src/app.ts", openFiles: ["src/app.ts"] },
-      { paneId: "pane-2", activeFile: "README.md", openFiles: ["README.md"] },
-    ]);
-    const source = latestAgentEventSource(FakeSource.instances);
-    expect(source).toBeDefined();
-    // The bridge carries the exact session and its memory-only decision capability.
-    const eventUrl = new URL(source?.url ?? "", "http://localhost");
-    expect(eventUrl.pathname).toBe("/api/editor/agent/events");
-    expect(eventUrl.searchParams.getAll("sessionId")).toEqual([String(snapshot?.sessionId)]);
-    expect(eventUrl.searchParams.getAll("bridgeDecisionCapability")).toEqual(["A".repeat(43)]);
-    return { source: source as FakeEventSource, sessionId: String(snapshot?.sessionId) };
-  }
-
-  it("registers snapshots and executes queued editor-owned agent actions", async () => {
-    const onSelect = vi.fn();
-    const FakeSource = installFakeEventSource();
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-    const view = render(
-      <EditorRuntimeWidget
-        windowId="agent-window"
-        root="/repo"
-        file="src/app.ts"
-        openFiles={["src/app.ts", "README.md"]}
-        dirtyFiles={["README.md"]}
-        onSelectOpenFile={onSelect}
-      />,
-    );
-    await screen.findByTestId("editor-surface");
-    await waitFor(() => {
-      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(agentEventSources(FakeSource.instances).length).toBeGreaterThan(0);
-    });
-    const sessionId = String(
-      vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
-    );
-    const source = latestAgentEventSource(FakeSource.instances) as FakeEventSource;
-    vi.mocked(saveFilesContent).mockResolvedValueOnce(
-      fileResponse({ content: "let value = 1;\n", modifiedAt: 2 }),
-    );
-    const boundTarget = { file: "src/app.ts", paneId: "pane-1" } as const;
-
-    act(() => {
-      source.emitAction(
-        agentAction("other-session", "focusTab", { target: { file: "ignored.ts" } }),
-      );
-      source.emitRaw("{bad-json");
-      source.emitAction(agentAction(sessionId, "focusTab"));
-      source.emitAction(agentAction(sessionId, "openFile", { target: { file: "README.md" } }));
-      source.emitAction(agentAction(sessionId, "format", { target: boundTarget }));
-      source.emitAction(agentAction(sessionId, "applyTextEdits", { target: boundTarget }));
-      source.emitAction(
-        agentAction(sessionId, "applyTextEdits", {
-          target: boundTarget,
-          textEdits: [
-            {
-              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
-              newText: "let",
-            },
-          ],
-        }),
-      );
-      source.emitAction(agentAction(sessionId, "moveTab"));
-      source.emitAction(agentAction(sessionId, "splitPane"));
-      source.emitAction(agentAction(sessionId, "setSelection", { target: boundTarget }));
-      source.emitAction(agentAction(sessionId, "applyPatch", { target: boundTarget }));
-      source.emitAction(agentAction(sessionId, "save", { target: boundTarget }));
-    });
-
-    expect(onSelect).toHaveBeenCalledTimes(1);
-    expect(onSelect).toHaveBeenCalledWith("README.md");
-    await waitFor(() => {
-      expect(surface.props?.formatRequestNonce).toBe(1);
-      expect(surface.props?.buffer.content.text).toBe("let value = 1;\n");
-    });
-    await waitFor(() => {
-      expect(agentResults().some((result) => result.message === "Save failed.")).toBe(false);
-      expect(agentResults().filter((result) => result.status === "succeeded")).toHaveLength(3);
-      expect(agentResults().filter((result) => result.status === "failed")).toHaveLength(5);
-      expect(agentResults().filter((result) => result.status === "conflict")).toHaveLength(2);
-    });
-    expect(agentResults()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ status: "failed", message: "Missing target file." }),
-        expect.objectContaining({ status: "failed", message: "Missing text edits." }),
-        expect.objectContaining({ status: "failed", message: "Provider unavailable." }),
-        expect.objectContaining({ status: "failed", message: "Missing selection target." }),
-        expect.objectContaining({ status: "succeeded" }),
-      ]),
-    );
-
-    view.unmount();
-    expect(source.removeEventListener).toHaveBeenCalledWith(
-      "editor-agent:action",
-      expect.any(Function),
-    );
-    expect(source.close).toHaveBeenCalled();
-  });
-
-  it("keeps the agent event stream stable when action callback props change", async () => {
-    const firstSelect = vi.fn();
-    const secondSelect = vi.fn();
-    const FakeSource = installFakeEventSource();
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-    const props = {
-      windowId: "agent-window",
-      root: "/repo",
-      file: "src/app.ts",
-      openFiles: ["src/app.ts", "README.md"],
-    } as const;
-    const view = render(<EditorRuntimeWidget {...props} onSelectOpenFile={firstSelect} />);
-    await screen.findByTestId("editor-surface");
-    await waitFor(() => {
-      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(agentEventSources(FakeSource.instances)).toHaveLength(1);
-    });
-    const source = agentEventSources(FakeSource.instances)[0] as FakeEventSource;
-    const sessionId = String(
-      vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
-    );
-
-    view.rerender(<EditorRuntimeWidget {...props} onSelectOpenFile={secondSelect} />);
-
-    expect(agentEventSources(FakeSource.instances)).toHaveLength(1);
-    expect(source.close).not.toHaveBeenCalled();
-    act(() => {
-      source.emitAction(agentAction(sessionId, "focusTab", { target: { file: "README.md" } }));
-    });
-    expect(firstSelect).not.toHaveBeenCalled();
-    expect(secondSelect).toHaveBeenCalledWith("README.md");
-  });
-
-  it("reports agent format actions as unavailable for unsupported languages", async () => {
-    const FakeSource = installFakeEventSource();
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
-      fileResponse({ path: "notes.md", name: "notes.md", extension: "md" }),
-    );
-    render(<EditorRuntimeWidget windowId="agent-markdown" root="/repo" file="notes.md" />);
-    await screen.findByTestId("editor-surface");
-    await waitFor(() => {
-      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(agentEventSources(FakeSource.instances).length).toBeGreaterThan(0);
-    });
-    const sessionId = String(
-      vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
-    );
-
-    act(() => {
-      (latestAgentEventSource(FakeSource.instances) as FakeEventSource).emitAction(
-        agentAction(sessionId, "format", {
-          target: { file: "notes.md", paneId: "pane-1" },
-        }),
-      );
-    });
-
-    await waitFor(() => {
-      expect(agentResults()).toContainEqual(
-        expect.objectContaining({
-          status: "failed",
-          message: "Formatting is unavailable for this language.",
-        }),
-      );
-    });
-  });
-
-  it("keeps agent bridge registration best-effort when the snapshot route fails", async () => {
-    installFakeEventSource();
-    vi.mocked(postEditorAgentSessionSnapshot).mockRejectedValueOnce(new Error("offline"));
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-
-    render(<EditorRuntimeWidget windowId="agent-offline" root="/repo" file="src/app.ts" />);
-
-    await screen.findByTestId("editor-surface");
-    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
-  });
-
-  it("keeps inactive split panes from opening duplicate agent event streams", async () => {
-    const FakeSource = installFakeEventSource();
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-
-    render(
-      <EditorRuntimeWidget
-        windowId="agent-inactive-pane"
-        root="/repo"
-        file="src/app.ts"
-        paneId="pane-2"
-        activePaneId="pane-1"
-      />,
-    );
-
-    await screen.findByTestId("editor-surface");
-    await act(async () => {});
-    expect(postEditorAgentSessionSnapshot).not.toHaveBeenCalled();
-    expect(agentEventSources(FakeSource.instances)).toHaveLength(0);
-  });
-
-  it("keeps the active pane event stream stable across handler rerenders", async () => {
-    const FakeSource = installFakeEventSource();
-    const firstSelect = vi.fn();
-    const secondSelect = vi.fn();
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-
-    const view = render(
-      <EditorRuntimeWidget
-        windowId="agent-active-pane"
-        root="/repo"
-        file="src/app.ts"
-        paneId="pane-1"
-        activePaneId="pane-1"
-        onSelectOpenFile={firstSelect}
-      />,
-    );
-
-    await screen.findByTestId("editor-surface");
-    await waitFor(() => {
-      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(agentEventSources(FakeSource.instances)).toHaveLength(1);
-    });
-    const sessionId = String(
-      vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
-    );
-    const source = agentEventSources(FakeSource.instances)[0] as FakeEventSource;
-
-    view.rerender(
-      <EditorRuntimeWidget
-        windowId="agent-active-pane"
-        root="/repo"
-        file="src/app.ts"
-        paneId="pane-1"
-        activePaneId="pane-1"
-        onSelectOpenFile={secondSelect}
-      />,
-    );
-
-    expect(agentEventSources(FakeSource.instances)).toHaveLength(1);
-    expect(source.close).not.toHaveBeenCalled();
-    act(() => {
-      source.emitAction(agentAction(sessionId, "openFile", { target: { file: "README.md" } }));
-    });
-
-    expect(firstSelect).not.toHaveBeenCalled();
-    expect(secondSelect).toHaveBeenCalledWith("README.md");
-
-    view.unmount();
-    expect(source.close).toHaveBeenCalledOnce();
-  });
-
-  it("multiplexes multiple active agent sessions over one live event stream", async () => {
-    const FakeSource = installFakeEventSource();
-
-    const view = render(
-      <>
-        <EditorRuntimeWidget windowId="agent-mux-1" root="/repo" file="src/app.ts" />
-        <EditorRuntimeWidget windowId="agent-mux-2" root="/repo" file="README.md" />
-      </>,
-    );
-
-    await screen.findAllByTestId("editor-surface");
-    await waitFor(() => {
-      expect(postEditorAgentSessionSnapshot).toHaveBeenCalledTimes(2);
-    });
-    const sessionIds = vi
-      .mocked(postEditorAgentSessionSnapshot)
-      .mock.calls.map(([snapshot]) => snapshot.sessionId);
-
-    await waitFor(() => {
-      const liveSources = liveAgentEventSources(FakeSource.instances);
-      expect(liveSources).toHaveLength(1);
-      const [source] = liveSources;
-      for (const sessionId of sessionIds) {
-        expect(source?.url).toContain(`sessionId=${encodeURIComponent(sessionId)}`);
-      }
-    });
-
-    view.unmount();
-    expect(
-      agentEventSources(FakeSource.instances).every((source) => source.close.mock.calls.length > 0),
-    ).toBe(true);
-  });
-
-  it("rounds fractional modifiedAt values before posting agent snapshots", async () => {
-    installFakeEventSource();
-    const loadedVersion = { ...BASE_VERSION, modifiedAt: 12.75 };
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
-      fileResponse({
-        session: { schemaVersion: "1", version: loadedVersion },
-      }),
-    );
-
-    render(<EditorRuntimeWidget windowId="agent-rounding" root="/repo" file="src/app.ts" />);
-
-    await screen.findByTestId("editor-surface");
-    await waitFor(() => {
-      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-    });
-
-    const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
-    expect(loadedVersion.modifiedAt).toBe(12.75);
-    expect(snapshot?.documentVersion?.modifiedAt).toBe(13);
-    expect(Number.isInteger(snapshot?.documentVersion?.modifiedAt ?? NaN)).toBe(true);
-  });
-
-  it("includes cursor, selection, diagnostics, dirty state, and layout panes in agent snapshots", async () => {
-    const { sessionId } = await renderedAgentSession();
-
-    act(() => {
-      surface.props?.onCursorChange?.({ line: 4, column: 2 });
-      surface.props?.onSelectionChange?.({
-        start: { line: 2, column: 1 },
-        end: { line: 3, column: 5 },
-      });
-      surface.props?.onDiagnosticsSummary?.({ errors: 1, warnings: 0, infos: 2 });
-      surface.props?.onDiagnostics?.([
-        {
-          severity: "error",
-          range: {
-            start: { line: 2, column: 1 },
-            end: { line: 2, column: 5 },
-          },
-          message: "x".repeat(1_025),
-        },
-      ]);
-      surface.props?.onContentChange({ text: "const changed = true;\n", sizeBytes: 22 }, "human");
-    });
-
-    await waitFor(() => {
-      const latest = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
-      expect(latest).toEqual(
-        expect.objectContaining({
-          sessionId,
-          cursor: { line: 4, character: 2 },
-          selection: {
-            start: { line: 2, character: 1 },
-            end: { line: 3, character: 5 },
-          },
-          diagnosticsSummary: { errors: 1, warnings: 0, infos: 2 },
-          diagnosticsDetail: {
-            items: [
-              {
-                severity: "error",
-                range: {
-                  start: { line: 2, character: 1 },
-                  end: { line: 2, character: 5 },
-                },
-                message: "x".repeat(1_024),
-              },
-            ],
-            truncated: true,
-          },
-          languageCapability: {
-            languageId: "typescript",
-            providerId: "typescript",
-            available: true,
-          },
-          dirtyFiles: expect.arrayContaining(["README.md", "src/app.ts"]),
-        }),
-      );
-    });
-  });
-});
-
-// ─── Issue #1394 — AgentConflictBanner + applyPatch review (ADR-0058 D3/D4) ──────────────────
-
-describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
-  function agentResults(): readonly Parameters<typeof postEditorAgentActionResult>[0]["result"][] {
-    return vi.mocked(postEditorAgentActionResult).mock.calls.map(([body]) => body.result);
-  }
-
-  function patchResult(
-    action: EditorAgentAction,
-    status: EditorAgentActionResult["status"],
-    overrides: Partial<EditorAgentActionResult> = {},
-  ): EditorAgentActionResult {
-    return {
-      schemaVersion: "1",
-      actionId: action.actionId,
-      sessionId: action.sessionId,
-      status,
-      ...overrides,
-    };
-  }
-
-  async function renderedAgentSession1394(
-    props: Partial<Parameters<typeof EditorRuntimeWidget>[0]> = {},
-  ): Promise<{
-    readonly source: FakeEventSource;
-    readonly sessionId: string;
-  }> {
-    const FakeSource = installFakeEventSource();
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-    render(
-      <EditorRuntimeWidget
-        windowId="agent-1394"
-        root="/repo"
-        file="src/app.ts"
-        paneId="pane-1"
-        {...props}
-      />,
-    );
-    await screen.findByTestId("editor-surface");
-    await waitFor(() => {
-      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(agentEventSources(FakeSource.instances).length).toBeGreaterThan(0);
-    });
-    const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
-    const source = latestAgentEventSource(FakeSource.instances) as FakeEventSource;
-    return { source, sessionId: String(snapshot?.sessionId) };
-  }
-
-  // ── AC3: conflict banner visibility (D4) ─────────────────────────────────
-
-  it("renders AgentConflictBanner when a conflict result arrives via SSE", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-
-    // Before the conflict event the banner must not be present.
-    expect(screen.queryByTestId("agent-conflict-banner")).toBeNull();
-
-    // Emit a conflict result from the SSE stream (editor-agent:result event).
-    act(() => {
-      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
-        data: JSON.stringify({
-          schemaVersion: "1",
-          eventId: "ev-1",
-          type: "result",
-          result: {
-            schemaVersion: "1",
-            actionId: "a-1",
-            sessionId,
-            status: "conflict",
-            message: "The target buffer has unsaved changes.",
-            conflict: { code: "DIRTY", message: "The target buffer has unsaved changes." },
-          },
-        }),
-      });
-      // The component listens on "editor-agent:result"; FakeEventSource only wraps
-      // "editor-agent:action" in emitAction, so we dispatch directly to its listeners.
-      for (const listener of (
-        source as unknown as {
-          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
-        }
-      ).listeners.get("editor-agent:result") ?? []) {
-        if (typeof listener === "function") {
-          listener(conflictEvent);
-        } else {
-          listener.handleEvent(conflictEvent);
-        }
-      }
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
-    });
-
-    // The editor surface stays mounted — non-destructive (AC3).
-    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
-  });
-
-  it("dismisses the conflict banner when Dismiss is clicked (non-destructive AC3)", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-
-    act(() => {
-      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
-        data: JSON.stringify({
-          schemaVersion: "1",
-          eventId: "ev-dismiss",
-          type: "result",
-          result: {
-            schemaVersion: "1",
-            actionId: "a-dismiss",
-            sessionId,
-            status: "conflict",
-            conflict: { code: "INVALID_EDITS", message: "Edit range was inverted." },
-          },
-        }),
-      });
-      for (const listener of (
-        source as unknown as {
-          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
-        }
-      ).listeners.get("editor-agent:result") ?? []) {
-        if (typeof listener === "function") {
-          listener(conflictEvent);
-        } else {
-          listener.handleEvent(conflictEvent);
-        }
-      }
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
-    });
-
-    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("agent-conflict-banner")).toBeNull();
-    });
-
-    // Editor surface still mounted.
-    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
-  });
-
-  // ── AC2: overlapping edits produce conflict INVALID_EDITS (D3) ──────────
-
-  it("reports conflict INVALID_EDITS when applyTextEdits contains overlapping edits", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-
-    // applyTextEditsToText throws OverlappingPatchEditError for overlapping ranges.
-    // Two edits covering the same characters will trigger this.
-    act(() => {
-      source.emitAction(
-        agentAction(sessionId, "applyTextEdits", {
-          target: { file: "src/app.ts", paneId: "pane-1" },
-          textEdits: [
-            {
-              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 10 } },
-              newText: "first",
-            },
-            {
-              range: { start: { line: 0, character: 3 }, end: { line: 0, character: 8 } },
-              newText: "second",
-            },
-          ],
-        }),
-      );
-    });
-
-    await waitFor(() => {
-      const results = agentResults();
-      expect(
-        results.some((r) => r.status === "conflict" && r.conflict?.code === "INVALID_EDITS"),
-      ).toBe(true);
-    });
-
-    // Buffer must remain unchanged (non-destructive).
-    expect(surface.props?.buffer?.content.text).toBe("const value = 1;\n");
-  });
-
-  // ── applyPatch review UI: Accept / Reject (D3) ───────────────────────────
-
-  it("shows Accept and Reject buttons after a queued applyPatch action arrives", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-
-    // The server pre-validates applyPatch and emits the action with textEdits populated
-    // (a whole-document-replace). Simulate what the server emits to the browser.
-    act(() => {
-      source.emitAction(
-        agentAction(sessionId, "applyPatch", {
-          target: { file: "src/app.ts", paneId: "pane-1" },
-          textEdits: [
-            {
-              range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-              newText: "const value = 42;\n",
-            },
-          ],
-        }),
-      );
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("agent-patch-accept")).toBeInTheDocument();
-      expect(screen.getByTestId("agent-patch-reject")).toBeInTheDocument();
-    });
-    const review = screen.getByRole("group", { name: "Agent patch review for src/app.ts" });
-    expect(review.parentElement).toHaveStyle({
-      display: "flex",
-      flexDirection: "column",
-      width: "100%",
-      height: "100%",
-      minWidth: 0,
-      minHeight: 0,
-    });
-    expect(review).toHaveStyle({
-      flex: "1 1 auto",
-      width: "100%",
-      minWidth: 0,
-      minHeight: 0,
-    });
-    expect(screen.getByTestId("agent-patch-accept").parentElement).toHaveStyle({
-      flex: "0 0 auto",
-    });
-  });
-
-  it("dispatches 'Run Verification' scoped to the reviewed patch's OWN target file (Issue #2212 fix-up)", async () => {
-    // runtimeAgentTargetMatches requires an applyPatch action's target to match the active buffer to
-    // be admitted for review at all, so target === active file here is the only reachable case — this
-    // test proves DISPATCH (the button actually starts a targeted-test run for that file), which is
-    // the concrete gap the audit found: the prior test only asserted onRunVerification was a function.
-    const verificationFetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url.startsWith("/api/editor/verification/catalog")) {
-        return Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              schemaVersion: "1",
-              projectId: "/repo",
-              workspaceTrust: {
-                kind: "workspace-trust-status",
-                schemaVersion: 1,
-                projectId: "/repo",
-                trust: "trusted",
-                decidedBy: "server",
-                reason: "human-grant",
-                revision: 1,
-              },
-              kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
-                kind,
-                available: true,
-                trustState: "trusted",
-              })),
-            }),
-        } as Response);
-      }
-      if (init?.method === "DELETE") {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) } as Response);
-      }
-      const request = JSON.parse(String(init?.body)) as {
-        readonly projectId: string;
-        readonly kinds: readonly string[];
-        readonly targetPath?: string;
-      };
-      return Promise.resolve({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            runId: "verification-run-1",
-            projectId: request.projectId,
-            kinds: request.kinds,
-            ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
-            state: "running",
-            startedAtMs: 1,
-          }),
-      } as Response);
-    });
-    vi.stubGlobal("fetch", verificationFetchMock);
-    try {
-      const { source, sessionId } = await renderedAgentSession1394();
-      act(() => {
-        source.emitAction(
-          agentAction(sessionId, "applyPatch", {
-            target: { file: "src/app.ts", paneId: "pane-1" },
-            textEdits: [
-              {
-                range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-                newText: "const value = 42;\n",
-              },
-            ],
-          }),
-        );
-      });
-      const runButton = await screen.findByTestId("agent-patch-run-verification");
-      act(() => {
-        runButton.click();
-      });
-      await waitFor(() =>
-        expect(
-          verificationFetchMock.mock.calls.some(
-            ([url, init]) =>
-              url === "/api/editor/verification/runs" &&
-              (init as RequestInit | undefined)?.method === "POST",
-          ),
-        ).toBe(true),
-      );
-      const [runUrl, runInit] =
-        verificationFetchMock.mock.calls.find(
-          ([url, init]) =>
-            url === "/api/editor/verification/runs" &&
-            (init as RequestInit | undefined)?.method === "POST",
-        ) ?? [];
-      expect(runUrl).toBe("/api/editor/verification/runs");
-      const runBody = JSON.parse((runInit as RequestInit).body as string) as {
-        kinds: readonly string[];
-        targetPath?: string;
-      };
-      expect(runBody.kinds).toEqual(["targeted-test"]);
-      expect(runBody.targetPath).toBe("src/app.test.ts");
-    } finally {
-      vi.unstubAllGlobals();
-      resetEditorVerificationRunStateForTests();
-    }
-  });
-
-  it("applies an explicitly allowed patch immediately without staging review", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-    const action = agentAction(sessionId, "applyPatch", {
-      requiresReview: false,
-      target: { file: "src/app.ts", paneId: "pane-1" },
-      textEdits: [
-        {
-          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-          newText: "const value = 42;\n",
-        },
-      ],
-    });
-    vi.mocked(postEditorAgentActionResult).mockResolvedValue({
-      result: patchResult(action, "succeeded"),
-    });
-
-    act(() => source.emitAction(action));
-
-    await waitFor(() => {
-      expect(surface.props?.buffer.content.text).toBe("const value = 42;\n");
-      expect(agentResults()).toContainEqual(
-        expect.objectContaining({ actionId: action.actionId, status: "succeeded" }),
-      );
-    });
-    expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
-    expect(screen.queryByTestId("agent-patch-reject")).toBeNull();
-  });
-
-  it("rejects an allowed patch when the buffer changes after server admission", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-    const action = agentAction(sessionId, "applyPatch", {
-      requiresReview: false,
-      target: { file: "src/app.ts", paneId: "pane-1" },
-      textEdits: [
-        {
-          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-          newText: "const value = 42;\n",
-        },
-      ],
-    });
-    act(() => {
-      surface.props?.onContentChange({ text: "const local = true;\n", sizeBytes: 20 }, "human");
-      source.emitAction(action);
-    });
-
-    await waitFor(() => {
-      expect(agentResults()).toContainEqual(
-        expect.objectContaining({
-          actionId: action.actionId,
-          status: "conflict",
-          conflict: expect.objectContaining({ code: "VERSION_MISMATCH" }),
-        }),
-      );
-    });
-    expect(surface.props?.buffer.content.text).toBe("const local = true;\n");
-    expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
-  });
-
-  it("posts chat-origin Accept before mutating the dirty buffer", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-    const action = agentAction(sessionId, "applyPatch", {
-      origin: "chat",
-      target: { file: "src/app.ts", paneId: "pane-1" },
-      textEdits: [
-        {
-          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-          newText: "const value = 99;\n",
-        },
-      ],
-    });
-    let resolveDecision:
-      ((value: Awaited<ReturnType<typeof postEditorAgentActionResult>>) => void) | undefined;
-    vi.mocked(postEditorAgentActionResult).mockReturnValue(
-      new Promise((resolve) => {
-        resolveDecision = resolve;
-      }),
-    );
-
-    act(() => {
-      source.emitAction(action);
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("agent-patch-accept")).toBeInTheDocument();
-      expect(screen.getByTestId("agent-patch-reject")).toBeInTheDocument();
-    });
-    expect(diffSurface.props?.model.patchId).toBe("agent-patch-pending");
-    expect(diffSurface.props?.model.files[0]).toMatchObject({
-      uri: "src/app.ts",
-      original: "const value = 1;\n",
-      modified: "const value = 99;\n",
-    });
-    // applyTextEdits would mutate and report immediately instead of waiting for this review.
-    expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
-    expect(agentResults().filter((result) => result.actionId === action.actionId)).toHaveLength(0);
-
-    await userEvent.click(screen.getByTestId("agent-patch-accept"));
-
-    expect(agentResults().filter((result) => result.actionId === action.actionId)).toHaveLength(1);
-    expect(agentResults()[0]?.status).toBe("succeeded");
-    expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
-    expect(screen.getByTestId("agent-patch-accept")).toBeDisabled();
-    expect(screen.getByTestId("agent-patch-reject")).toBeDisabled();
-    expect(
-      screen.getByRole("group", { name: "Agent patch review for src/app.ts" }),
-    ).toHaveAttribute("aria-busy", "true");
-
-    act(() => {
-      resolveDecision?.({
-        result: {
-          schemaVersion: "1",
-          actionId: action.actionId,
-          sessionId: action.sessionId,
-          status: "succeeded",
-        },
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
-      expect(surface.props?.buffer.content.text).toBe("const value = 99;\n");
-      expect(surface.props?.hostEditRequest?.text).toBe("const value = 99;\n");
-      expect(surface.props?.hostEditRequest?.origin).toBe("applied-patch");
-      const results = agentResults().filter((result) => result.actionId === action.actionId);
-      expect(results).toHaveLength(1);
-      expect(results[0]?.status).toBe("succeeded");
-    });
-
-    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
-    expect(surface.props?.fileModel.dirty).toBe(true);
-    expect(surface.props?.fileModel.lastChangeOrigin).toBe("applied-patch");
-    expect(saveFilesContent).not.toHaveBeenCalled();
-  });
-
-  it("chat-origin Reject leaves the buffer unchanged and reports failed once", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-    const action = agentAction(sessionId, "applyPatch", {
-      origin: "chat",
-      target: { file: "src/app.ts", paneId: "pane-1" },
-      textEdits: [
-        {
-          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-          newText: "const value = 77;\n",
-        },
-      ],
-    });
-    vi.mocked(postEditorAgentActionResult).mockImplementation(async (body) => ({
-      result: body.result,
-    }));
-
-    act(() => {
-      source.emitAction(action);
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("agent-patch-accept")).toBeInTheDocument();
-      expect(screen.getByTestId("agent-patch-reject")).toBeInTheDocument();
-    });
-
-    const contentBefore = surface.props?.buffer?.content.text;
-    expect(diffSurface.props?.model.patchId).toBe("agent-patch-pending");
-    expect(diffSurface.props?.model.files[0]?.modified).toBe("const value = 77;\n");
-    // A deferred review with no result proves this did not enter the immediate applyTextEdits path.
-    expect(agentResults().filter((result) => result.actionId === action.actionId)).toHaveLength(0);
-
-    await userEvent.click(screen.getByTestId("agent-patch-reject"));
-
-    await waitFor(() => {
-      expect(screen.queryByTestId("agent-patch-reject")).toBeNull();
-      const results = agentResults().filter((result) => result.actionId === action.actionId);
-      expect(results).toHaveLength(1);
-      expect(results[0]).toMatchObject({
-        status: "failed",
-        message: "The editor changes were rejected.",
-      });
-    });
-
-    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
-    expect(surface.props?.buffer?.content.text).toBe(contentBefore);
-    expect(surface.props?.fileModel.dirty).toBe(false);
-    expect(saveFilesContent).not.toHaveBeenCalled();
-  });
-
-  it("leaves content unchanged when the server rejects an Accept decision", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-    const action = agentAction(sessionId, "applyPatch", {
-      target: { file: "src/app.ts", paneId: "pane-1" },
-      textEdits: [
-        {
-          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-          newText: "const value = 101;\n",
-        },
-      ],
-    });
-    vi.mocked(postEditorAgentActionResult).mockRejectedValue(
-      new ApiError("ACTION_RESULT_NOT_PENDING", "No pending action.", 409),
-    );
-
-    act(() => source.emitAction(action));
-    await screen.findByTestId("agent-patch-accept");
-    await userEvent.click(screen.getByTestId("agent-patch-accept"));
-
-    await waitFor(() => expect(screen.queryByTestId("agent-patch-accept")).toBeNull());
-    expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
-    expect(surface.props?.fileModel.dirty).toBe(false);
-    expect(screen.getByTestId("editor-toolbar-notice")).toHaveTextContent(
-      "The review decision was not accepted. No local changes were applied.",
-    );
-  });
-
-  it("leaves content unchanged when an Accept decision returns failed", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-    const action = agentAction(sessionId, "applyPatch", {
-      target: { file: "src/app.ts", paneId: "pane-1" },
-      textEdits: [
-        {
-          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-          newText: "const value = 111;\n",
-        },
-      ],
-    });
-    vi.mocked(postEditorAgentActionResult).mockResolvedValue({
-      result: patchResult(action, "failed"),
-    });
-
-    act(() => source.emitAction(action));
-    await screen.findByTestId("agent-patch-accept");
-    await userEvent.click(screen.getByTestId("agent-patch-accept"));
-
-    await waitFor(() => expect(screen.queryByTestId("agent-patch-accept")).toBeNull());
-    expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
-    expect(surface.props?.fileModel.dirty).toBe(false);
-    expect(screen.getByTestId("editor-toolbar-notice")).toHaveTextContent(
-      "The editor review was not completed.",
-    );
-  });
-
-  it("waits for an authoritative terminal event after a network failure", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-    const action = agentAction(sessionId, "applyPatch", {
-      target: { file: "src/app.ts", paneId: "pane-1" },
-      textEdits: [
-        {
-          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-          newText: "const value = 112;\n",
-        },
-      ],
-    });
-    vi.mocked(postEditorAgentActionResult).mockRejectedValue(new TypeError("offline"));
-
-    act(() => source.emitAction(action));
-    await screen.findByTestId("agent-patch-accept");
-    await userEvent.click(screen.getByTestId("agent-patch-accept"));
-
-    await waitFor(() => {
-      expect(screen.getByTestId("editor-toolbar-notice")).toHaveTextContent(
-        "The review result is unknown. Waiting for authoritative editor status.",
-      );
-    });
-    expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
-    expect(screen.getByTestId("agent-patch-accept")).toBeDisabled();
-    expect(screen.getByTestId("agent-patch-reject")).toBeDisabled();
-
-    act(() => source.emitResult(patchResult(action, "succeeded")));
-    await waitFor(() => expect(surface.props?.buffer.content.text).toBe("const value = 112;\n"));
-  });
-
-  it("applies once when SSE confirms a lost Accept response", async () => {
-    const onDirtyChange = vi.fn();
-    const { source, sessionId } = await renderedAgentSession1394({ onDirtyChange });
-    const action = agentAction(sessionId, "applyPatch", {
-      target: { file: "src/app.ts", paneId: "pane-1" },
-      textEdits: [
-        {
-          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-          newText: "const value = 202;\n",
-        },
-      ],
-    });
-    let resolveDecision:
-      ((value: Awaited<ReturnType<typeof postEditorAgentActionResult>>) => void) | undefined;
-    vi.mocked(postEditorAgentActionResult).mockReturnValue(
-      new Promise((resolve) => {
-        resolveDecision = resolve;
-      }),
-    );
-
-    act(() => source.emitAction(action));
-    await screen.findByTestId("agent-patch-accept");
-    onDirtyChange.mockClear();
-    await userEvent.click(screen.getByTestId("agent-patch-accept"));
-    expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
-
-    act(() => source.emitResult(patchResult(action, "succeeded")));
-    await waitFor(() => expect(surface.props?.buffer.content.text).toBe("const value = 202;\n"));
-    expect(onDirtyChange).toHaveBeenCalledTimes(1);
-    expect(onDirtyChange).toHaveBeenCalledWith("src/app.ts", true);
-
-    act(() => {
-      resolveDecision?.({ result: patchResult(action, "succeeded") });
-      source.emitResult(patchResult(action, "succeeded"));
-    });
-    await act(async () => {});
-    expect(onDirtyChange).toHaveBeenCalledTimes(1);
-    expect(surface.props?.buffer.content.text).toBe("const value = 202;\n");
-  });
-
-  it("ignores unrelated results and clears a timed-out review before a late click", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-    const action = agentAction(sessionId, "applyPatch", {
-      target: { file: "src/app.ts", paneId: "pane-1" },
-      textEdits: [
-        {
-          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-          newText: "const value = 303;\n",
-        },
-      ],
-    });
-
-    act(() => source.emitAction(action));
-    const accept = await screen.findByTestId("agent-patch-accept");
-    act(() =>
-      source.emitResult({
-        ...patchResult(action, "failed"),
-        actionId: "unrelated-action",
-        failure: { code: "TIMED_OUT", message: "Timed out." },
-      }),
-    );
-    expect(screen.getByTestId("agent-patch-accept")).toBeInTheDocument();
-
-    act(() =>
-      source.emitResult({
-        ...patchResult(action, "failed"),
-        failure: { code: "TIMED_OUT", message: "Timed out." },
-      }),
-    );
-    await waitFor(() => expect(screen.queryByTestId("agent-patch-accept")).toBeNull());
-    fireEvent.click(accept);
-    expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
-    expect(screen.getByTestId("editor-toolbar-notice")).toHaveTextContent(
-      "The editor review expired. Request the change again.",
-    );
-  });
-
-  it("rejects an overlapping patch while preserving the active review", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-    const first = agentAction(sessionId, "applyPatch", {
-      target: { file: "src/app.ts", paneId: "pane-1" },
-      textEdits: [
-        {
-          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-          newText: "const value = 404;\n",
-        },
-      ],
-    });
-    const overlap = agentAction(sessionId, "applyPatch", {
-      target: { file: "src/app.ts", paneId: "pane-1" },
-      textEdits: [
-        {
-          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
-          newText: "const value = 405;\n",
-        },
-      ],
-    });
-
-    act(() => source.emitAction(first));
-    await screen.findByTestId("agent-patch-accept");
-    act(() => source.emitAction(overlap));
-
-    await waitFor(() => {
-      expect(
-        agentResults().some(
-          (result) => result.actionId === overlap.actionId && result.status === "failed",
-        ),
-      ).toBe(true);
-    });
-    expect(diffSurface.props?.model.files[0]?.modified).toBe("const value = 404;\n");
-    expect(screen.getByTestId("agent-patch-accept")).toBeInTheDocument();
-    expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
-  });
-
-  it("reports failed (not conflict) when applyPatch arrives with no textEdits", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-
-    act(() => {
-      source.emitAction(
-        agentAction(sessionId, "applyPatch", {
-          target: { file: "src/app.ts", paneId: "pane-1" },
-          // No textEdits — server failed to derive them.
-        }),
-      );
-    });
-
-    await waitFor(() => {
-      expect(agentResults().some((r) => r.status === "failed")).toBe(true);
-    });
-
-    // Review UI must not appear.
-    expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
-    expect(screen.queryByTestId("agent-patch-reject")).toBeNull();
-  });
-
-  it("reports conflict OUT_OF_SCOPE when applyPatch targets a file not open in this pane", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-
-    act(() => {
-      source.emitAction(
-        agentAction(sessionId, "applyPatch", {
-          target: { file: "other/file.ts", paneId: "pane-1" },
-          textEdits: [
-            {
-              range: { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } },
-              newText: "x",
-            },
-          ],
-        }),
-      );
-    });
-
-    await waitFor(() => {
-      expect(
-        agentResults().some((r) => r.status === "conflict" && r.conflict?.code === "OUT_OF_SCOPE"),
-      ).toBe(true);
-    });
-
-    // Review UI must not appear.
-    expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
-  });
-
-  // ── F6: sessionId filter — conflict for a different sessionId does NOT show banner ────────────
-
-  it("does not show AgentConflictBanner when a conflict result arrives for a different sessionId", async () => {
-    const { source } = await renderedAgentSession1394();
-
-    act(() => {
-      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
-        data: JSON.stringify({
-          schemaVersion: "1",
-          eventId: "ev-other",
-          type: "result",
-          result: {
-            schemaVersion: "1",
-            actionId: "a-other",
-            // A different sessionId — must be filtered out by onAgentResult (F6).
-            sessionId: "completely-different-session",
-            status: "conflict",
-            conflict: { code: "DIRTY", message: "Dirty in another pane." },
-          },
-        }),
-      });
-      for (const listener of (
-        source as unknown as {
-          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
-        }
-      ).listeners.get("editor-agent:result") ?? []) {
-        if (typeof listener === "function") {
-          listener(conflictEvent);
-        } else {
-          listener.handleEvent(conflictEvent);
-        }
-      }
-    });
-
-    // Give React a chance to render; the banner must NOT appear.
-    await act(async () => {});
-    expect(screen.queryByTestId("agent-conflict-banner")).toBeNull();
-
-    // Editor surface must remain mounted.
-    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
-  });
-
-  // ── F5: failed persist after DIRTY conflict keeps banner visible ─────────────────────────────
-
-  it("keeps AgentConflictBanner visible when onSave fails to persist (F5)", async () => {
-    const { source, sessionId } = await renderedAgentSession1394();
-
-    // Surface the DIRTY conflict banner.
-    act(() => {
-      const conflictEvent = new MessageEvent<string>("editor-agent:result", {
-        data: JSON.stringify({
-          schemaVersion: "1",
-          eventId: "ev-dirty-save",
-          type: "result",
-          result: {
-            schemaVersion: "1",
-            actionId: "a-dirty-save",
-            sessionId,
-            status: "conflict",
-            message: "The target buffer has unsaved changes.",
-            conflict: { code: "DIRTY", message: "The target buffer has unsaved changes." },
-          },
-        }),
-      });
-      for (const listener of (
-        source as unknown as {
-          listeners: Map<string, Set<EventListenerOrEventListenerObject>>;
-        }
-      ).listeners.get("editor-agent:result") ?? []) {
-        if (typeof listener === "function") {
-          listener(conflictEvent);
-        } else {
-          listener.handleEvent(conflictEvent);
-        }
-      }
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
-    });
-
-    // Make the buffer dirty.
-    act(() => {
-      surface.props?.onContentChange({ text: "dirty content\n", sizeBytes: 14 }, "human");
-    });
-    // Confirm dirty state: toolbar Save aria-disabled flips to "false".
-    await waitFor(() => {
-      const toolbar = document.querySelector(".ed-toolbar-actions");
-      expect(toolbar).not.toBeNull();
-      const toolbarBtn = within(toolbar as HTMLElement).getByRole("button", { name: /^Save$/u });
-      expect(toolbarBtn).toHaveAttribute("aria-disabled", "false");
-    });
-
-    // Use a never-resolving save so we can assert the banner stays visible while saving is
-    // in progress (the banner is dismissed ONLY when persist resolves ok===true; a pending
-    // or rejected save must keep it). Reset first: afterEach uses vi.clearAllMocks(), which does
-    // NOT drain a mockResolvedValueOnce queued by an earlier test in the suite — without this
-    // reset the save would consume that leaked success value and wrongly dismiss the banner.
-    vi.mocked(saveFilesContent).mockReset();
-    vi.mocked(saveFilesContent).mockReturnValueOnce(new Promise(() => {}));
-
-    // Click the Save button inside the banner (DIRTY renders a Save button in the banner;
-    // the toolbar also has one — target unambiguously with `within`).
-    const banner = screen.getByTestId("agent-conflict-banner");
-    await userEvent.click(within(banner).getByRole("button", { name: "Save" }));
-
-    // The save is in-flight and has not resolved, so the banner must still be present.
-    // React should have set saveStatus to "saving" but agentConflict stays non-null.
-    await act(async () => {});
-    expect(screen.getByTestId("agent-conflict-banner")).toBeInTheDocument();
-  });
-});
-
-// ─── Issue #1393 — layout-controller bridge actions (ADR-0061) ────────────────
-//
-// These tests render EditorRuntimeWidget with onSplitPane / onMoveTab injected
-// (exactly as EditorWidget.renderPane does) and exercise the AC1 path where
-// agent actions reach and invoke the layout controllers.
-
-describe("EditorWidget — agent layout-controller bridge actions", () => {
-  function agentResultsLayoutCtrl(): readonly Parameters<
-    typeof postEditorAgentActionResult
-  >[0]["result"][] {
-    return vi.mocked(postEditorAgentActionResult).mock.calls.map(([body]) => body.result);
-  }
-
-  async function renderedLayoutSession(
-    onSplitPane: ((paneId: string, direction: "row" | "column") => void) | undefined,
-    onMoveTab: ((fromPaneId: string, file: string, toPaneId: string) => void) | undefined,
-  ): Promise<{ source: FakeEventSource; sessionId: string }> {
-    const FakeSource = installFakeEventSource();
-    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
-    render(
-      <EditorRuntimeWidget
-        windowId="layout-ctrl-agent"
-        root="/repo"
-        file="src/app.ts"
-        paneId="pane-1"
-        openFiles={["src/app.ts"]}
-        onSelectOpenFile={vi.fn()}
-        onSplitPane={onSplitPane}
-        onMoveTab={onMoveTab}
-      />,
-    );
-    await screen.findByTestId("editor-surface");
-    await waitFor(() => {
-      expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(agentEventSources(FakeSource.instances).length).toBeGreaterThan(0);
-    });
-    const sessionId = String(
-      vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0].sessionId,
-    );
-    const source = latestAgentEventSource(FakeSource.instances) as FakeEventSource;
-    return { source, sessionId };
-  }
-
-  // (a) splitPane — layout controller invoked, result succeeded ───────────────
-
-  it("splitPane with onSplitPane injected calls the layout controller and reports succeeded", async () => {
-    const onSplitPane = vi.fn();
-    const { source, sessionId } = await renderedLayoutSession(onSplitPane, vi.fn());
-
-    act(() => {
-      source.emitAction(agentAction(sessionId, "splitPane", { target: { splitDirection: "row" } }));
-    });
-
-    await waitFor(() => {
-      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
-    });
-    expect(onSplitPane).toHaveBeenCalledWith("pane-1", "row");
-  });
-
-  it("splitPane with column direction calls onSplitPane with 'column'", async () => {
-    const onSplitPane = vi.fn();
-    const { source, sessionId } = await renderedLayoutSession(onSplitPane, vi.fn());
-
-    act(() => {
-      source.emitAction(
-        agentAction(sessionId, "splitPane", { target: { splitDirection: "column" } }),
-      );
-    });
-
-    await waitFor(() => {
-      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
-    });
-    expect(onSplitPane).toHaveBeenCalledWith("pane-1", "column");
-  });
-
-  // (b) moveTab — containment check blocks escaping paths ────────────────────
-
-  it("moveTab with an escaping path returns conflict OUT_OF_SCOPE", async () => {
-    const onMoveTab = vi.fn();
-    const { source, sessionId } = await renderedLayoutSession(vi.fn(), onMoveTab);
-
-    act(() => {
-      source.emitAction(
-        agentAction(sessionId, "moveTab", {
-          target: { file: "../escape", toPaneId: "pane-x" },
-        }),
-      );
-    });
-
-    await waitFor(() => {
-      expect(
-        agentResultsLayoutCtrl().some(
-          (r) => r.status === "conflict" && r.conflict?.code === "OUT_OF_SCOPE",
-        ),
-      ).toBe(true);
-    });
-    expect(onMoveTab).not.toHaveBeenCalled();
-  });
-
-  it("moveTab with a valid file and pane calls onMoveTab and reports succeeded", async () => {
-    const onMoveTab = vi.fn();
-    const { source, sessionId } = await renderedLayoutSession(vi.fn(), onMoveTab);
-
-    act(() => {
-      source.emitAction(
-        agentAction(sessionId, "moveTab", {
-          target: { file: "src/app.ts", toPaneId: "pane-2" },
-        }),
-      );
-    });
-
-    await waitFor(() => {
-      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
-    });
-    expect(onMoveTab).toHaveBeenCalledWith("pane-1", "src/app.ts", "pane-2");
-  });
-
-  // (c) setSelection — revealRequest transiently set on editor surface ─────────
-  // The hook sets agentSelectionRequest → surfaceRevealRequest for one render, then
-  // consumeSelectionRequest() clears it in the same act() flush. We capture the
-  // peak value via a spy on the probe write so we can assert on it after act returns.
-
-  it("setSelection passes a revealRequest with correct id and column mapping to the editor surface", async () => {
-    const { source, sessionId } = await renderedLayoutSession(vi.fn(), vi.fn());
-    const selection = {
-      start: { line: 1, character: 2 },
-      end: { line: 1, character: 5 },
-    };
-    const action = agentAction(sessionId, "setSelection", {
-      target: { file: "src/app.ts", paneId: "pane-1", selection },
-    });
-
-    // Capture all non-null revealRequests seen during any render of the surface probe.
-    const seenRevealRequests: NonNullable<EditorSurfaceProps["revealRequest"]>[] = [];
-    const origProps = Object.getOwnPropertyDescriptor(surface, "props");
-    Object.defineProperty(surface, "props", {
-      configurable: true,
-      set(value: EditorSurfaceProps | null) {
-        if (value?.revealRequest != null) seenRevealRequests.push(value.revealRequest);
-        // Store via direct property so reads work normally.
-        Object.defineProperty(surface, "props", {
-          configurable: true,
-          writable: true,
-          value,
-        });
-      },
-    });
-
-    act(() => {
-      source.emitAction(action);
-    });
-
-    // Restore surface.props descriptor so afterEach cleanup works normally.
-    if (origProps !== undefined) {
-      Object.defineProperty(surface, "props", origProps);
-    } else {
-      Object.defineProperty(surface, "props", { configurable: true, writable: true, value: null });
-    }
-
-    // Primary AC1 proof: the action was dispatched and reported as succeeded.
-    await waitFor(() => {
-      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
-    });
-
-    // Secondary proof: a revealRequest was seen during the transient render.
-    // It carries the actionId and maps character → column (character === column).
-    expect(seenRevealRequests.length).toBeGreaterThan(0);
-    const revealRequest = seenRevealRequests[0];
-    expect(revealRequest?.id).toContain(action.actionId);
-    expect(revealRequest?.range.start.column).toBe(2);
-    expect(revealRequest?.range.end.column).toBe(5);
-  });
-
-  // Smoke: setSelection does not change document.activeElement (AC: no focus theft)
-  it("setSelection does not steal keyboard focus from the current element", async () => {
-    const { source, sessionId } = await renderedLayoutSession(vi.fn(), vi.fn());
-    // Capture the active element before the agent action.
-    const elementBefore = document.activeElement;
-
-    act(() => {
-      source.emitAction(
-        agentAction(sessionId, "setSelection", {
-          target: {
-            file: "src/app.ts",
-            paneId: "pane-1",
-            selection: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } },
-          },
-        }),
-      );
-    });
-
-    await waitFor(() => {
-      expect(agentResultsLayoutCtrl().some((r) => r.status === "succeeded")).toBe(true);
-    });
-    // Focus must not have moved to the editor surface or any other element.
-    expect(document.activeElement).toBe(elementBefore);
-    expect(document.activeElement).not.toBe(screen.getByTestId("editor-surface"));
   });
 });
 

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5b4920b32a9a30e6d23a1486ae415fbdc8487d9226714bc5fc55e4072a4249ea"
+    "catalogDigest": "eb0e92975c7a3c89e49a6273393a2feb1f633321714fde161fb0afe91b842336"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 501,
-    "proofCount": 508,
-    "resolvedProofCount": 508,
+    "operationCount": 502,
+    "proofCount": 509,
+    "resolvedProofCount": 509,
     "failureClassCount": 334,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -469,6 +469,7 @@
       "ports": ["ModelGatewayLogSink", "ServerLogSink"],
       "operations": [
         "dap.debug-runtime.selected",
+        "editor.buffer-safety.state",
         "editor.local-history.rekey.completed",
         "editor.local-history.rekey.failed",
         "editor.producer-turn.completed",
@@ -1407,6 +1408,9 @@
     ],
     "dap.debug-runtime.selected.emitted-line": [
       "packages/keiko-server/src/editor/dap/debugLaunchPlan.test.ts"
+    ],
+    "editor.buffer-safety.state.lifecycle": [
+      "packages/keiko-server/src/editor/agentRoutes.test.ts"
     ],
     "editor.local-history.rekey.completed.emitted-line": [
       "packages/keiko-server/src/editor/localHistory/localHistoryCapture.test.ts"

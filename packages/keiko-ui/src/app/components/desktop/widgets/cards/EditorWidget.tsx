@@ -1,9 +1,30 @@
 "use client";
 
+import { discardEditorBufferSafetyFiles } from "./useEditorBufferSafety";
 import EditorSurfaceLoading from "./EditorSurfaceLoading";
 
-import { useTranslate } from "@/lib/i18n";
 import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
+import { useTranslate } from "@/lib/i18n";
+import type {
+  EditorDirtyCloseIntent,
+  EditorLayoutNode,
+  EditorLayoutSplitNode,
+  EditorLayoutStateV2,
+  EditorPaneStateV2,
+  EditorSplitDirection,
+  EditorSplitDropZone,
+} from "@oscharko-dev/keiko-contracts";
+import type { ClientNavigationOutcome } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { createEditorDirtyCloseIntent } from "@oscharko-dev/keiko-contracts/runtime/editor-dirty-close";
+import {
+  activeEditorPane,
+  editorLayoutOpenFiles,
+  editorLayoutPaneIds,
+  editorLayoutReducer,
+  serializeEditorLayoutStateV2,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
+import { selectWorkspaceFileTarget } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
+import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 import dynamic from "next/dynamic";
 import {
   useCallback,
@@ -20,53 +41,10 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import type {
-  EditorDirtyCloseIntent,
-  EditorLayoutNode,
-  EditorLayoutSplitNode,
-  EditorLayoutStateV2,
-  EditorPaneStateV2,
-  EditorSplitDirection,
-  EditorSplitDropZone,
-} from "@oscharko-dev/keiko-contracts";
-import {
-  activeEditorPane,
-  editorLayoutOpenFiles,
-  editorLayoutPaneIds,
-  editorLayoutReducer,
-  serializeEditorLayoutStateV2,
-} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
-import { createEditorDirtyCloseIntent } from "@oscharko-dev/keiko-contracts/runtime/editor-dirty-close";
-import type { ClientNavigationOutcome } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { selectWorkspaceFileTarget } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
-import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
-import { Icons } from "../../Icons";
-import { acquireGrabbingBodyStyle } from "../../interactionGuards";
-import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
-import { useModalInteractionLock } from "../../hooks/useModalInteractionLock";
-import {
-  dirtyFilesUnderPath,
-  reconcileEditorDirtyByPane,
-  type EditorDirtyByPane,
-} from "./editorDirtyState";
-import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
-import { editorPaneWindowId } from "./editorPaneWindowId";
-import editorWidgetStyles from "./EditorWidget.module.css";
-import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
-import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
-import { EditorOutlinePanel } from "./EditorOutlinePanel";
-import { EditorEmptyState } from "./EditorEmptyState";
-import { useEditorProjectConnection } from "./useEditorProjectConnection";
 import { useRegisterEditorPaletteHost } from "../../EditorPaletteHostRegistryContext";
 import { useEditorShellActions, type EditorShellActions } from "../../EditorShellActionsContext";
-import {
-  sameEditorOutlineSnapshot,
-  type EditorOutlineRevealRequest,
-  type EditorOutlineSnapshot,
-} from "./editorOutlineModel";
-import { type EditorPaletteHost } from "./editorCommands";
 import {
   EDITOR_SIDEBAR_MIN_WIDTH,
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
@@ -75,30 +53,36 @@ import {
   editorSidebarWidthFromPointer,
   editorWorkspaceLogicalWidth,
 } from "../../editorSidebarSizing";
-import {
-  useEditorVerificationRun,
-  type EditorVerificationRunControls,
-} from "./useEditorVerificationRun";
-import { useEditorSettings } from "./useEditorSettings";
-import {
-  WorkspaceTrustDecisionDialog,
-  type WorkspaceTrustDecision,
-} from "../../workspace-trust/WorkspaceTrustSurfaces";
-import trustStyles from "../../workspace-trust/WorkspaceTrust.module.css";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../hooks/useModalInteractionLock";
+import { Icons } from "../../Icons";
+import { acquireGrabbingBodyStyle } from "../../interactionGuards";
 import {
   bindingFromKeyboardEvent,
   dispatchableWorkspaceShortcutsForContext,
   resolveEffectiveKeyboardShortcuts,
   type EffectiveKeyboardShortcutRegistry,
 } from "../../keyboardShortcutsRegistry";
+import trustStyles from "../../workspace-trust/WorkspaceTrust.module.css";
 import {
-  completeEditorAgentReconciliation,
-  enqueueEditorAgentReconciliation,
-  pruneEditorAgentReconciliation,
-  type EditorAgentReconciliationEntry,
-  type EditorAgentReconciliationQueues,
-} from "./editorAgentReconciliationQueue";
+  WorkspaceTrustDecisionDialog,
+  type WorkspaceTrustDecision,
+} from "../../workspace-trust/WorkspaceTrustSurfaces";
 import { FileIcon } from "../shared/projectTree";
+import { type EditorPaletteHost } from "./editorCommands";
+import {
+  dirtyFilesUnderPath,
+  reconcileEditorDirtyByPane,
+  type EditorDirtyByPane,
+} from "./editorDirtyState";
+import { EditorEmptyState } from "./EditorEmptyState";
+import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
+import {
+  sameEditorOutlineSnapshot,
+  type EditorOutlineRevealRequest,
+  type EditorOutlineSnapshot,
+} from "./editorOutlineModel";
+import { EditorOutlinePanel } from "./EditorOutlinePanel";
 import {
   allDirtyFiles,
   clampNumber,
@@ -119,6 +103,16 @@ import {
   type PointerTabDrag,
   type TabInsertTarget,
 } from "./editorPaneGeometry";
+import { editorPaneWindowId } from "./editorPaneWindowId";
+import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
+import editorWidgetStyles from "./EditorWidget.module.css";
+import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
+import { useEditorProjectConnection } from "./useEditorProjectConnection";
+import { useEditorSettings } from "./useEditorSettings";
+import {
+  useEditorVerificationRun,
+  type EditorVerificationRunControls,
+} from "./useEditorVerificationRun";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const SplitIcon = Icons.split;
@@ -491,9 +485,6 @@ interface PaneBinding {
   readonly onSelectOpenFile: (file: string) => void;
   readonly onCloseOpenFile: (path: string) => Promise<boolean> | boolean | void;
   readonly onDirtyChange: (path: string, dirty: boolean) => void;
-  readonly onMoveTab: (fromPaneId: string, file: string, toPaneId: string) => void;
-  readonly onSplitPane: (paneId: string, direction: "row" | "column") => void;
-  readonly onAgentChangesetCommitted: (entries: readonly EditorAgentReconciliationEntry[]) => void;
   readonly toolbarExtras: ReactNode;
   readonly renderTabHandle: NonNullable<EditorRuntimeWidgetProps["renderTabHandle"]>;
 }
@@ -711,10 +702,7 @@ export function EditorWidget({
     readonly nonce: number;
   } | null>(null);
   const fileHistoryRequestSeqRef = useRef(0);
-  const [agentReconciliationQueues, setAgentReconciliationQueues] =
-    useState<EditorAgentReconciliationQueues>({});
   const saveSeqRef = useRef(0);
-  const agentReconciliationSeqRef = useRef(0);
   const saveResolversRef = useRef(new Map<number, (ok: boolean) => void>());
   const lastPropRootRef = useRef(root?.trim() ?? "");
   const lastExternalLayoutInputsRef = useRef<EditorExternalLayoutInputs | null>(null);
@@ -784,7 +772,6 @@ export function EditorWidget({
       setDirtyByPane({});
       setOutlineByPane({});
       setOutlineRevealByPane({});
-      setAgentReconciliationQueues({});
       // A trust dialog opened for the previous root must not survive the
       // switch: `verification` is re-derived from the live root each render,
       // so confirming the stale dialog after a switch would grant/revoke on
@@ -869,36 +856,6 @@ export function EditorWidget({
     [markDirty],
   );
 
-  const queueAgentReconciliation = useCallback(
-    (sourcePaneId: string, entries: readonly EditorAgentReconciliationEntry[]): void => {
-      agentReconciliationSeqRef.current += 1;
-      const request = {
-        requestId: agentReconciliationSeqRef.current,
-        entries: entries.map((entry) => ({ file: entry.file, kind: entry.kind })),
-      };
-      setAgentReconciliationQueues((current) =>
-        enqueueEditorAgentReconciliation(
-          current,
-          Object.values(layoutRef.current.panes),
-          sourcePaneId,
-          request,
-        ),
-      );
-    },
-    [],
-  );
-
-  const completeAgentReconciliation = useCallback((requestId: number, paneId: string): void => {
-    setAgentReconciliationQueues((current) =>
-      completeEditorAgentReconciliation(current, paneId, requestId),
-    );
-  }, []);
-
-  useEffect(() => {
-    const paneIds = new Set(Object.keys(layout.panes));
-    setAgentReconciliationQueues((current) => pruneEditorAgentReconciliation(current, paneIds));
-  }, [layout.panes]);
-
   const requestDirtyClose = useCallback(
     (input: {
       readonly paneId: string;
@@ -960,6 +917,11 @@ export function EditorWidget({
 
   const discardPendingClose = useCallback((): void => {
     if (pendingClose === null || pendingClose.saving) return;
+    discardEditorBufferSafetyFiles(
+      Object.keys(dirtyByPane).map((paneId) => editorPaneWindowId(windowId, paneId)),
+      workspaceRoot,
+      pendingClose.dirtyFiles,
+    );
     for (const path of pendingClose.dirtyFiles) {
       for (const [paneId, files] of Object.entries(dirtyByPane)) {
         if (files[path] === true) markDirty(paneId, path, false);
@@ -973,7 +935,7 @@ export function EditorWidget({
     }
     pendingClose.apply();
     setPendingClose(null);
-  }, [dirtyByPane, markDirty, pendingClose, workspaceRoot]);
+  }, [dirtyByPane, markDirty, pendingClose, windowId, workspaceRoot]);
 
   const cancelPendingClose = useCallback((): void => {
     const pending = pendingCloseRef.current;
@@ -1910,7 +1872,7 @@ export function EditorWidget({
     return () => node.removeEventListener("keydown", onKeyDown, true);
   }, [workspaceRoot]);
 
-  // Agent-pane snapshots, memoized by the pane SET. A split resize only changes a tree node's ratio,
+  // Pane safety snapshots, memoized by the pane SET. A split resize only changes a tree node's ratio,
   // leaving `layout.panes` untouched, so this stays referentially stable across a resize and does not
   // churn the per-pane editor-host props.
   const layoutPaneSnapshots = useMemo<readonly EditorAgentPaneSnapshot[]>(
@@ -1937,11 +1899,6 @@ export function EditorWidget({
         onSelectOpenFile: (file: string) => selectOpenFile(paneId, file),
         onCloseOpenFile: (path: string) => closeOpenFile(paneId, path),
         onDirtyChange: (path: string, dirty: boolean) => markDirty(paneId, path, dirty),
-        onMoveTab: (fromPaneId: string, file: string, toPaneId: string) =>
-          moveTabAction(fromPaneId, toPaneId, file),
-        onSplitPane: (targetPaneId: string, direction: "row" | "column") =>
-          splitPane(targetPaneId, direction),
-        onAgentChangesetCommitted: (entries) => queueAgentReconciliation(paneId, entries),
         toolbarExtras: renderPaneActions(pane, paneCount > 1, splitPane, closePane),
         // GEN-PERF-EDITOR-003 — the full drag-capable tab handle lives HERE (in the
         // pane-memoized closure) instead of as a per-render inline closure in renderPane,
@@ -1986,9 +1943,7 @@ export function EditorWidget({
     selectOpenFile,
     closeOpenFile,
     markDirty,
-    moveTabAction,
     splitPane,
-    queueAgentReconciliation,
     closePane,
     handleTabKeyDown,
     beginTabPointerDrag,
@@ -2022,17 +1977,12 @@ export function EditorWidget({
       layoutPanes: layoutPaneSnapshots,
       activePaneId: layout.activePaneId,
       onSelectOpenFile: binding.onSelectOpenFile,
-      onSplitPane: binding.onSplitPane,
-      onMoveTab: binding.onMoveTab,
       onCloseOpenFile: binding.onCloseOpenFile,
       onDirtyChange: binding.onDirtyChange,
       toolbarExtras: binding.toolbarExtras,
       externalSaveRequest:
         saveRequest !== null && saveRequest.paneId === pane.id ? saveRequest : undefined,
       onExternalSaveComplete,
-      agentReconciliationRequest: agentReconciliationQueues[pane.id]?.[0],
-      onAgentChangesetCommitted: binding.onAgentChangesetCommitted,
-      onAgentReconciliationComplete: completeAgentReconciliation,
       tabInsertTarget:
         tabInsertTargetState?.paneId === pane.id
           ? { file: tabInsertTargetState.file, edge: tabInsertTargetState.edge }

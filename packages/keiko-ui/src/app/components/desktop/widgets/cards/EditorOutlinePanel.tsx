@@ -172,7 +172,11 @@ export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
   const emptyText = outlineEmptyText(snapshot, t);
 
   return (
-    <section className={styles.outline} aria-label={t("editor.outline.workspaceLabel")}>
+    <section
+      className={styles.outline}
+      data-expanded={props.visible}
+      aria-label={t("editor.outline.workspaceLabel")}
+    >
       <div className={styles.outlineHeader}>
         <span
           className={styles.outlineTitle}

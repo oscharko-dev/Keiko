@@ -24,7 +24,8 @@ import type {
   EditorAgentActionPolicyDecision,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
-  EditorAgentBridgeActionRequest,
+  EditorBufferSnapshotRequest,
+  EditorBufferReleaseRequest,
   EditorAgentBridgeSnapshotRequest,
   EditorAgentConflictCode,
   EditorAgentEvent,
@@ -135,6 +136,7 @@ import {
   editorAgentWorkspaceRootDigest,
   type EditorAgentAuthorityResolution,
 } from "./agentAuthorityRegistry.js";
+import { recordBufferSafetyState } from "./bufferSafetyEvidence.js";
 import { EDITOR_AGENT_MAX_SESSIONS, editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentAuditForTests,
@@ -1250,6 +1252,95 @@ function registerBridgeSnapshot(
     : bridgeCapabilityError();
 }
 
+function bufferSafetyResponse(
+  snapshot: EditorAgentSessionSnapshot | null,
+  accepted: boolean,
+  correlationId: string | undefined,
+  outcome: "registered" | "refreshed" | "released",
+  capability?: string,
+): RouteResult {
+  recordBufferSafetyState(
+    accepted ? outcome : "refused",
+    snapshot?.dirtyFiles.length ?? 0,
+    correlationId,
+  );
+  return accepted
+    ? {
+        status: 200,
+        body: {
+          snapshot,
+          ...(capability === undefined ? {} : { bufferSnapshotCapability: capability }),
+        },
+      }
+    : {
+        status: 409,
+        body: errorBody(
+          "BUFFER_SAFETY_OWNERSHIP_INVALID",
+          "The buffer safety state could not be updated.",
+        ),
+      };
+}
+
+function registerBufferSafetySnapshot(
+  request: EditorBufferSnapshotRequest,
+  deps?: EditorAgentRouteDeps,
+  correlationId?: string,
+): RouteResult {
+  const rooted = resolveEditorAgentSessionRoot(request.snapshot, deps?.store);
+  if (!rooted.ok) return rootBoundaryError(rooted.reason);
+  const reason = editorAgentRootContainmentReason(
+    rooted.root,
+    snapshotRootPaths(request.snapshot),
+    deps,
+    shapedCorrelationId(request.snapshot.sessionId),
+  );
+  if (reason !== null) return rootBoundaryError(reason);
+  const snapshot = { ...request.snapshot, workspaceRoot: rooted.root.workspaceRoot };
+  const supplied = request.bufferSnapshotCapability;
+  if (supplied !== undefined) {
+    const digest = bridgeCapabilityDigest(supplied);
+    const refreshed = editorAgentRegistry.refreshBufferSnapshot(snapshot, digest);
+    // The registry is process-local: a retained non-executing owner may reseed only an absent ID.
+    // registerBufferSnapshot refuses every existing record, including another owner or bridge.
+    const reseeded = !refreshed && editorAgentRegistry.registerBufferSnapshot(snapshot, digest);
+    return bufferSafetyResponse(
+      snapshot,
+      refreshed || reseeded,
+      correlationId,
+      refreshed ? "refreshed" : "registered",
+    );
+  }
+  const capability = issueBridgeDecisionCapability();
+  const registered = editorAgentRegistry.registerBufferSnapshot(
+    snapshot,
+    bridgeCapabilityDigest(capability),
+  );
+  return bufferSafetyResponse(
+    snapshot,
+    registered,
+    correlationId,
+    "registered",
+    registered ? capability : undefined,
+  );
+}
+
+function releaseBufferSafetySnapshot(
+  request: EditorBufferReleaseRequest,
+  correlationId: string | undefined,
+): RouteResult {
+  const previous = editorAgentRegistry.bufferSnapshotFor(request.sessionId);
+  const released = editorAgentRegistry.releaseBufferSnapshot(
+    request.sessionId,
+    bridgeCapabilityDigest(request.bufferSnapshotCapability),
+  );
+  return bufferSafetyResponse(
+    released ? null : (previous ?? null),
+    released,
+    correlationId,
+    "released",
+  );
+}
+
 function snapshotReadAction(request: EditorAgentSnapshotRequest): EditorAgentAction {
   const identity = createHash("sha256")
     .update(`${request.sessionId ?? "selected"}:${request.textMode}`, "utf8")
@@ -1312,6 +1403,10 @@ export async function handleEditorAgentSnapshot(
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
   if ("kind" in parsed.value) {
+    if (parsed.value.kind === "buffer-snapshot")
+      return registerBufferSafetySnapshot(parsed.value, deps, ctx.correlationId);
+    if (parsed.value.kind === "buffer-release")
+      return releaseBufferSafetySnapshot(parsed.value, ctx.correlationId);
     return registerBridgeSnapshot(parsed.value, deps);
   }
   const selected = editorAgentRegistry.selectSnapshot(parsed.value.sessionId);
@@ -2284,77 +2379,8 @@ function rejectActionRequest(
   return { status, body: { result: attributed } };
 }
 
-type BridgeActionLease =
-  | {
-      readonly ok: true;
-      readonly action: EditorAgentAction;
-      readonly snapshot: EditorAgentSessionSnapshot;
-    }
-  | { readonly ok: false; readonly response: RouteResult };
-
-function validateBridgeActionLease(request: EditorAgentBridgeActionRequest): BridgeActionLease {
-  const { action, bridgeDecisionCapability } = request;
-  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
-  if (
-    snapshot === undefined ||
-    !actionHasBrowserReview(action.type) ||
-    action.authorityRef !== undefined ||
-    action.approvalRef !== undefined
-  ) {
-    return { ok: false, response: bridgeCapabilityError() };
-  }
-  const capabilityDigest = bridgeCapabilityDigest(bridgeDecisionCapability);
-  if (!editorAgentRegistry.hasValidBridgeLease(action.sessionId, capabilityDigest)) {
-    return { ok: false, response: bridgeCapabilityError() };
-  }
-  return { ok: true, action: { ...action, origin: "chat", requiresReview: true }, snapshot };
-}
-
-function attachBridgeActionAuthority(
-  action: EditorAgentAction,
-  snapshot: EditorAgentSessionSnapshot,
-  deps?: EditorAgentRouteDeps,
-): BridgeActionAuthorization {
-  const registration = editorAgentAuthorityRegistry.registerLocalBridge(
-    snapshot,
-    action,
-    editorAgentDeploymentCeiling(deps),
-    new Date().toISOString(),
-  );
-  if (!registration.ok) {
-    return {
-      ok: false,
-      response: {
-        status: 403,
-        body: errorBody("AUTHORITY_INVALID", "Local editor authority was not accepted."),
-      },
-    };
-  }
-  return {
-    ok: true,
-    action: { ...action, authorityRef: registration.authorityRef },
-  };
-}
-
-type BridgeActionAuthorization =
-  | { readonly ok: true; readonly action: EditorAgentAction }
-  | { readonly ok: false; readonly response: RouteResult };
-
-function editorActionRequestHash(
-  value: EditorAgentAction | EditorAgentBridgeActionRequest,
-): string {
-  return hashRequest(
-    JSON.stringify(
-      isEditorAgentAction(value)
-        ? value
-        : { schemaVersion: value.schemaVersion, kind: value.kind, action: value.action },
-    ),
-  );
-}
-
 interface PreparedEditorActionRequest {
   readonly action: EditorAgentAction;
-  readonly bridgeSnapshot?: EditorAgentSessionSnapshot | undefined;
   readonly requestHash: string;
 }
 
@@ -2381,22 +2407,9 @@ function invalidNavigationTargetResponse(): EditorActionRequestPreparation {
   };
 }
 
-function prepareEditorActionRequest(
-  value: EditorAgentAction | EditorAgentBridgeActionRequest,
-): EditorActionRequestPreparation {
-  const action = isEditorAgentAction(value) ? value : value.action;
+function prepareEditorActionRequest(action: EditorAgentAction): EditorActionRequestPreparation {
   if (!navigationTargetMatchesDocument(action)) return invalidNavigationTargetResponse();
-  const requestHash = editorActionRequestHash(value);
-  if (isEditorAgentAction(value)) {
-    return { ok: true, request: { action: value, requestHash } };
-  }
-  const lease = validateBridgeActionLease(value);
-  return lease.ok
-    ? {
-        ok: true,
-        request: { action: lease.action, bridgeSnapshot: lease.snapshot, requestHash },
-      }
-    : lease;
+  return { ok: true, request: { action, requestHash: hashRequest(JSON.stringify(action)) } };
 }
 
 // The replay path only consumes the governance pick plus the optional metadata redactor, so it
@@ -3686,7 +3699,7 @@ export async function handleEditorAgentActions(
   if (!parsed.ok) {
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
-  if (!isEditorAgentAction(parsed.value) && parsed.value.kind === "result") {
+  if (!isEditorAgentAction(parsed.value)) {
     return handleReportedActionResult(parsed.value, deps);
   }
   const preparation = prepareEditorActionRequest(parsed.value);
@@ -3697,16 +3710,7 @@ export async function handleEditorAgentActions(
     deps,
   );
   if (replay !== null) return replay;
-  let { action } = preparation.request;
-  if (preparation.request.bridgeSnapshot !== undefined) {
-    const authorization = attachBridgeActionAuthority(
-      action,
-      preparation.request.bridgeSnapshot,
-      deps,
-    );
-    if (!authorization.ok) return authorization.response;
-    action = authorization.action;
-  }
+  const { action } = preparation.request;
   const signal = actionAbortSignal(ctx);
   const actionDeps = queryGitAbortDeps(action, fullEditorActionDeps(deps), signal);
   return admitEditorAction(action, preparation.request.requestHash, actionDeps, signal);

@@ -629,11 +629,10 @@ describe("AppShell grounding connections", () => {
       title: "Release grounding review",
       projectPath: "/repo",
       chatId: undefined,
-      selectionHandoffId: undefined,
       newChatRequestId: expect.stringMatching(/^[0-9a-f-]{36}$/u),
     });
     expect(Object.hasOwn(newChatCfg ?? {}, "chatId")).toBe(true);
-    expect(Object.hasOwn(newChatCfg ?? {}, "selectionHandoffId")).toBe(true);
+    expect(Object.hasOwn(newChatCfg ?? {}, "selectionHandoffId")).toBe(false);
   });
 
   it("drops retained edges without unbinding when a chat window changes conversation", async (): Promise<void> => {
@@ -885,7 +884,6 @@ describe("AppShell grounding connections", () => {
     const unregister = registerChatWindowRuntime("private-window", {
       conversationId: privateChat.id,
       projectPath: privateChat.projectPath,
-      acceptSelectionHandoff: vi.fn(),
     });
 
     try {
@@ -920,7 +918,6 @@ describe("AppShell grounding connections", () => {
     const unregister = registerChatWindowRuntime("private-window", {
       conversationId: privateChat.id,
       projectPath: privateChat.projectPath,
-      acceptSelectionHandoff: vi.fn(),
     });
 
     try {

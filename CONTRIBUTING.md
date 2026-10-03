@@ -270,3 +270,11 @@ explicit repository Files windows also allow path changes. Back/Forward history 
 bounded and clears on task-bound root switches. Files titles reflect their resolved
 root; an empty Editor names its project. Navigation and directory reads record
 body-free client stage lifecycle evidence on the existing Activity Log.
+
+The ordinary Editor is human-operated. The owner decision of 2026-10-03 retires its agent
+presence/history, incoming actions, selection-to-chat handoff and Chat **Apply to editor** command.
+Keep the existing manual edit/save/format/history flow and content-free dirty-buffer protection.
+Safety-state publication does not grant an agent a live bridge or an executable Editor session.
+Chat repository search and the separate Coding Workbench keep their own existing behavior; shared
+runtime code still used by those consumers is not part of this retirement. See
+[ADR-0061](docs/adr/ADR-0061-browser-editor-agent-bridge.md).

@@ -4,6 +4,14 @@
 
 Accepted
 
+> **Amended by owner decision (2026-10-03).** The ordinary Editor's agent integration and
+> Chat handoffs are retired; independent Coding Workbench execution remains unchanged.
+> `tests/e2e/editor-manual-pins.spec.ts` replaces the removed ordinary Editor agent/chat suites with
+> manual undo/redo and split-pane pins plus absence of agent control requests. It is wired through
+> `test:e2e:editor-manual-pins` and the `e2e-extended` matrix. It does not claim agent action,
+> authority, or changeset reconciliation coverage. The baseline, accessibility, and performance
+> decisions below retain their existing owners.
+
 ## Context
 
 Issue #1377 (Epic #1491) establishes a reusable, durable browser quality backbone for the
@@ -20,10 +28,10 @@ _Housekeeping 2026-08-10: `editor-agent-1394.spec.ts` and `editor-agent-1395.spe
 after months without a running lane (see the retirement note in ADR-0058). The other suites listed
 above remain in place. Two invariants those suites carried — the browser undo/redo round-trip after
 an agent-applied edit and the denied-path governance/redaction proof — retired without a successor
-pin. Both are restored as targeted pins in `tests/e2e/editor-agent-pins.spec.ts` (wired into the
-`e2e-extended` matrix): the denied-path proof, and the undo/redo round-trip proven in the mounted
-editor for the first time, backed by undo-preserving programmatic writes across keiko-editor
-(#3070)._
+pin. They were restored in the former `editor-agent-pins.spec.ts` (#3070). That suite and
+`editor-chat-roundtrip-2119.spec.ts` were removed with the 2026-10-03 ordinary Editor retirement.
+Current `editor-manual-pins.spec.ts` preserves manual undo/redo and split-pane behavior; independent
+governed producer and server tests retain their own denied-path protections._
 
 This duplication has three costs. First, a change to the seeding contract (for example the workspace
 persistence key or the editor open sequence) must be edited in N places, and drifts silently when one

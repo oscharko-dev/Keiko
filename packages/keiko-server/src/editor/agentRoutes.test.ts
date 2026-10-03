@@ -1,3 +1,7 @@
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import {
   createBufferedServerLogSink,
@@ -5318,54 +5322,14 @@ describe("agent editor action policy (Issue #1395 AC2)", () => {
     ]);
   });
 
-  it("binds a capability-backed local patch to server-derived Ask for approval authority", async () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko-editor-local-authority-"));
-    try {
-      writeWorkspaceFile(root, "src/a.ts", "old\n");
-      await registerSnapshot(root, "src/a.ts");
-      const observer = connectBridge("session-1");
-      const proposed = action({
-        type: "applyPatch",
-        origin: "agent",
-        authorityRef: undefined,
-        target: { file: "src/a.ts", paneId: "pane-1" },
-        expectedContentHash: HASH,
-        patch: oneLineModifyPatch([{ file: "src/a.ts", before: "old", after: "new" }]),
-      });
-      const capability = bridgeDecisionCapability;
-      if (capability === undefined) throw new Error("expected bridge capability");
-      const request = {
-        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-        kind: "action",
-        action: proposed,
-        bridgeDecisionCapability: capability,
-      } as const;
-      const result = await handleEditorAgentActions(context(request));
-      const replay = await handleEditorAgentActions(context(request));
-      const forged = await handleEditorAgentActions(
-        context({ ...request, bridgeDecisionCapability: "B".repeat(43) }),
-      );
-      const unwrapped = await handleEditorAgentActions(
-        context({
-          ...proposed,
-          actionId: "action-unwrapped",
-          idempotencyKey: "idempotency-unwrapped",
-        }),
-      );
-
-      expect(result.status).toBe(202);
-      expect(replay.status).toBe(200);
-      expect(forged.status).toBe(403);
-      expect(unwrapped.status).toBe(403);
-      // Epic #2384: the server-derived local-bridge authority stays governed-assist, where a
-      // contained patch is now approval-required — it queues for browser review, not as allowed.
-      expect(auditRecords()[0]).toMatchObject({ disposition: "review-required", origin: "chat" });
-      expect(observer.frames()).toContain("editor-agent:action");
-      expect(observer.frames()).not.toContain("authorityRef");
-      expect(lastEmittedAction(observer.frames()).requiresReview).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+  it("rejects the retired Chat bridge-action wrapper without minting authority", async () => {
+    await registerSnapshot();
+    const response = await handleEditorAgentActions(
+      context({ schemaVersion: "1", kind: "action", action: action(), bridgeDecisionCapability }),
+    );
+    expect(response.status).toBe(400);
+    expect(editorAgentRegistry.pendingCount("session-1")).toBe(0);
+    expect(auditRecords()).toEqual([]);
   });
 
   it("fails closed for an unissued approval reference", async () => {
@@ -5481,5 +5445,171 @@ describe("agent editor action audit (Issue #1395 AC1, AC3, AC4)", () => {
     const replay = await handleEditorAgentActions(context(applyTextEditsAction("hello")));
     expect(replay.status).toBe(200);
     expect(auditRecords()).toHaveLength(1);
+  });
+});
+
+describe("ordinary Editor passive safety route", () => {
+  function safetySnapshot(dirtyFiles: readonly string[] = []): EditorAgentSessionSnapshot {
+    return {
+      schemaVersion: "1",
+      sessionId: "session-safety",
+      windowId: "window-safety",
+      workspaceRoot: "/repo",
+      activePaneId: null,
+      panes: [],
+      dirtyFiles,
+      activeFile: null,
+      cursor: null,
+      selection: null,
+      diagnosticsSummary: null,
+      textMode: "none",
+      updatedAt: 1,
+    };
+  }
+  function safetyRequest(value: unknown): RouteContext {
+    return {
+      ...context(value, "/api/editor/agent/snapshot"),
+      correlationId: "buffer-request-000001",
+    };
+  }
+  async function registerSafety(): Promise<string> {
+    const response = await handleEditorAgentSnapshot(
+      safetyRequest({
+        schemaVersion: "1",
+        kind: "buffer-snapshot",
+        snapshot: safetySnapshot(["src/a.ts"]),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(responseBridgeCapability(response.body)).toBeUndefined();
+    if (!isRecord(response.body) || typeof response.body.bufferSnapshotCapability !== "string")
+      throw new Error("expected safety owner");
+    return response.body.bufferSnapshotCapability;
+  }
+  it("cannot expose or activate a passive snapshot as an agent bridge", async () => {
+    const owner = await registerSafety();
+    expect(handleEditorAgentSessions().body).toEqual({ sessions: [] });
+    const bridge = connectBridge("session-safety", owner);
+    expect(bridge.outcome).toMatchObject({ status: 403 });
+    expect(editorAgentRegistry.hasLiveBridge("session-safety")).toBe(false);
+    const upgrade = await handleEditorAgentSnapshot(
+      safetyRequest({
+        schemaVersion: "1",
+        kind: "snapshot",
+        snapshot: safetySnapshot(),
+        bridgeDecisionCapability: owner,
+      }),
+    );
+    expect(upgrade.status).toBe(403);
+    const read = await handleEditorAgentSnapshot(
+      safetyRequest({ schemaVersion: "1", sessionId: "session-safety", textMode: "none" }),
+    );
+    expect(read.body).toEqual({ snapshot: null });
+    expect(editorAgentRegistry.bufferSnapshotFor("session-safety")?.dirtyFiles).toEqual([
+      "src/a.ts",
+    ]);
+  });
+  it("emits body-free safety lifecycle evidence through the existing Activity Log", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const owner = await registerSafety();
+      await handleEditorAgentSnapshot(
+        safetyRequest({
+          schemaVersion: "1",
+          kind: "buffer-snapshot",
+          snapshot: safetySnapshot(),
+          bufferSnapshotCapability: owner,
+        }),
+      );
+      const records = sink.events.filter((event) => event.op === "editor.buffer-safety.state");
+      expect(records).toHaveLength(2);
+      const lines = records.map(formatActivityLogProofLine);
+      expectActivityLogProof("editor.buffer-safety.state.lifecycle", lines[0] ?? "");
+      expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+        outcome: "registered",
+        dirtyFileCount: 1,
+        correlationId: "buffer-request-000001",
+      });
+      expect(JSON.parse(lines[1] ?? "")).toMatchObject({ outcome: "refreshed", dirtyFileCount: 0 });
+      expect(lines.join("")).not.toContain("src/a.ts");
+      expect(lines.join("")).not.toContain("/repo");
+      expect(lines.join("")).not.toContain(owner);
+    } finally {
+      resetServerLogger();
+    }
+  });
+  it("reclaims passive ownership after a server restart without replacing any existing record", async () => {
+    const owner = await registerSafety();
+    editorAgentRegistry.reset();
+    const request = {
+      schemaVersion: "1",
+      kind: "buffer-snapshot",
+      snapshot: safetySnapshot(["src/a.ts"]),
+      bufferSnapshotCapability: owner,
+    };
+    const restarted = await handleEditorAgentSnapshot(safetyRequest(request));
+    expect(restarted.status).toBe(200);
+    expect(editorAgentRegistry.bufferSnapshotFor("session-safety")?.dirtyFiles).toEqual([
+      "src/a.ts",
+    ]);
+    expect(editorAgentRegistry.hasLiveBridge("session-safety")).toBe(false);
+    const otherOwner = await handleEditorAgentSnapshot(
+      safetyRequest({ ...request, bufferSnapshotCapability: "B".repeat(43) }),
+    );
+    expect(otherOwner.status).toBe(409);
+    editorAgentRegistry.reset();
+    editorAgentRegistry.registerSnapshot(safetySnapshot(), "c".repeat(64));
+    const existingBridge = await handleEditorAgentSnapshot(safetyRequest(request));
+    expect(existingBridge.status).toBe(409);
+    expect(editorAgentRegistry.snapshotFor("session-safety")?.dirtyFiles).toEqual([]);
+    expect(editorAgentRegistry.bufferSnapshotFor("session-safety")).toBeUndefined();
+  });
+  it("retains protection across reload, rejects takeover and releases only explicitly clean state", async () => {
+    const owner = await registerSafety();
+    const clean = {
+      schemaVersion: "1",
+      kind: "buffer-snapshot",
+      snapshot: safetySnapshot(),
+      bufferSnapshotCapability: owner,
+    };
+    const unowned = await handleEditorAgentSnapshot(
+      safetyRequest({ schemaVersion: "1", kind: "buffer-snapshot", snapshot: safetySnapshot() }),
+    );
+    expect(unowned.status).toBe(409);
+    expect(
+      (
+        await handleEditorAgentSnapshot(
+          safetyRequest({
+            schemaVersion: "1",
+            kind: "buffer-release",
+            sessionId: "session-safety",
+          }),
+        )
+      ).status,
+    ).toBe(400);
+    const takeover = await handleEditorAgentSnapshot(
+      safetyRequest({ ...clean, bufferSnapshotCapability: "B".repeat(43) }),
+    );
+    expect(takeover.status).toBe(409);
+    const release = {
+      schemaVersion: "1",
+      kind: "buffer-release",
+      sessionId: "session-safety",
+      bufferSnapshotCapability: owner,
+    };
+    expect((await handleEditorAgentSnapshot(safetyRequest(release))).status).toBe(409);
+    expect(
+      (
+        await handleEditorAgentSnapshot(
+          safetyRequest({ ...clean, snapshot: { ...safetySnapshot(["src/a.ts"]), updatedAt: 2 } }),
+        )
+      ).status,
+    ).toBe(200);
+    expect((await handleEditorAgentSnapshot(safetyRequest(clean))).status).toBe(200);
+    expect((await handleEditorAgentSnapshot(safetyRequest(release))).body).toEqual({
+      snapshot: null,
+    });
+    expect(editorAgentRegistry.bufferSnapshotFor("session-safety")).toBeUndefined();
   });
 });

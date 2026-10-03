@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5b4920b32a9a30e6d23a1486ae415fbdc8487d9226714bc5fc55e4072a4249ea" as const;
+  "eb0e92975c7a3c89e49a6273393a2feb1f633321714fde161fb0afe91b842336" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -9201,6 +9201,43 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["debug-runtime-selection"],
     proofIds: ["dap.debug-runtime.selected.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "editor.buffer-safety.state",
+    category: "security",
+    owner: "keiko-server",
+    emitter: "editor.bufferSafetyEvidence.recordBufferSafetyState",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["registered", "refreshed", "released", "refused"],
+      },
+      dirtyFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["git-delivery-dirty-buffer"],
+    proofIds: ["editor.buffer-safety.state.lifecycle"],
     releaseImpact: "patch",
   },
   {
@@ -51069,21 +51106,55 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["git.delivery.buffers.checked"],
+        state: ["editor.buffer-safety.state", "git.delivery.buffers.checked"],
         end: [],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
+          op: "editor.buffer-safety.state",
+          mode: "correlation",
+        },
+        {
           op: "git.delivery.buffers.checked",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["git.delivery.buffers.checked"],
+      resourceSignals: ["editor.buffer-safety.state", "git.delivery.buffers.checked"],
       replayReferences: [],
       operations: [
+        {
+          op: "editor.buffer-safety.state",
+          owner: "keiko-server",
+          category: "security",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "capability",
+          safeContextFields: [
+            {
+              name: "dirtyFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["editor.buffer-safety.state.lifecycle"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "git.delivery.buffers.checked",
           owner: "keiko-server",
@@ -67193,6 +67264,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "consolidation.log.sink-failed": "memory-knowledge",
     "consolidation.summary.fallback": "memory-knowledge",
     "dap.debug-runtime.selected": "editor-delivery",
+    "editor.buffer-safety.state": "editor-delivery",
     "editor.local-history.rekey.completed": "editor-delivery",
     "editor.local-history.rekey.failed": "editor-delivery",
     "editor.producer-turn.completed": "editor-delivery",

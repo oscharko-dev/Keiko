@@ -50,7 +50,7 @@ import {
   openPdfCitationPreviewSession,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
-  queueEditorAgentBridgeAction,
+  postEditorBufferSafetyRequest,
   pdfCitationPreviewDocumentUrl,
   prepareUpdateRemediationStatus,
   reconnectProject,
@@ -313,8 +313,7 @@ describe("editor agent bridge capability serialization", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ snapshot: null, bridgeDecisionCapability: capability }))
-      .mockResolvedValueOnce(jsonResponse({ result: { status: "succeeded" } }))
-      .mockResolvedValueOnce(jsonResponse({ result: { status: "queued" } }));
+      .mockResolvedValueOnce(jsonResponse({ result: { status: "succeeded" } }));
     vi.stubGlobal("fetch", fetchMock);
     const snapshot = {
       schemaVersion: "1",
@@ -345,16 +344,6 @@ describe("editor agent bridge capability serialization", () => {
         status: "succeeded",
       },
     });
-    const action = {
-      schemaVersion: "1",
-      actionId: "action-2",
-      idempotencyKey: "key-2",
-      sessionId: "session-1",
-      type: "applyPatch",
-      patch: "patch",
-    } as const;
-    await queueEditorAgentBridgeAction(action, capability);
-
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/api/editor/agent/snapshot",
@@ -384,18 +373,60 @@ describe("editor agent bridge capability serialization", () => {
         }),
       }),
     );
+  });
+});
+
+describe("passive editor buffer ownership serialization", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  it("uses the existing snapshot route without minting or supplying a bridge decision capability", async () => {
+    const capability = "A".repeat(43);
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse({ snapshot: null })));
+    vi.stubGlobal("fetch", fetchMock);
+    const request = {
+      schemaVersion: "1",
+      kind: "buffer-snapshot",
+      bufferSnapshotCapability: capability,
+      snapshot: {
+        schemaVersion: "1",
+        sessionId: "buffer:window:pane:root",
+        windowId: "window",
+        workspaceRoot: "/repo",
+        activePaneId: "pane",
+        panes: [],
+        dirtyFiles: [],
+        activeFile: null,
+        cursor: null,
+        selection: null,
+        diagnosticsSummary: null,
+        textMode: "none",
+        updatedAt: 1,
+      },
+    } as const;
+    await postEditorBufferSafetyRequest(request);
+    const release = {
+      schemaVersion: "1",
+      kind: "buffer-release",
+      sessionId: request.snapshot.sessionId,
+      bufferSnapshotCapability: capability,
+    } as const;
+    await postEditorBufferSafetyRequest(release);
     expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      "/api/editor/agent/actions",
+      1,
+      "/api/editor/agent/snapshot",
       expect.objectContaining({
-        body: JSON.stringify({
-          schemaVersion: "1",
-          kind: "action",
-          action,
-          bridgeDecisionCapability: capability,
-        }),
+        method: "POST",
+        body: JSON.stringify(request),
+        signal: expect.any(AbortSignal),
       }),
     );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/editor/agent/snapshot",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(release) }),
+    );
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("bridgeDecisionCapability");
   });
 });
 

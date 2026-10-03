@@ -610,8 +610,6 @@ export type {
   KeikoEditorLoadState,
   EditorContentDelta,
   EditorRevealRequest,
-  EditorSelectionCapture,
-  AskKeikoAboutSelectionHandler,
 } from "./components/types.js";
 export type { KeikoEditorPreferenceOptions } from "./components/editor-options.js";
 // The controlled component renders the host-owned save lifecycle; these pure helpers let a host
@@ -690,23 +688,8 @@ export type {
 export {
   MONACO_BUILTIN_ACTION_IDS,
   EDITOR_COMMAND_KEYBINDINGS,
-  EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_ID,
-  EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_LABEL,
-  EDITOR_GENERATE_TESTS_ACTION_ID,
-  EDITOR_GENERATE_TESTS_ACTION_LABEL,
-  buildAskKeikoAboutSelectionKeybinding,
-  buildAskKeikoAboutSelectionActionDescriptor,
-  buildAskKeikoAboutSelectionRunHandler,
-  buildGenerateTestsKeybinding,
-  buildGenerateTestsActionDescriptor,
 } from "./components/command-actions.js";
-export type {
-  KeybindingDisplay,
-  CommandActionKeys,
-  AskKeikoAboutSelectionCommandActionKeys,
-  AskKeikoAboutSelectionActionArgs,
-  GenerateTestsActionArgs,
-} from "./components/command-actions.js";
+export type { KeybindingDisplay } from "./components/command-actions.js";
 export { deriveEditorStatusBar, editorLanguageLabel } from "./components/status-bar.js";
 export type {
   EditorDiagnosticsSummary,

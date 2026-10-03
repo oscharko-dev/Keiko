@@ -85,6 +85,12 @@ This shapes the product _and_ how you work on it:
   workspace override and navigation within that root. Never let a Files title name a configured
   root while its tree shows a different resolved root. Folder navigation and reads record body-free
   client stage lifecycle evidence on the existing Activity Log (ADR-0090 D4).
+- **Ordinary Editor scope (owner decision, 2026-10-03):** the Editor is a human-operated file
+  editor. Its agent presence/history, incoming action execution, and Editor/Chat handoffs are
+  retired. Preserve manual file operations and the ownership-bound, content-free dirty-buffer
+  safety state; that state must never make the Editor discoverable or executable as an agent
+  session. Chat repository search and the separate Coding Workbench are outside this retirement.
+  Shared runtime contracts remain only where active consumers need them (ADR-0061).
 - **Never** weaken a trust boundary, evidence redaction, or a governance gate to make something
   pass. Fail closed. If a gate blocks you, the gate is usually right.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are

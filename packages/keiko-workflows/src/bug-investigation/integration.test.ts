@@ -4,6 +4,7 @@
 
 import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { detectWorkspace } from "@oscharko-dev/keiko-workspace";
@@ -80,7 +81,7 @@ afterEach(() => {
 
 describe("investigateBug — apply + verify integration (AC #6/#8)", () => {
   it("applies the fix to disk and verification reports passed", async () => {
-    dir = realpathSync(mkdtempSync(join(here, ".keiko-itest-")));
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bug-integration-")));
     cpSync(FIXTURE, dir, { recursive: true });
     const workspace = detectWorkspace(dir);
     const failureOutput: string[] = [];

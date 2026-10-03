@@ -8,6 +8,11 @@
   background: color-mix(in oklch, var(--ed-bg) 88%, transparent);
 }
 
+.outline[data-expanded="true"] {
+  /* File selection must not move the project rows between the clicks of a double-click. */
+  height: 160px;
+}
+
 .outlineHeader {
   display: flex;
   align-items: center;
@@ -67,6 +72,7 @@
 
 .outlineBody {
   min-height: 0;
+  flex: 1 1 auto;
   overflow: auto;
   padding: 2px 5px 7px;
 }

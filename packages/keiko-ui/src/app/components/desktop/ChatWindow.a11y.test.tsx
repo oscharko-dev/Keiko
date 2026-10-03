@@ -207,7 +207,7 @@ describe("ChatWindow a11y", () => {
     expect(results).toHaveNoViolations();
   });
 
-  it("jest-axe: assistant code apply control has no violations", async () => {
+  it("jest-axe: assistant code copy control has no violations", async () => {
     const workspaceRoot = "/workspace/exact";
     const { container } = renderWindow(
       makeSession({
@@ -219,7 +219,8 @@ describe("ChatWindow a11y", () => {
       }),
     );
 
-    expect(screen.getByRole("button", { name: "Apply to editor" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Apply to editor" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Copy code block" })).toBeInTheDocument();
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });

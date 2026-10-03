@@ -64,7 +64,15 @@ export function parseFixtureEditorSnapshotRequest(
   } catch {
     return { ok: false, errors: [INVALID_EDITOR_SNAPSHOT_JSON] };
   }
-  return parseEditorAgentSnapshotRequest(decoded);
+  const parsed = parseEditorAgentSnapshotRequest(decoded);
+  if (!parsed.ok) return parsed;
+  if ("kind" in parsed.value && parsed.value.kind !== "snapshot") {
+    return {
+      ok: false,
+      errors: ["passive buffer requests are outside the Workbench bridge fixture"],
+    };
+  }
+  return { ok: true, value: parsed.value };
 }
 
 // The clamp is the product invariant under test, so the fixture must not re-implement it: it uses

@@ -4,6 +4,11 @@
 
 Proposed
 
+> **Ordinary Editor retirement (2026-10-03).** ADR-0061 records the owner decision to remove
+> ordinary Editor agent actions, their review UI, and the Chat return path described below.
+> Shared validation and server transactions remain where independent active consumers use them;
+> these historical Editor implementation requirements must not restore the retired integration.
+
 > **Superseded in part by [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).**
 > Per-patch browser review and rejection of multi-file agent patches are no longer universal.
 > Mode policy may allow normal contained edits/saves, and governed multi-file closed-file changes use

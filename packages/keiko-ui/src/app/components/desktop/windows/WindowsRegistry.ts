@@ -104,7 +104,6 @@ interface ChatWindowCfg extends WindowCfgRecord {
   readonly title?: string;
   readonly modelId?: string;
   readonly projectPathPrivacy?: "omit";
-  readonly selectionHandoffId?: string;
   readonly newChatRequestId?: string;
 }
 

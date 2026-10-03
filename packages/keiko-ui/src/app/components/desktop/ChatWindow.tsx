@@ -66,11 +66,7 @@ import {
   NATIVE_LIST_STYLE,
 } from "./native-element-styles";
 import dynamic from "next/dynamic";
-import {
-  SafeMarkdownBoundary,
-  type AssistantCodeBlockApply,
-  type AssistantCodeBlockApplyOutcome,
-} from "./SafeMarkdown";
+import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import {
   repositoryReferenceRoots,
   sanitizeRepositoryEvidenceText,
@@ -152,7 +148,6 @@ import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { GitChangeScopePill } from "./GitChangeScopePill";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { ConnectorScopePill } from "./ConnectorScopePill";
-import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { useFollowNewest } from "@/lib/useFollowNewest";
@@ -773,7 +768,7 @@ function useRegisterPdfCitationPreviewTarget(
 }
 
 // Extracted from ChatBubbleImpl (SonarCloud S3776) — both message roles use safe markdown
-// so sent Composer formatting remains visible, with assistant-only apply actions. A streaming
+// so sent Composer formatting remains visible. A streaming
 // assistant turn takes the SAME safe-markdown path as a settled one (#2404,
 // #2783); only code-fence highlighting is deferred while tokens arrive.
 type ChatBubbleMarkdownProps = {
@@ -783,7 +778,6 @@ type ChatBubbleMarkdownProps = {
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly citationPreview: CitationPreviewController | undefined;
-  readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
 };
 
 // Streaming assistant turns use the same safe renderer as persisted answers; parser failures fall
@@ -796,11 +790,9 @@ function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
       <AssessedAnswerBody
         content={message.content}
         messageId={message.id}
-        chatId={message.chatId}
         repositoryRoots={props.repositoryRoots}
         openRepositoryReference={props.openRepositoryReference}
         citationPreview={props.citationPreview}
-        onApplyCodeBlock={props.onApplyCodeBlock}
       />
     );
   }
@@ -809,11 +801,9 @@ function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
       source={message.content}
       literalUserInput={isUser}
       diagnosticCorrelationId={message.id}
-      applyScopeId={`${message.chatId}:${message.id}`}
       repositoryRoots={props.repositoryRoots}
       openRepositoryReference={props.openRepositoryReference}
       citationPreview={props.citationPreview}
-      onApplyCodeBlock={isUser ? undefined : props.onApplyCodeBlock}
       streaming={streaming}
       trailing={streaming ? <span className="ai-stream-cursor" aria-hidden="true" /> : undefined}
     />
@@ -1021,7 +1011,6 @@ function ChatBubbleImpl({
   regenerating = false,
   repositoryRoots,
   openRepositoryReference,
-  onApplyCodeBlock,
   previewWindows,
   windowId,
   streaming = false,
@@ -1035,7 +1024,6 @@ function ChatBubbleImpl({
   readonly regenerating?: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
-  readonly onApplyCodeBlock?: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
   readonly windowId: string | undefined;
   // Issue #1296 — true only for the live assistant turn while tokens are arriving,
@@ -1125,7 +1113,6 @@ function ChatBubbleImpl({
           repositoryRoots={repositoryRoots}
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
-          onApplyCodeBlock={onApplyCodeBlock}
         />
         <ResponseVersionSelector
           message={message}
@@ -1220,7 +1207,6 @@ interface ConversationThreadProps {
   readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
-  readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
   readonly windowId: string | undefined;
   readonly sending: boolean;
@@ -1241,7 +1227,6 @@ function ConversationThreadImpl({
   onOpenRunResult,
   repositoryRoots,
   openRepositoryReference,
-  onApplyCodeBlock,
   previewWindows,
   windowId,
   sending,
@@ -1331,7 +1316,6 @@ function ConversationThreadImpl({
                   onOpenRunResult={onOpenRunResult}
                   repositoryRoots={repositoryRoots}
                   openRepositoryReference={openRepositoryReference}
-                  onApplyCodeBlock={onApplyCodeBlock}
                   previewWindows={previewWindows}
                   windowId={windowId}
                   layout="turn"
@@ -5217,25 +5201,6 @@ function MemoryPanelImpl({
 // across a token flush, so the memo skips the per-frame re-render.
 const MemoryPanel = memo(MemoryPanelImpl);
 
-function assistantCodeBlockApplyOutcome(
-  outcome: ChatEditorApplyOutcome,
-): AssistantCodeBlockApplyOutcome {
-  if (outcome.kind === "conflict") return { kind: "conflict", code: outcome.code };
-  return { kind: outcome.kind };
-}
-
-// Extracted from ChatWindow (SonarCloud S3776) — the code-apply workspace root is only defined
-// when the active chat's project root matches the active project (same guard, now as ifs).
-function codeApplyWorkspaceRootFor(
-  activeChatRoot: string | undefined,
-  activeProjectRoot: string | undefined,
-): string | undefined {
-  if (activeChatRoot === undefined) return undefined;
-  if (activeChatRoot.trim().length === 0) return undefined;
-  if (activeChatRoot !== activeProjectRoot) return undefined;
-  return activeChatRoot;
-}
-
 // Extracted from ChatWindow (SonarCloud S3776) — AC #1: block ready when no model is available.
 function isComposerReadyToSend(
   draft: string,
@@ -5410,7 +5375,6 @@ function ChatWindowLog({
   onOpenRunResult,
   repositoryRoots,
   openRepositoryReference,
-  onApplyCodeBlock,
   previewWindows,
   windowId,
   sending,
@@ -5440,7 +5404,6 @@ function ChatWindowLog({
   readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
-  readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
   readonly windowId: string | undefined;
   readonly sending: boolean;
@@ -5486,7 +5449,6 @@ function ChatWindowLog({
               onOpenRunResult={onOpenRunResult}
               repositoryRoots={repositoryRoots}
               openRepositoryReference={openRepositoryReference}
-              onApplyCodeBlock={onApplyCodeBlock}
               previewWindows={previewWindows}
               windowId={windowId}
               sending={sending}
@@ -5759,32 +5721,6 @@ export function ChatWindow({
     void sendMessage({ text: live, clearDraftOnAdmission: true });
   };
   const displayedError = presentChatSessionError(error, optionalT);
-  const activeProjectRoot = activeProject?.path;
-  const activeChatRoot = activeChat?.projectPath;
-  const codeApplyWorkspaceRoot = codeApplyWorkspaceRootFor(activeChatRoot, activeProjectRoot);
-  const queueAssistantCodeBlockApply = useCallback<AssistantCodeBlockApply>(
-    async ({ codeBlockText, language }) => {
-      if (codeApplyWorkspaceRoot === undefined) {
-        return { kind: "rejected" };
-      }
-      const [{ queueChatEditorApply }, { queueLocalEditorAgentAction }] = await Promise.all([
-        import("@/lib/chat-editor-apply"),
-        import("./widgets/cards/editorAgentBridge"),
-      ]);
-      const outcome = await queueChatEditorApply(
-        {
-          codeBlockText,
-          language,
-          context: { workspaceRoot: codeApplyWorkspaceRoot },
-        },
-        { queueAction: queueLocalEditorAgentAction },
-      );
-      return assistantCodeBlockApplyOutcome(outcome);
-    },
-    [codeApplyWorkspaceRoot],
-  );
-  const onApplyCodeBlock =
-    codeApplyWorkspaceRoot === undefined ? undefined : queueAssistantCodeBlockApply;
   const ready =
     isComposerReadyToSend(draft, sending, loading, noEligibleModels) &&
     canonicalVoiceTurnRequiresRetry !== true;
@@ -5950,7 +5886,6 @@ export function ChatWindow({
         onOpenRunResult={onOpenRunResult}
         repositoryRoots={repositoryRoots}
         openRepositoryReference={openRepositoryReference}
-        onApplyCodeBlock={onApplyCodeBlock}
         previewWindows={previewWindows}
         windowId={windowId}
         sending={sending}

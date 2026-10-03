@@ -17,7 +17,6 @@
  * `moveTab`/`splitPane` delegate to the layout controllers injected by `EditorWidget`; `setSelection`
  * sets a one-shot `revealRequest` payload the host merges into the editor surface.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
   isContainedAgentPath,
@@ -26,17 +25,18 @@ import {
   isEditorAgentEvent,
   isEditorAgentWriteActionType,
 } from "@oscharko-dev/keiko-contracts/editor-agent";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { postEditorAgentActionResult, queueEditorAgentBridgeAction } from "../../../../../lib/api";
+import { postEditorAgentActionResult } from "../../../../../lib/api";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import type {
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
-  EditorAgentEvent,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
-  EditorAgentSnapshotResponse,
   EditorAgentConflictCode,
+  EditorAgentEvent,
+  EditorAgentSnapshotResponse,
 } from "../../../../../lib/types";
 
 /**
@@ -152,17 +152,6 @@ function rememberBridgeCapability(sessionId: string, capability: string): boolea
     generation: editorAgentCapabilityGeneration,
   });
   return true;
-}
-
-/** Queue an explicit local UI action without exposing the bridge capability to its caller. */
-export function queueLocalEditorAgentAction(
-  action: EditorAgentAction,
-): Promise<EditorAgentActionQueuedResponse> {
-  const capability = editorAgentDecisionCapabilities.get(action.sessionId)?.value;
-  if (capability === undefined) {
-    return Promise.reject(new Error("The browser bridge decision capability is unavailable."));
-  }
-  return queueEditorAgentBridgeAction(action, capability);
 }
 
 function normalizeActiveTarget(path: string): string {

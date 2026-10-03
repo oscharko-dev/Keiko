@@ -1637,7 +1637,7 @@ describe("ChatWindowSessionHost target missing", () => {
   });
 
   it("renders a not-found message when the configured chat has no live match", async (): Promise<void> => {
-    // targetMissing requires: no selectionHandoffId, a configured chatId, session not loading,
+    // targetMissing requires: a configured chatId, session not loading,
     // the active chat not already that id, and no open (non-closed) chat with that id either.
     chatSessionState.activeChat = undefined;
     chatSessionState.chats = [];

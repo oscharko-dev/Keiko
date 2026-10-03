@@ -28,7 +28,10 @@ import type {
   EditorAgentFailureCode,
   EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
-import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  isEditorBufferSafetySnapshot,
+  EDITOR_AGENT_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { isMutatingEditorAgentAction } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
 
 // A queued action the bridge never acknowledges within ACTION_TIMEOUT_MS is failed and evicted so the
@@ -61,11 +64,15 @@ export type EditorAgentQueueOutcome =
   | { readonly kind: "rejected"; readonly result: EditorAgentActionResult };
 
 export interface EditorAgentRegistry {
+  registerBufferSnapshot(snapshot: EditorAgentSessionSnapshot, capabilityDigest: string): boolean;
+  refreshBufferSnapshot(snapshot: EditorAgentSessionSnapshot, capabilityDigest: string): boolean;
+  releaseBufferSnapshot(sessionId: string, capabilityDigest: string): boolean;
   registerSnapshot(snapshot: EditorAgentSessionSnapshot, capabilityDigest?: string): boolean;
   refreshSnapshot(snapshot: EditorAgentSessionSnapshot, capabilityDigest: string): boolean;
   rotateSnapshotCapability(snapshot: EditorAgentSessionSnapshot, capabilityDigest: string): boolean;
   listSessions(): readonly EditorAgentSessionSnapshot[];
   snapshotFor(sessionId: string): EditorAgentSessionSnapshot | undefined;
+  bufferSnapshotFor(sessionId: string): EditorAgentSessionSnapshot | undefined;
   selectSnapshot(sessionId?: string): EditorAgentSessionSnapshot | undefined;
   hasLiveBridge(sessionId: string): boolean;
   liveBridgeCount(sessionId: string): number;
@@ -119,6 +126,7 @@ type EditorAgentEventPayload =
 interface RegistryState {
   readonly sessions: Map<string, EditorAgentSessionSnapshot>;
   readonly capabilityDigests: Map<string, string>;
+  readonly bufferSessions: Set<string>;
   readonly bridges: Map<string, Set<EditorAgentSubscriber>>;
   readonly observers: Set<EditorAgentSubscriber>;
   // sessionId -> actionId -> pending entry. Session-scoped so no cross-session interference is possible
@@ -339,6 +347,7 @@ function connectImpl(
       state.observers.delete(send);
     };
   }
+  if (state.bufferSessions.has(sessionId)) return (): void => undefined;
   let set = state.bridges.get(sessionId);
   if (set === undefined) {
     set = new Set();
@@ -359,6 +368,7 @@ function connectAuthenticatedImpl(
   capabilityDigest: string,
   send: EditorAgentSubscriber,
 ): (() => void) | undefined {
+  if (state.bufferSessions.has(sessionId)) return undefined;
   if (!digestMatches(state.capabilityDigests.get(sessionId), capabilityDigest)) return undefined;
   return connectImpl(state, sessionId, send);
 }
@@ -461,6 +471,7 @@ function hasValidBridgeLeaseImpl(
   capabilityDigest: string,
 ): boolean {
   return (
+    !state.bufferSessions.has(sessionId) &&
     (state.bridges.get(sessionId)?.size ?? 0) > 0 &&
     digestMatches(state.capabilityDigests.get(sessionId), capabilityDigest)
   );
@@ -495,6 +506,7 @@ function refreshSnapshotImpl(
   snapshot: EditorAgentSessionSnapshot,
   capabilityDigest: string,
 ): boolean {
+  if (state.bufferSessions.has(snapshot.sessionId)) return false;
   if (!digestMatches(state.capabilityDigests.get(snapshot.sessionId), capabilityDigest))
     return false;
   state.sessions.set(snapshot.sessionId, snapshot);
@@ -507,6 +519,7 @@ function rotateSnapshotCapabilityImpl(
   snapshot: EditorAgentSessionSnapshot,
   capabilityDigest: string,
 ): boolean {
+  if (state.bufferSessions.has(snapshot.sessionId)) return false;
   if (!state.sessions.has(snapshot.sessionId)) return false;
   if (!/^[a-f0-9]{64}$/u.test(capabilityDigest)) return false;
   if ((state.bridges.get(snapshot.sessionId)?.size ?? 0) > 0) return false;
@@ -520,15 +533,83 @@ function rotateSnapshotCapabilityImpl(
 // Bound the snapshot registry: when over the cap, evict the oldest session that is neither bridged nor
 // has in-flight actions (so active work is never disrupted), preferring the just-registered session
 // last. If every other session is busy the registry is left slightly over the soft cap.
+function sessionMustBeRetained(state: RegistryState, sessionId: string): boolean {
+  return (
+    (state.bridges.get(sessionId)?.size ?? 0) > 0 ||
+    (state.pending.get(sessionId)?.size ?? 0) > 0 ||
+    (state.sessions.get(sessionId)?.dirtyFiles.length ?? 0) > 0
+  );
+}
+
 function evictOldestIdleSession(state: RegistryState, keepSessionId: string): void {
   for (const sessionId of state.sessions.keys()) {
-    if (sessionId === keepSessionId) continue;
-    if ((state.bridges.get(sessionId)?.size ?? 0) > 0) continue;
-    if ((state.pending.get(sessionId)?.size ?? 0) > 0) continue;
+    if (sessionId === keepSessionId || sessionMustBeRetained(state, sessionId)) continue;
+    state.bufferSessions.delete(sessionId);
     state.sessions.delete(sessionId);
     state.capabilityDigests.delete(sessionId);
     return;
   }
+}
+
+function registerBufferSnapshotImpl(
+  state: RegistryState,
+  snapshot: EditorAgentSessionSnapshot,
+  capabilityDigest: string,
+): boolean {
+  if (!isEditorBufferSafetySnapshot(snapshot) || state.sessions.has(snapshot.sessionId))
+    return false;
+  if (!/^[a-f0-9]{64}$/u.test(capabilityDigest)) return false;
+  if (state.sessions.size >= state.maxSessions) evictOldestIdleSession(state, snapshot.sessionId);
+  if (state.sessions.size >= state.maxSessions) return false;
+  state.sessions.set(snapshot.sessionId, snapshot);
+  state.capabilityDigests.set(snapshot.sessionId, capabilityDigest);
+  state.bufferSessions.add(snapshot.sessionId);
+  return true;
+}
+
+function refreshBufferSnapshotImpl(
+  state: RegistryState,
+  snapshot: EditorAgentSessionSnapshot,
+  capabilityDigest: string,
+): boolean {
+  if (!isEditorBufferSafetySnapshot(snapshot) || !state.bufferSessions.has(snapshot.sessionId))
+    return false;
+  if (!digestMatches(state.capabilityDigests.get(snapshot.sessionId), capabilityDigest))
+    return false;
+  const current = state.sessions.get(snapshot.sessionId);
+  if (current?.workspaceRoot !== snapshot.workspaceRoot || current.windowId !== snapshot.windowId)
+    return false;
+  state.sessions.set(snapshot.sessionId, snapshot);
+  return true;
+}
+
+function releaseBufferSnapshotImpl(
+  state: RegistryState,
+  sessionId: string,
+  capabilityDigest: string,
+): boolean {
+  if (!state.bufferSessions.has(sessionId)) return false;
+  if (!digestMatches(state.capabilityDigests.get(sessionId), capabilityDigest)) return false;
+  if (state.sessions.get(sessionId)?.dirtyFiles.length !== 0) return false;
+  state.sessions.delete(sessionId);
+  state.capabilityDigests.delete(sessionId);
+  state.bufferSessions.delete(sessionId);
+  return true;
+}
+
+function selectActionSnapshot(
+  state: RegistryState,
+  sessionId: string | undefined,
+): EditorAgentSessionSnapshot | undefined {
+  const selected =
+    sessionId === undefined
+      ? [...state.sessions.values()].find(
+          (snapshot) => !state.bufferSessions.has(snapshot.sessionId),
+        )
+      : state.sessions.get(sessionId);
+  return selected === undefined || state.bufferSessions.has(selected.sessionId)
+    ? undefined
+    : selected;
 }
 
 function resetImpl(state: RegistryState): void {
@@ -537,6 +618,7 @@ function resetImpl(state: RegistryState): void {
   }
   state.sessions.clear();
   state.capabilityDigests.clear();
+  state.bufferSessions.clear();
   state.bridges.clear();
   state.observers.clear();
   state.pending.clear();
@@ -548,6 +630,7 @@ function createRegistryState(options: EditorAgentRegistryOptions): RegistryState
   return {
     sessions: new Map(),
     capabilityDigests: new Map(),
+    bufferSessions: new Set(),
     bridges: new Map(),
     observers: new Set(),
     pending: new Map(),
@@ -567,6 +650,12 @@ export function createEditorAgentRegistry(
 ): EditorAgentRegistry {
   const state = createRegistryState(options);
   return {
+    registerBufferSnapshot: (snapshot, digest): boolean =>
+      registerBufferSnapshotImpl(state, snapshot, digest),
+    refreshBufferSnapshot: (snapshot, digest): boolean =>
+      refreshBufferSnapshotImpl(state, snapshot, digest),
+    releaseBufferSnapshot: (sessionId, digest): boolean =>
+      releaseBufferSnapshotImpl(state, sessionId, digest),
     registerSnapshot: (snapshot, capabilityDigest): boolean =>
       registerSnapshotImpl(state, snapshot, capabilityDigest),
     refreshSnapshot: (snapshot, capabilityDigest): boolean =>
@@ -575,12 +664,15 @@ export function createEditorAgentRegistry(
       rotateSnapshotCapabilityImpl(state, snapshot, capabilityDigest),
     listSessions: (): readonly EditorAgentSessionSnapshot[] => [...state.sessions.values()],
     snapshotFor: (sessionId): EditorAgentSessionSnapshot | undefined =>
-      state.sessions.get(sessionId),
+      selectActionSnapshot(state, sessionId),
+    bufferSnapshotFor: (sessionId): EditorAgentSessionSnapshot | undefined =>
+      state.bufferSessions.has(sessionId) ? state.sessions.get(sessionId) : undefined,
     selectSnapshot: (sessionId): EditorAgentSessionSnapshot | undefined =>
-      sessionId === undefined ? [...state.sessions.values()][0] : state.sessions.get(sessionId),
+      selectActionSnapshot(state, sessionId),
     hasLiveBridge: (sessionId): boolean => (state.bridges.get(sessionId)?.size ?? 0) > 0,
     liveBridgeCount: (sessionId): number => state.bridges.get(sessionId)?.size ?? 0,
     matchesBridgeDecisionCapabilityDigest: (sessionId, capabilityDigest): boolean =>
+      !state.bufferSessions.has(sessionId) &&
       digestMatches(state.capabilityDigests.get(sessionId), capabilityDigest),
     hasValidBridgeLease: (sessionId, capabilityDigest): boolean =>
       hasValidBridgeLeaseImpl(state, sessionId, capabilityDigest),

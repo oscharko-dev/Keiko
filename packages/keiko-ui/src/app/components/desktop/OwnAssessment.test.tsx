@@ -19,11 +19,9 @@ function renderBody(content: string, messageId = "msg-assessment-0001"): void {
     <AssessedAnswerBody
       content={content}
       messageId={messageId}
-      chatId="chat-1"
       repositoryRoots={[]}
       openRepositoryReference={undefined}
       citationPreview={undefined}
-      onApplyCodeBlock={undefined}
     />,
   );
 }

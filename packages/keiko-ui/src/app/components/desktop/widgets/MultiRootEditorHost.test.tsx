@@ -34,7 +34,7 @@ vi.mock("next/dynamic", () => ({
       const { layoutJson, onWorkspaceChange, root, sessionActive } = props;
       mountedBindings.push({
         root,
-        rootRef: props.agentRootBinding?.rootRef,
+        rootRef: props.safetyRootBinding?.rootRef,
         windowId: props.windowId,
       });
       useEffect(() => {
@@ -163,7 +163,7 @@ afterEach(() => {
 
 // Issue #2619 (ADR-0147 D1) — `selectedRoot()` in this host also falls back to the focused root, and
 // that is the deliberate exception, not an oversight: the host mounts EVERY root with its own
-// explicit `root` and `agentRootBinding`, so focus only decides which already-bound tab is visible.
+// explicit `root` and `safetyRootBinding`, so focus only decides which already-bound tab is visible.
 // No mutation ever borrows a root it was not given. Named here so the distinction stays deliberate
 // rather than assumed.
 describe("MultiRootEditorHost focused-root exception (#2619)", () => {
