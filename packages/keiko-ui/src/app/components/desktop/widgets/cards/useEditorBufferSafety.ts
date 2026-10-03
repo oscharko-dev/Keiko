@@ -6,6 +6,12 @@ import { reportClientDiagnostic, type ClientDiagnosticMeta } from "@/lib/client-
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import type { EditorAgentSessionSnapshot, EditorAgentSnapshotResponse } from "@/lib/types";
+import {
+  claimEditorBufferOwnership,
+  forgetEditorBufferOwnership,
+  persistEditorBufferOwnership,
+  type EditorBufferOwnership,
+} from "./editor-buffer-ownership";
 
 export interface EditorBufferCleanSettlement {
   readonly sequence: number;
@@ -14,6 +20,8 @@ export interface EditorBufferCleanSettlement {
 
 interface BufferOwner {
   readonly sessionId: string;
+  ownership: EditorBufferOwnership | null;
+  disposed: boolean;
   references: number;
   capability: string | undefined;
   latest: EditorAgentSessionSnapshot | null;
@@ -29,8 +37,6 @@ interface BufferOwner {
 }
 
 const owners = new Map<string, BufferOwner>();
-const STORAGE_PREFIX = "keiko.editor.buffer-safety.v1:";
-
 function failureDiagnostic(error: unknown): readonly [string, ClientDiagnosticMeta] {
   return [
     `Editor buffer protection failed: ${clientErrorSummary(error)}`,
@@ -41,52 +47,22 @@ function failureDiagnostic(error: unknown): readonly [string, ClientDiagnosticMe
   ];
 }
 
-function storedOwnership(sessionId: string): { capability?: string; dirtyFiles: string[] } {
-  try {
-    const raw = window.sessionStorage.getItem(STORAGE_PREFIX + sessionId);
-    if (raw === null) return { dirtyFiles: [] };
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return { dirtyFiles: [] };
-    const record = parsed as Record<string, unknown>;
-    if (typeof record.capability !== "string" || !Array.isArray(record.dirtyFiles))
-      return { dirtyFiles: [] };
-    const paths = record.dirtyFiles.filter((path): path is string => typeof path === "string");
-    return { capability: record.capability, dirtyFiles: paths };
-  } catch (error) {
-    reportClientDiagnostic(...failureDiagnostic(error));
-    return { dirtyFiles: [] };
-  }
-}
-
-function persistCapability(owner: BufferOwner): void {
-  try {
-    const key = STORAGE_PREFIX + owner.sessionId;
-    if (owner.capability === undefined) window.sessionStorage.removeItem(key);
-    else
-      window.sessionStorage.setItem(
-        key,
-        JSON.stringify({ capability: owner.capability, dirtyFiles: [...owner.unresolved] }),
-      );
-  } catch (error) {
-    reportClientDiagnostic(...failureDiagnostic(error));
-  }
-}
-
 function ownerFor(sessionId: string): BufferOwner {
   const previous = owners.get(sessionId);
   if (previous !== undefined) return previous;
-  const stored = storedOwnership(sessionId);
   const owner: BufferOwner = {
     sessionId,
     references: 0,
-    capability: stored.capability,
+    capability: undefined,
+    ownership: null,
+    disposed: false,
     latest: null,
     acknowledged: null,
     inFlight: null,
     running: false,
     failed: false,
     materialKey: undefined,
-    unresolved: new Set(stored.dirtyFiles),
+    unresolved: new Set(),
     pendingClean: new Map(),
     settlementSerial: 0,
     cleanSequence: 0,
@@ -103,7 +79,11 @@ function protectedSnapshot(
   for (const path of owner.pendingClean.keys()) {
     if (!snapshot.dirtyFiles.includes(path)) unresolved.delete(path);
   }
-  return { ...snapshot, dirtyFiles: [...new Set([...unresolved, ...snapshot.dirtyFiles])] };
+  return {
+    ...snapshot,
+    sessionId: owner.ownership?.sessionId ?? snapshot.sessionId,
+    dirtyFiles: [...new Set([...unresolved, ...snapshot.dirtyFiles])],
+  };
 }
 
 function applicableSettlements(
@@ -134,7 +114,13 @@ function acceptAcknowledgement(
   cleanFiles: ReadonlyMap<string, number>,
 ): void {
   const capability = response.bufferSnapshotCapability ?? owner.capability;
-  if (capability === undefined || response.snapshot?.sessionId !== owner.sessionId) {
+  const ownership = owner.ownership;
+  if (
+    ownership === null ||
+    response.snapshot === null ||
+    capability !== ownership.capability ||
+    response.snapshot.sessionId !== ownership.sessionId
+  ) {
     throw new TypeError("Buffer protection response is incomplete");
   }
   owner.capability = capability;
@@ -142,15 +128,27 @@ function acceptAcknowledgement(
   owner.materialKey = materialKey;
   owner.acknowledged = response.snapshot;
   consumeCleanSettlement(owner, cleanFiles);
+  const pendingDirty = owner.latest?.dirtyFiles ?? [];
   owner.unresolved.clear();
-  for (const path of response.snapshot.dirtyFiles) owner.unresolved.add(path);
-  persistCapability(owner);
+  for (const path of [...response.snapshot.dirtyFiles, ...pendingDirty]) owner.unresolved.add(path);
+  persistEditorBufferOwnership(ownership, [...owner.unresolved]);
 }
 
 async function acknowledge(
   owner: BufferOwner,
   snapshot: EditorAgentSessionSnapshot,
 ): Promise<void> {
+  owner.inFlight = snapshot;
+  if (owner.ownership === null) {
+    const ownership = await claimEditorBufferOwnership(snapshot);
+    if (owner.disposed) {
+      ownership.release();
+      return;
+    }
+    owner.ownership = ownership;
+    owner.capability = ownership.capability;
+    for (const path of ownership.dirtyFiles) owner.unresolved.add(path);
+  }
   const cleanFiles = applicableSettlements(owner, snapshot);
   const protectedState = protectedSnapshot(owner, snapshot);
   const materialKey = JSON.stringify({ ...protectedState, updatedAt: 0 });
@@ -158,14 +156,31 @@ async function acknowledge(
     consumeCleanSettlement(owner, cleanFiles);
     return;
   }
-  owner.inFlight = protectedState;
+  for (const path of protectedState.dirtyFiles) owner.unresolved.add(path);
+  owner.ownership.updatedAt = Math.max(Date.now(), owner.ownership.updatedAt + 1);
+  persistEditorBufferOwnership(owner.ownership, [...owner.unresolved]);
+  owner.inFlight = { ...protectedState, updatedAt: owner.ownership.updatedAt };
   const response = await postEditorBufferSafetyRequest({
     schemaVersion: "1",
     kind: "buffer-snapshot",
-    snapshot: protectedState,
+    snapshot: owner.inFlight,
     ...(owner.capability === undefined ? {} : { bufferSnapshotCapability: owner.capability }),
   });
-  acceptAcknowledgement(owner, response, materialKey, cleanFiles);
+  if (!owner.disposed) acceptAcknowledgement(owner, response, materialKey, cleanFiles);
+}
+
+function finishCleanRelease(owner: BufferOwner): void {
+  if (owner.disposed) return;
+  owner.materialKey = undefined;
+  owner.acknowledged = null;
+  if (owner.references > 0 || owner.latest !== null || owner.unresolved.size > 0) return;
+  owner.capability = undefined;
+  if (owner.ownership !== null) {
+    forgetEditorBufferOwnership(owner.ownership);
+    owner.ownership.release();
+    owner.ownership = null;
+  }
+  if (owner.references === 0 && owner.latest === null) owners.delete(owner.sessionId);
 }
 
 async function releaseCleanOwner(owner: BufferOwner): Promise<void> {
@@ -174,22 +189,18 @@ async function releaseCleanOwner(owner: BufferOwner): Promise<void> {
   const response = await postEditorBufferSafetyRequest({
     schemaVersion: "1",
     kind: "buffer-release",
-    sessionId: owner.sessionId,
+    sessionId: owner.ownership?.sessionId ?? owner.sessionId,
     bufferSnapshotCapability: owner.capability,
   });
   if (response.snapshot !== null) throw new TypeError("Buffer protection release is incomplete");
-  owner.materialKey = undefined;
-  owner.capability = undefined;
-  owner.acknowledged = null;
-  persistCapability(owner);
-  if (owner.references === 0 && owner.latest === null) owners.delete(owner.sessionId);
+  finishCleanRelease(owner);
 }
 
 async function flush(owner: BufferOwner): Promise<void> {
-  if (owner.running) return;
+  if (owner.running || owner.disposed) return;
   owner.running = true;
   try {
-    while (owner.latest !== null) {
+    while (owner.latest !== null && !owner.disposed) {
       const snapshot = owner.latest;
       owner.latest = null;
       await acknowledge(owner, snapshot);
@@ -202,7 +213,11 @@ async function flush(owner: BufferOwner): Promise<void> {
     owner.running = false;
     owner.inFlight = null;
     if (owner.latest !== null) void flush(owner);
-    else if (owner.references === 0) owners.delete(owner.sessionId);
+    else if (owner.references === 0) {
+      owner.ownership?.release();
+      owner.ownership = null;
+      owners.delete(owner.sessionId);
+    }
   }
 }
 
@@ -225,7 +240,18 @@ export function useEditorBufferSafety(
     if (snapshot === null) return;
     const owner = ownerFor(snapshot.sessionId);
     owner.latest = snapshot;
-    for (const path of snapshot.dirtyFiles) owner.pendingClean.delete(path);
+    for (const path of snapshot.dirtyFiles) {
+      owner.pendingClean.delete(path);
+      owner.unresolved.add(path);
+    }
+    if (owner.ownership !== null) {
+      try {
+        persistEditorBufferOwnership(owner.ownership, [...owner.unresolved]);
+      } catch (error) {
+        owner.failed = true;
+        reportClientDiagnostic(...failureDiagnostic(error));
+      }
+    }
     if (cleanSettlement !== undefined && cleanSettlement.sequence !== owner.cleanSequence) {
       queueCleanSettlement(owner, cleanSettlement.paths);
       owner.cleanSequence = cleanSettlement.sequence;
@@ -256,5 +282,9 @@ export function discardEditorBufferSafetyFiles(
 }
 
 export function resetEditorBufferSafetyForTests(): void {
+  for (const owner of owners.values()) {
+    owner.disposed = true;
+    owner.ownership?.release();
+  }
   owners.clear();
 }
