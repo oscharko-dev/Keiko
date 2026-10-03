@@ -19,7 +19,11 @@ import {
   type SupportIncidentSegmentFile,
 } from "../support-incident.js";
 import { listSupportIncidentEntries } from "../support-incident-store.js";
-import { DEFAULT_SUPPORT_QUERY_LIMITS, type SupportQuerySelection } from "./support-query.js";
+import {
+  DEFAULT_SUPPORT_QUERY_LIMITS,
+  type SupportQuerySelection,
+  type SupportQueryResult,
+} from "./support-query.js";
 import { executeLocalSupportQuery } from "./support-local-query.js";
 import {
   resolveSupportIncident,
@@ -34,7 +38,6 @@ import {
 } from "./support-report.js";
 
 import { ActivityLogAnalyzeBudgetError, analyzeLogLines } from "./support-analyze.js";
-import type { SupportQueryResult } from "./support-query.js";
 
 const REPORT_QUERY_LIMITS = {
   ...DEFAULT_SUPPORT_QUERY_LIMITS,

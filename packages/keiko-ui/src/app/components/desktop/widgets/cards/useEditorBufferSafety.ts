@@ -134,11 +134,7 @@ function acceptAcknowledgement(
   cleanFiles: ReadonlyMap<string, number>,
 ): void {
   const capability = response.bufferSnapshotCapability ?? owner.capability;
-  if (
-    capability === undefined ||
-    response.snapshot === null ||
-    response.snapshot.sessionId !== owner.sessionId
-  ) {
+  if (capability === undefined || response.snapshot?.sessionId !== owner.sessionId) {
     throw new TypeError("Buffer protection response is incomplete");
   }
   owner.capability = capability;
@@ -248,12 +244,7 @@ export function discardEditorBufferSafetyFiles(
   const discardedPaths = new Set(paths);
   for (const owner of owners.values()) {
     const snapshot = owner.latest ?? owner.inFlight ?? owner.acknowledged;
-    if (
-      snapshot === null ||
-      snapshot.workspaceRoot !== root ||
-      !matchingWindows.has(snapshot.windowId)
-    )
-      continue;
+    if (snapshot?.workspaceRoot !== root || !matchingWindows.has(snapshot.windowId)) continue;
     queueCleanSettlement(owner, paths);
     owner.latest = {
       ...snapshot,

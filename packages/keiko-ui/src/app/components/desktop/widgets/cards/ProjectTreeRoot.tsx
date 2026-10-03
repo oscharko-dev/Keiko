@@ -24,8 +24,8 @@ export function ProjectTreeRoot({
     root
       .replaceAll("\\", "/")
       .split("/")
-      .filter((part) => part.length > 0)
-      .at(-1) ?? root;
+      .reverse()
+      .find((part) => part.length > 0) ?? root;
   return (
     <>
       <button
