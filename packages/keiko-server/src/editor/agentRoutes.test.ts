@@ -5486,6 +5486,71 @@ describe("ordinary Editor passive safety route", () => {
       throw new Error("expected safety owner");
     return response.body.bufferSnapshotCapability;
   }
+  it("refreshes a client-owned first registration after its response was lost", async () => {
+    const bufferSnapshotCapability = "A".repeat(43);
+    const request = {
+      schemaVersion: "1",
+      kind: "buffer-snapshot",
+      bufferSnapshotCapability,
+      snapshot: safetySnapshot(["src/a.ts"]),
+    };
+    // The UI persisted this owner before POST; discard the successful response entirely.
+    await handleEditorAgentSnapshot(safetyRequest(request));
+    const refreshed = await handleEditorAgentSnapshot(
+      safetyRequest({
+        ...request,
+        snapshot: { ...request.snapshot, updatedAt: 2 },
+      }),
+    );
+    expect(refreshed.status).toBe(200);
+    expect(editorAgentRegistry.bufferSnapshotFor("session-safety")?.dirtyFiles).toEqual([
+      "src/a.ts",
+    ]);
+    expect(editorAgentRegistry.listSessions()).toHaveLength(1);
+    expect(handleEditorAgentSessions().body).toEqual({ sessions: [] });
+    expect(editorAgentRegistry.hasLiveBridge("session-safety")).toBe(false);
+  });
+  it("keeps a second publisher's dirty buffers protected when the first publisher settles", async () => {
+    const first = {
+      schemaVersion: "1",
+      kind: "buffer-snapshot",
+      bufferSnapshotCapability: "A".repeat(43),
+      snapshot: safetySnapshot(["src/a.ts"]),
+    };
+    const second = {
+      ...first,
+      bufferSnapshotCapability: "B".repeat(43),
+      snapshot: { ...safetySnapshot(["src/b.ts"]), sessionId: "session-safety-second" },
+    };
+    expect((await handleEditorAgentSnapshot(safetyRequest(first))).status).toBe(200);
+    expect((await handleEditorAgentSnapshot(safetyRequest(second))).status).toBe(200);
+    const takeover = {
+      ...second,
+      bufferSnapshotCapability: first.bufferSnapshotCapability,
+      snapshot: { ...second.snapshot, dirtyFiles: [] },
+    };
+    expect((await handleEditorAgentSnapshot(safetyRequest(takeover))).status).toBe(409);
+    expect(
+      (await handleEditorAgentSnapshot(safetyRequest({ ...first, snapshot: safetySnapshot() })))
+        .status,
+    ).toBe(200);
+    expect(
+      (
+        await handleEditorAgentSnapshot(
+          safetyRequest({
+            schemaVersion: "1",
+            kind: "buffer-release",
+            sessionId: first.snapshot.sessionId,
+            bufferSnapshotCapability: first.bufferSnapshotCapability,
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    expect(editorAgentRegistry.listSessions().map((snapshot) => snapshot.dirtyFiles)).toEqual([
+      ["src/b.ts"],
+    ]);
+    expect(handleEditorAgentSessions().body).toEqual({ sessions: [] });
+  });
   it("cannot expose or activate a passive snapshot as an agent bridge", async () => {
     const owner = await registerSafety();
     expect(handleEditorAgentSessions().body).toEqual({ sessions: [] });
