@@ -10,7 +10,8 @@
 // enforcing sandbox backend the step actually runs under network:"none"; on a host without one it
 // fails closed and NEVER spawns, and the report never claims enforcement it did not actually apply.
 
-import { mkdtemp, rm, realpath, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, realpath, writeFile, readFile, access, mkdir } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -22,6 +23,8 @@ import {
   planDirectTargetedTests,
 } from "@oscharko-dev/keiko-verification";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import * as sandbox from "@oscharko-dev/keiko-sandbox";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   executeVerificationEnforced,
@@ -33,6 +36,13 @@ import {
 
 function note(message: string): void {
   process.stderr.write(`${message}\n`);
+}
+
+async function proveOutsideWriteWithoutConfinement(root: string, outside: string): Promise<void> {
+  expect(() => execFileSync(process.execPath, ["verify.cjs"], { cwd: root })).toThrow();
+  expect(await readFile(outside, "utf8")).toBe("escaped");
+  await writeFile(outside, "unchanged", "utf8");
+  await rm(join(root, "inside.txt"));
 }
 
 const PACKAGE_JSON = JSON.stringify({
@@ -129,6 +139,95 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
       await rm(root, { recursive: true, force: true });
     }
   }, 30_000);
+
+  it("allows workspace writes while refusing a repository script's outside write", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-verify-contained-")));
+    const outsideParent = await realpath(await mkdtemp(join(tmpdir(), "keiko-verify-outside-")));
+    // A bare /tmp filename can refer to writable private sandbox scratch rather than the host
+    // sentinel. Its separate parent is not mounted, so this path tests the actual host object.
+    const outside = join(outsideParent, "outside.txt");
+    await writeFile(outside, "unchanged", "utf8");
+    try {
+      await writeFile(
+        join(root, "package.json"),
+        JSON.stringify({ name: "contained-fixture", scripts: { typecheck: "node verify.cjs" } }),
+        "utf8",
+      );
+      await writeFile(
+        join(root, "verify.cjs"),
+        `const fs = require("node:fs"); fs.writeFileSync("inside.txt", "allowed"); let blocked = false; try { fs.writeFileSync(${JSON.stringify(outside)}, "escaped"); } catch { blocked = true; } if (!blocked) process.exit(2);`,
+        "utf8",
+      );
+      await proveOutsideWriteWithoutConfinement(root, outside);
+      const workspace = detectWorkspaceAt(root);
+      const plan = buildVerificationPlan(workspace, detectScripts(workspace), {
+        only: ["typecheck"],
+      });
+      const { report, probe } = await executeVerificationEnforced({
+        plan,
+        workspace,
+        signal: new AbortController().signal,
+      });
+      expect(await readFile(outside, "utf8")).toBe("unchanged");
+      if (probe.available) {
+        assertRanUnderEnforcedIsolation(report);
+        expect(await readFile(join(root, "inside.txt"), "utf8")).toBe("allowed");
+      } else {
+        assertFailedClosedWithoutSpawning(report, probe);
+        await expect(access(join(root, "inside.txt"))).rejects.toThrow();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outsideParent, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("observes a malformed local Docker configuration without customer fields or spawning", async () => {
+    const parent = await realpath(await mkdtemp(join(tmpdir(), "keiko-docker-probe-")));
+    const root = join(parent, "workspace");
+    const directory = join(parent, "configuration");
+    const records: ServerDiagnosticRecord[] = [];
+    const availability = vi.spyOn(sandbox, "probeBackends").mockReturnValue({
+      bubblewrap: false,
+      unshare: false,
+      seatbelt: false,
+      docker: true,
+      podman: false,
+    });
+    try {
+      await mkdir(root);
+      await mkdir(directory);
+      await writeFile(
+        join(directory, "config.json"),
+        "customer-configuration-sentinel-invalid-json",
+      );
+      vi.stubEnv("DOCKER_CONFIG", directory);
+      vi.stubEnv("DOCKER_CONTEXT", "");
+      vi.stubEnv("DOCKER_HOST", "");
+      const probe = probeNetworkIsolation(
+        root,
+        {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        "docker-probe-correlation-1",
+      );
+      expect(probe).toEqual({ available: false, backend: "container-docker" });
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        operation: "verification.isolation-probe",
+        source: "verification.isolation-probe.local-docker",
+        correlationId: "docker-probe-correlation-1",
+      });
+      expect(JSON.stringify(records)).not.toContain("customer-configuration-sentinel");
+      expect(JSON.stringify(records)).not.toContain(parent);
+    } finally {
+      availability.mockRestore();
+      vi.unstubAllEnvs();
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
 
   it("probeNetworkIsolation reports a real backend label and availability for this host", () => {
     const probe = probeNetworkIsolation(process.cwd());

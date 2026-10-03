@@ -1,15 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { workspaceTrustRootBindingsMatch } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  createNodeUiStore,
-  SCHEMA_VERSION,
-  UiStoreError,
-  UiStoreSchemaVersionError,
-} from "./index.js";
+import { createNodeUiStore, SCHEMA_VERSION, UiStoreSchemaVersionError } from "./index.js";
 import { restoreV13SchemaFixture } from "./legacySchemaTestFixture.js";
 import { invalidatedRootRefs } from "./workspaceManifests.js";
 
@@ -42,7 +37,7 @@ function trustRootBinding(
 }
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), "keiko-manifest-migration-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-manifest-migration-"));
   project = join(tmp, "project");
   dbPath = join(tmp, "ui.db");
   mkdirSync(project);
@@ -89,26 +84,17 @@ describe("workspace manifest migration", () => {
 });
 
 describe("workspace manifest registration (#2768)", () => {
-  it("rolls back a second project whose canonical root collides with an already-registered one", () => {
-    // A symlink alias resolves through realpathSync.native to the same canonical root as its
-    // target (#2615) without depending on an actual case-insensitive filesystem — the same
-    // collision a case-insensitive host produces from two spellings of one directory.
+  it("reuses registered membership for a canonical root alias", () => {
     const alias = join(tmp, "alias");
     symlinkSync(project, alias, "dir");
-
     const store = createNodeUiStore(dbPath, { now: () => 1 });
-    store.createProject(project, "Project");
-    try {
-      store.createProject(alias, "Alias");
-      throw new Error("expected a workspace-root conflict");
-    } catch (error) {
-      expect(error).toBeInstanceOf(UiStoreError);
-      expect((error as UiStoreError).code).toBe("PROJECT_EXISTS");
-    }
-
-    // The failed registration must not leave a project row with no paired workspace manifest.
+    const original = store.createProject(project, "Project");
+    const reopened = store.createProject(alias);
+    expect(reopened.path).toBe(original.path);
+    expect(reopened.name).toBe("Project");
     expect(store.listProjects()).toHaveLength(1);
     expect(store.listWorkspaceManifestRecords()).toHaveLength(1);
+    expect(store.findWorkspaceManifestRecordByProject(reopened.path)).toBeDefined();
     store.close();
   });
 });

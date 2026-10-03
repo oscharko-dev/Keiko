@@ -53,6 +53,7 @@ const AGGREGATOR_DEFAULTS = Object.freeze({
   BUILD_SCAN_SBOM_SMOKE_RESULT: "success",
   CROSS_PLATFORM_RESULT: "success",
   NODE_26_COMPATIBILITY_RESULT: "success",
+  SBOM_PROVENANCE_RESULT: "skipped",
   DOCUMENTATION_ONLY: "false",
   EDITOR_FAST_PR: "false",
   VERIFIED_TREE_RESULT: "success",
@@ -290,6 +291,9 @@ describe("the aggregator still fails closed", () => {
 
   it.each([
     ["the dev Sonar analysis ran and failed", { ...REUSING, COVERAGE_SONAR_RESULT: "failure" }],
+    ["provenance ran and failed", { ...REUSING, SBOM_PROVENANCE_RESULT: "failure" }],
+    ["provenance was cancelled", { ...REUSING, SBOM_PROVENANCE_RESULT: "cancelled" }],
+    ["provenance result is missing", { ...REUSING, SBOM_PROVENANCE_RESULT: "" }],
     ["the evidence run id is missing", { ...REUSING, TREE_EVIDENCE_RUN_ID: "" }],
     ["the evidence tree sha is missing", { ...REUSING, TREE_EVIDENCE_TREE_SHA: "" }],
     ["the evidence head sha is missing", { ...REUSING, TREE_EVIDENCE_HEAD_SHA: "" }],
@@ -306,6 +310,11 @@ describe("the aggregator still fails closed", () => {
 
   it.each([
     ["all gates green", {}, 0],
+    ["push provenance passed", { CI_EVENT_NAME: "push", SBOM_PROVENANCE_RESULT: "success" }, 0],
+    ["push provenance failed", { CI_EVENT_NAME: "push", SBOM_PROVENANCE_RESULT: "failure" }, 1],
+    ["push provenance skipped", { CI_EVENT_NAME: "push", SBOM_PROVENANCE_RESULT: "skipped" }, 1],
+    ["push provenance missing", { CI_EVENT_NAME: "push", SBOM_PROVENANCE_RESULT: "" }, 1],
+    ["pull request provenance skipped", { CI_EVENT_NAME: "pull_request" }, 0],
     ["ui failed", { UI_RESULT: "failure" }, 1],
     ["ui skipped without reuse", { UI_RESULT: "skipped" }, 1],
     [

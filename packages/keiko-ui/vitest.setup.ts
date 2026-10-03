@@ -6,6 +6,8 @@ import { setClientDiagnosticWriter } from "./src/lib/client-diagnostics";
 import { resetLoadedMessageCatalogs } from "./src/lib/i18n";
 import { writeToBrowserConsole } from "./src/lib/install-client-diagnostics";
 
+import { createOriginLocksFixture } from "./src/test-utils/origin-locks-fixture";
+
 expect.extend(toHaveNoViolations);
 
 // Give every test the transport the application installs, rather than the sink's pre-transport
@@ -13,6 +15,12 @@ expect.extend(toHaveNoViolations);
 // real delivery path end to end instead of a stand-in, and a suite that swaps the writer for its
 // own spy cannot leave the next one buffering into the void.
 beforeEach(() => {
+  if (typeof navigator !== "undefined") {
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+  }
   setClientDiagnosticWriter(writeToBrowserConsole);
   // The lazily loaded locale catalogs are module state that no DOM or storage teardown can reach
   // (#2871). `I18nProvider` reads them synchronously on its first render — `activeLocale =

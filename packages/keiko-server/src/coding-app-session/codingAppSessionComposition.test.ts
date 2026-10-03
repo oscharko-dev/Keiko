@@ -50,27 +50,24 @@ describe("production composition of the app-session channel (ADR-0141 D7)", () =
     expect(result?.paired).toBe(true);
     // No content source is wired in production this wave, so even a paired session reads content-free.
     if (result?.paired) expect(channel?.snapshot(result.cookieToken).content).toBeNull();
-    expect(channel?.ensureLocalSession(undefined).status).toBe("issued");
+    expect(channel?.ensureLocalSession(undefined).status).toBe("unavailable");
+    expect(channel?.sessionCount()).toBe(1);
   });
 
-  // Reviewer thread (PR #3506): the production composition of `handleCodingAppSessionLocalSession`
-  // relies on the launcher-backed pairing authority to gate a fresh cookie, and must never treat
-  // a caller-supplied cookie value as authoritative. These two tests pin both sides through the real
-  // handler (not just the channel API): a forged cookie plus paired authority yields an issued
-  // session with a fresh cookie; a valid token yields `active` with no fresh `Set-Cookie`.
-  it("handleCodingAppSessionLocalSession issues a fresh cookie for a forged value under launcher authority", () => {
-    const deps = productionDeps({ [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: LAUNCHER_SECRET });
-    const channel = deps.codingAppSessionChannel;
-    if (channel === undefined) throw new Error("channel missing");
-    const before = channel.sessionCount();
-    const result = handleCodingAppSessionLocalSession(
-      routeCtx(`${APP_SESSION_COOKIE_NAME}=sess_000000000000000000000000.forged`),
-      deps,
-    );
-    expect(result.headers?.["Set-Cookie"]).toBeDefined();
-    expect(String(result.headers?.["Set-Cookie"])).toContain(APP_SESSION_COOKIE_NAME);
-    expect(channel.sessionCount()).toBe(before + 1);
-  });
+  // Launcher configuration permits validating an attestation, never unauthenticated minting.
+  // The production handler must preserve this distinction for absent and forged browser cookies.
+  it.each([undefined, `${APP_SESSION_COOKIE_NAME}=sess_000000000000000000000000.forged`])(
+    "local-session cannot mint from launcher configuration alone (%s)",
+    (cookie) => {
+      const deps = productionDeps({ [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: LAUNCHER_SECRET });
+      const channel = deps.codingAppSessionChannel;
+      if (channel === undefined) throw new TypeError("channel missing");
+      const before = channel.sessionCount();
+      const result = handleCodingAppSessionLocalSession(routeCtx(cookie), deps);
+      expect(result.headers).toBeUndefined();
+      expect(channel.sessionCount()).toBe(before);
+    },
+  );
 
   it("handleCodingAppSessionLocalSession honors a valid app-session cookie without issuing a fresh one", () => {
     const deps = productionDeps({ [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: LAUNCHER_SECRET });

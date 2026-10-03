@@ -1,16 +1,24 @@
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  resetServerLogger,
+  setSupportIncidentTriggerForTests,
+  drainSupportIncidentCandidates,
+} from "../../../tests/support/activity-log-test-support.js";
 import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
+  readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import {
   clientBindingDigest,
@@ -25,6 +33,8 @@ import {
   redactLogFields,
   formatRegisteredServerLogLine,
   serverLogProcessIdentity,
+  createActivityLogSink,
+  listSupportIncidents,
 } from "@oscharko-dev/keiko-activity-log";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 
@@ -436,6 +446,60 @@ describe("POST /api/diagnostics/client", () => {
     );
     expect(sink.lines().join("")).not.toContain("private issue content");
     expect(sink.lines().join("")).not.toContain("server-log.write-failed");
+  });
+
+  it("logs a client load timeout at error so the registered incident trigger can retain it", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "desktop editor widget chunk: stalled",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_editor-stall-0001",
+          errorKind: "timeout",
+        }),
+      ),
+    );
+    expect(clientDiagnosticEvents(sink)).toEqual([
+      expect.objectContaining({
+        level: "error",
+        op: "client.diagnostic",
+        correlationId: "ui_editor-stall-0001",
+        errorKind: "timeout",
+      }),
+    ]);
+  });
+
+  it("creates a retained local incident for a browser timeout through the production log sink", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "keiko-client-timeout-"));
+    setSupportIncidentTriggerForTests(true);
+    const sink = createActivityLogSink(stateDir, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "desktop editor widget chunk: stalled",
+            clientTs: CLIENT_TS,
+            correlationId: "ui_retained-timeout-0001",
+            errorKind: "timeout",
+          }),
+        ),
+      );
+      drainSupportIncidentCandidates();
+      const incidents = listSupportIncidents(stateDir);
+      expect(incidents).toHaveLength(1);
+      expect(incidents[0]?.trigger).toBe("registered-failure");
+      expect(incidents[0]?.fingerprint.op).toBe("client.diagnostic");
+      expect(incidents[0]?.fingerprint.errorKind).toBe("timeout");
+      expect(incidents[0]?.correlation.rootCorrelationId).toBe("ui_retained-timeout-0001");
+      expect(incidents[0]?.pin.status).toBe("pinned");
+    } finally {
+      setSupportIncidentTriggerForTests(undefined);
+      resetServerLogger();
+      sink.close?.();
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it.each(["voice-dialogue", "markdown-layout"])(
@@ -2360,4 +2424,93 @@ it("admits a final loss flush after both ordinary budgets are exhausted", async 
     now.mockRestore();
     resetClientDiagnosticsIngestStateForTests();
   }
+});
+
+describe("reviewed navigation and render evidence", () => {
+  it.each(["applied", "unavailable", "failed", "dropped", "stale", "cancelled", "deferred"])(
+    "persists closed navigation outcome %s with the lifecycle join",
+    async (navigationOutcome) => {
+      const sink = captureServerLog();
+      const base = {
+        kind: "stage",
+        stage: "editor project selection",
+        ordinal: 1,
+        correlationId: "ui_navigation-0001",
+      };
+      await handleClientDiagnosticIngest(context(JSON.stringify({ ...base, phase: "started" })));
+      await handleClientDiagnosticIngest(
+        context(JSON.stringify({ ...base, phase: "settled", durationMs: 2, navigationOutcome })),
+      );
+      const events = sink.events.filter((event) => event.op.startsWith("client.stage."));
+      expect(events).toHaveLength(2);
+      expect(events.map((event) => event.correlationId)).toEqual([
+        base.correlationId,
+        base.correlationId,
+      ]);
+      expect(events[1]?.extra?.navigationOutcome).toBe(navigationOutcome);
+      const encoded = sink.lines().join("");
+      expect(encoded).toContain(`"navigationOutcome":"${navigationOutcome}"`);
+      expect(analyzeLogText(encoded).sufficiency.status).toBe("complete");
+    },
+  );
+  it("persists file-read transport and stage lifecycle under one minted correlation", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "keiko-navigation-stage-"));
+    const sink = createActivityLogSink(stateDir, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const correlationId = "ui_files-read-0001";
+    const base = { kind: "stage", stage: "files directory load", ordinal: 1, correlationId };
+    try {
+      for (const body of [
+        { ...base, phase: "started" },
+        { ...base, phase: "settled", durationMs: 3, navigationOutcome: "applied" },
+      ])
+        await handleClientDiagnosticIngest(context(JSON.stringify(body), correlationId));
+      sink.close?.();
+      const analyzed = analyzeLogText(readPersistedActivityLog(stateDir));
+      const timeline = analyzed.timelines.find((entry) => entry.correlationId === correlationId);
+      expect(
+        timeline?.lines.filter((line) => line.op === "http.request.body.received"),
+      ).toHaveLength(2);
+      expect(
+        timeline?.lines
+          .filter((line) => line.op.startsWith("client.stage."))
+          .map((line) => line.op),
+      ).toEqual(["client.stage.started", "client.stage.settled"]);
+      expect(analyzed.sufficiency.status).toBe("complete");
+    } finally {
+      resetServerLogger();
+      sink.close?.();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+  it.each(["shell", "window-body"])(
+    "records a real %s render failure at error while plain internal boundaries remain warn",
+    async (renderFailure) => {
+      const sink = captureServerLog();
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "caught render",
+            clientTs: CLIENT_TS,
+            kind: "boundary",
+            renderFailure,
+            errorKind: "internal",
+          }),
+        ),
+      );
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "ordinary boundary",
+            clientTs: CLIENT_TS,
+            kind: "boundary",
+            errorKind: "internal",
+          }),
+        ),
+      );
+      const events = clientDiagnosticEvents(sink);
+      expect(events.map((event) => event.level)).toEqual(["error", "warn"]);
+      expect(events[0]?.extra?.renderFailure).toBe(renderFailure);
+    },
+  );
 });

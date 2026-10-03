@@ -11,7 +11,10 @@ import {
 } from "react";
 import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 
 import { Icons } from "../../Icons";
 import {
@@ -90,7 +93,10 @@ function kindLabel(kind: EditorDocumentSymbol["kind"]): string {
   return kind.replace(/[A-Z]/gu, (letter) => ` ${letter.toLowerCase()}`);
 }
 
-function outlineEmptyText(snapshot: EditorOutlineSnapshot | undefined, t: I18nTranslate): string {
+function outlineEmptyText(
+  snapshot: EditorOutlineSnapshot | undefined,
+  t: OptionalWidgetTranslate,
+): string {
   let text: string;
   if (snapshot?.loading === true) {
     text = t("editor.outline.loading");
@@ -103,7 +109,7 @@ function outlineEmptyText(snapshot: EditorOutlineSnapshot | undefined, t: I18nTr
 }
 
 export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const snapshot = props.snapshot;
   const tree = useMemo(() => buildEditorOutlineTree(snapshot?.symbols ?? []), [snapshot?.symbols]);
   const allNodeIds = useMemo(() => collectNodeIds(tree), [tree]);
@@ -172,7 +178,11 @@ export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
   const emptyText = outlineEmptyText(snapshot, t);
 
   return (
-    <section className={styles.outline} aria-label={t("editor.outline.workspaceLabel")}>
+    <section
+      className={styles.outline}
+      data-expanded={props.visible}
+      aria-label={t("editor.outline.workspaceLabel")}
+    >
       <div className={styles.outlineHeader}>
         <span
           className={styles.outlineTitle}

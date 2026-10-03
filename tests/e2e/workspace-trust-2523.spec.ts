@@ -1,5 +1,5 @@
 // Issue #2523 — executable real-BFF Workspace Trust journey. Every transition is driven through
-// the human-facing prompt or management window and awaited at the canonical server route; the test
+// the explicit management window and awaited at the canonical server route; the test
 // never injects trusted client state or calls the route directly.
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
@@ -40,9 +40,15 @@ async function runPaletteCommand(page: Page, title: string): Promise<void> {
   const query = page.getByRole("combobox", { name: "Command query" });
   await expect(query).toBeVisible();
   await query.fill(`>${title}`);
-  const option = page.getByRole("option").filter({ hasText: title }).first();
+  const option = page.getByRole("option").filter({ hasText: title });
+  await expect(option).toHaveCount(1);
   await expect(option).toBeVisible();
-  await option.click();
+  await expect(option).toHaveAttribute("aria-selected", "true");
+  await expect(query).toBeFocused();
+  // Native select options have no independent pointer box in WebKit; activate the selected
+  // command through the palette's normal keyboard path instead of clicking browser-owned chrome.
+  await query.press("Enter");
+  await expect(query).toBeHidden();
 }
 
 async function expectNoPaletteCommand(page: Page, title: string): Promise<void> {
@@ -82,7 +88,7 @@ test.afterEach(() => {
   cleanupEditorWorkspaces();
 });
 
-async function openUntrustedEditor(page: Page): Promise<void> {
+async function openUntrustedEditor(page: Page): Promise<string> {
   const fixture = createEditorWorkspace([
     { path: "package.json", content: `${PACKAGE_JSON}\n` },
     { path: SOURCE, content: "export const answer: number = 42;\n" },
@@ -101,19 +107,23 @@ async function openUntrustedEditor(page: Page): Promise<void> {
   });
   await page.goto("/");
   await openEditorWorkspace(page, { dismissTrustPrompt: false });
+  return fixture.root;
 }
 
-async function stayRestrictedAtPrompt(page: Page): Promise<void> {
-  const prompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
-  await expect(prompt).toBeVisible();
-  const stayRestricted = prompt.getByRole("button", { name: "Stay restricted" });
-  await expect(stayRestricted).toBeFocused();
-  await expectAxeGreen(page, "[role='alertdialog']");
-  await page.keyboard.press("Enter");
-  await expect(prompt).toBeHidden();
+function workspaceTrustCard(page: Page, root: string): Locator {
+  return page.getByTestId("workspace-trust-root").filter({ hasText: root });
+}
 
-  const editorBanner = page.getByTestId("workspace-trust-banner-editor");
-  await expect(editorBanner).toContainText("Restricted Mode");
+async function expectRestrictedManualEditor(page: Page): Promise<void> {
+  const prompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
+  await expect(prompt).toHaveCount(0);
+  await expect(page.getByTestId("workspace-trust-banner-editor")).toHaveCount(0);
+  const editor = page.getByRole("region", { name: /^Editor/u });
+  await expect(editor.locator(".monaco-editor")).toBeVisible();
+  await expect(editor.getByRole("tab", { name: /src\/index\.ts/u })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await expectNoPaletteCommand(page, "Run Typecheck");
 }
 
@@ -126,21 +136,22 @@ async function inspectRestrictedLanguageStatus(page: Page): Promise<void> {
   await expectAxeGreen(page, "[data-testid='workspace-trust-banner-languages']");
 }
 
-async function grantFromManagement(page: Page): Promise<Locator> {
+async function grantFromManagement(page: Page, root: string): Promise<Locator> {
   await runPaletteCommand(page, "Open Workspace Trust");
   const panel = page.getByTestId("workspace-trust-panel");
-  const card = panel.getByTestId("workspace-trust-root").filter({ hasText: "Workspace Trust E2E" });
+  const card = workspaceTrustCard(page, root);
   await expect(card).toBeVisible();
+  const trustButton = card.getByRole("button", { name: "Trust" });
+  await expect(trustButton).toBeEnabled();
   await expectAxeGreen(page, "[data-testid='workspace-trust-panel']");
   const grantResponse = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
       response.url().endsWith("/api/editor/verification/trust"),
   );
-  const trustButton = card.getByRole("button", { name: "Trust" });
-  await expect(trustButton).toBeEnabled();
   await trustButton.click();
   const grantDialog = page.getByRole("alertdialog", { name: "Trust this workspace?" });
+  await expectViewportModal(page, grantDialog);
   await expect(grantDialog.getByRole("button", { name: "Cancel" })).toBeFocused();
   await grantDialog.getByRole("button", { name: "Trust workspace" }).click();
   expect((await grantResponse).status()).toBe(200);
@@ -157,9 +168,9 @@ async function assertTrustedCapability(page: Page): Promise<void> {
   await expectPaletteCommand(page, "Run Typecheck");
 }
 
-async function revokeFromManagement(page: Page, panel: Locator): Promise<void> {
+async function revokeFromManagement(page: Page, root: string): Promise<void> {
   await runPaletteCommand(page, "Open Workspace Trust");
-  const card = panel.getByTestId("workspace-trust-root").filter({ hasText: "Workspace Trust E2E" });
+  const card = workspaceTrustCard(page, root);
   const revokeResponse = page.waitForResponse(
     (response) =>
       response.request().method() === "DELETE" &&
@@ -172,7 +183,12 @@ async function revokeFromManagement(page: Page, panel: Locator): Promise<void> {
     .click();
   expect((await revokeResponse).status()).toBe(200);
   await expect(card.getByText("Restricted Mode")).toBeVisible();
-  await expect(page.getByTestId("workspace-trust-banner-editor")).toBeVisible();
+  await clickWindowChromeButton(
+    page.getByRole("region", { name: /^Workspace Trust/u }),
+    "Close Workspace Trust window",
+  );
+  await expectRestrictedManualEditor(page);
+  await runPaletteCommand(page, "Open Workspace Trust");
 }
 
 async function assertNarrowTextZoomLayout(page: Page, panel: Locator): Promise<void> {
@@ -197,21 +213,29 @@ async function assertNarrowTextZoomLayout(page: Page, panel: Locator): Promise<v
 }
 
 test("workspace trust confirm preserves viewport modality @smoke", async ({ page }) => {
-  await openUntrustedEditor(page);
+  const root = await openUntrustedEditor(page);
+  await expectRestrictedManualEditor(page);
+  await runPaletteCommand(page, "Open Workspace Trust");
+  const card = workspaceTrustCard(page, root);
+  await expect(card.getByText("Restricted Mode")).toBeVisible();
+  await card.getByRole("button", { name: "Trust", exact: true }).click();
   const prompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
   await expectViewportModal(page, prompt);
-  await prompt.getByRole("button", { name: "Stay restricted" }).click();
+  await expect(prompt.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await expectAxeGreen(page, "[role='alertdialog']");
+  await page.keyboard.press("Enter");
+  await expect(prompt).toBeHidden();
+  await expect(card.getByText("Restricted Mode")).toBeVisible();
 });
 
 test("an untrusted root stays restricted until an explicit confirmed grant and returns after revoke", async ({
   page,
 }) => {
-  await openUntrustedEditor(page);
-  await expectViewportModal(page, page.getByRole("alertdialog", { name: "Trust this workspace?" }));
-  await stayRestrictedAtPrompt(page);
+  const root = await openUntrustedEditor(page);
+  await expectRestrictedManualEditor(page);
   await inspectRestrictedLanguageStatus(page);
-  const panel = await grantFromManagement(page);
+  const panel = await grantFromManagement(page, root);
   await assertTrustedCapability(page);
-  await revokeFromManagement(page, panel);
+  await revokeFromManagement(page, root);
   await assertNarrowTextZoomLayout(page, panel);
 });

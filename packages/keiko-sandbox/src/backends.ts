@@ -51,7 +51,7 @@ function strictBubblewrapArgs(plan: IsolatedRunPlan): readonly string[] {
     ? [...EXECUTION_ROOT_READONLY_BINDS, commandDir]
     : EXECUTION_ROOT_READONLY_BINDS;
   return [
-    "--unshare-net",
+    ...(plan.network === "none" ? ["--unshare-net"] : []),
     "--die-with-parent",
     "--new-session",
     "--proc",
@@ -145,7 +145,12 @@ function buildLinuxGatewayCommand(
 function buildBubblewrapCommand(plan: IsolatedRunPlan): WrappedCommand {
   const gateway = copyNetworkGatewayPolicy(plan.network);
   if (gateway !== undefined) return buildLinuxGatewayCommand("bubblewrap", plan, gateway);
-  if (plan.network !== "none") throw new TypeError("sandbox-network-policy-invalid");
+  if (
+    plan.network !== "none" &&
+    !(plan.network === "inherit" && plan.filesystem === "execution-root")
+  ) {
+    throw new TypeError("sandbox-network-policy-invalid");
+  }
   return { command: "bwrap", args: bubblewrapArgs(plan) };
 }
 
@@ -210,7 +215,7 @@ function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] 
   return [
     "run",
     "--rm",
-    "--network=none",
+    ...(plan.network === "none" ? ["--network=none"] : []),
     ...(plan.filesystem === "execution-root"
       ? ["--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m"]
       : []),
@@ -228,11 +233,23 @@ function unsupportedBackend(backend: never): never {
   throw new Error(`Unsupported sandbox backend: ${String(backend)}`);
 }
 
+function assertCompatibleFilesystem(backend: SandboxBackend, plan: IsolatedRunPlan): void {
+  if (
+    plan.filesystem === "execution-root" &&
+    (backend === "unshare" ||
+      backend === "seatbelt" ||
+      copyNetworkGatewayPolicy(plan.network) !== undefined)
+  ) {
+    throw new TypeError("sandbox-filesystem-policy-unsupported");
+  }
+}
+
 // Builds the wrapped command for a backend, or undefined for "none" (no enforcing wrapper).
 export function buildWrappedCommand(
   backend: SandboxBackend,
   plan: IsolatedRunPlan,
 ): WrappedCommand | undefined {
+  assertCompatibleFilesystem(backend, plan);
   switch (backend) {
     case "bubblewrap":
       return buildBubblewrapCommand(plan);

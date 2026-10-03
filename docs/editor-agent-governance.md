@@ -2,14 +2,12 @@
 
 This is the governance layer over the agent editor control plane. It makes every agent editor action
 **classifiable** (allowed, denied, or review-required) and **auditable** (a bounded, content-free
-record of what an agent changed or attempted), and surfaces recent activity to the user. It is
+record of what an agent changed or attempted). It is
 defined in
 [`packages/keiko-contracts/src/editor-agent-governance.ts`](../packages/keiko-contracts/src/editor-agent-governance.ts),
 enforced and recorded in the BFF
 ([`agentRoutes.ts`](../packages/keiko-server/src/editor/agentRoutes.ts) +
-[`agentActionAudit.ts`](../packages/keiko-server/src/editor/agentActionAudit.ts)), and displayed by the
-browser panel
-([`EditorAgentActionsPanel.tsx`](../packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorAgentActionsPanel.tsx)).
+[`agentActionAudit.ts`](../packages/keiko-server/src/editor/agentActionAudit.ts)).
 The governing decision records are
 [ADR-0062](./adr/ADR-0062-agent-editor-action-governance-and-audit.md) and its current authority
 amendments, [ADR-0125](./adr/ADR-0125-governed-agent-docking-and-editor-changesets.md) and
@@ -20,8 +18,11 @@ apply-edits gates ([ADR-0058](./adr/ADR-0058-safe-apply-edits-and-patch-workflow
 registry/queue ([ADR-0060](./adr/ADR-0060-agent-editor-session-registry-and-queue.md)), and the
 browser bridge ([ADR-0061](./adr/ADR-0061-browser-editor-agent-bridge.md)).
 
-Owner: Issue #1395 (Epic #1491). This is the product differentiator: not just agent power, but
-controlled, explainable, recoverable agent power.
+Owner: Issue #1395 (Epic #1491).
+
+The ordinary Editor integration was retired by owner decision on 2026-10-03. The shared governed
+control plane remains for independent consumers, including the Coding Workbench; this document
+does not make those actions available in the ordinary Editor.
 
 ## Effect classes
 
@@ -36,8 +37,11 @@ compile time):
 | `content-mutation` | `format`, `save`, `applyTextEdits`, `applyPatch`, `applyChangeset` | yes     | `allowed` when contained and non-sensitive, then composed with mode policy |
 | `external-effect`  | _(future Git / command actions — none today)_                      | yes     | `review-required`                                                          |
 
-The mutating set (`isMutatingEditorAgentAction`) is `content-mutation` ∪ `external-effect`. The
-action contract currently defines no Git or command action, so `external-effect` remains empty.
+The table describes the original mutation taxonomy. The current exhaustive contract also assigns
+`queryGit`, `navigateSymbol`, and `searchWorkspace` to `workspace-read`, and
+`requestVerification` to `execution`. These retain their existing Workbench authority and budgets.
+The mutating set (`isMutatingEditorAgentAction`) is `content-mutation` ∪ `external-effect`;
+`external-effect` remains empty.
 Adding one requires an explicit class, resource scope, risk, producer, enforcement path, and tests;
 classification alone never grants execution authority.
 
@@ -84,7 +88,8 @@ The BFF composes the baseline and mode policy before queueing. A policy-required
 only for an action with an implemented review path (`applyPatch` or `applyChangeset`); other action
 types fail closed as `APPROVAL_REQUIRED`. An allowed patch or changeset may proceed without visible
 review, but uses the same current-hash check, bridge confirmation, server-side revalidation, atomic
-transaction, terminal result, and Monaco reconciliation as the reviewed path. Omitted legacy
+transaction, and terminal result as the reviewed path. These are shared control-plane requirements,
+not a mounted ordinary Editor review workflow. Omitted legacy
 `requiresReview` values still mean review-required.
 
 Sensitive-path denial applies across every write action, including every declared member of an
@@ -130,22 +135,28 @@ This is intentionally ephemeral: the issue excludes long-term telemetry collecti
 The record shape is deliberately `EvidenceStore`-compatible so a future durable sink (mirroring
 `patchApplyEvidence`) can persist it without a schema change.
 
-## UI surface
+## Ordinary Editor retirement
 
-`EditorAgentActionsPanel` renders the recent records for the active session: action type, target
-file, a disposition label (allowed / review-required / denied), outcome, and a timestamp. It fetches
-the audit feed on mount and re-fetches whenever the editor-agent bridge observes activity
-(`onAgentActivity`), without widening the frozen `EditorAgentEvent` union. The disposition is conveyed
-by a text label (not colour alone, WCAG 1.4.1), the list is an `aria-live` region, and styling reuses
-existing design tokens (no global stylesheet change; CSP `script-src 'self'` compliant).
+The ordinary Editor no longer mounts an agent actions panel or presence indicator, subscribes to
+agent action events, executes incoming actions, or offers Chat **Apply to editor** and selection
+handoffs. Manual editing, saving, formatting, tabs, splits, history, and language services remain.
+The independent Coding Workbench's governed execution and shared audit ledger are unchanged.
+
+The Editor publishes only body-free buffer-safety snapshots through the existing snapshot route
+and registry. Their ownership token authorizes refresh and clean release only. Passive records
+cannot authenticate an action/SSE bridge, appear in discovery, or provide agent context. The
+existing verified-commit check still sees their dirty buffers. A disconnect does not clear dirty
+state; clean, acknowledged state can be released explicitly. See
+[ADR-0060](./adr/ADR-0060-agent-editor-session-registry-and-queue.md) for the lifecycle limits.
 
 ## Limitations
 
 - **Ephemeral audit.** The ledger is in-memory, session-scoped, and FIFO-evicted; records do not
-  survive a server restart and older records are dropped. It backs a "recent actions" view, not a
-  compliance archive. Durable persistence is a documented follow-up.
-- **Git / command actions are future work.** The taxonomy defines an `external-effect` class for them,
-  but no audit fires until those action types exist in the action contract.
+  survive a server restart and older records are dropped. It is not a compliance archive, and the
+  ordinary Editor no longer displays it. Durable persistence is a documented follow-up.
+- **Classification is not execution availability.** `queryGit` is a bounded repository read,
+  `requestVerification` is governed execution, and `external-effect` remains empty. None of these
+  restores an ordinary Editor agent channel.
 - **Layered containment.** `isContainedAgentPath` is only the first lexical gate. Server preflight and
   commit-time patch handling re-resolve targets through the workspace boundary, reject symlink and
   hard-link escape, and revalidate the atomic transaction before disk mutation.

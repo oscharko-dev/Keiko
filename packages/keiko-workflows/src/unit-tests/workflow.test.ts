@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_PATCH_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import { generateUnitTests } from "./workflow.js";
 import type { UnitTestWorkflowDeps, UnitTestWorkflowInput } from "./types.js";
@@ -12,6 +12,12 @@ import {
   scriptChildClose,
   scriptedModel,
 } from "./_support.js";
+
+vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-verification")>();
+  const { withConfinedVerificationFixture } = await import("./_support.js");
+  return withConfinedVerificationFixture(actual);
+});
 
 const ROOT = "/repo";
 
@@ -244,9 +250,7 @@ describe("generateUnitTests — apply mode verification", () => {
       fs: unknownFs,
       writer,
       spawn: autoClosingSpawn,
-      // This case pins the npm-test FALLBACK resolution, not the egress boundary, and a fake spawn
-      // cannot be sandboxed — so the degrade mode is requested by name rather than inferred from
-      // the injected spawn, which also matched governed production runs (KEIKO-0096).
+      // Degrade changes network compatibility only; the real planner must still confine writes.
       verificationNetworkEnforcement: "enforce-or-degrade",
       now: () => 1000,
       idSource: () => "run-1",
@@ -254,7 +258,8 @@ describe("generateUnitTests — apply mode verification", () => {
     expect(report.status).toBe("completed");
     expect(report.verificationSummary?.overallStatus).toBe("passed");
     expect(report.verificationSkipReason).toBeUndefined();
-    expect(spawn.calls()[0]?.args).toEqual(["test"]);
+    expect(spawn.calls()[0]?.args.slice(-2)).toEqual(["/trusted-tools/npm", "test"]);
+    expect(spawn.calls()[0]?.args).toContain("--bind");
   });
 
   it("skips verification when no test command resolves", async () => {

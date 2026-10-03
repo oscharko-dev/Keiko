@@ -527,7 +527,7 @@ describe("WorkspaceScriptTrustService", () => {
     // removing a root from a multi-root workspace, which no longer orphans the project — removal
     // now restores a standalone single-root workspace. The invariant is unchanged and now sits at
     // the layer that owns it, anchored to the D9 producer that still exists.
-    const dir = mkdtempSync(join(tmpdir(), "keiko-script-trust-premanifest-"));
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-script-trust-premanifest-"));
     const dbPath = join(dir, "ui.db");
     const active = join(dir, "active");
     mkdirSync(active);
@@ -833,7 +833,7 @@ describe("WorkspaceScriptTrust fail-closed matrix", () => {
   // over a live in-memory store proves only that the decision is not cached in the service. So the
   // drill spans a real SQLite file that is closed and reopened between its two halves.
   it("keeps an invalidated grant invalid and restores trust only through an explicit re-grant", () => {
-    const dir = mkdtempSync(join(tmpdir(), "keiko-script-trust-regrant-"));
+    const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-script-trust-regrant-"));
     const dbPath = join(dir, "ui.db");
     const before = createNodeUiStore(dbPath);
     let invalidatedRevision: number;

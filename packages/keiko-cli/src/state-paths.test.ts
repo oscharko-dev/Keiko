@@ -24,6 +24,7 @@ import {
   removePidFileIfMatches,
   removeStaleShutdownRequest,
   resolveStateDir,
+  resolveContainedStateDir,
   scanRuntimeState,
   writeExclusivePidFile,
   writeShutdownRequest,
@@ -45,6 +46,20 @@ afterEach(() => {
 });
 
 describe("resolveStateDir", () => {
+  it("refuses a default state directory redirected outside the selected working directory", () => {
+    const cwd = makeRoot();
+    const outside = makeRoot();
+    symlinkSync(outside, join(cwd, DEFAULT_STATE_DIR_NAME), "junction");
+    expect(() => resolveContainedStateDir(cwd, {}, cwd)).toThrow(
+      expect.objectContaining({ code: "STATE_DIR_ESCAPE" }),
+    );
+  });
+
+  it("accepts an absent default state directory below a canonical working directory", () => {
+    const cwd = makeRoot();
+    expect(resolveContainedStateDir(cwd, {}, cwd)).toBe(join(cwd, DEFAULT_STATE_DIR_NAME));
+  });
+
   it("uses an explicit --state-dir argument over env and default", () => {
     const dir = resolveStateDir("/cwd", { KEIKO_STATE_DIR: "/env/state" }, "/explicit/state");
     expect(dir).toBe("/explicit/state");

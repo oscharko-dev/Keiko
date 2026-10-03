@@ -14,6 +14,24 @@
 
 title = "Keiko secret scan"
 
+[[allowlists]]
+description = "PR #3685: deterministic watcher root-token fixture in one immutable checkpoint; this 16-hex sequence is test metadata, not a credential, and is assembled from fragments in subsequent commits."
+condition = "AND"
+commits = ["69bb4b8ed88ac1a77d1107df52e533c30af9ef70"]
+paths = ['''packages/keiko-ui/src/app/components/desktop/widgets/cards/useWorkspaceWatch\.test\.tsx''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''rootToken: "0123456789abcdef",''']
+
+[[allowlists]]
+description = "PR #3685: the deterministic watcher root-token fixture was also copied into FilesWidget in this immutable checkpoint. It is test metadata, not a credential; the current fixture assembles it from fragments. Only this exact historical fixture line is exempt."
+condition = "AND"
+commits = ["269bbf2f91d40b6e9e8b636c807e3495a1e20f74"]
+paths = ['''packages/keiko-ui/src/app/components/desktop/widgets/cards/FilesWidget\.test\.tsx''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''rootToken: "0123456789abcdef",''']
+
 [extend]
 useDefault = true
 

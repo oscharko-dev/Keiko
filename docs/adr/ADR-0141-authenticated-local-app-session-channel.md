@@ -95,6 +95,11 @@ returns the content-free projection. The exact launcher-to-browser delivery of t
 finalized with the UI plumbing in W1.5; the server-side authority, the session, and the channel are
 complete and independently testable through the port here.
 
+The local-session restore route only confirms an existing valid bearer. Composing a launcher
+pairing port is never itself client attestation: an absent, forged, revoked or expired cookie cannot
+mint a new session. The launcher fragment is redeemed only by the existing single-use `/pair`
+endpoint. Valid-cookie reloads remain automatic and do not widen authority.
+
 ### D3 — The authenticated channel is a distinct transport, not a widening of the unauthenticated union
 
 Content is served over a new authenticated channel: an authenticated snapshot read and an
@@ -261,10 +266,15 @@ content store is introduced.
 
 The same session bearer is issued as host-scoped cookies for the protected route families:
 `/api/coding-workbench`, `/api/git`, `/api/files`, `/api/editor`, `/api/runtime`, `/api/runs`,
-`/api/workspaces`, `/api/desktop/chat`, and `/api/task-workspaces`. The final path carries the
+`/api/workspaces`, `/api/desktop/chat`, `/api/task-workspaces`, `/api/diagnostics/report`, and the
+exact `/api/repositories/clone` entry point. Clone validates paired authority before reading its
+body, checking destination paths or invoking the credential-capable Git runner. The broader
+`/api/repositories` family receives no bearer. The final path carries the
 paired session to issue-bound workspace provisioning (#3384/#3385); preview and provisioning
 independently validate that session before resolving issue content. Cookie issuance and revocation
 share one explicit path list so sign-out clears every browser projection.
+The exact diagnostics report path uses the same paired authority to export a local, body-free
+support artifact. Other diagnostics routes receive no bearer through this path.
 
 No live bearer is issued at the broader `/api` ancestor or to unrelated BFF routes. Issuance and
 sign-out also expire the retired `/api` and `/api/editor/local-history` projections. `Path` remains

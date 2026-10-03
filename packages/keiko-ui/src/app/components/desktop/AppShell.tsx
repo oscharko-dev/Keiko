@@ -102,6 +102,7 @@ function cloneCfg(cfg: Cfg): Cfg {
 function normalizedNewChatCfg(cfg: Cfg, activeProjectPath: string | undefined): Cfg {
   const next = cloneCfg(cfg);
   delete next["projectPath"];
+  delete next["selectionHandoffId"];
   const configuredProjectPath = validProjectPath(cfg["projectPath"]);
   const selectedProjectPath = validProjectPath(activeProjectPath);
   const projectPath = configuredProjectPath ?? selectedProjectPath;
@@ -118,7 +119,6 @@ export function prepareNewWindowCfg(
     ? {
         ...normalizedNewChatCfg(cfg, activeProjectPath),
         chatId: undefined,
-        selectionHandoffId: undefined,
         newChatRequestId,
       }
     : cfg;

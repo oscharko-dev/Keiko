@@ -195,6 +195,53 @@ describe("SupportIncident candidates", () => {
     rmSync(stateDir, { recursive: true, force: true });
   });
 
+  it("retains separate windows for later browser occurrences despite identical coarse defect evidence", () => {
+    const first = created(
+      recordRegisteredFailureIncident(stateDir, {
+        op: "client.diagnostic",
+        errorKind: "timeout",
+        correlationId: "browser-window-stall",
+        clientKind: "other",
+        frames: [],
+      }),
+    );
+    const later = created(
+      recordRegisteredFailureIncident(stateDir, {
+        op: "client.diagnostic",
+        errorKind: "timeout",
+        correlationId: "browser-editor-read",
+        clientKind: "other",
+        frames: [],
+      }),
+    );
+    expect(first.record.fingerprint.algorithm).toBe(2);
+    expect(later.record.fingerprint.defectFingerprint).toBe(
+      first.record.fingerprint.defectFingerprint,
+    );
+    expect(later.incidentId).not.toBe(first.incidentId);
+    expect(later.record.pin.pinId).not.toBe(first.record.pin.pinId);
+    const replay = recordRegisteredFailureIncident(stateDir, {
+      op: "client.diagnostic",
+      errorKind: "timeout",
+      correlationId: "browser-editor-read",
+      clientKind: "other",
+      frames: [],
+    });
+    expect(replay).toMatchObject({ status: "deduplicated", incidentId: later.incidentId });
+    expect(listSupportIncidents(stateDir)).toHaveLength(2);
+    dismissSupportIncident(stateDir, later.incidentId);
+    const retried = created(
+      recordRegisteredFailureIncident(stateDir, {
+        op: "client.diagnostic",
+        errorKind: "timeout",
+        correlationId: "browser-editor-read",
+        clientKind: "other",
+        frames: [],
+      }),
+    );
+    expect(retried.incidentId).not.toBe(later.incidentId);
+  });
+
   // Backdates a store file past the in-flight grace: a file whose writer crashed long ago, as
   // opposed to one another process may still be writing.
   function abandon(name: string): void {
@@ -603,6 +650,21 @@ describe("SupportIncident candidates", () => {
         errorKind: "internal",
         correlationId: "over-quota-1",
       });
+      expect(
+        recordRegisteredFailureIncident(stateDir, {
+          op: "client.diagnostic",
+          errorKind: "internal",
+          correlationId: "over-quota-browser",
+          clientKind: "boundary",
+          renderFailure: "window-body",
+        }),
+      ).toEqual({ status: "rejected", reason: "quota-exhausted" });
+      expect(
+        expectActivityLogProof(
+          "support.incident.rejected.emitted-line",
+          lines("support.incident.rejected").at(-1) ?? "",
+        ),
+      ).toMatchObject({ fingerprintAlgorithm: 2, correlationId: "over-quota-browser" });
       expect(rejected).toEqual({ status: "rejected", reason: "quota-exhausted" });
       expect(storeNames()).toHaveLength(MAX_REGISTERED_FAILURE_INCIDENTS);
       const line = expectActivityLogProof(

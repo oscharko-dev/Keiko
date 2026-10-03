@@ -11,8 +11,10 @@
 // points back into a sensitive location.
 
 import { homedir } from "node:os";
-import { existsSync, lstatSync, realpathSync, type Stats } from "node:fs";
-import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
+import { realpathSync } from "node:fs";
+import { isAbsolute, join, normalize, resolve, sep } from "node:path";
+import { assertSqliteStatePath } from "@oscharko-dev/keiko-security/fs-hardening";
+import type { MemoryVaultLogSink } from "./vault-log.js";
 import { MemoryStorageError } from "./errors.js";
 
 export const MEMORY_DB_FILENAME = "keiko-memory.db";
@@ -35,37 +37,7 @@ function isInsideRuntimeStateRoot(candidate: string): boolean {
   return r === runtimeRoot || r.startsWith(`${runtimeRoot}${sep}`);
 }
 
-// Walk every ancestor from dirname(path) up to the filesystem root and return true as soon as ANY
-// existing ancestor is a symlink. Do NOT short-circuit at the first existing directory: a real
-// subdirectory pre-created inside a symlinked target would otherwise defeat the guard, because the
-// walk would see the real subdirectory (not a symlink) at the first-existing position and never
-// inspect the shallower symlinked ancestor. Audit KEIKO-0478; the same fix must stay applied to
-// packages/keiko-server/src/store/paths.ts's byte-identical copy.
-function hasSymlinkAncestor(path: string): boolean {
-  let current = dirname(path);
-  const root = parse(current).root;
-  while (current !== root) {
-    // PR-review follow-up (Codex thread 3771256639): use lstatSync directly. existsSync
-    // returned false on transient EACCES/EIO, letting the walk pass an inaccessible
-    // symlinked ancestor we could not verify. Only ENOENT means the segment truly does
-    // not exist; every other errno propagates so the caller sees the storage failure.
-    const stat = lstatOrNull(current);
-    if (stat?.isSymbolicLink()) return true;
-    current = dirname(current);
-  }
-  return false;
-}
-
-function lstatOrNull(path: string): Stats | null {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-function guard(path: string, label: string): string {
+function guard(path: string, label: string, sink?: MemoryVaultLogSink): string {
   // NUL bypass (CWE-22): path.normalize() leaves NUL bytes intact, so a string like
   // "/safe/path\0/etc/passwd" satisfies the CWD-containment check but open(2) truncates
   // at the NUL and lands on a completely different file. Reject NUL bytes first so the
@@ -80,11 +52,10 @@ function guard(path: string, label: string): string {
   if (isInsideCwd(normalized) && !isInsideRuntimeStateRoot(normalized)) {
     throw invalidPath(`${label} must not be inside the current workspace.`);
   }
-  if (existsSync(normalized) && lstatSync(normalized).isSymbolicLink()) {
-    throw invalidPath(`${label} must not be a symlink.`);
-  }
-  if (hasSymlinkAncestor(normalized)) {
-    throw invalidPath(`${label} must not be inside a symlinked directory.`);
+  try {
+    assertSqliteStatePath(join(normalized, MEMORY_DB_FILENAME), { store: "memory-vault", sink });
+  } catch {
+    throw invalidPath("Memory database state path is unsafe or unavailable.");
   }
   return normalized;
 }
@@ -92,20 +63,18 @@ function guard(path: string, label: string): string {
 export function resolveMemoryDir(
   explicit: string | undefined,
   env: Readonly<Record<string, string | undefined>>,
+  sink?: MemoryVaultLogSink,
 ): string {
   if (explicit !== undefined && explicit.length > 0) {
-    return guard(explicit, "Memory vault directory");
+    return guard(explicit, "Memory vault directory", sink);
   }
   const fromEnv = env.KEIKO_MEMORY_DIR;
   if (fromEnv !== undefined && fromEnv.length > 0) {
-    return guard(fromEnv, "KEIKO_MEMORY_DIR");
+    return guard(fromEnv, "KEIKO_MEMORY_DIR", sink);
   }
   const stateDir = env.KEIKO_STATE_DIR;
   if (stateDir !== undefined && stateDir.length > 0) {
-    return guard(
-      join(guard(stateDir, "KEIKO_STATE_DIR"), MEMORY_DIR_NAME),
-      "KEIKO_STATE_DIR/memory",
-    );
+    return guard(join(stateDir, MEMORY_DIR_NAME), "KEIKO_STATE_DIR/memory", sink);
   }
   // The default branch is guarded exactly like the three configured branches above: it is the one
   // every install without explicit configuration takes, and it is where the encrypted DB — plus,
@@ -113,13 +82,12 @@ export function resolveMemoryDir(
   // otherwise redirect both silently. The CWD-containment check inside guard() is a no-op for a
   // homedir path unless the process is started from $HOME, where .keiko is the gitignored runtime
   // state root guard() already allows.
-  return guard(defaultMemoryDirCandidate(), "Default memory vault directory");
+  return guard(defaultMemoryDirCandidate(), "Default memory vault directory", sink);
 }
 
 // The home directory itself may legitimately BE a symlink — a relocated or mounted home is an
-// ordinary setup, not the planted redirect this module defends against. hasSymlinkAncestor stops
-// at the first EXISTING ancestor, so before ~/.keiko is created (i.e. on first run) that ancestor
-// IS the home directory, and guarding the unresolved path rejected those installs outright.
+// ordinary setup, not the planted redirect this module defends against. Canonicalize that
+// trusted home before validating every state-path ancestor, including first-run directories.
 // Resolving the home to its real location keeps every guard aimed at what the threat model is
 // about: a symlinked .keiko, or a symlinked memory/ inside it, are both still rejected because the
 // resolved path is checked in full.
@@ -138,6 +106,7 @@ function defaultMemoryDirCandidate(): string {
 export function resolveMemoryDbPath(
   explicit: string | undefined,
   env: Readonly<Record<string, string | undefined>>,
+  sink?: MemoryVaultLogSink,
 ): string {
-  return join(resolveMemoryDir(explicit, env), MEMORY_DB_FILENAME);
+  return join(resolveMemoryDir(explicit, env, sink), MEMORY_DB_FILENAME);
 }

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   supportIncidentPrivateProjection,
   type SupportReport,
+  type SupportIncidentPrivateProjection,
   MAX_SUPPORT_REPORT_CONTAINERS,
   MAX_SUPPORT_REPORT_DEPTH,
   MAX_SUPPORT_REPORT_EVENT_BYTES,
@@ -48,6 +49,10 @@ import {
 } from "./support-report.js";
 import { parseCanonicalSupportJson } from "./support-report-json.js";
 
+import { supportReportPrivacyProjection } from "./support-report-privacy.js";
+import { findSupportRegistry } from "./support-registry.js";
+import { SUPPORT_RELEASE_REGISTRY_SNAPSHOTS } from "./support-registry-history.generated.js";
+
 const T0 = Date.UTC(2026, 8, 30, 12);
 const CORRELATION = "support-report-fixture-0001";
 let stateDir: string;
@@ -57,7 +62,11 @@ function fixture(
   fields: Readonly<Record<string, unknown>> = {},
   parentAt?: (index: number) => string,
   lead: (process: FixtureProcess) => readonly string[] = () => [],
-): { report: SupportReport; query: SupportQueryResult } {
+): {
+  report: SupportReport;
+  query: SupportQueryResult;
+  incident: SupportIncidentPrivateProjection;
+} {
   const process = fixtureProcess(4242, "aabbccdd");
   writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
     ...lead(process),
@@ -89,7 +98,7 @@ function fixture(
     DEFAULT_SUPPORT_QUERY_LIMITS,
     { trigger: "export" },
   );
-  return { report: buildSupportReport(incident, query), query };
+  return { report: buildSupportReport(incident, query), query, incident };
 }
 
 describe("canonical body-free offline report", () => {
@@ -149,14 +158,14 @@ describe("canonical body-free offline report", () => {
   );
 
   it("reduces evidence above the record cap to an explicitly insufficient report", () => {
-    const { report, query } = fixture();
+    const { query, incident } = fixture();
     const event = query.events[0];
     if (event === undefined) throw new TypeError("missing fixture evidence");
     const oversized = {
       ...query,
       events: Array.from({ length: MAX_SUPPORT_REPORT_RECORDS + 1 }, () => event),
     };
-    const reduced = buildSupportReport(report.incident, oversized);
+    const reduced = buildSupportReport(incident, oversized);
     expect(reduced.evidence.recordCount).toBe(0);
     expect(reduced.selection.status).toBe("insufficient");
     expect(reduced.selection.reasons).toContain("report-budget-exceeded");
@@ -257,7 +266,7 @@ describe("canonical body-free offline report", () => {
   });
 
   it("refuses producer-only route hatches and unsafe frames even with valid registered sections", () => {
-    const { report, query } = fixture();
+    const { report, query, incident } = fixture();
     const process = fixtureProcess(4242, "aabbccdd");
     const request = JSON.parse(
       fixtureLine(process, T0, {
@@ -275,7 +284,7 @@ describe("canonical body-free offline report", () => {
     const sourceSegmentId = eventsOf(report)[0]?.sourceSegmentId ?? "legacy";
     const original = query.events[0];
     if (original === undefined) throw new TypeError("missing selected event");
-    const safe = buildSupportReport(report.incident, {
+    const safe = buildSupportReport(incident, {
       ...query,
       events: [{ ...original, text: canonicalSupportJson(request) }],
     });
@@ -339,16 +348,16 @@ describe("canonical body-free offline report", () => {
   });
 
   it("uses the hard final-file budget and never reports an omitted closure as complete", () => {
-    const { report, query } = fixture();
+    const { report, query, incident } = fixture();
     const fullBytes = Buffer.byteLength(serializeSupportReport(report));
-    const reduced = buildSupportReport(report.incident, query, fullBytes - 1);
+    const reduced = buildSupportReport(incident, query, fullBytes - 1);
     expect(Buffer.byteLength(serializeSupportReport(reduced))).toBeLessThan(fullBytes);
     // The report-budget metric names exactly what --max-bytes would have to allow.
     expect(reduced.selection.requiredBytes).toBe(fullBytes);
     expect(reduced.evidence.recordCount).toBe(0);
     expect(reduced.selection.status).toBe("insufficient");
     expect(reduced.selection.reasons).toContain("report-budget-exceeded");
-    expect(() => buildSupportReport(report.incident, query, 1)).toThrow(SupportReportError);
+    expect(() => buildSupportReport(incident, query, 1)).toThrow(SupportReportError);
   });
 });
 
@@ -507,7 +516,9 @@ describe("hostile report admission", () => {
   });
   it("rejects escaped terminal controls inside an otherwise correctly sealed event section", () => {
     const report = fixture().report;
-    const text = JSON.stringify(eventsOf(report)).replace(CORRELATION, `${CORRELATION}\\u001b`);
+    const correlation = report.incident.correlation.rootCorrelationId;
+    if (correlation === undefined) throw new TypeError("missing report correlation");
+    const text = JSON.stringify(eventsOf(report)).replace(correlation, `${correlation}\\u001b`);
     const evidence = {
       ...report.evidence,
       rawBytes: Buffer.byteLength(text),
@@ -530,9 +541,9 @@ describe("hostile report admission", () => {
     }
   });
   it("enforces the producer ceiling even when an operator requests a larger budget", () => {
-    const { report, query } = fixture();
+    const { query, incident } = fixture();
     for (const max of [MAX_SUPPORT_REPORT_BYTES + 1, NaN, Infinity, 0, -1, 1.5]) {
-      expect(() => buildSupportReport(report.incident, query, max)).toThrow(
+      expect(() => buildSupportReport(incident, query, max)).toThrow(
         expect.objectContaining({ reason: "report-budget-exceeded" }),
       );
     }
@@ -557,6 +568,67 @@ describe("historical report reconstruction", () => {
   afterEach(() => {
     rmSync(stateDir, { recursive: true, force: true });
   });
+  it.each(["1.1.9", "99.0.0"])(
+    "does not attest current-only modules for release %s sharing the current catalog digest",
+    (productVersion) => {
+      const { incident } = failureFixture();
+      const registry = findSupportRegistry(incident.build);
+      if (registry === undefined) throw new TypeError("missing current registry");
+      const otherRelease = {
+        ...incident,
+        productVersion,
+        build: { ...incident.build, productVersion },
+      };
+      const privacy = supportReportPrivacyProjection(otherRelease, registry);
+      expect(
+        privacy.event({
+          sourceSegmentId: "fixture",
+          record: {
+            op: otherRelease.op,
+            correlationId: otherRelease.correlation.rootCorrelationId,
+            frames: ["packages/keiko-activity-log/dist/reader/support-desktop-report.js:10:2"],
+          },
+        }),
+      ).toBeUndefined();
+      expect(privacy.reasons()).toEqual(["evidence-partial"]);
+    },
+  );
+
+  it("retains code frames owned by the producing release after modules have moved", () => {
+    const snapshot = SUPPORT_RELEASE_REGISTRY_SNAPSHOTS.find((entry) => entry.release === "1.1.9");
+    if (snapshot === undefined) throw new TypeError("missing shipped release registry");
+    const registry = findSupportRegistry(snapshot);
+    if (registry === undefined) throw new TypeError("missing archived registry");
+    const { incident } = failureFixture();
+    const historical = {
+      ...incident,
+      productVersion: snapshot.release,
+      build: { ...incident.build, ...snapshot, productVersion: snapshot.release },
+    };
+    const privacy = supportReportPrivacyProjection(historical, registry);
+    const frame = "packages/keiko-server/dist/observability/activity-log-store.js:10:2";
+    const projected = privacy.event({
+      sourceSegmentId: "fixture",
+      record: {
+        op: historical.op,
+        correlationId: historical.correlation.rootCorrelationId,
+        frames: [frame],
+      },
+    });
+    expect(projected?.record.frames).toEqual([frame]);
+    expect(privacy.reasons()).toEqual([]);
+    expect(
+      privacy.event({
+        sourceSegmentId: "fixture",
+        record: {
+          op: historical.op,
+          correlationId: historical.correlation.rootCorrelationId,
+          frames: ["packages/keiko-server/dist/customer-private-file.js:10:2"],
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it("analyzes frozen 1.1.9 production evidence and seed with its matching registry", () => {
     const packed = JSON.parse(
       readFileSync(
@@ -615,7 +687,11 @@ describe("historical report reconstruction", () => {
 
 // A registered failure; with `parent`, the failing operation was spawned under that root, which
 // recorded its own line first.
-function failureFixture(parent?: string): { report: SupportReport; query: SupportQueryResult } {
+function failureFixture(parent?: string): {
+  report: SupportReport;
+  query: SupportQueryResult;
+  incident: SupportIncidentPrivateProjection;
+} {
   const process = fixtureProcess(4343, "bbccddee");
   const spawned = parent === undefined ? {} : { parentCorrelationId: parent };
   writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
@@ -671,7 +747,7 @@ function failureFixture(parent?: string): { report: SupportReport; query: Suppor
     DEFAULT_SUPPORT_QUERY_LIMITS,
     { trigger: "export" },
   );
-  return { report: buildSupportReport(incident, query), query };
+  return { report: buildSupportReport(incident, query), query, incident };
 }
 
 function withoutKey(
@@ -878,7 +954,7 @@ describe("received-report audit hardening (#3534)", () => {
   });
 
   it("never reports a registered failure as complete without its own failing line", () => {
-    const { report, query } = failureFixture();
+    const { report, query, incident } = failureFixture();
     expect(report.incident.trigger).toBe("registered-failure");
     expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe("complete");
     const withoutFailure = (events: ReturnType<typeof eventsOf>): ReturnType<typeof eventsOf> =>
@@ -892,7 +968,7 @@ describe("received-report audit hardening (#3534)", () => {
     expect(analyzed.selection.status).toBe("insufficient");
     expect(analyzed.selection.reasons).toContain("evidence-not-retained");
     // The producer applies the same rule to a closure that lost its failing line.
-    const produced = buildSupportReport(report.incident, {
+    const produced = buildSupportReport(incident, {
       ...query,
       events: query.events.filter((event) => !event.text.includes('"op":"gateway.chat.failed"')),
     });
@@ -958,7 +1034,10 @@ describe("received-report audit hardening (#3534)", () => {
       ),
     );
     expect(withoutFailure.selection.reasons).toContain("evidence-not-retained");
-    expect(supportReportTimeline(withoutFailure, CORRELATION)?.sufficiency).toMatchObject({
+    expect(
+      supportReportTimeline(withoutFailure, report.incident.correlation.rootCorrelationId ?? "")
+        ?.sufficiency,
+    ).toMatchObject({
       status: "insufficient",
       reasons: expect.arrayContaining(["evidence-not-retained"]) as unknown,
     });
@@ -974,9 +1053,10 @@ describe("received-report audit hardening (#3534)", () => {
         lifetimes: report.selection.lifetimes,
       }),
     );
-    expect(supportReportTimeline(dropped, CORRELATION)?.sufficiency.reasons).toContain(
-      "events-dropped",
-    );
+    expect(
+      supportReportTimeline(dropped, report.incident.correlation.rootCorrelationId ?? "")
+        ?.sufficiency.reasons,
+    ).toContain("events-dropped");
     expect(dropped.seed?.sufficiency.reasons).toContain("events-dropped");
   });
 
@@ -1058,14 +1138,13 @@ describe("received-report audit hardening (#3534)", () => {
   it("refuses a declared child whose own failing line no longer names its parent", () => {
     const parent = "support-report-parent-0002";
     const { report } = failureFixture(parent);
-    expect(report.incident.correlation).toEqual({
-      rootCorrelationId: parent,
-      childCorrelationIds: [CORRELATION],
-    });
+    expect(report.incident.correlation.rootCorrelationId).toMatch(/^id\d{6}$/u);
+    expect(report.incident.correlation.childCorrelationIds).toHaveLength(1);
+    expect(report.incident.correlation.childCorrelationIds[0]).toMatch(/^id\d{6}$/u);
     expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe("complete");
     const detached = resealed(report, (events) =>
       events.map((event) =>
-        event.record.correlationId === CORRELATION
+        event.record.correlationId === report.incident.correlation.childCorrelationIds[0]
           ? { ...event, record: withoutKey(event.record, "parentCorrelationId") }
           : event,
       ),
@@ -1102,7 +1181,7 @@ describe("received-report audit hardening (#3534)", () => {
                 ...event,
                 record: {
                   ...withoutKey(event.record, "parentCorrelationId"),
-                  correlationId: parent,
+                  correlationId: report.incident.correlation.rootCorrelationId,
                 },
               }
             : event,
@@ -1366,7 +1445,7 @@ describe("received-report audit hardening (#3534)", () => {
   });
 
   it("keeps every supported record when one selected line belongs to another registry", () => {
-    const { report, query } = fixture(3);
+    const { query, incident } = fixture(3);
     const original = query.events[0];
     if (original === undefined) throw new TypeError("missing selected event");
     const foreign = {
@@ -1376,7 +1455,7 @@ describe("received-report audit hardening (#3534)", () => {
         `"catalogDigest":"${"e".repeat(64)}"`,
       ),
     };
-    const mixed = buildSupportReport(report.incident, {
+    const mixed = buildSupportReport(incident, {
       ...query,
       events: [foreign, ...query.events],
     });

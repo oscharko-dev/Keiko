@@ -1,16 +1,18 @@
-// Apply-mode + verification integration test (ADR-0009 D15) — the ONLY bug-investigation test that
-// touches the real filesystem and spawns a process. It copies the on-disk fixture project into a tmp
-// dir created NEXT TO the real node_modules that provides vitest (derived dynamically via
-// require.resolve), so `npx vitest run` resolves vitest through upward module resolution WITHOUT
-// network. The fixture's regression test FAILS against the buggy source; the workflow applies a
-// corrected diff (mock model) and verification then reports PASSED — fail-before / pass-after is the
-// real evidence (D11). When vitest cannot be resolved, the suite is describe.skip'd.
+// Execute the buggy regression in a confined, self-contained workspace, then apply the real
+// workflow patch and execute it again. Node's built-in runner needs no sibling dependencies or
+// platform-specific host binaries in the container.
 
-import { createRequire } from "node:module";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { detectWorkspace } from "@oscharko-dev/keiko-workspace";
+import {
+  DEFAULT_VERIFICATION_LIMITS,
+  resolveTargetedTests,
+  runVerification,
+} from "@oscharko-dev/keiko-verification";
 import { investigateBug } from "./workflow.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
@@ -27,17 +29,6 @@ const FIXTURE = join(
   "bug-investigation",
   "target-project",
 );
-
-function vitestHostRoot(): string | undefined {
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require.resolve("vitest/package.json");
-    // .../<root>/node_modules/vitest/package.json -> <root>
-    return dirname(dirname(dirname(pkg)));
-  } catch {
-    return undefined;
-  }
-}
 
 // A valid fix diff: change the divisor from 3 to 2 in src/buggy.ts. The context line must match the
 // fixture exactly so #6 validatePatch finds no conflict.
@@ -79,7 +70,6 @@ function model(content: string): ModelPort {
   return { call: (): Promise<NormalizedResponse> => Promise.resolve(response) };
 }
 
-const hostRoot = vitestHostRoot();
 let dir: string | undefined;
 
 afterEach(() => {
@@ -89,12 +79,34 @@ afterEach(() => {
   }
 });
 
-const maybe = hostRoot === undefined ? describe.skip : describe;
-
-maybe("investigateBug — apply + verify integration (AC #6/#8)", () => {
+describe("investigateBug — apply + verify integration (AC #6/#8)", () => {
   it("applies the fix to disk and verification reports passed", async () => {
-    dir = mkdtempSync(join(hostRoot ?? ".", ".keiko-itest-"));
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bug-integration-")));
     cpSync(FIXTURE, dir, { recursive: true });
+    const workspace = detectWorkspace(dir);
+    const failureOutput: string[] = [];
+    const before = await runVerification(
+      {
+        workspaceRoot: workspace.root,
+        steps: resolveTargetedTests(
+          workspace,
+          ["src/buggy.ts"],
+          undefined,
+          DEFAULT_VERIFICATION_LIMITS,
+        ),
+      },
+      {
+        workspace,
+        networkEnforcement: "enforce-or-degrade",
+        onStepOutput: (output): void => {
+          failureOutput.push(output.excerpt);
+        },
+      },
+    );
+    expect(before.results).toHaveLength(1);
+    expect(before.results[0]?.status).toBe("failed");
+    expect(failureOutput.join("\n")).toContain("3.333");
+    expect(before.results[0]?.exitCode).toBe(1);
 
     const report = await investigateBug(
       {

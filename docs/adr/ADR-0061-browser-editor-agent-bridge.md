@@ -4,6 +4,11 @@
 
 Accepted
 
+> **Amended by owner decision (2026-10-03).** The ordinary Editor's agent integration and
+> bidirectional Chat handoffs are retired. The current scope below replaces the original
+> ordinary-Editor implementation described in D1–D7. Shared execution code remains for independent
+> consumers; the Coding Workbench is outside this change.
+
 > **Superseded in part by [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).**
 > Browser-only patch application and universal Accept/Reject review do not govern every mode or
 > multi-file changeset. The bridge remains responsible for Monaco state and reconciliation after a
@@ -49,6 +54,44 @@ The acceptance criteria for #1393 are:
 5. No agent action can exceed the workspace boundary.
 
 ## Decision
+
+### Current scope — ordinary Editor retirement (2026-10-03)
+
+The ordinary Editor is a human-operated file editor. It no longer shows agent presence or recent
+agent actions, subscribes to agent action events, executes incoming navigation/layout/write actions,
+or exposes agent patch/changeset review. The selection-to-chat handoff and Chat **Apply to editor**
+command are removed with their exclusive client code and command wiring. Chat repository search
+and grounding remain independent features.
+
+Manual navigation, tabs, split panes, selection, editing, saving, formatting, file history and
+language services keep their existing owners. Removing the action integration must not remove
+those ordinary Editor capabilities or the protection of unsaved buffers.
+
+The existing server registry retains a separate safety-only publication for owned dirty-buffer
+state. It carries no document body and cannot authenticate an action bridge, appear in agent
+discovery, or receive actions. Owned cleanup settles the state when a window is closed normally;
+connection loss must not silently erase knowledge of unsaved edits. This reuses the existing
+registry and dirty-buffer checks rather than introducing another workspace or execution system.
+
+The browser persists its safety-only capability and unresolved dirty paths before its first
+publication. Each live tab holds an exclusive Web Lock for its publication record; duplicate tabs
+publish independently, while a reopened tab can recover a released record without claiming another
+publisher's authority. Missing or invalid ownership storage refuses publication. Acknowledgements
+cannot replace the caller's capability, and cleanup rechecks current references and dirty state
+after asynchronous work before removing a persisted record.
+
+Publication timestamps are durably monotonic, including after a wall-clock rollback or reopen.
+The passive registry rejects an older snapshot or an equal timestamp with different state, while
+accepting an identical retry. A delayed clean request therefore cannot erase a newer dirty state.
+These rules apply only to safety-only publications; the action bridge is unchanged.
+
+The independent Coding Workbench continues to use its existing headless changeset bridge and
+shared server contracts. Retaining those active consumers is not an ordinary Editor integration.
+No Coding Workbench behavior changes are authorized by this retirement.
+
+The original D1–D7 and their consequences below record the implementation being retired from the
+ordinary Editor. They are historical rationale, not current requirements to restore that UI or
+its action handlers.
 
 ### D1 — Extract a thin `useEditorAgentBridge` hook plus a pure `dispatchEditorAgentAction` function (placement: pane-level)
 

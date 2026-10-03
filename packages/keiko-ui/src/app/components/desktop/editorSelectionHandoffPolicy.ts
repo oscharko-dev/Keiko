@@ -1,1 +1,0 @@
-export const EDITOR_SELECTION_HANDOFF_TTL_MS = 2 * 60 * 1000;

@@ -24,7 +24,7 @@ import {
   isActivityLogInstanceId,
   isActivityLogProcessId,
   isActivityLogProductVersion,
-  normalizeKeikoFrameSignature,
+  normalizeDefectFrameSignature,
   parseActivityLogSegmentId,
   parseSupportIncidentPrivateProjection,
   type SupportIncidentPrivateProjection,
@@ -67,6 +67,10 @@ import {
 } from "./support-lifetime.js";
 import type { SupportQueryResult } from "./support-query.js";
 import { findSupportRegistry, type SupportReaderRegistry } from "./support-registry.js";
+import {
+  supportReportPrivacyProjection,
+  type SupportReportPrivacyProjection,
+} from "./support-report-privacy.js";
 import {
   canonicalSupportJson,
   parseCanonicalSupportJson,
@@ -240,17 +244,34 @@ function reportLifetimes(
 
 // A record the incident's exact registry cannot validate (for example one written by another
 // release after an upgrade) is left out and named; every other selected record is retained.
+function privateQueryEvents(
+  selected: readonly SupportReportEvent[],
+  registry: SupportReaderRegistry,
+  privacy: SupportReportPrivacyProjection,
+): readonly SupportReportEvent[] {
+  return selected
+    .filter((event) => isSupportReportEvent(event.record, registry))
+    .flatMap((event) => {
+      const projected = privacy.event(event);
+      return projected === undefined ? [] : [projected];
+    });
+}
+
 function selectedEvidence(
   incident: SupportIncidentPrivateProjection,
   query: SupportQueryResult,
   registry: SupportReaderRegistry,
+  privacy: SupportReportPrivacyProjection,
 ): SelectedEvidence {
   const selected = queryEvents(query);
-  const events = selected.filter((event) => isSupportReportEvent(event.record, registry));
+  const events = privateQueryEvents(selected, registry, privacy);
   const selectedReasons = reasons([
     ...query.diagnosticSufficiency.reasons,
     ...incident.sufficiencyReasons,
-    ...(events.length < selected.length ? (["unsupported-evidence"] as const) : []),
+    ...privacy.reasons(),
+    ...(selected.some((event) => !isSupportReportEvent(event.record, registry))
+      ? (["unsupported-evidence"] as const)
+      : []),
   ]);
   const lifetimes = reportLifetimes(query, events);
   try {
@@ -281,12 +302,10 @@ function selectedEvidence(
   }
 }
 
-/** Generates only the canonical private projection and registered causal evidence. */
-export function buildSupportReport(
+function validateReportInput(
   incident: SupportIncidentPrivateProjection,
-  query: SupportQueryResult,
-  maxBytes = MAX_SUPPORT_REPORT_BYTES,
-): SupportReport {
+  maxBytes: number,
+): SupportReaderRegistry {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_SUPPORT_REPORT_BYTES)
     throw new SupportReportError("report-budget-exceeded");
   if (parseSupportIncidentPrivateProjection(incident) === undefined)
@@ -295,10 +314,24 @@ export function buildSupportReport(
     throw new SupportReportError("report-budget-exceeded");
   const registry = findSupportRegistry(incident.build);
   if (registry === undefined) throw new SupportReportError("unsupported-report");
+  if (!incidentCorrelationsRedacted(incident)) throw new SupportReportError("unsafe-report");
+  return registry;
+}
+
+/** Generates only the canonical private projection and registered causal evidence. */
+export function buildSupportReport(
+  incident: SupportIncidentPrivateProjection,
+  query: SupportQueryResult,
+  maxBytes = MAX_SUPPORT_REPORT_BYTES,
+): SupportReport {
+  const registry = validateReportInput(incident, maxBytes);
+  const privacy = supportReportPrivacyProjection(incident, registry);
+  const privateIncident = privacy.incident;
   const { evidence, selectedReasons, requiredBytes, lifetimes } = selectedEvidence(
-    incident,
+    privateIncident,
     query,
     registry,
+    privacy,
   );
   const selection = {
     status: diagnosticSufficiencyStatus(selectedReasons),
@@ -306,18 +339,18 @@ export function buildSupportReport(
     requiredBytes,
     lifetimes,
   };
-  let report = sealSupportReport(incident, selection, evidence);
+  let report = sealSupportReport(privateIncident, selection, evidence);
   const completeBytes = Buffer.byteLength(serializeSupportReport(report));
   if (completeBytes > maxBytes) {
     const budgetReasons = reasons([
       ...selectedReasons,
       "report-budget-exceeded",
-      ...projectedEvidenceReasons(incident, [], registry, []),
+      ...projectedEvidenceReasons(privateIncident, [], registry, []),
     ]);
     // The report-budget metric names what the complete report would need: --max-bytes at least
     // this large (within the hard ceiling) carries the whole selection.
     report = sealSupportReport(
-      incident,
+      privateIncident,
       {
         status: "insufficient",
         reasons: budgetReasons,
@@ -563,14 +596,13 @@ function failureIdentityMatches(
   incident: SupportIncidentPrivateProjection,
   event: SupportReportEvent,
 ): boolean {
-  const input = registeredFailureFingerprintInput({
-    op: incident.op,
-    errorKind: event.record.errorKind,
-    frames: event.record.frames,
-  });
+  const input = registeredFailureFingerprintInput(
+    { ...event.record, op: incident.op },
+    incident.fingerprintAlgorithm,
+  );
   return (
     input.errorKind === incident.errorKind &&
-    normalizeKeikoFrameSignature(input.frames).length === incident.frameCount &&
+    normalizeDefectFrameSignature(input).length === incident.frameCount &&
     computeDefectFingerprint(input) === incident.defectFingerprint &&
     canonicalSupportJson(registeredFailureCorrelation(event.record)) ===
       canonicalSupportJson(incident.correlation)

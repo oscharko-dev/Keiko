@@ -186,3 +186,26 @@ export function scriptChildClose(
     child.emit("close", opts.exitCode ?? 0, opts.signal ?? null);
   });
 }
+
+// Qualify only the fake host effects. The real verification orchestrator and sandbox planner
+// still enforce execution-root confinement and produce the wrapper observed by recordingSpawn.
+export function withConfinedVerificationFixture(
+  actual: typeof import("@oscharko-dev/keiko-verification"),
+): typeof import("@oscharko-dev/keiko-verification") {
+  return {
+    ...actual,
+    runVerification: (plan, deps): ReturnType<typeof actual.runVerification> =>
+      actual.runVerification(plan, {
+        ...deps,
+        sandboxAvailability: {
+          bubblewrap: true,
+          unshare: false,
+          seatbelt: false,
+          docker: false,
+          podman: false,
+        },
+        platform: "linux",
+        resolveExecutable: (command): string => `/trusted-tools/${command}`,
+      }),
+  };
+}

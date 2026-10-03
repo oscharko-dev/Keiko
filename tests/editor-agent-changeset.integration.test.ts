@@ -21,7 +21,6 @@ import {
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
-import { buildPatchPreview, type PatchPreviewSource } from "@oscharko-dev/keiko-editor";
 import {
   EditorAgentHttpClient,
   EditorAgentToolHost,
@@ -49,8 +48,6 @@ import {
   type RouteResult,
 } from "../packages/keiko-server/src/routes.js";
 const BASE_URL = "http://127.0.0.1:1983";
-const EDITOR_AGENT_CHANGESET_MODULE =
-  "../packages/keiko-ui/src/app/components/desktop/widgets/cards/editorAgentChangeset.js";
 const SESSION_ID = "session-2117";
 const ACTION_ID = "action-2117";
 const FILES = [
@@ -73,18 +70,8 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 type PreparedChangeset = NonNullable<NonNullable<EditorAgentAction["changeset"]>["prepared"]>;
-type ChangesetPatchBuilder = (input: {
-  readonly actionId: string;
-  readonly prepared: PreparedChangeset;
-}) => Parameters<typeof buildPatchPreview>[0]["patch"];
-
-interface EditorAgentChangesetModule {
-  readonly buildEditorAgentChangesetPatch: ChangesetPatchBuilder;
-}
-
 interface WorkspaceFixture {
   readonly root: string;
-  readonly sources: Readonly<Record<string, PatchPreviewSource>>;
 }
 
 interface CapturedBridge {
@@ -92,34 +79,17 @@ interface CapturedBridge {
   readonly close: () => void;
 }
 
-function importEditorAgentChangesetModule(moduleName: string): Promise<EditorAgentChangesetModule> {
-  return import(moduleName) as Promise<EditorAgentChangesetModule>;
-}
-
 function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
-}
-
-function source(path: string, text: string): PatchPreviewSource {
-  return {
-    content: {
-      relativePath: path,
-      text,
-      sizeBytes: Buffer.byteLength(text, "utf8"),
-      truncated: false,
-    },
-  };
 }
 
 function createWorkspace(): WorkspaceFixture {
   const root = mkdtempSync(join(tmpdir(), "keiko-editor-agent-changeset-"));
   mkdirSync(join(root, "src"), { recursive: true });
-  const sources: Record<string, PatchPreviewSource> = {};
   for (const file of FILES) {
     writeFileSync(join(root, file.path), file.before, "utf8");
-    sources[file.path] = source(file.path, file.before);
   }
-  return { root, sources };
+  return { root };
 }
 
 function postContext(url: string, body: string): RouteContext {
@@ -380,41 +350,6 @@ function assertEmittedChangeset(action: EditorAgentAction): PreparedChangeset {
   return prepared;
 }
 
-async function assertReviewModel(
-  prepared: PreparedChangeset,
-  sources: Readonly<Record<string, PatchPreviewSource>>,
-): Promise<void> {
-  const { buildEditorAgentChangesetPatch } = await importEditorAgentChangesetModule(
-    EDITOR_AGENT_CHANGESET_MODULE,
-  );
-  const patch = buildEditorAgentChangesetPatch({ actionId: ACTION_ID, prepared });
-  const model = buildPatchPreview({ patch, sources });
-  expect(model).toMatchObject({
-    patchId: `agent-changeset:${ACTION_ID}`,
-    fileCount: 2,
-    totalFileCount: 2,
-    modifiedCount: 2,
-    createdCount: 0,
-    deletedCount: 0,
-    omittedFileCount: 0,
-    truncated: false,
-  });
-  expect(model.files).toHaveLength(FILES.length);
-  for (const file of FILES) {
-    const reviewed = model.files.find((candidate) => candidate.uri === file.path);
-    expect(reviewed).toBeDefined();
-    expect(reviewed).toMatchObject({
-      uri: file.path,
-      displayPath: file.path,
-      status: "modified",
-      diffable: true,
-      original: file.before,
-      modified: file.after,
-      hasChanges: true,
-    });
-  }
-}
-
 function postFailedBrowserResult(
   transport: EditorAgentHttpTransport,
   action: EditorAgentAction,
@@ -458,7 +393,7 @@ function assertWorkspaceUnchanged(workspace: WorkspaceFixture): void {
 }
 
 describe("editor agent changeset cross-package integration (#2117)", () => {
-  it("reaches a two-file review model without mutating the workspace", async () => {
+  it("prepares a governed two-file changeset through the server and tool contracts without writing", async () => {
     _resetEditorAgentStateForTests();
     const workspace = createWorkspace();
     let bridge: CapturedBridge | undefined;
@@ -484,8 +419,7 @@ describe("editor agent changeset cross-package integration (#2117)", () => {
         result: { actionId: ACTION_ID, sessionId: SESSION_ID, status: "queued" },
       });
       const action = emittedAction(bridge.frames());
-      const prepared = assertEmittedChangeset(action);
-      await assertReviewModel(prepared, workspace.sources);
+      assertEmittedChangeset(action);
       assertWorkspaceUnchanged(workspace);
 
       const failed = await postFailedBrowserResult(transport, action, bridgeDecisionCapability);

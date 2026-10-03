@@ -407,46 +407,8 @@ describe("EditorAgentAuthorityRegistry", () => {
     ).toEqual({ ok: false, reason: "budget-exceeded" });
   });
 
-  it("derives a bounded local authority that cannot be replayed for another action", () => {
-    const registry = new EditorAgentAuthorityRegistry();
-    const localSnapshot = {
-      schemaVersion: "1",
-      sessionId: "session-1",
-      windowId: "window-1",
-      workspaceRoot: ROOT,
-      activePaneId: "pane-1",
-      panes: [{ paneId: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
-      dirtyFiles: [],
-      activeFile: "src/a.ts",
-      cursor: null,
-      selection: null,
-      diagnosticsSummary: null,
-      textMode: "none",
-      updatedAt: 1,
-    } as const;
-    const localAction = action();
-    const otherAction = { ...localAction, actionId: "action-2", idempotencyKey: "key-2" };
-    const first = registry.registerLocalBridge(
-      localSnapshot,
-      localAction,
-      "autonomous-delivery",
-      NOW,
-    );
-    expect(first.ok).toBe(true);
-    if (!first.ok) throw new Error("expected local registration");
-    expect(JSON.stringify(first.authorityRef)).not.toContain("capability");
-    expect(
-      registry.resolveForAction(first.authorityRef, localAction, ROOT, "autonomous-delivery", NOW),
-    ).toMatchObject({
-      ok: true,
-      envelope: {
-        requestedMode: "governed-assist",
-        actionClasses: ["workspace-read", "workspace-write"],
-      },
-    });
-    expect(
-      registry.resolveForAction(first.authorityRef, otherAction, ROOT, "autonomous-delivery", NOW),
-    ).toEqual({ ok: false, reason: "invalid" });
+  it("offers no implicit local editor authority minting path", () => {
+    expect("registerLocalBridge" in new EditorAgentAuthorityRegistry()).toBe(false);
   });
 });
 
@@ -599,28 +561,8 @@ describe("EditorAgentAuthorityRegistry.reserveForConnector", () => {
     ).toEqual(["source-control.read"]);
   });
 
-  it("refuses a local-bridge-bound envelope: one-shot editor authority is not connector-consumable", () => {
-    const registry = new EditorAgentAuthorityRegistry();
-    const snapshot = {
-      schemaVersion: "1",
-      sessionId: "session-1",
-      windowId: "window-1",
-      workspaceRoot: ROOT,
-      activePaneId: "pane-1",
-      panes: [{ paneId: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
-      dirtyFiles: [],
-      activeFile: "src/a.ts",
-      cursor: null,
-      selection: null,
-      diagnosticsSummary: null,
-      textMode: "none",
-      updatedAt: 1,
-    } as const;
-    const registration = registry.registerLocalBridge(snapshot, action(), "governed-assist", NOW);
-    if (!registration.ok) throw new Error("local bridge registration failed");
-    expect(
-      registry.reserveForConnector(registration.authorityRef, ROOT, "governed-assist", NOW),
-    ).toEqual({ ok: false, reason: "invalid" });
+  it("offers no implicit local editor authority minting path", () => {
+    expect("registerLocalBridge" in new EditorAgentAuthorityRegistry()).toBe(false);
   });
 });
 

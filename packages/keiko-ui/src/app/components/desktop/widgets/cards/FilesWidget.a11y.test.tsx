@@ -100,7 +100,7 @@ describe("FilesWidget Git decoration accessibility", () => {
     const { container } = render(<FilesWidget root="/repo" openFilesDirectly />);
 
     await screen.findByLabelText("Git conflict: conflicted.ts");
-    expect(screen.getByRole("treeitem", { name: "ignored.log, Ignored by Git" })).toBeEnabled();
+    expect(screen.getByRole("treeitem", { name: "ignored.log, Ignored by Git 1 B" })).toBeEnabled();
     expect(screen.getByLabelText("Folder contains 1 Git changes")).toBeInTheDocument();
     expect(
       screen.getByText("Git decorations incomplete: showing only the first 500 changes."),

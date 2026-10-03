@@ -3,11 +3,19 @@
 // that it does — and that it does nothing else — lives where a reviewer looks for it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
 import {
   isClientDiagnosticIngestRequest,
   isClientStageIngestRequest,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { clientErrorEvidence } from "./client-error-evidence";
+import { fetchFilesTree } from "./api";
+import { CORRELATION_HEADER } from "./bff-correlation";
+import {
+  observeFilesDirectoryRead,
+  resetFilesNavigationEvidenceForTests,
+} from "./files-navigation-evidence";
+import { useFilesNavigation } from "@/app/components/desktop/widgets/cards/useFilesNavigation";
 import {
   clientDiagnosticPostFailureCount,
   clientDiagnosticPostThrottledCount,
@@ -35,11 +43,66 @@ function lastPostedBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unk
 }
 
 afterEach(() => {
+  resetFilesNavigationEvidenceForTests();
   resetClientDiagnosticWriter();
   resetClientDiagnosticPostStateForTests();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+it.each([false, true])(
+  "persists product navigation and its actual directory request on one causal timeline (failed=%s)",
+  async (failed) => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      if (!String(input).startsWith("/api/files/tree?")) return jsonResponse();
+      const correlationId = new Headers(init?.headers).get(CORRELATION_HEADER) ?? "";
+      return new Response(
+        JSON.stringify(
+          failed
+            ? { error: { code: "INTERNAL", message: "customer body" } }
+            : {
+                root: "/private/customer",
+                path: "docs",
+                entries: [],
+                truncated: false,
+              },
+        ),
+        { status: failed ? 500 : 200, headers: { [CORRELATION_HEADER]: correlationId } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setClientDiagnosticWriter(fanOutClientDiagnostic);
+    const { result, unmount } = renderHook(() => useFilesNavigation("/private/customer"));
+    act(() => result.current.visit("docs"));
+    const navigation = result.current.takeRead("docs");
+    expect(navigation).toBeDefined();
+    await observeFilesDirectoryRead(
+      (correlationId) => fetchFilesTree("/private/customer", "docs", correlationId),
+      navigation,
+    ).catch(() => undefined);
+    const stages = fetchMock.mock.calls
+      .filter(([input]) => input === "/api/diagnostics/client")
+      .map(([, init]) => JSON.parse(String(init?.body)) as unknown)
+      .filter(isClientStageIngestRequest);
+    expect(stages).toHaveLength(4);
+    expect(new Set(stages.map((stage) => stage.correlationId))).toEqual(
+      new Set([navigation?.correlationId]),
+    );
+    const request = fetchMock.mock.calls.find(([input]) =>
+      String(input).startsWith("/api/files/tree?"),
+    );
+    expect(new Headers(request?.[1]?.headers).get(CORRELATION_HEADER)).toBe(
+      navigation?.correlationId,
+    );
+    expect(
+      stages.filter((stage) => stage.phase === "settled").map((stage) => stage.navigationOutcome),
+    ).toEqual([failed ? "failed" : "applied", failed ? "failed" : "applied"]);
+    expect(JSON.stringify(stages)).not.toContain("customer");
+    unmount();
+  },
+);
 
 describe("writeToBrowserConsole", () => {
   it("writes the message verbatim and adds nothing of its own", () => {
@@ -581,6 +644,46 @@ describe("fanOutClientDiagnostic stage evidence", () => {
       ordinal: 1,
       durationMs: 5,
     });
+  });
+
+  it("preserves the closed navigation outcome without the user message", () => {
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    fanOutClientDiagnostic("customer repository details must not be transported", {
+      correlationId: "navigation-123",
+      stageReport: {
+        stage: "editor project selection",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 5,
+        navigationOutcome: "deferred",
+      },
+    });
+    const body = lastPostedBody(fetchMock);
+    expect(body).toEqual({
+      kind: "stage",
+      stage: "editor project selection",
+      phase: "settled",
+      ordinal: 1,
+      durationMs: 5,
+      navigationOutcome: "deferred",
+      correlationId: "navigation-123",
+    });
+    expect(isClientStageIngestRequest(body)).toBe(true);
+  });
+
+  it("preserves the closed caught-render marker through the message transport", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    fanOutClientDiagnostic("Workspace window render failed", {
+      kind: "boundary",
+      renderFailure: "window-body",
+    });
+    const body = lastPostedBody(fetchMock);
+    expect(body).toMatchObject({ kind: "boundary", renderFailure: "window-body" });
+    expect(isClientDiagnosticIngestRequest(body)).toBe(true);
   });
 
   it("preserves correlated body-free bulk-deletion counts through the stage transport", () => {

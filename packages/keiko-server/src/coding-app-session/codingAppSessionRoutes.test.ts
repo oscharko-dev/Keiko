@@ -99,54 +99,24 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     expect(result.headers).toBeUndefined();
   });
 
-  it("local-session with launcher authority issues the app-session cookie", () => {
-    const channel = createCodingAppSessionChannel({
-      registry: createSessionRegistry(),
-      pairingPort: createFakeSessionPairingPort(),
-    });
-    const setCookie = handleCodingAppSessionLocalSession(ctx(), deps(channel)).headers?.[
-      "Set-Cookie"
-    ];
-
-    expect(setCookie).toHaveLength(11);
-    expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
-    expect(String(setCookie)).toContain("Path=/api/coding-workbench");
-    expect(channel.sessionCount()).toBe(1);
-  });
-
-  // Reviewer thread (PR #3506): pin the two cookie-value classes at the ROUTE handler.
-  // A forged/malformed cookie must not authenticate — the handler mints a fresh session under the
-  // pairing authority. A valid cookie must not mint anything — the handler leaves the response
-  // header-free and the session count unchanged.
-  it("local-session with a forged cookie value issues a fresh app-session cookie", () => {
-    const channel = createCodingAppSessionChannel({
-      registry: createSessionRegistry(),
-      pairingPort: createFakeSessionPairingPort(),
-    });
-    const before = channel.sessionCount();
-    const setCookie = handleCodingAppSessionLocalSession(
-      ctx(`${APP_SESSION_COOKIE_NAME}=sess_000000000000000000000000.forged`),
-      deps(channel),
-    ).headers?.["Set-Cookie"];
-
-    expect(setCookie).toHaveLength(11);
-    expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
-    expect(channel.sessionCount()).toBe(before + 1);
-  });
-
-  it("local-session with a valid cookie stays active and issues no fresh Set-Cookie", () => {
-    const channel = createCodingAppSessionChannel({
-      registry: createSessionRegistry(),
-      pairingPort: createFakeSessionPairingPort(),
-    });
-    const issued = handleCodingAppSessionLocalSession(ctx(), deps(channel)).headers?.["Set-Cookie"];
-    const cookie = String(issued).split(";")[0] ?? "";
-    const before = channel.sessionCount();
-
-    const result = handleCodingAppSessionLocalSession(ctx(cookie), deps(channel));
-
-    expect(result.headers).toBeUndefined();
-    expect(channel.sessionCount()).toBe(before);
+  it.each([undefined, `${APP_SESSION_COOKIE_NAME}=sess_000000000000000000000000.forged`])(
+    "local-session cannot issue a bearer without launcher attestation (%s)",
+    (cookie) => {
+      const channel = createCodingAppSessionChannel({
+        registry: createSessionRegistry(),
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      expect(
+        handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers,
+      ).toBeUndefined();
+      expect(channel.sessionCount()).toBe(0);
+    },
+  );
+  it("local-session confirms a launcher-paired cookie without issuing or widening authority", () => {
+    const { channel, cookie } = pairedChannel();
+    const count = channel.sessionCount();
+    expect(handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers).toBeUndefined();
+    expect(channel.sessionCount()).toBe(count);
   });
 
   it("rotate without a composed channel acknowledges without a cookie", () => {
@@ -158,7 +128,7 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionRotate(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(11);
+    expect(setCookie).toHaveLength(13);
     expect(String(setCookie)).toContain("Path=/api/task-workspaces;");
     expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
     expect(String(setCookie)).toContain("Path=/api/coding-workbench");
@@ -177,7 +147,7 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionSignOut(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(11);
+    expect(setCookie).toHaveLength(13);
     expect(String(setCookie)).toContain("Path=/api/task-workspaces;");
     expect(String(setCookie)).toContain("Path=/api/editor/local-history");
     expect(String(setCookie)).toContain("Path=/api/runs");
@@ -258,42 +228,32 @@ describe("app-session lifecycle lines (F65)", () => {
     );
   });
 
-  it("logs only a local-session issue, correlated and body-free", () => {
-    const channel = createCodingAppSessionChannel({
-      registry: createSessionRegistry(),
-      pairingPort: createFakeSessionPairingPort(),
-    });
+  it("logs a confirmed existing session with body-free lifecycle evidence", () => {
+    const { channel, cookie } = pairedChannel();
     const { deps: logDeps, events } = logged(channel);
-
-    handleCodingAppSessionLocalSession({ ...ctx(), correlationId: "local-correlation" }, logDeps);
-
+    handleCodingAppSessionLocalSession(
+      { ...ctx(cookie), correlationId: "local-correlation" },
+      logDeps,
+    );
     expect(events).toEqual([
       {
         level: "info",
         category: "http",
-        op: "coding-app-session.local-session.issued",
+        op: "coding-app-session.local-session.confirmed",
         correlationId: "local-correlation",
         extra: { completeness: "complete", loss: "none" },
       },
     ]);
     expectActivityLogProof(
-      "coding-app-session.local-session.issued.request",
+      "coding-app-session.local-session.confirmed.request",
       formatActivityLogProofLine(events[0] ?? {}),
     );
   });
-
-  it("does not log an already active local session", () => {
-    const channel = createCodingAppSessionChannel({
-      registry: createSessionRegistry(),
-      pairingPort: createFakeSessionPairingPort(),
-    });
-    const issued = handleCodingAppSessionLocalSession(ctx(), deps(channel)).headers?.["Set-Cookie"];
+  it("does not log attacker-controlled local-session denials individually", () => {
+    const { channel } = pairedChannel();
     const { deps: logDeps, events } = logged(channel);
-
-    handleCodingAppSessionLocalSession(ctx(String(issued).split(";")[0] ?? ""), logDeps);
-
+    handleCodingAppSessionLocalSession(ctx(), logDeps);
     expect(events).toEqual([]);
-    expect(channel.sessionCount()).toBe(1);
   });
 
   it("writes no line of its own for a denied pairing; denials stay aggregated (KEIKO-0838)", async () => {

@@ -253,6 +253,7 @@ describe("client diagnostics loss evidence", () => {
     expect(expectActivityLogProof("client.diagnostic.line", line ?? "")).toMatchObject({
       clientKind: "window-error",
       errorKind: "internal",
+      level: "error",
       clientBufferEvicted: 3,
       clientPostsFailed: 1,
       clientErrorsSuppressed: 2,
@@ -261,6 +262,38 @@ describe("client diagnostics loss evidence", () => {
     expect(counters["client-buffer-evicted"]).toBe(3);
     expect(counters["client-post-failed"]).toBe(1);
     expect(counters["client-error-suppressed"]).toBe(2);
+  });
+
+  it("retains a caught editor render failure at incident-triggering severity", async () => {
+    const body = JSON.stringify({
+      message: "[keiko] editor render failed: TypeError",
+      clientTs: CLIENT_TS,
+      kind: "boundary",
+      renderFailure: "window-body",
+      errorKind: "internal",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    const [line] = lines("client.diagnostic");
+    expect(expectActivityLogProof("client.diagnostic.line", line ?? "")).toMatchObject({
+      errorKind: "internal",
+      clientKind: "boundary",
+      renderFailure: "window-body",
+      level: "error",
+    });
+  });
+
+  it("keeps an unmarked operation failure below automatic incident severity", async () => {
+    const body = JSON.stringify({
+      message: "[keiko] optional file operation failed: ApiError",
+      clientTs: CLIENT_TS,
+      errorKind: "internal",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    const [line] = lines("client.diagnostic");
+    expect(expectActivityLogProof("client.diagnostic.line", line ?? "")).toMatchObject({
+      errorKind: "internal",
+      level: "warn",
+    });
   });
 
   it("refuses a report whose loss block is not closed", async () => {
@@ -275,6 +308,39 @@ describe("client diagnostics loss evidence", () => {
 
   // KEIKO-3557: proves the new lifecycle operations reach the production file sink with a complete
   // v2 identity, exactly like every other registered operation — not merely a buffered test event.
+  it.each([
+    "files directory load",
+    "files directory navigation",
+    "files project selection",
+    "editor project selection",
+  ] as const)("persists %s as reconstructable navigation lifecycle evidence", async (stage) => {
+    const body = { kind: "stage", stage, ordinal: 3 };
+    expect(
+      (await handleClientDiagnosticIngest(context(JSON.stringify({ ...body, phase: "started" }))))
+        .status,
+    ).toBe(204);
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(JSON.stringify({ ...body, phase: "settled", durationMs: 2 })),
+        )
+      ).status,
+    ).toBe(204);
+    const expected = {
+      correlationId: CORRELATION_ID,
+      stage: stage.replaceAll(" ", "-"),
+      completeness: "complete",
+      loss: "none",
+    };
+    expect(
+      expectActivityLogProof("client.stage.started.line", lines("client.stage.started")[0] ?? ""),
+    ).toMatchObject(expected);
+    expect(
+      expectActivityLogProof("client.stage.settled.line", lines("client.stage.settled")[0] ?? ""),
+    ).toMatchObject(expected);
+    expect(lines("client.diagnostic")).toEqual([]);
+  });
+
   it("persists a started stage report as client.stage.started", async () => {
     const body = JSON.stringify({
       kind: "stage",

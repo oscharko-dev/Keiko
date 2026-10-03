@@ -96,8 +96,8 @@ export function resolveStateDir(cwd: string, env: EnvSource, stateDirArg?: strin
 
 // Home-contained variant of `resolveStateDir` (#KEIKO-0330). When the state dir comes
 // from an explicit `--state-dir` argument or `KEIKO_STATE_DIR`, its resolved realpath
-// MUST live under the user's homedir; the default `<cwd>/.keiko` fallback is trusted
-// (the user owns their own cwd). Refusing violates a fail-closed contract with the
+// MUST live under the user's homedir. The default `<cwd>/.keiko` must remain inside
+// the canonical selected cwd, including existing ancestors. Refusing violates a fail-closed contract with the
 // operator: without this guard, an attacker who can plant the env var (wrapper script
 // in PATH, dev-container `.env`, exported in a parent shell) can steer the pid file
 // (fed to `process.kill`) and the append-mode log file to any user-writable path.
@@ -112,15 +112,15 @@ export function resolveContainedStateDir(
   stateDirArg?: string,
 ): string {
   const explicit = explicitStateDirSource(env, stateDirArg);
-  if (explicit === undefined) return resolve(cwd, DEFAULT_STATE_DIR_NAME);
-  const resolved = isAbsolute(explicit.value) ? explicit.value : resolve(cwd, explicit.value);
+  const selected = explicit ?? { source: "default state directory", value: DEFAULT_STATE_DIR_NAME };
+  const resolved = isAbsolute(selected.value) ? selected.value : resolve(cwd, selected.value);
   try {
-    assertRealpathContained(home, resolved);
+    assertRealpathContained(explicit === undefined ? cwd : home, resolved);
   } catch (e) {
     if (e instanceof LauncherError && e.code === "PATH_ESCAPE") {
       throw new LauncherError(
         "STATE_DIR_ESCAPE",
-        `keiko: ${explicit.source} ${explicit.value} resolves outside the user's home directory (${home}); refusing to proceed.`,
+        `keiko: ${selected.source} resolves outside ${explicit === undefined ? "the selected working directory" : "the user's home directory"}; refusing to proceed.`,
       );
     }
     throw e;

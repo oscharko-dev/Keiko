@@ -114,7 +114,7 @@ function buildEditorHarness(): EditorHarness {
   const monaco: MountMonaco = {
     editor: { defineTheme: (): void => undefined },
     KeyMod: { CtrlCmd: 2048, Alt: 512, Shift: 1024 },
-    KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60, F5: 62, F6: 63, F10: 67, F11: 68 },
+    KeyCode: { KeyS: 49, F2: 60, F5: 62, F6: 63, F10: 67, F11: 68 },
   };
   return {
     editor,

@@ -3,6 +3,7 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { GlobalSupportReportAction } from "./SupportReportButton";
 import { DiagnosticReadinessBadge } from "./DiagnosticReadinessBadge";
 import { useBackendHealth, type BackendHealth } from "./hooks/useBackendHealth";
 import { Icons } from "./Icons";
@@ -117,6 +118,7 @@ function FooterImpl({
       <DiagnosticReadinessBadge
         snapshot={backendHealth.state === "loaded" ? backendHealth.health.diagnostics : undefined}
       />
+      <GlobalSupportReportAction />
       <span className="spacer" />
       <span className="ft-brand" aria-label={t("footer.version", { version: installedVersion })}>
         Keiko | {installedVersion}

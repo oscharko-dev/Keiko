@@ -951,22 +951,6 @@
     "en": "Monaco format action backed by governed formatting.",
     "de": "Monaco-Formataktion mit governter Formatierung."
   },
-  "command.editorGenerateTests": {
-    "en": "Generate tests",
-    "de": "Tests generieren"
-  },
-  "command.editorGenerateTests.description": {
-    "en": "Host-injected Monaco action for governed test generation.",
-    "de": "Host-injizierte Monaco-Aktion für governte Testgenerierung."
-  },
-  "command.editorAskSelection": {
-    "en": "Ask Keiko about selection",
-    "de": "Keiko zur Auswahl fragen"
-  },
-  "command.editorAskSelection.description": {
-    "en": "Host-injected Monaco action for selected text context.",
-    "de": "Host-injizierte Monaco-Aktion für ausgewählten Textkontext."
-  },
   "command.editorRenameSymbol": {
     "en": "Rename symbol",
     "de": "Symbol umbenennen"

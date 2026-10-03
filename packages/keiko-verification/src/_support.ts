@@ -9,7 +9,26 @@ import { dirname, join } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import type { SpawnFn, SpawnOptions } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceFs, WorkspaceInfo, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import type { VerificationDeps } from "./orchestrator.js";
 import type { ResourceMonitor } from "./monitor.js";
+
+// Tests fake the child process only; the real sandbox planner still builds the strict wrapper.
+export function verificationSandboxDeps(): Pick<
+  VerificationDeps,
+  "sandboxAvailability" | "platform" | "resolveExecutable"
+> {
+  return {
+    sandboxAvailability: {
+      bubblewrap: true,
+      unshare: false,
+      seatbelt: false,
+      docker: false,
+      podman: false,
+    },
+    platform: "linux",
+    resolveExecutable: (command): string => `/abs/${command}`,
+  };
+}
 
 export interface FakeChild extends EventEmitter {
   stdout: EventEmitter;

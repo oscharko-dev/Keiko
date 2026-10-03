@@ -6,7 +6,7 @@ import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 
 import { DatabaseSync } from "node:sqlite";
 import { createCodingHistoryStore } from "./codingHistory.js";
-import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -28,6 +28,7 @@ import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
+  assertSqliteStatePath,
   chmodIfPresent,
   ensureDirHardened,
   FILE_MODE,
@@ -119,6 +120,7 @@ import {
   workspaceManifestRootCountForProject,
 } from "./workspaceManifests.js";
 import { validateProjectPath } from "./validation.js";
+import { deriveWorkspaceRootRef } from "../workspace-root-identity.js";
 import {
   readMemoryAutonomyPolicy as sqlReadMemoryAutonomyPolicy,
   updateMemoryAutonomyPolicy as sqlUpdateMemoryAutonomyPolicy,
@@ -306,10 +308,14 @@ function createProjectRecord(
   name?: string,
 ): Project {
   const normalized = validateProjectPath(path, { mustExist: true });
-  const resolvedName = deriveProjectName(name, normalized);
   const now = options.now();
   return withImmediateTransaction(db, () => {
-    const project = sqlUpsertProject(db, normalized, resolvedName, name !== undefined, now);
+    const rootRef = deriveWorkspaceRootRef(realpathSync.native(normalized));
+    const membership = sqlFindWorkspaceManifestRecordByRoot(db, rootRef);
+    const registeredPath =
+      membership?.rootProjects.find((root) => root.rootRef === rootRef)?.projectPath ?? normalized;
+    const resolvedName = deriveProjectName(name, registeredPath);
+    const project = sqlUpsertProject(db, registeredPath, resolvedName, name !== undefined, now);
     ensureProjectWorkspaceManifest(db, project.path, project.name, now);
     return project;
   });
@@ -939,7 +945,8 @@ function emitUiStoreOpenedEvent(sink: ServerLogSink | undefined, event: ServerLo
 // without re-deriving it.
 export const UI_DB_BUSY_TIMEOUT_MS = 5_000;
 
-function preparedDatabase(target: string): DatabaseSync {
+function preparedDatabase(target: string, sink?: ServerLogSink): DatabaseSync {
+  if (target !== ":memory:") assertSqliteStatePath(target, { store: "ui", sink });
   const db = new DatabaseSync(target);
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(`PRAGMA busy_timeout = ${String(UI_DB_BUSY_TIMEOUT_MS)}`);
@@ -972,8 +979,10 @@ export function createInMemoryUiStore(opts?: UiStoreFactoryOptions): UiStore {
 // sink at all.
 export function openNodeUiDatabase(dbPath: string, sink?: ServerLogSink): DatabaseSync {
   const elapsed = startUiStoreOpenTimer();
+  assertSqliteStatePath(dbPath, { store: "ui", sink });
   ensureDirHardened(dirname(dbPath));
-  let db = preparedDatabase(dbPath);
+  assertSqliteStatePath(dbPath, { store: "ui", sink });
+  let db = preparedDatabase(dbPath, sink);
   try {
     db.exec("PRAGMA journal_mode = WAL");
     assertQuickCheckOk(db);
@@ -985,7 +994,7 @@ export function openNodeUiDatabase(dbPath: string, sink?: ServerLogSink): Databa
       throw error;
     }
     quarantineCorruptDb(dbPath, error);
-    db = preparedDatabase(dbPath);
+    db = preparedDatabase(dbPath, sink);
     db.exec("PRAGMA journal_mode = WAL");
     assertQuickCheckOk(db);
     runMigrations(db, sink);

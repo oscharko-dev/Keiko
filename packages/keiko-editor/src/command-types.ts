@@ -11,8 +11,6 @@ export type EditorHostCapability =
   | "provideInlineCompletions"
   | "provideDiagnostics"
   | "provideContext"
-  | "askKeikoAboutSelection"
-  | "generateTests"
   | "renameSymbol"
   | "previewPatch"
   | "applyPatchReview"
@@ -40,8 +38,6 @@ export type EditorCommandId =
   // Issue #1205: reject/hide the visible inline (ghost-text) suggestion. Editor-intrinsic (Monaco's
   // `editor.action.inlineSuggest.hide`), so it needs no host capability.
   | "editor.rejectInlineCompletion"
-  | "editor.generateTests"
-  | "editor.askKeikoAboutSelection"
   | "editor.renameSymbol"
   // Issue #1205: run verification over a generated patch (governed, off in v1 — see `runVerification`).
   | "editor.runVerification"

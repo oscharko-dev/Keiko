@@ -42,6 +42,26 @@ function hostileWindow(type: string, extra: Record<string, unknown> = {}): unkno
 }
 
 describe("workspace-persistence", () => {
+  it.each(["files", "editor"] as const)(
+    "retains only the closed explicit %s project binding",
+    (type) => {
+      const retained = sanitizePersistedWindows([
+        win({
+          id: "project-window",
+          type,
+          cfg: { root: "/documents", rootBinding: "coding-repository" },
+        }),
+      ]);
+      expect(retained[0]?.cfg).toEqual({ root: "/documents", rootBinding: "coding-repository" });
+      for (const rootBinding of ["another-root", true, 42, { root: "/other" }]) {
+        const rejected = sanitizePersistedWindows([
+          { ...win({ id: "project-window", type }), cfg: { root: "/documents", rootBinding } },
+        ]);
+        expect(rejected[0]?.cfg).toEqual({ root: "/documents" });
+      }
+    },
+  );
+
   it("retains only the closed Coding Workbench Git binding marker", () => {
     const retained = sanitizePersistedWindows([
       win({

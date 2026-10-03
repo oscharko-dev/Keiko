@@ -1,16 +1,26 @@
-# Epic #2091 agent docking regression evidence
+# Epic #2091 agent docking regression evidence — historical closeout
 
 Date: 2026-07-10
 
 Scope: Epic #2091 and child issues #2114, #2115, #2116, #2117, #2118, #2119, #2120, #2121, and
 #2122.
 
-## Maintained policy
+## Current scope (2026-10-03)
 
-ADR-0125 supersedes the old blanket review/manual-Save language in the original issue drafts. Keiko
-ships the three Codex-aligned modes **Ask for approval**, **Approve for me**, and **Full access**.
-Contained mutations proceed or require review according to the central mode/risk matrix. Hard
-denials and the separate delivery approval boundary remain unchanged.
+The results below are the dated 2026-07-10 #2091 closeout record, not gate results for the current
+branch. The ordinary Editor's agent integration and Chat handoffs are now retired. The independent
+Coding Workbench retains its shared governed authority, producer, patch, and headless execution
+paths. Historical results for the removed browser integration are retained as architectural
+history, not a requirement to recreate that integration.
+
+Current ordinary Editor reproduction uses `npm run test:e2e:editor-manual-pins` and
+`tests/e2e/editor-manual-pins.spec.ts` for manual undo/redo, split panes, and the absence of agent
+control requests. Passive buffer-safety contracts and verified-commit protections have separate
+contract/registry/route/commit tests. See [the current demo](./2091-agent-docking-demo.md).
+
+Current mode semantics are defined by ADR-0138 and `AGENTS.md`: **Ask for approval**,
+**Supervised workspace**, and **Full access** apply to autonomy-capable surfaces. The ordinary
+Editor retirement does not alter those Workbench modes or their deployment ceilings.
 
 ## End-to-end evidence
 
@@ -21,10 +31,11 @@ denials and the separate delivery approval boundary remain unchanged.
 > `POST /api/editor/agent/authority` and `/api/coding-workbench/autonomous-delivery/confirm`, which
 > #2256 later unmounted on purpose, so from that point the suite could not have passed again — and
 > nothing noticed, because it ran in no lane. Its split-pane single-session invariant survives as a
-> pin in `tests/e2e/editor-agent-pins.spec.ts`; the selection, apply, review and save journeys are
-> covered by `tests/e2e/editor-chat-roundtrip-2119.spec.ts`. Both run in a workflow lane.
+> pin in the former `editor-agent-pins.spec.ts`; selection, apply, review and save were covered by
+> the former `editor-chat-roundtrip-2119.spec.ts`. Both ordinary Editor agent suites were removed
+> with the 2026-10-03 retirement; current manual pins do not claim their retired agent coverage.
 
-The suite proves:
+The historical run proved:
 
 - editor selection -> Ask Keiko -> selection-grounded response;
 - Chat code-block Apply -> Reject -> Apply -> Accept -> dirty buffer -> explicit Save -> disk;
@@ -83,7 +94,7 @@ requested-mode policy, and deployment-ceiling policy wins. Navigation/layout rem
 delivery remains separately approved.
 
 Named verification includes the Authority Envelope mode-ceiling, expired-authority, budget,
-idempotent replay, action-bound local authority, and commit-time changeset revalidation tests in
+idempotent replay, the former action-bound local authority, and commit-time changeset revalidation tests in
 `agentRoutes.test.ts` and `agentAuthorityRegistry.test.ts`.
 
 ## Editor release evidence
@@ -120,9 +131,9 @@ packaged production UI on reachable `dev` commit
 `npm run check:perf-evidence` passed for both workspace and editor evidence and confirmed each
 commit stamp is reachable from the current branch.
 
-## Final local gates
+## Historical final local gates
 
-| Command                                                 | Current branch result                            |
+| Command                                                 | 2026-07-10 result                                |
 | ------------------------------------------------------- | ------------------------------------------------ |
 | `npm run typecheck`                                     | Pass                                             |
 | `NODE_OPTIONS=--max-old-space-size=8192 npm run lint`   | Pass                                             |
@@ -155,7 +166,8 @@ All required gates were rerun after synchronizing with `origin/dev` at
 
 ## Closure assessment
 
-The implementation and post-merge audit hardening are present on `dev`. Focused security review,
-full-loop browser evidence, coverage, documentation, and Linux release evidence are complete. Formal
-epic closure now waits only for the evidence-closeout pull request's required GitHub checks, review
-settlement, merge, and the final evidence links in Epic #2091.
+The original closeout recorded the implementation and post-merge audit hardening on `dev`, with
+focused security review, browser evidence, coverage, documentation, and Linux release evidence.
+Those historical measurements are preserved without claiming current gate freshness. The present
+ordinary Editor retirement removes its agent UI and local Chat authority factory while retaining
+independent governed Workbench execution and verified-commit dirty-buffer checks.

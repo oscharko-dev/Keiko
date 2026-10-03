@@ -57,6 +57,7 @@ import {
   type ClientDiagnosticWorkspaceTrustBinding,
   type ClientDiagnosticCodingHistoryScope,
   type ClientStageId,
+  type ClientNavigationOutcome,
   type ClientComposerActivity,
   type ClientComposerCodeStage,
   type ClientChatHistoryDeletionCounts,
@@ -76,6 +77,7 @@ export type ClientDiagnosticStageReport = (
       readonly phase: "settled";
       readonly ordinal: number;
       readonly durationMs: number;
+      readonly navigationOutcome?: ClientNavigationOutcome | undefined;
     }
 ) & { readonly deletion?: ClientChatHistoryDeletionCounts | undefined };
 
@@ -123,12 +125,15 @@ export interface ClientDiagnosticGitRetryAttemptReport {
 }
 
 export interface ClientDiagnosticMeta {
+  // UI-only provenance: emitted solely by the browser's uncaught-error listeners.
+  readonly globalFailure?: boolean | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
+  readonly renderFailure?: "shell" | "window-body" | undefined;
   // The closed class of the failure, when the caller classified it (`bffRequestErrorKind`).
   readonly errorKind?: ActivityLogErrorKind | undefined;
   readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
@@ -164,6 +169,26 @@ export interface ClientDiagnosticMeta {
 }
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;
+
+export type ClientDiagnosticDeliveryRetry = (
+  correlationId: string,
+  signal: AbortSignal,
+) => Promise<boolean | undefined>;
+
+let deliveryRetry: ClientDiagnosticDeliveryRetry | undefined;
+
+/** The installed transport owns delivery; the sink and report UI do not choose a transport. */
+export function setClientDiagnosticDeliveryRetry(retry: ClientDiagnosticDeliveryRetry): void {
+  deliveryRetry = retry;
+}
+
+/** Undefined means this selector is not a retained browser-only diagnostic. */
+export async function ensureClientDiagnosticDelivery(
+  correlationId: string,
+  signal: AbortSignal,
+): Promise<boolean | undefined> {
+  return deliveryRetry?.(correlationId, signal);
+}
 
 interface PendingDiagnostic {
   readonly message: string;
@@ -219,6 +244,39 @@ function bufferUntilTransportArrives(message: string, meta?: ClientDiagnosticMet
 
 let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
 
+export interface GlobalClientFailure {
+  readonly ordinal: number;
+  readonly correlationId: string | undefined;
+}
+
+let globalFailure: GlobalClientFailure | null = null;
+let globalFailureOrdinal = 0;
+const globalFailureListeners = new Set<() => void>();
+
+export function subscribeGlobalClientFailure(listener: () => void): () => void {
+  globalFailureListeners.add(listener);
+  return (): void => {
+    globalFailureListeners.delete(listener);
+  };
+}
+
+export function currentGlobalClientFailure(): GlobalClientFailure | null {
+  return globalFailure;
+}
+
+export function dismissGlobalClientFailure(ordinal: number): void {
+  if (globalFailure?.ordinal !== ordinal) return;
+  globalFailure = null;
+  for (const listener of globalFailureListeners) listener();
+}
+
+function publishGlobalClientFailure(meta: ClientDiagnosticMeta | undefined): void {
+  if (meta?.globalFailure !== true) return;
+  if (meta.kind !== "window-error" && meta.kind !== "unhandled-rejection") return;
+  globalFailure = { ordinal: ++globalFailureOrdinal, correlationId: meta.correlationId };
+  for (const listener of globalFailureListeners) listener();
+}
+
 /**
  * Report a bounded, already-redacted operator diagnostic.
  *
@@ -233,6 +291,7 @@ let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
  * `message` to the console unchanged (`useWindowStageEvidence`).
  */
 export function reportClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): void {
+  publishGlobalClientFailure(meta);
   writer(message, meta);
 }
 
@@ -254,6 +313,7 @@ export function resetClientDiagnosticWriter(): void {
   writer = bufferUntilTransportArrives;
   pending.length = 0;
   lossCounts.clear();
+  if (globalFailure !== null) dismissGlobalClientFailure(globalFailure.ordinal);
 }
 
 type SseStreamCloseReason = "connecting" | "closed" | "unknown";

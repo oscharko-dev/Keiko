@@ -173,15 +173,12 @@ set, AC1), for governance-relevant execution and server-resolved reads including
 any action that is `denied`. Ordinary navigation/layout `allowed` actions are not audited, keeping
 the ledger focused on governance-relevant activity.
 
-### D3 — Read-only "recent agent editor actions" UI surface
+### D3 — Ordinary Editor action UI retired (2026-10-03)
 
-A new `EditorAgentActionsPanel` renders the recent records for the active session: action type,
-target file, a disposition badge (allowed / review-required / denied), outcome status, and a
-relative timestamp. It fetches `GET /api/editor/agent/audit?sessionId=` on mount and re-fetches when
-the existing SSE bridge observes an action or result event (no change to the frozen
-`EditorAgentEvent` union). It reuses the existing design-system classes and tokens, adds no inline
-scripts (CSP `script-src 'self'` compliant), and meets WCAG 2.2 AA (semantic list, `aria-live`,
-status conveyed by text not colour alone).
+The owner decision recorded in ADR-0061 removes `EditorAgentActionsPanel`, its filters, the agent
+presence indicator, and ordinary Editor action subscriptions. Opening a normal Editor no longer
+loads the agent audit list. The shared server policy and bounded audit remain for their independent
+active consumers; their retention does not reintroduce an agent control surface into the Editor.
 
 ### D4 — Reuse, not reinvention
 

@@ -55,6 +55,10 @@ const I18N_USAGE_APIS = [
   // These follow the same shape as `useTranslate` / `useCodingWorkbenchTranslate` above:
   // a hook that returns `(key, values?) => string`, backed by a matching-key EN and DE map.
   { name: "useProblemsTranslate", pattern: /\buseProblemsTranslate\s*\(/ },
+  // Files and Editor share the existing feature-scoped EN/DE Files catalog.
+  { name: "useFilesWidgetTranslate", pattern: /\buseFilesWidgetTranslate\s*\(/ },
+  { name: "FilesWidgetTranslate-type", pattern: /\bFilesWidgetTranslate\b/ },
+  { name: "translateFilesWidget", pattern: /\btranslateFilesWidget\s*\(/ },
 ];
 const I18N_USAGE_PATTERNS = I18N_USAGE_APIS.map((api) => api.pattern);
 // Each quoted alternative used to open with an unbounded [^"]* that overlaps the required
@@ -179,6 +183,14 @@ const FEATURE_CATALOG_DE_PATTERN = /-i18n\.de\.ts$/u;
 const FEATURE_CATALOG_SINGLE_SUFFIX = "-i18n.ts";
 const FEATURE_CATALOG_JSON_SUFFIX = "-i18n.messages.json";
 const CATALOG_LANGUAGE_MAP_PATTERN = /_(EN|DE)_MESSAGES\b/gu;
+const FILES_CATALOG_LANGUAGE_MAP_PATTERN = /\b(EN|DE)_FILES_WIDGET_MESSAGES\b/gu;
+
+function catalogLanguageMaps(source) {
+  return [
+    ...source.matchAll(CATALOG_LANGUAGE_MAP_PATTERN),
+    ...source.matchAll(FILES_CATALOG_LANGUAGE_MAP_PATTERN),
+  ].sort((left, right) => left.index - right.index);
+}
 
 function isSharedCatalogKeyHelper(repoRoot, file) {
   let source;
@@ -188,7 +200,7 @@ function isSharedCatalogKeyHelper(repoRoot, file) {
     // A deleted `-i18n.ts` cannot need local parity; classify it out of the catalog set.
     return true;
   }
-  const declaredMaps = [...source.matchAll(CATALOG_LANGUAGE_MAP_PATTERN)];
+  const declaredMaps = catalogLanguageMaps(source);
   return declaredMaps.length === 0 && source.includes("MessageKey");
 }
 
@@ -344,7 +356,7 @@ function singleFileCatalogParityProblems(repoRoot, singleFileCatalogs) {
   const problems = [];
   for (const file of singleFileCatalogs) {
     const source = readText(repoRoot, file);
-    const boundaries = [...source.matchAll(CATALOG_LANGUAGE_MAP_PATTERN)];
+    const boundaries = catalogLanguageMaps(source);
     const english = boundaries.find((match) => match[1] === "EN");
     const german = boundaries.find((match) => match[1] === "DE");
     if (english?.index === undefined || german?.index === undefined) {

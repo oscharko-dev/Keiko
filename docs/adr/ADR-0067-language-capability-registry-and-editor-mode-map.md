@@ -185,6 +185,11 @@ degrade path raises no exception.
 
 ### D6 — AC4: additive, content-free `languageCapability` field on the agent snapshot
 
+The ordinary Editor producer described in this section is retired by the 2026-10-03 owner decision
+in ADR-0061. Language capability discovery still drives the Editor's own language features; its
+safety-only buffer publication does not provide live agent context. The optional shared wire field
+remains for independent consumers.
+
 We will add one additive **optional** field to `EditorAgentSessionSnapshot`:
 
 ```ts

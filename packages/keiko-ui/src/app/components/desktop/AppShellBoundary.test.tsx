@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppShellFrame } from "./AppShell";
 import { AppShellBoundary } from "./AppShellBoundary";
 import { I18nProvider } from "@/lib/i18n";
+import * as diagnostics from "@/lib/client-diagnostics";
 
 // Silences React's expected error-boundary console noise for a render that throws.
 function withBoundaryNoise<T>(message: string, run: () => T): T {
@@ -76,6 +77,7 @@ describe("AppShellBoundary", () => {
   });
 
   it("degrades a render-time throw to an actionable surface instead of a blank page", () => {
+    const diagnostic = vi.spyOn(diagnostics, "reportClientDiagnostic");
     const { warnSpy } = renderBoundary(<Bomb armed />, {});
     try {
       const alert = screen.getByRole("alert");
@@ -92,6 +94,10 @@ describe("AppShellBoundary", () => {
       // and a message Keiko does not control, and the console is the surface users screenshot into
       // bug reports. Both directions are pinned: the class is present, the object is not.
       expect(warnSpy).toHaveBeenCalledWith("[keiko] app shell crashed: Error");
+      expect(diagnostic).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ kind: "boundary", renderFailure: "shell" }),
+      );
       for (const call of warnSpy.mock.calls) {
         for (const argument of call) {
           expect(argument).not.toBeInstanceOf(Error);
@@ -99,6 +105,7 @@ describe("AppShellBoundary", () => {
         }
       }
     } finally {
+      diagnostic.mockRestore();
       warnSpy.mockRestore();
     }
   });

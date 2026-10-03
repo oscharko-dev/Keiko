@@ -115,7 +115,6 @@ describe("prepareNewWindowCfg", (): void => {
     expect(cfg).toStrictEqual({
       title: "Release grounding review",
       chatId: undefined,
-      selectionHandoffId: undefined,
       newChatRequestId: "new-chat-request-2",
     });
   });
@@ -132,7 +131,6 @@ describe("prepareNewWindowCfg", (): void => {
       title: "Project B",
       projectPath: "/repo-b",
       chatId: undefined,
-      selectionHandoffId: undefined,
       newChatRequestId: "request-project-b",
     });
   });

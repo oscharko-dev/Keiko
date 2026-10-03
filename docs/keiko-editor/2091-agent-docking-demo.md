@@ -1,94 +1,59 @@
-# Epic #2091 agent docking demo
+# Epic #2091 agent docking demo — current Editor retirement
 
-This script uses a disposable repository containing no secrets or private data.
+The original #2091 ordinary Editor docking demo is retired by owner decision on 2026-10-03.
+Selection-to-chat handoffs, Chat **Apply to editor**, incoming agent actions, presence, and recent
+agent activity are removed. The independent Coding Workbench and its headless changeset execution
+remain unchanged; this manual Editor demo does not verify or redesign them.
 
 ## Preparation
 
-1. Run `npm install` from the repository root.
+Use a disposable repository containing no secrets or private data.
+
+1. Install the repository dependencies and provision the prerequisites described in `AGENTS.md`.
 2. Run `npm run dev:start` and open the loopback URL printed by the command.
-3. Open a disposable workspace with at least two small source files.
-4. Select one of the three agent modes: **Ask for approval**, **Supervised workspace** (labelled
-   **Approve for me** before ADR-0138), or **Full access**.
+3. Select a disposable workspace containing two small source files in the Editor.
 
-## Selection-grounded chat and single-file apply
+## Manual editing and split panes
 
-1. Open a source file in the built-in editor and select a non-empty expression.
-2. Invoke **Ask Keiko about this selection**.
-3. Confirm that Chat opens and the request carries the selected file/range context.
-4. Wait for the assistant response and confirm its answer is grounded in the selected expression.
-5. On an assistant code block, invoke **Apply to editor**.
-6. Confirm the editor shows the existing side-by-side patch review with Accept and Reject.
-7. Reject once and verify the buffer and disk file remain unchanged.
-8. Apply the same code block again and Accept.
-9. Confirm the active tab is dirty while the disk file is still byte-identical to its original.
-10. Invoke Save and confirm the disk file now matches the accepted buffer and the dirty marker clears.
+1. Open a source file and edit it. Confirm the tab becomes dirty.
+2. Undo and redo the edit using the normal keyboard shortcuts. Confirm the displayed buffer changes.
+3. Save explicitly. Confirm the disk file matches the buffer and the dirty marker clears.
+4. Open the second file, split it into another pane, and switch focus between the panes.
+5. Confirm both panes remain usable for manual editing, formatting, saving, and file navigation.
+6. Confirm there is no agent presence or recent-actions panel, incoming action subscription, agent
+   patch review, Chat **Apply to editor**, or selection-to-chat command.
 
-## Multi-file changeset
+## Unsaved-buffer protection
 
-1. Dock an agent run that proposes one changeset touching the open file and a closed second file.
-2. In **Supervised workspace**, use a high-risk changeset and confirm the agent-presence indicator
-   enters review state.
-3. Inspect the changed-file list and select each file. Confirm each original/modified Monaco diff is
-   accurate.
-4. Before Accept, confirm both disk files are byte-identical to their starting content.
-5. Accept the changeset and confirm both files update as one transaction, the open Monaco model
-   reconciles to disk, no tab remains dirty, and Save status reads `Saved`.
-6. Repeat with an allowed workspace-contained changeset in **Ask for approval** or **Full access**.
-   Confirm no review surface appears, the transaction completes, and Monaco reconciles.
-7. Split the two changed files into separate panes and switch focus between them. Confirm only the
-   active pane is discoverable to Chat, then apply a reviewed changeset and verify both visible
-   Monaco models refresh from disk without becoming dirty.
-
-## Presence, policy, and audit
-
-1. Open the agent actions panel and filter to the docked session or action.
-2. Confirm the presence indicator reports detached, active, or review state as the run progresses.
-3. Confirm the audit rows show action type, origin (`agent` or `chat`), policy disposition, queued
-   outcome, and terminal outcome.
-4. Confirm the audit surface contains no patch body, source content, selection text, diagnostic
-   message, credential, Authority Envelope body, or bridge capability.
-5. Attempt a changeset containing one normal source file and one `.env`, `.ssh`, `.keiko`, or known
-   credential-store target. Confirm the whole action fails closed and no member changes.
-6. Confirm commit, push, pull-request creation, and merge still require the separate delivery
-   approval flow regardless of the selected agent mode.
+The normal Editor retains safety-only snapshots on the existing registry. These do not contain
+source text and cannot authenticate actions, SSE, discovery, or agent context. An acknowledged
+clean snapshot permits owned release. A dirty disconnect retains the dirty-buffer guard used by
+verified commits; it does not create an executable agent session. Reload carries the non-executing
+ownership token and acknowledged dirty paths forward. See
+[the registry ADR](../adr/ADR-0060-agent-editor-session-registry-and-queue.md) for ownership and
+lost-token limitations.
 
 ## Automated reproduction
 
-Run:
-
 ```bash
-npm run test:e2e:editor-chat-2119
+npm run test:e2e:editor-manual-pins
 ```
 
-```bash
-npm run test:e2e:editor-agent-pins
-```
+`tests/e2e/editor-manual-pins.spec.ts` covers manual undo/redo and split-pane focus changes while
+asserting that no agent events, actions, or audit requests occur. It replaces the ordinary Editor
+journeys formerly named `editor-agent-pins.spec.ts` and `editor-chat-roundtrip-2119.spec.ts`.
+It is not evidence for independent Workbench changeset application.
 
-Together these cover selection-grounded Ask/response, Chat Apply Reject/Accept/Save, the
-sensitive-path denial and authority-missing fail-closed default, split-pane session cardinality,
-filesystem state, and content-free audit evidence against the real BFF.
+Targeted contract, registry, route, and verified-commit tests separately cover passive ownership,
+wrong-purpose action/SSE rejection, dirty retention, clean release, and server-restart reseeding.
 
-Two behaviours the retired suite covered end-to-end are **not** covered end-to-end any more. They
-are named here rather than quietly dropped, with the reason, because one of them cannot simply be
-rewritten:
+## Historical #2091 evidence
 
-- **Cross-pane model reconciliation** — an inactive pane's buffer updating after a committed
-  changeset. This is not merely unwritten, it is currently unreachable end-to-end. A split MOVES the
-  active tab into the new pane (`editorLayoutReducer`'s `split-pane` refuses to leave the source
-  pane empty), so two panes hold two DIFFERENT files; proving reconciliation across them therefore
-  needs a changeset that touches BOTH files at once. The chat bridge — the only agent-write path the
-  product still mounts — applies to the active buffer alone. The retired journey got its multi-file
-  changeset from `POST /api/editor/agent/authority`, which #2256 removed on purpose. Restoring the
-  proof needs a server-side path that can apply a multi-file changeset, not a rewrite of the test.
-- **The agent presence indicator** — no E2E coverage remains.
+The [regression evidence](./2091-agent-docking-regression-evidence.md) and
+[security review](./2091-agent-docking-security-review.md) retain their dated 2026-07-10 results.
+Their Chat Apply, browser review, presence, and cross-pane agent reconciliation journeys describe
+historical capabilities; they are not instructions to restore the retired ordinary Editor UI.
 
-Both keep unit-level coverage — `packages/keiko-editor/src/components/editor-model-registry.test.ts`
-and `packages/keiko-ui/.../EditorRuntimeWidget.a11y.test.tsx` respectively — against a mocked Monaco
-and no real BFF.
-
-The former `test:e2e:editor-agent-docking-2122` suite is retired (#2955). Its reviewed and direct
-multi-file transaction journeys registered a browser-supplied Authority Envelope through
-`POST /api/editor/agent/authority` and `/api/coding-workbench/autonomous-delivery/confirm`, which
-#2256 deliberately unmounted — `packages/keiko-server/src/routes.test.ts` pins that they stay
-unmounted, so those journeys asserted a capability the product no longer offers. Server-derived
-authority now travels with the bridge lease, which is what the two suites above exercise.
+The earlier `test:e2e:editor-agent-docking-2122` suite was already retired by #2955. It drove
+browser-supplied authority routes that #2256 deliberately unmounted. The current shared governed
+producer, authority, patch, and headless Workbench tests retain their independent scope.

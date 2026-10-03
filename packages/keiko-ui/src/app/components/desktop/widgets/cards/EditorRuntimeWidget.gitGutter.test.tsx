@@ -9,7 +9,6 @@ import {
   fetchGitStatus,
   fetchGitStructuredDiff,
   fetchGitBlame,
-  postEditorAgentSessionSnapshot,
   saveFilesContent,
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
@@ -28,7 +27,6 @@ vi.mock("../../../../../lib/api", async () => {
     fetchGitStatus: vi.fn(),
     fetchGitStructuredDiff: vi.fn(),
     fetchGitBlame: vi.fn(),
-    postEditorAgentSessionSnapshot: vi.fn(),
     saveFilesContent: vi.fn(),
   };
 });
@@ -162,7 +160,6 @@ async function renderEditorWithBlame(onOpenGitCommit = vi.fn()): Promise<ReturnT
 
 beforeEach(() => {
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(CAPABILITIES);
-  vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
   vi.mocked(fetchGitStatus).mockResolvedValue(cleanGitStatus("/repo"));
   vi.mocked(fetchGitStructuredDiff).mockImplementation(async ({ scope }) => diff(scope));
   vi.mocked(fetchGitBlame).mockResolvedValue({
@@ -226,74 +223,7 @@ describe("EditorRuntimeWidget Git gutter", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
-  it("reports gitContextSummary on the posted agent snapshot (Issue #2234, ADR-0127)", async () => {
-    vi.mocked(fetchGitStatus).mockResolvedValue({
-      schemaVersion: "1",
-      root: "/repo",
-      state: "available",
-      available: true,
-      detached: false,
-      clean: false,
-      stagedCount: 1,
-      unstagedCount: 2,
-      untrackedCount: 0,
-      conflictedCount: 1,
-      changes: [
-        {
-          path: "src/app.ts",
-          indexStatus: "M",
-          worktreeStatus: " ",
-          staged: true,
-          unstaged: false,
-          untracked: false,
-          conflicted: false,
-        },
-        {
-          path: "src/other.ts",
-          indexStatus: " ",
-          worktreeStatus: "M",
-          staged: false,
-          unstaged: true,
-          untracked: false,
-          conflicted: false,
-        },
-        {
-          path: "src/conflict.ts",
-          indexStatus: "U",
-          worktreeStatus: "U",
-          staged: false,
-          unstaged: false,
-          untracked: false,
-          conflicted: true,
-        },
-      ],
-      truncated: false,
-      maxChanges: 500,
-    });
-    await renderEditor("<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n");
-
-    await waitFor(() => {
-      const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
-      expect(snapshot?.gitContextSummary).toEqual({
-        hasConflictMarkers: false,
-        changedFileCount: 3,
-        truncated: false,
-      });
-    });
-
-    act(() => surface.props?.editorConflicts?.onChange(2, false));
-
-    await waitFor(() => {
-      const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
-      expect(snapshot?.gitContextSummary).toEqual({
-        hasConflictMarkers: true,
-        changedFileCount: 3,
-        truncated: false,
-      });
-    });
-  });
-
-  it("reads staged and unstaged once per bridge refresh and never from content changes", async () => {
+  it("reads staged and unstaged once per gutter refresh and never from content changes", async () => {
     await renderEditor();
     const gutter = surface.props?.editorGitGutter;
     expect(gutter).toBeDefined();
@@ -321,7 +251,7 @@ describe("EditorRuntimeWidget Git gutter", () => {
     expect(fetchGitStructuredDiff).toHaveBeenCalledTimes(2);
   });
 
-  it("increments the refresh trigger explicitly and after a successful save", async () => {
+  it("increments the refresh trigger after a successful save", async () => {
     const mutation = vi.fn<(event: Event) => void>();
     window.addEventListener(WORKSPACE_FILE_MUTATED_EVENT, mutation, { once: true });
     vi.mocked(saveFilesContent).mockResolvedValue({
@@ -332,9 +262,6 @@ describe("EditorRuntimeWidget Git gutter", () => {
     });
     await renderEditor();
     const initial = surface.props?.gitGutterRefreshNonce ?? 0;
-    fireEvent.click(screen.getByRole("button", { name: "Refresh editor change indicators" }));
-    await waitFor(() => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 1));
-
     act(() => {
       surface.props?.onContentChange({ text: "typed", sizeBytes: 5 }, "human");
     });
@@ -353,7 +280,7 @@ describe("EditorRuntimeWidget Git gutter", () => {
       expectedSavedVersion: 0,
     };
     act(() => surface.props?.onSaveRequested(request));
-    await waitFor(() => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 2));
+    await waitFor(() => expect(surface.props?.gitGutterRefreshNonce).toBe(initial + 1));
     expect(mutation).toHaveBeenCalledOnce();
     expect(
       workspaceFileMutationDetail(mutation.mock.calls[0]?.[0] ?? new Event("missing")),

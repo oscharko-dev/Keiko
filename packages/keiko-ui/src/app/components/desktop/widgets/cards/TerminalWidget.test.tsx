@@ -22,6 +22,14 @@ vi.mock("../../../../../lib/terminal-api", () => ({
   terminalEventsUrl: (): string => "/api/terminal/events",
 }));
 
+vi.mock("../../../../../lib/browser-stream-capacity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../../lib/browser-stream-capacity")>()),
+  acquirePersistentBrowserStreamCapacity: (onGranted: () => void): (() => void) => {
+    onGranted();
+    return (): void => undefined;
+  },
+}));
+
 type EsListener = (ev: MessageEvent<string>) => void;
 
 class FakeEventSource {
@@ -29,10 +37,15 @@ class FakeEventSource {
   public readonly listeners = new Map<string, EsListener[]>();
   public closed = false;
   public static last: FakeEventSource | null = null;
+  public static autoOpen = true;
+  public readyState = 0;
 
   public constructor(url: string) {
     this.url = url;
     FakeEventSource.last = this;
+    queueMicrotask(() => {
+      if (FakeEventSource.autoOpen) this.dispatch("open", "");
+    });
   }
 
   public addEventListener(type: string, listener: EsListener): void {
@@ -46,6 +59,7 @@ class FakeEventSource {
   }
 
   public dispatch(type: string, data: string): void {
+    if (type === "open") this.readyState = 1;
     const handlers = this.listeners.get(type) ?? [];
     for (const h of handlers) h(new MessageEvent(type, { data }));
   }
@@ -56,6 +70,7 @@ beforeEach(() => {
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("crypto", { randomUUID: vi.fn(() => "req-own") });
   FakeEventSource.last = null;
+  FakeEventSource.autoOpen = true;
   vi.mocked(fetchTerminalPolicy).mockResolvedValue({
     commands: ["ls", "git", "grep"],
     limits: { maxOutputBytes: 262144, defaultTimeoutMs: 30000 },
@@ -73,6 +88,43 @@ afterEach(() => {
 });
 
 describe("TerminalWidget", () => {
+  it("waits for the event channel before starting and retains an immediate start event", async () => {
+    FakeEventSource.autoOpen = false;
+    vi.mocked(createTerminalExecution).mockImplementation(() => {
+      FakeEventSource.last?.dispatch(
+        "terminal:execution-started",
+        JSON.stringify({
+          kind: "execution-started",
+          executionId: "own-live-run",
+          payload: {
+            requestId: "req-own",
+            projectId: "/proj",
+            command: "ls",
+            argCount: 0,
+            startedAt: 1,
+          },
+        }),
+      );
+      return new Promise<never>(() => undefined);
+    });
+    const view = render(<TerminalWidget projectPath="/proj" />);
+    const runButton = await screen.findByRole("button", { name: /^run$/i });
+    await waitFor(() => expect(runButton).toHaveAttribute("aria-disabled", "false"));
+    await userEvent.click(runButton);
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    expect(createTerminalExecution).not.toHaveBeenCalled();
+    FakeEventSource.last?.dispatch("open", "");
+    await waitFor(() => expect(createTerminalExecution).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /cancel|abort/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      ),
+    );
+    view.unmount();
+    expect(FakeEventSource.last?.closed).toBe(true);
+  });
+
   it("renders the form with project, command, args and cwd inputs", async () => {
     render(<TerminalWidget />);
     await screen.findByRole("combobox", { name: /command/i });
@@ -149,10 +201,12 @@ describe("TerminalWidget", () => {
     await userEvent.click(screen.getByRole("button", { name: /run/i }));
 
     const stdout = await screen.findByRole("region", { name: /command stdout/i });
-    expect(stdout.tagName).toBe("PRE");
+    expect(stdout.tagName).toBe("SECTION");
+    expect(stdout.querySelector("pre")).toHaveTextContent("o".repeat(4000));
     expect(stdout).toHaveAttribute("tabindex", "0");
     const stderr = screen.getByRole("region", { name: /command stderr/i });
-    expect(stderr.tagName).toBe("PRE");
+    expect(stderr.tagName).toBe("SECTION");
+    expect(stderr.querySelector("pre")).toHaveTextContent("e".repeat(4000));
     expect(stderr).toHaveAttribute("tabindex", "0");
   });
 

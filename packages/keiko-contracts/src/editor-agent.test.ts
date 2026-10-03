@@ -160,7 +160,7 @@ describe("editor agent contracts", () => {
     };
     expect(parseEditorAgentActionsPostBody(withInvalidBridge)).toEqual({
       ok: false,
-      errors: ["browser action request is invalid"],
+      errors: ["body must be an editor agent action or action result"],
     });
   });
 
@@ -207,19 +207,18 @@ describe("editor agent contracts", () => {
       bridgeDecisionCapability: BRIDGE_CAPABILITY,
     };
     expect(parseEditorAgentActionsPostBody(bridgeAction)).toMatchObject({
-      ok: true,
-      value: { kind: "action", action: { origin: "agent" } },
+      ok: false,
     });
     expect(parseEditorAgentActionsPostBody({ ...bridgeAction, unknown: true })).toEqual({
       ok: false,
-      errors: ["browser action request is invalid"],
+      errors: ["body must be an editor agent action or action result"],
     });
     expect(
       parseEditorAgentActionsPostBody({
         ...bridgeAction,
         bridgeDecisionCapability: "invalid",
       }),
-    ).toEqual({ ok: false, errors: ["browser action request is invalid"] });
+    ).toEqual({ ok: false, errors: ["body must be an editor agent action or action result"] });
   });
 
   // PR #3625 review: only a review's Reject is the human's decision, and it says so explicitly; a
@@ -2201,3 +2200,73 @@ describe("editor agent action payload bounds", () => {
     expect(isEditorAgentPreparedChangeset({ files })).toBe(false);
   });
 });
+
+describe("passive editor buffer safety snapshots", () => {
+  it("accepts body-free owned safety snapshots and clean release requests", () => {
+    expect(
+      parseEditorAgentSnapshotRequest({
+        schemaVersion: "1",
+        kind: "buffer-snapshot",
+        snapshot: safetySnapshot(),
+      }),
+    ).toMatchObject({ ok: true, value: { kind: "buffer-snapshot" } });
+    expect(
+      parseEditorAgentSnapshotRequest({
+        schemaVersion: "1",
+        kind: "buffer-release",
+        sessionId: "session-1",
+        bufferSnapshotCapability: BRIDGE_CAPABILITY,
+      }),
+    ).toMatchObject({ ok: true, value: { kind: "buffer-release" } });
+  });
+  it("rejects content, foreign decision capabilities and unsupported release fields", () => {
+    const request = { schemaVersion: "1", kind: "buffer-snapshot", snapshot: safetySnapshot() };
+    for (const unsafe of [
+      { ...request, bridgeDecisionCapability: BRIDGE_CAPABILITY },
+      {
+        ...request,
+        snapshot: {
+          ...safetySnapshot(),
+          panes: [
+            { paneId: "pane-1", activeFile: null, openFiles: [], text: "PRIVATE_NESTED_BUFFER" },
+          ],
+        },
+      },
+      {
+        ...request,
+        snapshot: { ...safetySnapshot(), text: "PRIVATE_BUFFER", textMode: "activeFile" },
+      },
+      {
+        ...request,
+        snapshot: { ...safetySnapshot(), diagnosticsDetail: { items: [], truncated: false } },
+      },
+      {
+        schemaVersion: "1",
+        kind: "buffer-release",
+        sessionId: "session-1",
+        bufferSnapshotCapability: BRIDGE_CAPABILITY,
+        force: true,
+      },
+    ])
+      expect(parseEditorAgentSnapshotRequest(unsafe).ok).toBe(false);
+  });
+});
+
+function safetySnapshot(): EditorAgentSessionSnapshot {
+  const source = snapshot();
+  return {
+    schemaVersion: "1",
+    sessionId: source.sessionId,
+    windowId: source.windowId,
+    workspaceRoot: source.workspaceRoot,
+    activePaneId: source.activePaneId,
+    panes: source.panes,
+    dirtyFiles: source.dirtyFiles,
+    activeFile: source.activeFile,
+    cursor: null,
+    selection: null,
+    diagnosticsSummary: null,
+    textMode: "none",
+    updatedAt: source.updatedAt,
+  };
+}

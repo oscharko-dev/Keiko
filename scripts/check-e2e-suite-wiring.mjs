@@ -1181,7 +1181,7 @@ function commandGrepFilters(command) {
   return filters;
 }
 
-// A positional `*.spec.ts` argument, which is how `test:e2e:editor-chat-2119` names its one file.
+// A positional `*.spec.ts` argument, which is how `test:e2e:editor-manual-pins` names its one file.
 // A `--config` value is excluded by construction: it never ends in `.spec.ts`.
 /**
  * The spec files a command actually hands to Playwright.

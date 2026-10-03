@@ -21,10 +21,15 @@ const qualifierPath = resolve(
 const qualifier = readFileSync(qualifierPath, "utf8");
 
 // The installed qualifier must reconstruct the failed turn through its run id: the validated
-// timeline of `--correlation-id <runId>` has to carry the run's typed turn failure (#3598, #3534).
+// timeline of the validated private run alias must carry its typed turn failure (#3598, #3534).
 function runIdLookupGate(source) {
-  return /customerShapeSupportTimelineEvidence\(\s*JSON\.parse\(analyze\("--correlation-id", runId, "--json"\)\),\s*machineView,\s*runId,\s*"coding-sidecar\.gateway\.turn-failed",?\s*\)/u.test(
-    source,
+  return (
+    source.includes(
+      "const correlations = customerShapeSupportReportCorrelations(machineView, evidence, runId);",
+    ) &&
+    /customerShapeSupportTimelineEvidence\(\s*JSON\.parse\(analyze\("--correlation-id", correlations\.runId, "--json"\)\),\s*machineView,\s*correlations\.runId,\s*"coding-sidecar\.gateway\.turn-failed",?\s*\)/u.test(
+      source,
+    )
   );
 }
 
@@ -97,8 +102,8 @@ describe("customer-shape publish gate", () => {
 
   it("rejects a qualifier that analyzes the request twice instead of the run", () => {
     const weakened = qualifier.replace(
-      '"--correlation-id", runId, "--json"',
-      '"--correlation-id", diagnostic.correlationId, "--json"',
+      '"--correlation-id", correlations.runId, "--json"',
+      '"--correlation-id", correlations.diagnosticId, "--json"',
     );
     expect(weakened).not.toBe(qualifier);
     expect(runIdLookupGate(weakened)).toBe(false);

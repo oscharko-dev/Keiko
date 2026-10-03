@@ -14,10 +14,12 @@ import {
   statSync,
   symlinkSync,
   writeFileSync,
+  utimesSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -99,11 +101,11 @@ function seed(): void {
     fixtureLine(process, now, { op: "client.diagnostic", correlationId: CORRELATION }),
   ]);
 }
-function seedGatewayFailure(): void {
+function seedGatewayFailure(ageMs = 0): void {
   rmSync(join(stateDir, "logs"), { recursive: true });
   const process = fixtureProcess(4242, "aabbccdd");
-  const now = Date.now();
-  writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+  const now = Date.now() - ageMs;
+  const segment = writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
     fixtureLine(process, now, {
       op: "gateway.chat.started",
       correlationId: CORRELATION,
@@ -143,6 +145,7 @@ function seedGatewayFailure(): void {
       },
     }),
   ]);
+  utimesSync(segment, now / 1000, now / 1000);
 }
 async function exportReport(out = root): Promise<ReturnType<typeof capture>> {
   const result = capture();
@@ -292,15 +295,45 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+// A shipped product stack has no Vitest caller modules. Keep real throw-site coordinates.
+async function withProductStack<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = Error.stackTraceLimit;
+  Error.stackTraceLimit = 3;
+  try {
+    return await operation();
+  } finally {
+    Error.stackTraceLimit = previous;
+  }
+}
+
 describe("support report CLI and private publication", () => {
+  it("assesses a historical selected correlation closure rather than the export-time window", async () => {
+    seedGatewayFailure(75 * 60_000);
+    await exportReport();
+    const exported = readSupportReportFile(path);
+    const report = parseSupportReport(exported);
+    const decoded = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+    expect(decoded).toContain("gateway.chat.failed");
+    expect(report.incident.segments.length).toBeGreaterThan(0);
+    expect(report.incident.lineCount).toBeGreaterThan(0);
+    expect(report.incident.sufficiencyStatus).toBe("complete");
+    expect(analyzeSupportReport(exported).selection.status).toBe("complete");
+  });
   it("publishes exactly one private report and a versioned validated machine view", async () => {
     const result = await exportReport();
     expect(result.output.join("")).toContain("Nothing has been sent.");
     expect(readdirSync(root).sort()).toEqual([path.slice(root.length + 1), "state"].sort());
     expect(statSync(path).mode & 0o777).toBe(0o600);
-    const artifact = analyzeSupportReport(readSupportReportFile(path));
+    const exported = readSupportReportFile(path);
+    const report = parseSupportReport(exported);
+    const artifact = analyzeSupportReport(exported);
     expect(artifact.selection.status).toBe("complete");
-    expect(artifact.seed?.correlationId).toBe(CORRELATION);
+    expect(artifact.seed?.correlationId).toBe(report.incident.correlation.rootCorrelationId);
+    expect(artifact.seed?.correlationId).toMatch(/^id\d{6}$/u);
+    expect(exported).not.toContain(CORRELATION);
+    expect(
+      inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8"),
+    ).not.toContain(CORRELATION);
     // The analysis states the SHA-256 of the exact bytes on disk and names the analyzer itself.
     expect(artifact.sourceArtifactDigest).toBe(sha256Of(readFileSync(path)));
     expect(artifact.analyzerVersion).toBe(KEIKO_PRODUCT_VERSION);
@@ -383,7 +416,14 @@ describe("support report CLI and private publication", () => {
       }),
     ]);
     await exportReport();
-    for (const selected of [CORRELATION, child]) {
+    const artifact = analyzeSupportReport(readSupportReportFile(path));
+    const parentRef = artifact.incident.correlation.rootCorrelationId;
+    const childRef = artifact.analysis.timelines.find((timeline) =>
+      timeline.lines.some((line) => line.parentCorrelationId === parentRef),
+    )?.correlationId;
+    if (parentRef === undefined || childRef === undefined)
+      throw new TypeError("missing exported parent/child references");
+    for (const selected of [parentRef, childRef]) {
       const result = await analyze(["--seed", "--json", "--correlation-id", selected]);
       expect(result.code, result.errors.join("")).toBe(0);
     }
@@ -395,14 +435,15 @@ describe("support report CLI and private publication", () => {
     expect(completions.slice(-2)).toEqual([
       expect.objectContaining({
         seedCorrelation: "selected",
-        seedCorrelationDigest: digest(CORRELATION),
+        seedCorrelationDigest: digest(parentRef),
       }),
       expect.objectContaining({
         seedCorrelation: "selected",
-        seedCorrelationDigest: digest(child),
+        seedCorrelationDigest: digest(childRef),
       }),
     ]);
-    expect(JSON.stringify(completions)).not.toContain(child);
+    expect(JSON.stringify(completions)).not.toContain(parentRef);
+    expect(JSON.stringify(completions)).not.toContain(childRef);
   });
 
   // Review #3679: a real native import rejection still leaves a Keiko failure site on the line.
@@ -520,7 +561,7 @@ describe("support report CLI and private publication", () => {
     writeFileSync(path, '{"$section":"config-snapshot","secret":"customer-private"}\n', {
       mode: 0o600,
     });
-    const result = await analyze(["--json"]);
+    const result = await withProductStack(() => analyze(["--json"]));
     expect(result.code).toBe(1);
     expect(result.output).toEqual([]);
     expect(result.errors.join("")).not.toContain("customer-private");
@@ -916,13 +957,15 @@ describe("support report CLI and private publication", () => {
     seedGatewayFailure();
     await exportReport();
     const { artifact, seed } = analyzedReport();
-    const timeline = findTimeline(artifact.analysis, CORRELATION);
+    const selected = artifact.incident.correlation.rootCorrelationId;
+    if (selected === undefined) throw new TypeError("missing report root");
+    const timeline = findTimeline(artifact.analysis, selected);
     if (timeline === undefined) throw new TypeError("missing fixture timeline");
     const header = `Support incident ${artifact.incident.incidentId}\nDiagnostic sufficiency: complete\nAuthenticity: unknown\n`;
     // Each argument set selects its own view, and every view is the production renderer's text.
     const views: readonly (readonly [readonly string[], string])[] = [
       [[], header + renderHumanAllTimelines(artifact.analysis)],
-      [["--correlation-id", CORRELATION], header + renderHumanTimeline(timeline)],
+      [["--correlation-id", selected], header + renderHumanTimeline(timeline)],
       [["--clusters"], header + renderHumanClusters(artifact.analysis.clusters)],
       [["--seed"], renderHumanReproductionSeed(seed)],
     ];
@@ -1032,7 +1075,9 @@ describe("support report CLI and private publication", () => {
     seedGatewayFailure();
     await exportReport();
     const artifact = analyzeSupportReport(readSupportReportFile(path));
-    const result = await analyze(["--json", "--correlation-id", CORRELATION]);
+    const selected = artifact.incident.correlation.rootCorrelationId;
+    if (selected === undefined) throw new TypeError("missing report root");
+    const result = await analyze(["--json", "--correlation-id", selected]);
     expect(result.code, result.errors.join("")).toBe(0);
     const timeline = JSON.parse(result.output.join("")) as Record<string, unknown>;
     expect(timeline).toMatchObject({
@@ -1042,7 +1087,7 @@ describe("support report CLI and private publication", () => {
       reportDigest: artifact.reportDigest,
       analyzerVersion: KEIKO_PRODUCT_VERSION,
       sourceArtifactDigest: sha256Of(readFileSync(path)),
-      correlationId: CORRELATION,
+      correlationId: selected,
     });
     expect(timeline.errorKinds).toContain("timeout");
     expect(Array.isArray(timeline.lines)).toBe(true);
@@ -1261,7 +1306,7 @@ describe("support report CLI and private publication", () => {
       readSupportReportFile(join(out, readdirSync(out)[0] ?? "")),
     );
     expect(exported.analysis.timelines.map((timeline) => timeline.correlationId)).toContain(
-      CORRELATION,
+      exported.incident.correlation.rootCorrelationId,
     );
     // The default location was never consulted, let alone created.
     expect(existsSync(join(root, ".keiko"))).toBe(false);
@@ -1302,7 +1347,7 @@ describe("support report CLI and private publication", () => {
       readSupportReportFile(join(out, readdirSync(out)[0] ?? "")),
     );
     expect(exported.analysis.timelines.map((timeline) => timeline.correlationId)).toContain(
-      "default-state-0001",
+      exported.incident.correlation.rootCorrelationId,
     );
     // The seeded state directory next to it was not consulted: it holds nothing of this export.
     expect(readdirSync(stateDir)).toEqual(["logs"]);

@@ -473,3 +473,22 @@ describe("isSafeGitRefName", () => {
     expect(isSafeGitRefName(ref)).toBe(true);
   });
 });
+
+describe("optional complete Git directory metadata", () => {
+  it("accepts additive complete metadata without requiring it on legacy envelopes", () => {
+    expect(validateGitRepositoryStatusResponse(makeValidStatusResponse()).ok).toBe(true);
+    expect(
+      validateGitRepositoryStatusResponse(
+        makeValidStatusResponse({ selectedRootIgnored: true, untrackedDirectories: ["new"] }),
+      ).ok,
+    ).toBe(true);
+  });
+  it.each([
+    { selectedRootIgnored: "true" },
+    { untrackedDirectories: [false] },
+    { untrackedDirectories: "new" },
+    { untrackedDirectories: ["one", "two"], maxChanges: 1 },
+  ])("rejects malformed or unbounded metadata %j", (metadata) => {
+    expect(validateGitRepositoryStatusResponse(makeValidStatusResponse(metadata)).ok).toBe(false);
+  });
+});

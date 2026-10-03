@@ -14,7 +14,6 @@ import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 import { ChatSessionProvider } from "../context/ChatSessionContext";
 import { ErrorNoticeFromError } from "../ErrorNotice";
 import {
-  routeSelectionHandoffToOpenChat,
   usePublishChatWindowActivity,
   usePublishChatWindowRuntime,
   type ChatWindowRuntimeTarget,
@@ -53,15 +52,6 @@ import { gitObjectId } from "./gitObjectId";
 import { managedTaskWorkspaceAccess } from "./ManagedTaskWorkspaceGate";
 import { MultiRootEditorHost } from "./MultiRootEditorHost";
 import { useEditorAgentTranslate, type EditorAgentMessageKey } from "./cards/editor-agent-i18n";
-import {
-  composeEditorSelectionPrompt,
-  consumeEditorSelectionHandoff,
-  discardEditorSelectionHandoff,
-  inspectEditorSelectionHandoff,
-  registerEditorSelectionHandoff,
-  type EditorSelectionHandoff,
-  type EditorSelectionHandoffMetadata,
-} from "./cards/editorSelectionHandoff";
 import { createWindowChunkFallback } from "./WindowChunkFallback";
 import { StagePlaceholder } from "./StagePlaceholder";
 
@@ -112,104 +102,13 @@ function stringArray(cfg: Record<string, unknown>, key: string): readonly string
   return values.length > 0 ? values : undefined;
 }
 
-type SelectionHandoffNoticeKey = Extract<
+type ChatCreationNoticeKey = Extract<
   EditorAgentMessageKey,
-  | "chat.creation.openFailed"
-  | "chat.creation.titleSaveFailed"
-  | "editor.askSelection.chatUnavailable"
-  | "editor.askSelection.openFailed"
+  "chat.creation.openFailed" | "chat.creation.titleSaveFailed"
 >;
 
-type SelectionHandoffRoute =
-  | { readonly kind: "wait" }
-  | { readonly kind: "fail"; readonly noticeKey: SelectionHandoffNoticeKey }
-  | { readonly kind: "consume"; readonly chat: Chat; readonly workspaceRoot: string }
-  | { readonly kind: "open-project"; readonly project: ProjectWithAvailability }
-  | { readonly kind: "open-chat"; readonly chat: Chat }
-  | { readonly kind: "create-chat"; readonly project: ProjectWithAvailability };
-
-interface SelectionRouteAttempt {
-  attemptedAction: "open-project" | "open-chat" | "create-chat" | null;
-  id: string | null;
-  inFlight: boolean;
-}
-
-interface SelectionHandoffControl {
-  readonly noticeKey: SelectionHandoffNoticeKey | null;
-  readonly pending: boolean;
-}
-
-function matchingOpenChat(
-  chats: readonly Chat[],
-  workspaceRoot: string,
-  preferredId: string | undefined,
-): Chat | undefined {
-  const matches = chats.filter(
-    (chat) => chat.projectPath === workspaceRoot && chat.status !== "closed",
-  );
-  return matches.find((chat) => chat.id === preferredId) ?? matches[0];
-}
-
-function selectionHandoffRoute(args: {
-  readonly attemptedAction: SelectionRouteAttempt["attemptedAction"];
-  readonly chatId: string | undefined;
-  readonly metadata: EditorSelectionHandoffMetadata | null;
-  readonly routing: boolean;
-  readonly session: ChatSessionApi;
-}): SelectionHandoffRoute {
-  const { metadata, session } = args;
-  if (metadata === null) return { kind: "fail", noticeKey: "editor.askSelection.openFailed" };
-  if (session.loading || session.sending || args.routing) return { kind: "wait" };
-  const workspaceRoot = metadata.workspaceRoot;
-  const project = session.projects.find((candidate) => candidate.path === workspaceRoot);
-  if (project?.available !== true || session.noEligibleModels) {
-    return { kind: "fail", noticeKey: "editor.askSelection.chatUnavailable" };
-  }
-  const activeChat = session.activeChat?.status === "closed" ? undefined : session.activeChat;
-  if (session.activeProject?.path === workspaceRoot && activeChat?.projectPath === workspaceRoot) {
-    return session.selectedModel === undefined
-      ? { kind: "fail", noticeKey: "editor.askSelection.chatUnavailable" }
-      : { kind: "consume", chat: activeChat, workspaceRoot };
-  }
-  if (session.activeProject?.path !== workspaceRoot) {
-    return args.attemptedAction === null
-      ? { kind: "open-project", project }
-      : { kind: "fail", noticeKey: "editor.askSelection.openFailed" };
-  }
-  const canRouteInsideProject =
-    args.attemptedAction === null || args.attemptedAction === "open-project";
-  if (!canRouteInsideProject) {
-    return { kind: "fail", noticeKey: "editor.askSelection.openFailed" };
-  }
-  const existing = matchingOpenChat(session.chats, workspaceRoot, args.chatId);
-  return existing === undefined
-    ? { kind: "create-chat", project }
-    : { kind: "open-chat", chat: existing };
-}
-
-function routeSelectionHandoff(
-  route: Extract<
-    SelectionHandoffRoute,
-    { readonly kind: "open-project" | "open-chat" | "create-chat" }
-  >,
-  session: ChatSessionApi,
-  createChat: (project: ProjectWithAvailability) => Promise<unknown>,
-): Promise<unknown> {
-  if (route.kind === "open-project") return session.openProject(route.project);
-  if (route.kind === "open-chat") return session.openChat(route.chat);
-  return createChat(route.project);
-}
-
-function currentRouteAttempt(
-  ref: { current: SelectionRouteAttempt },
-  id: string,
-): SelectionRouteAttempt {
-  if (ref.current.id !== id) ref.current = { attemptedAction: null, id, inFlight: false };
-  return ref.current;
-}
-
 interface ChatCreationOwner {
-  readonly kind: "selection" | "window";
+  readonly kind: "window";
   readonly id: string;
 }
 
@@ -370,10 +269,8 @@ export function useChatCreationCoordinator(
         return result;
       } else {
         active.isOwnerCurrent = isOwnerCurrent;
-        if (owner.kind === "window" || title !== undefined) {
-          active.desiredTitle = normalizedChatTitle(title);
-          active.titleRevision += 1;
-        }
+        active.desiredTitle = normalizedChatTitle(title);
+        active.titleRevision += 1;
       }
       return activeCreationResult(active, replaceChat);
     },
@@ -386,127 +283,24 @@ export function useChatCreationCoordinator(
   return useMemo((): ChatCreationCoordinator => ({ release, request }), [release, request]);
 }
 
-const pendingHandoffDisposals = new Map<string, number>();
-
-function retainSelectionHandoff(id: string): void {
-  const timeout = pendingHandoffDisposals.get(id);
-  if (timeout === undefined) return;
-  window.clearTimeout(timeout);
-  pendingHandoffDisposals.delete(id);
-}
-
-function scheduleSelectionHandoffDisposal(id: string): void {
-  retainSelectionHandoff(id);
-  const timeout = window.setTimeout((): void => {
-    if (pendingHandoffDisposals.get(id) !== timeout) return;
-    pendingHandoffDisposals.delete(id);
-    discardEditorSelectionHandoff(id);
-  }, 0);
-  pendingHandoffDisposals.set(id, timeout);
-}
-
-function useSelectionHandoffControl(args: {
-  readonly chatId: string | undefined;
-  readonly coordinator: ChatCreationCoordinator;
-  readonly ctx: WindowRenderContext;
-  readonly id: string | undefined;
-  readonly session: ChatSessionApi;
-}): SelectionHandoffControl {
-  const [noticeKey, setNoticeKey] = useState<SelectionHandoffNoticeKey | null>(null);
-  const [revision, setRevision] = useState(0);
-  const [settledId, setSettledId] = useState<string | null>(null);
-  const attemptRef = useRef<SelectionRouteAttempt>({
-    attemptedAction: null,
-    id: null,
-    inFlight: false,
-  });
-  const { id, session } = args;
-  useEffect((): (() => void) | undefined => {
-    if (id === undefined) return;
-    retainSelectionHandoff(id);
-    return (): void => {
-      scheduleSelectionHandoffDisposal(id);
-    };
-  }, [id]);
-  useEffect(() => {
-    if (id === undefined || settledId === id) return;
-    const metadata = inspectEditorSelectionHandoff(id);
-    if (metadata === null) return;
-    const delay = Math.max(1, metadata.expiresAt - Date.now() + 1);
-    const timeout = window.setTimeout((): void => setRevision((value): number => value + 1), delay);
-    return (): void => window.clearTimeout(timeout);
-  }, [id, settledId]);
-  useEffect(() => {
-    if (id === undefined || settledId === id) return;
-    const attempt = currentRouteAttempt(attemptRef, id);
-    const route = selectionHandoffRoute({
-      attemptedAction: attempt.attemptedAction,
-      chatId: args.chatId,
-      metadata: inspectEditorSelectionHandoff(id),
-      routing: attempt.inFlight,
-      session,
-    });
-    if (route.kind === "wait") return;
-    if (route.kind === "fail") {
-      discardEditorSelectionHandoff(id);
-      args.ctx.updateCfg({ selectionHandoffId: undefined });
-      args.coordinator.release({ kind: "selection", id });
-      setNoticeKey(route.noticeKey);
-      setSettledId(id);
-      return;
-    }
-    if (route.kind === "consume") {
-      const handoff = consumeEditorSelectionHandoff(id, route.workspaceRoot);
-      if (handoff === null) {
-        setRevision((value): number => value + 1);
-        return;
-      }
-      args.ctx.updateCfg({
-        chatId: route.chat.id,
-        title: route.chat.title,
-        selectionHandoffId: undefined,
-        newChatRequestId: undefined,
-      });
-      args.coordinator.release({ kind: "selection", id });
-      args.ctx.focusWindow(args.ctx.windowId);
-      setNoticeKey(null);
-      setSettledId(id);
-      void session
-        .sendMessage({ text: composeEditorSelectionPrompt(handoff) })
-        .then(undefined, () => setNoticeKey("editor.askSelection.openFailed"));
-      return;
-    }
-    Object.assign(attempt, { attemptedAction: route.kind, inFlight: true });
-    const finish = (): void => {
-      if (attemptRef.current.id === id) attemptRef.current.inFlight = false;
-      setRevision((value): number => value + 1);
-    };
-    const createChat = (project: ProjectWithAvailability): Promise<unknown> =>
-      args.coordinator.request({ kind: "selection", id }, project);
-    void routeSelectionHandoff(route, session, createChat).then(finish, finish);
-  }, [args.chatId, args.coordinator, args.ctx, id, revision, session, settledId]);
-  return { noticeKey, pending: id !== undefined && settledId !== id };
-}
-
 interface ChatCreationControlArgs {
   readonly activeProject: ProjectWithAvailability | undefined;
   readonly chatId: string | undefined;
   readonly coordinator: ChatCreationCoordinator;
   readonly loading: boolean;
   readonly newChatRequestId: string | undefined;
-  readonly selectionHandoffId: string | undefined;
   readonly title: string | undefined;
   readonly updateCfg: WindowRenderContext["updateCfg"];
 }
 
 interface ChatCreationControl {
-  readonly errorKey: SelectionHandoffNoticeKey | null;
+  readonly errorKey: ChatCreationNoticeKey | null;
   readonly pending: boolean;
 }
 
 interface ChatCreationError {
   readonly chatId: string | undefined;
-  readonly messageKey: SelectionHandoffNoticeKey;
+  readonly messageKey: ChatCreationNoticeKey;
   readonly requestId: string;
 }
 
@@ -622,25 +416,16 @@ function visibleChatCreationError(
   error: ChatCreationError | null,
   chatId: string | undefined,
   requestKey: string | undefined,
-): SelectionHandoffNoticeKey | null {
+): ChatCreationNoticeKey | null {
   if (error === null || error.chatId !== chatId) return null;
   if (chatId === undefined && error.requestId !== requestKey) return null;
   return error.messageKey;
 }
 
 function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationControl {
-  const {
-    activeProject,
-    chatId,
-    coordinator,
-    loading,
-    newChatRequestId,
-    selectionHandoffId,
-    title,
-    updateCfg,
-  } = args;
+  const { activeProject, chatId, coordinator, loading, newChatRequestId, title, updateCfg } = args;
   const [error, setError] = useState<ChatCreationError | null>(null);
-  const pending = chatId === undefined && selectionHandoffId === undefined;
+  const pending = chatId === undefined;
   const coordinatorRevision = useIdentityRevision(coordinator);
   const requestId = pending
     ? (newChatRequestId ?? `initial-unbound-chat-${String(coordinatorRevision)}`)
@@ -918,11 +703,9 @@ function boundChatTargetMissing(args: {
   readonly lookupFailed: boolean;
   readonly liveTargetPresent: boolean;
   readonly loading: boolean;
-  readonly selectionHandoffId: string | undefined;
   readonly switchingProject: boolean;
 }): boolean {
   return (
-    args.selectionHandoffId === undefined &&
     args.chatId !== undefined &&
     !args.loading &&
     !args.legacyProjectPending &&
@@ -943,7 +726,6 @@ function projectToOpen(
 
 function useProjectRouting(
   targetProject: ProjectWithAvailability | undefined,
-  selectionHandoffId: string | undefined,
   session: ChatSessionApi,
 ): boolean {
   const attemptedPath = useRef<string | undefined>(undefined);
@@ -956,13 +738,7 @@ function useProjectRouting(
     [],
   );
   useEffect((): void => {
-    if (
-      session.loading ||
-      session.error !== undefined ||
-      selectionHandoffId !== undefined ||
-      targetProject === undefined
-    )
-      return;
+    if (session.loading || session.error !== undefined || targetProject === undefined) return;
     if (attemptedPath.current === targetProject.path) return;
     attemptedPath.current = targetProject.path;
     const generation = ++attemptGeneration.current;
@@ -971,7 +747,7 @@ function useProjectRouting(
       if (attemptGeneration.current === generation) setPendingPath(undefined);
     };
     void session.openProject(targetProject).then(settle, settle);
-  }, [selectionHandoffId, session, targetProject]);
+  }, [session, targetProject]);
   useEffect((): void => {
     if (pendingPath === undefined && (targetProject === undefined || session.error !== undefined)) {
       attemptedPath.current = undefined;
@@ -1009,11 +785,10 @@ function useBoundChatRouting(args: {
   readonly chatId: string | undefined;
   readonly configuredProjectPath: string | undefined;
   readonly projectPathPrivacy: "omit" | undefined;
-  readonly selectionHandoffId: string | undefined;
   readonly session: ChatSessionApi;
   readonly updateCfg: WindowRenderContext["updateCfg"];
 }): BoundChatRouting {
-  const { chatId, selectionHandoffId, session } = args;
+  const { chatId, session } = args;
   const activeTarget = activeChatTarget(session);
   const legacyProject = useLegacyChatProjectPath({
     chatId,
@@ -1026,7 +801,7 @@ function useBoundChatRouting(args: {
     updateCfg: args.updateCfg,
   });
   const targetProject = projectToOpen(legacyProject.path, session);
-  const switchingProject = useProjectRouting(targetProject, selectionHandoffId, session);
+  const switchingProject = useProjectRouting(targetProject, session);
   const liveTargetPresent = session.chats.some(
     (chat): boolean => chat.id === chatId && chat.status !== "closed",
   );
@@ -1034,11 +809,11 @@ function useBoundChatRouting(args: {
     legacyProject.failed || projectRestoreFailed(session, switchingProject, liveTargetPresent);
   const { chats, loading, openChat } = session;
   useEffect((): void => {
-    if (loading || selectionHandoffId !== undefined || chatId === undefined) return;
+    if (loading || chatId === undefined) return;
     if (activeTarget?.id === chatId) return;
     const target = chats.find((chat): boolean => chat.id === chatId && chat.status !== "closed");
     if (target !== undefined) void openChat(target);
-  }, [activeTarget?.id, chatId, chats, loading, openChat, selectionHandoffId]);
+  }, [activeTarget?.id, chatId, chats, loading, openChat]);
   const targetMissing = boundChatTargetMissing({
     activeTargetId: activeTarget?.id,
     chatId,
@@ -1046,7 +821,6 @@ function useBoundChatRouting(args: {
     lookupFailed,
     liveTargetPresent,
     loading: session.loading,
-    selectionHandoffId,
     switchingProject,
   });
   return routingResult(activeTarget, legacyProject, lookupFailed, switchingProject, targetMissing);
@@ -1474,7 +1248,6 @@ interface BoundChatConfig {
   readonly newChatRequestId: string | undefined;
   readonly projectPath: string | undefined;
   readonly projectPathPrivacy: "omit" | undefined;
-  readonly selectionHandoffId: string | undefined;
   readonly title: string | undefined;
 }
 
@@ -1487,7 +1260,6 @@ function boundChatConfig(cfg: Record<string, unknown>): BoundChatConfig {
     newChatRequestId: str(cfg, "newChatRequestId"),
     projectPath: str(cfg, "projectPath"),
     projectPathPrivacy,
-    selectionHandoffId: str(cfg, "selectionHandoffId"),
     title: str(cfg, "title"),
   };
 }
@@ -1495,7 +1267,7 @@ function boundChatConfig(cfg: Record<string, unknown>): BoundChatConfig {
 function ChatHostAlert({
   messageKey,
 }: {
-  readonly messageKey: SelectionHandoffNoticeKey | null;
+  readonly messageKey: ChatCreationNoticeKey | null;
 }): ReactNode {
   const agentT = useEditorAgentTranslate();
   return messageKey === null ? null : (
@@ -1512,16 +1284,8 @@ function useBoundChatControls(
 ): {
   readonly configuredProjectMissing: boolean;
   readonly creating: ChatCreationControl;
-  readonly handoff: SelectionHandoffControl;
 } {
   const coordinator = useChatCreationCoordinator(session.openNewChat, session.replaceChat);
-  const handoff = useSelectionHandoffControl({
-    chatId: configuration.chatId,
-    coordinator,
-    ctx,
-    id: configuration.selectionHandoffId,
-    session,
-  });
   const configuredProject =
     configuration.projectPath === undefined
       ? session.activeProject
@@ -1534,11 +1298,10 @@ function useBoundChatControls(
     coordinator,
     loading: session.loading || configuredProjectMissing,
     newChatRequestId: configuration.newChatRequestId,
-    selectionHandoffId: configuration.selectionHandoffId,
     title: configuration.title,
     updateCfg: ctx.updateCfg,
   });
-  return { configuredProjectMissing, creating, handoff };
+  return { configuredProjectMissing, creating };
 }
 
 function boundChatWaiting(args: {
@@ -1550,7 +1313,6 @@ function boundChatWaiting(args: {
 }): boolean {
   return (
     args.sessionLoading ||
-    args.controls.handoff.pending ||
     (!args.controls.configuredProjectMissing && args.controls.creating.pending) ||
     args.routing.switchingProject ||
     args.routing.resolvingLegacyProject ||
@@ -1629,7 +1391,7 @@ function BoundChatAlerts({
   if (controls.creating.errorKey !== null) {
     return <ChatHostAlert messageKey={controls.creating.errorKey} />;
   }
-  return <ChatHostAlert messageKey={lookupMessage ?? controls.handoff.noticeKey} />;
+  return <ChatHostAlert messageKey={lookupMessage} />;
 }
 
 function useBoundChatWindowRuntime(
@@ -1638,8 +1400,8 @@ function useBoundChatWindowRuntime(
   routing: BoundChatRouting,
   session: ChatSessionApi,
 ): void {
-  const { focusWindow, restoreWindow, updateCfg, windowId } = ctx;
-  const { chatId, newChatRequestId, projectPath, selectionHandoffId } = configuration;
+  const { windowId } = ctx;
+  const { chatId, newChatRequestId, projectPath } = configuration;
   usePublishChatWindowActivity(windowId, session.sending, session.latestGrounded);
   const runtimeTarget = useMemo<ChatWindowRuntimeTarget | undefined>(() => {
     if (newChatRequestId !== undefined || routing.lookupFailed || routing.targetMissing) {
@@ -1660,20 +1422,7 @@ function useBoundChatWindowRuntime(
     routing.lookupFailed,
     routing.targetMissing,
   ]);
-  const acceptSelectionHandoff = useCallback(
-    (selectionHandoffId: string): void => {
-      updateCfg({ selectionHandoffId, newChatRequestId: undefined });
-      restoreWindow?.(windowId);
-      focusWindow(windowId);
-    },
-    [focusWindow, restoreWindow, updateCfg, windowId],
-  );
-  usePublishChatWindowRuntime(
-    windowId,
-    runtimeTarget,
-    acceptSelectionHandoff,
-    selectionHandoffId === undefined,
-  );
+  usePublishChatWindowRuntime(windowId, runtimeTarget);
 }
 
 function useBoundChatTitleSync(
@@ -1698,7 +1447,6 @@ function BoundChatWindowSessionHost(props: BoundChatWindowSessionHostProps): Rea
     chatId: configuration.chatId,
     configuredProjectPath: configuration.projectPath,
     projectPathPrivacy: configuration.projectPathPrivacy,
-    selectionHandoffId: configuration.selectionHandoffId,
     session,
     updateCfg: ctx.updateCfg,
   });
@@ -1885,6 +1633,7 @@ function updateEditorCfg(
   const rootChanged = patch.root !== undefined && patch.root !== configuredRoot;
   ctx.updateCfg({
     root: patch.root,
+    ...(patch.rootBinding === undefined ? {} : { rootBinding: patch.rootBinding }),
     file: patch.file,
     openFiles: patch.openFiles,
     layoutJson: patch.layoutJson,
@@ -1933,40 +1682,21 @@ function revealSessionProps(cfg: Record<string, unknown>): EditorRevealSessionPr
   };
 }
 
-function routeEditorSelectionToChat(
+function editorWorkspaceNoticeProps(
   targetRoot: string | undefined,
-  handoff: EditorSelectionHandoff,
+  cfg: Record<string, unknown>,
   ctx: WindowRenderContext,
-): boolean {
-  if (targetRoot === undefined) return false;
-  const selectionHandoffId = registerEditorSelectionHandoff(targetRoot, handoff);
-  if (selectionHandoffId === null) return false;
-  const openFallback = (): string | null => {
-    return ctx.openWindow("chat", {
-      projectPathPrivacy: "omit",
-      selectionHandoffId,
-    });
+): Pick<EditorWidgetProps, "initialWorkspaceNotice" | "onWorkspaceNoticeConsumed"> {
+  if (str(cfg, "root") !== targetRoot || cfg["workspaceNoticeCode"] !== "trust-grant-failed")
+    return {};
+  return {
+    initialWorkspaceNotice: {
+      code: "trust-grant-failed",
+      correlationId: str(cfg, "workspaceNoticeCorrelationId"),
+    },
+    onWorkspaceNoticeConsumed: (): void =>
+      ctx.updateCfg({ workspaceNoticeCode: undefined, workspaceNoticeCorrelationId: undefined }),
   };
-  const abandonHandoff = (): void => {
-    discardEditorSelectionHandoff(selectionHandoffId);
-    reportClientDiagnostic(
-      "[keiko] queued editor selection handoff could not be restored after chat closure",
-    );
-  };
-  if (
-    routeSelectionHandoffToOpenChat(
-      targetRoot,
-      selectionHandoffId,
-      ctx.currentWindowStack?.() ?? [],
-      openFallback,
-      abandonHandoff,
-    ) !== null
-  ) {
-    return true;
-  }
-  if (openFallback() !== null) return true;
-  abandonHandoff();
-  return false;
 }
 
 function editorSessionBaseProps(
@@ -1976,6 +1706,7 @@ function editorSessionBaseProps(
 ): EditorSessionBaseProps {
   const file = str(cfg, "file");
   return {
+    ...editorWorkspaceNoticeProps(targetRoot, cfg, ctx),
     linkedRoot: ctx.linkedRoot,
     linkedFilePath: ctx.linkedFilePath,
     linkedCapsuleIds: ctx.linkedCapsuleIds,
@@ -1994,9 +1725,6 @@ function editorSessionBaseProps(
     onOpenProblems: (projectPath) => {
       ctx.openWindow("problems", { projectPath });
     },
-    onOpenWorkspaceTrust: () => {
-      ctx.openWindow("workspaceTrust");
-    },
     onOpenDebugPanel: () => {
       if (targetRoot !== undefined) {
         ctx.openWindow("debug", {
@@ -2005,7 +1733,6 @@ function editorSessionBaseProps(
         });
       }
     },
-    onAskSelection: (handoff) => routeEditorSelectionToChat(targetRoot, handoff, ctx),
   };
 }
 
@@ -2071,6 +1798,7 @@ export function FilesWindowSessionHost({
   const onRootChange = (nextRoot: string): void => {
     ctx.updateCfg({
       root: nextRoot,
+      rootBinding: "coding-repository",
       activeFilePath: undefined,
       activeDirectoryPath: undefined,
       resolvedRoot: undefined,
@@ -2086,9 +1814,18 @@ export function FilesWindowSessionHost({
       <FilesWidget
         {...(root === undefined ? {} : { root })}
         onActiveFileChange={onActiveFileChange}
-        {...(root === undefined ? { onRootChange } : {})}
+        {...(root === undefined || str(cfg, "rootBinding") === "coding-repository"
+          ? { onRootChange }
+          : {})}
         onOpenFile={(fileRoot: string, path: string) =>
-          ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] })
+          ctx.openWindow("editor", {
+            root: fileRoot,
+            file: path,
+            openFiles: [path],
+            ...(str(cfg, "rootBinding") === "coding-repository"
+              ? { rootBinding: "coding-repository" }
+              : {}),
+          })
         }
         onOpenGitDelivery={onOpenGitDelivery}
       />

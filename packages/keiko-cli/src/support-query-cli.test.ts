@@ -591,7 +591,7 @@ describe("keiko support export with a selector (#3531)", () => {
     expect(analyzeSupportReport(text).selection.reasons).not.toContain("corrupt-evidence");
   });
 
-  it("exports only the causal closure, field for field, with a validated versioned verdict", async () => {
+  it("exports only the causal closure, preserving technical fields and private reference joins", async () => {
     const { stateDir, lines } = stateWithHistory();
     const outDir = makeRoot("keiko-query-cli-out-");
     const { io } = makeIo();
@@ -606,17 +606,30 @@ describe("keiko support export with a selector (#3531)", () => {
     expect(code).toBe(0);
     const text = readExportedReport(outDir);
     const report = parseSupportReport(text);
-    // The report re-encodes each line canonically, so the pin compares the decoded records with
-    // the retained lines value for value, in order: exactly the closure, nothing lost or added.
+    // The exported header owns the private references. Every other technical field still matches
+    // the retained records, in order; customer correlation labels never enter the artifact.
     const decoded = JSON.parse(
       inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8"),
     ) as readonly { readonly record: unknown }[];
+    const root = report.incident.correlation.rootCorrelationId;
+    const analysis = analyzeSupportReport(text).analysis;
+    const child = analysis.timelines.find(
+      (timeline) => timeline.correlationId !== root,
+    )?.correlationId;
+    expect(root).toBeDefined();
+    expect(child).toBeDefined();
+    expect(child).not.toBe(root);
     expect(decoded.map((event) => event.record)).toEqual(
-      lines.slice(0, 2).map((line) => JSON.parse(line) as unknown),
+      lines.slice(0, 2).map((line, index) => ({
+        ...(JSON.parse(line) as Record<string, unknown>),
+        correlationId: index === 0 ? root : child,
+        ...(index === 0 ? {} : { parentCorrelationId: root }),
+      })),
     );
+    expect(JSON.stringify(decoded)).not.toContain(ROOT_ID);
+    expect(JSON.stringify(decoded)).not.toContain(CHILD_ID);
     expect(JSON.stringify(decoded)).not.toContain(OTHER_ID);
     expect(report.selection.status).toBe("complete");
-    const analysis = analyzeSupportReport(text).analysis;
     expect(analysis.evidence).toMatchObject({
       classification: "supported",
       supportedLineCount: 2,

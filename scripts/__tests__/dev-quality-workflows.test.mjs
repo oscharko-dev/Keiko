@@ -333,6 +333,16 @@ describe("dev quality workflows", () => {
     expect(ciWorkflow.jobs["coverage-sonar"]["timeout-minutes"]).toBe(50);
   });
 
+  it("isolates local rule analysis from mutable coverage while retaining CI coverage inputs", () => {
+    const scannerInvocation = localSonar.slice(
+      localSonar.indexOf('"${compose[@]}" run --rm --no-deps scanner'),
+      localSonar.indexOf("# SonarQube Community carries no shell analyzer"),
+    );
+    expect(scannerInvocation).toContain('-Dsonar.javascript.lcov.reportPaths=""');
+    const properties = readFileSync(resolve(root, "sonar-project.properties"), "utf8");
+    expect(properties).toMatch(/^sonar\.javascript\.lcov\.reportPaths=.+$/mu);
+  });
+
   it("isolates local Sonar state by repository and selectable loopback port", () => {
     expect(localSonar).toContain('sonar_port="${KEIKO_LOCAL_SONAR_PORT:-9234}"');
     expect(localSonar).toContain("--path-format=absolute --git-common-dir");

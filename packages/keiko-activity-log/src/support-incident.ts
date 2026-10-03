@@ -13,9 +13,11 @@
 // an expected refusal, not a defect). Eligibility is therefore derived from the registry alone —
 // there is no UI- or caller-side list. This module's own operations are never candidates.
 //
-// DEDUPLICATION. At most one open registered-failure candidate exists per defectFingerprint,
+// DEDUPLICATION. Server failures retain one open candidate per defectFingerprint. Version-two
+// browser diagnostics retain one per validated causal occurrence, because coarse browser evidence
+// can otherwise collapse unrelated failures and discard their windows. The same bounded quota is
 // enforced atomically across every process sharing stateDir by an exclusive-create claim file keyed
-// by the fingerprint (#3533 review 4050606506): a recurrence of the same defect is evidenced as
+// by the retention key (#3533 review 4050606506): a repeat of the same key is evidenced as
 // `support.incident.deduplicated` on the existing incident instead of pinning a second window. A
 // process additionally suppresses re-evaluating a fingerprint for SUPPORT_INCIDENT_SUPPRESSION_MS
 // so a failure storm costs no filesystem work. User reports are never merged: each explicit "Report
@@ -44,7 +46,7 @@ import {
   activityLogEvent,
   activityLogOperationSchema,
   defineActivityLogOperation,
-  normalizeKeikoFrameSignature,
+  normalizeDefectFrameSignature,
   recordActivityLogLoss,
   supportIncidentBuild,
   type DefectFingerprintInput,
@@ -77,6 +79,7 @@ import {
   incidentCorrelationId,
   registeredFailureCorrelation,
   registeredFailureFingerprintInput,
+  registeredFailureDeduplicationKey,
 } from "./defect-fingerprint.js";
 import { activityLogTestWriterInstalled } from "./server-logger.js";
 import {
@@ -112,6 +115,8 @@ export const SUPPORT_INCIDENT_WINDOW_AFTER_MS = 5 * MINUTE_MS;
 export const MAX_SUPPORT_INCIDENTS = SUPPORT_INCIDENT_SLOT_COUNT;
 /** Of those, registered-failure candidates may occupy at most this many. */
 export const MAX_REGISTERED_FAILURE_INCIDENTS = 24;
+// Browser occurrences cannot occupy the sixteen slots reserved for server failures.
+const MAX_BROWSER_FAILURE_INCIDENTS = 8;
 /** A process re-evaluates one defectFingerprint at most this often. */
 export const SUPPORT_INCIDENT_SUPPRESSION_MS = MINUTE_MS;
 /**
@@ -400,6 +405,7 @@ interface RejectionFacts {
   readonly defectFingerprint: string | undefined;
   readonly correlationId: string;
   readonly openIncidentCount: number;
+  readonly fingerprintAlgorithm?: 1 | 2;
 }
 
 function rejectedEvidence(stateDir: string, facts: RejectionFacts): void {
@@ -417,7 +423,7 @@ function rejectedEvidence(stateDir: string, facts: RejectionFacts): void {
         ...(facts.defectFingerprint === undefined
           ? {}
           : { defectFingerprint: facts.defectFingerprint }),
-        fingerprintAlgorithm: DEFECT_FINGERPRINT_ALGORITHM_VERSION,
+        fingerprintAlgorithm: facts.fingerprintAlgorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
         trigger: facts.trigger,
         openIncidentCount: facts.openIncidentCount,
         completeness: "partial",
@@ -526,6 +532,10 @@ export interface SupportIncidentFailureEvidence {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly frames?: readonly unknown[] | undefined;
+  readonly clientKind?: unknown;
+  readonly renderFailure?: unknown;
+  readonly moduleLoadFailure?: unknown;
+  readonly stage?: unknown;
 }
 
 // ─── Candidate creation ────────────────────────────────────────────────────────────────────────
@@ -653,12 +663,12 @@ function buildRecord(
     trigger: draft.trigger,
     state: "candidate",
     fingerprint: {
-      algorithm: DEFECT_FINGERPRINT_ALGORITHM_VERSION,
+      algorithm: draft.input.algorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
       defectFingerprint: context.defectFingerprint,
       surface: draft.input.surface,
       op: draft.input.op,
       errorKind: draft.input.errorKind,
-      frameCount: normalizeKeikoFrameSignature(draft.input.frames).length,
+      frameCount: normalizeDefectFrameSignature(draft.input).length,
     },
     correlation: draft.correlation,
     build: supportIncidentBuild(identity.productVersion, identity.platformClass),
@@ -675,14 +685,16 @@ function buildRecord(
 // MAX_SUPPORT_INCIDENTS-MAX_REGISTERED_FAILURE_INCIDENTS slots, so those stay available to a user
 // report even when automatics hold their full share -- reproducing quotaAllows's old count-based
 // reserve atomically, one exclusive-create attempt at a time instead of one racy directory count.
-function slotSearchOrder(trigger: SupportIncidentTrigger): readonly number[] {
+function slotSearchOrder(trigger: SupportIncidentTrigger, op: string): readonly number[] {
   if (trigger === "user-report") {
     return Array.from(
       { length: MAX_SUPPORT_INCIDENTS },
       (_, index) => MAX_SUPPORT_INCIDENTS - 1 - index,
     );
   }
-  return Array.from({ length: MAX_REGISTERED_FAILURE_INCIDENTS }, (_, index) => index);
+  const length =
+    op === "client.diagnostic" ? MAX_BROWSER_FAILURE_INCIDENTS : MAX_REGISTERED_FAILURE_INCIDENTS;
+  return Array.from({ length }, (_, index) => index);
 }
 
 /**
@@ -695,8 +707,9 @@ function claimQuotaSlot(
   stateDir: string,
   trigger: SupportIncidentTrigger,
   incidentId: string,
+  op: string,
 ): number | undefined {
-  for (const slotIndex of slotSearchOrder(trigger)) {
+  for (const slotIndex of slotSearchOrder(trigger, op)) {
     if (claimSupportIncidentSlot(stateDir, slotIndex, incidentId)) return slotIndex;
   }
   return undefined;
@@ -726,6 +739,7 @@ function reject(
     reason,
     trigger: draft.trigger,
     defectFingerprint: context.defectFingerprint,
+    fingerprintAlgorithm: draft.input.algorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
     correlationId: draft.evidenceCorrelationId,
     openIncidentCount,
   });
@@ -919,7 +933,7 @@ function deduplicationTarget(
     ? {
         incidentId,
         defectFingerprint: context.defectFingerprint,
-        fingerprintAlgorithm: DEFECT_FINGERPRINT_ALGORITHM_VERSION,
+        fingerprintAlgorithm: draft.input.algorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
         trigger: draft.trigger,
       }
     : {
@@ -965,6 +979,17 @@ function handleDedup(
   return { done: false };
 }
 
+function draftDeduplicationKey(draft: CandidateDraft, fingerprint: string): string | undefined {
+  return draft.trigger === "registered-failure"
+    ? registeredFailureDeduplicationKey(
+        draft.input.op,
+        draft.input.algorithm ?? 1,
+        fingerprint,
+        draft.correlation,
+      )
+    : undefined;
+}
+
 function createCandidate(
   stateDir: string,
   draft: CandidateDraft,
@@ -982,8 +1007,7 @@ function createCandidate(
   const entries = swept.entries;
 
   const incidentId = randomBytes(16).toString("hex");
-  const dedupFingerprint =
-    draft.trigger === "registered-failure" ? context.defectFingerprint : undefined;
+  const dedupFingerprint = draftDeduplicationKey(draft, context.defectFingerprint);
   if (dedupFingerprint !== undefined) {
     const handled = handleDedup(
       stateDir,
@@ -996,7 +1020,7 @@ function createCandidate(
     if (handled.done) return handled.result;
   }
 
-  const slotIndex = claimQuotaSlot(stateDir, draft.trigger, incidentId);
+  const slotIndex = claimQuotaSlot(stateDir, draft.trigger, incidentId, draft.input.op);
   if (slotIndex === undefined) {
     if (dedupFingerprint !== undefined) {
       releaseSupportIncidentFingerprintClaim(stateDir, dedupFingerprint);
@@ -1087,7 +1111,14 @@ function releaseClaims(
 function releaseRecordClaims(stateDir: string, record: SupportIncidentRecord): void {
   releaseClaims(
     stateDir,
-    record.trigger === "registered-failure" ? record.fingerprint.defectFingerprint : undefined,
+    record.trigger === "registered-failure"
+      ? registeredFailureDeduplicationKey(
+          record.fingerprint.op,
+          record.fingerprint.algorithm,
+          record.fingerprint.defectFingerprint,
+          record.correlation,
+        )
+      : undefined,
     record.slotIndex,
   );
 }
@@ -1288,6 +1319,7 @@ export function dismissSupportIncident(
 
 /** A process evaluates at most this many new candidates per rolling minute (all fingerprints). */
 export const MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE = 6;
+const MAX_BROWSER_INCIDENT_EVALUATIONS_PER_MINUTE = 2;
 const MAX_REMEMBERED_FINGERPRINTS = 128;
 
 interface PendingCandidate {
@@ -1304,6 +1336,7 @@ let drainScheduled = false;
 let exitFlushInstalled = false;
 const recentFingerprints = new Map<string, number>();
 const recentEvaluations: number[] = [];
+const recentBrowserEvaluations: number[] = [];
 const pendingCandidates: PendingCandidate[] = [];
 // The last time a rate-limited evaluation was evidenced (#3533 audit): throttled by the same
 // SUPPORT_INCIDENT_SUPPRESSION_MS window as everything else here, so a storm that keeps hitting
@@ -1316,6 +1349,7 @@ export function setSupportIncidentTriggerForTests(enabled: boolean | undefined):
   triggerOverride = enabled;
   recentFingerprints.clear();
   recentEvaluations.length = 0;
+  recentBrowserEvaluations.length = 0;
   pendingCandidates.length = 0;
   lastRateLimitEvidenceAtMs = undefined;
 }
@@ -1333,15 +1367,27 @@ type EvaluationAdmission = "admitted" | "suppressed" | "rate-limited";
 // pinned window and the Activity Log's own retention already cover it -- but a rate-limited
 // evaluation can be a defect Keiko has never seen before, dropped purely because the shared cap was
 // already spent; the caller evidences that case explicitly (#3533 audit).
-function admitEvaluation(fingerprint: string, nowMs: number): EvaluationAdmission {
+function expireEvaluations(evaluations: number[], nowMs: number): void {
+  while (evaluations.length > 0 && nowMs - (evaluations[0] ?? nowMs) >= MINUTE_MS) {
+    evaluations.shift();
+  }
+}
+
+function admitEvaluation(
+  fingerprint: string,
+  nowMs: number,
+  browser: boolean,
+): EvaluationAdmission {
   const last = recentFingerprints.get(fingerprint);
   if (last !== undefined && nowMs - last < SUPPORT_INCIDENT_SUPPRESSION_MS) return "suppressed";
-  while (recentEvaluations.length > 0 && nowMs - (recentEvaluations[0] ?? nowMs) >= MINUTE_MS) {
-    recentEvaluations.shift();
-  }
+  expireEvaluations(recentEvaluations, nowMs);
+  expireEvaluations(recentBrowserEvaluations, nowMs);
+  if (browser && recentBrowserEvaluations.length >= MAX_BROWSER_INCIDENT_EVALUATIONS_PER_MINUTE)
+    return "rate-limited";
   if (recentEvaluations.length >= MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE)
     return "rate-limited";
   recentEvaluations.push(nowMs);
+  if (browser) recentBrowserEvaluations.push(nowMs);
   if (recentFingerprints.size >= MAX_REMEMBERED_FINGERPRINTS) recentFingerprints.clear();
   recentFingerprints.set(fingerprint, nowMs);
   return "admitted";
@@ -1356,7 +1402,11 @@ type AdmissionOutcome =
   | { readonly status: "ineligible" }
   | { readonly status: "admitted"; readonly evidence: SupportIncidentFailureEvidence }
   | { readonly status: "suppressed" }
-  | { readonly status: "rate-limited"; readonly defectFingerprint: string };
+  | {
+      readonly status: "rate-limited";
+      readonly defectFingerprint: string;
+      readonly fingerprintAlgorithm: 1 | 2;
+    };
 
 function admittedEvidence(event: ServerLogEvent): AdmissionOutcome {
   if (!supportIncidentEligibleOperation(event.op)) return { status: "ineligible" };
@@ -1366,12 +1416,23 @@ function admittedEvidence(event: ServerLogEvent): AdmissionOutcome {
     correlationId: event.correlationId,
     parentCorrelationId: event.parentCorrelationId,
     frames: eventFrames(event),
+    clientKind: event.extra?.clientKind,
+    renderFailure: event.extra?.renderFailure,
+    moduleLoadFailure: event.extra?.moduleLoadFailure,
+    stage: event.extra?.stage,
   };
-  const defectFingerprint = computeDefectFingerprint(registeredFailureFingerprintInput(evidence));
-  const admission = admitEvaluation(defectFingerprint, Date.now());
+  const input = registeredFailureFingerprintInput(evidence);
+  const defectFingerprint = computeDefectFingerprint(input);
+  const key = registeredFailureDeduplicationKey(
+    input.op,
+    input.algorithm ?? 1,
+    defectFingerprint,
+    registeredFailureCorrelation(evidence),
+  );
+  const admission = admitEvaluation(key, Date.now(), event.op === "client.diagnostic");
   if (admission === "admitted") return { status: "admitted", evidence };
   return admission === "rate-limited"
-    ? { status: "rate-limited", defectFingerprint }
+    ? { status: "rate-limited", defectFingerprint, fingerprintAlgorithm: input.algorithm ?? 1 }
     : { status: "suppressed" };
 }
 
@@ -1383,6 +1444,7 @@ function reportRateLimitedEvaluation(
   stateDir: string,
   defectFingerprint: string,
   correlationId: string | undefined,
+  fingerprintAlgorithm: 1 | 2,
 ): void {
   const nowMs = Date.now();
   if (
@@ -1396,6 +1458,7 @@ function reportRateLimitedEvaluation(
     reason: "evaluation-rate-limited",
     trigger: "registered-failure",
     defectFingerprint,
+    fingerprintAlgorithm,
     correlationId: correlationId ?? randomUUID(),
     openIncidentCount: listSupportIncidentEntries(stateDir).length,
   });
@@ -1449,7 +1512,12 @@ export function observeSupportIncidentTrigger(stateDir: string, event: ServerLog
   try {
     const admission = admittedEvidence(event);
     if (admission.status === "rate-limited") {
-      reportRateLimitedEvaluation(stateDir, admission.defectFingerprint, event.correlationId);
+      reportRateLimitedEvaluation(
+        stateDir,
+        admission.defectFingerprint,
+        event.correlationId,
+        admission.fingerprintAlgorithm,
+      );
       return;
     }
     if (admission.status !== "admitted") return;

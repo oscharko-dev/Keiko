@@ -3448,7 +3448,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setError(undefined);
       setNotice(undefined);
       try {
-        const created = await createProject({ path: trimmed });
+        const created = await createProject({
+          path: trimmed,
+          selectionIntent: "explicit-folder-selection",
+        });
         const projectPayload = await fetchProjects();
         setState((previous) => ({ ...previous, projects: Array.from(projectPayload.projects) }));
         await openProject(created.project);

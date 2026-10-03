@@ -242,11 +242,18 @@ describe("managed task-workspace Files authorization", (): void => {
     const result = await handleFilesTree(route(treePath(fixtureRoot)), dependencies);
 
     expect(result.status).toBe(200);
-    const names = (result.body as FilesTreeResponse).entries.map((entry): string => entry.name);
+    const entries = (result.body as FilesTreeResponse).entries;
+    const names = entries.map((entry): string => entry.name);
     // A 200 alone would also accept an empty listing, which is what the over-restrictive ancestor
-    // rule produced before: the permitted sibling must still be served, not just `.keiko` withheld.
+    // rule produced before: the permitted sibling must still be served. Known denied directories
+    // remain visible as unavailable rows, without permitting discovery beneath their boundary.
     expect(names).toContain("docs");
-    expect(names).not.toContain(".keiko");
+    expect(entries.find((entry) => entry.name === ".keiko")).toMatchObject({
+      kind: "directory",
+      readable: false,
+    });
+    const denied = await handleFilesTree(route(treePath(fixtureRoot, ".keiko")), dependencies);
+    expect(denied).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
   });
 
   it("fails closed when managed-root containment cannot be canonicalized", async (): Promise<void> => {

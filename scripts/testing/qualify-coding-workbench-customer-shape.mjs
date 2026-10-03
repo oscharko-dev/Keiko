@@ -28,6 +28,7 @@ import {
   completedToolRoundTripEvidence,
   customerShapeFailureSummary,
   customerShapeRequestEvidence,
+  customerShapeSupportReportCorrelations,
   customerShapeSupportReportEvidence,
   customerShapeSupportTimelineEvidence,
   linkedFailureEvidence,
@@ -188,7 +189,6 @@ function assertAnalyzableFailure(project, stateDir, lines, runId, forbidden) {
   // assertion above separately proves that the failure itself reached the Workbench.
   const evidence = linkedFailureEvidence(lines, runId);
   if (evidence === undefined) throw new Error("failed turn lacks linked installed-build evidence");
-  const { diagnostic } = evidence;
   const bin = join(project, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
   const report = exportFailureReport(project, stateDir, runId, bin);
   const analyze = (...args) =>
@@ -207,17 +207,18 @@ function assertAnalyzableFailure(project, stateDir, lines, runId, forbidden) {
     content.length,
     forbidden,
   );
+  const correlations = customerShapeSupportReportCorrelations(machineView, evidence, runId);
   // `--correlation-id --json` narrows the same validated report to one timeline.
   const runTimeline = customerShapeSupportTimelineEvidence(
-    JSON.parse(analyze("--correlation-id", runId, "--json")),
+    JSON.parse(analyze("--correlation-id", correlations.runId, "--json")),
     machineView,
-    runId,
+    correlations.runId,
     "coding-sidecar.gateway.turn-failed",
   );
   const diagnosticTimeline = customerShapeSupportTimelineEvidence(
-    JSON.parse(analyze("--correlation-id", diagnostic.correlationId, "--json")),
+    JSON.parse(analyze("--correlation-id", correlations.diagnosticId, "--json")),
     machineView,
-    diagnostic.correlationId,
+    correlations.diagnosticId,
     "server.diagnostic.failure",
   );
   process.stdout.write(

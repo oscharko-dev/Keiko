@@ -46,9 +46,6 @@ import type {
   EditorInlineCompletionWireResponse,
   EditorInlineCompletionWireTriggerKind,
   EditorInlineCompletionTelemetryReport,
-  EditorTestGenerationWireRequest,
-  EditorTestGenerationWireResponse,
-  EditorTestGenerationWireTarget,
   EditorPatchApplyDecision,
   EditorPatchApplyWireRequest,
   EditorPatchApplyWireResponse,
@@ -69,11 +66,9 @@ import type {
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
   EditorAgentActionResultRequest,
-  EditorAgentBridgeActionRequest,
-  EditorAgentAuditResponse,
+  EditorBufferSnapshotRequest,
+  EditorBufferReleaseRequest,
   EditorAgentSessionSnapshot,
-  EditorAgentSessionsResponse,
-  EditorAgentSnapshotRequest,
   EditorAgentSnapshotResponse,
   CostClass,
   GroundingLimits,
@@ -206,7 +201,6 @@ import {
   EDITOR_COMPLETION_SCHEMA_VERSION,
   EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
   EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
-  EDITOR_TEST_GENERATION_SCHEMA_VERSION,
   EDITOR_PATCH_APPLY_SCHEMA_VERSION,
 } from "./types";
 // Runtime primitives shared with `./coding-workbench-lazy-fetchers.ts`: both files import them
@@ -1080,6 +1074,7 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
 
 export interface CreateProjectInput {
   path: string;
+  selectionIntent?: "explicit-folder-selection" | "file-navigation";
   name?: string;
 }
 
@@ -1100,6 +1095,7 @@ export async function createProject(
     {
       method: "POST",
       body: JSON.stringify(input),
+      signal: AbortSignal.timeout(15_000),
     },
     undefined,
     correlationId,
@@ -1737,11 +1733,15 @@ export async function openNativeFileDialog(
 // Desktop files — selected-root browser, preview, and editor control plane
 // ---------------------------------------------------------------------------
 
-export async function fetchFilesTree(root: string, path = ""): Promise<FilesTreeResponse> {
+export async function fetchFilesTree(
+  root: string,
+  path = "",
+  correlationId?: string,
+): Promise<FilesTreeResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   if (path.length > 0) params.set("path", path);
-  return fetchJson(`/api/files/tree?${params.toString()}`);
+  return fetchJson(`/api/files/tree?${params.toString()}`, undefined, undefined, correlationId);
 }
 
 export async function fetchFilesSearch(
@@ -1799,18 +1799,26 @@ export async function applyWorkspaceReplace(
   });
 }
 
-export async function fetchFilesPreview(root: string, path: string): Promise<FilesPreviewResponse> {
+export async function fetchFilesPreview(
+  root: string,
+  path: string,
+  correlationId?: string,
+): Promise<FilesPreviewResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   params.set("path", path);
-  return fetchJson(`/api/files/preview?${params.toString()}`);
+  return fetchJson(`/api/files/preview?${params.toString()}`, undefined, undefined, correlationId);
 }
 
-export async function fetchFilesContent(root: string, path: string): Promise<FilesContentResponse> {
+export async function fetchFilesContent(
+  root: string,
+  path: string,
+  correlationId?: string,
+): Promise<FilesContentResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   params.set("path", path);
-  return fetchJson(`/api/files/content?${params.toString()}`);
+  return fetchJson(`/api/files/content?${params.toString()}`, undefined, undefined, correlationId);
 }
 
 export async function saveFilesContent(input: {
@@ -2231,37 +2239,6 @@ export async function reportEditorInlineCompletionTelemetry(
   await fetchJson("/api/editor/inline-completion/telemetry", {
     method: "POST",
     body: JSON.stringify(report),
-  });
-}
-
-// Issue #1202 — governed editor-driven test generation (ADR-0042 D7). Posts the editor target (the
-// overlay buffer + scope coordinates) to the wave-2 BFF, which returns a `disabled`/`deferred` outcome
-// in v1 (no candidate; the feature ships switched off) or, once an enforced egress boundary unlocks it,
-// a reviewable candidate patch. The browser never reaches a model directly. `signal` cancels a run.
-export interface EditorTestGenerationRequestInput {
-  readonly root: string;
-  readonly editorSessionId?: string;
-  readonly target: EditorTestGenerationWireTarget;
-  readonly contextBudgetBytes: number;
-  readonly context?: EditorCompletionContextSelectors;
-}
-
-export async function requestEditorTestGeneration(
-  input: EditorTestGenerationRequestInput,
-  signal?: AbortSignal,
-): Promise<EditorTestGenerationWireResponse> {
-  const requestBody: EditorTestGenerationWireRequest = {
-    schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,
-    root: input.root,
-    target: input.target,
-    contextBudgetBytes: input.contextBudgetBytes,
-    ...(input.editorSessionId === undefined ? {} : { editorSessionId: input.editorSessionId }),
-    ...(input.context === undefined ? {} : { context: input.context }),
-  };
-  return fetchJson("/api/editor/test-generation", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -2807,19 +2784,6 @@ export async function requestEditorRenameApply(
   return envelope.result;
 }
 
-export async function fetchEditorAgentSessions(): Promise<EditorAgentSessionsResponse> {
-  return fetchJson("/api/editor/agent/sessions");
-}
-
-export async function requestEditorAgentSnapshot(
-  input: EditorAgentSnapshotRequest,
-): Promise<EditorAgentSnapshotResponse> {
-  return fetchJson("/api/editor/agent/snapshot", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
 export async function postEditorAgentSessionSnapshot(
   snapshot: EditorAgentSessionSnapshot,
   bridgeDecisionCapability?: string,
@@ -2844,19 +2808,14 @@ export async function queueEditorAgentAction(
   });
 }
 
-export async function queueEditorAgentBridgeAction(
-  action: EditorAgentAction,
-  bridgeDecisionCapability: string,
-): Promise<EditorAgentActionQueuedResponse> {
-  const request: EditorAgentBridgeActionRequest = {
-    schemaVersion: action.schemaVersion,
-    kind: "action",
-    action,
-    bridgeDecisionCapability,
-  };
-  return fetchJson("/api/editor/agent/actions", {
+/** Passive unsaved-buffer protection; this does not register an agent bridge. */
+export async function postEditorBufferSafetyRequest(
+  request: EditorBufferSnapshotRequest | EditorBufferReleaseRequest,
+): Promise<EditorAgentSnapshotResponse> {
+  return fetchJson("/api/editor/agent/snapshot", {
     method: "POST",
     body: JSON.stringify(request),
+    signal: AbortSignal.timeout(15_000),
   });
 }
 
@@ -2867,12 +2826,6 @@ export async function postEditorAgentActionResult(
     method: "POST",
     body: JSON.stringify(result),
   });
-}
-
-// Issue #1395 (ADR-0062) — read the bounded audit feed of recent agent editor actions for a session.
-// Content-free records only (no raw source, no secrets); used by the recent-actions governance panel.
-export async function fetchEditorAgentAudit(sessionId: string): Promise<EditorAgentAuditResponse> {
-  return fetchJson(`/api/editor/agent/audit?sessionId=${encodeURIComponent(sessionId)}`);
 }
 
 // ---------------------------------------------------------------------------

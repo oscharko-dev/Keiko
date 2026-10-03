@@ -39,6 +39,7 @@ import {
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
   supportIncidentSegmentFiles,
+  type SupportIncidentFailureEvidence,
 } from "@oscharko-dev/keiko-activity-log";
 import {
   analyzeLogText,
@@ -182,19 +183,22 @@ async function queryEvents(
 // Production records a registered-failure incident from the failing event itself, so the harness
 // takes the error kind and frames of the persisted failing line, never the cluster's (an
 // unvalidated tool-catalog line's kind is withheld from its cluster).
-function persistedFailureEvidence(
-  stateDir: string,
-  op: string,
-): { readonly errorKind?: string; readonly frames?: readonly unknown[] } {
+function persistedFailureEvidence(stateDir: string, op: string): SupportIncidentFailureEvidence {
   const [line] = persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
-  if (line === undefined) return {};
-  const { errorKind, frames } = JSON.parse(line) as {
-    readonly errorKind?: unknown;
-    readonly frames?: unknown;
-  };
+  if (line === undefined) return { op };
+  const record = JSON.parse(line) as Record<string, unknown>;
   return {
-    ...(typeof errorKind === "string" ? { errorKind } : {}),
-    ...(Array.isArray(frames) ? { frames: frames as readonly unknown[] } : {}),
+    op,
+    ...(typeof record.errorKind === "string" ? { errorKind: record.errorKind } : {}),
+    ...(typeof record.correlationId === "string" ? { correlationId: record.correlationId } : {}),
+    ...(typeof record.parentCorrelationId === "string"
+      ? { parentCorrelationId: record.parentCorrelationId }
+      : {}),
+    ...(Array.isArray(record.frames) ? { frames: record.frames as readonly unknown[] } : {}),
+    clientKind: record.clientKind,
+    renderFailure: record.renderFailure,
+    moduleLoadFailure: record.moduleLoadFailure,
+    stage: record.stage,
   };
 }
 
@@ -209,11 +213,10 @@ async function proveIncidentWindowCoversClosure(
   const creation =
     failure === undefined
       ? incidents.recordUserReportedIncident(stateDir, {})
-      : incidents.recordRegisteredFailureIncident(stateDir, {
-          op: failure.op,
-          ...persistedFailureEvidence(stateDir, failure.op),
-          correlationId,
-        });
+      : incidents.recordRegisteredFailureIncident(
+          stateDir,
+          persistedFailureEvidence(stateDir, failure.op),
+        );
   expect(creation, `scenario ${scenario}: records an incident candidate for its failure`).not.toBe(
     undefined,
   );

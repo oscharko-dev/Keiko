@@ -4365,12 +4365,6 @@
     },
     {
       "path": "packages/keiko-server/src/editor/watch/workspaceWatchService.ts",
-      "owner": "deferred",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/editor/watch/workspaceWatchService.ts",
       "owner": "metadataFor",
       "kind": "unregistered-catch",
       "count": 1
@@ -7082,12 +7076,6 @@
       "count": 2
     },
     {
-      "path": "packages/keiko-server/src/workspace-state-handlers.ts",
-      "owner": "loadWorkspaceStateFromDisk",
-      "kind": "unregistered-catch",
-      "count": 2
-    },
-    {
       "path": "packages/keiko-tool-catalog/src/schema.ts",
       "owner": "isValidRegexSource",
       "kind": "unregistered-catch",
@@ -7910,24 +7898,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorSelectionHandoff.ts",
-      "owner": "availableId",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorSelectionHandoff.ts",
-      "owner": "currentTime",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorSelectionHandoff.ts",
-      "owner": "decodeBoundedUtf8",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorSemanticTokens.ts",
       "owner": "resolveTokens",
       "kind": "unregistered-catch",
@@ -8170,54 +8140,6 @@
     {
       "path": "packages/keiko-ui/src/lib/api.ts",
       "owner": "sendDesktopChatStream",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "actionIdentity",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "attemptQueueOnce",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "fetchSelectedSession",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "loadCreateTarget",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "loadExistingTarget",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "parsePatchEntries",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "prepareSubmission",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "queueChatEditorApply",
       "kind": "unregistered-catch",
       "count": 1
     },

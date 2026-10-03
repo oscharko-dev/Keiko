@@ -2,8 +2,10 @@
 // explicit option → KEIKO_UI_DATA_DIR/keiko-ui.db → homedir()/.keiko/keiko-ui.db.
 
 import { homedir } from "node:os";
-import { existsSync, lstatSync, type Stats } from "node:fs";
-import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
+import { assertSqliteStatePath } from "@oscharko-dev/keiko-security/fs-hardening";
+import type { ServerLogSink } from "../observability/index.js";
 import { invalidRequest } from "./errors.js";
 
 export const UI_DB_FILENAME = "keiko-ui.db";
@@ -19,35 +21,6 @@ function isInsideRuntimeStateRoot(path: string, workspaceRoot: string): boolean 
   const runtimeRoot = resolve(workspaceRoot, UI_DB_DIRNAME);
   const resolved = resolve(path);
   return resolved === runtimeRoot || resolved.startsWith(`${runtimeRoot}${sep}`);
-}
-
-// Walk every ancestor from dirname(path) up to the filesystem root and return true as soon as ANY
-// existing ancestor is a symlink. Do NOT short-circuit at the first existing directory: a real
-// subdirectory pre-created inside a symlinked target would otherwise defeat the guard, because the
-// walk would see the real subdirectory (not a symlink) at the first-existing position and never
-// inspect the shallower symlinked ancestor. Audit KEIKO-0478; parity fix with
-// packages/keiko-memory-vault/src/paths.ts.
-function hasSymlinkAncestor(path: string): boolean {
-  let current = dirname(path);
-  const root = parse(current).root;
-  while (current !== root) {
-    // PR-review follow-up (Codex thread 3771256639): lstat directly. Only ENOENT means the
-    // segment truly does not exist; EACCES/EIO propagate so a symlinked ancestor whose
-    // target is temporarily inaccessible cannot slip past by looking absent to existsSync.
-    const stat = lstatOrNull(current);
-    if (stat?.isSymbolicLink()) return true;
-    current = dirname(current);
-  }
-  return false;
-}
-
-function lstatOrNull(path: string): Stats | null {
-  try {
-    return lstatSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
 }
 
 function resolveConfiguredPath(path: string, label: string): string {
@@ -69,12 +42,6 @@ function resolveConfiguredPath(path: string, label: string): string {
   ) {
     throw invalidRequest(`${label} must not be inside the current workspace.`);
   }
-  if (existsSync(resolved) && lstatSync(resolved).isSymbolicLink()) {
-    throw invalidRequest(`${label} must not be a symlink.`);
-  }
-  if (hasSymlinkAncestor(resolved)) {
-    throw invalidRequest(`${label} must not be inside a symlinked directory.`);
-  }
   return resolved;
 }
 
@@ -87,15 +54,41 @@ function containsPath(parent: string, child: string): boolean {
 export function resolveUiDbPath(
   explicit: string | undefined,
   env: Readonly<Record<string, string | undefined>>,
+  sink?: ServerLogSink,
 ): string {
   if (explicit !== undefined && explicit.length > 0) {
-    return resolveConfiguredPath(explicit, "UI database path");
+    return checkedUiDbPath(resolveConfiguredPath(explicit, "UI database path"), sink);
   }
   const dir = env.KEIKO_UI_DATA_DIR;
   if (dir !== undefined && dir.length > 0) {
-    return join(resolveConfiguredPath(dir, "KEIKO_UI_DATA_DIR"), UI_DB_FILENAME);
+    return checkedUiDbPath(
+      join(resolveConfiguredPath(dir, "KEIKO_UI_DATA_DIR"), UI_DB_FILENAME),
+      sink,
+    );
   }
-  return join(homedir(), UI_DB_DIRNAME, UI_DB_FILENAME);
+  return checkedUiDbPath(
+    resolveConfiguredPath(defaultUiDbPath(), "Default UI database path"),
+    sink,
+  );
+}
+
+function defaultUiDbPath(): string {
+  let home = homedir();
+  try {
+    home = realpathSync(home);
+  } catch {
+    throw invalidRequest("Default UI database home is unavailable.");
+  }
+  return join(home, UI_DB_DIRNAME, UI_DB_FILENAME);
+}
+
+function checkedUiDbPath(path: string, sink?: ServerLogSink): string {
+  try {
+    assertSqliteStatePath(path, { store: "ui", sink });
+  } catch {
+    throw invalidRequest("UI database state path is unsafe or unavailable.");
+  }
+  return path;
 }
 
 export function assertUiDbOutsideProject(uiDbPath: string | undefined, projectPath: string): void {

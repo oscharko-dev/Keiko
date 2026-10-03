@@ -590,6 +590,7 @@ describe("bffRequestErrorKind", () => {
     [new ApiError("UPSTREAM", "no", 502), "unavailable"],
     [new ApiError("NOT_FOUND", "no", 404), "invalid-request"],
     [new DOMException("aborted", "AbortError"), "cancelled"],
+    [new DOMException("deadline", "TimeoutError"), "timeout"],
     [new TypeError("Failed to fetch"), "unavailable"],
     [new Error("other"), "unknown"],
   ] as const)("classifies %s as %s", (error, kind) => {

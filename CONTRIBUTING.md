@@ -130,7 +130,11 @@ Keep this contract converged in one change. The writer, segmented store, and rea
 compose it while domain packages continue to use injected ports (ADR-0179). A runtime change that
 affects Activity Log behavior updates the owning implementation, its failure-first regression,
 emitted-line and analyzer/replay proof, ADR-0173, ADR-0179, AGENTS.md, this contributor contract,
-and directly affected operator documentation as applicable. Saved support reports remain local artifacts written to a user-selected destination;
+and directly affected operator documentation as applicable. Saved support reports remain local artifacts
+created by an explicit user action. CLI exports enforce owner-private file permissions. Desktop
+exports use the browser's configured download destination and filesystem permissions; the browser
+may save directly to Downloads without showing a destination picker. This owner-approved desktop
+workflow does not claim the CLI's permission guarantees.
 publishing or attaching one to GitHub or another external system requires separate explicit user
 authority and is never part of logging or export.
 
@@ -248,7 +252,29 @@ The canonical owner-private report has embedded integrity, a 10 MiB hard ceiling
 may only lower it) and explicit sufficiency. `--out` names a private directory, never a file; the
 filename always uses the fixed product/schema/incident/date class. Inclusion flags and raw-log or
 legacy bundle input are refused. Validate a manually received file offline with
-`keiko support analyze FILE --json` before agents use its machine view, and follow
+`keiko support analyze FILE --json` before agents use its machine view. New reports use artifact-local
+ordinal references: the UI Support ID is only a local export/query selector. For a received report,
+select `incident.correlation.rootCorrelationId` or an exported timeline reference from the unfiltered
+analysis before using `--correlation-id`; no original-to-exported mapping is included. Follow
 [the support workspace guide](docs/observability/support-workspace.md). Nothing is sent by these
 commands. `npm run set-version` regenerates the historical registry snapshots the analyzer selects
 from, so a release needs no extra step.
+
+## Files and Editor navigation
+
+Explicit folder selections in the New Window dialog and Editor root picker preserve
+the selected root through the existing `coding-repository` presentation binding.
+The same behavior applies to Git repositories and ordinary folders. Task-bound
+windows retain the active workspace projection and allow navigation within it;
+explicit repository Files windows also allow path changes. Back/Forward history is
+bounded and clears on task-bound root switches. Files titles reflect their resolved
+root; an empty Editor names its project. Navigation and directory reads record
+body-free client stage lifecycle evidence on the existing Activity Log.
+
+The ordinary Editor is human-operated. The owner decision of 2026-10-03 retires its agent
+presence/history, incoming actions, selection-to-chat handoff and Chat **Apply to editor** command.
+Keep the existing manual edit/save/format/history flow and content-free dirty-buffer protection.
+Safety-state publication does not grant an agent a live bridge or an executable Editor session.
+Chat repository search and the separate Coding Workbench keep their own existing behavior; shared
+runtime code still used by those consumers is not part of this retirement. See
+[ADR-0061](docs/adr/ADR-0061-browser-editor-agent-bridge.md).

@@ -681,7 +681,11 @@ describe("unknown API routes", () => {
     ];
     // Second-place candidates that reviewers might reach for; each is a known state-changing
     // POST route that MUST still require CSRF (proven by the pre-existing tests above).
-    const candidates: readonly string[] = ["/api/runs", "/api/editor/language"];
+    const candidates: readonly string[] = [
+      "/api/runs",
+      "/api/editor/language",
+      "/api/repositories/clone",
+    ];
 
     for (const path of candidates) {
       const res = await fetch(`${baseUrl()}${path}`, {
@@ -706,6 +710,21 @@ describe("unknown API routes", () => {
         expect(body.error?.code).not.toBe("FORBIDDEN_CSRF");
       }
     }
+  });
+
+  it("rejects a hostile clone Origin even with the mutation guard and a presented cookie", async () => {
+    const response = await fetchRawWithInit("/api/repositories/clone", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Keiko-CSRF": "1",
+        Cookie: "keiko_app_session=untrusted-cookie",
+        Origin: "https://evil.example.test",
+      },
+      body: "{}",
+    });
+    expect(response.status).toBe(403);
+    expect(response.text).toContain("FORBIDDEN_HOST");
   });
 
   it("allows POST /api/coding-sidecar/gateway/chat/completions without X-Keiko-CSRF when JSON is used", async () => {

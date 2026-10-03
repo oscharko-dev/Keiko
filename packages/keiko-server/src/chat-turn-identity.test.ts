@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -115,7 +115,7 @@ describe("canonicalChatTurnIdentityContent", () => {
   });
 
   it("persists neither document nor memory identity content in the UI database", () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko-turn-identity-"));
+    const root = mkdtempSync(join(realpathSync(tmpdir()), "keiko-turn-identity-"));
     const dbPath = join(root, "ui.db");
     const store = createNodeUiStore(dbPath);
     let closed = false;

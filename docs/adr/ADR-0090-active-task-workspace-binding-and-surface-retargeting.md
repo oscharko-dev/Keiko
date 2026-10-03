@@ -127,8 +127,35 @@ read; managed worktree reconciliation remains scoped to managed instances. Openi
 the Coding Workbench with a registered repository requires no separate Code setup.
 Changing the Git window's repository or the Chat project never silently retargets
 an existing Coding Workbench window.
-Repository Files/Editor windows opened from Git carry `rootBinding:
-"coding-repository"` and preserve the same configured repository root. Legacy
+Repository Files/Editor windows opened from Git or an explicit folder selection in the
+New Window dialog carry `rootBinding: "coding-repository"` and preserve the same
+configured root. This presentation binding also applies to ordinary folders without
+Git; it grants no execution authority. Explicit path changes in a repository Files
+window or the Editor root picker keep that binding. Legacy task-bound windows retain
+the active-root override, but always expose navigation within that root. Folder
+history is bounded, preserves Back/Forward across explicitly selected roots and
+resets when a task-bound root switches. Files titles use the resolved root and an
+empty Editor shows its project root, so neither can label another root as the
+selected project. Navigation and directory reads emit body-free client stage
+lifecycle evidence through the existing Activity Log. Explicit Editor root changes
+reuse project registration and require current workspace membership before committing
+the canonical root, including ordinary folders without Git, so local history retains
+its identity checks. A failed connection preserves the previous editor and its buffers.
+The Editor keeps a project hierarchy rooted at the selected directory; folder rows
+expand and collapse without replacing the root. Files uses directory navigation with
+Back/Forward/Up. Both views retain safe hidden and Git-ignored entries with subtle gray typography;
+independent status remains available through accessible names and tooltips. Files dims
+filesystem-hidden entries; the Editor dims Git-ignored/untracked entries, while tracked
+dotfiles retain normal text. Ignored directory descendants inherit the decoration, including
+when navigation selects the ignored directory itself as the displayed root. Fully untracked
+directories are classified only from complete bounded Git status and tracked-file results;
+incomplete results omit that classification instead of dimming tracked content. Canonical
+root aliases reuse the same registered project. Multi-root Editor windows keep their manifest
+members fixed so retargeting one root cannot discard another root's unsaved buffers.
+Authorized parent listings may
+show known non-secret runtime/dependency directory names as metadata-free, unavailable
+rows. Content, children, mutations, symlink targets, and secret paths retain the existing
+deny boundary; this presentation exception does not change connected-context discovery. Legacy
 repository windows that already persisted a `.keiko/.../task-workspaces/...`
 `resolvedRoot` are repaired back to their configured repository root before they
 render or produce Chat connected scopes; they must not look like the main
