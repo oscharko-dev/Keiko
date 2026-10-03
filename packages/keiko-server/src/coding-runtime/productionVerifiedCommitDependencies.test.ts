@@ -132,8 +132,11 @@ describe("production verified commit dependencies", () => {
     expect(editorAgentRegistry.releaseBufferSnapshot(dirty.sessionId, digest)).toBe(false);
     expect(verifiedCommitBuffersClean(deps, root, "run-1")).toBe(false);
     expect(editorAgentRegistry.refreshBufferSnapshot({ ...dirty, dirtyFiles: [] }, digest)).toBe(
-      true,
+      false,
     );
+    expect(verifiedCommitBuffersClean(deps, root, "run-1")).toBe(false);
+    const clean = { ...dirty, dirtyFiles: [], updatedAt: dirty.updatedAt + 1 };
+    expect(editorAgentRegistry.refreshBufferSnapshot(clean, digest)).toBe(true);
     expect(editorAgentRegistry.releaseBufferSnapshot(dirty.sessionId, digest)).toBe(true);
     expect(verifiedCommitBuffersClean(deps, root, "run-1")).toBe(true);
   });

@@ -36,6 +36,14 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   });
   return { promise, resolve };
 }
+function hasStorageSetter(value: unknown): value is Pick<Storage, "setItem"> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "setItem" in value &&
+    typeof value.setItem === "function"
+  );
+}
 beforeEach(() => {
   resetEditorBufferSafetyForTests();
   window.sessionStorage.clear();
@@ -129,17 +137,34 @@ describe("passive editor buffer protection", () => {
   it("does not create an unrecoverable server owner when durable persistence fails", async () => {
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);
-    const write = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
-      throw new DOMException("Storage denied", "QuotaExceededError");
+    const prototype: unknown = Object.getPrototypeOf(window.localStorage);
+    if (!hasStorageSetter(prototype)) throw new TypeError("Storage setter is unavailable");
+    const original = prototype.setItem;
+    const write = vi.spyOn(prototype, "setItem").mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string,
+    ): void {
+      if (this === window.localStorage)
+        throw new DOMException("Storage denied", "QuotaExceededError");
+      original.call(this, key, value);
     });
     const hook = renderHook(() => useEditorBufferSafety(snapshot()));
-    await waitFor(() => expect(writer).toHaveBeenCalledOnce());
-    expect(postEditorBufferSafetyRequest).not.toHaveBeenCalled();
-    hook.unmount();
-    await act(async () => {
-      await Promise.resolve();
-    });
-    write.mockRestore();
+    try {
+      await waitFor(() => expect(writer).toHaveBeenCalledOnce());
+      expect(write).toHaveBeenCalledOnce();
+      expect(write.mock.contexts[0]).toBe(window.localStorage);
+      expect(postEditorBufferSafetyRequest).not.toHaveBeenCalled();
+      expect(
+        window.localStorage.getItem("keiko.editor.buffer-safety.v1:" + snapshot().sessionId),
+      ).toBeNull();
+    } finally {
+      hook.unmount();
+      await act(async () => {
+        await Promise.resolve();
+      });
+      write.mockRestore();
+    }
   });
   it("persists edits arriving during a pending release across immediate publisher reset", async () => {
     const release = deferred<EditorAgentSnapshotResponse>();

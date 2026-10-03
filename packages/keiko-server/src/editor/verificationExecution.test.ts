@@ -142,7 +142,10 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
 
   it("allows workspace writes while refusing a repository script's outside write", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-verify-contained-")));
-    const outside = `${root}-outside.txt`;
+    const outsideParent = await realpath(await mkdtemp(join(tmpdir(), "keiko-verify-outside-")));
+    // A bare /tmp filename can refer to writable private sandbox scratch rather than the host
+    // sentinel. Its separate parent is not mounted, so this path tests the actual host object.
+    const outside = join(outsideParent, "outside.txt");
     await writeFile(outside, "unchanged", "utf8");
     try {
       await writeFile(
@@ -175,7 +178,7 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
       }
     } finally {
       await rm(root, { recursive: true, force: true });
-      await rm(outside, { force: true });
+      await rm(outsideParent, { recursive: true, force: true });
     }
   }, 30_000);
 
