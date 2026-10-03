@@ -201,17 +201,29 @@ async function postOsvBatch(body) {
   return response.json();
 }
 
-// The advisory ids OSV records against the given npm packages.
-export async function osvAdvisoryIds(packages, post = postOsvBatch) {
-  const ids = new Set();
+// The npm queries for the given packages, in batches OSV accepts.
+function osvQueryBatches(packages) {
+  const batches = [];
   for (let start = 0; start < packages.length; start += OSV_BATCH_LIMIT) {
     const batch = packages.slice(start, start + OSV_BATCH_LIMIT);
-    const queries = batch.map(({ name, version }) => ({
-      package: { ecosystem: "npm", name },
-      version,
-    }));
-    collectOsvIds(await post({ queries }), queries.length, ids);
+    batches.push(
+      batch.map(({ name, version }) => ({ package: { ecosystem: "npm", name }, version })),
+    );
   }
+  return batches;
+}
+
+// The advisory ids OSV records against the given npm packages. The batches are independent, so
+// they are asked together and each answer is then read against its own queries.
+export async function osvAdvisoryIds(packages, post = postOsvBatch) {
+  const answered = await Promise.all(
+    osvQueryBatches(packages).map(async (queries) => ({
+      queries,
+      answer: await post({ queries }),
+    })),
+  );
+  const ids = new Set();
+  for (const { queries, answer } of answered) collectOsvIds(answer, queries.length, ids);
   return ids;
 }
 
