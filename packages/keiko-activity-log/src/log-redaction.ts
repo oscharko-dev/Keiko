@@ -81,6 +81,7 @@
 import {
   CLIENT_ERROR_CLASSES,
   isClientDiagnosticFrame,
+  isPersistedClientDiagnosticFrame,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   ACTIVITY_LOG_CAUSE_CHAIN_FIELD_NAME,
@@ -612,7 +613,7 @@ function redactLogArray(value: readonly unknown[], depth: number): unknown[] {
 function isConformingFrame(value: unknown): value is string {
   if (typeof value !== "string") return false;
   if (RELATIVE_MARKER_PATTERN.test(value)) return false;
-  if (isClientDiagnosticFrame(value)) return true;
+  if (isClientDiagnosticFrame(value) || isPersistedClientDiagnosticFrame(value)) return true;
   const match = FRAME_SHAPE_PATTERN.exec(value);
   if (match === null) return false;
   const packageName = match.groups?.pkg;
@@ -928,6 +929,14 @@ export function redactLogLabel(value: string): string {
   return redactLogString(value);
 }
 
+/** True when the writer's label redaction leaves `value` unchanged: no credential shape. */
+export function isRedactedLogLabel(value: unknown): value is string {
+  return typeof value === "string" && redactLogLabel(value) === value;
+}
+
+// The envelope labels the writer passes through `redactLogLabel` before persisting.
+const SUPPORT_LABEL_FIELDS = ["op", "errorKind", "correlationId", "parentCorrelationId"] as const;
+
 // A closed-vocabulary array field (e.g. `unsupportedReasons`) is meant to carry only the fixed set
 // of reason codes a producer's own type declares — but the type is a compile-time promise, not a
 // runtime one: nothing stops a future producer, or a bug in an existing one, from putting unbounded
@@ -941,4 +950,64 @@ export function closeReasonVocabulary(
   fallback: string,
 ): string {
   return vocab.has(value) ? value : fallback;
+}
+
+// The producer-only prose/route escape hatches. A received report carries them only as the
+// projection's explicit markers, which the equality check below proves.
+const SUPPORT_PROJECTED_FIELDS: ReadonlySet<string> = new Set([
+  "path",
+  "routeTemplate",
+  "clientNote",
+  "diagnosticSummary",
+]);
+
+// Received reports cannot inherit the producer-only prose/route escape hatches. Their closed
+// projection preserves these fields as explicit markers, independent of a configured server.
+export function projectSupportLogFields(
+  fields: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(fields).map(([name, value]) => {
+      if (name === "path" || name === "routeTemplate") return [name, REDACTED_PATH];
+      if (name === "clientNote" || name === "diagnosticSummary") return [name, REDACTED_SHAPE];
+      return [name, value];
+    }),
+  );
+}
+
+/**
+ * Reuse the owning reducers; an untrusted sender cannot claim producer redaction. Every field
+ * outside the envelope must already be a fixed point of the same redaction the writer applies
+ * before persisting, so a received report cannot carry an endpoint, credential, identity or path
+ * that a Keiko writer would have replaced with a marker. Envelope labels must be fixed points of the
+ * label redaction the writer applies, so a credential-shaped correlation id is refused. Frames and
+ * causes, when present, must be non-empty arrays their reducer leaves unchanged.
+ */
+export function areSupportLogFieldsSafe(
+  fields: Readonly<Record<string, unknown>>,
+  envelopeKeys: ReadonlySet<string> = new Set<string>(),
+): boolean {
+  const projected = projectSupportLogFields(fields);
+  if (!Object.entries(fields).every(([name, value]) => value === projected[name])) return false;
+  if (
+    !SUPPORT_LABEL_FIELDS.every(
+      (name) => fields[name] === undefined || isRedactedLogLabel(fields[name]),
+    )
+  )
+    return false;
+  const producerFields = Object.fromEntries(
+    Object.entries(fields).filter(
+      ([name]) =>
+        !SUPPORT_PROJECTED_FIELDS.has(name) &&
+        (!envelopeKeys.has(name) || name === "frames" || name === "causeChain"),
+    ),
+  );
+  const redacted = redactLogFields(producerFields) ?? {};
+  if (JSON.stringify(redacted) !== JSON.stringify(producerFields)) return false;
+  return ["frames", "causeChain"].every((name) => {
+    if (fields[name] === undefined) return true;
+    if (!Array.isArray(fields[name]) || fields[name].length === 0) return false;
+    const sanitized = redactAcceptedField(name, fields[name], MAX_LOG_FIELD_DEPTH);
+    return JSON.stringify(sanitized) === JSON.stringify(fields[name]);
+  });
 }

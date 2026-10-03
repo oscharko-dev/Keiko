@@ -67,7 +67,9 @@ import {
   type ParsedLine,
   type ProcessSequenceAnomaly,
   type SequenceState,
+  sufficiencyLine,
 } from "./support-analyze.js";
+import { reportsProcessEvidenceLoss } from "./support-analyze-sufficiency.js";
 import {
   ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
   parseSegmentManifestFileName,
@@ -75,7 +77,8 @@ import {
 } from "./support-segment-manifest-names.js";
 
 export const SEGMENT_MANIFEST_KIND = "keiko.activity-log.segment-manifest";
-export const SEGMENT_MANIFEST_SCHEMA_VERSION = 1;
+// 2 (#3534): `processLossLineCount`. A manifest of another version is rebuilt, never trusted.
+export const SEGMENT_MANIFEST_SCHEMA_VERSION = 2;
 export const MAX_SEGMENT_MANIFEST_BYTES = 256 * 1024;
 const MAX_MANIFEST_PROCESSES = 16;
 const MAX_LIFECYCLE_REFERENCES = 64;
@@ -155,6 +158,9 @@ export interface SegmentManifest {
   readonly unregisteredOpLineCount: number;
   readonly uncorrelatedLineCount: number;
   readonly lossLineCount: number;
+  // Lines in which the segment's process recorded losing its own evidence: a loss summary's process
+  // counters (never the browser ones) or a producer's confirmed drop, such as the seal's.
+  readonly processLossLineCount: number;
   readonly lifecycleReferences: {
     readonly complete: boolean;
     readonly incidentIds: readonly string[];
@@ -309,6 +315,7 @@ export class SegmentManifestBuilder {
   private unregisteredOpLineCount = 0;
   private uncorrelatedLineCount = 0;
   private lossLineCount = 0;
+  private processLossLineCount = 0;
   private readonly incidentIds = new Set<string>();
   private readonly defectFingerprints = new Set<string>();
   private referencesOverflow = false;
@@ -381,7 +388,7 @@ export class SegmentManifestBuilder {
     for (const failureClass of registration.failureClasses) {
       increment(this.failureClasses, failureClass);
     }
-    if (registration.lifecycle === "loss") this.lossLineCount += 1;
+    this.observeLoss(parsed, registration.lifecycle === "loss");
     const fields = parsed.view.extra;
     if (registration.fields.incidentId !== undefined && isSupportIncidentId(fields?.incidentId)) {
       this.addReference(this.incidentIds, fields.incidentId);
@@ -392,6 +399,11 @@ export class SegmentManifestBuilder {
     ) {
       this.addReference(this.defectFingerprints, fields.defectFingerprint);
     }
+  }
+
+  private observeLoss(parsed: ParsedLine, lossLifecycle: boolean): void {
+    if (lossLifecycle) this.lossLineCount += 1;
+    if (reportsProcessEvidenceLoss(sufficiencyLine(parsed))) this.processLossLineCount += 1;
   }
 
   private addReference(target: Set<string>, value: string): void {
@@ -477,6 +489,7 @@ export class SegmentManifestBuilder {
       unregisteredOpLineCount: this.unregisteredOpLineCount,
       uncorrelatedLineCount: this.uncorrelatedLineCount,
       lossLineCount: this.lossLineCount,
+      processLossLineCount: this.processLossLineCount,
       lifecycleReferences: {
         complete: !this.referencesOverflow,
         incidentIds: [...this.incidentIds].sort(compareText),
@@ -556,6 +569,7 @@ function canonicalBody(value: SegmentManifestBody): SegmentManifestBody {
     unregisteredOpLineCount: value.unregisteredOpLineCount,
     uncorrelatedLineCount: value.uncorrelatedLineCount,
     lossLineCount: value.lossLineCount,
+    processLossLineCount: value.processLossLineCount,
     lifecycleReferences: {
       complete: value.lifecycleReferences.complete,
       incidentIds: [...value.lifecycleReferences.incidentIds],
@@ -722,7 +736,8 @@ function validLists(value: Plain): boolean {
     isCountArray(value.failureClasses) &&
     isCount(value.unregisteredOpLineCount) &&
     isCount(value.uncorrelatedLineCount) &&
-    isCount(value.lossLineCount)
+    isCount(value.lossLineCount) &&
+    isCount(value.processLossLineCount)
   );
 }
 

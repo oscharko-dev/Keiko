@@ -141,12 +141,11 @@ function openIncidentSegment(path: string, stateDir: string): number {
 // Streams every covered segment's lines, in order, through the same hardened, state-dir-rooted
 // safe-artifact open and bounded chunked reader the query engine uses
 // (support-segment-scan.ts's `ActivityLogScanner`) — never a whole segment, let alone the whole
-// window, in one buffer (#3531 audit). Every yielded line is reported `terminated: true`, matching
-// `support-export.ts`'s own reconstruction (`readKeptFiles` rejoins every kept line with its own
-// trailing "\n" before the analyzer ever sees it), so a torn tail classifies identically through
-// either path — this migration changes memory shape only, never a verdict. `onChunk` is the reader's
-// own observability seam (never used in production): it lets a test prove every read stayed inside
-// one bounded chunk instead of trusting the implementation by inspection.
+// window, in one buffer (#3531 audit). Each line keeps the reader's own termination, so a crashed
+// writer's torn tail is truncated evidence here exactly as in the query engine, never a corrupt
+// record (#3534). `onChunk` is the reader's own observability seam (never used in production): it
+// lets a test prove every read stayed inside one bounded chunk instead of trusting the
+// implementation by inspection.
 function* supportIncidentWindowLines(
   segments: readonly SupportIncidentSegmentFile[],
   stateDir: string,
@@ -158,7 +157,7 @@ function* supportIncidentWindowLines(
         () => openIncidentSegment(segment.path, stateDir),
         onChunk === undefined ? {} : { onChunk },
       )) {
-        yield { text: line.text, terminated: true };
+        yield { text: line.text, terminated: line.terminated };
       }
     } catch (error) {
       if (!(error instanceof ActivityLogReadError)) throw error;
@@ -252,6 +251,47 @@ export function resolveSupportIncident(
       ...ACTIVITY_LOG_EVIDENCE_INTEGRITY[classification],
     },
     sufficiency: incidentSufficiency(record, analysis),
+  };
+}
+
+/**
+ * The descriptor of an incident whose window cannot be read whole: a covered segment is unreadable,
+ * or the window exceeds its byte bound. Nothing is read. The window is described by its segment
+ * references alone and is explicitly insufficient with the closed reason, so an export can still
+ * publish an honest report instead of failing.
+ */
+export function unresolvedSupportIncident(
+  record: SupportIncidentRecord,
+  segments: readonly SupportIncidentSegmentFile[],
+  reason: SupportIncidentWindowError["reason"],
+): SupportIncident {
+  const required =
+    record.trigger === "registered-failure"
+      ? activityLogFailureClassesOf([record.fingerprint.op])
+      : [];
+  return {
+    ...record,
+    evidence: {
+      segments: segments.map(({ segmentId, state, sizeBytes }) => ({
+        segmentId,
+        state,
+        sizeBytes,
+      })),
+      lineCount: 0,
+      integrity: "incomplete",
+      ...ACTIVITY_LOG_EVIDENCE_INTEGRITY.incomplete,
+    },
+    sufficiency: {
+      status: "insufficient",
+      reasons: [reason === "window-too-large" ? "report-budget-exceeded" : "segment-unreadable"],
+      coverage: {
+        requiredClassCount: required.length,
+        presentClassCount: 0,
+        completeClassCount: 0,
+        degradedClassCount: 0,
+        insufficientClassCount: 0,
+      },
+    },
   };
 }
 

@@ -5,9 +5,29 @@ import { describe, expect, it } from "vitest";
 
 import {
   cliControlStateConflictsWithTarget,
+  cliDirectoryIsWithin,
   cliTargetIdentitySha256,
   resolveCliControlStateDir,
 } from "./cli-control-state.js";
+
+describe("cliDirectoryIsWithin", () => {
+  it("recognizes the target or any descendant by device and inode, through any alias", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-control-identity-"));
+    try {
+      const target = join(root, "logs");
+      mkdirSync(join(target, "nested"), { recursive: true });
+      const alias = join(root, "alias");
+      symlinkSync(target, alias, "dir");
+      expect(cliDirectoryIsWithin(target, target)).toBe(true);
+      expect(cliDirectoryIsWithin(join(alias, "nested", "missing"), target)).toBe(true);
+      expect(cliDirectoryIsWithin(join(root, "elsewhere"), target)).toBe(false);
+      expect(cliDirectoryIsWithin(root, target)).toBe(false);
+      expect(cliDirectoryIsWithin(target, join(root, "absent"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("resolveCliControlStateDir", () => {
   it("uses fixed per-user platform locations without environment input", () => {

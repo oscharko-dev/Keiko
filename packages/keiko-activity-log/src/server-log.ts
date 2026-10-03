@@ -268,8 +268,8 @@ function correlationIdOrUnknown(value: string | undefined): string {
     : ACTIVITY_LOG_UNKNOWN_CORRELATION_ID;
 }
 
-// Exposed so a future consumer (the CLI's support-bundle manifest) can name the same instance the
-// running process is stamping onto its own lines, without recomputing or guessing at the value.
+// Exposed so a consumer can name the same instance the running process is stamping onto its own
+// lines, without recomputing or guessing at the value.
 export function serverLogInstanceId(): string {
   return INSTANCE_ID;
 }

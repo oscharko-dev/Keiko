@@ -38,7 +38,7 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 | Source                     | Result                                                                        |
 | -------------------------- | ----------------------------------------------------------------------------- |
 | `npm audit --json`         | 0 vulnerabilities across 1,025 resolved packages (124 prod, 878 dev, 147 opt) |
-| OSV Scanner 2.6.0          | 0 findings across the repository lockfiles                                    |
+| OSV Scanner 2.6.0          | 0 unwaived findings; 2 time-boxed build-time waivers, recorded below          |
 | Repository secret scanning | 0 open alerts; both prior findings triaged and closed below                   |
 | Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout       |
 
@@ -47,6 +47,26 @@ resolutions are `brace-expansion` 1.1.21 and 5.0.12, `fast-uri` 3.1.8, and `ip-a
 The two `brace-expansion` majors are pinned under their respective `minimatch` consumers so neither
 receives an incompatible major. `npm ci`, `npm audit`, and the exact OSV Scanner 2.6.0 scan pass
 with the updated lockfile.
+
+A later 2026-09-30 scan identified newly published advisories in Next.js 16.3.5 and DOMPurify
+3.4.13. [#3678](https://github.com/oscharko-dev/Keiko/pull/3678) moved Next.js and its ESLint
+configuration to 16.3.6, fixing
+[GHSA-vcvr-r3jv-pc5j](https://github.com/advisories/GHSA-vcvr-r3jv-pc5j), and the existing
+repository-wide DOMPurify override to 3.4.16, fixing
+[GHSA-p98j-92pf-mc4p](https://github.com/advisories/GHSA-p98j-92pf-mc4p). The full npm audit and
+exact OSV Scanner 2.6.0 repository scan both report zero vulnerabilities with these patches; no
+waiver or gate threshold changed.
+
+On 2026-10-02 GitHub reviewed
+[GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) (braces through 3.0.3)
+and [GHSA-ch52-4w7c-c8xp](https://github.com/advisories/GHSA-ch52-4w7c-c8xp) (http-cache-semantics
+through 4.2.0), and OSV began reporting both. Neither names a patched release. The lockfile holds
+one dev-only instance of each: braces under the keiko-ui ESLint configuration, and
+http-cache-semantics under the release-signing `sigstore` dependency.
+[#3679](https://github.com/oscharko-dev/Keiko/pull/3679) records each in `osv-scanner.toml` as an
+id-bound waiver. Each waiver carries its reachability analysis and an `ignoreUntil` of 2026-11-30.
+npm's audit feed did not list either advisory yet, so `check:osv-waiver-scope` now also asks OSV
+whether a waived advisory affects any package the lockfile does not flag dev.
 
 ### How this queue must be queried — and the trap in it
 

@@ -389,6 +389,12 @@ fix, migration, connector, UI surface — in every autonomy mode, with no except
 small to log". (Repository tooling under `scripts/` is not product runtime; it keeps its
 deterministic `PASS`/`FAIL` output. Everything that runs inside the product is in scope.)
 
+Received support reports must pass the canonical offline validator before any renderer or agent
+uses them. Export contains only the closed private incident and registered causal events, with
+embedded integrity and explicit insufficiency; no raw logs, inclusion flags or sidecars. Use the
+[controlled support workspace guide](docs/observability/support-workspace.md). Matching historical
+registries are repository-owned, never report-supplied (ADR-0173 D8/D9).
+
 ### Rule 1 — every change ships its own logging, on the existing system
 
 The behaviour you add or change must leave body-free evidence in the activity log, built on the
@@ -435,6 +441,10 @@ system that exists, never beside it:
   back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`
   ([`correlation.ts`](packages/keiko-server/src/correlation.ts)) — never an ad-hoc string, never a
   silently missing id.
+  Adapters that rebind an event use `withActivityLogCorrelation` or
+  `withActivityLogParentCorrelation`; a plain object spread drops its non-enumerable registration
+  and rejection markers. Preserve producer-owned ids and prove forwarded events through the real
+  registered formatter, not only a buffered event assertion.
   Repository-add dialogs mint that id before clone/register, validate it with the canonical Activity Log correlation guard, pass it to the request, and report
   the attempt and settlement even when dismissed; effect replay is not a human dismissal.
 - **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
@@ -577,28 +587,21 @@ assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product
 already recorded:
 
-1. **Get the artifact.** `keiko support export --out bundle.jsonl` (adds store fingerprints, a
-   manifest and — with `--include-evidence` — evidence manifests), or one raw Activity Log file
-   from `<stateDir>/logs/` (a segment or a legacy file); the analyzer auto-detects which it was
-   handed. If Keiko recorded a local incident candidate, `keiko support incident show <id> --json`
-   names its defect fingerprint, correlations and pinned evidence window. For one operation,
-   `keiko support export --correlation-id <id>` (or `--incident <id>`) writes only its registered
-   causal closure, and `keiko support query --correlation-id <id> --json` returns it directly; both
-   report `insufficient` with a closed reason rather than cut required evidence to fit.
-2. **Reconstruct.** `keiko support analyze bundle.jsonl` prints every timeline;
-   `--correlation-id <id> --json` narrows to one as a machine-readable `LogTimeline`; `--clusters`
-   groups every parsed line of the file by category, `op` and `errorKind` (errors and successes
-   alike, independent of a correlation id); `--seed` builds the reproduction seed; and
-   `--emit-fixture <path>` writes a ready-to-paste gateway replay fixture.
-3. **Investigate from the timeline.** `keiko investigate --from-timeline <timeline.json>` turns that
-   timeline into a governed investigation with persisted evidence.
-4. **Read compatibility and integrity before trusting a seed.** The analyzer distinguishes
-   supported, legacy, unsupported, corrupt, truncated, and incomplete input. It
-   reports gaps, duplicates, decreasing/reset sequence values, and reorder per
-   `(pid, instanceId)` before exposing a reconstruction. Its `warnings` also name exactly which
-   evidence class it could not reconstruct (no stack frames, no gateway call, no request line, no store fingerprint).
-   A missing class is itself a finding: the surface that failed to log is part of the bug, and Rule
-   1 applies to its fix.
+1. **Get the artifact.** Use `keiko support export --incident <id>` or a correlation selector.
+   Received evidence is one canonical private report; raw logs, legacy open bundles and inclusion
+   flags are not accepted at the support-report boundary. For local debugging, use
+   `keiko support query --correlation-id <id> --json` on the existing Activity Log.
+2. **Validate before reconstruction.** `keiko support analyze report.json --json` emits the
+   versioned body-free machine view only after complete offline validation. Give agents that
+   analyzed projection, never unvalidated report bytes. Human views, clusters, deterministic
+   seeds and explicitly selected replay fixtures derive from the same validated evidence.
+3. **Investigate from the validated timeline.**
+   `keiko support analyze report.json --correlation-id <id> --json > timeline.json` emits that
+   validated timeline; `keiko investigate --from-timeline timeline.json` consumes it.
+4. **Read sufficiency and integrity before trusting a seed.** Closed reasons, coverage and loss
+   expose missing causal evidence, lifecycle transitions and unsupported identities. Authenticity
+   stays unknown. The seed warnings name unavailable evidence classes; never replace them with
+   invented reproduction text or assume a historical PID is locally running.
 5. **Turn the seed into a red-then-green test** following
    [`docs/observability/reproduction-harness.md`](docs/observability/reproduction-harness.md), so the
    fix is proven against the customer's actual sequence rather than a guess.

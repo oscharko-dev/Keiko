@@ -1495,7 +1495,7 @@ const UNSUCCESSFUL_TERMINAL_STATES: ReadonlySet<string> = new Set([
 // #3390: both guards now read what the Code task DISPLAYS, so a lane failure reads the way the
 // operator's own screen would. `diagnose` supplies the window's live status sentence and any alert
 // in place of the internal `failureCode`, which no window ever displayed -- a strictly more useful
-// failure message, and one a support bundle can be matched against.
+// failure message, and one a support report can be matched against.
 export async function readObservedRunWhileAwaitingDraft(
   read: () => Promise<ObservedRun>,
   diagnose: () => Promise<string>,

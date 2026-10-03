@@ -41,8 +41,8 @@ blocks for shell input.
 ```bash
 # Example command with redacted placeholders.
 keiko status
-keiko support export --out keiko-support.jsonl
-keiko support analyze keiko-support.jsonl --clusters
+keiko support export   # prints the path of the private report it writes
+keiko support analyze <report.json> --clusters
 ```
 
 State which output confirms the root cause and which output indicates a

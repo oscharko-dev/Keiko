@@ -330,6 +330,16 @@ export function isClientDiagnosticFrame(value: unknown): value is string {
   );
 }
 
+/** Persisted browser coordinates carry only the reducer's digest and bounded coordinates. */
+export function isPersistedClientDiagnosticFrame(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^dist\/ui\/static\/_next\/static\/chunks\/sha256-[a-f0-9]{64}\.js:\d{1,8}:\d{1,8}$/u.test(
+      value,
+    )
+  );
+}
+
 export interface ClientErrorEvidence {
   readonly errorClass: string;
   readonly frames: readonly string[];

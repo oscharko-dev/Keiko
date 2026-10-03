@@ -28,6 +28,8 @@ import {
   completedToolRoundTripEvidence,
   customerShapeFailureSummary,
   customerShapeRequestEvidence,
+  customerShapeSupportReportEvidence,
+  customerShapeSupportTimelineEvidence,
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
 
@@ -154,7 +156,33 @@ function reportQualificationFailure(stateDir, twin, firstRequest, phase) {
   );
 }
 
-function assertAnalyzableFailure(project, stateDir, lines, runId) {
+function exportFailureReport(project, stateDir, runId, bin) {
+  const directory = join(project, `failure-support-${randomBytes(8).toString("hex")}`);
+  run(
+    process.execPath,
+    [
+      bin,
+      "support",
+      "export",
+      "--state-dir",
+      stateDir,
+      "--correlation-id",
+      runId,
+      "--out",
+      directory,
+    ],
+    { cwd: project },
+  );
+  const reports = readdirSync(directory);
+  if (
+    reports.length !== 1 ||
+    !/^keiko-support-v1-[a-f0-9]{12}-\d{4}-\d{2}-\d{2}\.json$/u.test(reports[0])
+  )
+    throw new Error("support export did not publish exactly one canonical report");
+  return join(directory, reports[0]);
+}
+
+function assertAnalyzableFailure(project, stateDir, lines, runId, forbidden) {
   // OpenCode may publish its terminal failure first. In that ordering the gateway's additional
   // turn event is suppressed; the closed publication reason explains that outcome. The browser
   // assertion above separately proves that the failure itself reached the Workbench.
@@ -162,29 +190,41 @@ function assertAnalyzableFailure(project, stateDir, lines, runId) {
   if (evidence === undefined) throw new Error("failed turn lacks linked installed-build evidence");
   const { diagnostic } = evidence;
   const bin = join(project, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
-  const bundle = join(project, `failure-support-${randomBytes(8).toString("hex")}.jsonl`);
-  run(process.execPath, [bin, "support", "export", "--state-dir", stateDir, "--out", bundle], {
-    cwd: project,
-  });
-  const analyzed = run(
-    process.execPath,
-    [bin, "support", "analyze", bundle, "--correlation-id", diagnostic.correlationId, "--json"],
-    { cwd: project },
+  const report = exportFailureReport(project, stateDir, runId, bin);
+  const analyze = (...args) =>
+    run(process.execPath, [bin, "support", "analyze", report, ...args], { cwd: project });
+  const analyzed = analyze("--json");
+  if (analyze("--json") !== analyzed)
+    throw new Error("support report reconstruction is nondeterministic");
+  const content = readFileSync(report);
+  if (forbidden.some((value) => value.length > 0 && content.includes(value)))
+    throw new Error("support report retained prohibited synthetic content");
+  const machineView = JSON.parse(analyzed);
+  const summary = customerShapeSupportReportEvidence(
+    machineView,
+    evidence,
+    runId,
+    content.length,
+    forbidden,
   );
-  const report = JSON.parse(analyzed);
-  if (!JSON.stringify(report.lines).includes('"server.diagnostic.failure"')) {
-    throw new Error("support analyze omitted the failed turn's correlated diagnostic");
-  }
-  const analyzedRun = run(
-    process.execPath,
-    [bin, "support", "analyze", bundle, "--correlation-id", runId, "--json"],
-    { cwd: project },
+  // `--correlation-id --json` narrows the same validated report to one timeline.
+  const runTimeline = customerShapeSupportTimelineEvidence(
+    JSON.parse(analyze("--correlation-id", runId, "--json")),
+    machineView,
+    runId,
+    "coding-sidecar.gateway.turn-failed",
   );
-  if (
-    !JSON.stringify(JSON.parse(analyzedRun).lines).includes('"coding-sidecar.gateway.turn-failed"')
-  ) {
-    throw new Error("support analyze omitted the run's turn failure projection");
-  }
+  const diagnosticTimeline = customerShapeSupportTimelineEvidence(
+    JSON.parse(analyze("--correlation-id", diagnostic.correlationId, "--json")),
+    machineView,
+    diagnostic.correlationId,
+    "server.diagnostic.failure",
+  );
+  process.stdout.write(
+    `customer-shape support reconstruction: ${JSON.stringify({ ...summary, runTimeline, diagnosticTimeline })}\n`,
+  );
+  if (summary.selection.status !== "complete" || summary.sufficiency.status !== "complete")
+    throw new Error("supported installed failure did not reconstruct completely from its report");
 }
 
 async function awaitProjectedTurnFailure(stateDir, runId) {
@@ -409,6 +449,19 @@ function assertToolRoundTrip(twin, firstRequest) {
   }
 }
 
+function forbiddenReportValues(project, stateDir, configPath, twin) {
+  return [
+    CUSTOMER_SHAPE_API_KEY,
+    CUSTOMER_SHAPE_REPLY,
+    "Synthetic partial reply.",
+    "Reply briefly to confirm that the Workbench is ready.",
+    project,
+    stateDir,
+    configPath,
+    twin.baseUrl,
+  ];
+}
+
 async function qualifyInstalled(
   project,
   stateDir,
@@ -442,7 +495,14 @@ async function qualifyInstalled(
     const lines = activityLines(stateDir);
     assertGatewayEvidence(twin, firstRequest, lines, runId, phase);
     if (expectToolCall) assertToolRoundTrip(twin, firstRequest);
-    if (expectFailure) assertAnalyzableFailure(project, stateDir, lines, runId);
+    if (expectFailure)
+      assertAnalyzableFailure(
+        project,
+        stateDir,
+        lines,
+        runId,
+        forbiddenReportValues(project, stateDir, configPath, twin),
+      );
   } catch (error) {
     reportQualificationFailure(stateDir, twin, firstRequest, phase);
     throw error;

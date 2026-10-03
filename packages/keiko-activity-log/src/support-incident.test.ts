@@ -289,11 +289,12 @@ describe("SupportIncident candidates", () => {
   describe("the registered-failure trigger", () => {
     it("derives eligibility from the registry, not from a caller list", () => {
       expect(supportIncidentEligibleOperation(FAILURE_OP)).toBe(true);
-      expect(supportIncidentEligibleOperation("support.analyze.classified")).toBe(false);
+      // A registered operation outside the failure lifecycle is never eligible.
+      expect(supportIncidentEligibleOperation("support.report.completed")).toBe(false);
       expect(supportIncidentEligibleOperation("support.incident.rejected")).toBe(false);
       expect(supportIncidentEligibleOperation("not.a.registered.operation")).toBe(false);
       expect(
-        recordRegisteredFailureIncident(stateDir, { op: "support.analyze.classified" }),
+        recordRegisteredFailureIncident(stateDir, { op: "support.report.completed" }),
       ).toBeUndefined();
     });
 
@@ -325,6 +326,27 @@ describe("SupportIncident candidates", () => {
         rootCorrelationId: "root-correlation-1",
         childCorrelationIds: ["child-correlation-1"],
       });
+    });
+
+    // Review #3679: the writer redacts a credential-shaped correlation label, so an incident never
+    // adopts one: it could only leak the secret, never join the persisted evidence.
+    it("never adopts a correlation label the writer would redact", () => {
+      // Assembled at runtime so the secret scanner never sees a token literal.
+      const token = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "c2lnbmF0dXJl"].join(".");
+      const failure = created(
+        recordRegisteredFailureIncident(stateDir, {
+          op: FAILURE_OP,
+          correlationId: token,
+          parentCorrelationId: "root-correlation-2",
+        }),
+      ).record;
+      expect(failure.correlation).toEqual({
+        rootCorrelationId: "root-correlation-2",
+        childCorrelationIds: [],
+      });
+      const report = created(recordUserReportedIncident(stateDir, { correlationId: token })).record;
+      expect(report.correlation.rootCorrelationId).not.toBe(token);
+      expect(JSON.stringify([failure, report])).not.toContain(token);
     });
 
     it("maps an open errorKind outside the closed vocabulary to unknown", () => {

@@ -10,30 +10,35 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { inflateSync } from "node:zlib";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogOperationSchema,
   attachActivityLogEventRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   closeFileServerLogSinks,
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
 } from "@oscharko-dev/keiko-server";
 import { createFileServerLogSink } from "@oscharko-dev/keiko-activity-log";
-import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
 import { loadActivityLog } from "./lazy-modules.js";
 import { parseSupportArgs, runSupportCli, type SupportCliDeps } from "./support.js";
-import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import { analyzeSupportReport, parseSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 import {
+  fixtureEvent,
   fixtureLine,
   fixtureProcess,
   segmentIdentity,
   writeFixtureSegment,
 } from "../../../tests/support/activity-log-segments.js";
+import {
+  expectActivityLogProof,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
 
 const REAL_TMPDIR = realpathSync(tmpdir());
 const roots: string[] = [];
@@ -80,21 +85,8 @@ function stateWithHistory(): { readonly stateDir: string; readonly lines: readon
   return { stateDir, lines };
 }
 
-const HEALTHY_AUDIT: AuditResult = {
-  ok: true,
-  stateDir: "/irrelevant/.keiko",
-  classes: [{ id: "creds", title: "Credential references", status: "pass", findings: [] }],
-};
-
 function exportDeps(cwd: string): SupportCliDeps {
-  return {
-    cwd,
-    now: () => new Date("2026-09-18T12:00:00.000Z"),
-    auditDeps: {
-      loadAuditor: () => Promise.resolve({ auditLocalState: () => HEALTHY_AUDIT }),
-    },
-    evidenceStore: createInMemoryEvidenceStore(),
-  };
+  return { cwd };
 }
 
 const AUDIT_ENV = { KEIKO_LOCAL_STATE_AUDITOR: "/opt/keiko/scripts/lib/local-state-audit.mjs" };
@@ -308,47 +300,323 @@ describe("keiko support manifest (#3531)", () => {
   });
 });
 
+function readExportedReport(directory: string): string {
+  const reports = readdirSync(directory).filter((name) => name.startsWith("keiko-support-v1-"));
+  expect(reports).toHaveLength(1);
+  expect(reports[0]).toMatch(/^keiko-support-v1-[a-f0-9]{12}-\d{4}-\d{2}-\d{2}\.json$/u);
+  return readFileSync(join(directory, reports[0] ?? ""), "utf8");
+}
+
 describe("keiko support export with a selector (#3531)", () => {
-  it("exports only the causal closure, byte for byte, with a versioned selection verdict", async () => {
+  // Review #3679: the report of a long-running process keeps the runtime its start recorded.
+  it("keeps a long-running process's runtime in the exported report", async () => {
+    const stateDir = makeRoot("keiko-query-cli-runtime-");
+    const a = fixtureProcess(7103, "0badc0d3");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      fixtureLine(a, T0, { op: "process.started" }),
+      fixtureLine(a, T0 + 600_000, { op: "client.diagnostic", correlationId: ROOT_ID }),
+    ]);
+    const outDir = makeRoot("keiko-query-cli-out-");
+    const { io, err } = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outDir],
+      io,
+      AUDIT_ENV,
+      exportDeps(outDir),
+    );
+
+    expect(code, err()).toBe(0);
+    const report = parseSupportReport(readExportedReport(outDir));
+    const decoded = JSON.parse(
+      inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8"),
+    ) as readonly { readonly record: Readonly<Record<string, unknown>> }[];
+    expect(decoded.map((event) => event.record)).toContainEqual(
+      expect.objectContaining({
+        op: "process.started",
+        nodeVersion: "v24.18.0",
+        platform: "linux",
+      }),
+    );
+  });
+
+  // Review #3679: retention removed the startup segment of a long-running process, before or after
+  // its first heartbeat. Export and analyze state the loss, and so do the lines they persist: the
+  // log alone must explain the missing runtime.
+  it.each([
+    ["after its first heartbeat", true],
+    ["before its first heartbeat", false],
+  ])("states a long-running process's start that retention removed %s", async (_label, beat) => {
+    const stateDir = makeRoot("keiko-query-cli-retention-");
+    const controlStateDir = makeRoot("keiko-query-cli-control-");
+    const a = fixtureProcess(7104, "0badc0d4");
+    const startup = writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      fixtureLine(a, T0, { op: "process.started" }),
+      ...(beat ? [fixtureLine(a, T0 + 60_000, { op: "process.heartbeat" })] : []),
+    ]);
+    // In write order: each line takes the next seq.
+    const later = beat
+      ? fixtureLine(a, T0 + 120_000, { op: "process.heartbeat" })
+      : fixtureLine(a, T0 + 120_000, { op: "client.diagnostic", correlationId: OTHER_ID });
+    const failure = fixtureLine(a, T0 + 600_000, {
+      op: "client.diagnostic",
+      correlationId: ROOT_ID,
+    });
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 120_000, 2), [later, failure]);
+    rmSync(startup);
+    const outDir = makeRoot("keiko-query-cli-out-");
+    const deps = { cwd: outDir, controlActivityStateDir: controlStateDir };
+    const { io, err } = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outDir],
+      io,
+      AUDIT_ENV,
+      deps,
+    );
+
+    expect(code, err()).toBe(0);
+    const text = readExportedReport(outDir);
+    const report = parseSupportReport(text);
+    expect(report.selection).toMatchObject({
+      status: "insufficient",
+      reasons: expect.arrayContaining(["evidence-not-retained"]) as unknown,
+    });
+    const exportLog = readPersistedActivityLog(stateDir);
+    const [queried] = persistedActivityLogLines(exportLog, "support.query.completed");
+    const [exported] = persistedActivityLogLines(exportLog, "support.report.completed");
+    const query = expectActivityLogProof("support.query.completed.query-evidence", queried ?? "");
+    const completed = expectActivityLogProof(
+      "support.report.completed.report-lifecycle",
+      exported ?? "",
+    );
+    // A retained heartbeat travels as the proof a receiver recomputes the lost start from.
+    const selected = beat ? [later, failure] : [failure];
+    const selectedBytes = selected.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0);
+    expect(query).toMatchObject({
+      surface: "export",
+      queryClass: "correlation",
+      resultEventCount: selected.length,
+      selectedBytes,
+      requiredBytes: selectedBytes,
+      truncation: "none",
+      sufficiency: "insufficient",
+      sufficiencyReasons: ["evidence-not-retained"],
+    });
+    expect(completed).toMatchObject({
+      surface: "export",
+      recordCount: selected.length,
+      reportBytes: Buffer.byteLength(text),
+      sufficiency: "insufficient",
+      sufficiencyReasons: ["evidence-not-retained"],
+    });
+    expect(completed.correlationId).toBe(query.correlationId);
+
+    const analysis = makeIo();
+    const analyzed = await runSupportCli(
+      ["analyze", join(outDir, readdirSync(outDir)[0] ?? ""), "--json"],
+      analysis.io,
+      {},
+      deps,
+    );
+    expect(analyzed, analysis.err()).toBe(0);
+    expect(JSON.parse(analysis.out())).toMatchObject({
+      selection: { status: "insufficient", reasons: ["evidence-not-retained"] },
+    });
+    const [analyzedLine] = persistedActivityLogLines(
+      readPersistedActivityLog(controlStateDir),
+      "support.report.completed",
+    );
+    expect(
+      expectActivityLogProof("support.report.completed.report-lifecycle", analyzedLine ?? ""),
+    ).toMatchObject({
+      surface: "analyze",
+      recordCount: selected.length,
+      sufficiency: "insufficient",
+      sufficiencyReasons: ["evidence-not-retained"],
+    });
+  });
+
+  // Review #3679: a writer's confirmed drop degrades the report, and every line export and analyze
+  // complete with must say why: without the reason on them, the loss behind the verdict could not be
+  // reconstructed from the log. The real writer produces the evidence — a gateway event the registry
+  // rejects, the seal that counts the drop, then the failure — so no fixture restates its formula.
+  it("states a writer's confirmed drop on every completion export and analyze persist", async () => {
+    const stateDir = makeRoot("keiko-query-cli-drop-");
+    const controlStateDir = makeRoot("keiko-query-cli-control-");
+    const chat = { modelId: "test-model", streaming: false };
+    const started = { costClass: "low", timeoutMs: 100, maxRetries: 0, requestBudgetMs: 100 };
+    // The rejected write announces its drop on the independent stderr channel.
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const writer = createFileServerLogSink(stateDir);
+    writer.write(fixtureEvent({ op: "process.started" }));
+    writer.write(
+      fixtureEvent({
+        op: "gateway.chat.started",
+        correlationId: ROOT_ID,
+        fields: { ...chat, ...started, upstreamStreaming: false },
+      }),
+    );
+    writer.write(
+      fixtureEvent({
+        op: "gateway.chat.started",
+        correlationId: ROOT_ID,
+        fields: { ...chat, ...started, costClass: "unbounded", upstreamStreaming: false },
+      }),
+    );
+    writer.close?.();
+    createFileServerLogSink(stateDir).write(
+      fixtureEvent({
+        op: "gateway.chat.failed",
+        correlationId: ROOT_ID,
+        errorKind: "timeout",
+        level: "error",
+        fields: chat,
+      }),
+    );
+    closeFileServerLogSinks();
+    expect(stderr).toHaveBeenCalled();
+    stderr.mockRestore();
+    const sources = readPersistedActivityLog(stateDir);
+    expect(
+      persistedActivityLogLines(sources, "activity-log.segment.sealed").map(
+        (line) => JSON.parse(line) as Readonly<Record<string, unknown>>,
+      ),
+    ).toContainEqual(
+      expect.objectContaining({
+        droppedEventCount: 1,
+        completeness: "partial",
+        loss: "event-dropped",
+      }),
+    );
+    const outDir = makeRoot("keiko-query-cli-out-");
+    const deps = { cwd: outDir, controlActivityStateDir: controlStateDir };
+    const { io, err } = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outDir],
+      io,
+      AUDIT_ENV,
+      deps,
+    );
+
+    expect(code, err()).toBe(0);
+    const text = readExportedReport(outDir);
+    const report = parseSupportReport(text);
+    // The seal that counts the drop also declares its own segment partial.
+    const reasons = ["activity-log-loss", "evidence-partial"];
+    expect(report.selection).toMatchObject({ status: "degraded", reasons });
+    const exportLog = readPersistedActivityLog(stateDir);
+    const [queried] = persistedActivityLogLines(exportLog, "support.query.completed");
+    const [exported] = persistedActivityLogLines(exportLog, "support.report.completed");
+    const query = expectActivityLogProof("support.query.completed.query-evidence", queried ?? "");
+    const completed = expectActivityLogProof(
+      "support.report.completed.report-lifecycle",
+      exported ?? "",
+    );
+    expect(query).toMatchObject({
+      surface: "export",
+      queryClass: "correlation",
+      resultEventCount: report.evidence.recordCount,
+      truncation: "none",
+      sufficiency: "degraded",
+      sufficiencyReasons: reasons,
+    });
+    expect(completed).toMatchObject({
+      surface: "export",
+      recordCount: report.evidence.recordCount,
+      reportBytes: Buffer.byteLength(text),
+      sufficiency: "degraded",
+      sufficiencyReasons: reasons,
+    });
+    expect(completed.correlationId).toBe(query.correlationId);
+
+    const analysis = makeIo();
+    const analyzed = await runSupportCli(
+      ["analyze", join(outDir, readdirSync(outDir)[0] ?? ""), "--json"],
+      analysis.io,
+      {},
+      deps,
+    );
+    expect(analyzed, analysis.err()).toBe(0);
+    expect(JSON.parse(analysis.out())).toMatchObject({
+      selection: { status: "degraded", reasons },
+    });
+    const [analyzedLine] = persistedActivityLogLines(
+      readPersistedActivityLog(controlStateDir),
+      "support.report.completed",
+    );
+    const analyzedRecord = expectActivityLogProof(
+      "support.report.completed.report-lifecycle",
+      analyzedLine ?? "",
+    );
+    expect(analyzedRecord).toMatchObject({
+      surface: "analyze",
+      analysisView: "analysis",
+      recordCount: report.evidence.recordCount,
+      reportBytes: Buffer.byteLength(text),
+      reportDigest: completed.reportDigest,
+      sufficiency: "degraded",
+      sufficiencyReasons: reasons,
+    });
+    expect(analyzedRecord.correlationId).not.toBe(query.correlationId);
+  });
+
+  // #3534: a report over a crashed writer's torn tail says truncated, never corrupt, so the intact
+  // evidence before the crash is degraded rather than refused as insufficient.
+  it("reports a torn segment tail as truncated evidence, never corrupt", async () => {
+    const stateDir = makeRoot("keiko-query-cli-torn-");
+    const a = fixtureProcess(7102, "0badc0d2");
+    writeFixtureSegment(
+      stateDir,
+      segmentIdentity(a, T0, 1),
+      [fixtureLine(a, T0, { op: "client.diagnostic", correlationId: ROOT_ID })],
+      { state: "active", tail: '{"ts":"2026-09-18T12:00:01.000Z","op":"client.d' },
+    );
+    const outDir = makeRoot("keiko-query-cli-out-");
+    const { io, err } = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outDir],
+      io,
+      AUDIT_ENV,
+      exportDeps(outDir),
+    );
+
+    expect(code, err()).toBe(0);
+    const text = readExportedReport(outDir);
+    const { reasons } = parseSupportReport(text).selection;
+    expect(reasons).toContain("truncated-evidence");
+    expect(reasons).not.toContain("corrupt-evidence");
+    expect(analyzeSupportReport(text).selection.reasons).not.toContain("corrupt-evidence");
+  });
+
+  it("exports only the causal closure, field for field, with a validated versioned verdict", async () => {
     const { stateDir, lines } = stateWithHistory();
     const outDir = makeRoot("keiko-query-cli-out-");
-    const outPath = join(outDir, "selective.jsonl");
     const { io } = makeIo();
 
     const code = await runSupportCli(
-      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outPath],
+      ["export", "--state-dir", stateDir, "--correlation-id", ROOT_ID, "--out", outDir],
       io,
       AUDIT_ENV,
       exportDeps(outDir),
     );
 
     expect(code).toBe(0);
-    const bundle = readFileSync(outPath, "utf8");
-    const bundleLines = bundle.trimEnd().split("\n");
-    const manifest = JSON.parse(bundleLines[0] ?? "{}") as {
-      readonly sourceLogFileLines: readonly { readonly lineCount: number }[];
-      readonly selection: {
-        readonly kind: string;
-        readonly schemaVersion: number;
-        readonly query: {
-          readonly diagnosticSufficiency: { readonly status: string };
-          readonly events?: unknown;
-        };
-      };
-    };
-    const content = bundleLines.filter((line) => !line.startsWith('{"$section"'));
-    expect(content).toEqual(lines.slice(0, 2));
-    expect(bundle).not.toContain(OTHER_ID);
-    expect(manifest.sourceLogFileLines).toEqual([
-      expect.objectContaining({ lineCount: 2, terminalFragment: false }),
-    ]);
-    expect(manifest.selection).toMatchObject({
-      kind: "keiko.support.export-selection",
-      schemaVersion: 1,
-    });
-    expect(manifest.selection.query.events).toBeUndefined();
-    const analysis = analyzeLogText(bundle);
-    expect(analysis.sourceKind).toBe("bundle");
+    const text = readExportedReport(outDir);
+    const report = parseSupportReport(text);
+    // The report re-encodes each line canonically, so the pin compares the decoded records with
+    // the retained lines value for value, in order: exactly the closure, nothing lost or added.
+    const decoded = JSON.parse(
+      inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8"),
+    ) as readonly { readonly record: unknown }[];
+    expect(decoded.map((event) => event.record)).toEqual(
+      lines.slice(0, 2).map((line) => JSON.parse(line) as unknown),
+    );
+    expect(JSON.stringify(decoded)).not.toContain(OTHER_ID);
+    expect(report.selection.status).toBe("complete");
+    const analysis = analyzeSupportReport(text).analysis;
     expect(analysis.evidence).toMatchObject({
       classification: "supported",
       supportedLineCount: 2,
@@ -359,7 +627,6 @@ describe("keiko support export with a selector (#3531)", () => {
   it("writes nothing and exits 1 when the closure does not fit the budget", async () => {
     const { stateDir } = stateWithHistory();
     const outDir = makeRoot("keiko-query-cli-out-");
-    const outPath = join(outDir, "too-small.jsonl");
     const { io, err } = makeIo();
 
     const code = await runSupportCli(
@@ -370,7 +637,7 @@ describe("keiko support export with a selector (#3531)", () => {
         "--correlation-id",
         ROOT_ID,
         "--out",
-        outPath,
+        outDir,
         "--max-bytes",
         "100",
       ],
@@ -380,14 +647,13 @@ describe("keiko support export with a selector (#3531)", () => {
     );
 
     expect(code).toBe(1);
-    expect(existsSync(outPath)).toBe(false);
-    expect(err()).toContain("insufficient (report-budget-exceeded)");
+    expect(readdirSync(outDir)).toEqual([]);
+    expect(err()).toContain("report-budget-exceeded");
   });
 
-  it("writes nothing and exits 1 when the selection is not retained", async () => {
+  it("records nothing and writes nothing for a correlation without retained evidence", async () => {
     const { stateDir } = stateWithHistory();
     const outDir = makeRoot("keiko-query-cli-out-");
-    const outPath = join(outDir, "missing.jsonl");
     const { io, err } = makeIo();
 
     const code = await runSupportCli(
@@ -398,7 +664,7 @@ describe("keiko support export with a selector (#3531)", () => {
         "--correlation-id",
         "corr-cli-absent-0001",
         "--out",
-        outPath,
+        outDir,
       ],
       io,
       AUDIT_ENV,
@@ -406,33 +672,36 @@ describe("keiko support export with a selector (#3531)", () => {
     );
 
     expect(code).toBe(1);
-    expect(existsSync(outPath)).toBe(false);
-    expect(err()).toContain("insufficient (evidence-not-retained)");
+    expect(err()).toContain("keiko support: selection-unavailable");
+    expect(readdirSync(outDir)).toEqual([]);
+    // A mistyped correlation never pins a fourteen-day incident window.
+    expect(existsSync(join(stateDir, "support-incidents"))).toBe(false);
   });
 
   // Audit (#3531/#3533): a user-reported incident's window is never empty — it always captures at
   // least its own support.incident.created line — but when the window holds no REGISTERED FAILURE,
   // the selection is `insufficient` with the closed instrumentation-gap reason `no-registered-failure`
   // (support-analyze-sufficiency.ts). That reason was never asserted end-to-end through export.
-  it("writes nothing and exits 1 for a user-reported incident with no registered failure", async () => {
+  it("never claims complete for a user-reported incident with no registered failure", async () => {
     const stateDir = makeRoot("keiko-query-cli-no-failure-");
     const created = recordUserReportedIncident(stateDir, {
       correlationId: "corr-cli-no-failure-01",
     });
     if (created.status === "rejected") throw new Error(`incident rejected: ${created.reason}`);
     const outDir = makeRoot("keiko-query-cli-out-");
-    const outPath = join(outDir, "no-failure.jsonl");
-    const { io, err } = makeIo();
+    const { io } = makeIo();
 
     const code = await runSupportCli(
-      ["export", "--state-dir", stateDir, "--incident", created.incidentId, "--out", outPath],
+      ["export", "--state-dir", stateDir, "--incident", created.incidentId, "--out", outDir],
       io,
       AUDIT_ENV,
       exportDeps(outDir),
     );
 
-    expect(code).toBe(1);
-    expect(existsSync(outPath)).toBe(false);
-    expect(err()).toContain("insufficient (no-registered-failure)");
+    expect(code).toBe(0);
+    const report = parseSupportReport(readExportedReport(outDir));
+    expect(report.selection.status).toBe("insufficient");
+    expect(report.selection.reasons).toContain("no-registered-failure");
+    expect(analyzeSupportReport(readExportedReport(outDir)).selection.status).toBe("insufficient");
   });
 });

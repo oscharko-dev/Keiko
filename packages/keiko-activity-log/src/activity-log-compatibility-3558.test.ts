@@ -4,9 +4,6 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  ACTIVITY_LOG_CATALOG_DIGEST,
-  ACTIVITY_LOG_REGISTRY_VERSION,
-  ACTIVITY_LOG_SCHEMA_DIGEST,
   activityLogEvent,
   activityLogOperationSchema,
   parseActivityLogFileName,
@@ -23,6 +20,7 @@ import {
   resolveActivityLogStorePolicy,
 } from "./activity-log-store.js";
 import { ActivityLogScanner, listActivityLogStoreFiles } from "./reader/support-segment-scan.js";
+import { findSupportRegistry } from "./reader/support-registry.js";
 import {
   closeFileServerLogSinks,
   createFileServerLogSink,
@@ -185,14 +183,51 @@ describe("pre-move Activity Log compatibility fixture (#3558)", () => {
       readonly registryVersion?: unknown;
       readonly schemaDigest?: unknown;
     };
-    const expectedV2Evidence =
-      capturedIdentity.catalogDigest === ACTIVITY_LOG_CATALOG_DIGEST &&
-      capturedIdentity.registryVersion === ACTIVITY_LOG_REGISTRY_VERSION &&
-      capturedIdentity.schemaDigest === ACTIVITY_LOG_SCHEMA_DIGEST
-        ? "supported"
-        : "unsupported";
+    // A line is read with the registry it records when that registry is the current one or a
+    // shipped release snapshot (#3534); any other identity stays unsupported.
+    const recordedRegistry =
+      typeof capturedIdentity.registryVersion === "number" &&
+      typeof capturedIdentity.schemaDigest === "string" &&
+      typeof capturedIdentity.catalogDigest === "string"
+        ? findSupportRegistry({
+            registryVersion: capturedIdentity.registryVersion,
+            schemaDigest: capturedIdentity.schemaDigest,
+            catalogDigest: capturedIdentity.catalogDigest,
+          })
+        : undefined;
     const v2 = scanned.filter((line) => line.text.includes("compatibility-3558-sealed"));
-    expectCapturedV2Evidence(v2, expectedV2Evidence);
+    expectCapturedV2Evidence(v2, recordedRegistry === undefined ? "unsupported" : "supported");
+  });
+
+  it("keeps a captured line whose recorded registry no shipped snapshot matches unsupported", () => {
+    const stateDir = restoreFixture();
+    const forged = decodedFixture()
+      .files.filter((file) => file.name.endsWith("-000001.jsonl"))
+      .map((file) => {
+        const text = Buffer.from(file.bytes, "base64")
+          .toString("utf8")
+          .replaceAll(/"catalogDigest":"[a-f0-9]{64}"/gu, `"catalogDigest":"${"f".repeat(64)}"`);
+        return { name: file.name, text };
+      });
+    expect(forged).toHaveLength(1);
+    for (const file of forged) {
+      // A sealed segment is restored read-only; reopen it only to forge the recorded identity.
+      const path = join(stateDir, "logs", file.name);
+      chmodSync(path, 0o600);
+      writeFileSync(path, file.text);
+      chmodSync(path, 0o400);
+    }
+    const [segment] = listActivityLogStoreFiles(stateDir).filter((file) =>
+      file.name.endsWith("-000001.jsonl"),
+    );
+    if (segment === undefined) throw new Error("fixture segment missing");
+    const v2 = [...new ActivityLogScanner(stateDir).scan(segment)].filter((line) =>
+      line.text.includes("compatibility-3558-sealed"),
+    );
+    expect(v2.length).toBeGreaterThan(0);
+    for (const line of v2) {
+      expect(line.classification).toEqual({ kind: "rejected", evidence: "unsupported" });
+    }
   });
 
   it("recovers the captured pre-move active segment without changing its persisted bytes", () => {

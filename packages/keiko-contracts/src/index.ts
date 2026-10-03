@@ -101,6 +101,7 @@ export type {
   validateActivityLogOperationRecord,
   validateRegisteredActivityLogEvent,
   withActivityLogCorrelation,
+  withActivityLogParentCorrelation,
 } from "./observability.js";
 
 // ─── Harness ───────────────────────────────────────────────────────────────────

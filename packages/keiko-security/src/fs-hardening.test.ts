@@ -38,6 +38,7 @@ import {
   ensureDirHardened,
   isSafeArtifactClass,
   isSafeArtifactFailureKind,
+  isSafeArtifactStageFileName,
   openSafeArtifactFile,
   publishSafeArtifactFileSet,
   recoverSafeArtifactFileSet,
@@ -2793,5 +2794,22 @@ describe("replaceSafeArtifactFile", () => {
     expect(readFileSync(path, "utf8")).toBe("old");
     expect(readFileSync(outsideVictim, "utf8")).toBe("outside");
     expect(readFileSync(outsideStage, "utf8")).toBe("attacker");
+  });
+});
+
+describe("isSafeArtifactStageFileName (#3534)", () => {
+  it("accepts only the private stage copy of a publication", () => {
+    expect(isSafeArtifactStageFileName(`.keiko-publish-${"a".repeat(24)}-0.stage`)).toBe(true);
+    expect(isSafeArtifactStageFileName(`.keiko-publish-${"a".repeat(24)}-15.stage`)).toBe(true);
+    for (const name of [
+      `.keiko-publish-${"a".repeat(24)}.complete`,
+      `.keiko-publish-${"a".repeat(23)}-0.stage`,
+      `.keiko-publish-${"A".repeat(24)}-0.stage`,
+      `.keiko-publish-${"a".repeat(24)}-01.stage`,
+      `.keiko-publish-${"a".repeat(24)}-0.stage.json`,
+      "report.stage",
+    ]) {
+      expect(isSafeArtifactStageFileName(name)).toBe(false);
+    }
   });
 });

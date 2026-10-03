@@ -31,8 +31,6 @@
 // complete.
 
 import {
-  ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
-  ACTIVITY_LOG_OPERATION_REGISTRY,
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   DIAGNOSTIC_SUFFICIENCY_REASONS,
   diagnosticSufficiencyStatus,
@@ -80,6 +78,8 @@ export interface ActivityLogSufficiencyIntegrity {
   readonly sequenceAnomalies: readonly { readonly kind: string }[];
 }
 
+import { CURRENT_SUPPORT_REGISTRY, type SupportReaderRegistry } from "./support-registry.js";
+
 interface ClassCoverage {
   readonly failureClass: string;
   readonly lifecycleOperations: Readonly<Partial<Record<string, readonly string[]>>>;
@@ -91,19 +91,6 @@ interface OperationFacts {
   readonly causal: string;
   readonly failureClasses: readonly string[];
 }
-
-const COVERAGE_BY_CLASS: ReadonlyMap<string, ClassCoverage> = new Map(
-  (ACTIVITY_LOG_FAILURE_CLASS_COVERAGE.classes as readonly ClassCoverage[]).map((entry) => [
-    entry.failureClass,
-    entry,
-  ]),
-);
-
-const OPERATION_FACTS: ReadonlyMap<string, OperationFacts> = new Map(
-  (ACTIVITY_LOG_OPERATION_REGISTRY as readonly (OperationFacts & { readonly op: string })[]).map(
-    (registration) => [registration.op, registration],
-  ),
-);
 
 const ACTIVITY_LOG_EVIDENCE_CLASS_PREFIX = "activity-log-";
 const ACTIVITY_LOG_LOSS_SUMMARY_OP = "activity-log.loss";
@@ -119,8 +106,8 @@ function lifetimeKey(line: ActivityLogSufficiencyLine): string {
   return `${String(line.pid ?? "")}:${line.instanceId ?? ""}`;
 }
 
-function classesOf(op: string): readonly string[] {
-  return OPERATION_FACTS.get(op)?.failureClasses ?? [];
+function classesOf(op: string, registry: SupportReaderRegistry): readonly string[] {
+  return registry.operations.get(op)?.failureClasses ?? [];
 }
 
 function positiveCount(value: unknown): boolean {
@@ -135,8 +122,11 @@ function summaryReportsEvidenceLoss(fields: Readonly<Record<string, unknown>>): 
   );
 }
 
-function isEvidenceLossLine(line: ActivityLogSufficiencyLine): boolean {
-  const facts = OPERATION_FACTS.get(line.op);
+function isEvidenceLossLine(
+  line: ActivityLogSufficiencyLine,
+  registry: SupportReaderRegistry,
+): boolean {
+  const facts = registry.operations.get(line.op);
   if (facts?.lifecycle !== "loss") return false;
   if (!facts.failureClasses.some((name) => name.startsWith(ACTIVITY_LOG_EVIDENCE_CLASS_PREFIX))) {
     return false;
@@ -146,16 +136,32 @@ function isEvidenceLossLine(line: ActivityLogSufficiencyLine): boolean {
   return fields.loss !== undefined && fields.loss !== "none";
 }
 
-function droppedOperation(line: ActivityLogSufficiencyLine): string | undefined {
+/**
+ * True for a line recording that its own process lost Activity Log evidence: a registered evidence
+ * loss (the loss summary counts process counters only, never the browser-side ones) or a producer's
+ * confirmed drop, such as a segment seal's `droppedEventCount`. A browser report the server
+ * refused loses no line of the process.
+ */
+export function reportsProcessEvidenceLoss(
+  line: ActivityLogSufficiencyLine,
+  registry: SupportReaderRegistry = CURRENT_SUPPORT_REGISTRY,
+): boolean {
+  return isEvidenceLossLine(line, registry) || positiveCount(line.fields?.droppedEventCount);
+}
+
+function droppedOperation(
+  line: ActivityLogSufficiencyLine,
+  registry: SupportReaderRegistry,
+): string | undefined {
   for (const name of DROPPED_OPERATION_FIELDS) {
     const value = line.fields?.[name];
-    if (typeof value === "string" && OPERATION_FACTS.has(value)) return value;
+    if (typeof value === "string" && registry.operations.has(value)) return value;
   }
   return undefined;
 }
 
-function ownerOf(op: string): string {
-  return OPERATION_FACTS.get(op)?.owner ?? "";
+function ownerOf(op: string, registry: SupportReaderRegistry): string {
+  return registry.operations.get(op)?.owner ?? "";
 }
 
 // A lost event is attributed as precisely as its loss line allows: the named operation's classes;
@@ -171,17 +177,20 @@ function ownerLossKey(line: ActivityLogSufficiencyLine, owner: string): string {
   return `${lifetimeKey(line)}|${owner}`;
 }
 
-function lossAttribution(lines: readonly ActivityLogSufficiencyLine[]): LossAttribution {
+function lossAttribution(
+  lines: readonly ActivityLogSufficiencyLine[],
+  registry: SupportReaderRegistry,
+): LossAttribution {
   const droppedClasses = new Set<string>();
   const lossLifetimes = new Set<string>();
   const ownerLosses = new Set<string>();
   for (const line of lines) {
-    if (!isEvidenceLossLine(line)) continue;
-    const dropped = droppedOperation(line);
+    if (!reportsProcessEvidenceLoss(line, registry)) continue;
+    const dropped = droppedOperation(line, registry);
     if (dropped !== undefined) {
-      for (const name of classesOf(dropped)) droppedClasses.add(name);
+      for (const name of classesOf(dropped, registry)) droppedClasses.add(name);
     } else if (line.fields?.[DROPPED_OPERATION_DIGEST_FIELD] !== undefined) {
-      ownerLosses.add(ownerLossKey(line, ownerOf(line.op)));
+      ownerLosses.add(ownerLossKey(line, ownerOf(line.op, registry)));
     } else {
       lossLifetimes.add(lifetimeKey(line));
     }
@@ -189,11 +198,15 @@ function lossAttribution(lines: readonly ActivityLogSufficiencyLine[]): LossAttr
   return { droppedClasses, lossLifetimes, ownerLosses };
 }
 
-function lineLostEvidence(line: ActivityLogSufficiencyLine, loss: LossAttribution): boolean {
-  if (isEvidenceLossLine(line)) return false;
+function lineLostEvidence(
+  line: ActivityLogSufficiencyLine,
+  loss: LossAttribution,
+  registry: SupportReaderRegistry,
+): boolean {
+  if (reportsProcessEvidenceLoss(line, registry)) return false;
   return (
     loss.lossLifetimes.has(lifetimeKey(line)) ||
-    loss.ownerLosses.has(ownerLossKey(line, ownerOf(line.op)))
+    loss.ownerLosses.has(ownerLossKey(line, ownerOf(line.op, registry)))
   );
 }
 
@@ -224,8 +237,11 @@ function causalReasons(
   return reasons;
 }
 
-function lineReasons(line: ActivityLogSufficiencyLine): readonly DiagnosticSufficiencyReason[] {
-  const facts = OPERATION_FACTS.get(line.op);
+function lineReasons(
+  line: ActivityLogSufficiencyLine,
+  registry: SupportReaderRegistry,
+): readonly DiagnosticSufficiencyReason[] {
+  const facts = registry.operations.get(line.op);
   if (facts === undefined) return [];
   const completeness = line.fields?.completeness;
   const partial =
@@ -233,14 +249,20 @@ function lineReasons(line: ActivityLogSufficiencyLine): readonly DiagnosticSuffi
   return partial ? [...causalReasons(line, facts), "evidence-partial"] : causalReasons(line, facts);
 }
 
-function causalStartOperations(coverage: ClassCoverage): readonly string[] {
+function causalStartOperations(
+  coverage: ClassCoverage,
+  registry: SupportReaderRegistry,
+): readonly string[] {
   return (coverage.lifecycleOperations.start ?? []).filter(
-    (op) => (OPERATION_FACTS.get(op)?.causal ?? "none") !== "none",
+    (op) => (registry.operations.get(op)?.causal ?? "none") !== "none",
   );
 }
 
-function closesOnKnownCorrelation(line: ActivityLogSufficiencyLine): boolean {
-  const facts = OPERATION_FACTS.get(line.op);
+function closesOnKnownCorrelation(
+  line: ActivityLogSufficiencyLine,
+  registry: SupportReaderRegistry,
+): boolean {
+  const facts = registry.operations.get(line.op);
   if (facts === undefined || facts.causal === "none") return false;
   const closing = facts.lifecycle === "end" || facts.lifecycle === "failure";
   return closing && knownCorrelation(line.correlationId);
@@ -251,15 +273,18 @@ function closesOnKnownCorrelation(line: ActivityLogSufficiencyLine): boolean {
 function lifecycleStartMissing(
   coverage: ClassCoverage,
   members: readonly ActivityLogSufficiencyLine[],
+  registry: SupportReaderRegistry,
 ): boolean {
-  const starts = causalStartOperations(coverage);
+  const starts = causalStartOperations(coverage, registry);
   if (starts.length === 0) return false;
   const started = new Set(
     members
       .filter((line) => starts.includes(line.op) && knownCorrelation(line.correlationId))
       .map((line) => line.correlationId),
   );
-  return members.some((line) => closesOnKnownCorrelation(line) && !started.has(line.correlationId));
+  return members.some(
+    (line) => closesOnKnownCorrelation(line, registry) && !started.has(line.correlationId),
+  );
 }
 
 function orderedReasons(
@@ -274,15 +299,16 @@ function classSufficiency(
   members: readonly ActivityLogSufficiencyLine[],
   shared: readonly DiagnosticSufficiencyReason[],
   loss: LossAttribution,
+  registry: SupportReaderRegistry,
 ): ActivityLogClassSufficiency {
   const reasons = new Set<DiagnosticSufficiencyReason>(shared);
   for (const line of members) {
-    for (const reason of lineReasons(line)) reasons.add(reason);
-    if (lineLostEvidence(line, loss)) reasons.add("activity-log-loss");
+    for (const reason of lineReasons(line, registry)) reasons.add(reason);
+    if (lineLostEvidence(line, loss, registry)) reasons.add("activity-log-loss");
   }
   if (loss.droppedClasses.has(failureClass)) reasons.add("events-dropped");
-  const coverage = COVERAGE_BY_CLASS.get(failureClass);
-  if (coverage !== undefined && lifecycleStartMissing(coverage, members)) {
+  const coverage = registry.classes.get(failureClass);
+  if (coverage !== undefined && lifecycleStartMissing(coverage, members, registry)) {
     reasons.add("lifecycle-start-missing");
   }
   const ordered = orderedReasons(reasons);
@@ -296,10 +322,11 @@ function classSufficiency(
 
 function linesByClass(
   lines: readonly ActivityLogSufficiencyLine[],
+  registry: SupportReaderRegistry,
 ): ReadonlyMap<string, ActivityLogSufficiencyLine[]> {
   const byClass = new Map<string, ActivityLogSufficiencyLine[]>();
   for (const line of lines) {
-    for (const failureClass of classesOf(line.op)) {
+    for (const failureClass of classesOf(line.op, registry)) {
       const members = byClass.get(failureClass);
       if (members === undefined) byClass.set(failureClass, [line]);
       else members.push(line);
@@ -344,18 +371,24 @@ function summarize(
 export function projectActivityLogSufficiency(
   lines: readonly ActivityLogSufficiencyLine[],
   integrity: ActivityLogSufficiencyIntegrity,
+  registry: SupportReaderRegistry = CURRENT_SUPPORT_REGISTRY,
 ): ActivityLogSufficiency {
   const shared = integrityReasons(integrity);
-  const loss = lossAttribution(lines);
-  const classes = [...linesByClass(lines)]
-    .map(([failureClass, members]) => classSufficiency(failureClass, members, shared, loss))
+  const loss = lossAttribution(lines, registry);
+  const classes = [...linesByClass(lines, registry)]
+    .map(([failureClass, members]) =>
+      classSufficiency(failureClass, members, shared, loss, registry),
+    )
     .sort((left, right) => (left.failureClass < right.failureClass ? -1 : 1));
   return summarize(classes, "no-registered-evidence");
 }
 
 /** The failure classes the registry assigns to `ops`, in first-occurrence order. */
-export function activityLogFailureClassesOf(ops: readonly string[]): readonly string[] {
-  return [...new Set(ops.flatMap((op) => classesOf(op)))];
+export function activityLogFailureClassesOf(
+  ops: readonly string[],
+  registry: SupportReaderRegistry = CURRENT_SUPPORT_REGISTRY,
+): readonly string[] {
+  return [...new Set(ops.flatMap((op) => classesOf(op, registry)))];
 }
 
 /**

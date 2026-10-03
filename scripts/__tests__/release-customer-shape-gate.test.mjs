@@ -20,8 +20,10 @@ const qualifierPath = resolve(
 );
 const qualifier = readFileSync(qualifierPath, "utf8");
 
+// The installed qualifier must reconstruct the failed turn through its run id: the validated
+// timeline of `--correlation-id <runId>` has to carry the run's typed turn failure (#3598, #3534).
 function runIdLookupGate(source) {
-  return /const analyzedRun = run\(\s*process\.execPath,\s*\[bin, "support", "analyze", bundle, "--correlation-id", runId, "--json"\]/u.test(
+  return /customerShapeSupportTimelineEvidence\(\s*JSON\.parse\(analyze\("--correlation-id", runId, "--json"\)\),\s*machineView,\s*runId,\s*"coding-sidecar\.gateway\.turn-failed",?\s*\)/u.test(
     source,
   );
 }

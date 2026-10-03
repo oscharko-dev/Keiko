@@ -18,7 +18,10 @@ import {
   listActivityLogStoreFiles,
   type ActivityLogStoreFile,
 } from "./support-segment-scan.js";
-import type { SegmentManifestSequenceAnomalies } from "./support-segment-manifest.js";
+import {
+  SEGMENT_MANIFEST_SCHEMA_VERSION,
+  type SegmentManifestSequenceAnomalies,
+} from "./support-segment-manifest.js";
 import {
   fixtureLine,
   fixtureProcess,
@@ -352,6 +355,331 @@ describe("support query causal closure (#3531)", () => {
     expect(result.diagnosticSufficiency.reasons).toContain("segment-unreadable");
   });
 
+  // Review #3679: a long-running process's start names its runtime; it stays in the closure's
+  // context however far before the failure it lies, even without any context window.
+  it("keeps each closure lifetime's process start wherever it lies", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      fixtureLine(a, T0, { op: "process.started" }),
+      signal(a, T0 + 60_000),
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    for (const contextMs of [DEFAULT_SUPPORT_QUERY_LIMITS.contextMs, 0]) {
+      const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs });
+      const context = result.events.filter((event) => event.role === "context");
+      expect(context.map((event) => event.parsed.view.op)).toEqual(["process.started"]);
+      expect(context[0]?.parsed.view.extra).toMatchObject({ nodeVersion: "v24.18.0" });
+      expect(result.truncation.state).toBe("none");
+    }
+  });
+
+  // Review #3679: the runtime anchor is required evidence. It never consumes the optional context
+  // cap, and a budget that cannot hold it beside the closure states the bytes both need.
+  it("never counts a lifetime anchor against the optional context cap", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      fixtureLine(a, T0, { op: "process.started" }),
+      signal(a, T0 + 600_000),
+      diagnostic(a, T0 + 600_001, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { maxContextEvents: 1 });
+    expect(
+      result.events
+        .filter((event) => event.role === "context")
+        .map((event) => event.parsed.view.op),
+    ).toEqual(["process.started", SIGNAL]);
+    expect(result.truncation.state).toBe("none");
+    expect(result.diagnosticSufficiency.reasons).not.toContain("context-truncated");
+  });
+
+  // Review #3679: the requirement names the closure and its anchors on both sides of the budget,
+  // including when the closure alone already overflows it, so the stated size is one that fits.
+  it("states the closure and anchor bytes when the budget cannot hold the runtime", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    const start = fixtureLine(a, T0, { op: "process.started" });
+    const failure = diagnostic(a, T0 + 600_000, IDS.root);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [start, failure]);
+    const closureBytes = Buffer.byteLength(failure) + 1;
+    const bothBytes = closureBytes + Buffer.byteLength(start) + 1;
+    for (const maxResultBytes of [closureBytes - 1, closureBytes, bothBytes - 1]) {
+      const { result } = query(stateDir, correlationSelection(IDS.root), {
+        contextMs: 0,
+        maxResultBytes,
+      });
+      expect(result.events).toEqual([]);
+      expect(result.diagnosticSufficiency.status).toBe("insufficient");
+      expect(result.diagnosticSufficiency.reasons).toContain("report-budget-exceeded");
+      expect(result.truncation).toMatchObject({
+        state: "budget-exceeded",
+        requiredBytes: bothBytes,
+      });
+    }
+    const { result } = query(stateDir, correlationSelection(IDS.root), {
+      contextMs: 0,
+      maxResultBytes: bothBytes,
+    });
+    expect(result.diagnosticSufficiency.status).toBe("complete");
+    expect(result.metrics.selectedBytes).toBe(bothBytes);
+  });
+
+  // Review #3679: only `keiko ui` writes a start, and retention prunes a lifetime's oldest segment
+  // first. A start that went with the first segment is stated whether or not a heartbeat followed it,
+  // and a retained heartbeat travels as the proof a receiver recomputes the loss from.
+  it.each([
+    ["after its first heartbeat", true],
+    ["before its first heartbeat", false],
+  ])("states a lifetime start that retention removed %s", (_label, heartbeats) => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    const startup = writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      fixtureLine(a, T0, { op: "process.started" }),
+      ...(heartbeats ? [fixtureLine(a, T0 + 60_000, { op: "process.heartbeat" })] : []),
+    ]);
+    const later = heartbeats
+      ? [fixtureLine(a, T0 + 120_000, { op: "process.heartbeat" })]
+      : [diagnostic(a, T0 + 120_000, IDS.unrelated)];
+    const failure = diagnostic(a, T0 + 600_000, IDS.root);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 120_000, 2), [...later, failure]);
+    const retained = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 }).result;
+    expect(retained.diagnosticSufficiency.status).toBe("complete");
+    expect(retained.events.map((event) => event.parsed.view.op)).toEqual([
+      "process.started",
+      DIAGNOSTIC,
+    ]);
+
+    rmSync(startup);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("insufficient");
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
+    const required = heartbeats ? [...later, failure] : [failure];
+    expect(result.events.map((event) => event.text)).toEqual(required);
+    const overflow = query(stateDir, correlationSelection(IDS.root), {
+      contextMs: 0,
+      maxResultBytes: Buffer.byteLength(failure),
+    }).result;
+    expect(overflow.truncation).toMatchObject({
+      state: "budget-exceeded",
+      requiredBytes: required.reduce((sum, line) => sum + Buffer.byteLength(line) + 1, 0),
+    });
+  });
+
+  // A one-shot command writes no start (its fatal and exit lines come without one). With all of its
+  // segments retained from the first, it never wrote one, so nothing is missing; the first line of
+  // its first segment travels along so a receiver can see that beginning too.
+  it("never asks a start of a lifetime whose segments run unbroken from its first", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    const beginning = signal(a, T0);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [beginning]);
+    const later = signal(a, T0 + 1);
+    const failure = diagnostic(a, T0 + 2, IDS.root);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), [later, failure]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("complete");
+    expect(result.diagnosticSufficiency.reasons).toEqual([]);
+    expect(result.events.map((event) => event.text)).toEqual([beginning, failure]);
+  });
+
+  // Review #3679: a segment name proves nothing when its contents are unusable. A damaged line in
+  // a start-less lifetime's segments could be the start itself, so its beginning is not proven.
+  it.each([
+    ["a corrupt start", (line: string): string => line.replace('"v24.18.0"', "24")],
+    [
+      "an incomplete start",
+      (line: string): string => line.replace(',"nodeVersion":"v24.18.0"', ""),
+    ],
+  ])("states a missing start behind %s in the first segment", (_label, damage) => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    const start = fixtureLine(a, T0, { op: "process.started" });
+    expect(damage(start)).not.toBe(start);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [damage(start)]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 600_000, 2), [
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("insufficient");
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
+  });
+
+  // Review #3679: an unsupported line, or an event the process recorded losing, in a start-less
+  // lifetime's segments could be its start, so neither leaves the beginning proven. A seal's confirmed
+  // drop counts before any loss summary is written, even when the rejected event's claimed seq went
+  // to the sink's own line and no gap remains.
+  it.each([
+    [
+      "an unsupported start",
+      (a: FixtureProcess): readonly string[] => [
+        fixtureLine(a, T0 + 1, { op: "process.started" }).replace(
+          '"schemaVersion":2',
+          '"schemaVersion":3',
+        ),
+      ],
+    ],
+    [
+      "a recorded loss",
+      (a: FixtureProcess): readonly string[] => [
+        fixtureLine(a, T0 + 1, {
+          op: "activity-log.loss",
+          fields: {
+            completeness: "partial",
+            loss: "event-dropped",
+            trigger: "heartbeat",
+            totalLost: 1,
+            schemaRejected: 1,
+          },
+        }),
+      ],
+    ],
+    [
+      "a seal's confirmed drop",
+      (a: FixtureProcess): readonly string[] => {
+        const before = signal(a, T0 + 1);
+        const seal = fixtureLine(a, T0 + 2, {
+          op: "activity-log.segment.sealed",
+          correlationId: "unknown-correlation-id",
+          fields: {
+            completeness: "partial",
+            loss: "event-dropped",
+            sealReason: "close",
+            segmentIndex: 2,
+            segmentFirstSeq: 2,
+            segmentLastSeq: 3,
+            segmentLineCount: 2,
+            segmentBytes: 512,
+            segmentDurationMs: 1,
+            droppedEventCount: 1,
+            segmentByteLimit: 1_048_576,
+            segmentSecondsLimit: 3600,
+          },
+        });
+        return [before, seal];
+      },
+    ],
+  ])("states a missing start behind %s in its beginning", (_label, damaged) => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [signal(a, T0)]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), damaged(a));
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 600_000, 3), [
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("insufficient");
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
+    expect(result.lifetimes).toEqual([{ pid: 4101, instanceId: "aaaaaaa1", start: "lost" }]);
+  });
+
+  // Review #3679: only the process losing its own evidence leaves a start unaccounted for. A summary
+  // that lost nothing, or counted only browser reports the server refused, loses no line of it.
+  it.each([
+    ["nothing lost", { totalLost: 0 }],
+    ["a refused browser report", { totalLost: 1, clientRejected: 1 }],
+    ["a failed browser post", { totalLost: 1, clientPostFailed: 1 }],
+  ])("keeps a beginning proven beside a loss summary of %s", (_label, counters) => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      signal(a, T0),
+      fixtureLine(a, T0 + 1, {
+        op: "activity-log.loss",
+        fields: { trigger: "exit", ...counters },
+      }),
+    ]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 600_000, 2), [
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("complete");
+    expect(result.lifetimes).toEqual([{ pid: 4101, instanceId: "aaaaaaa1", start: "absent" }]);
+  });
+
+  // Review #3679: proving a long start-less lifetime lossless reads only the segments whose manifests
+  // could record a loss (a loss summary, a sequence break); every other body stays unopened.
+  it("proves a start-less beginning without opening a segment that cannot record a loss", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [diagnostic(a, T0, IDS.root)]);
+    const quiet = writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), [signal(a, T0 + 1)]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 2, 3), [
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    const { result, opened } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("complete");
+    expect(result.lifetimes).toEqual([{ pid: 4101, instanceId: "aaaaaaa1", start: "absent" }]);
+    expect([...opened]).not.toContain(quiet.split("/").at(-1));
+  });
+
+  // Review #3679: a torn tail ends only a lifetime's last segment, where a crash stops it; a torn
+  // first segment followed by another cannot prove that its beginning held no start.
+  it("states a missing start behind a torn first segment", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    const torn = '{"ts":"2026-09-18T12:00:00.000Z","op":"process.st';
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [signal(a, T0)], { tail: torn });
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 600_000, 2), [
+      diagnostic(a, T0 + 600_000, IDS.root),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.diagnosticSufficiency.status).toBe("insufficient");
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
+  });
+
+  // A lifetime whose segments no longer run unbroken from its first may have lost its start with the
+  // missing segment, so the start is unaccounted for even though the first segment survived.
+  it("states a missing start when a lifetime's segments no longer run unbroken", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [signal(a, T0)]);
+    const gap = writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 1, 2), [signal(a, T0 + 1)]);
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0 + 2, 3), [diagnostic(a, T0 + 2, IDS.root)]);
+    expect(
+      query(stateDir, correlationSelection(IDS.root)).result.diagnosticSufficiency.status,
+    ).toBe("complete");
+    rmSync(gap);
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+    expect(result.diagnosticSufficiency.status).toBe("insufficient");
+    expect(result.diagnosticSufficiency.reasons).toContain("evidence-not-retained");
+  });
+
+  // Review #3679: the lifetimes whose starts are measured are bounded like the closure itself.
+  it("never partially selects a closure whose lifetimes exceed the closure bound", () => {
+    const processes = [
+      fixtureProcess(4101, "aaaaaaa1"),
+      fixtureProcess(4202, "bbbbbbb2"),
+      fixtureProcess(4303, "ccccccc3"),
+    ];
+    for (const [index, process] of processes.entries()) {
+      writeFixtureSegment(stateDir, segmentIdentity(process, T0 + index, 1), [
+        diagnostic(process, T0 + index, IDS.root),
+      ]);
+    }
+    const { result } = query(stateDir, correlationSelection(IDS.root), {
+      maxClosureCorrelations: 1,
+    });
+    expect(result.events).toEqual([]);
+    expect(result.diagnosticSufficiency.reasons).toContain("report-budget-exceeded");
+    expect(result.truncation).toMatchObject({ state: "budget-exceeded", requiredBytes: 0 });
+    expect(result.closure).toMatchObject({ correlationCount: 1, missingCorrelationCount: 0 });
+    expect(
+      query(stateDir, correlationSelection(IDS.root), { maxClosureCorrelations: 3 }).result
+        .diagnosticSufficiency.status,
+    ).toBe("complete");
+  });
+
+  // #3534: a crashed writer's torn tail is truncated evidence, never a corrupt record, and the
+  // fragment never becomes a selected event.
+  it("declares a torn segment tail as truncated evidence and never selects the fragment", () => {
+    const a = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(
+      stateDir,
+      segmentIdentity(a, T0, 1),
+      [diagnostic(a, T0, IDS.root), diagnostic(a, T0 + 100, IDS.root)],
+      { state: "active", tail: '{"ts":"2026-09-18T12:00:01.000Z","op":"client.d' },
+    );
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+
+    expect(result.integrity).toMatchObject({ truncatedLineCount: 1, corruptLineCount: 0 });
+    expect(result.diagnosticSufficiency.reasons).toContain("truncated-evidence");
+    expect(result.diagnosticSufficiency.reasons).not.toContain("corrupt-evidence");
+    // A crash tears only the last segment of a lifetime, so its beginning still holds (review #3679).
+    expect(result.diagnosticSufficiency).toMatchObject({ status: "degraded" });
+    expect(result.diagnosticSufficiency.reasons).not.toContain("evidence-not-retained");
+    expect(result.events.map((event) => event.parsed.correlationId)).toEqual([IDS.root, IDS.root]);
+  });
+
   it("selects a user-reported window and the closure of every correlation inside it", () => {
     writeGraph(stateDir);
     const files = listActivityLogStoreFiles(stateDir);
@@ -472,7 +800,9 @@ describe("support query result projections (#3531)", () => {
     writeGraph(stateDir);
     const { result } = query(stateDir, correlationSelection(IDS.root));
 
-    expect(result.provenance).toMatchObject({ manifestSchemaVersion: 1 });
+    expect(result.provenance).toMatchObject({
+      manifestSchemaVersion: SEGMENT_MANIFEST_SCHEMA_VERSION,
+    });
     expect(result.integrity).toMatchObject({
       classification: "supported",
       completeness: "complete",

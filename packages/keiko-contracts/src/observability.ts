@@ -94,6 +94,7 @@ export {
   parseSupportIncidentFileName,
   parseSupportIncidentFingerprintClaimFileName,
   parseSupportIncidentRecord,
+  parseSupportIncidentPrivateProjection,
   parseSupportIncidentSlotClaimFileName,
   supportIncidentBuild,
   supportIncidentFileName,
@@ -334,8 +335,15 @@ export function isActivityLogPlatformClass(value: unknown): value is string {
   return typeof value === "string" && ACTIVITY_LOG_PLATFORM_CLASS_PATTERN.test(value);
 }
 
+// Bounded like the product-version comparison, so no identity field can carry an unbounded string.
+const MAX_ACTIVITY_LOG_PRODUCT_VERSION_LENGTH = 128;
+
 export function isActivityLogProductVersion(value: unknown): value is string {
-  return typeof value === "string" && ACTIVITY_LOG_PRODUCT_VERSION_PATTERN.test(value);
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_ACTIVITY_LOG_PRODUCT_VERSION_LENGTH &&
+    ACTIVITY_LOG_PRODUCT_VERSION_PATTERN.test(value)
+  );
 }
 
 export function isActivityLogProcessId(value: unknown): value is number {
@@ -937,6 +945,20 @@ export function validateActivityLogOperationRecord(
   return registration;
 }
 
+/** Validates a reader record against a trusted archived registration, using the owning validators. */
+export function validateArchivedActivityLogRecord(
+  registration: ActivityLogOperationRegistration,
+  category: string,
+  envelope: ActivityLogEventEnvelope,
+  fields: Readonly<Record<string, unknown>>,
+): void {
+  if (registration.category !== category) {
+    throw new ActivityLogEventValidationError("registration-mismatch");
+  }
+  validateActivityLogFields(registration, fields);
+  validateActivityLogEnvelope(registration, envelope);
+}
+
 export const ACTIVITY_LOG_EVENT_REGISTRATION = Symbol.for(
   "@oscharko-dev/keiko-contracts/activity-log-event-registration",
 );
@@ -1326,3 +1348,5 @@ export function activityLogEvent<
     return rejectedActivityLogEvent<Registration>(error);
   }
 }
+
+export * from "./support-report.js";

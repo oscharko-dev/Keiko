@@ -22,6 +22,7 @@ import {
   type ServerLogSink,
 } from "@oscharko-dev/keiko-activity-log";
 import { readPersistedActivityLog } from "../../../../tests/support/activity-log-proof.js";
+import { fixtureLine, fixtureProcess } from "../../../../tests/support/activity-log-segments.js";
 
 import {
   analyzeLogText,
@@ -184,6 +185,20 @@ function expectCorrelatedSafeOpen(view: ServerLogLineView | undefined): void {
   expect(view?.extra).toEqual(SAFE_OPEN_EXTRA);
 }
 
+describe("persisted timestamp grammar", () => {
+  it("never accepts an extended-year timestamp that would break lexical ordering", () => {
+    const valid = fixtureLine(fixtureProcess(4242, "aabbccdd"), Date.UTC(2026, 8, 30, 12), {
+      op: "client.diagnostic",
+      correlationId: "corr-00000001",
+    });
+    const extended = valid.replace(/"ts":"[^"]+"/u, '"ts":"+275760-09-13T00:00:00.000Z"');
+    expect(analyzeLogText(`${valid}\n`).evidence.supportedLineCount).toBe(1);
+    const result = analyzeLogText(`${extended}\n`);
+    expect(result.evidence.supportedLineCount).toBe(0);
+    expect(result.timelines).toEqual([]);
+  });
+});
+
 describe("detectSourceKind", () => {
   it("recognises a bundle's manifest first line", () => {
     expect(detectSourceKind(line({ $section: "manifest", schemaVersion: 2 }))).toBe("bundle");
@@ -283,6 +298,45 @@ describe("analyzeLogText — governed update attempts", () => {
     });
 
     expect(analyzeLogText(serialized).updateAttempts).toEqual([]);
+  });
+
+  it("indexes many unrelated fallback records by their proven parents within the budget", () => {
+    const text = Array.from({ length: 2000 }, (_, index) =>
+      line({
+        ts: T0,
+        category: "diagnostic",
+        op: "server.diagnostic.failure",
+        correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        parentCorrelationId: `fallback-parent-${String(index)}`,
+      }),
+    ).join("\n");
+    const result = analyzeLogText(text, { maxTimelineRecords: 4000 });
+    expect(findTimeline(result, ACTIVITY_LOG_UNKNOWN_CORRELATION_ID)?.lines).toHaveLength(2000);
+    expect(findTimeline(result, "fallback-parent-17")?.lines).toEqual([
+      expect.objectContaining({ parentCorrelationId: "fallback-parent-17" }),
+    ]);
+    expect(result.timelines).toHaveLength(2001);
+  });
+
+  it("shares the bounded timeline budget with reconstructed update attempts", () => {
+    const text = line({
+      ts: T0,
+      category: "diagnostic",
+      op: "update.candidate.issued",
+      correlationId: "update-budget-correlation",
+      candidateId: "update-budget-candidate",
+    });
+    const original = analyzeLogText(text);
+    expect(original.timelines).toHaveLength(1);
+    expect(original.updateAttempts).toHaveLength(1);
+    expect(analyzeLogText(text, { maxTimelineRecords: 2 })).toEqual(original);
+    expect(() => analyzeLogText(text, { maxTimelineRecords: 1 })).toThrow(
+      "timeline-budget-exceeded",
+    );
+    const ordinaryBytes = Buffer.byteLength(JSON.stringify(original.timelines[0]?.lines[0]));
+    expect(() => analyzeLogText(text, { maxTimelineBytes: ordinaryBytes })).toThrow(
+      "timeline-budget-exceeded",
+    );
   });
 
   it("reconstructs a large corpus of distinct explicit candidates", () => {

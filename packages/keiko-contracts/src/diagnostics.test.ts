@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   ACTIVITY_LOG_READINESS_REASONS,
+  isClientDiagnosticFrame,
+  isPersistedClientDiagnosticFrame,
   ACTIVITY_LOG_READINESS_STATES,
   ACTIVITY_LOG_WRITER_KINDS,
   CLIENT_BINDING_CANDIDATES_MAX,
@@ -1200,6 +1202,22 @@ describe("client error evidence trust boundary", () => {
   const base = { message: "failure", clientTs: "2026-09-19T00:00:00.000Z" };
   const frame = "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345";
   const evidence = { errorClass: "TypeError", frames: [frame], causeChain: ["Error"] };
+  it("keeps persisted digest coordinates separate from untrusted browser wire frames", () => {
+    const persisted = `dist/ui/static/_next/static/chunks/sha256-${"a".repeat(64)}.js:12:345`;
+    expect(isClientDiagnosticFrame(persisted)).toBe(false);
+    expect(isPersistedClientDiagnosticFrame(persisted)).toBe(true);
+    expect(isPersistedClientDiagnosticFrame(frame)).toBe(false);
+    expect(isPersistedClientDiagnosticFrame(null)).toBe(false);
+    expect(isPersistedClientDiagnosticFrame(persisted.replace("12:345", "123456789:345"))).toBe(
+      false,
+    );
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...base,
+        errorEvidence: { ...evidence, frames: [persisted] },
+      }),
+    ).toBe(false);
+  });
   it("accepts the bounded closed evidence shape", () => {
     expect(isClientDiagnosticIngestRequest({ ...base, errorEvidence: evidence })).toBe(true);
   });

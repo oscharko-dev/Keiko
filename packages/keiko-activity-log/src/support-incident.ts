@@ -32,23 +32,18 @@
 // at the same instant, and its fingerprint and slot claims release with it, so an unreported incident
 // releases its evidence and its claims predictably.
 
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
-  ACTIVITY_LOG_OPERATION_SURFACES,
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
-  MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
   SUPPORT_INCIDENT_SLOT_COUNT,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
-  activityLogErrorKindOr,
   activityLogEvent,
   activityLogOperationSchema,
-  defectFingerprintPreimage,
   defineActivityLogOperation,
-  isActivityLogCorrelationId,
   normalizeKeikoFrameSignature,
   recordActivityLogLoss,
   supportIncidentBuild,
@@ -77,8 +72,13 @@ import {
   type ActivityLogPinResult,
   type ServerLogEvent,
 } from "./server-log.js";
+import {
+  computeDefectFingerprint,
+  incidentCorrelationId,
+  registeredFailureCorrelation,
+  registeredFailureFingerprintInput,
+} from "./defect-fingerprint.js";
 import { activityLogTestWriterInstalled } from "./server-logger.js";
-import { FRAME_SHAPE_PATTERN } from "./stack-frames.js";
 import {
   claimSupportIncidentFingerprint,
   claimSupportIncidentSlot,
@@ -496,10 +496,7 @@ function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
 
 // ─── Fingerprint and candidate policy ──────────────────────────────────────────────────────────
 
-/** The deterministic, versioned defectFingerprint: SHA-256 over the canonical contract preimage. */
-export function computeDefectFingerprint(input: DefectFingerprintInput): string {
-  return createHash("sha256").update(defectFingerprintPreimage(input), "utf8").digest("hex");
-}
+export { computeDefectFingerprint };
 
 let supportedFailureClasses: ReadonlySet<string> | undefined;
 
@@ -529,37 +526,6 @@ export interface SupportIncidentFailureEvidence {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly frames?: readonly unknown[] | undefined;
-}
-
-function keikoFrames(frames: readonly unknown[] | undefined): readonly string[] {
-  if (frames === undefined) return [];
-  return frames.filter(
-    (frame): frame is string => typeof frame === "string" && FRAME_SHAPE_PATTERN.test(frame),
-  );
-}
-
-function failureFingerprintInput(evidence: SupportIncidentFailureEvidence): DefectFingerprintInput {
-  return {
-    surface: ACTIVITY_LOG_OPERATION_SURFACES[evidence.op] ?? "unattributed",
-    op: evidence.op,
-    errorKind: activityLogErrorKindOr(evidence.errorKind, "unknown"),
-    frames: keikoFrames(evidence.frames),
-  };
-}
-
-function failureCorrelation(evidence: SupportIncidentFailureEvidence): SupportIncidentCorrelation {
-  const own = isActivityLogCorrelationId(evidence.correlationId)
-    ? evidence.correlationId
-    : undefined;
-  const parent = isActivityLogCorrelationId(evidence.parentCorrelationId)
-    ? evidence.parentCorrelationId
-    : undefined;
-  const root = parent ?? own;
-  const children = parent !== undefined && own !== undefined && own !== parent ? [own] : [];
-  return {
-    ...(root === undefined ? {} : { rootCorrelationId: root }),
-    childCorrelationIds: children.slice(0, MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS),
-  };
 }
 
 // ─── Candidate creation ────────────────────────────────────────────────────────────────────────
@@ -1044,10 +1010,10 @@ function createCandidate(
 }
 
 function registeredFailureDraft(evidence: SupportIncidentFailureEvidence): CandidateDraft {
-  const correlation = failureCorrelation(evidence);
+  const correlation = registeredFailureCorrelation(evidence);
   return {
     trigger: "registered-failure",
-    input: failureFingerprintInput(evidence),
+    input: registeredFailureFingerprintInput(evidence),
     correlation,
     // The failing operation's own correlation (validated), so the candidate's lines join it.
     evidenceCorrelationId:
@@ -1077,9 +1043,7 @@ export function recordUserReportedIncident(
   stateDir: string,
   options: SupportIncidentOptions = {},
 ): SupportIncidentCreation {
-  const correlationId = isActivityLogCorrelationId(options.correlationId)
-    ? options.correlationId
-    : randomUUID();
+  const correlationId = incidentCorrelationId(options.correlationId) ?? randomUUID();
   return createCandidate(
     stateDir,
     {
@@ -1403,7 +1367,7 @@ function admittedEvidence(event: ServerLogEvent): AdmissionOutcome {
     parentCorrelationId: event.parentCorrelationId,
     frames: eventFrames(event),
   };
-  const defectFingerprint = computeDefectFingerprint(failureFingerprintInput(evidence));
+  const defectFingerprint = computeDefectFingerprint(registeredFailureFingerprintInput(evidence));
   const admission = admitEvaluation(defectFingerprint, Date.now());
   if (admission === "admitted") return { status: "admitted", evidence };
   return admission === "rate-limited"

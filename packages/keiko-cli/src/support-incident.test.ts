@@ -319,13 +319,11 @@ describe("keiko support incident", () => {
     expect(analysis).toEqual(analyzeLogText(wholeText));
   });
 
-  // The pre-migration reconstruction (`readKeptFiles` rejoining every kept line with its own
-  // trailing "\n") always reported the LAST line of the window as terminated, even when the
-  // covered active segment's own tail was torn — the rejoin masked it. `resolveSupportIncidentEvidence`
-  // preserves that exact verdict (forces `terminated: true` on every line it yields) rather than
-  // silently starting to report a torn tail as `truncated`, which would be a result change this
-  // audit is not chartered to make.
-  it("matches the pre-migration reconstruction's masking of a torn active-segment tail", () => {
+  // The retired bundle reconstruction rejoined every kept line with its own trailing "\n", which
+  // masked a crashed writer's torn tail as a complete-but-malformed (corrupt) record. The incident
+  // window now keeps the bounded reader's own termination, so the torn tail is truncated evidence,
+  // exactly as the query engine and a whole-text analysis of the same bytes classify it (#3534).
+  it("reports a torn active-segment tail as truncated evidence, never as a corrupt record", () => {
     const process = fixtureProcess(7202, "deadbee2");
     const t0 = Date.UTC(2026, 8, 18, 9, 30, 0);
     const sealedPath = writeFixtureSegment(stateDir, segmentIdentity(process, t0, 1), [
@@ -354,20 +352,10 @@ describe("keiko support incident", () => {
 
     const analysis = resolveSupportIncidentEvidence(segments, stateDir);
 
-    // The old reconstruction's own join: every kept line (including a torn tail) rejoined with its
-    // own trailing "\n" before analysis, exactly as `readSupportIncidentWindow` used to build its
-    // `windowText`.
-    const rejoinedLines = [
-      ...readFileSync(sealedPath, "utf8").split("\n").filter(Boolean),
-      ...readFileSync(activePath, "utf8").split("\n").filter(Boolean),
-    ];
-    const rejoinedText = rejoinedLines.map((line) => `${line}\n`).join("");
-    expect(analysis).toEqual(analyzeLogText(rejoinedText));
-    // The torn fragment is invalid JSON either way, but WHICH rejected evidence class it gets is
-    // exactly the quirk being preserved: `invalidJsonEvidence` reads a forced-terminated line as
-    // `corrupt` (a complete-but-malformed record), never as `truncated` (an incomplete one) — the
-    // one distinction a real bounded reader would have reported correctly.
-    expect(analysis.evidence.corruptLineCount).toBe(1);
-    expect(analysis.evidence.truncatedLineCount).toBe(0);
+    // The streaming window analyzes exactly what a whole-text analysis of the same bytes reports.
+    const wholeText = readFileSync(sealedPath, "utf8") + readFileSync(activePath, "utf8");
+    expect(analysis).toEqual(analyzeLogText(wholeText));
+    expect(analysis.evidence.truncatedLineCount).toBe(1);
+    expect(analysis.evidence.corruptLineCount).toBe(0);
   });
 });

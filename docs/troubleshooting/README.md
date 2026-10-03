@@ -73,20 +73,26 @@ levels.
 
 ## Log locations and debug mode
 
-| Path                   | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.keiko/logs/`         | Redacted server activity log (JSON Lines), stored as immutable segments: one active segment per running process, read-only sealed segments, and any legacy `server.log` or `server-YYYY-MM-DD.log` files. Keiko bounds the directory by bytes and age (256 MiB and 14 days by default) and records seals, crash recovery, retention, pins and storage pressure as typed body-free events. Never edit, truncate or delete a file in it by hand. See [Observability: the server activity log](../observability/README.md) for details, `KEIKO_LOG_LEVEL`, and `keiko support export`/`keiko support analyze`. |
-| `.keiko/ui.log`        | Retired. Earlier releases wrote raw UI process output here. Keiko no longer creates it, never reads it into a report, and `keiko uninstall --state` removes an old copy. UI diagnostics are in the Activity Log (`.keiko/logs/`).                                                                                                                                                                                                                                                                                                                                                                           |
-| `.keiko/ui.pid`        | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `.keiko/ui.shutdown`   | Pid-bound graceful-stop request written by `keiko stop` / `restart` / `uninstall --force`. The UI drains when it sees its own pid here; Windows cannot deliver cross-process `SIGTERM`. Removed once the process is confirmed gone.                                                                                                                                                                                                                                                                                                                                                                         |
-| `.keiko/evidence/`     | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `~/.keiko/keiko-ui.db` | Local UI state database. User-scoped, not project-scoped.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Path                      | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.keiko/logs/`            | Redacted server activity log (JSON Lines), stored as immutable segments: one active segment per running process, read-only sealed segments, and any legacy `server.log` or `server-YYYY-MM-DD.log` files. Keiko bounds the directory by bytes and age (256 MiB and 14 days by default) and records seals, crash recovery, retention, pins and storage pressure as typed body-free events. Never edit, truncate or delete a file in it by hand. See [Observability: the server activity log](../observability/README.md) for details, `KEIKO_LOG_LEVEL`, and `keiko support export`/`keiko support analyze`. |
+| `.keiko/ui.log`           | Retired. Earlier releases wrote raw UI process output here. Keiko no longer creates it, never reads it into a report, and `keiko uninstall --state` removes an old copy. UI diagnostics are in the Activity Log (`.keiko/logs/`).                                                                                                                                                                                                                                                                                                                                                                           |
+| `.keiko/ui.pid`           | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `.keiko/ui.shutdown`      | Pid-bound graceful-stop request written by `keiko stop` / `restart` / `uninstall --force`. The UI drains when it sees its own pid here; Windows cannot deliver cross-process `SIGTERM`. Removed once the process is confirmed gone.                                                                                                                                                                                                                                                                                                                                                                         |
+| `.keiko/evidence/`        | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `.keiko/support-reports/` | Private canonical support reports written by `keiko support export` (owner-only, at most 10 MiB each). Keiko never sends them; share one manually only through an approved channel.                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `~/.keiko/keiko-ui.db`    | Local UI state database. User-scoped, not project-scoped.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
-`keiko support export` exclusively creates its report and integrity sidecar; it never replaces an
-existing destination. After an interrupted export, rerun with the same explicit `--out` path. For
-the default output, rerun from the same working directory. Keiko resolves the one bounded recovery
-slot before reading a new clock or activity-log snapshot. A conflicting target, intent, stage,
-symlink, hard link, or non-regular file fails closed and is not removed or replaced.
+`keiko support export` exclusively creates one private report in `<stateDir>/support-reports/` (or
+the directory `--out` names) and never replaces an existing destination; there is no sidecar.
+Without `--incident`, `--correlation-id` or `--defect-fingerprint` it records a user-reported
+incident covering the last 15 minutes; for older evidence select an incident from
+`keiko support incident list` or a correlation id. An interrupted export can leave a private
+`.keiko-publish-<24 hex>-<n>.stage` copy beside the report, which the next export names. Rerunning
+the export of the same incident into the same directory completes a stage that holds exactly the
+same bytes and fails closed on one that differs; delete a stage once its failure evidence is
+preserved. A conflicting target, stage, symlink, hard link, or non-regular file fails closed and
+is not removed or replaced.
 
 If Keiko aborts startup with an Activity Log safe-artifact failure, use the closed failure kind from
 stderr to recover; the diagnostic intentionally does not echo the configured path:
@@ -105,8 +111,8 @@ stderr to recover; the diagnostic intentionally does not echo the configured pat
 4. Retry with a clean, operator-controlled state directory. A repeated `target-mutated` or unsafe
    target result indicates continuing mutation or an untrusted path; stop retrying and investigate
    that boundary instead of weakening the check.
-5. After startup succeeds, run `keiko support analyze` on the newest segment in `<stateDir>/logs/`
-   and confirm the new evidence is current. Treat an incomplete/unavailable writer or an unexplained sequence gap as
+5. After startup succeeds, run `keiko status` (its `Diagnostic evidence:` line) and
+   `keiko support query --op activity-log.readiness --json`, and confirm the new evidence is current. Treat an incomplete/unavailable writer or an unexplained sequence gap as
    evidence loss, not as a recovered complete log.
 
 To capture verbose output for a single command run, invoke the CLI in the
@@ -122,8 +128,8 @@ foreground process with `Ctrl+C` when finished and remove the log file
 once it has been reviewed and redacted.
 
 When a CLI verification or workflow command produces unexpected output,
-attach the redacted command output and, if you choose to share it, a bundle
-from `keiko support export`, which holds the redacted Activity Log. Do not attach `~/.keiko/keiko-ui.db`, runtime config
+attach the redacted command output and, if you choose to share it, the report
+from `keiko support export`, which holds only body-free registered Activity Log evidence. Do not attach `~/.keiko/keiko-ui.db`, runtime config
 files, or files under `.keiko/evidence/` without first reviewing them for
 project content.
 
@@ -165,9 +171,9 @@ caches where the default timeout is too tight (`health-timeout`).
 # Confirm Keiko is not already running on the same port.
 keiko status
 
-# Export the redacted Activity Log and look for the crash (process.fatal).
-keiko support export --out keiko-support.jsonl
-keiko support analyze keiko-support.jsonl --clusters
+# Export a report of the last 15 minutes and look for the crash (process.fatal).
+keiko support export   # prints the path of the private report it writes
+keiko support analyze <report.json> --clusters
 
 # Run the UI in the foreground to surface startup errors interactively.
 npx keiko ui --port 1983
@@ -828,8 +834,9 @@ cooperating deployments (a systemd unit, a container env, a shell profile) is vi
 
 **Diagnostic Steps**
 
-1. Run `keiko support analyze` on the newest segment in `<stateDir>/logs/`, or on a
-   `keiko support export` bundle. Read the latest `activity-log.pressure`,
+1. Run `keiko support query --op activity-log.pressure --json` against the local Activity Log
+   (likewise for the two ops below), or `keiko support analyze` on a `keiko support export`
+   report. Read the latest `activity-log.pressure`,
    `activity-log.retention.pruned` and `activity-log.segment.recovered` lines: the state,
    `droppedEventCount`, and the used, budget, pin-quota and free bytes. Do not infer a path from the
    body-free record.

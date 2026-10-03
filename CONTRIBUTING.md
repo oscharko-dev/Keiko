@@ -31,6 +31,10 @@ event store, analyzer, or incident subsystem. Register every operation through t
 APIs in `keiko-contracts` and emit only the registration-derived event shape. The checked-in
 `docs/observability/op-catalog.generated.json` is generated from those canonical declarations and
 emitters. Its typed registry is authoritative; the legacy literal scan is migration input only.
+Adapters rebind events with `withActivityLogCorrelation` or `withActivityLogParentCorrelation`,
+preserving producer-owned ids and the non-enumerable registration/rejection markers. Test the
+forwarded event through the real registered formatter: a buffer alone cannot detect a marker
+lost by an object spread.
 
 Each registration owns exact fields, bounds, data classes and vocabularies, causal and lifecycle
 semantics, analyzer projection, failure classes, proof ids, and release impact. Unknown or dynamic
@@ -236,3 +240,15 @@ approval. Explicit narrower deployment ceilings and every mode-independent denia
 Do not propagate Coding's availability default to Memory: its absent-configuration ceiling stays
 `governed-assist` for capture, policy projection and maintenance. Regression coverage must exercise
 both production composition and these consumers when changing this wiring.
+
+## Support reports
+
+For local defect evidence, use `keiko support export --incident <id>` or a correlation selector.
+The canonical owner-private report has embedded integrity, a 10 MiB hard ceiling (`--max-bytes`
+may only lower it) and explicit sufficiency. `--out` names a private directory, never a file; the
+filename always uses the fixed product/schema/incident/date class. Inclusion flags and raw-log or
+legacy bundle input are refused. Validate a manually received file offline with
+`keiko support analyze FILE --json` before agents use its machine view, and follow
+[the support workspace guide](docs/observability/support-workspace.md). Nothing is sent by these
+commands. `npm run set-version` regenerates the historical registry snapshots the analyzer selects
+from, so a release needs no extra step.

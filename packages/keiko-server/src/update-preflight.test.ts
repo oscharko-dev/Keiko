@@ -25,6 +25,7 @@ import {
 } from "./update-preflight.js";
 import type { RouteContext } from "./routes.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { isStableVersionString } from "./update-preflight-registry.js";
 
 const APPROVED_RELEASE_REFERENCE = "github-pr-review:oscharko-dev/Keiko#1717#484740";
 const ARCHIVE_SHA = "a".repeat(64);
@@ -1930,6 +1931,16 @@ describe("update preflight service", () => {
 
   it("rejects malformed semver comparisons instead of lexically sorting them", () => {
     expect(() => compareSemver("1.10.0", "not-a-version")).toThrow(TypeError);
+  });
+
+  it("treats only well-formed stable versions as stable tags and orders prereleases by SemVer", () => {
+    // A malformed release tag once counted as stable and then threw inside the comparison.
+    expect(isStableVersionString("garbage")).toBe(false);
+    expect(isStableVersionString(undefined)).toBe(false);
+    expect(isStableVersionString("1.2.3-rc.1")).toBe(false);
+    expect(isStableVersionString("1.2.3")).toBe(true);
+    expect(compareSemver("1.2.3-rc.10", "1.2.3-rc.9")).toBeGreaterThan(0);
+    expect(compareSemver("1.2.3-rc.1", "1.2.3")).toBeLessThan(0);
   });
 
   it("surfaces malformed registry metadata as a degraded state", async () => {
