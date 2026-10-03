@@ -193,16 +193,28 @@ describe("assembleContextPack", () => {
     expect(validateConnectedContextPack(result.pack).ok).toBe(true);
   });
 
-  it("emits a no-evidence marker when an excerpt is missing for a candidate path", async () => {
+  it("reports a missing excerpt as partial scope when another file supplies evidence", async () => {
     const input: AssembleInput = {
       ...baseInput(),
       excerpts: new Map([["a.ts", "export const a = 1;"]]),
     };
     const result = await assembleContextPack(input, { nowMs: fixedNow });
-    const missing = result.pack.uncertainty.find((u) => u.kind === "no-evidence");
+    const missing = result.pack.uncertainty.find((u) => u.kind === "scope-incomplete");
     expect(missing).toBeDefined();
     expect(missing?.claim).toContain("b.ts");
     expect(result.pack.files.map((f) => f.scopePath)).toEqual(["a.ts"]);
+    expect(result.pack.uncertainty.some((u) => u.kind === "no-evidence")).toBe(false);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+
+  it("reports no evidence when none of the candidate excerpts can be read", async () => {
+    const result = await assembleContextPack(
+      { ...baseInput(), excerpts: new Map() },
+      { nowMs: fixedNow },
+    );
+    expect(result.pack.files).toHaveLength(0);
+    expect(result.pack.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
   });
 
   it("assigns editable role to listed paths and read-only to others", async () => {

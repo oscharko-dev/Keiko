@@ -142,6 +142,12 @@ Source excerpts are fetched afresh per question and are trimmed, rather than sum
 remaining input. The previous grounded request's source share is an estimate for the next turn;
 the allocator's assembled estimate and provider/gateway request accounting remain distinct.
 
+The answer disclosure is labeled **Source context**. Its estimate counts source-excerpt content;
+prompt formatting, system instructions and conversation messages belong to the full-request
+accounting shown by the conversation meter. Populated source groups have localized names; the
+repository group is labeled **Repository excerpts**, whose item count can differ from files read
+and citation references. The panel never presents a source-only estimate as the total prompt.
+
 Checkpoint validation and manual compaction use the same bounded conversation profile as grounded
 sending. A valid 8,000-token lane checkpoint is not invalidated by comparison with a larger full
 model window. The meter refreshes when connected folder, knowledge or Git-change scopes change,

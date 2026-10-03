@@ -319,7 +319,7 @@ interface ProcessContext {
   readonly nowMs: number;
 }
 
-type ProcessOutcome = "continue" | "budget-clipped";
+type ProcessOutcome = "continue" | "budget-clipped" | "excerpt-unavailable";
 
 function recordBudgetClip(plan: BuildPlan, candidate: CandidateFile, nowMs: number): void {
   plan.uncertainty.push({
@@ -337,13 +337,14 @@ function recordBudgetClip(plan: BuildPlan, candidate: CandidateFile, nowMs: numb
   });
 }
 
-function recordNoEvidence(plan: BuildPlan, claim: string, nowMs: number): void {
+function recordUnavailableExcerpt(plan: BuildPlan, claim: string, nowMs: number): ProcessOutcome {
   plan.uncertainty.push({
-    kind: "no-evidence",
+    kind: "scope-incomplete",
     claim,
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   });
+  return "excerpt-unavailable";
 }
 
 function recordPreMarkedOmission(
@@ -376,8 +377,11 @@ function processCandidate(
   }
   const excerptSource = ctx.excerpts.get(candidate.scopePath);
   if (excerptSource === undefined) {
-    recordNoEvidence(plan, `excerpt unavailable for ${candidate.scopePath}`, ctx.nowMs);
-    return "continue";
+    return recordUnavailableExcerpt(
+      plan,
+      `excerpt unavailable for ${candidate.scopePath}`,
+      ctx.nowMs,
+    );
   }
   const atomsForPath = ctx.atomsByPath.get(candidate.scopePath) ?? [];
   if (atomsForPath.length === 0) {
@@ -390,12 +394,11 @@ function processCandidate(
     ctx,
   );
   if (excerpts.length === 0) {
-    recordNoEvidence(
+    return recordUnavailableExcerpt(
       plan,
       `excerpt unavailable for cited ranges in ${candidate.scopePath}`,
       ctx.nowMs,
     );
-    return "continue";
   }
   const checkpoint: BudgetCheckpoint = {
     atoms: atomsForPath,
@@ -423,9 +426,19 @@ function buildPlan(
   initialUncertainty: readonly UncertaintyMarker[] | undefined,
 ): BuildPlan {
   const plan = emptyBuildPlan(initialUsage, initialUncertainty);
+  let unavailableExcerpts = 0;
   for (const candidate of ordered) {
     const outcome = processCandidate(plan, candidate, ctx);
     if (outcome === "budget-clipped") break;
+    if (outcome === "excerpt-unavailable") unavailableExcerpts += 1;
+  }
+  if (plan.files.length === 0 && unavailableExcerpts > 0) {
+    plan.uncertainty.push({
+      kind: "no-evidence",
+      claim: "no candidate excerpt supplied usable evidence",
+      impactedAtomIds: [],
+      emittedAtMs: ctx.nowMs,
+    });
   }
   return plan;
 }

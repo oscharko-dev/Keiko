@@ -45,6 +45,17 @@ function summary(
 }
 
 describe("ContextStatusPanel", () => {
+  it("identifies source-context estimates and names the repository excerpt count", () => {
+    const counts = laneCounts(0);
+    counts["repo-evidence"] = 5;
+    const { container } = render(
+      <ContextStatusPanel contextSummary={summary({ laneCounts: counts })} />,
+    );
+    expect(container.textContent).toContain("Source context");
+    expect(container.textContent).toContain("Repository excerpts");
+    expect(container.textContent).toContain("Source groups: 1");
+  });
+
   it("renders null when contextSummary is undefined (legacy / non-profiled turn)", () => {
     const { container } = render(<ContextStatusPanel contextSummary={undefined} />);
     expect(container.querySelector(".ctx-status")).toBeNull();
@@ -81,10 +92,10 @@ describe("ContextStatusPanel", () => {
     expect(summaryEl).toHaveClass("grounded-evidence-summary");
     expect(summaryEl).toHaveAttribute("aria-label", "Context assembly details");
     expect(summaryEl).toHaveAttribute("title", expect.stringContaining(DEFAULT_TOKEN_ESTIMATOR_ID));
-    expect(title).toHaveTextContent("Context");
-    expect(meta).toHaveTextContent("34.0k est. assembled tokens");
+    expect(title).toHaveTextContent("Source context");
+    expect(meta).toHaveTextContent("34.0k est. source tokens");
     expect(meta).toHaveTextContent("Moderate pressure");
-    expect(meta).toHaveTextContent("2 lanes");
+    expect(meta).toHaveTextContent("Source groups: 2");
     expect(meta).toHaveTextContent("Compaction active");
   });
 
@@ -97,7 +108,7 @@ describe("ContextStatusPanel", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("Estimator");
     expect(text).toContain(DEFAULT_TOKEN_ESTIMATOR_ID);
-    expect(text).toContain("Assembled estimate");
+    expect(text).toContain("Source-excerpt estimate");
     expect(text).toContain("34.0k tok");
     expect(text).toContain("Budget pressure");
     expect(text).toContain("Moderate");
@@ -122,10 +133,10 @@ describe("ContextStatusPanel", () => {
     const dts = Array.from(container.querySelectorAll(".grounded-context-pack-dt")).map(
       (dt) => dt.textContent,
     );
-    expect(dts).toContain("repo evidence");
-    expect(dts).toContain("system contract");
+    expect(dts).toContain("Repository excerpts");
+    expect(dts).toContain("System instructions");
     // Zero-count lanes are omitted.
-    expect(dts).not.toContain("working memory");
+    expect(dts).not.toContain("Working memory");
     const text = container.textContent ?? "";
     expect(text).toContain("7");
     expect(text).toContain("1");

@@ -10,14 +10,28 @@
 // by default, keyboard-operable, no useState, complexity 1 per render function.
 
 import type { ReactNode } from "react";
+import { CONTEXT_LANE_IDS } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { formatTokens } from "@/lib/format";
 import { useLocale, useTranslate, type I18nTranslate, type Locale } from "@/lib/i18n";
-import { MetricRow, humanizeToken } from "./GroundedAnswer";
+import type { MessageKey } from "@/lib/i18n-messages.en";
+import { MetricRow } from "./GroundedAnswer";
 import {
   DEFAULT_TOKEN_ESTIMATOR_ID,
   type ContextBudgetPressure,
+  type ContextLaneId,
   type GroundedAnswerContextSummary,
 } from "@/lib/types";
+
+const LANE_LABELS: Readonly<Record<ContextLaneId, MessageKey>> = {
+  "system-contract": "context.lane.system",
+  "user-task": "context.lane.task",
+  "active-plan": "context.lane.plan",
+  "repo-evidence": "context.lane.repository",
+  "tool-observations": "context.lane.tools",
+  "working-memory": "context.lane.memory",
+  "history-summary": "context.lane.history",
+  "verification-evidence": "context.lane.verification",
+};
 
 function pressureLabel(pressure: ContextBudgetPressure, t: I18nTranslate): string {
   if (pressure === "low") return t("context.pressure.low");
@@ -46,9 +60,9 @@ function contextSummaryMeta(
   ].join(" · ");
 }
 
-// Per-lane rows: only lanes that actually carried items (count > 0), so the panel does not list
-// eight zero rows for a small turn. ContextLaneId is a fixed literal union (humanized for display),
-// never a path; the value is an integer count. Object.entries order follows the laneCounts map.
+// Per-lane rows show populated item counts with localized labels. The repository lane counts
+// excerpts, which can differ from both files read and citation references. Lane IDs are fixed
+// contract vocabulary, never paths; the wire contains counts only.
 function LaneRows({
   laneCounts,
   locale,
@@ -56,13 +70,16 @@ function LaneRows({
   readonly laneCounts: GroundedAnswerContextSummary["laneCounts"];
   readonly locale: Locale;
 }): ReactNode {
-  const populated = Object.entries(laneCounts).filter(([, count]) => count > 0);
+  const t = useTranslate();
+  const populated = CONTEXT_LANE_IDS.map((lane) => [lane, laneCounts[lane]] as const).filter(
+    ([, count]) => count > 0,
+  );
   return (
     <>
       {populated.map(([lane, count]) => (
         <MetricRow
           key={`lane-${lane}`}
-          label={humanizeToken(lane)}
+          label={t(LANE_LABELS[lane])}
           value={count.toLocaleString(locale)}
         />
       ))}
