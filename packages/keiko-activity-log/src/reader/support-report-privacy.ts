@@ -1,4 +1,5 @@
 import { constants } from "node:os";
+import { inflateSync } from "node:zlib";
 import {
   ACTIVITY_LOG_ERROR_KINDS,
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
@@ -23,12 +24,36 @@ import {
 } from "../log-redaction.js";
 import {
   SUPPORT_CODE_MODULES,
+  SUPPORT_CODE_MODULE_HISTORY,
   SUPPORT_CODE_ERROR_CLASSES,
   SUPPORT_CODE_TOKENS,
 } from "./support-code-inventory.generated.js";
-import type { SupportReaderRegistry } from "./support-registry.js";
+import { CURRENT_SUPPORT_REGISTRY, type SupportReaderRegistry } from "./support-registry.js";
 
 const MODULES = new Set(SUPPORT_CODE_MODULES);
+const archivedModules = new Map<string, ReadonlySet<string>>();
+
+function codeModules(incident: SupportIncidentPrivateProjection): ReadonlySet<string> {
+  if (incident.build.catalogDigest === CURRENT_SUPPORT_REGISTRY.catalogDigest) return MODULES;
+  const archived = SUPPORT_CODE_MODULE_HISTORY.find(
+    (entry) =>
+      entry.release === incident.productVersion &&
+      entry.catalogDigest === incident.build.catalogDigest,
+  );
+  if (archived === undefined) return new Set();
+  const cached = archivedModules.get(archived.sourceCommit);
+  if (cached !== undefined) return cached;
+  const decoded: unknown = JSON.parse(
+    inflateSync(Buffer.from(archived.modules, "base64"), {
+      maxOutputLength: 1024 * 1024,
+    }).toString("utf8"),
+  );
+  if (!Array.isArray(decoded) || !decoded.every((value: unknown) => typeof value === "string"))
+    throw new TypeError("Invalid shipped code inventory");
+  const modules = new Set<string>(decoded);
+  archivedModules.set(archived.sourceCommit, modules);
+  return modules;
+}
 const REDACTION_MARKERS = new Set([
   REDACTED_SHAPE,
   REDACTED_KEY,
@@ -79,6 +104,7 @@ export interface SupportReportPrivacyProjection {
 interface PrivacyContext {
   readonly incident: SupportIncidentPrivateProjection;
   readonly registry: SupportReaderRegistry;
+  readonly modules: ReadonlySet<string>;
   readonly reference: (value: string) => string;
   readonly loseDetail: () => void;
 }
@@ -95,11 +121,11 @@ function referenceAllocator(): (value: string) => string {
   };
 }
 
-function isCodeFrame(value: unknown): value is string {
+function isCodeFrame(value: unknown, modules: ReadonlySet<string>): value is string {
   if (isPersistedClientDiagnosticFrame(value)) return true;
   if (typeof value !== "string") return false;
   const module = normalizeKeikoFrame(value);
-  return module !== undefined && MODULES.has(module);
+  return module !== undefined && modules.has(module);
 }
 
 function technicalOpaque(name: string, value: string, context: PrivacyContext): boolean {
@@ -200,7 +226,9 @@ function projectEvent(
 ): SupportReportEvent | undefined {
   const fields = context.registry.operations.get(String(event.record.op))?.fields;
   const frames = event.record.frames;
-  const safeFrames = Array.isArray(frames) ? frames.filter(isCodeFrame) : undefined;
+  const safeFrames = Array.isArray(frames)
+    ? frames.filter((frame: unknown) => isCodeFrame(frame, context.modules))
+    : undefined;
   if (Array.isArray(frames) && safeFrames !== undefined && safeFrames.length < frames.length) {
     context.loseDetail();
     // The immutable fingerprint must not be rewritten to make a reduced failure look original.
@@ -225,6 +253,7 @@ export function supportReportPrivacyProjection(
   const context = {
     incident,
     registry,
+    modules: codeModules(incident),
     reference,
     loseDetail: (): void => {
       detailLost = true;

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
@@ -66,6 +66,29 @@ describe("desktop canonical support report", () => {
     expect(failures).toHaveLength(1);
     expect(failures[0]?.errorKind).toBe("timeout");
     expect(listSupportIncidents(stateDir)).toHaveLength(1);
+  });
+
+  it("derives sufficiency from the selected failure even when reported long after its segment sealed", () => {
+    const failureAt = Date.now() - 75 * 60 * 1000;
+    const process = fixtureProcess(4242, "aabbccdd");
+    const path = writeFixtureSegment(stateDir, segmentIdentity(process, failureAt, 1), [
+      fixtureLine(process, failureAt, {
+        op: "client.diagnostic",
+        correlationId: "aged-desktop-failure",
+        errorKind: "timeout",
+        level: "error",
+      }),
+    ]);
+    utimesSync(path, failureAt / 1000, failureAt / 1000);
+    const response = createDesktopSupportReport(stateDir, "aged-desktop-failure");
+    const analyzed = analyzeSupportReport(response.reportJson);
+    expect(analyzed.selection.status).toBe("complete");
+    expect(analyzed.selection.reasons).not.toContain("no-registered-failure");
+    expect(
+      analyzed.analysis.timelines
+        .flatMap((timeline) => timeline.lines)
+        .some((line) => line.op === "client.diagnostic" && line.errorKind === "timeout"),
+    ).toBe(true);
   });
 
   it("rejects an unknown correlation without pinning a fabricated incident", () => {

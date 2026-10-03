@@ -3,6 +3,11 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { format } from "prettier";
 import ts from "typescript";
+import { Buffer } from "node:buffer";
+import { execFileSync } from "node:child_process";
+import { deflateSync } from "node:zlib";
+import { supportedReleases } from "./generate-support-registry-history.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 import { normalizeKeikoFrame } from "../packages/keiko-contracts/dist/observability.js";
 
@@ -232,6 +237,43 @@ function errorClasses(classes) {
   return [...errors].sort(compareCodeUnits);
 }
 
+function archivedCodeModules(root) {
+  if (resolve(root) !== repoRoot) return [];
+  const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+  const execute = (args) =>
+    execFileSync(resolveHostExecutable("git"), args, {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  return supportedReleases(version).map(({ release, sourceCommit }) => {
+    const paths = execute(["ls-tree", "-r", "--name-only", sourceCommit]).trimEnd().split("\n");
+    const modules = paths
+      .filter(
+        (path) =>
+          /^(?:packages\/keiko-[^/]+\/src\/|src\/cli\/).*\.tsx?$/u.test(path) &&
+          !excluded.test(path),
+      )
+      .flatMap((path) => {
+        const frame = path.replace("/src/", "/dist/").replace(/\.tsx?$/u, ".js");
+        const normalized = normalizeKeikoFrame(`${frame}:1:1`);
+        return normalized === undefined ? [] : [normalized];
+      });
+    const registry = JSON.parse(
+      execute(["show", `${sourceCommit}:docs/observability/op-catalog.generated.json`]),
+    ).typedRegistry;
+    const json = JSON.stringify([...new Set(modules)].sort(compareCodeUnits));
+    if (Buffer.byteLength(json) > 1024 * 1024)
+      throw new RangeError("Archived code inventory exceeds its ceiling");
+    return {
+      release,
+      sourceCommit,
+      catalogDigest: registry.catalogDigest,
+      modules: deflateSync(json, { level: 9 }).toString("base64"),
+    };
+  });
+}
+
 export async function generateSupportCodeInventory(root = repoRoot) {
   const modules = new Set();
   const classes = new Map();
@@ -256,7 +298,8 @@ export async function generateSupportCodeInventory(root = repoRoot) {
       "// Only code-owned symbols are admissible in exported diagnostic details.\n" +
       declaration("SUPPORT_CODE_MODULES", [...modules].sort(compareCodeUnits)) +
       declaration("SUPPORT_CODE_ERROR_CLASSES", errorClasses(classes)) +
-      declaration("SUPPORT_CODE_TOKENS", [...tokens].sort(compareCodeUnits)),
+      declaration("SUPPORT_CODE_TOKENS", [...tokens].sort(compareCodeUnits)) +
+      `export const SUPPORT_CODE_MODULE_HISTORY = ${JSON.stringify(archivedCodeModules(root))} as const;\n`,
     { parser: "typescript", printWidth: 100 },
   );
 }

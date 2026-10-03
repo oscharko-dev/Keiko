@@ -49,6 +49,10 @@ import {
 } from "./support-report.js";
 import { parseCanonicalSupportJson } from "./support-report-json.js";
 
+import { supportReportPrivacyProjection } from "./support-report-privacy.js";
+import { findSupportRegistry } from "./support-registry.js";
+import { SUPPORT_RELEASE_REGISTRY_SNAPSHOTS } from "./support-registry-history.generated.js";
+
 const T0 = Date.UTC(2026, 8, 30, 12);
 const CORRELATION = "support-report-fixture-0001";
 let stateDir: string;
@@ -564,6 +568,41 @@ describe("historical report reconstruction", () => {
   afterEach(() => {
     rmSync(stateDir, { recursive: true, force: true });
   });
+  it("retains code frames owned by the producing release after modules have moved", () => {
+    const snapshot = SUPPORT_RELEASE_REGISTRY_SNAPSHOTS.find((entry) => entry.release === "1.1.9");
+    if (snapshot === undefined) throw new TypeError("missing shipped release registry");
+    const registry = findSupportRegistry(snapshot);
+    if (registry === undefined) throw new TypeError("missing archived registry");
+    const { incident } = failureFixture();
+    const historical = {
+      ...incident,
+      productVersion: snapshot.release,
+      build: { ...incident.build, ...snapshot, productVersion: snapshot.release },
+    };
+    const privacy = supportReportPrivacyProjection(historical, registry);
+    const frame = "packages/keiko-server/dist/observability/activity-log-store.js:10:2";
+    const projected = privacy.event({
+      sourceSegmentId: "fixture",
+      record: {
+        op: historical.op,
+        correlationId: historical.correlation.rootCorrelationId,
+        frames: [frame],
+      },
+    });
+    expect(projected?.record.frames).toEqual([frame]);
+    expect(privacy.reasons()).toEqual([]);
+    expect(
+      privacy.event({
+        sourceSegmentId: "fixture",
+        record: {
+          op: historical.op,
+          correlationId: historical.correlation.rootCorrelationId,
+          frames: ["packages/keiko-server/dist/customer-private-file.js:10:2"],
+        },
+      }),
+    ).toBeUndefined();
+  });
+
   it("analyzes frozen 1.1.9 production evidence and seed with its matching registry", () => {
     const packed = JSON.parse(
       readFileSync(

@@ -273,6 +273,8 @@ body, checking destination paths or invoking the credential-capable Git runner. 
 paired session to issue-bound workspace provisioning (#3384/#3385); preview and provisioning
 independently validate that session before resolving issue content. Cookie issuance and revocation
 share one explicit path list so sign-out clears every browser projection.
+The exact diagnostics report path uses the same paired authority to export a local, body-free
+support artifact. Other diagnostics routes receive no bearer through this path.
 
 No live bearer is issued at the broader `/api` ancestor or to unrelated BFF routes. Issuance and
 sign-out also expire the retired `/api` and `/api/editor/local-history` projections. `Path` remains

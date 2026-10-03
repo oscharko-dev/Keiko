@@ -428,7 +428,8 @@ describe("support report CLI and private publication", () => {
         seedCorrelationDigest: digest(childRef),
       }),
     ]);
-    expect(JSON.stringify(completions)).not.toContain(child);
+    expect(JSON.stringify(completions)).not.toContain(parentRef);
+    expect(JSON.stringify(completions)).not.toContain(childRef);
   });
 
   // Review #3679: a real native import rejection still leaves a Keiko failure site on the line.

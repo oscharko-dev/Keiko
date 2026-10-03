@@ -14,12 +14,14 @@ import {
   recordUserReportedIncident,
   supportIncidentSegmentFiles,
   type SupportIncidentRejection,
+  type SupportIncidentSegmentFile,
 } from "../support-incident.js";
 import { listSupportIncidentEntries } from "../support-incident-store.js";
 import { DEFAULT_SUPPORT_QUERY_LIMITS, type SupportQuerySelection } from "./support-query.js";
 import { executeLocalSupportQuery } from "./support-local-query.js";
 import {
   resolveSupportIncident,
+  resolveSupportIncidentAnalysis,
   unresolvedSupportIncident,
   SupportIncidentWindowError,
 } from "./support-incident-resolution.js";
@@ -28,6 +30,9 @@ import {
   serializeSupportReport,
   SupportReportError,
 } from "./support-report.js";
+
+import { analyzeLogLines } from "./support-analyze.js";
+import type { SupportQueryResult } from "./support-query.js";
 
 const REPORT_QUERY_LIMITS = {
   ...DEFAULT_SUPPORT_QUERY_LIMITS,
@@ -59,11 +64,38 @@ function createReportIncident(stateDir: string, correlationId: string): SupportI
   return created.record;
 }
 
+function selectedSegments(query: SupportQueryResult): readonly SupportIncidentSegmentFile[] {
+  const segments = new Map<string, SupportIncidentSegmentFile>();
+  for (const { file } of query.events) {
+    if (file.segmentId === undefined || (file.kind !== "active" && file.kind !== "sealed"))
+      continue;
+    segments.set(file.segmentId, {
+      segmentId: file.segmentId,
+      state: file.kind,
+      sizeBytes: file.sizeBytes,
+      path: file.path,
+    });
+  }
+  return [...segments.values()];
+}
+
 function incidentDescriptor(
   stateDir: string,
   record: SupportIncidentRecord,
+  selected?: SupportQueryResult,
 ): SupportReport["incident"] {
-  const segments = supportIncidentSegmentFiles(stateDir, record);
+  const segments =
+    selected === undefined
+      ? supportIncidentSegmentFiles(stateDir, record)
+      : selectedSegments(selected);
+  if (selected !== undefined) {
+    const analysis = analyzeLogLines(
+      selected.events.map((event) => ({ text: event.text, terminated: true })),
+    );
+    return supportIncidentPrivateProjection(
+      resolveSupportIncidentAnalysis(record, segments, analysis),
+    );
+  }
   try {
     return supportIncidentPrivateProjection(resolveSupportIncident(record, segments, stateDir));
   } catch (error) {
@@ -168,7 +200,10 @@ export function createPreparedDesktopSupportReport(
       trigger: "export",
       persist: false,
     });
-  const report = buildSupportReport(incidentDescriptor(stateDir, record), evidence.result);
+  const report = buildSupportReport(
+    incidentDescriptor(stateDir, record, correlationId === undefined ? undefined : evidence.result),
+    evidence.result,
+  );
   return {
     fileName: supportReportFileName(
       report.schemaVersion,

@@ -626,6 +626,13 @@ declared Error classes and technical tokens must belong to the generated product
 or a closed runtime vocabulary; merely looking like a technical identifier does not authorize a
 string. Unknown diagnostic details are omitted or marked, with insufficient evidence reported when
 immutable failure provenance cannot be preserved. Historical schema-1 reports remain readable.
+Archived releases use their producing release's pinned code-module inventory, paired with the
+archived registry identity. Module moves in a later release therefore do not discard an otherwise
+valid historical failure frame. These inventories are generated from trusted release commits,
+never from customer reports, and decoded within a fixed byte limit.
+For an explicitly selected desktop failure, sufficiency and segment references derive from the
+selected causal evidence rather than the later click-time incident window. Missing or truncated
+evidence remains insufficient under the ordinary query and report validators.
 
 The desktop exposes the same canonical report as a local JSON download at actionable failures.
 The healthy workspace footer has no report action. An uncaught browser error or rejected promise

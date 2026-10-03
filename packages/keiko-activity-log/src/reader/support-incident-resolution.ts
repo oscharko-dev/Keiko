@@ -139,7 +139,19 @@ export function resolveSupportIncident(
   segments: readonly SupportIncidentSegmentFile[],
   stateDir: string,
 ): SupportIncident {
-  const analysis = resolveSupportIncidentEvidence(segments, stateDir);
+  return resolveSupportIncidentAnalysis(
+    record,
+    segments,
+    resolveSupportIncidentEvidence(segments, stateDir),
+  );
+}
+
+/** A selected causal closure supplies its own evidence, independent of the report click time. */
+export function resolveSupportIncidentAnalysis(
+  record: SupportIncidentRecord,
+  segments: readonly SupportIncidentSegmentFile[],
+  analysis: AnalyzeAllResult,
+): SupportIncident {
   const classification = analysis.evidence.classification;
   return {
     ...record,

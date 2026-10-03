@@ -14,12 +14,11 @@ argument parsing, rendering, and publication remain their composition owners
 
 ## Create a report in the browser
 
-Choose **Create error report** in the workspace footer, or beside a failed editor load,
-window crash, file-tree load, or degraded local-history save. Keiko downloads one canonical
-`keiko-support-v1-*.json` file. Attach that file to the support channel you use; Keiko does not
-automatically upload it or require a CLI command. A contextual button selects the originating
-correlation. The footer selects the most recent retained failure from the last 15 minutes; when no
-recent failure is retained, it creates a bounded incident window and marks missing evidence.
+Choose **Create error report** beside a failed editor load, window crash, file-tree load, or
+degraded local-history save. An uncaught browser failure also offers a compact footer action;
+a healthy workspace has none. Each action selects that failure's correlation and disappears
+after a successful download. Keiko downloads one canonical `keiko-support-v1-*.json` file.
+Attach it to your usual support channel; Keiko does not upload it or require a CLI command.
 
 The local paired app session authorizes the report endpoint. The browser cannot select a state
 directory. One worker performs bounded, read-only evidence scans with a 30-second deadline and a
