@@ -1,6 +1,33 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "editor.localHistoryProtection.savedBrief": "Gespeichert. Dateiverlauf nicht verfügbar.",
+  "editor.localHistoryProtection.suppressedBrief": "Ohne Eintrag im Dateiverlauf gespeichert.",
+  "editor.outline.title": "Gliederung",
+  "editor.outline.workspaceLabel": "Arbeitsbereichsgliederung",
+  "editor.outline.hide": "Gliederungsbereich ausblenden",
+  "editor.outline.show": "Gliederungsbereich einblenden",
+  "editor.outline.loading": "Symbole werden geladen.",
+  "editor.outline.unavailable": "Für diese Datei ist keine Gliederung verfügbar.",
+  "editor.outline.empty": "In dieser Datei wurden keine Symbole gefunden.",
+  "editor.localHistoryProtection.savedUnprotected":
+    "Die Datei wurde gespeichert, aber der lokale Verlauf konnte diese Version nicht schützen.",
+  "editor.localHistoryProtection.workspaceUnavailable":
+    "Verbinden Sie dieses Projekt erneut. Bearbeiten und speichern Sie die Datei danach noch einmal.",
+  "editor.localHistoryProtection.filesystemIdentityUnsupported":
+    "Verschieben Sie dieses Projekt auf ein Dateisystem mit stabiler Dateiidentität, bevor Sie sich auf den lokalen Verlauf verlassen.",
+  "editor.localHistoryProtection.historyUnavailable":
+    "Speichern Sie erneut, sobald der lokale Verlauf verfügbar ist.",
+  "editor.localHistoryProtection.suppressedSecretDetected":
+    "Dieser Speichervorgang wurde nicht als Wiederherstellungspunkt gesichert: Der Inhalt scheint ein Secret zu enthalten. Die Wiederherstellung über den lokalen Verlauf ist für diesen Speichervorgang nicht verfügbar.",
+  "editor.localHistoryProtection.diagnosticReference": "Diagnosereferenz: {correlationId}",
+  "editor.callHierarchy.title": "Aufrufhierarchie",
+  "editor.callHierarchy.incoming": "Eingehende Aufrufe",
+  "editor.callHierarchy.outgoing": "Ausgehende Aufrufe",
+  "editor.callHierarchy.callSite": "Aufrufstelle",
+  "editor.callHierarchy.empty": "Für dieses Symbol wurden keine Aufrufe gefunden.",
+  "editor.callHierarchy.close": "Aufrufhierarchie schließen",
+  "editor.callHierarchy.command": "Aufrufhierarchie anzeigen",
   "editor.fileHistory.title": "Dateiverlauf",
   "editor.fileHistory.close": "Dateiverlauf schließen",
   "editor.fileHistory.listLabel": "Wiederherstellungspunkte der Datei",

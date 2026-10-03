@@ -1,4 +1,31 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "editor.localHistoryProtection.savedBrief": "Saved. File history unavailable.",
+  "editor.localHistoryProtection.suppressedBrief": "Saved without a history entry.",
+  "editor.outline.title": "Outline",
+  "editor.outline.workspaceLabel": "Workspace outline",
+  "editor.outline.hide": "Hide outline panel",
+  "editor.outline.show": "Show outline panel",
+  "editor.outline.loading": "Loading symbols.",
+  "editor.outline.unavailable": "Outline is unavailable for this file.",
+  "editor.outline.empty": "No symbols found in this file.",
+  "editor.localHistoryProtection.savedUnprotected":
+    "File saved, but Local History could not protect this version.",
+  "editor.localHistoryProtection.workspaceUnavailable":
+    "Reconnect this project, then edit and save the file again.",
+  "editor.localHistoryProtection.filesystemIdentityUnsupported":
+    "Move this project to a filesystem with stable file identity before relying on Local History.",
+  "editor.localHistoryProtection.historyUnavailable":
+    "Save again after Local History is available.",
+  "editor.localHistoryProtection.suppressedSecretDetected":
+    "This save was not checkpointed: the content looks like it contains a secret. Local History recovery is unavailable for this save.",
+  "editor.localHistoryProtection.diagnosticReference": "Diagnostic reference: {correlationId}",
+  "editor.callHierarchy.title": "Call hierarchy",
+  "editor.callHierarchy.incoming": "Incoming calls",
+  "editor.callHierarchy.outgoing": "Outgoing calls",
+  "editor.callHierarchy.callSite": "Call site",
+  "editor.callHierarchy.empty": "No calls found for this symbol.",
+  "editor.callHierarchy.close": "Close call hierarchy",
+  "editor.callHierarchy.command": "Show Call Hierarchy",
   "editor.fileHistory.title": "File history",
   "editor.fileHistory.close": "Close file history",
   "editor.fileHistory.listLabel": "File restore points",

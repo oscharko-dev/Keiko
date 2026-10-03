@@ -185,6 +185,7 @@ import {
   mapWireToEditorSymbolsResponse,
 } from "../../../../../lib/editor-language";
 import { useLocale, useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { EN_MESSAGES } from "../../../../../lib/i18n-messages.en";
 import type {
   EditorAgentPaneSnapshot,
@@ -1611,6 +1612,7 @@ function EditorRuntimeWidget({
   heldTabFile,
 }: EditorRuntimeWidgetProps): ReactNode {
   const commonT = useTranslate();
+  const optionalT = useOptionalWidgetTranslate();
   const sourceControlT = useEditorSourceControlTranslate();
   const languageIntelligenceT = useEditorLanguageIntelligenceTranslate();
   const locale = useLocale();
@@ -4354,15 +4356,15 @@ function EditorRuntimeWidget({
   const surfaceRevealRequest = buildSurfaceRevealRequest();
   const callHierarchyLabels = useMemo(
     () => ({
-      title: commonT("editor.callHierarchy.title"),
-      incoming: commonT("editor.callHierarchy.incoming"),
-      outgoing: commonT("editor.callHierarchy.outgoing"),
-      callSite: commonT("editor.callHierarchy.callSite"),
-      empty: commonT("editor.callHierarchy.empty"),
-      close: commonT("editor.callHierarchy.close"),
-      command: commonT("editor.callHierarchy.command"),
+      title: optionalT("editor.callHierarchy.title"),
+      incoming: optionalT("editor.callHierarchy.incoming"),
+      outgoing: optionalT("editor.callHierarchy.outgoing"),
+      callSite: optionalT("editor.callHierarchy.callSite"),
+      empty: optionalT("editor.callHierarchy.empty"),
+      close: optionalT("editor.callHierarchy.close"),
+      command: optionalT("editor.callHierarchy.command"),
     }),
-    [commonT],
+    [optionalT],
   );
 
   const renderGitGutterPeek = (): ReactNode => {
@@ -4963,11 +4965,11 @@ function EditorRuntimeWidget({
   ): string => {
     switch (reason) {
       case "workspace-unavailable":
-        return commonT("editor.localHistoryProtection.workspaceUnavailable");
+        return optionalT("editor.localHistoryProtection.workspaceUnavailable");
       case "filesystem-identity-unsupported":
-        return commonT("editor.localHistoryProtection.filesystemIdentityUnsupported");
+        return optionalT("editor.localHistoryProtection.filesystemIdentityUnsupported");
       default:
-        return commonT("editor.localHistoryProtection.historyUnavailable");
+        return optionalT("editor.localHistoryProtection.historyUnavailable");
     }
   };
 
@@ -4981,7 +4983,7 @@ function EditorRuntimeWidget({
     return (
       <output className="ed-recovery" data-testid="editor-local-history-protection">
         <span>
-          {commonT(
+          {optionalT(
             degraded
               ? "editor.localHistoryProtection.savedBrief"
               : "editor.localHistoryProtection.suppressedBrief",
@@ -4995,8 +4997,8 @@ function EditorRuntimeWidget({
           <p>
             {degraded
               ? localHistoryProtectionGuidance(localHistoryProtection.reason)
-              : commonT("editor.localHistoryProtection.suppressedSecretDetected")}{" "}
-            {commonT("editor.localHistoryProtection.diagnosticReference", {
+              : optionalT("editor.localHistoryProtection.suppressedSecretDetected")}{" "}
+            {optionalT("editor.localHistoryProtection.diagnosticReference", {
               correlationId: localHistoryProtection.correlationId,
             })}
           </p>
