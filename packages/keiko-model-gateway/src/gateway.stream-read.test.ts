@@ -460,6 +460,45 @@ describe("stream startup resilience", () => {
     expect(log.events.some((event) => event.op === "gateway.retry.scheduled")).toBe(true);
   });
 
+  it.each([429, 503])("waits for HTTP%d proxy recovery and delivers one answer", async (status) => {
+    const clock = createScriptedGatewayClock();
+    const recoveryAt = clock.now() + 120_000;
+    const calls: number[] = [];
+    const log = recorder();
+    const gateway = new Gateway(config(true), {
+      clock,
+      log,
+      fetchImpl: (): Promise<Response> => {
+        calls.push(clock.now());
+        return Promise.resolve(
+          clock.now() < recoveryAt
+            ? new Response("{}", { status, headers: { "retry-after": "120" } })
+            : new Response(
+                encoder.encode(deltaLine("recovered once") + finishLine("stop") + DONE_LINE),
+                {
+                  headers: { "content-type": "text/event-stream" },
+                },
+              ),
+        );
+      },
+    });
+    const received: string[] = [];
+    for await (const chunk of gateway.chatStream(REQUEST)) {
+      if (chunk.type === "delta") received.push(chunk.token);
+    }
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toBe(recoveryAt);
+    expect(received).toEqual(["recovered once"]);
+    expect(log.events.find((event) => event.op === "gateway.retry.scheduled")?.extra).toMatchObject(
+      {
+        httpStatus: status,
+        delayMs: 120_000,
+        retryAfterMs: 120_000,
+      },
+    );
+    expect(JSON.stringify(log.events)).not.toContain("recovered once");
+  });
+
   it("recovers from a silent first connection within the shared stream budget", async () => {
     vi.useFakeTimers();
     let calls = 0;

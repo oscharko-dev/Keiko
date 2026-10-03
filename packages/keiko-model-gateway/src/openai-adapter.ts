@@ -782,8 +782,13 @@ function retryAfterMs(response: Response): number | null {
   if (header === null) {
     return null;
   }
-  const seconds = Number(header);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : null;
+  if (/^\d+$/.test(header.trim())) {
+    const milliseconds = Number(header) * 1000;
+    return Number.isFinite(milliseconds) ? milliseconds : null;
+  }
+  if (!/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)/i.test(header)) return null;
+  const date = Date.parse(header);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1165,7 +1170,7 @@ function mapProviderFailure(
   const reported = streamed
     ? `reported status ${String(status)} mid-stream`
     : `returned HTTP ${String(status)}`;
-  throw new ProviderError(`provider ${reported} for '${modelId}'`, status, secrets);
+  throw new ProviderError(`provider ${reported} for '${modelId}'`, status, secrets, retryAfter);
 }
 
 // A failure the provider, or a proxy such as LiteLLM, writes into a stream it has already started:

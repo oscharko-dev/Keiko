@@ -407,3 +407,88 @@ describe("customer-shape LiteLLM twin", () => {
     ).toBeUndefined();
   });
 });
+
+describe("synthetic gateway transport profile", () => {
+  function fixtureRequest(stream) {
+    return {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream,
+        messages: [{ role: "user", content: "private fixture prompt" }],
+      }),
+    };
+  }
+
+  it("delays headers and reports transport metadata without recording prompt content", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 25 });
+    const origin = new URL(twin.baseUrl).origin;
+    try {
+      const started = Date.now();
+      const response = await fetch(`${origin}/delay35/v1/chat/completions`, fixtureRequest(false));
+      expect(Date.now() - started).toBeGreaterThanOrEqual(25);
+      expect(await response.text()).toContain("Synthetic gateway transport test completed.");
+      const metrics = await (await fetch(`${origin}/metrics`)).json();
+      expect(metrics).toMatchObject({
+        requestCount: 1,
+        requests: [{ scenario: "delay35", status: 200 }],
+      });
+      expect(JSON.stringify(metrics)).not.toContain("private fixture prompt");
+      const models = await (await fetch(`${origin}/delay35/v1/models`)).json();
+      expect(models.data[0].model_info.max_input_tokens).toBe(128_000);
+    } finally {
+      await twin.close();
+    }
+  });
+
+  it.each([429, 503])(
+    "keeps HTTP%d unavailable until the advertised queue cooldown ends",
+    async (status) => {
+      const twin = await startCustomerShapeLiteLlmTwin({
+        transportOnly: true,
+        retryAfterSeconds: 1,
+      });
+      const url = `${new URL(twin.baseUrl).origin}/retry${status}/v1/chat/completions`;
+      try {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const response = await fetch(url, fixtureRequest(false));
+          expect(response.status).toBe(status);
+          expect(response.headers.get("retry-after")).toBe("1");
+          await response.text();
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1050));
+        const recovered = await fetch(url, fixtureRequest(true));
+        expect(recovered.status).toBe(200);
+        expect(await recovered.text()).toContain("data: [DONE]");
+        expect(twin.requests).toHaveLength(3);
+      } finally {
+        await twin.close();
+      }
+    },
+  );
+
+  it("pauses a live stream after the first delta and never echoes the prompt", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 30 });
+    const url = `${new URL(twin.baseUrl).origin}/pause35/v1/chat/completions`;
+    try {
+      const response = await fetch(url, fixtureRequest(true));
+      const reader = response.body.getReader();
+      const first = new TextDecoder().decode((await reader.read()).value);
+      expect(first).toContain("Synthetic gateway stream started.");
+      expect(first).not.toContain("[DONE]");
+      let rest = "";
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        rest += new TextDecoder().decode(chunk.value);
+      }
+      expect(twin.requests[0].elapsedMs).toBeGreaterThanOrEqual(30);
+      expect(rest).toContain("Synthetic gateway transport test completed.");
+      expect(rest).toContain("[DONE]");
+      expect(first + rest).not.toContain("private fixture prompt");
+      reader.releaseLock();
+    } finally {
+      await twin.close();
+    }
+  });
+});

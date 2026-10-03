@@ -467,7 +467,7 @@ export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 | `TimeoutError` | `GATEWAY_TIMEOUT` | — | Yes |
 | `CancelledError` | `GATEWAY_CANCELLED` | — | No |
 | `CircuitOpenError` | `GATEWAY_CIRCUIT_OPEN` | — | No |
-| `ProviderError` | `GATEWAY_PROVIDER_ERROR` | `httpStatus: number` | No |
+| `ProviderError` | `GATEWAY_PROVIDER_ERROR` | `httpStatus: number`, `retryAfterMs: number \| null` | HTTP 500/502/503/529 before delivered output |
 | `ConfigInvalidError` | `GATEWAY_CONFIG_INVALID` | — | No |
 | `UnknownModelError` | `GATEWAY_UNKNOWN_MODEL` | — | No |
 
@@ -588,19 +588,24 @@ HTTP 200.
 `TimeoutError` and `RateLimitError`, the gateway retries up to `config.maxRetries` times. The
 backoff is `min(retryBaseDelayMs * 2^(attempt - 1), 30_000)` at the top of an equal-jitter band
 (each sleep lies between half of it and all of it); a `RateLimitError` that carries `retryAfterMs`
-waits exactly that long instead, capped at 30 s. The delay uses `clock.sleep()`. The
+waits at least the stated cooldown instead, subject to the remaining whole-call budget and
+platform timer ceiling. Retryable `ProviderError` responses (including HTTP 503) preserve the same
+optional `retryAfterMs` duration. OpenAI-compatible adapters parse both delay-seconds and HTTP-date
+forms of `Retry-After`; malformed values use the normal backoff. Provider cooldowns are never
+shortened to the exponential backoff cap: an overloaded LiteLLM queue may legitimately request
+a two-minute wait. The delay uses cancellation-aware `clock.sleep()`. The
 following error types are never retried: `AuthenticationError`, `ModelRefusalError`,
 `ContextOverflowError`, `CancelledError`, `CircuitOpenError`, `ConfigInvalidError`,
 `UnknownModelError`.
 
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
-(`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry, the longest sleep the
-loop honours (the backoff cap and the cap on a provider's `retryAfterMs` are both 30 s), so a
-rate-limited provider keeps all its configured attempts and the cool-down it asked for. A retry
+(`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry reserves
+all configured attempts and exponential backoff windows. A provider cooldown above 30 s consumes
+the same fixed whole-call budget and may leave fewer attempts; it never expands the deadline. A retry
 whose delay does not fit what is left of the budget could never run, so the call ends at once with
 the last error (`gateway.retry.exhausted` with `reason: "budget"`, the delay and the remaining
 budget) instead of sleeping the rest of it away. An attempt that starts with less than `timeoutMs`
-left, which only an earlier attempt overrunning its own timeout can cause, runs under what is left.
+left, after earlier attempts or provider cooldowns consumed that budget, runs under what is left.
 A caller that builds its own deadline around a gateway call derives it from the same function; the
 coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read (`chatStream`) may retry a retryable startup failure only before delivering its
 first non-empty delta or terminal response. Empty role deltas do not commit the answer. Once any

@@ -324,12 +324,13 @@ function isRetryableError(error: Error): boolean {
   return error instanceof GatewayError && error.retryable;
 }
 
-// A RateLimitError with an explicit retryAfterMs is honoured VERBATIM (the server
-// told us when to come back — jitter would only delay recovery), capped at 30 s;
-// every other retryable error takes the jittered backoff step.
+// A provider cooldown is a minimum wait, not the exponential backoff ceiling. Honour it
+// within the remaining request budget and platform timer bound; retrying early can consume
+// every attempt while the same overloaded provider is still unavailable.
 function retryDelayMs(error: Error, attempt: number, base: number, random: () => number): number {
-  if (error instanceof RateLimitError && error.retryAfterMs !== null && error.retryAfterMs > 0) {
-    return Math.min(error.retryAfterMs, MAX_BACKOFF_MS);
+  const retryAfterMs = providerErrorDetail(error).retryAfterMs;
+  if (retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    return Math.min(retryAfterMs, MAX_TIMER_DELAY_MS);
   }
   return backoffDelayMs(attempt, base, random);
 }
@@ -433,8 +434,8 @@ function loggedRetryModel(context: RetryLogContext): Readonly<{ modelId?: string
 // rate-limited call is always HTTP 429 by definition, and a consumer building a replay/reproduction
 // artifact from these lines (e.g. `GatewayReplayAttempt.httpStatus`) should never have to infer the
 // status from `errorKind === GATEWAY_RATE_LIMIT` when the error itself already carries it —
-// restating it here costs one field and removes that inference entirely. `retryAfterMs` stays
-// `RateLimitError`-only: `ProviderError` never carries a server-supplied retry delay.
+// restating it here costs one field and removes that inference entirely. Both error types
+// preserve a provider cooldown as a duration; neither contributes provider response content.
 export interface ProviderErrorDetail {
   readonly httpStatus?: number;
   readonly retryAfterMs?: number;
@@ -443,7 +444,9 @@ export interface ProviderErrorDetail {
 export function providerErrorDetail(error: unknown): ProviderErrorDetail {
   const httpStatus = providerErrorHttpStatus(error);
   const retryAfterMs =
-    error instanceof RateLimitError ? (error.retryAfterMs ?? undefined) : undefined;
+    error instanceof RateLimitError || error instanceof ProviderError
+      ? (error.retryAfterMs ?? undefined)
+      : undefined;
   return {
     ...(httpStatus === undefined ? {} : { httpStatus }),
     ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
@@ -615,14 +618,10 @@ function chatAttemptTimeoutMs(provider: ProviderRetryPolicy): number {
   return Math.max(provider.timeoutMs, GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
 }
 
-// The end-to-end budget of one buffered call to `provider`: every attempt its full `timeoutMs`
-// (ADR-0003), and before every retry the longest sleep the loop honours. The backoff cap and the
-// cap on a provider's Retry-After are both MAX_BACKOFF_MS, so a rate-limited provider keeps all its
-// configured attempts and the cool-down it asked for. The one derivation: the gateway's retry loop
-// and every deadline a caller builds around a gateway call (the coding sidecar route) take it from
-// here, so the two cannot drift apart again. They had: the provider's `timeoutMs` was passed to
-// the loop as the budget of the WHOLE call, an attempt that hung spent it, and the retry a
-// `TimeoutError` is declared retryable for never ran (coding run 23, 2026-09-11).
+// One end-to-end buffered budget reserves every configured attempt and capped backoff sleep.
+// A longer provider cooldown consumes this same budget and may leave fewer attempts; it is never
+// shortened to retry before recovery. Gateway retries and surrounding route deadlines share this
+// derivation so an outer deadline cannot interrupt the provider's own bounded wait.
 //
 // The per-attempt bound is floored first (`chatAttemptTimeoutMs`, now the SAME buffered floor this
 // function floors to), so the trailing `Math.max` below is a provable no-op today — kept as an

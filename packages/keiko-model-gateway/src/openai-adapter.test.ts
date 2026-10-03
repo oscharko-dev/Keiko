@@ -400,6 +400,38 @@ describe("OpenAiAdapter.call", () => {
     }
   });
 
+  it("preserves a 503 provider cooldown instead of retrying a queued request early", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(jsonResponse({}, { status: 503, headers: { "retry-after": "120" } })),
+    );
+    await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({
+      httpStatus: 503,
+      retryAfterMs: 120_000,
+      retryable: true,
+    });
+  });
+
+  it("accepts an HTTP-date provider cooldown", async () => {
+    const now = Date.parse("2026-10-03T20:00:00Z");
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const adapter = adapterWith(() =>
+        Promise.resolve(
+          jsonResponse(
+            {},
+            {
+              status: 429,
+              headers: { "retry-after": "Sat, 03 Oct 2026 20:02:00 GMT" },
+            },
+          ),
+        ),
+      );
+      await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({ retryAfterMs: 120_000 });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("throws ProviderError carrying the http status on a 500", async () => {
     const adapter = adapterWith(() => Promise.resolve(jsonResponse({}, { status: 503 })));
     try {

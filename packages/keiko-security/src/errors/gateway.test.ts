@@ -124,9 +124,17 @@ describe("error subclasses", () => {
 });
 
 describe("ProviderError retry classification by HTTP status", () => {
+  it("preserves an optional provider cooldown without changing legacy construction", () => {
+    expect(new ProviderError("upstream", 503).retryAfterMs).toBeNull();
+    expect(new ProviderError("upstream", 503, [], 120_000)).toMatchObject({
+      retryAfterMs: 120_000,
+      retryable: true,
+      httpStatus: 503,
+    });
+  });
+
   // Provider 5xx responses are transient by the providers' own contracts and must
-  // re-enter the bounded retry loop on the buffered path; every other status a
-  // ProviderError carries stays terminal. (Streaming never enters the retry loop.)
+  // re-enter bounded retries before output; every other status stays terminal.
   it.each([
     [500, true],
     [502, true],

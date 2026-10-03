@@ -151,6 +151,28 @@ describe("executeWithRetry — activity log", () => {
     expect(exhausted.extra?.httpStatus).toBe(429);
   });
 
+  it("persists a long 503 cooldown as body-free retry evidence", async () => {
+    const log = recorder();
+    await expect(
+      executeWithRetry(
+        (): Promise<never> =>
+          Promise.reject(new ProviderError("private provider payload", 503, [], 120_000)),
+        { maxRetries: 1, retryBaseDelayMs: 10, timeoutMs: 600_000 },
+        stubClock(),
+        undefined,
+        () => 0.5,
+        { sink: log.sink },
+      ),
+    ).rejects.toBeInstanceOf(ProviderError);
+    const scheduled = eventFor(log.events, "gateway.retry.scheduled");
+    const persisted = expectActivityLogProof(
+      "gateway.retry.scheduled.emitted-line",
+      formatActivityLogProofLine(scheduled),
+    );
+    expect(persisted).toMatchObject({ httpStatus: 503, retryAfterMs: 120_000, delayMs: 120_000 });
+    expect(JSON.stringify(log.events)).not.toContain("private provider payload");
+  });
+
   it("labels the terminal attempt with the attempt number it gave up on", async () => {
     const log = recorder();
     const attempt = (): Promise<never> => Promise.reject(new TransportError("upstream reset"));

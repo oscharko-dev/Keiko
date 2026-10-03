@@ -136,9 +136,9 @@ export class CircuitOpenError extends GatewayError {
 // Provider 5xx responses are transient by the providers' own contracts (both
 // OpenAI-compatible and Anthropic APIs document retry-with-backoff for
 // 500/502/503/529); everything else a ProviderError carries (4xx validation,
-// permission, not-found …) is terminal. Streaming calls never enter the retry
-// loop (Gateway.chatStream is deliberately not wrapped in executeWithRetry), so
-// this flag re-enables retries for idempotent, buffered calls only.
+// permission, not-found …) is terminal. Streamed calls retry only startup failures
+// before delivering output;
+// once an answer starts, the caller must never generate it again automatically.
 const RETRYABLE_PROVIDER_HTTP_STATUS: ReadonlySet<number> = new Set([500, 502, 503, 529]);
 
 export class ProviderError extends GatewayError {
@@ -147,10 +147,17 @@ export class ProviderError extends GatewayError {
   readonly code: ErrorCode = ERROR_CODES.PROVIDER_ERROR;
   readonly retryable: boolean;
   readonly httpStatus: number;
+  readonly retryAfterMs: number | null;
 
-  constructor(message: string, httpStatus: number, secrets: readonly string[] = []) {
+  constructor(
+    message: string,
+    httpStatus: number,
+    secrets: readonly string[] = [],
+    retryAfterMs: number | null = null,
+  ) {
     super(message, secrets);
     this.httpStatus = httpStatus;
+    this.retryAfterMs = retryAfterMs;
     this.retryable = RETRYABLE_PROVIDER_HTTP_STATUS.has(httpStatus);
   }
 }

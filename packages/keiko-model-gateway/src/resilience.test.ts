@@ -203,7 +203,7 @@ describe("executeWithRetry", () => {
     expect(sleeps).toEqual([2000]);
   });
 
-  it("caps RateLimitError.retryAfterMs at 30 seconds", async () => {
+  it("waits for a queued provider cooldown beyond exponential backoff", async () => {
     const { clock, sleeps } = stubClock();
     await expect(
       executeWithRetry(
@@ -212,7 +212,24 @@ describe("executeWithRetry", () => {
         clock,
       ),
     ).rejects.toBeInstanceOf(RateLimitError);
-    expect(sleeps).toEqual([30_000]);
+    expect(sleeps).toEqual([120_000]);
+  });
+
+  it("does not shorten a cooldown that exceeds the remaining request budget", async () => {
+    const { clock, sleeps } = stubClock();
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          return Promise.reject(new RateLimitError("queued", 120_000));
+        },
+        { maxRetries: 3, retryBaseDelayMs: 500, timeoutMs: 60_000 },
+        clock,
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([]);
   });
 
   it("does not sleep or retry after the end-to-end timeout budget is exhausted", async () => {
@@ -416,11 +433,14 @@ describe("executeWithRetry", () => {
     });
   });
 
-  it("propagates cancellation while sleeping between retries", async () => {
+  it("cancels a long provider cooldown without issuing another request", async () => {
     const controller = new AbortController();
+    let calls = 0;
+    const sleeps: number[] = [];
     const clock: Clock = {
       now: () => 0,
-      sleep: (_ms, signal) => {
+      sleep: (ms, signal) => {
+        sleeps.push(ms);
         controller.abort();
         return signal?.aborted === true
           ? Promise.reject(new DOMException("cancelled", "AbortError"))
@@ -429,12 +449,17 @@ describe("executeWithRetry", () => {
     };
     await expect(
       executeWithRetry(
-        () => Promise.reject(new TransportError("retry me")),
+        () => {
+          calls += 1;
+          return Promise.reject(new ProviderError("queued", 503, [], 120_000));
+        },
         { maxRetries: 1, retryBaseDelayMs: 500 },
         clock,
         controller.signal,
       ),
     ).rejects.toBeInstanceOf(CancelledError);
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([120_000]);
   });
 });
 
