@@ -1300,6 +1300,59 @@ describe("EditorWidget — edit and save", () => {
     expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
   });
 
+  it.each(["own", "different-content", "rewritten-version"] as const)(
+    "reconciles fractional watch timestamp roundoff for a %s write",
+    async (origin) => {
+      const FakeSource = installFakeEventSource();
+      await renderLoaded();
+      await waitFor(() => expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1));
+      const modifiedAt = 1791044334786.291;
+      const saved = fileResponse({
+        modifiedAt,
+        sizeBytes: 17,
+        content: "const value = 2;\n",
+        session: {
+          schemaVersion: "1",
+          version: { sizeBytes: 17, modifiedAt, contentHash: "b".repeat(64) },
+        },
+      });
+      vi.mocked(saveFilesContent).mockResolvedValueOnce(saved);
+      act(() => {
+        surface.props?.onContentChange({ text: saved.content, sizeBytes: 17 }, "human");
+      });
+      await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+      await waitFor(() => expect(surface.props?.saveStatus).toBe("saved"));
+      const current = fileResponse({
+        ...saved,
+        session: {
+          schemaVersion: "1",
+          version: {
+            ...saved.session.version,
+            modifiedAt: origin === "rewritten-version" ? modifiedAt + 1 : modifiedAt,
+            contentHash: origin === "different-content" ? "c".repeat(64) : "b".repeat(64),
+          },
+        },
+      });
+      vi.mocked(fetchFilesContent).mockResolvedValueOnce(current);
+      await act(async () => {
+        workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+          schemaVersion: "1",
+          sequence: 5,
+          kind: "changed",
+          relativePath: "src/app.ts",
+          sizeBytes: 17,
+          modifiedAt: 1791044334786.2913,
+          metadataHash: "0011223344556677",
+        });
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(fetchFilesContent).toHaveBeenCalledTimes(2));
+      if (origin === "own")
+        expect(screen.queryByTestId("editor-external-change-banner")).toBeNull();
+      else expect(await screen.findByTestId("editor-external-change-banner")).toBeInTheDocument();
+    },
+  );
+
   it.each([
     ["own", 2, false],
     ["external", 3, true],
@@ -1411,63 +1464,69 @@ describe("EditorWidget — edit and save", () => {
     );
   });
 
-  it("does not consume an external write that arrives before the delayed self event", async () => {
-    const FakeSource = installFakeEventSource();
-    await renderLoaded();
-    await waitFor(() => {
-      expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
-    });
-    const saved = fileResponse({
-      modifiedAt: 2,
-      sizeBytes: 17,
-      content: "const value = 2;\n",
-      session: {
-        schemaVersion: "1",
-        version: { sizeBytes: 17, modifiedAt: 2, contentHash: "b".repeat(64) },
-      },
-    });
-    vi.mocked(saveFilesContent).mockResolvedValueOnce(saved);
-    act(() => {
-      surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
-    });
-    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
-    await waitFor(() => expect(surface.props?.saveStatus).toBe("saved"));
-
-    act(() => {
-      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
-        schemaVersion: "1",
-        sequence: 5,
-        kind: "changed",
-        relativePath: "src/app.ts",
-        sizeBytes: 19,
-        modifiedAt: 3,
-        metadataHash: "7766554433221100",
+  it.each([
+    ["integer", 2, 2],
+    ["fractional", 1791044334786.291, 1791044334786.2913],
+  ] as const)(
+    "does not consume an external write before the delayed %s self event",
+    async (_representation, savedModifiedAt, observedModifiedAt) => {
+      const FakeSource = installFakeEventSource();
+      await renderLoaded();
+      await waitFor(() => {
+        expect(workspaceWatchEventSources(FakeSource.instances)).toHaveLength(1);
       });
-    });
-    const banner = await screen.findByTestId("editor-external-change-banner");
-    expect(banner).toHaveTextContent("The file changed on disk: src/app.ts.");
-
-    await act(async () => {
-      workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
-        schemaVersion: "1",
-        sequence: 6,
-        kind: "changed",
-        relativePath: "src/app.ts",
+      const saved = fileResponse({
+        modifiedAt: savedModifiedAt,
         sizeBytes: 17,
-        modifiedAt: 2,
-        metadataHash: "0011223344556677",
+        content: "const value = 2;\n",
+        session: {
+          schemaVersion: "1",
+          version: { sizeBytes: 17, modifiedAt: savedModifiedAt, contentHash: "b".repeat(64) },
+        },
       });
-      // The widget serializes watch reconciliation through a promise chain. Let that queued
-      // transition settle before asserting that the delayed self notification preserved the
-      // already-surfaced genuine external-change warning.
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(screen.getAllByTestId("editor-external-change-banner")).toHaveLength(1);
-    expect(screen.getByTestId("editor-external-change-banner")).toHaveTextContent(
-      "The file changed on disk: src/app.ts.",
-    );
-  });
+      vi.mocked(saveFilesContent).mockResolvedValueOnce(saved);
+      act(() => {
+        surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
+      });
+      await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+      await waitFor(() => expect(surface.props?.saveStatus).toBe("saved"));
+
+      act(() => {
+        workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+          schemaVersion: "1",
+          sequence: 5,
+          kind: "changed",
+          relativePath: "src/app.ts",
+          sizeBytes: 19,
+          modifiedAt: 3,
+          metadataHash: "7766554433221100",
+        });
+      });
+      const banner = await screen.findByTestId("editor-external-change-banner");
+      expect(banner).toHaveTextContent("The file changed on disk: src/app.ts.");
+
+      await act(async () => {
+        workspaceWatchEventSources(FakeSource.instances)[0]?.emit("editor-watch:changed", {
+          schemaVersion: "1",
+          sequence: 6,
+          kind: "changed",
+          relativePath: "src/app.ts",
+          sizeBytes: 17,
+          modifiedAt: observedModifiedAt,
+          metadataHash: "0011223344556677",
+        });
+        // The widget serializes watch reconciliation through a promise chain. Let that queued
+        // transition settle before asserting that the delayed self notification preserved the
+        // already-surfaced genuine external-change warning.
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getAllByTestId("editor-external-change-banner")).toHaveLength(1);
+      expect(screen.getByTestId("editor-external-change-banner")).toHaveTextContent(
+        "The file changed on disk: src/app.ts.",
+      );
+    },
+  );
 
   it("discards deferred watch reconciliation after typing advances the document version", async () => {
     const { pendingRead, saved } = await beginDeferredWatchReconciliation();

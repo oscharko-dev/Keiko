@@ -1253,6 +1253,18 @@ function localWriteTargetsEvent(
   );
 }
 
+function savedTimestampMatchesWatchRepresentation(
+  observed: number | undefined,
+  saved: number,
+): boolean {
+  if (observed === undefined || !Number.isFinite(observed) || !Number.isFinite(saved)) return false;
+  // Native Stats.mtimeMs and bigint nanoseconds converted to milliseconds can round differently.
+  // This bound covers only double-precision conversion error; the live read below still proves
+  // exact saved metadata and content hash before treating a notification as our own write.
+  const roundoff = 2 * Number.EPSILON * Math.max(1, Math.abs(observed), Math.abs(saved));
+  return Math.abs(observed - saved) <= roundoff;
+}
+
 function eventMatchesSavedMetadata(
   event: EditorM7WatchEvent,
   expectedVersion: EditorDocumentVersion,
@@ -1260,7 +1272,7 @@ function eventMatchesSavedMetadata(
   return (
     event.kind === "changed" &&
     event.sizeBytes === expectedVersion.sizeBytes &&
-    event.modifiedAt === expectedVersion.modifiedAt
+    savedTimestampMatchesWatchRepresentation(event.modifiedAt, expectedVersion.modifiedAt)
   );
 }
 
