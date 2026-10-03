@@ -1,4 +1,5 @@
 import { constants } from "node:os";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import { inflateSync } from "node:zlib";
 import {
   ACTIVITY_LOG_ERROR_KINDS,
@@ -33,8 +34,18 @@ import { CURRENT_SUPPORT_REGISTRY, type SupportReaderRegistry } from "./support-
 const MODULES = new Set(SUPPORT_CODE_MODULES);
 const archivedModules = new Map<string, ReadonlySet<string>>();
 
+function currentCodeBuild(incident: SupportIncidentPrivateProjection): boolean {
+  const build = incident.build;
+  return (
+    incident.productVersion === KEIKO_PRODUCT_VERSION &&
+    build.registryVersion === CURRENT_SUPPORT_REGISTRY.registryVersion &&
+    build.schemaDigest === CURRENT_SUPPORT_REGISTRY.schemaDigest &&
+    build.catalogDigest === CURRENT_SUPPORT_REGISTRY.catalogDigest
+  );
+}
+
 function codeModules(incident: SupportIncidentPrivateProjection): ReadonlySet<string> {
-  if (incident.build.catalogDigest === CURRENT_SUPPORT_REGISTRY.catalogDigest) return MODULES;
+  if (currentCodeBuild(incident)) return MODULES;
   const archived = SUPPORT_CODE_MODULE_HISTORY.find(
     (entry) =>
       entry.release === incident.productVersion &&

@@ -568,6 +568,32 @@ describe("historical report reconstruction", () => {
   afterEach(() => {
     rmSync(stateDir, { recursive: true, force: true });
   });
+  it.each(["1.1.9", "99.0.0"])(
+    "does not attest current-only modules for release %s sharing the current catalog digest",
+    (productVersion) => {
+      const { incident } = failureFixture();
+      const registry = findSupportRegistry(incident.build);
+      if (registry === undefined) throw new TypeError("missing current registry");
+      const otherRelease = {
+        ...incident,
+        productVersion,
+        build: { ...incident.build, productVersion },
+      };
+      const privacy = supportReportPrivacyProjection(otherRelease, registry);
+      expect(
+        privacy.event({
+          sourceSegmentId: "fixture",
+          record: {
+            op: otherRelease.op,
+            correlationId: otherRelease.correlation.rootCorrelationId,
+            frames: ["packages/keiko-activity-log/dist/reader/support-desktop-report.js:10:2"],
+          },
+        }),
+      ).toBeUndefined();
+      expect(privacy.reasons()).toEqual(["evidence-partial"]);
+    },
+  );
+
   it("retains code frames owned by the producing release after modules have moved", () => {
     const snapshot = SUPPORT_RELEASE_REGISTRY_SNAPSHOTS.find((entry) => entry.release === "1.1.9");
     if (snapshot === undefined) throw new TypeError("missing shipped release registry");

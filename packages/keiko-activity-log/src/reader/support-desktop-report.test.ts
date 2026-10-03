@@ -12,6 +12,11 @@ import {
 } from "../../../../tests/support/activity-log-segments.js";
 import { createDesktopSupportReport } from "./support-desktop-report.js";
 import { analyzeSupportReport, parseSupportReport } from "./support-report.js";
+import * as supportAnalysis from "./support-analyze.js";
+import {
+  MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
+  MAX_SUPPORT_REPORT_TIMELINE_BYTES,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 let stateDir: string;
 beforeEach(() => {
@@ -20,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(stateDir, { recursive: true, force: true });
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function writeFailures(): void {
@@ -89,6 +95,41 @@ describe("desktop canonical support report", () => {
         .flatMap((timeline) => timeline.lines)
         .some((line) => line.op === "client.diagnostic" && line.errorKind === "timeout"),
     ).toBe(true);
+  });
+
+  it("bounds selected incident analysis before timeline expansion and exports explicit incompleteness", () => {
+    const now = Date.now();
+    const process = fixtureProcess(4242, "aabbccdd");
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, {
+        op: "client.diagnostic",
+        correlationId: "bounded-analysis",
+        errorKind: "timeout",
+        level: "error",
+      }),
+      fixtureLine(process, now + 1, {
+        op: "client.diagnostic",
+        correlationId: "bounded-analysis",
+        errorKind: "internal",
+        level: "error",
+      }),
+    ]);
+    const analyze = supportAnalysis.analyzeLogLines;
+    const selectedAnalysis = vi
+      .spyOn(supportAnalysis, "analyzeLogLines")
+      .mockImplementationOnce((lines, options) =>
+        analyze(lines, { ...options, maxTimelineRecords: 1 }),
+      );
+    const response = createDesktopSupportReport(stateDir, "bounded-analysis");
+    const report = parseSupportReport(response.reportJson);
+    expect(selectedAnalysis).toHaveBeenCalledWith(expect.any(Array), {
+      maxTimelineRecords: MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
+      maxTimelineBytes: MAX_SUPPORT_REPORT_TIMELINE_BYTES,
+    });
+    expect(report.incident.sufficiencyReasons).toContain("report-budget-exceeded");
+    expect(report.selection.status).toBe("insufficient");
+    expect(report.selection.reasons).toContain("report-budget-exceeded");
+    expect(analyzeSupportReport(response.reportJson).selection.status).toBe("insufficient");
   });
 
   it("rejects an unknown correlation without pinning a fabricated incident", () => {

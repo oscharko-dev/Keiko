@@ -2,6 +2,8 @@
 import { randomUUID } from "node:crypto";
 import {
   MAX_SUPPORT_REPORT_EVENT_BYTES,
+  MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
+  MAX_SUPPORT_REPORT_TIMELINE_BYTES,
   supportIncidentPrivateProjection,
   supportReportFileName,
   type DesktopSupportReportResponse,
@@ -31,7 +33,7 @@ import {
   SupportReportError,
 } from "./support-report.js";
 
-import { analyzeLogLines } from "./support-analyze.js";
+import { ActivityLogAnalyzeBudgetError, analyzeLogLines } from "./support-analyze.js";
 import type { SupportQueryResult } from "./support-query.js";
 
 const REPORT_QUERY_LIMITS = {
@@ -79,6 +81,27 @@ function selectedSegments(query: SupportQueryResult): readonly SupportIncidentSe
   return [...segments.values()];
 }
 
+function selectedIncident(
+  record: SupportIncidentRecord,
+  segments: readonly SupportIncidentSegmentFile[],
+  selected: SupportQueryResult,
+): ReturnType<typeof resolveSupportIncidentAnalysis> {
+  try {
+    const analysis = analyzeLogLines(
+      selected.events.map((event) => ({ text: event.text, terminated: true })),
+      {
+        maxTimelineRecords: MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
+        maxTimelineBytes: MAX_SUPPORT_REPORT_TIMELINE_BYTES,
+      },
+    );
+    return resolveSupportIncidentAnalysis(record, segments, analysis);
+  } catch (error) {
+    if (!(error instanceof ActivityLogAnalyzeBudgetError)) throw error;
+    // Reuse the canonical budget-exceeded descriptor; retain the query's selected evidence.
+    return unresolvedSupportIncident(record, segments, "window-too-large");
+  }
+}
+
 function incidentDescriptor(
   stateDir: string,
   record: SupportIncidentRecord,
@@ -89,12 +112,7 @@ function incidentDescriptor(
       ? supportIncidentSegmentFiles(stateDir, record)
       : selectedSegments(selected);
   if (selected !== undefined) {
-    const analysis = analyzeLogLines(
-      selected.events.map((event) => ({ text: event.text, terminated: true })),
-    );
-    return supportIncidentPrivateProjection(
-      resolveSupportIncidentAnalysis(record, segments, analysis),
-    );
+    return supportIncidentPrivateProjection(selectedIncident(record, segments, selected));
   }
   try {
     return supportIncidentPrivateProjection(resolveSupportIncident(record, segments, stateDir));
