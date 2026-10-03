@@ -83,6 +83,12 @@ async function requestAutonomyMode(page: Page, label: RegExp): Promise<void> {
   await page.getByRole("button", { name: "Close Settings window" }).click();
 }
 
+async function expectEffectiveMode(page: Page, mode: string): Promise<void> {
+  await workbench(page).getByRole("button", { name: "Open Coding Workbench information" }).click();
+  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute("data-mode", mode);
+  await page.keyboard.press("Escape");
+}
+
 async function openWorkbench(page: Page, pairingFragment?: string): Promise<void> {
   await page.goto(pairingFragment === undefined ? "/" : `/${pairingFragment}`);
   if (pairingFragment !== undefined) {
@@ -94,31 +100,32 @@ async function openWorkbench(page: Page, pairingFragment?: string): Promise<void
   await expect(workbench(page)).toBeVisible();
 }
 
-// Drives the "Code setup" section end to end through UI interactions only: binding the fixture
-// checkout now provisions, runs the #447 reconciliation pass that stamps the verified head the runtime
-// launch authority requires, and only then activates — no out-of-band `page.request` reconciliation
-// call (#2476 AC1). The section yields once the verified binding lands.
-//
-// PR #3625: the setup card no longer has "Repository path"/"Target branch" text inputs -- the
-// repository is chosen from Git's registered checkouts through a combobox. `registerTrustedRepositoryProject`
-// (called before this, for its own M11 workspace-trust reason) already registered the fixture under
-// the name below, so it is selectable here without a further registration call.
+// The registered fixture is the sole repository and is selected by the product automatically.
+// Choose its existing worktree location control: that UI selection provisions, reconciles the
+// verified head, and activates the managed checkout without an out-of-band reconciliation call.
+// The fixture intentionally wires managed worktrees rather than local checkout provisioning.
 async function bindFixtureWorkspace(page: Page): Promise<void> {
-  const setup = page.getByRole("region", { name: "Code setup" });
-  await expect(setup).toBeVisible();
-  await setup.getByRole("combobox", { name: "Choose coding repository" }).click();
+  const controls = workbench(page);
+  await expect(controls.getByRole("combobox", { name: "Choose coding repository" })).toContainText(
+    "Authority Fixture Repository",
+  );
+  await expect(controls.getByRole("combobox", { name: "Choose coding branch" })).toContainText(
+    "main",
+  );
+  await controls.getByRole("combobox", { name: "Work in" }).click();
+  const activation = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/task-workspaces/active" &&
+      response.request().method() === "POST",
+  );
   await page
-    .getByRole("listbox", { name: "Choose coding repository" })
-    .getByRole("option", { name: "Authority Fixture Repository", exact: true })
+    .getByRole("listbox", { name: "Work in" })
+    .getByRole("option", { name: "New local worktree", exact: true })
     .click();
-  await setup.getByRole("combobox", { name: "Choose coding branch" }).click();
-  await page
-    .getByRole("listbox", { name: "Choose coding branch" })
-    .getByRole("option", { name: "main", exact: true })
-    .click();
-  await setup.getByRole("button", { name: "Bind workspace" }).click();
-  // The bind performs real filesystem + git reconciliation before it yields, so allow for that IO.
-  await expect(setup).toHaveCount(0, { timeout: 30_000 });
+  expect((await activation).ok()).toBe(true);
+  await expect(controls.getByRole("combobox", { name: "Work in" })).toContainText(
+    "New local worktree",
+  );
 }
 
 // Locates the file the scripted runtime edited inside the Keiko-managed worktree root. The worktree
@@ -213,7 +220,9 @@ function worktreeRootForTarget(target: string): string {
 }
 
 interface ChangesetAuditProjection {
+  readonly actionId?: string;
   readonly actionType?: string;
+  readonly disposition?: string;
   readonly conflictCode?: string;
   readonly failureCode?: string;
   readonly outcome?: string;
@@ -255,7 +264,8 @@ async function openRealBinaryManualEditor(page: Page): Promise<void> {
       name: `Editor: ${AUTHORITY_TARGET_RELATIVE_PATH} in ${root}`,
       exact: true,
     }),
-  ).toBeVisible();
+  ).toBeAttached();
+  await expect(workspace.locator(".monaco-editor").first()).toBeVisible();
   await expect(workspace.locator(".monaco-editor .view-lines").first()).toContainText(
     AUTHORITY_EDITED_CONTENT.trimEnd(),
   );
@@ -296,30 +306,31 @@ async function assertInheritedWorkspaceTrust(page: Page): Promise<void> {
   await expect(page.getByTestId("workspace-trust-banner-editor")).toHaveCount(0);
 }
 
-async function approveRealBinaryChangeset(page: Page): Promise<void> {
+async function proveRealBinaryChangesetApplied(page: Page, runId: string): Promise<void> {
   if (!realBinaryJourney) return;
-  // The run's own registered bridge owns this review. Keep it mounted and approve its exact
-  // proposed diff in the Workbench; opening an unrelated Editor session cannot transfer authority.
+  // The run's accepted supervised authority permits this routine contained edit. Its own
+  // Workbench bridge applies it; an ordinary manual Editor must not be needed for execution.
   const review = workbench(page).getByRole("region", { name: "Review the proposed file change" });
   await expect
     .poll(() => latestChangesetAudit(page))
     .toMatchObject({
       actionType: "applyChangeset",
-      outcome: "queued",
+      disposition: "allowed",
+      outcome: "succeeded",
     });
-  await expect(review).toBeVisible({ timeout: 30_000 });
-  await expect(review).toContainText(AUTHORITY_TARGET_RELATIVE_PATH);
-  const apply = review.getByRole("button", { name: "Apply change", exact: true });
-  await expect(apply).toBeVisible();
-  await apply.click();
-  await expect(review).toBeHidden();
+  const audit = await latestChangesetAudit(page);
+  expect(audit?.actionId).toMatch(/^ses_[^:]+:tool-keiko_changeset_edit-6$/u);
+  expect(audit?.sessionId).toContain(runId);
+  await expect(review).toHaveCount(0);
 }
 
 async function proveVerificationActivity(timeline: Locator): Promise<void> {
   if (realBinaryJourney) {
-    await expect(
-      timeline.getByText("Tool activity: keiko_verification", { exact: true }),
-    ).toBeVisible({ timeout: 90_000 });
+    const verification = toolActivity(timeline, "keiko_verification");
+    await expect(verification).toHaveCount(1, { timeout: 90_000 });
+    await expandCompletedActivity(timeline);
+    await verification.locator("summary").click();
+    await expect(verification.getByText("keiko_verification", { exact: true })).toBeVisible();
     return;
   }
   await expect(timeline.getByText("Verification summarized", { exact: true })).toBeVisible({
@@ -429,6 +440,8 @@ async function proveLiveActivityTimeline(
   runId: string,
 ): Promise<void> {
   await awaitRequiredQuestion(page);
+  await workbench(page).getByRole("button", { name: "Run details" }).click();
+  await expandCompletedActivity(timeline);
   if (realBinaryJourney) {
     await proveRepositorySearchConsumption(timeline);
     await proveSkillDiscoveryConsumption(timeline);
@@ -442,7 +455,7 @@ async function proveLiveActivityTimeline(
   await expect(completedRead).toContainText("workspace");
   await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
   await answerVisibleQuestion(page);
-  await approveRealBinaryChangeset(page);
+  await proveRealBinaryChangesetApplied(page, runId);
   await openRealBinaryManualEditor(page);
   await proveVerificationActivity(timeline);
   await expect(
@@ -462,6 +475,19 @@ async function proveLiveActivityTimeline(
   if (!realBinaryJourney) await proveRunChangesView(page, request, edited[0] ?? "");
 }
 
+function toolActivity(timeline: Locator, tool: string): Locator {
+  return timeline
+    .locator('[data-tool-state="succeeded"]')
+    .filter({ has: timeline.page().getByText(tool, { exact: true }) });
+}
+
+async function expandCompletedActivity(timeline: Locator): Promise<void> {
+  const summaries = timeline.locator(
+    '[data-timeline-kind="group"] > details:not([open]) > summary',
+  );
+  for (const summary of await summaries.all()) await summary.click();
+}
+
 async function proveRepositorySearchConsumption(timeline: Locator): Promise<void> {
   const path = join(stateDir, "h1-result-consumption.json");
   await expect.poll(() => existsSync(path)).toBe(true);
@@ -477,9 +503,11 @@ async function proveRepositorySearchConsumption(timeline: Locator): Promise<void
     readTargetDerivedFromResult: true,
   });
   for (const tool of ["keiko_repository_search", "keiko_workspace_read"]) {
-    const succeeded = timeline.locator('[data-tool-state="succeeded"]').filter({ hasText: tool });
+    const succeeded = toolActivity(timeline, tool);
     await expect(succeeded).toHaveCount(1);
     await expect(succeeded).toBeVisible();
+    await succeeded.locator("summary").click();
+    await expect(succeeded.getByText(tool, { exact: true })).toBeVisible();
   }
 }
 
@@ -498,13 +526,12 @@ async function proveSkillDiscoveryConsumption(timeline: Locator): Promise<void> 
     invokedSkillDerivedFromResult: true,
   });
   for (const tool of ["keiko_skill_discover", "keiko_skill"]) {
-    // Matched on the card's exact label, so `keiko_skill` cannot also match
-    // `keiko_skill_discover`. A `hasText` regular expression cannot do it: the text engine reads a
-    // pattern with the repository's mandatory `u` flag as literal text and matches nothing.
-    const succeeded = timeline
-      .locator('[data-tool-state="succeeded"]')
-      .filter({ has: timeline.page().getByText(`Tool activity: ${tool}`, { exact: true }) });
+    // Match the exact tool identifier inside its user-expandable card, so invoking a skill
+    // cannot also match the distinct skill-discovery card.
+    const succeeded = toolActivity(timeline, tool);
     await expect(succeeded).toHaveCount(1);
+    await succeeded.locator("summary").click();
+    await expect(succeeded.getByText(tool, { exact: true })).toBeVisible();
   }
   await expect(timeline.getByText("Skill invoked", { exact: true }).first()).toBeVisible();
 }
@@ -572,15 +599,9 @@ test("#2386 authority: the workbench readiness surface is live, not static", asy
 // exactly the post-#2644 stall this step repairs. The human raising the mode IS the product
 // flow; the widening-rejection step below still proves a LIVE run cannot be widened further.
 async function proveDefaultModeThenRaiseToSupervised(page: Page): Promise<void> {
-  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
-    "data-mode",
-    "governed-assist",
-  );
+  await expectEffectiveMode(page, "governed-assist");
   await requestAutonomyMode(page, /Supervised workspace/u);
-  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
-    "data-mode",
-    "supervised-coding",
-  );
+  await expectEffectiveMode(page, "supervised-coding");
 }
 
 test("#2386 authority: question, sticky pause, widening rejection, follow-up, settle", async ({
@@ -589,8 +610,8 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
 }) => {
   // #2478: the boot URL carries the launcher-minted pairing attestation; question text is served
   // only to this paired window from here on.
-  await openWorkbench(page, launcherPairingFragment());
   await registerTrustedRepositoryProject(page);
+  await openWorkbench(page, launcherPairingFragment());
   await bindFixtureWorkspace(page);
 
   await proveDefaultModeThenRaiseToSupervised(page);
@@ -622,10 +643,7 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   // that requesting Full access there leaves the live run's confirmed mode untouched — the
   // supervised mode this journey raised to before starting.
   await requestAutonomyMode(page, /Full access/u);
-  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
-    "data-mode",
-    "supervised-coding",
-  );
+  await expectEffectiveMode(page, "supervised-coding");
   await expect(workbench(page)).toHaveAttribute("data-state", "paused");
 
   // A follow-up drafted while paused is admitted as a new task turn — and must NOT auto-resume.
@@ -641,10 +659,7 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   // Narrowing the product-wide policy while the run is paused leaves the live run's confirmed
   // mode untouched, exactly like the widening attempt above.
   await requestAutonomyMode(page, /Ask for approval/u);
-  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
-    "data-mode",
-    "supervised-coding",
-  );
+  await expectEffectiveMode(page, "supervised-coding");
 
   await page.getByRole("button", { name: "Resume run" }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
