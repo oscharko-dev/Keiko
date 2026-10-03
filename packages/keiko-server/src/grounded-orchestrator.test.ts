@@ -1727,35 +1727,43 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it.each(["Was siehst du?", "What can you see?", "Give me an overview of this codebase structure."])(
-    "explores a connected repository with no metadata or matching prose: %s",
-    async (text) => {
-      seedRepo();
-      const log = createBufferedServerLogSink();
-      const out = await retrieveConnectedContextPack(
-        input({
-          scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
-          query: happyQuery({ text }),
-        }),
-        {
+  it.each([
+    "Was siehst du?",
+    "What can you see?",
+    "Give me an overview of this codebase structure.",
+  ])("explores a connected repository with no metadata or matching prose: %s", async (text) => {
+    seedRepo();
+    const log = createBufferedServerLogSink();
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text }),
+      }),
+      {
+        correlationId: "connected-orientation",
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        activityLog: log,
+      },
+    );
+    expect(out.pack.files.map((file) => file.scopePath)).toContain("src/foo.ts");
+    expect(
+      out.pack.files
+        .flatMap((file) => file.excerpts)
+        .some((excerpt) => excerpt.content.includes("export function MyClass")),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    expect(log.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          op: "search.connected-context.completed",
           correlationId: "connected-orientation",
-          answerer: echoAnswerer,
-          nowMs: () => NOW,
-          detectWorkspace: () => fakeWorkspace(),
-          activityLog: log,
-        },
-      );
-      expect(out.pack.files.map((file) => file.scopePath)).toContain("src/foo.ts");
-      expect(out.pack.files.flatMap((file) => file.excerpts).some((excerpt) =>
-        excerpt.content.includes("export function MyClass"),
-      )).toBe(true);
-      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
-      expect(log.events).toEqual(expect.arrayContaining([
-        expect.objectContaining({ op: "search.connected-context.completed", correlationId: "connected-orientation" }),
-      ]));
-      expect(log.lines().join("\n")).not.toContain("export function MyClass");
-    },
-  );
+        }),
+      ]),
+    );
+    expect(log.lines().join("\n")).not.toContain("export function MyClass");
+  });
 
   it("grounds direct package.json metadata requests without leaking internal .keiko evidence", async () => {
     writeFileSync(join(ROOT, "package.json"), '{\n  "packageManager": "npm@11.16.0"\n}\n');
@@ -2484,7 +2492,7 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("reports oversized prefix scans in coverage diagnostics without marking the selected file omitted", async () => {
+  it("excludes files above the per-file limit instead of citing a scanned prefix", async () => {
     writeFileSync(join(ROOT, "src/oversized.ts"), `oversizedNeedle\n${"x".repeat(2_200_000)}`);
     const counted = countingNodeFs();
     const out = await retrieveConnectedContextPack(
@@ -2499,20 +2507,16 @@ describe("runGroundedExploration", () => {
         detectWorkspace: () => fakeWorkspace(),
       },
     );
-    expect(out.pack.files.some((file) => file.scopePath === "src/oversized.ts")).toBe(true);
-    expect(out.pack.omitted.some((entry) => entry.scopePath === "src/oversized.ts")).toBe(false);
-    expect(out.pack.diagnostics?.coverage?.truncated).toBe(true);
-    expect(out.pack.diagnostics?.coverage?.oversizedFilesScanned).toBe(1);
-    expect(
-      out.pack.uncertainty.some(
-        (marker) =>
-          marker.kind === "scope-incomplete" && marker.claim.includes("oversized-prefix 1"),
-      ),
-    ).toBe(true);
+    expect(out.pack.files.some((file) => file.scopePath === "src/oversized.ts")).toBe(false);
+    expect(out.pack.diagnostics?.coverage?.oversizedFilesScanned).toBe(0);
+    expect(out.pack.uncertainty.some((marker) => marker.claim.includes("oversized-prefix 1"))).toBe(
+      false,
+    );
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
   it("reports low-value rescue coverage when generated source is the only evidence", async () => {
+    writeFileSync(join(ROOT, ".git"), "gitdir: ../fixture.git\n");
     mkdirSync(join(ROOT, "generated"), { recursive: true });
     writeFileSync(join(ROOT, "generated/client.ts"), "export const GeneratedNeedle = 1;\n");
     const out = await retrieveConnectedContextPack(
@@ -2599,13 +2603,10 @@ describe("runGroundedExploration", () => {
 
     const descriptorExcerpt = out.pack.files
       .find((file) => file.scopePath === "src/DescriptorProbe.ts")
-      ?.excerpts.find(
-        (excerpt) =>
-          excerpt.atom.provenance.tool === "repo.symbolFileDiscovery" &&
-          excerpt.atom.lineRange?.startLine === 3,
-      );
+      ?.excerpts.find((excerpt) => excerpt.content.includes("export function DescriptorProbe"));
     expect(descriptorCaps).toContain(2_097_152);
     expect(descriptorExcerpt).toBeDefined();
+    expect(descriptorExcerpt?.atom.lineRange).toEqual({ startLine: 1, endLine: 4 });
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -4303,8 +4304,9 @@ describe("runGroundedExploration", () => {
         true,
       );
       expect(
-        repeatedFile?.excerpts.filter((excerpt) => excerpt.content.includes("MyClass repeated"))
-          .length,
+        repeatedFile?.excerpts.flatMap((excerpt) =>
+          excerpt.content.split("\n").filter((line) => line.includes("MyClass repeated")),
+        ).length,
       ).toBeGreaterThan(8);
       expect(
         out.pack.uncertainty.every(
@@ -5398,6 +5400,7 @@ function scriptedExcerptClock(options: ScriptedExcerptClockOptions): ScriptedExc
   const onContentRead = (): void => {
     if (armed && options.crossDuringContentRead === true) late = true;
   };
+  const descriptorBytes = nodeWorkspaceFs.readFileBytes;
   const descriptorUtf8 = nodeWorkspaceFs.readFileUtf8SameDescriptor;
   const containedDescriptorUtf8 = nodeWorkspaceFs.readFileUtf8WithinRootSameDescriptor;
   return {
@@ -5408,6 +5411,20 @@ function scriptedExcerptClock(options: ScriptedExcerptClockOptions): ScriptedExc
     },
     fs: {
       ...nodeWorkspaceFs,
+      ...(descriptorBytes === undefined
+        ? {}
+        : {
+            readFileBytes: async (
+              absolutePath: string,
+              maxBytes: number,
+              hardLinkPolicy: WorkspaceHardLinkPolicy,
+              expected: WorkspaceStat,
+            ): Promise<Uint8Array> => {
+              const bytes = await descriptorBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
+              onContentRead();
+              return bytes;
+            },
+          }),
       ...(descriptorUtf8 === undefined
         ? {}
         : {

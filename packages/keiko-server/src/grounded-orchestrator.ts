@@ -1481,16 +1481,22 @@ async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Pro
     ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
   };
   if (inputs.retrievalIntent === "repository-overview") {
-    return findFiles(inputs.searchScope, {
-      ...inputs.query,
-      kind: "file-pattern",
-      text: "**/*",
-    }, ring.searchLimits, options);
+    return findFiles(
+      inputs.searchScope,
+      {
+        ...inputs.query,
+        kind: "file-pattern",
+        text: "**/*",
+      },
+      ring.searchLimits,
+      options,
+    );
   }
   const definitionSymbol = directDefinitionSymbol(inputs.query, inputs.anchors);
-  const query = definitionSymbol === undefined
-    ? inputs.query
-    : { ...inputs.query, kind: "exact-symbol" as const, text: definitionSymbol };
+  const query =
+    definitionSymbol === undefined
+      ? inputs.query
+      : { ...inputs.query, kind: "exact-symbol" as const, text: definitionSymbol };
   return searchText(inputs.searchScope, query, ring.searchLimits, {
     ...options,
     ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
@@ -4421,6 +4427,7 @@ interface GroundedPackCacheLookupInputs {
 }
 
 interface AssembleOptionsForGroundedPack {
+  readonly includeSurroundingContext: boolean;
   readonly nowMs: () => number;
   readonly microIndex?: MicroIndex;
   readonly reranker?: RerankerSeam;
@@ -4512,6 +4519,7 @@ function assembleOptionsFor(
       : deadlineBoundReranker(deps.contextPackReranker, nowMs, deadlineAtMs, deps.signal);
   return {
     nowMs,
+    includeSurroundingContext: true,
     ...(includeMicroIndex && microIndex !== undefined ? { microIndex } : {}),
     ...(includeReranker && reranker !== undefined ? { reranker } : {}),
   };

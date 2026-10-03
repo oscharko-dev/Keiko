@@ -127,6 +127,24 @@ objects. The BFF returns the manifest run id on `GroundedAnswer.evidenceRunId`, 
 UI links to the local evidence detail route for reviewers who need the durable audit
 record.
 
+### D3.3 — Explicit connections support bounded recursive orientation and search
+
+An explicitly connected repository or ordinary folder is sufficient scope for a meaningful
+orientation or natural-language search request. A filename or symbol is useful for precision,
+but is not a prerequisite to inspect the user's accepted root. Empty and punctuation-only
+requests still require clarification, and implicit roots retain their narrowing guards.
+Repository orientation uses the existing recursive file-discovery facade in addition to
+metadata and overview documents; a source-only folder must produce actual source evidence.
+All existing path denials, byte limits, cancellation and exploration budgets still apply.
+
+The search match identifies where to read; it is not the entire context for the answer.
+Connected-context assembly retains each bounded, actually read surrounding window once,
+including function bodies and neighboring calls, and binds its evidence atom to the exact
+source lines present in that excerpt. Metadata and listing atoms receive source ranges only
+after a real read. Compaction narrows ranges to the lines sent. The default match-only
+assembler mode remains available to consumers that require exact match slices. Window mode
+participates in the micro-index key, so the two modes cannot reuse incompatible packs.
+
 ### D4 — The summary is structurally redaction-free, and we prove it
 
 The wire boundary is asserted by `grounded-qa.redaction.test.ts`: an attacker-controlled

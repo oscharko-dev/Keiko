@@ -134,6 +134,37 @@ describe("OpenCode launch profile", () => {
     expect(finalPermissionAction(config.permissions, "keiko_submit_changeset")).toBe("deny");
   });
 
+  it("distinguishes creation from digest-bound edits of existing files", () => {
+    const profile = buildOpenCodeLaunchProfile({
+      executable: "/managed/opencode",
+      stateRoot: "/private/run",
+      ...CONTEXT_INPUT,
+      randomBytes: (): Buffer => Buffer.alloc(32, 7),
+    });
+    if (!profile.ok) throw new Error("expected fixed managed launch profile");
+    const prompt = profile.configValue.agents.build.system;
+    expect(prompt).toContain("Read every existing file before you edit it");
+    expect(prompt).toContain("For a new file, use a /dev/null source diff");
+    expect(prompt).toContain(createHash("sha256").update("", "utf8").digest("hex"));
+  });
+
+  it("teaches the launched agent to refine truncated search without inventing pagination", () => {
+    const profile = buildOpenCodeLaunchProfile({
+      executable: "/managed/opencode",
+      stateRoot: "/private/run",
+      ...CONTEXT_INPUT,
+      randomBytes: (): Buffer => Buffer.alloc(32, 7),
+    });
+    if (!profile.ok) throw new Error("expected fixed managed launch profile");
+    const prompt = profile.configValue.agents.build.system;
+    expect(prompt).not.toContain("continuation cursors");
+    expect(prompt).toContain("truncationReasons");
+    expect(prompt).toContain("includeGlobs");
+    expect(prompt).toContain("An empty truncated result does not prove absence");
+    expect(prompt).toContain("literal mode for an exact phrase");
+    expect(prompt).toContain("lexical mode for natural-language concepts");
+  });
+
   it("documents every model-visible tool and the built-in prohibition in the agent prompt", () => {
     // The V2 child resolves the coding model with its default agent; the governed system
     // override is what live models actually receive, so every

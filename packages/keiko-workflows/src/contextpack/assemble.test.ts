@@ -16,7 +16,7 @@ import {
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 
-import { assembleContextPack, type AssembleInput } from "./assemble.js";
+import { assembleContextPack, contextPackIndexKey, type AssembleInput } from "./assemble.js";
 import { createMicroIndex } from "./microIndex.js";
 import type { RerankerSeam } from "./reranker.js";
 
@@ -468,5 +468,75 @@ describe("assembleContextPack", () => {
     expect(excerpts?.map((excerpt) => excerpt.content)).toEqual(["first target", "second target"]);
     expect(result.pack.usage.excerptBytes).toBe("first targetsecond target".length);
     expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+  it("retains requested read-window context with exact source lines", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [atom("a.ts", "target", { startLine: 10, endLine: 10 })],
+      ranked: [candidate("a.ts", 0.9)],
+      excerpts: new Map([
+        [
+          "a.ts",
+          [
+            {
+              startLine: 9,
+              endLine: 12,
+              content: "context before\nfirst target\nfunction body\nreturn result",
+            },
+          ],
+        ],
+      ]),
+    };
+    const result = await assembleContextPack(input, {
+      nowMs: fixedNow,
+      includeSurroundingContext: true,
+    });
+    expect(result.pack.files[0]?.excerpts[0]?.content).toBe(
+      "context before\nfirst target\nfunction body\nreturn result",
+    );
+    expect(result.pack.files[0]?.excerpts[0]?.atom.lineRange).toEqual({
+      startLine: 9,
+      endLine: 12,
+    });
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+
+  it("binds listing evidence to the lines actually sent and bounds compacted ranges", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [atom("a.ts", "listing", undefined)],
+      ranked: [candidate("a.ts", 0.9)],
+      excerpts: new Map([["a.ts", [{ startLine: 1, endLine: 3, content: "one\ntwo\nthree" }]]]),
+    };
+    const result = await assembleContextPack(input, {
+      nowMs: fixedNow,
+      includeSurroundingContext: true,
+      maxBytesPerExcerpt: 7,
+    });
+    expect(result.pack.files[0]?.excerpts[0]?.content).toBe("one\ntwo");
+    expect(result.pack.files[0]?.excerpts[0]?.atom.lineRange).toEqual({ startLine: 1, endLine: 2 });
+  });
+
+  it("does not duplicate overlapping match windows in surrounding context mode", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [
+        atom("a.ts", "first", { startLine: 10, endLine: 10 }),
+        atom("a.ts", "second", { startLine: 12, endLine: 12 }),
+      ],
+      ranked: [candidate("a.ts", 0.9)],
+      excerpts: new Map([
+        ["a.ts", [{ startLine: 9, endLine: 12, content: "before\nfirst\nbetween\nsecond" }]],
+      ]),
+    };
+    const result = await assembleContextPack(input, {
+      nowMs: fixedNow,
+      includeSurroundingContext: true,
+    });
+    expect(result.pack.files[0]?.excerpts).toHaveLength(1);
+    expect(result.pack.usage.excerptBytes).toBe("before\nfirst\nbetween\nsecond".length);
+    expect(contextPackIndexKey(input, { includeSurroundingContext: true })).not.toBe(
+      contextPackIndexKey(input, { includeSurroundingContext: false }),
+    );
   });
 });

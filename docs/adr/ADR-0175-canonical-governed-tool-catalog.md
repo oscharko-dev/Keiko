@@ -216,12 +216,29 @@ first edit, with a diagnostic naming only the digest of the event type; the refu
 labels (type, tool, status, byte size, refusing gate) now travel in that diagnostic's `code`.
 
 Repository search v1 is local lexical/literal/safe-regex/symbol search through the workspace owner.
-It caps query characters at 200, hits at 50, scanned files at 2,000, file bytes at 512 KiB, time at
-5 seconds, snippets at 512 bytes, result at 64 KiB and discovery inventory at 50,000. Each include
-and exclude list has at most 32 globs of 200 characters. Yield after at most 32 candidates. Search
-must reject dangerous regexes, honor cancellation during inventory and scanning, and report omitted
-coverage. Existing `repoSearch` defaults of 200 hits do not widen the coding projection's 50-hit cap.
-`keiko_workspace_discover` stays path-only. Semantic reranking remains deferred to #3416/#2554.
+It caps query characters at 200, hits at 50, file bytes at an inclusive 2 MiB, time at
+5 seconds, snippets at 512 bytes and result at 64 KiB. Discovery and scanning do not impose an
+arbitrary file-count ceiling on the selected folder; the absolute request deadline, cancellation
+and output caps still apply, with incomplete coverage reported explicitly. Each include and exclude list has at
+most 32 globs of 200 characters. Yield after at most 32 candidates. Search must reject dangerous
+regexes, honor cancellation during inventory and scanning, and report omitted coverage. Existing
+`repoSearch` defaults of 200 hits do not widen the coding projection's 50-hit cap.
+
+Recursive search does not require Git metadata. In an ordinary folder, directory names such as
+`build`, `dist` or `generated` alone do not classify text documents as code noise; Git repositories
+retain their coding-noise exclusions. Both scopes retain the same sensitive-path, containment,
+symlink, binary and image denials. The ordinary Chat can search a connected folder; launching a
+Coding Workbench write task still requires its existing verified Git workspace authority.
+
+The governed model prompt describes the actual search result: bounded hits and
+`truncationReasons`, without a continuation cursor. The agent refines a truncated search with a
+more selective query or `includeGlobs`, reads the matched line window before editing, and cannot
+infer absence from an empty result whose coverage is incomplete. Literal mode matches an exact
+phrase; lexical mode searches concepts; symbol and safe-regex modes retain their explicit semantics.
+`keiko_workspace_discover` stays path-only. Optional semantic reranking follows #3416/#2554 below;
+its availability never gates recursive lexical search. The same prompt distinguishes existing-file
+reads from new-file creation: existing edits bind the latest whole-file read digest; creation uses
+a `/dev/null` source diff and the empty-content digest already owned by the changeset contract.
 
 ### D5 — Version-1 result, paging and recovery table
 

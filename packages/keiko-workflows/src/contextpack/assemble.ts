@@ -23,7 +23,7 @@ import {
   type SelectedScope,
   type UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { connectedContextPackStableId } from "@oscharko-dev/keiko-workspace";
+import { connectedContextPackStableId, evidenceAtomStableId } from "@oscharko-dev/keiko-workspace";
 
 import { compactExcerpt, nextAtomFitsBudget, type BudgetCheckpoint } from "./compaction.js";
 import { makeIndexKey, type MicroIndex } from "./microIndex.js";
@@ -56,6 +56,7 @@ export type ExcerptSource = string | ExcerptWindow | readonly ExcerptWindow[];
 
 export interface AssembleOptions {
   readonly maxBytesPerExcerpt?: number;
+  readonly includeSurroundingContext?: boolean;
   readonly editablePaths?: ReadonlySet<string>;
   readonly reranker?: RerankerSeam;
   readonly microIndex?: MicroIndex;
@@ -74,6 +75,7 @@ const DEFAULT_MAX_BYTES_PER_EXCERPT = 8 * 1024;
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 interface ResolvedOptions {
+  readonly includeSurroundingContext: boolean;
   readonly maxBytesPerExcerpt: number;
   readonly editablePaths: ReadonlySet<string>;
   readonly reranker: RerankerSeam;
@@ -83,6 +85,7 @@ interface ResolvedOptions {
 
 function resolveOptions(options: AssembleOptions | undefined): ResolvedOptions {
   return {
+    includeSurroundingContext: options?.includeSurroundingContext ?? false,
     maxBytesPerExcerpt: options?.maxBytesPerExcerpt ?? DEFAULT_MAX_BYTES_PER_EXCERPT,
     editablePaths: options?.editablePaths ?? new Set<string>(),
     reranker: options?.reranker ?? disabledReranker,
@@ -186,10 +189,24 @@ function compactAtomsForCandidate(
   atomsForPath: readonly EvidenceAtom[],
   source: ExcerptSource,
   maxBytesPerExcerpt: number,
+  context: { readonly includeSurroundingContext: boolean; readonly scopeId: string },
 ): { readonly excerpts: ContextExcerpt[]; readonly totalBytes: number } {
   const excerpts: ContextExcerpt[] = [];
   let totalBytes = 0;
+  const seenWindows = new Set<string>();
   for (const atom of atomsForPath) {
+    if (context.includeSurroundingContext) {
+      const window = normalizeExcerptWindows(source).find((entry) => coversAtom(entry, atom));
+      if (window === undefined) continue;
+      const key = `${String(window.startLine)}-${String(window.endLine)}`;
+      if (seenWindows.has(key)) continue;
+      seenWindows.add(key);
+      const excerpt = compactContextWindow(atom, window, maxBytesPerExcerpt, context.scopeId);
+      if (excerpt.contentBytes === 0) continue;
+      excerpts.push(excerpt);
+      totalBytes += excerpt.contentBytes;
+      continue;
+    }
     const rawContent = contentForAtom(atom, source);
     if (rawContent === undefined) {
       continue;
@@ -199,6 +216,37 @@ function compactAtomsForCandidate(
     totalBytes += result.bytesConsumed;
   }
   return { excerpts, totalBytes };
+}
+
+function compactContextWindow(
+  atom: EvidenceAtom,
+  window: ExcerptWindow,
+  maxBytes: number,
+  scopeId: string,
+): ContextExcerpt {
+  const result = compactExcerpt({ atom, rawContent: window.content, maxBytes });
+  const lineRange = {
+    startLine: window.startLine,
+    endLine: Math.min(
+      window.endLine,
+      window.startLine + Math.max(0, lineCount(result.excerpt.content) - 1),
+    ),
+  };
+  return {
+    ...result.excerpt,
+    atom: {
+      ...atom,
+      lineRange,
+      stableId: evidenceAtomStableId({
+        scopeId,
+        scopePath: atom.scopePath,
+        lineRange,
+        provenanceKind: atom.provenance.kind,
+        provenanceTool: atom.provenance.tool,
+        queryFingerprint: atom.provenance.queryFingerprint,
+      }),
+    },
+  };
 }
 
 function lineCount(content: string): number {
@@ -261,6 +309,8 @@ function appendUsage(usage: ExplorationUsage, addedBytes: number): ExplorationUs
 }
 
 interface ProcessContext {
+  readonly includeSurroundingContext: boolean;
+  readonly scopeId: string;
   readonly atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>;
   readonly excerpts: ReadonlyMap<string, ExcerptSource>;
   readonly budget: ExplorationBudget;
@@ -337,6 +387,7 @@ function processCandidate(
     atomsForPath,
     excerptSource,
     ctx.maxBytesPerExcerpt,
+    ctx,
   );
   if (excerpts.length === 0) {
     recordNoEvidence(
@@ -601,6 +652,7 @@ function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): rea
     diagnostics: cacheDiagnostics(input.diagnostics),
     excerpts: cacheExcerptIdentity(input),
     maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
+    includeSurroundingContext: resolved.includeSurroundingContext,
     editablePaths: [...resolved.editablePaths].sort((left, right) => left.localeCompare(right)),
     rerankerName: resolved.reranker.name,
   });
@@ -641,6 +693,8 @@ export async function assembleContextPack(
     rerankerOutcome.ordered,
     {
       atomsByPath,
+      includeSurroundingContext: resolved.includeSurroundingContext,
+      scopeId: input.scope.scopeId,
       excerpts: input.excerpts,
       budget: input.budget,
       maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
