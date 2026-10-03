@@ -286,9 +286,19 @@ const openDeleteConfirm: SurfaceOpener = async (page, request, theme) => {
   await expect(row).toBeVisible();
   await row.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Delete…" }).click();
-  const dialog = page.locator('.ed-dirty-dialog[role="dialog"][aria-modal="true"]');
+  const dialog = page.getByRole("dialog", { name: "Delete file?" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Delete" })).toBeFocused();
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
+  expect(await dialog.evaluate((element) => element.tagName)).toBe("DIALOG");
+  const confirm = dialog.getByRole("button", { name: "Delete" });
+  const cancel = dialog.getByRole("button", { name: "Cancel" });
+  await expect(confirm).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(confirm).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(cancel).toBeFocused();
   return ".ed-dirty-dialog";
 };
 

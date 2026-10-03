@@ -65,7 +65,7 @@
 
 .cmpRootPath {
   overflow: hidden;
-  color: var(--fg-dim);
+  color: var(--text-secondary);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
