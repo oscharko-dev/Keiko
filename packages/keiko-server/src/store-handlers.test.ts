@@ -584,6 +584,46 @@ describe("GET /api/projects", () => {
 
 // ─── Route 14: POST /api/projects ────────────────────────────────────────────
 describe("POST /api/projects", () => {
+  it.each(["revoked", "invalidated", "restricted"] as const)(
+    "preserves %s script trust when an existing project is explicitly reopened",
+    async (state) => {
+      writeFileSync(join(projDir, "package.json"), JSON.stringify({ name: "selected-root" }));
+      store.createProject(projDir);
+      const trustLines: ServerLogEvent[] = [];
+      const workspaceScriptTrust = createWorkspaceScriptTrustService({
+        store,
+        activityLog: {
+          write: (event: ServerLogEvent): void => {
+            trustLines.push(event);
+          },
+        },
+      });
+      if (state !== "restricted") workspaceScriptTrust.grant(projDir);
+      if (state === "revoked") workspaceScriptTrust.revoke(projDir);
+      if (state === "invalidated") {
+        writeFileSync(join(projDir, "package.json"), JSON.stringify({ name: "changed-root" }));
+      }
+      const before = workspaceScriptTrust.status(projDir);
+      expect(before.trust).toBe("restricted");
+      trustLines.length = 0;
+      await restartWithDeps({ workspaceScriptTrust });
+      const alias = join(tmp, "project-alias");
+      symlinkSync(projDir, alias, "dir");
+      for (const path of [projDir, alias]) {
+        const res = await fetch(url("/api/projects"), {
+          method: "POST",
+          headers: POST_HEADERS,
+          body: JSON.stringify({ path, selectionIntent: "explicit-folder-selection" }),
+        });
+        expect(res.status).toBe(201);
+        expect(workspaceScriptTrust.status(projDir)).toEqual(before);
+        expect(trustLines.filter((event) => event.op === "workspace-script-trust.granted")).toEqual(
+          [],
+        );
+      }
+    },
+  );
+
   it.each([undefined, "file-navigation"])(
     "does not grant trust for registration intent %s",
     async (selectionIntent) => {

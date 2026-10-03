@@ -461,14 +461,18 @@ export async function handleCreateProject(
     // The store owner writes the project row and its single-root workspace manifest in one
     // transaction (`createProjectRecord`). A successful response therefore exposes a current
     // membership projection; consumers never synthesize or assume membership client-side.
+    const registeredPaths = new Set(deps.store.listProjects().map((project) => project.path));
     const project = deps.store.createProject(normalizedPath, name);
-    // Choosing a local folder is the explicit local-human trust act. The trust service resolves
+    // The first explicit folder selection grants trust; reopening an existing canonical project
+    // preserves its trust decision, including revocation and invalidation. The store resolves aliases
+    // to that same registered path. The trust service resolves
     // every authoritative dimension itself (manifest/root/object identity and package.json basis);
     // the browser supplies only the path it already selected. When the service is unavailable the
     // project remains registered but restricted, preserving the legacy injectable test seam without
     // inventing browser-side authority.
     try {
-      if (explicitSelection) deps.workspaceScriptTrust?.grant(project.path, ctx.correlationId);
+      if (explicitSelection && !registeredPaths.has(project.path))
+        deps.workspaceScriptTrust?.grant(project.path, ctx.correlationId);
     } catch (error) {
       const correlationId = reportProjectTrustGrantFailure(
         deps,
