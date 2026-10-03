@@ -1293,6 +1293,7 @@ export const SUPPORT_CODE_MODULES: readonly string[] = [
   "keiko-server/editor/verificationRoutes",
   "keiko-server/editor/verificationRunner",
   "keiko-server/editor/verificationRunnerErrors",
+  "keiko-server/editor/watch/workspaceWatchEvidence",
   "keiko-server/editor/watch/workspaceWatchRoutes",
   "keiko-server/editor/watch/workspaceWatchService",
   "keiko-server/editor/workspaceSearchRoutes",

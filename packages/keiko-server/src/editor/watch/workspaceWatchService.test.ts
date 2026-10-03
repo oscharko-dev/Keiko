@@ -1,3 +1,10 @@
+import { resetServerLogger } from "../../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../../tests/support/activity-log-proof.js";
+import { createServerLogger, setServerLogger } from "../../observability/index.js";
 import type { Dirent, Stats } from "node:fs";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
@@ -152,6 +159,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  resetServerLogger();
   await rm(root, { recursive: true, force: true });
   await rm(outside, { recursive: true, force: true });
 });
@@ -218,6 +226,149 @@ describe("workspace watch service", () => {
       expect.objectContaining({ kind: "created", relativePath: "while-paused.txt" }),
     );
     manager.disposeAll();
+  });
+
+  it("pauses an in-flight baseline during a stream lease gap without false degradation", async () => {
+    await writeFile(join(root, "existing.txt"), "one");
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    let releaseRead: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    fileSystem.readdir.mockImplementationOnce(async (path) => {
+      await held;
+      return readdir(path, { withFileTypes: true });
+    });
+    const manager = createWorkspaceWatchService({ adapter, fileSystem, coalesceMs: 0 });
+    try {
+      const first = manager.subscribe({ root, onEvent: vi.fn() });
+      await waitForCondition(() => fileSystem.readdir.mock.calls.length === 1);
+      if (first.kind !== "ok") throw new Error("Expected subscription");
+      first.unsubscribe();
+      releaseRead?.();
+      for (let turn = 0; turn < 5; turn += 1) await yieldToEventLoop();
+      expect(manager.snapshot(root).health).toBe("healthy");
+      expect(fileSystem.lstat).not.toHaveBeenCalled();
+      const onEvent = vi.fn();
+      manager.subscribe({ root, onEvent });
+      await drainInitialBaseline(manager, adapter);
+      await writeFile(join(root, "existing.txt"), "two");
+      adapter.emit({ eventType: "change", filename: "existing.txt" });
+      await waitForCondition(() => onEvent.mock.calls.length > 0);
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: "changed" }));
+      expect(fileSystem.readdir).toHaveBeenCalledOnce();
+    } finally {
+      releaseRead?.();
+      manager.disposeAll();
+    }
+  });
+
+  it("publishes an honest recovered snapshot after reconciling an unattended change", async () => {
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({ adapter, coalesceMs: 0 });
+    const onSnapshot = vi.fn();
+    try {
+      const first = manager.subscribe({ root, onEvent: vi.fn(), onSnapshot });
+      await drainInitialBaseline(manager, adapter);
+      if (first.kind !== "ok") throw new Error("Expected subscription");
+      first.unsubscribe();
+      await writeFile(join(root, "gap.txt"), "one");
+      adapter.emit({ eventType: "rename", filename: "gap.txt" });
+      expect(manager.snapshot(root).health).toBe("rescanRequired");
+      manager.subscribe({ root, onEvent: vi.fn(), onSnapshot });
+      await waitForCondition(() => manager.snapshot(root).health === "healthy");
+      expect(onSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ health: "healthy", degradedReasons: [] }),
+      );
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it("reuses a healthy baseline across repeated leases without full rescans", async () => {
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    const manager = createWorkspaceWatchService({ adapter, fileSystem, coalesceMs: 0 });
+    try {
+      let lease = manager.subscribe({ root, onEvent: vi.fn() });
+      await drainInitialBaseline(manager, adapter);
+      fileSystem.readdir.mockClear();
+      for (let index = 0; index < 6; index += 1) {
+        if (lease.kind !== "ok") throw new Error("Expected subscription");
+        lease.unsubscribe();
+        lease = manager.subscribe({ root, onEvent: vi.fn() });
+        await yieldToEventLoop();
+      }
+      expect(fileSystem.readdir).not.toHaveBeenCalled();
+      expect(manager.snapshot(root).health).toBe("healthy");
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it("releases a suspended scan at the bounded idle shutdown", async () => {
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    let releaseRead: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    fileSystem.readdir.mockImplementationOnce(async (path) => {
+      await held;
+      return readdir(path, { withFileTypes: true });
+    });
+    const manager = createWorkspaceWatchService({ adapter, fileSystem, idleTearDownMs: 0 });
+    try {
+      const first = manager.subscribe({ root, onEvent: vi.fn() });
+      await waitForCondition(() => fileSystem.readdir.mock.calls.length === 1);
+      if (first.kind !== "ok") throw new Error("Expected subscription");
+      first.unsubscribe();
+      releaseRead?.();
+      await waitForCondition(() => adapter.handles[0]?.close.mock.calls.length === 1);
+      expect(fileSystem.lstat).not.toHaveBeenCalled();
+    } finally {
+      releaseRead?.();
+      manager.disposeAll();
+    }
+  });
+
+  it("records body-free degraded and recovered state once with closed reasons", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({ adapter, coalesceMs: 0 });
+    try {
+      const args = { root, onEvent: vi.fn(), correlationId: "watch-session-000001" };
+      const first = manager.subscribe(args);
+      await drainInitialBaseline(manager, adapter);
+      if (first.kind !== "ok") throw new Error("Expected subscription");
+      first.unsubscribe();
+      await writeFile(join(root, "gap.txt"), "customer body");
+      adapter.emit({ eventType: "change", filename: "gap.txt" });
+      adapter.emit({ eventType: "change", filename: "gap.txt" });
+      manager.subscribe(args);
+      await waitForCondition(() => manager.snapshot(root).health === "healthy");
+      const records = sink.events.filter(
+        (event) => event.op === "editor.workspace-watch.health-changed",
+      );
+      expect(records).toHaveLength(2);
+      const lines = records.map(formatActivityLogProofLine);
+      expectActivityLogProof("editor.workspace-watch.health-changed.transitions", lines[0] ?? "");
+      expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+        health: "rescanRequired",
+        previousHealth: "healthy",
+        reasons: ["ambiguous-event"],
+        correlationId: args.correlationId,
+        errorKind: "unavailable",
+      });
+      expect(JSON.parse(lines[1] ?? "")).toMatchObject({ health: "healthy", reasons: [] });
+      expect(lines.join("")).not.toContain(root);
+      expect(lines.join("")).not.toContain("customer body");
+      expect(lines.join("")).not.toContain("gap.txt");
+    } finally {
+      manager.disposeAll();
+    }
   });
 
   it("does not start polling scans while the initial baseline is still reading", async () => {

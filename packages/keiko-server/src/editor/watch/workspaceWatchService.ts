@@ -20,6 +20,7 @@ import { containsPath } from "@oscharko-dev/keiko-git";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 
 import { pathIsDenied } from "../../files-deny.js";
+import { recordWorkspaceWatchHealth } from "./workspaceWatchEvidence.js";
 import type { WorkspaceRootAccess } from "../../task-workspace/workspace-root-access.js";
 
 export interface WorkspaceWatchRawEvent {
@@ -68,6 +69,8 @@ interface WorkspaceWatchSubscribeArgs {
   readonly root: string;
   readonly lastSequence?: number | undefined;
   readonly onEvent: (event: EditorM7WatchEvent) => void;
+  readonly onSnapshot?: ((snapshot: EditorM7WatchSnapshot) => void) | undefined;
+  readonly correlationId?: string | undefined;
   readonly reproveRoot?: WorkspaceWatchRootReprover | undefined;
   readonly onAuthorityRevoked?: (() => void) | undefined;
   readonly additionalExclusions?: readonly string[] | undefined;
@@ -130,6 +133,8 @@ interface WatchEffectFileSystem {
 interface WatchSubscriber {
   readonly id: number;
   readonly onEvent: (event: EditorM7WatchEvent) => void;
+  readonly onSnapshot: ((snapshot: EditorM7WatchSnapshot) => void) | undefined;
+  readonly correlationId: string | undefined;
   readonly reproveRoot: WorkspaceWatchRootReprover | undefined;
   readonly onAuthorityRevoked: (() => void) | undefined;
 }
@@ -496,6 +501,10 @@ class WorkspaceWatchSession {
   private readonly known = new Map<string, FileMetadata>();
   private readonly replay: EditorM7WatchEvent[] = [];
   private readonly degradedReasons = new Set<EditorM7WatchDegradedReason>();
+  private readonly scanSubscriberWaiters = new Set<() => void>();
+  private loggedHealth: EditorM7WatchHealth = "healthy";
+  private loggedReasons = "";
+  private latestCorrelationId: string | undefined;
   private nextSubscriberId = 0;
   private sequence = 0;
   private eventCount = 0;
@@ -575,6 +584,7 @@ class WorkspaceWatchSession {
       return;
     }
     this.disposed = true;
+    this.resumeScan();
     this.clearTimers();
     this.handle?.close();
     this.handle = null;
@@ -582,6 +592,7 @@ class WorkspaceWatchSession {
     this.pending.clear();
     this.health = "stopped";
     this.degradedReasons.add("shutdown");
+    this.publishHealth();
   }
 
   // Exclusions are fixed at first-subscribe for the life of the session: the initial baseline scan
@@ -600,10 +611,14 @@ class WorkspaceWatchSession {
     const subscriber = {
       id: this.nextSubscriberId,
       onEvent: args.onEvent,
+      onSnapshot: args.onSnapshot,
+      correlationId: args.correlationId,
       reproveRoot: args.reproveRoot,
       onAuthorityRevoked: args.onAuthorityRevoked,
     };
     this.subscribers.set(subscriber.id, subscriber);
+    this.latestCorrelationId = args.correlationId;
+    this.resumeScan();
     return subscriber;
   }
 
@@ -613,10 +628,10 @@ class WorkspaceWatchSession {
   }
 
   private ensureStarted(): void {
-    if (this.disposed || this.pollTimer !== null) return;
-    if (this.handle !== null) {
+    if (this.disposed) return;
+    if (this.handle !== null || this.pollTimer !== null) {
       this.startBaselineSeed();
-      if (this.degradedReasons.has("ambiguous-event")) void this.scanAndEmitDiff();
+      if (this.health !== "healthy") void this.scanAndEmitDiff();
       return;
     }
     // The native watcher has no WorkspaceFs equivalent, so it is gated by the same fresh re-proof
@@ -809,6 +824,7 @@ class WorkspaceWatchSession {
   }
 
   private startBaselineSeed(): void {
+    if (this.scanning) return;
     this.baselineReady ??= this.seedBaseline();
   }
 
@@ -829,6 +845,7 @@ class WorkspaceWatchSession {
     } finally {
       this.scanning = false;
     }
+    if (this.health === "rescanRequired") void this.scanAndEmitDiff();
   }
 
   private async scanAndEmitDiff(): Promise<void> {
@@ -855,7 +872,7 @@ class WorkspaceWatchSession {
     if (fileSystem === null) return null;
     try {
       const rootStats = await fileSystem.stat(this.root);
-      if (!this.ensureLiveRootAuthority()) return null;
+      if (!(await this.awaitScanSubscriber()) || !this.ensureLiveRootAuthority()) return null;
       if (!rootStats.isDirectory) return this.rootReplaced();
       return await this.scanDirectory("");
     } catch (error) {
@@ -881,7 +898,7 @@ class WorkspaceWatchSession {
     const found = new Map<string, FileMetadata>();
     const queue = [start];
     for (let cursor = 0; cursor < queue.length; cursor += 1) {
-      if (this.disposed || this.subscribers.size === 0) return { entries: found, complete: false };
+      if (!(await this.awaitScanSubscriber())) return { entries: found, complete: false };
       const current = queue[cursor] ?? "";
       const result = await this.scanOneDirectory(current, found, queue);
       if (result === "complete") continue;
@@ -910,13 +927,14 @@ class WorkspaceWatchSession {
     } catch {
       return "unavailable";
     }
-    if (!this.ensureLiveRootAuthority()) return "unavailable";
+    if (!(await this.awaitScanSubscriber()) || !this.ensureLiveRootAuthority())
+      return "unavailable";
     for (const name of names) {
       if (performance.now() >= this.scanYieldAt) {
         await pauseBackgroundWork(8);
         this.scanYieldAt = performance.now() + 8;
       }
-      if (this.disposed || this.subscribers.size === 0) return "unavailable";
+      if (!(await this.awaitScanSubscriber())) return "unavailable";
       const outcome = await this.scanDirectoryEntry(relativeDirectory, name, found, queue);
       if (outcome !== "continue") return outcome;
     }
@@ -959,12 +977,15 @@ class WorkspaceWatchSession {
   private enterDegraded(reason: EditorM7WatchDegradedReason): void {
     this.degradedReasons.add(reason);
     if (this.health === "healthy") this.health = "degraded";
+    this.publishHealth();
   }
 
   private emitRescan(reason: EditorM7WatchDegradedReason, kind: "rescan" | "overflow"): void {
+    if (this.disposed) return;
     const alreadyRequired = this.health === "rescanRequired" && this.degradedReasons.has(reason);
     this.degradedReasons.add(reason);
     this.health = "rescanRequired";
+    this.publishHealth();
     if (alreadyRequired) return;
     this.emit({
       schemaVersion: EDITOR_M7_SCHEMA_VERSION,
@@ -985,6 +1006,7 @@ class WorkspaceWatchSession {
     } else {
       this.health = this.degradedReasons.size === 0 ? "healthy" : "degraded";
     }
+    this.publishHealth();
     if (this.handle !== null && this.pollTimer !== null) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -1056,11 +1078,13 @@ class WorkspaceWatchSession {
   private markUnattendedChange(): void {
     this.degradedReasons.add("ambiguous-event");
     this.health = "rescanRequired";
+    this.publishHealth();
   }
 
   private revokeRoot(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.resumeScan();
     this.clearTimers();
     this.handle?.close();
     this.handle = null;
@@ -1081,6 +1105,7 @@ class WorkspaceWatchSession {
       subscriber.onEvent(event);
       subscriber.onAuthorityRevoked?.();
     }
+    this.publishHealth();
     // Authority is revoked and handles are closed above, but the reported health stays a
     // terminal, tombstoned "rescanRequired" (not "stopped" -- that means deliberate shutdown, see
     // dispose()) so a later snapshot still explains why the watch ended. Scheduling idle-dispose
@@ -1107,6 +1132,35 @@ class WorkspaceWatchSession {
     this.replay.length = 0;
     this.pending.clear();
     this.additionalExclusions = NO_EXCLUSIONS;
+  }
+
+  // Keep one bounded scan across stream leases. While nobody is subscribed, no capability-backed
+  // filesystem work runs; the existing idle teardown releases both the scan and its metadata.
+  private async awaitScanSubscriber(): Promise<boolean> {
+    if (this.disposed) return false;
+    if (this.subscribers.size === 0) {
+      await new Promise<void>((resolve) => {
+        this.scanSubscriberWaiters.add(resolve);
+      });
+    }
+    return !this.disposed && this.subscribers.size > 0;
+  }
+
+  private resumeScan(): void {
+    for (const resume of this.scanSubscriberWaiters) resume();
+    this.scanSubscriberWaiters.clear();
+  }
+
+  private publishHealth(): void {
+    const snapshot = this.snapshot();
+    const reasons = snapshot.degradedReasons.join(",");
+    if (this.loggedHealth === snapshot.health && this.loggedReasons === reasons) return;
+    recordWorkspaceWatchHealth(snapshot, this.loggedHealth, this.latestCorrelationId);
+    this.loggedHealth = snapshot.health;
+    this.loggedReasons = reasons;
+    for (const subscriber of this.subscribers.values()) {
+      if (proveRoot(subscriber.reproveRoot, this.root).granted) subscriber.onSnapshot?.(snapshot);
+    }
   }
 
   private replayAfter(lastSequence: number | undefined): readonly EditorM7WatchEvent[] {

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8478a4b1d5790b63c67f67ba46ea7d50938aead5e2baed149de0f4d2fad21c7f"
+    "catalogDigest": "008c9d66eeb21982fb995d4d1e840e648568468e746d618b47738ef14fbc074c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 499,
-    "proofCount": 506,
-    "resolvedProofCount": 506,
-    "failureClassCount": 332,
+    "operationCount": 500,
+    "proofCount": 507,
+    "resolvedProofCount": 507,
+    "failureClassCount": 333,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -476,6 +476,7 @@
         "editor.verification.execute",
         "editor.verification.workspace",
         "editor.workspace-watch.authority-revoked",
+        "editor.workspace-watch.health-changed",
         "git-change.chat.blocked",
         "git-change.chat.connected",
         "git-change.chat.refreshed",
@@ -772,6 +773,7 @@
     "document-not-refreshed": ["memory-knowledge.dependency-failure"],
     "editor-local-history-rekey": ["editor-delivery.dependency-failure"],
     "editor-producer-turn": ["editor-delivery.dependency-failure"],
+    "editor-workspace-watch-availability": ["editor-delivery.dependency-failure"],
     "editor-workspace-watch-authority": ["editor-delivery.rejection"],
     "embedding-batch": ["memory-knowledge.rejection", "model-gateway.rejection"],
     "embedding-batch-grouping": ["memory-knowledge.dependency-failure"],
@@ -1426,6 +1428,9 @@
     ],
     "editor.workspace-watch.authority-revoked.emitted-line": [
       "packages/keiko-server/src/editor/watch/workspaceWatchRoutes.test.ts"
+    ],
+    "editor.workspace-watch.health-changed.transitions": [
+      "packages/keiko-server/src/editor/watch/workspaceWatchService.test.ts"
     ],
     "embedding.batch.array-unsupported.emitted-line": [
       "packages/keiko-model-gateway/src/openai-embedding-adapter.logging.test.ts"

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "8478a4b1d5790b63c67f67ba46ea7d50938aead5e2baed149de0f4d2fad21c7f" as const;
+  "008c9d66eeb21982fb995d4d1e840e648568468e746d618b47738ef14fbc074c" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -9664,6 +9664,87 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["editor-workspace-watch-authority"],
     proofIds: ["editor.workspace-watch.authority-revoked.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "editor.workspace-watch.health-changed",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "editor.watch.workspaceWatchEvidence.recordWorkspaceWatchHealth",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      health: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["healthy", "degraded", "rescanRequired", "stopped"],
+      },
+      previousHealth: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["healthy", "degraded", "rescanRequired", "stopped"],
+      },
+      reasons: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: true,
+        maxLength: 32,
+        maxItems: 8,
+        values: [
+          "native-watch-unavailable",
+          "unsupported-recursive-watch",
+          "event-overflow",
+          "sequence-gap",
+          "ambiguous-event",
+          "unsafe-path",
+          "root-replaced",
+          "shutdown",
+        ],
+      },
+      rootToken: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 24,
+      },
+      sequence: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      eventCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      subscriberCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      queueDepth: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["editor-workspace-watch-availability"],
+    proofIds: ["editor.workspace-watch.health-changed.transitions"],
     releaseImpact: "patch",
   },
   {
@@ -30317,8 +30398,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 332,
-  completeClassCount: 332,
+  supportedClassCount: 333,
+  completeClassCount: 333,
   completeness: "complete",
   classes: [
     {
@@ -42354,6 +42435,98 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["editor.workspace-watch.authority-revoked.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "editor-workspace-watch-availability",
+      requirementContract: "editor-workspace-watch-availability",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["editor.workspace-watch.health-changed"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "editor.workspace-watch.health-changed",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["editor.workspace-watch.health-changed"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "editor.workspace-watch.health-changed",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "capability",
+          safeContextFields: [
+            {
+              name: "eventCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "health",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "previousHealth",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "queueDepth",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "reasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "rootToken",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "sequence",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "subscriberCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["editor.workspace-watch.health-changed.transitions"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -66798,6 +66971,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "editor.verification.execute": "editor-delivery",
     "editor.verification.workspace": "editor-delivery",
     "editor.workspace-watch.authority-revoked": "editor-delivery",
+    "editor.workspace-watch.health-changed": "editor-delivery",
     "embedding.batch.array-unsupported": "model-gateway",
     "embedding.batch.budgeting-failed": "memory-knowledge",
     "embedding.batch.cancelled": "memory-knowledge",

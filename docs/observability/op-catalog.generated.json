@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "8478a4b1d5790b63c67f67ba46ea7d50938aead5e2baed149de0f4d2fad21c7f",
+    "catalogDigest": "008c9d66eeb21982fb995d4d1e840e648568468e746d618b47738ef14fbc074c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -10167,6 +10167,89 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/watch/workspaceWatchRoutes.ts:45",
         "emitterSites": ["packages/keiko-server/src/editor/watch/workspaceWatchRoutes.ts:87"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "editor.workspace-watch.health-changed",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "editor.watch.workspaceWatchEvidence.recordWorkspaceWatchHealth",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "health": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["healthy", "degraded", "rescanRequired", "stopped"]
+          },
+          "previousHealth": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["healthy", "degraded", "rescanRequired", "stopped"]
+          },
+          "reasons": {
+            "type": "string-array",
+            "dataClass": "closed-enum",
+            "required": true,
+            "maxLength": 32,
+            "maxItems": 8,
+            "values": [
+              "native-watch-unavailable",
+              "unsupported-recursive-watch",
+              "event-overflow",
+              "sequence-gap",
+              "ambiguous-event",
+              "unsafe-path",
+              "root-replaced",
+              "shutdown"
+            ]
+          },
+          "rootToken": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 24
+          },
+          "sequence": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "eventCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "subscriberCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "queueDepth": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["editor-workspace-watch-availability"],
+        "proofIds": ["editor.workspace-watch.health-changed.transitions"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/editor/watch/workspaceWatchEvidence.ts:9",
+        "emitterSites": ["packages/keiko-server/src/editor/watch/workspaceWatchEvidence.ts:70"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -34667,6 +34750,33 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "editor-workspace-watch-availability",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["editor.workspace-watch.health-changed"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["editor.workspace-watch.health-changed"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["editor.workspace-watch.health-changed"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["editor.workspace-watch.health-changed"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "digest",
+          "loss-state"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "editor-workspace-watch-authority",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -40952,8 +41062,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 332,
-      "completeClassCount": 332,
+      "supportedClassCount": 333,
+      "completeClassCount": 333,
       "completeness": "complete",
       "classes": [
         {
@@ -53078,6 +53188,104 @@
                 "causeChain": false
               },
               "proofIds": ["editor.workspace-watch.authority-revoked.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "editor-workspace-watch-availability",
+          "requirementContract": "editor-workspace-watch-availability",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["editor.workspace-watch.health-changed"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "editor.workspace-watch.health-changed",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["editor.workspace-watch.health-changed"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "editor.workspace-watch.health-changed",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "eventCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "health",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "previousHealth",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "queueDepth",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "reasons",
+                  "type": "string-array",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "rootToken",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "sequence",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "subscriberCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["editor.workspace-watch.health-changed.transitions"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -77630,13 +77838,13 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-activity-log/src/reader/support-report.ts:567",
+      "site": "packages/keiko-activity-log/src/reader/support-report.ts:598",
       "package": "keiko-activity-log"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-activity-log/src/reader/support-report.ts:587",
+      "site": "packages/keiko-activity-log/src/reader/support-report.ts:618",
       "package": "keiko-activity-log"
     },
     {
@@ -80818,6 +81026,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "editor.workspace-watch.health-changed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/watch/workspaceWatchEvidence.ts:12",
+      "package": "keiko-server"
+    },
+    {
       "op": "embedding.memory.failed",
       "category": "embedding",
       "site": "packages/keiko-server/src/memory-embedding.ts:87",
@@ -82808,6 +83022,7 @@
     "editor.verification.subscriber",
     "editor.verification.workspace",
     "editor.workspace-watch.authority-revoked",
+    "editor.workspace-watch.health-changed",
     "embedding.batch.array-unsupported",
     "embedding.batch.budgeting-failed",
     "embedding.batch.cancelled",

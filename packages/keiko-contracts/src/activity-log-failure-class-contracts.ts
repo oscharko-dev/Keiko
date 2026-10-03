@@ -2862,6 +2862,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "editor-workspace-watch-availability",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["editor.workspace-watch.health-changed"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["editor.workspace-watch.health-changed"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["editor.workspace-watch.health-changed"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["editor.workspace-watch.health-changed"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "editor-workspace-watch-authority",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

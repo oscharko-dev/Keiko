@@ -6,6 +6,7 @@ import {
 } from "../../../../../lib/client-diagnostics";
 import {
   resetSharedEventSourcesForTests,
+  refreshSharedEventSource,
   sharedEventSourceGeneration,
   subscribeSharedEventSource,
 } from "./sharedEventSource";
@@ -573,3 +574,41 @@ describe("subscribeSharedEventSource", () => {
     vi.useRealTimers();
   });
 });
+
+it.each(["editor-watch:snapshot", "editor-watch:snapshot-required"])(
+  "accepts the watch service's restarted cursor from %s",
+  (snapshotType) => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const url = "/api/editor/workspace-watch/events?root=%2Frepo";
+    const unsubscribe = subscribeSharedEventSource(
+      url,
+      ["editor-watch:changed", snapshotType],
+      vi.fn(),
+    );
+    try {
+      const change = FakeEventSource.instances[0]?.listeners.get("editor-watch:changed");
+      if (change === undefined) throw new Error("Expected watch stream");
+      for (const listener of change)
+        listener(
+          new MessageEvent("editor-watch:changed", {
+            data: "{}",
+            lastEventId: "700",
+          }),
+        );
+      refreshSharedEventSource(url);
+      const snapshot = FakeEventSource.instances[1]?.listeners.get(snapshotType);
+      if (snapshot === undefined) throw new Error("Expected resumed watch stream");
+      for (const listener of snapshot)
+        listener(
+          new MessageEvent(snapshotType, {
+            data: "{}",
+            lastEventId: "2",
+          }),
+        );
+      refreshSharedEventSource(url);
+      expect(FakeEventSource.instances[2]?.url).toBe(`${url}&lastEventId=2`);
+    } finally {
+      unsubscribe();
+    }
+  },
+);

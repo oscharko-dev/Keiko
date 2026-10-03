@@ -6701,7 +6701,14 @@ function EditorRuntimeWidget({
               : commonT("editor.runtime.watchInterrupted")}
           </span>
           <span className="spacer" />
-          <button type="button" className="ed-reload" onClick={requestReload}>
+          <button
+            type="button"
+            className="ed-reload"
+            onClick={() => {
+              workspaceWatch.refresh();
+              requestReload();
+            }}
+          >
             {commonT("editor.runtime.refresh")}
           </button>
         </output>

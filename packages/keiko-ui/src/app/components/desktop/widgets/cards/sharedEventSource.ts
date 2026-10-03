@@ -120,7 +120,13 @@ function dispatcherFor(entry: SharedEventSourceEntry, type: string): EventListen
   if (dispatcher !== undefined) return dispatcher;
   dispatcher = (event: Event): void => {
     sourceGenerationByEvent.set(event, entry.sourceGeneration);
-    recordLastEventId(entry, event, type === "editor-debug:snapshot-required");
+    recordLastEventId(
+      entry,
+      event,
+      type === "editor-debug:snapshot-required" ||
+        type === "editor-watch:snapshot" ||
+        type === "editor-watch:snapshot-required",
+    );
     const subscribers = entry.subscribersByType.get(type);
     if (subscribers === undefined || subscribers.size === 0) return;
     for (const subscriber of subscribers) {
@@ -407,6 +413,14 @@ export function subscribeSharedEventSource(
     refreshStreamBudget();
     removeVisibilityListenerIfIdle();
   };
+}
+
+/** Reopen one existing subscription so every consumer receives its fresh server snapshot. */
+export function refreshSharedEventSource(url: string): void {
+  const entry = sourcesByUrl.get(url);
+  if (entry === undefined) return;
+  suspendEntry(entry);
+  refreshStreamBudget();
 }
 
 export function sharedEventSourceGeneration(event: MessageEvent<string>): number {
