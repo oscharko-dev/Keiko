@@ -98,6 +98,7 @@ export interface WorkspaceWatchServiceOptions {
   readonly replayCapacity?: number | undefined;
   readonly maxSubscribersPerRoot?: number | undefined;
   readonly maxScanEntries?: number | undefined;
+  readonly onScanSettled?: (() => void) | undefined;
 }
 
 export interface WorkspaceWatchFileSystem {
@@ -153,6 +154,7 @@ interface PendingChange {
   readonly relativePath: string;
   readonly oldRelativePath?: string | undefined;
   readonly eventType: WorkspaceWatchRawEvent["eventType"];
+  readonly parentRefresh?: boolean;
 }
 
 interface FileMetadata {
@@ -187,6 +189,7 @@ interface WatchConfig {
   readonly replayCapacity: number;
   readonly maxSubscribersPerRoot: number;
   readonly maxScanEntries: number;
+  readonly onScanSettled: (() => void) | undefined;
 }
 
 const NODE_FILE_SYSTEM: WorkspaceWatchFileSystem = {
@@ -295,6 +298,7 @@ const DEFAULT_CONFIG: Omit<WatchConfig, "adapter" | "fileSystem"> = {
   replayCapacity: 256,
   maxSubscribersPerRoot: 64,
   maxScanEntries: 20_000,
+  onScanSettled: undefined,
 };
 
 const EXCLUDED_SEGMENTS = new Set([
@@ -369,6 +373,17 @@ function hardExcluded(relativePath: string, additional: WatchExclusions): boolea
 
 function eventPathAllowed(relativePath: string, additional: WatchExclusions): boolean {
   return !pathIsDenied(relativePath) && !hardExcluded(relativePath, additional);
+}
+
+function unavailableEntryParent(
+  event: WorkspaceWatchRawEvent,
+  relativePath: string,
+  additional: WatchExclusions,
+): string | null {
+  if (event.eventType !== "rename") return null;
+  const parent = pathPosix.dirname(relativePath);
+  const normalizedParent = parent === "." ? "" : parent;
+  return eventPathAllowed(normalizedParent, additional) ? normalizedParent : null;
 }
 
 function relativePathFromNative(root: string, target: string): string {
@@ -496,6 +511,7 @@ function configFromOptions(options: WorkspaceWatchServiceOptions): WatchConfig {
     replayCapacity: options.replayCapacity ?? DEFAULT_CONFIG.replayCapacity,
     maxSubscribersPerRoot: options.maxSubscribersPerRoot ?? DEFAULT_CONFIG.maxSubscribersPerRoot,
     maxScanEntries: options.maxScanEntries ?? DEFAULT_CONFIG.maxScanEntries,
+    onScanSettled: options.onScanSettled,
   };
 }
 
@@ -525,6 +541,7 @@ class WorkspaceWatchSession {
   private flushing = false;
   private scanning = false;
   private scanYieldAt = 0;
+  private changeRevision = 0;
   private disposed = false;
   private additionalExclusions: WatchExclusions = NO_EXCLUSIONS;
   private exclusionsInitialized = false;
@@ -639,7 +656,7 @@ class WorkspaceWatchSession {
     if (this.disposed) return;
     if (this.handle !== null || this.pollTimer !== null) {
       this.startBaselineSeed();
-      if (this.health !== "healthy") void this.scanAndEmitDiff();
+      if (this.needsReconciliation()) void this.scanAndEmitDiff();
       return;
     }
     // The native watcher has no WorkspaceFs equivalent, so it is gated by the same fresh re-proof
@@ -678,6 +695,7 @@ class WorkspaceWatchSession {
   private handleRawEvent(event: WorkspaceWatchRawEvent): void {
     if (this.disposed) return;
     if (this.isExcludedRawEvent(event)) return;
+    this.changeRevision += 1;
     const proof = this.currentAuthority();
     if (proof === null) {
       this.markUnattendedChange();
@@ -702,7 +720,7 @@ class WorkspaceWatchSession {
       return;
     }
     if (!eventPathAllowed(relativePath, this.additionalExclusions)) {
-      this.enterDegraded("unsafe-path");
+      this.handleUnavailableEntry(event, relativePath);
       return;
     }
     this.queue({
@@ -710,6 +728,16 @@ class WorkspaceWatchSession {
       oldRelativePath: oldRelativePath ?? undefined,
       eventType: event.eventType,
     });
+  }
+
+  private handleUnavailableEntry(event: WorkspaceWatchRawEvent, relativePath: string): void {
+    const parent = unavailableEntryParent(event, relativePath, this.additionalExclusions);
+    if (parent === null) {
+      this.enterDegraded("unsafe-path");
+      return;
+    }
+    // Refresh only the authorized parent listing. Never stat, enter, or read the excluded entry.
+    this.queue({ relativePath: parent, eventType: "change", parentRefresh: true });
   }
 
   // Discarding excluded activity needs no authority proof or filesystem effect. In particular,
@@ -721,9 +749,17 @@ class WorkspaceWatchSession {
     const oldPath = normalizeEventPath(event.oldFilename);
     return (
       path !== null &&
-      hardExcluded(path, this.additionalExclusions) &&
+      this.discardExcludedPath(event, path) &&
       (event.oldFilename === undefined ||
         (oldPath !== null && hardExcluded(oldPath, this.additionalExclusions)))
+    );
+  }
+
+  private discardExcludedPath(event: WorkspaceWatchRawEvent, path: string): boolean {
+    if (unavailableEntryParent(event, path, this.additionalExclusions) !== null) return false;
+    if (hardExcluded(path, this.additionalExclusions)) return true;
+    return (
+      pathIsDenied(path) && !eventPathAllowed(pathPosix.dirname(path), this.additionalExclusions)
     );
   }
 
@@ -765,6 +801,16 @@ class WorkspaceWatchSession {
 
   private async reconcileChange(change: PendingChange): Promise<void> {
     if (this.disposed) return;
+    if (change.parentRefresh === true) {
+      this.emit({
+        schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+        sequence: this.nextSequence(),
+        kind: "changed",
+        relativePath: change.relativePath,
+        entryKind: "directory",
+      });
+      return;
+    }
     if (change.oldRelativePath !== undefined) {
       await this.reconcileRename(change.oldRelativePath, change.relativePath);
       return;
@@ -797,6 +843,7 @@ class WorkspaceWatchSession {
       if (current.kind === "unavailable") this.startFallbackPolling();
       return;
     }
+    this.changeRevision += 1;
     this.known.delete(oldRelativePath);
     this.known.set(relativePath, current.metadata);
     this.emit(eventFromMetadata(this.nextSequence(), "renamed", current.metadata, oldRelativePath));
@@ -821,11 +868,13 @@ class WorkspaceWatchSession {
 
   private applyAbsent(relativePath: string): void {
     if (!this.known.has(relativePath)) return;
+    this.changeRevision += 1;
     this.known.delete(relativePath);
     this.emit(deletedEvent(this.nextSequence(), relativePath));
   }
 
   private applyPresent(metadata: FileMetadata): void {
+    this.changeRevision += 1;
     const previous = this.known.get(metadata.relativePath);
     this.known.set(metadata.relativePath, metadata);
     if (previous === undefined) {
@@ -857,6 +906,7 @@ class WorkspaceWatchSession {
       if (this.health === "rescanRequired") this.announceBaselineGap();
     } finally {
       this.scanning = false;
+      this.config.onScanSettled?.();
     }
     if (this.health === "rescanRequired") void this.scanAndEmitDiff();
   }
@@ -875,22 +925,36 @@ class WorkspaceWatchSession {
     });
   }
 
+  private needsReconciliation(): boolean {
+    return (
+      this.degradedReasons.has("ambiguous-event") || this.degradedReasons.has("event-overflow")
+    );
+  }
+
   private async scanAndEmitDiff(): Promise<void> {
     if (this.scanning || !this.ensureLiveRootAuthority()) return;
     this.scanning = true;
+    const revision = this.changeRevision;
+    let stale = false;
     try {
       const next = await this.scanTree();
-      if (next === null || !next.complete || this.disposed || !this.ensureLiveRootAuthority()) {
-        return;
-      }
-      for (const [path, previous] of this.known)
-        if (!next.entries.has(path))
-          this.emit(deletedEvent(this.nextSequence(), previous.relativePath));
+      if (!this.canApplyScan(next)) return;
+      stale = revision !== this.changeRevision;
+      if (stale) return;
+      for (const path of this.known.keys()) if (!next.entries.has(path)) this.applyAbsent(path);
       for (const metadata of next.entries.values()) this.applyPresent(metadata);
       this.recoverAfterCompleteScan();
     } finally {
       this.scanning = false;
+      this.config.onScanSettled?.();
+      // A scan spanning a native event or live reconciliation is not a coherent snapshot.
+      // Retain the complete baseline and retry on the bounded poll cadence, never a hot scan loop.
+      if (stale) this.startFallbackPolling();
     }
+  }
+
+  private canApplyScan(scan: ScanResult | null): scan is ScanResult {
+    return scan !== null && scan.complete && !this.disposed && this.ensureLiveRootAuthority();
   }
 
   private async scanTree(): Promise<ScanResult | null> {
