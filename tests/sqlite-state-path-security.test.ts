@@ -18,6 +18,8 @@ import { openMemoryDatabase } from "../packages/keiko-memory-vault/src/db.js";
 import { resolveMemoryDbPath } from "../packages/keiko-memory-vault/src/paths.js";
 import { TEST_CIPHER } from "../packages/keiko-memory-vault/src/_support.js";
 import { openKnowledgeStore } from "../packages/keiko-local-knowledge/src/store.js";
+import { createMemoryVault } from "../packages/keiko-memory-vault/src/vault.js";
+import { buildUiHandlerDeps } from "../packages/keiko-server/src/deps.js";
 
 import { SqliteStatePathError } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
@@ -74,6 +76,35 @@ const stores = [
     resolve: (state: string): string => resolveMemoryDbPath(state, {}),
   },
 ] as const;
+
+describe("production SQLite startup refusal evidence", (): void => {
+  it.each(["ui", "memory-vault"])(
+    "logs %s refusals during dependency composition",
+    (store): void => {
+      const { state, outside } = fixture();
+      const filename = store === "ui" ? "keiko-ui.db" : "keiko-memory.db";
+      symlinkSync(join(outside, "missing.db"), join(state, filename));
+      const events: unknown[] = [];
+      const sink = {
+        write: (event: unknown): void => {
+          events.push(event);
+        },
+      };
+      expect(() => {
+        if (store === "ui")
+          buildUiHandlerDeps({
+            configPath: undefined,
+            env: { KEIKO_UI_DATA_DIR: state },
+            activityLog: sink,
+          });
+        else createMemoryVault({ memoryDir: state, env: {}, logSink: sink });
+      }).toThrow();
+      expect(events).toHaveLength(1);
+      assertRefusalEvidence(events[0], store);
+      expect(JSON.stringify(events)).not.toContain(state);
+    },
+  );
+});
 
 describe("local knowledge SQLite path authority", (): void => {
   it.each(["ancestor", "leaf", "hard-link", "-wal", "-shm", "-journal"])(

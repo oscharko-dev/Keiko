@@ -945,8 +945,8 @@ function emitUiStoreOpenedEvent(sink: ServerLogSink | undefined, event: ServerLo
 // without re-deriving it.
 export const UI_DB_BUSY_TIMEOUT_MS = 5_000;
 
-function preparedDatabase(target: string): DatabaseSync {
-  if (target !== ":memory:") assertSqliteStatePath(target);
+function preparedDatabase(target: string, sink?: ServerLogSink): DatabaseSync {
+  if (target !== ":memory:") assertSqliteStatePath(target, { store: "ui", sink });
   const db = new DatabaseSync(target);
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(`PRAGMA busy_timeout = ${String(UI_DB_BUSY_TIMEOUT_MS)}`);
@@ -982,7 +982,7 @@ export function openNodeUiDatabase(dbPath: string, sink?: ServerLogSink): Databa
   assertSqliteStatePath(dbPath, { store: "ui", sink });
   ensureDirHardened(dirname(dbPath));
   assertSqliteStatePath(dbPath, { store: "ui", sink });
-  let db = preparedDatabase(dbPath);
+  let db = preparedDatabase(dbPath, sink);
   try {
     db.exec("PRAGMA journal_mode = WAL");
     assertQuickCheckOk(db);
@@ -994,7 +994,7 @@ export function openNodeUiDatabase(dbPath: string, sink?: ServerLogSink): Databa
       throw error;
     }
     quarantineCorruptDb(dbPath, error);
-    db = preparedDatabase(dbPath);
+    db = preparedDatabase(dbPath, sink);
     db.exec("PRAGMA journal_mode = WAL");
     assertQuickCheckOk(db);
     runMigrations(db, sink);

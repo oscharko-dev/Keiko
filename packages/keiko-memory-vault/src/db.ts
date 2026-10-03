@@ -61,8 +61,8 @@ export { chmodIfPresent, ensureDirHardened };
 // immediately with SQLITE_BUSY.
 const MEMORY_VAULT_BUSY_TIMEOUT_MS = 5_000;
 
-export function preparedDatabase(target: string): DatabaseSync {
-  if (target !== ":memory:") assertSqliteStatePath(target);
+export function preparedDatabase(target: string, sink?: MemoryVaultLogSink): DatabaseSync {
+  if (target !== ":memory:") assertSqliteStatePath(target, { store: "memory-vault", sink });
   const db = new DatabaseSync(target);
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(`PRAGMA busy_timeout = ${String(MEMORY_VAULT_BUSY_TIMEOUT_MS)}`);
@@ -168,7 +168,7 @@ export function openMemoryDatabase(
   assertSqliteStatePath(dbPath, { store: "memory-vault", sink });
   ensureDirHardened(dirname(dbPath));
   assertSqliteStatePath(dbPath, { store: "memory-vault", sink });
-  let db = preparedDatabase(dbPath);
+  let db = preparedDatabase(dbPath, sink);
   try {
     configureWalDatabase(db);
     assertQuickCheckOk(db);
@@ -187,7 +187,7 @@ export function openMemoryDatabase(
     quarantineCorruptDb(dbPath, { hadWal, hadShm }, error);
     let reopened = false;
     try {
-      db = preparedDatabase(dbPath);
+      db = preparedDatabase(dbPath, sink);
       configureWalDatabase(db);
       assertQuickCheckOk(db);
       runMigrations(db, cipher, sink);

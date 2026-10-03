@@ -4152,7 +4152,11 @@ function runtimePathFields(options: BuildHandlerDepsOptions): {
   readonly resolvedUiDbPath: string;
   readonly runtimeConfigPath: string;
 } {
-  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
+  const resolvedUiDbPath = resolveUiDbPath(
+    options.uiDbPath,
+    options.env,
+    options.activityLog ?? processServerLogSink(),
+  );
   return { resolvedUiDbPath, runtimeConfigPath: localGatewayConfigPath(resolvedUiDbPath) };
 }
 

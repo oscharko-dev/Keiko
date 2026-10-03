@@ -1242,7 +1242,7 @@ export type CreateMemoryVaultOptions = MemoryVaultFactoryOptions & {
 
 export function createMemoryVault(options?: CreateMemoryVaultOptions): MemoryVaultStore {
   const env = options?.env ?? defaultEnv();
-  const dbPath = resolveMemoryDbPath(options?.memoryDir, env);
+  const dbPath = resolveMemoryDbPath(options?.memoryDir, env, options?.logSink);
   const { cipher, keySource } = resolveCipherWithSource(options, env, options?.securityLogSink);
   const elapsedMs = startMemoryVaultLogTimer();
   const db = openMemoryDatabase(dbPath, cipher, options?.logSink);

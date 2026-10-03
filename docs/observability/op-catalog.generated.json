@@ -82604,7 +82604,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4353",
+      "site": "packages/keiko-server/src/deps.ts:4357",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
