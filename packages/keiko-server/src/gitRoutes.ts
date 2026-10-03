@@ -639,6 +639,7 @@ export function parseStatus(
     untrackedCount: counts.untrackedCount,
     conflictedCount: counts.conflictedCount,
     changes: collected.changes,
+    selectedRootIgnored: selectedRootIsIgnored(records, selectedRootPrefix),
     truncated: computeStatusTruncated(
       processTruncated,
       records.length,
@@ -648,6 +649,72 @@ export function parseStatus(
     ),
     maxChanges,
   };
+}
+
+function selectedRootIsIgnored(records: readonly string[], prefix: string): boolean {
+  if (prefix.length === 0) return false;
+  return records.some(
+    (record) => record.startsWith("!! ") && record.slice(3).replace(/\/$/u, "") === prefix,
+  );
+}
+
+function parentGitDirectories(path: string): readonly string[] {
+  const parts = path.split("/");
+  return parts.slice(0, -1).map((_part, index) => parts.slice(0, index + 1).join("/"));
+}
+
+async function untrackedDirectoryMetadata(
+  repo: RepositoryContext,
+  options: NormalizedGitRouteOptions,
+  status: GitRepositoryStatusResponse,
+): Promise<readonly string[] | undefined> {
+  if (status.truncated || !status.changes.some((change) => change.untracked)) return undefined;
+  const cached = await options.runner(
+    [
+      ...GIT_BASE_ARGS,
+      "-C",
+      repo.repositoryRoot,
+      "ls-files",
+      "--cached",
+      "-z",
+      ...selectedRootPathspecArgs(repo.selectedRootPrefix),
+    ],
+    {
+      cwd: repo.repositoryRoot,
+      maxBytes: options.maxStatusBytes,
+      timeoutMs: options.timeoutMs,
+      ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
+    },
+  );
+  if (cached.exitCode !== 0 || cached.truncated || cached.timedOut) return undefined;
+  return fullyUntrackedDirectories(
+    cached.stdout,
+    repo.selectedRootPrefix,
+    status.changes,
+    options.maxChanges,
+  );
+}
+
+function fullyUntrackedDirectories(
+  cachedPaths: string,
+  selectedRootPrefix: string,
+  changes: readonly GitChangedFile[],
+  maxChanges: number,
+): readonly string[] | undefined {
+  const trackedDirectories = new Set(
+    cachedPaths.split("\0").flatMap((raw) => {
+      const path = stripSelectedPrefix(raw, selectedRootPrefix);
+      return path === null ? [] : parentGitDirectories(path);
+    }),
+  );
+  const untracked = new Set<string>();
+  for (const change of changes.filter((entry) => entry.untracked)) {
+    for (const directory of parentGitDirectories(change.path)) {
+      if (!trackedDirectories.has(directory)) untracked.add(directory);
+      if (untracked.size > maxChanges) return undefined;
+    }
+  }
+  return [...untracked].sort((left, right) => left.localeCompare(right));
 }
 
 function redacted<T>(deps: UiHandlerDeps, value: T): T {
@@ -1209,7 +1276,16 @@ export async function handleGitStatus(
         status.truncated,
         path,
       );
-      return { status: 200, body: redacted(deps, body) };
+      const untrackedDirectories = includeIgnored
+        ? await untrackedDirectoryMetadata(repo, options, body)
+        : undefined;
+      return {
+        status: 200,
+        body: redacted(deps, {
+          ...body,
+          ...(untrackedDirectories === undefined ? {} : { untrackedDirectories }),
+        }),
+      };
     },
   );
 }

@@ -6,7 +6,7 @@ import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 
 import { DatabaseSync } from "node:sqlite";
 import { createCodingHistoryStore } from "./codingHistory.js";
-import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -120,6 +120,7 @@ import {
   workspaceManifestRootCountForProject,
 } from "./workspaceManifests.js";
 import { validateProjectPath } from "./validation.js";
+import { deriveWorkspaceRootRef } from "../workspace-root-identity.js";
 import {
   readMemoryAutonomyPolicy as sqlReadMemoryAutonomyPolicy,
   updateMemoryAutonomyPolicy as sqlUpdateMemoryAutonomyPolicy,
@@ -307,10 +308,14 @@ function createProjectRecord(
   name?: string,
 ): Project {
   const normalized = validateProjectPath(path, { mustExist: true });
-  const resolvedName = deriveProjectName(name, normalized);
   const now = options.now();
   return withImmediateTransaction(db, () => {
-    const project = sqlUpsertProject(db, normalized, resolvedName, name !== undefined, now);
+    const rootRef = deriveWorkspaceRootRef(realpathSync.native(normalized));
+    const membership = sqlFindWorkspaceManifestRecordByRoot(db, rootRef);
+    const registeredPath =
+      membership?.rootProjects.find((root) => root.rootRef === rootRef)?.projectPath ?? normalized;
+    const resolvedName = deriveProjectName(name, registeredPath);
+    const project = sqlUpsertProject(db, registeredPath, resolvedName, name !== undefined, now);
     ensureProjectWorkspaceManifest(db, project.path, project.name, now);
     return project;
   });

@@ -411,6 +411,7 @@ export function MultiRootEditorHost({
                 {...baseProps}
                 {...initialSessionProps(root, sessions, cfg)}
                 root={root.canonicalRoot}
+                rootSelectionLocked
                 safetyRootBinding={safetyRootBinding(manifest, root)}
                 sessionActive={active}
                 windowId={editorPaneWindowId(baseProps.windowId, root.rootRef)}

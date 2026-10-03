@@ -24,6 +24,7 @@ vi.mock("@oscharko-dev/keiko-editor", () => ({
 const mountedBindings: {
   root: string | undefined;
   rootRef: string | undefined;
+  rootSelectionLocked: boolean | undefined;
   windowId: string | undefined;
 }[] = [];
 
@@ -35,6 +36,7 @@ vi.mock("next/dynamic", () => ({
       mountedBindings.push({
         root,
         rootRef: props.safetyRootBinding?.rootRef,
+        rootSelectionLocked: props.rootSelectionLocked,
         windowId: props.windowId,
       });
       useEffect(() => {
@@ -196,6 +198,7 @@ describe("MultiRootEditorHost focused-root exception (#2619)", () => {
     for (const entry of mountedBindings) {
       expect(entry.root).toBeDefined();
       expect(entry.rootRef).toBeDefined();
+      expect(entry.rootSelectionLocked).toBe(true);
     }
   });
 });

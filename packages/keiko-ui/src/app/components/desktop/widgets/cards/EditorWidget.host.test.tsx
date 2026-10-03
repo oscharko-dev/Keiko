@@ -116,3 +116,10 @@ describe("EditorWidget host — split resize gesture", () => {
     await waitFor(() => expect(screen.getAllByTestId("pane-runtime")).toHaveLength(2));
   });
 });
+
+it("keeps a manifest-bound editor root fixed so sibling dirty editors cannot be unmounted", async () => {
+  render(<EditorWidget root="/repo" file="a.ts" rootSelectionLocked />);
+  const input = await screen.findByRole("textbox", { name: "Current folder path" });
+  expect(input).toHaveAttribute("readonly");
+  expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
+});

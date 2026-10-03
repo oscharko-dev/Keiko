@@ -118,12 +118,15 @@ function gitChange(
 
 function mockProjectVersioningTree(): void {
   vi.mocked(fetchGitStatus).mockResolvedValue(
-    availableGitStatus([
-      gitChange("ignored/", "!"),
-      gitChange("new/", "?"),
-      gitChange("loose.md", "?"),
-      gitChange("mixed/new.md", "?"),
-    ]),
+    availableGitStatus(
+      [
+        gitChange("ignored/", "!"),
+        gitChange("new/inside.md", "?", { indexStatus: "?" }),
+        gitChange("loose.md", "?", { indexStatus: "?" }),
+        gitChange("mixed/new.md", "?", { indexStatus: "?" }),
+      ],
+      { untrackedDirectories: ["new"] },
+    ),
   );
   vi.mocked(fetchFilesTree).mockImplementation(async (_root, path = "") => ({
     root: "/repo",
@@ -1744,6 +1747,167 @@ describe("FilesWidget", () => {
     expect(onRootChange).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["BAD_ROOT", "Use an absolute folder path."],
+    ["INVALID_DIRECTORY", "The folder does not exist."],
+    ["DENIED", "This folder cannot be opened."],
+    ["NOT_FOUND", "The folder does not exist."],
+  ])(
+    "explains expected directory refusal %s without retry or support report",
+    async (code, message) => {
+      vi.mocked(fetchFilesTree).mockRejectedValueOnce(
+        new ApiError(code, "body-free server reason", 400),
+      );
+      render(<FilesWidget root="/repo" />);
+      expect(await screen.findByRole("alert")).toHaveTextContent(message);
+      expect(screen.queryByRole("button", { name: "Create error report" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    },
+  );
+
+  it("returns to the configured root without retargeting the window", async () => {
+    vi.mocked(fetchFilesTree).mockImplementation(async (_root, path = "") => ({
+      root: "/repo",
+      path,
+      truncated: false,
+      entries:
+        path === ""
+          ? [{ name: "src", path: "src", kind: "directory", extension: null, readable: true }]
+          : [{ ...treeEntryBase, name: "inner.md", path: "src/inner.md", kind: "file" }],
+    }));
+    const onRootChange = vi.fn();
+    render(<FilesWidget root="/repo" onRootChange={onRootChange} />);
+    await userEvent.click(await screen.findByRole("treeitem", { name: "src" }));
+    await screen.findByText("inner.md");
+    const input = screen.getByRole("textbox", {
+      name: "Folder path — open any folder on this machine",
+    });
+    await userEvent.clear(input);
+    await userEvent.type(input, "/repo");
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    await waitFor(() => expect(screen.queryByText("inner.md")).toBeNull());
+    expect(await screen.findByRole("treeitem", { name: "src" })).toBeInTheDocument();
+    expect(onRootChange).not.toHaveBeenCalled();
+  });
+
+  it("joins a navigation to its read and settles only after the actual read outcome", async () => {
+    const child = deferred<never>();
+    vi.mocked(fetchFilesTree).mockImplementation(async (_root, path = "") => {
+      if (path === "src") return child.promise;
+      return {
+        root: "/repo",
+        path: "",
+        truncated: false,
+        entries: [{ name: "src", path: "src", kind: "directory", readable: true, extension: null }],
+      };
+    });
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    render(<FilesWidget root="/repo" />);
+    const row = await screen.findByRole("treeitem", { name: "src" });
+    writer.mockClear();
+    await userEvent.click(row);
+    const navigation = writer.mock.calls.find(
+      (call) => call[1]?.stageReport?.stage === "files directory navigation",
+    );
+    const read = writer.mock.calls.find(
+      (call) => call[1]?.stageReport?.stage === "files directory load",
+    );
+    expect(navigation?.[1]?.stageReport.phase).toBe("started");
+    expect(read?.[1]?.parentCorrelationId).toBe(navigation?.[1]?.correlationId);
+    expect(writer.mock.calls.some((call) => call[1]?.stageReport?.phase === "settled")).toBe(false);
+    child.reject(new ApiError("DENIED", "private body", 403));
+    await screen.findByText("This folder cannot be opened.");
+    expect(writer.mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          expect.any(String),
+          expect.objectContaining({
+            correlationId: navigation?.[1]?.correlationId,
+            stageReport: expect.objectContaining({ phase: "settled", navigationOutcome: "failed" }),
+          }),
+        ],
+      ]),
+    );
+    expect(JSON.stringify(writer.mock.calls)).not.toContain("private body");
+  });
+
+  it("joins a new root selection to its successful directory read", async () => {
+    const selected = deferred<{
+      root: string;
+      path: string;
+      truncated: boolean;
+      entries: FilesTreeEntry[];
+    }>();
+    vi.mocked(fetchFilesTree).mockImplementation(async (root) =>
+      root === "/new" ? selected.promise : { root, path: "", truncated: false, entries: [] },
+    );
+    function RootHarness(): ReactElement {
+      const [root, setRoot] = useState("/repo");
+      return <FilesWidget root={root} onRootChange={setRoot} />;
+    }
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    render(<RootHarness />);
+    const input = screen.getByRole("textbox", {
+      name: "Folder path — open any folder on this machine",
+    });
+    await waitFor(() => expect(input).toHaveValue("/repo"));
+    writer.mockClear();
+    await userEvent.clear(input);
+    await userEvent.type(input, "/new");
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    const navigation = writer.mock.calls.find(
+      (call) => call[1]?.stageReport?.stage === "files project selection",
+    );
+    const read = writer.mock.calls.find(
+      (call) => call[1]?.stageReport?.stage === "files directory load",
+    );
+    expect(navigation?.[1]?.stageReport.phase).toBe("started");
+    expect(read?.[1]?.parentCorrelationId).toBe(navigation?.[1]?.correlationId);
+    expect(writer.mock.calls.some((call) => call[1]?.stageReport?.phase === "settled")).toBe(false);
+    await act(async () =>
+      selected.resolve({ root: "/new", path: "", truncated: false, entries: [] }),
+    );
+    expect(writer.mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          expect.any(String),
+          expect.objectContaining({
+            correlationId: navigation?.[1]?.correlationId,
+            stageReport: expect.objectContaining({
+              phase: "settled",
+              navigationOutcome: "applied",
+            }),
+          }),
+        ],
+      ]),
+    );
+  });
+
+  it("inherits ignored status after entering a selected ignored directory", async () => {
+    vi.mocked(fetchFilesTree).mockImplementation(async (_root, path = "") => ({
+      root: "/repo",
+      path,
+      truncated: false,
+      entries:
+        path === ""
+          ? [{ name: "dist", path: "dist", kind: "directory", extension: null, readable: true }]
+          : [{ ...treeEntryBase, name: "inside.md", path: "dist/inside.md", kind: "file" }],
+    }));
+    vi.mocked(fetchGitStatus).mockImplementation(async (root) =>
+      availableGitStatus(root === "/repo/dist" ? [] : [gitChange("dist/", "!")], {
+        root,
+        selectedRootIgnored: root === "/repo/dist",
+      }),
+    );
+    render(<FilesWidget root="/repo" />);
+    await userEvent.click(await screen.findByRole("treeitem", { name: /dist, Ignored by Git/u }));
+    expect(
+      await screen.findByRole("treeitem", { name: /inside.md, Ignored by Git/u }),
+    ).toHaveAttribute("data-git-ignored", "true");
+  });
+
   it("renders tree loading errors", async () => {
     vi.mocked(fetchFilesTree).mockRejectedValueOnce(new Error("access denied"));
 
@@ -2274,7 +2438,9 @@ describe("FilePreview", () => {
           </I18nProvider>,
         );
         const alert = await screen.findByRole("alert");
-        expect(alert).toHaveTextContent("Diese Datei kann nicht gelesen werden.");
+        await waitFor(() =>
+          expect(alert).toHaveTextContent("Diese Datei kann nicht gelesen werden."),
+        );
         expect(alert).not.toHaveTextContent("private customer body");
         const requestCorrelation = vi.mocked(fetchFilesPreview).mock.calls.at(-1)?.[2];
         expect(requestCorrelation).toEqual(expect.any(String));

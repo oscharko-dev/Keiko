@@ -134,6 +134,10 @@ const EditorRuntimeWidget = dynamic<EditorRuntimeWidgetProps>(
   },
 );
 
+function normalizedEditorRoot(root: string): string | undefined {
+  return selectWorkspaceFileTarget(root, "__root_identity__")?.root;
+}
+
 export interface EditorWidgetWorkspacePatch {
   readonly rootBinding?: "coding-repository" | undefined;
   readonly root?: string | undefined;
@@ -143,6 +147,7 @@ export interface EditorWidgetWorkspacePatch {
 }
 
 export interface EditorWidgetProps extends EditorRuntimeWidgetProps {
+  readonly rootSelectionLocked?: boolean | undefined;
   readonly layoutJson?: string | undefined;
   readonly onWorkspaceChange?: ((patch: EditorWidgetWorkspacePatch) => void) | undefined;
   readonly onOpenProblems?: ((projectPath: string) => void) | undefined;
@@ -599,6 +604,7 @@ export function EditorWidget({
   onWorkspaceChange,
   onOpenProblems,
   workspaceTrustUiAvailable = true,
+  rootSelectionLocked = false,
   initialWorkspaceNotice,
   onWorkspaceNoticeConsumed,
   onOpenDebugPanel,
@@ -959,6 +965,7 @@ export function EditorWidget({
 
   const selectConnectedRoot = useCallback(
     (normalizedRoot: string, correlationId?: string, warning?: string): ClientNavigationOutcome => {
+      if (rootSelectionLocked && normalizedRoot !== workspaceRoot) return "dropped";
       const apply = (): void => {
         const nextLayout = editorLayoutReducer(layoutRef.current, {
           type: "replace-root",
@@ -989,17 +996,17 @@ export function EditorWidget({
         correlationId,
       );
     },
-    [commitLayout],
+    [commitLayout, rootSelectionLocked, workspaceRoot],
   );
 
   const openRoot = useCallback(
     (nextRoot: string, alreadyConnected = false): void => {
       const selectedRoot = nextRoot.trim();
-      if (selectedRoot.length === 0) return;
+      if (selectedRoot.length === 0 || rootSelectionLocked) return;
       if (alreadyConnected) selectConnectedRoot(selectedRoot);
       else void connectProjectRoot(selectedRoot, selectConnectedRoot);
     },
-    [connectProjectRoot, selectConnectedRoot],
+    [connectProjectRoot, rootSelectionLocked, selectConnectedRoot],
   );
 
   const openFile = useCallback(
@@ -1009,8 +1016,8 @@ export function EditorWidget({
       // (AC3). An unresolvable candidate is dropped so the editor stays on its current usable state.
       const target = selectWorkspaceFileTarget(nextRoot, nextFile);
       if (target === null || target.file.length === 0) return;
-      const currentRoot = selectWorkspaceFileTarget(workspaceRoot, "__root_identity__")?.root;
-      const changesRoot = target.root !== currentRoot;
+      const changesRoot = target.root !== normalizedEditorRoot(workspaceRoot);
+      if (changesRoot && rootSelectionLocked) return;
       const apply = (connectedRoot = changesRoot ? target.root : workspaceRoot): void => {
         const current = layoutRef.current;
         const base = changesRoot
@@ -1056,7 +1063,7 @@ export function EditorWidget({
         "file-navigation",
       );
     },
-    [commitLayout, connectProjectRoot, workspaceRoot],
+    [commitLayout, connectProjectRoot, rootSelectionLocked, workspaceRoot],
   );
 
   const selectOpenFile = useCallback(
@@ -2137,7 +2144,7 @@ export function EditorWidget({
               root={workspaceRoot}
               activeFilePath={activeFile.length > 0 ? activeFile : undefined}
               openFilesDirectly
-              onRootChange={openRoot}
+              {...(rootSelectionLocked ? {} : { onRootChange: openRoot })}
               onOpenFile={openFile}
               onFilesMutated={handleFilesMutated}
               onBeforeEntryMutation={confirmFilesEntryMutation}

@@ -959,6 +959,9 @@ describe("EditorWidget — edit and save", () => {
 
     const warning = await screen.findByTestId("editor-local-history-protection");
     expect(warning).toHaveTextContent("Saved. File history unavailable.");
+    expect(within(warning).getByTestId("load-report-correlation")).toHaveTextContent(
+      "local-history-correlation-2811",
+    );
     expect(warning.querySelector("details")).not.toHaveAttribute("open");
     await userEvent.click(screen.getByText("Details", { selector: "summary" }));
     expect(warning.querySelector("details")).toHaveAttribute("open");
@@ -1030,6 +1033,7 @@ describe("EditorWidget — edit and save", () => {
     );
     expect(warning).toHaveTextContent("Local History recovery is unavailable for this save.");
     expect(warning).toHaveTextContent("secret-suppressed-correlation");
+    expect(within(warning).queryByTestId("load-report-correlation")).toBeNull();
     expect(surface.props?.saveStatus).toBe("saved");
     expect(surface.props?.fileModel.dirty).toBe(false);
   });

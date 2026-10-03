@@ -12,6 +12,7 @@ import type {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  ApiError,
   copyFilesEntry,
   createFilesEntry,
   deleteFilesEntry,
@@ -39,7 +40,7 @@ import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
 import {
   observeFilesDirectoryRead,
-  startFilesNavigationEvidence,
+  type FilesNavigationRead,
 } from "@/lib/files-navigation-evidence";
 import { FilesRootBar } from "./FilesRootBar";
 import { SupportReportButton } from "../../SupportReportButton";
@@ -157,6 +158,7 @@ function gitPathFromTreePath(visibleDirectoryPath: string | null, path: string):
 }
 
 function markedGitPath(path: string, markedPaths: ReadonlySet<string>): boolean {
+  if (markedPaths.has("")) return true;
   let candidate: string | null = path;
   while (candidate !== null) {
     if (markedPaths.has(candidate) || markedPaths.has(`${candidate}/`)) return true;
@@ -167,6 +169,7 @@ function markedGitPath(path: string, markedPaths: ReadonlySet<string>): boolean 
 
 interface DirectoryState {
   readonly correlationId?: string | undefined;
+  readonly expectedRefusal?: boolean;
   readonly entries: readonly FilesTreeEntry[];
   readonly truncated: boolean;
   readonly loading: boolean;
@@ -379,6 +382,23 @@ function errorMessage(error: unknown, t: I18nTranslate): string {
   return error instanceof Error ? error.message : t("filesWidget.error.unableToReadFolder");
 }
 
+function directoryRefusalMessage(error: unknown, t: FilesWidgetTranslate): string | null {
+  const cause = error instanceof Error ? error.cause : undefined;
+  const apiError = error instanceof ApiError ? error : cause;
+  if (!(apiError instanceof ApiError)) return null;
+  switch (apiError.code) {
+    case "BAD_ROOT":
+      return t("tree.absolutePathRequired");
+    case "INVALID_DIRECTORY":
+    case "NOT_FOUND":
+      return t("tree.folderMissing");
+    case "DENIED":
+      return t("tree.folderDenied");
+    default:
+      return null;
+  }
+}
+
 // CSS.escape with a fallback for environments without the CSSOM utility (older jsdom):
 // escaping quotes/backslashes is enough for an attribute-value selector.
 function cssEscape(value: string): string {
@@ -574,12 +594,17 @@ function gitDirectoryLabel(aggregate: GitDirectoryAggregate, t: FilesWidgetTrans
 const filesTreeRequests = new Map<string, Promise<FilesTreeResponse>>();
 const gitStatusRequests = new Map<string, Promise<GitRepositoryStatusResponse>>();
 
-function readSharedFilesTree(root: string, path: string): Promise<FilesTreeResponse> {
-  const key = `${root}\u0000${path}`;
+function readSharedFilesTree(
+  root: string,
+  path: string,
+  navigation?: FilesNavigationRead,
+): Promise<FilesTreeResponse> {
+  const key = `${root}\u0000${path}\u0000${navigation?.correlationId ?? ""}`;
   const existing = filesTreeRequests.get(key);
   if (existing !== undefined) return existing;
-  const request = observeFilesDirectoryRead((correlationId) =>
-    fetchFilesTree(root, path, correlationId),
+  const request = observeFilesDirectoryRead(
+    (correlationId) => fetchFilesTree(root, path, correlationId),
+    navigation,
   ).finally(() => {
     filesTreeRequests.delete(key);
   });
@@ -757,6 +782,9 @@ export function FilesWidget({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const navigation = useFilesNavigation(apiRoot, onRootChange);
   const currentDirectoryPath = navigation.path;
+  const takeNavigationRead = navigation.takeRead;
+  const selectNavigationRoot = navigation.selectRoot;
+  const visitDirectory = navigation.visit;
   const previousDirectoryRef = useRef<string | null>(null);
   const currentDirectoryRef = useRef(currentDirectoryPath);
   currentDirectoryRef.current = currentDirectoryPath;
@@ -951,7 +979,7 @@ export function FilesWidget({
         },
       }));
       try {
-        const response = await readSharedFilesTree(apiRoot, path);
+        const response = await readSharedFilesTree(apiRoot, path, takeNavigationRead(path));
         if (isStale()) return;
         if (path === "") {
           setResolvedRootValue(response.root);
@@ -980,20 +1008,22 @@ export function FilesWidget({
         });
       } catch (error: unknown) {
         if (isStale()) return;
+        const refusal = directoryRefusalMessage(error, tGit);
         setDirectories((current) => ({
           ...current,
           [path]: {
             entries: current[path]?.entries ?? [],
             truncated: current[path]?.truncated ?? false,
             loading: false,
-            error: t("filesWidget.error.unableToReadFolder"),
+            error: refusal ?? t("filesWidget.error.unableToReadFolder"),
+            expectedRefusal: refusal !== null,
             correlationId: correlationIdOf(error),
             notice: null,
           },
         }));
       }
     },
-    [apiRoot, t, touchDirectoryAccess],
+    [apiRoot, takeNavigationRead, t, tGit, touchDirectoryAccess],
   );
 
   useEffect(() => {
@@ -1102,12 +1132,15 @@ export function FilesWidget({
     (next: string): void => {
       const target = next.trim();
       if (onRootChange === undefined || target.length === 0) return;
+      if (target === apiRoot || target === effectiveRoot) {
+        visitDirectory(null);
+        setRootDraft(effectiveRoot);
+        return;
+      }
       if (target === visibleRootPath) return;
-      const settle = startFilesNavigationEvidence("files project selection");
-      onRootChange(target);
-      settle();
+      selectNavigationRoot(target);
     },
-    [onRootChange, visibleRootPath],
+    [apiRoot, effectiveRoot, selectNavigationRoot, visitDirectory, onRootChange, visibleRootPath],
   );
 
   const goToDirectory = navigation.visit;
@@ -1117,7 +1150,7 @@ export function FilesWidget({
     setSelectedPath(null);
     activeFileChangeRef.current?.(null, effectiveRoot, currentDirectoryPath);
     const path = currentDirectoryPath ?? "";
-    if (directories[path] === undefined) void loadDirectory(path);
+    void loadDirectory(path);
   }, [
     apiRoot,
     currentDirectoryPath,
@@ -1560,24 +1593,32 @@ export function FilesWidget({
     () =>
       new Set(
         gitStatusState.status?.available === true
-          ? gitStatusState.status.changes
-              .filter(isIgnoredGitChange)
-              .map((change) => treePathFromGitPath(currentDirectoryPath, change.path))
+          ? [
+              ...(gitStatusState.status.selectedRootIgnored === true
+                ? [currentDirectoryPath ?? ""]
+                : []),
+              ...gitStatusState.status.changes
+                .filter(isIgnoredGitChange)
+                .map((change) => treePathFromGitPath(currentDirectoryPath, change.path)),
+            ]
           : [],
       ),
     [currentDirectoryPath, gitStatusState.status],
   );
   const unversionedGitPaths = useMemo(
     () =>
-      new Set(
-        gitChanges
+      new Set([
+        ...gitChanges
           .filter(
             (change) =>
               change.untracked || change.indexStatus === "?" || change.worktreeStatus === "?",
           )
           .map((change) => treePathFromGitPath(currentDirectoryPath, change.path)),
-      ),
-    [currentDirectoryPath, gitChanges],
+        ...(gitStatusState.status?.untrackedDirectories ?? []).map((path) =>
+          treePathFromGitPath(currentDirectoryPath, path),
+        ),
+      ]),
+    [currentDirectoryPath, gitChanges, gitStatusState.status],
   );
   // GEN-PERF-WIDGET-004 — memoize the path->change Map on [gitChanges] so it is not rebuilt
   // over all (up to 500) git changes on every render (incl. every pointermove-driven one).
@@ -2016,10 +2057,14 @@ export function FilesWidget({
         {state?.error !== null && state?.error !== undefined ? (
           <div className="files-error" role="alert" style={{ marginLeft: treeIndent(depth) }}>
             <span>{state.error}</span>
-            <button type="button" className="files-retry" onClick={() => retryDirectory(path)}>
-              {t("filesWidget.directory.retry")}
-            </button>
-            <SupportReportButton correlationId={state.correlationId} compact />
+            {state.expectedRefusal === true ? null : (
+              <>
+                <button type="button" className="files-retry" onClick={() => retryDirectory(path)}>
+                  {t("filesWidget.directory.retry")}
+                </button>
+                <SupportReportButton correlationId={state.correlationId} compact />
+              </>
+            )}
           </div>
         ) : null}
         {/* Truncation notice sits ABOVE the rows so it is visible as soon as the folder opens
