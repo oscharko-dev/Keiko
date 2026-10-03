@@ -64,6 +64,7 @@ import {
   recordClientDiagnosticLoss,
   restoreClientDiagnosticLoss,
   setClientDiagnosticWriter,
+  setClientDiagnosticDeliveryRetry,
   takeClientDiagnosticLoss,
 } from "./client-diagnostics";
 import { ApiError } from "./api-shared-primitives";
@@ -146,6 +147,9 @@ function clientStagePostBody(
         phase: "settled",
         ordinal: report.ordinal,
         durationMs: report.durationMs,
+        ...(report.navigationOutcome === undefined
+          ? {}
+          : { navigationOutcome: report.navigationOutcome }),
         correlationId: id,
         deletion: report.deletion,
       };
@@ -264,6 +268,7 @@ function clientMessagePostBody(
     correlationId: validCorrelationId(meta.correlationId),
     parentCorrelationId: validCorrelationId(meta.parentCorrelationId),
     errorKind: meta.errorKind,
+    renderFailure: meta.renderFailure,
     voiceDialogueStage: meta.voiceDialogueStage,
     voiceCaptureReason: meta.voiceCaptureReason,
     voiceCaptureError: meta.voiceCaptureError,
@@ -420,6 +425,91 @@ export function resetClientDiagnosticPostStateForTests(): void {
   postWindows.routine = freshPostWindow();
   postFailureCount = 0;
   postThrottledCount = 0;
+  reportDeliveries.clear();
+  reportRetryWindow = freshPostWindow();
+}
+
+type DiagnosticPostBody = ReturnType<typeof clientDiagnosticPostBody>;
+interface ReportDelivery {
+  readonly body: ClientDiagnosticIngestRequest;
+  acknowledged: Promise<boolean>;
+}
+const MAX_REPORT_DELIVERIES = 100;
+const REPORT_RETRY_LIMIT = 6;
+const reportDeliveries = new Map<string, ReportDelivery>();
+let reportRetryWindow = freshPostWindow();
+
+// Contextual file/folder failures need the same exact-id replay as uncaught browser failures:
+// their original request may fail before the BFF can retain any evidence. Routine lifecycle
+// reports remain unretained; only already-projected failure evidence enters this bounded cache.
+function browserReportCorrelation(meta: ClientDiagnosticMeta | undefined): string | undefined {
+  if (meta === undefined) return undefined;
+  if (
+    meta.kind !== "window-error" &&
+    meta.kind !== "unhandled-rejection" &&
+    meta.renderFailure === undefined &&
+    meta.errorKind === undefined &&
+    meta.errorEvidence === undefined
+  )
+    return undefined;
+  return validCorrelationId(meta.correlationId);
+}
+
+function rememberReportDelivery(
+  body: DiagnosticPostBody,
+  meta: ClientDiagnosticMeta | undefined,
+  acknowledged: Promise<boolean>,
+): void {
+  if (!("message" in body)) return;
+  const key = browserReportCorrelation(meta);
+  if (key === undefined) return;
+  const retainedBody = { ...body };
+  delete retainedBody.loss;
+  reportDeliveries.set(key, { body: retainedBody, acknowledged });
+  if (reportDeliveries.size <= MAX_REPORT_DELIVERIES) return;
+  const oldest = reportDeliveries.keys().next().value;
+  if (oldest !== undefined) reportDeliveries.delete(oldest);
+}
+
+function waitForDelivery(delivery: Promise<boolean>, signal: AbortSignal): Promise<boolean> {
+  signal.throwIfAborted();
+  return new Promise<boolean>((resolve, reject): void => {
+    const abort = (): void => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    void delivery.then(
+      (value): void => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown): void => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function retryReportDelivery(
+  correlationId: string,
+  signal: AbortSignal,
+): Promise<boolean | undefined> {
+  const retained = reportDeliveries.get(correlationId);
+  if (retained === undefined) return undefined;
+  const pending = retained.acknowledged;
+  if (await waitForDelivery(pending, signal)) return true;
+  if (retained.acknowledged !== pending) return waitForDelivery(retained.acknowledged, signal);
+  if (!admittedByClientPostRateLimit(reportRetryWindow, REPORT_RETRY_LIMIT, Date.now()))
+    return false;
+  // One human report action may redeliver its original, already-projected diagnostic. It has a
+  // separate bounded budget; the server's ingest limiter remains authoritative. Never fall back
+  // to a different incident or send an error message, repository content or raw stack here.
+  const loss = takeClientDiagnosticLoss();
+  retained.acknowledged = sendClientDiagnosticBody(
+    { ...retained.body, ...(loss === undefined ? {} : { loss }) },
+    loss,
+    signal,
+  );
+  return waitForDelivery(retained.acknowledged, signal);
 }
 
 // Best-effort POST to the server activity log. Never awaited by a call site and never lets a
@@ -447,20 +537,35 @@ function recordFailedPost(loss: ClientDiagnosticLossCounts | undefined, error: u
   writeToBrowserConsole(DIAGNOSTIC_DELIVERY_FAILURE_NOTICE);
 }
 
+async function sendClientDiagnosticBody(
+  body: DiagnosticPostBody,
+  loss: ClientDiagnosticLossCounts | undefined,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  try {
+    await bffFetchJson<undefined>("/api/diagnostics/client", {
+      method: "POST",
+      body: JSON.stringify(body),
+      keepalive: true,
+      signal: signal ?? AbortSignal.timeout(15_000),
+    });
+    return true;
+  } catch (error) {
+    recordFailedPost(loss, error);
+    return false;
+  }
+}
+
 function sendClientDiagnostic(
   message: string,
   meta: ClientDiagnosticMeta | undefined,
   loss: ClientDiagnosticLossCounts | undefined,
+  admitted = true,
 ): void {
   try {
     const body = clientDiagnosticPostBody(message, meta ?? {}, loss);
-    void bffFetchJson<undefined>("/api/diagnostics/client", {
-      method: "POST",
-      body: JSON.stringify(body),
-      keepalive: true,
-    }).catch((error: unknown) => {
-      recordFailedPost(loss, error);
-    });
+    const acknowledged = admitted ? sendClientDiagnosticBody(body, loss) : Promise.resolve(false);
+    rememberReportDelivery(body, meta, acknowledged);
   } catch (error) {
     recordFailedPost(loss, error);
   }
@@ -478,6 +583,7 @@ function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMe
     window.throttled += 1;
     recordClientDiagnosticLoss("postsThrottled");
     if (window.throttled === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
+    sendClientDiagnostic(message, meta, undefined, false);
     return;
   }
   const loss = structuredPostBody(meta) === undefined ? takeClientDiagnosticLoss() : undefined;
@@ -508,6 +614,7 @@ function fanOutClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): v
   postClientDiagnosticToServer(message, meta);
 }
 
+setClientDiagnosticDeliveryRetry(retryReportDelivery);
 setClientDiagnosticWriter(fanOutClientDiagnostic);
 
 export { writeToBrowserConsole, fanOutClientDiagnostic };

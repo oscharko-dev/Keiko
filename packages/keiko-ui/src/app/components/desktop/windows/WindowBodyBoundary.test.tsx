@@ -14,6 +14,7 @@ import { registerWindowRender } from "./WindowsRegistry";
 import type { AppWindow } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import { workspaceApiFixture } from "../../../../test-utils/workspace-api-fixture";
+import * as diagnostics from "@/lib/client-diagnostics";
 
 function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
   return {
@@ -56,6 +57,7 @@ function Bomb({ armed }: { readonly armed: boolean }): React.JSX.Element {
 
 describe("WindowBodyBoundary", () => {
   it("degrades a throwing child to the fallback and logs the window type, not the title", () => {
+    const diagnostic = vi.spyOn(diagnostics, "reportClientDiagnostic");
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       withBoundaryNoise("forced widget defect", () =>
@@ -71,12 +73,17 @@ describe("WindowBodyBoundary", () => {
       // CLASS through the one client diagnostic sink. Strengthened, not adapted — the window type
       // that made this attributable is still asserted, and the raw Error is now pinned as absent.
       expect(warnSpy).toHaveBeenCalledWith("[keiko] window body crashed: agents: Error");
+      expect(diagnostic).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ kind: "boundary", renderFailure: "window-body" }),
+      );
       for (const call of warnSpy.mock.calls) {
         for (const argument of call) {
           expect(argument).not.toBeInstanceOf(Error);
         }
       }
     } finally {
+      diagnostic.mockRestore();
       warnSpy.mockRestore();
     }
   });

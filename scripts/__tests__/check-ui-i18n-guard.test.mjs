@@ -404,6 +404,78 @@ test("accepts a single-file feature catalog carrying both language maps", async 
   );
 });
 
+const FILES_FEATURE_CATALOG =
+  "packages/keiko-ui/src/app/components/desktop/widgets/cards/files-widget-i18n.ts";
+const FILES_FEATURE_COPY = { "tree.projectRoot": "Project", "tree.connectionFailed": "Failed" };
+
+function filesWidgetCatalog(englishKeys, germanKeys) {
+  return singleFileCatalog(englishKeys, germanKeys)
+    .replace("FEATURE_EN_MESSAGES", "EN_FILES_WIDGET_MESSAGES")
+    .replace("FEATURE_DE_MESSAGES", "DE_FILES_WIDGET_MESSAGES");
+}
+
+test.each([
+  'export function Tree() { const t = useFilesWidgetTranslate(); return <button aria-label={t("tree.projectRoot")} />; }',
+  'export function Connection() { const t = useFilesWidgetTranslate(); return t("tree.connectionFailed"); }',
+  'export function label(t: FilesWidgetTranslate) { return t("tree.projectRoot"); }',
+  'export function label(locale) { return translateFilesWidget(locale, "tree.projectRoot"); }',
+])("recognizes existing Files localization API: %s", async (source) => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [UI_FILE]: source,
+      [FILES_FEATURE_CATALOG]: filesWidgetCatalog(FILES_FEATURE_COPY, FILES_FEATURE_COPY),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [UI_FILE, FILES_FEATURE_CATALOG],
+      });
+      expect(result.i18nRelevantFiles).toEqual([UI_FILE]);
+      expect(result.problems).toEqual([]);
+      expect(result.ok).toBe(true);
+    },
+  );
+});
+
+test("still rejects untranslated copy alongside the Files localization hook", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [UI_FILE]:
+        'export function Tree() { const t = useFilesWidgetTranslate(); return <button aria-label={t("tree.projectRoot")}>Open folder now</button>; }',
+      [FILES_FEATURE_CATALOG]: filesWidgetCatalog(FILES_FEATURE_COPY, FILES_FEATURE_COPY),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [UI_FILE, FILES_FEATURE_CATALOG],
+      });
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toContain('"Open folder now"');
+    },
+  );
+});
+
+test("still rejects missing German Files catalog keys", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [UI_FILE]:
+        'export function Tree() { const t = useFilesWidgetTranslate(); return <button aria-label={t("tree.projectRoot")} />; }',
+      [FILES_FEATURE_CATALOG]: filesWidgetCatalog(FILES_FEATURE_COPY, {}),
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [UI_FILE, FILES_FEATURE_CATALOG],
+      });
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/same keys.*tree\.projectRoot/u);
+    },
+  );
+});
+
 const JSON_FEATURE_CATALOG = "packages/keiko-ui/src/app/feature/feature-i18n.messages.json";
 const NON_I18N_UI_FILE = "packages/keiko-ui/src/app/feature/arithmetic.ts";
 const NON_I18N_UI_SOURCE = "export const add = (left, right) => left + right;\n";
@@ -2431,6 +2503,9 @@ const I18N_API_USAGE_LINES = [
   '  return translateOptionalWidget(locale, "x");',
   '  return localizedWindowTitle(t, "files");',
   "  const t = useProblemsTranslate();",
+  "  const t = useFilesWidgetTranslate();",
+  "export function labelFor(t: FilesWidgetTranslate): string {",
+  '  return translateFilesWidget(locale, "x");',
 ];
 
 test("every recognised i18n API usage is both relevant and a new signature when adopted alone", () => {

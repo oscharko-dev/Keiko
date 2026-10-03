@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { runVerification, type VerificationDeps } from "./orchestrator.js";
 import type { VerificationPlan, VerificationStep } from "./types.js";
@@ -8,6 +9,7 @@ import {
   makeWorkspace,
   recordingSpawn,
   scriptChildClose,
+  verificationSandboxDeps,
 } from "./_support.js";
 
 function step(overrides: Partial<VerificationStep> = {}): VerificationStep {
@@ -31,6 +33,7 @@ function depsWith(
   extra: Partial<VerificationDeps> = {},
 ): VerificationDeps {
   return {
+    ...verificationSandboxDeps(),
     workspace: ws.info,
     spawn: spawnFn,
     monitor: fakeMonitor(),
@@ -39,6 +42,63 @@ function depsWith(
     ...extra,
   };
 }
+
+describe("runVerification — repository filesystem containment", () => {
+  const strictBackend = {
+    bubblewrap: true,
+    unshare: false,
+    seatbelt: false,
+    docker: false,
+    podman: false,
+  };
+  it.each(["typecheck", "lint", "test", "build", "targeted-test"] as const)(
+    "confines %s writes to the execution root",
+    async (kind) => {
+      const ws = makeWorkspace();
+      const rec = recordingSpawn();
+      scriptChildClose(rec.child, { exitCode: 0 });
+      const target =
+        kind === "targeted-test"
+          ? step({
+              kind,
+              scriptName: undefined,
+              command: "npx",
+              args: ["vitest", "run", "src/a.test.ts"],
+            })
+          : step({ kind, scriptName: kind, args: kind === "test" ? ["test"] : ["run", kind] });
+      const report = await runVerification(
+        planOf([target], ws.info.root),
+        depsWith(ws, rec.fn, {
+          sandboxAvailability: strictBackend,
+          platform: "linux",
+          resolveExecutable: (command) => `/abs/${command}`,
+        }),
+      );
+      expect(report.results[0]?.status).toBe("passed");
+      expect(rec.calls()[0]?.command).toBe("/abs/bwrap");
+      expect(rec.calls()[0]?.args).toEqual(
+        expect.arrayContaining(["--bind", realpathSync(ws.info.root), "/keiko-execution-root"]),
+      );
+      expect(rec.calls()[0]?.args).not.toContain("--dev-bind");
+    },
+  );
+
+  it("does not execute repository code through a network-only backend", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const report = await runVerification(
+      planOf([step()], ws.info.root),
+      depsWith(ws, rec.fn, {
+        sandboxAvailability: { ...strictBackend, bubblewrap: false, unshare: true },
+        platform: "linux",
+        resolveExecutable: (command) => `/abs/${command}`,
+      }),
+    );
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
+  });
+});
 
 describe("runVerification — outcomes", () => {
   it("exit 0 → passed, with all four appliedLimits dimensions present", async () => {
@@ -232,8 +292,9 @@ describe("runVerification — outcomes", () => {
 
     expect(report.results[0]?.status).toBe("passed");
     expect(rec.calls()).toHaveLength(1);
-    expect(rec.calls()[0]?.command).toMatch(/(?:^|\/)node$/u);
-    expect(rec.calls()[0]?.args).toEqual(["--test", "src/a.test.js"]);
+    expect(rec.calls()[0]?.command).toBe("/abs/bwrap");
+    expect(rec.calls()[0]?.args).toContain("/abs/node");
+    expect(rec.calls()[0]?.args.slice(-2)).toEqual(["--test", "src/a.test.js"]);
   });
 
   it.each([
@@ -323,12 +384,14 @@ describe("runVerification — cancellation (D5)", () => {
       ac.abort();
     });
     const report = await runVerification(planOf([step()], ws.info.root), {
+      ...verificationSandboxDeps(),
       workspace: ws.info,
       spawn: rec.fn,
       monitor,
       signal: ac.signal,
       // Empty PATH → defaultResolveExecutable throws CommandDeniedError before spawning.
       processEnv: {},
+      resolveExecutable: undefined,
       now: () => 1_000,
       networkEnforcement: "inherit",
     });
@@ -359,6 +422,7 @@ describe("runVerification — memory breach (D3) and no monitor-interval leak", 
     const monitor = { ...fakeMonitor(), canEnforceProcessTreeMemory: (): boolean => false };
     const limits = { ...DEFAULT_VERIFICATION_LIMITS, maxMemoryBytes: 64 * 1024 * 1024 };
     const report = await runVerification(planOf([step({ limits })], ws.info.root), {
+      ...verificationSandboxDeps(),
       workspace: ws.info,
       spawn: rec.fn,
       monitor,
@@ -384,6 +448,7 @@ describe("runVerification — memory breach (D3) and no monitor-interval leak", 
       queueMicrotask(() => child.emit("close", null, "SIGTERM"));
     });
     const report = await runVerification(planOf([step({ limits })], ws.info.root), {
+      ...verificationSandboxDeps(),
       workspace: ws.info,
       spawn: rec.fn,
       monitor,
@@ -406,6 +471,7 @@ describe("runVerification — memory breach (D3) and no monitor-interval leak", 
     const recA = recordingSpawn();
     scriptChildClose(recA.child, { exitCode: 0 });
     await runVerification(planOf([step()], ws.info.root), {
+      ...verificationSandboxDeps(),
       workspace: ws.info,
       spawn: recA.fn,
       monitor,
@@ -428,7 +494,14 @@ describe("runVerification — memory breach (D3) and no monitor-interval leak", 
         ],
         ws.info.root,
       ),
-      { workspace: ws.info, spawn: recB.fn, monitor, now: () => 1, networkEnforcement: "inherit" },
+      {
+        ...verificationSandboxDeps(),
+        workspace: ws.info,
+        spawn: recB.fn,
+        monitor,
+        now: () => 1,
+        networkEnforcement: "inherit",
+      },
     );
     expect(monitor.watched()).toHaveLength(1); // unchanged: no spawn on a skip
   });

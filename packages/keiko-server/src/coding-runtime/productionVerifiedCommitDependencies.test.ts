@@ -123,6 +123,24 @@ describe("production verified commit dependencies", () => {
     expect(JSON.stringify(events)).not.toContain("code.ts");
   });
 
+  it("blocks passive dirty buffers without a bridge until their owner confirms clean release", () => {
+    const dirty = dirtySnapshot(root);
+    const digest = "b".repeat(64);
+    expect(editorAgentRegistry.registerBufferSnapshot(dirty, digest)).toBe(true);
+    expect(editorAgentRegistry.hasLiveBridge(dirty.sessionId)).toBe(false);
+    expect(verifiedCommitBuffersClean(deps, root, "run-1")).toBe(false);
+    expect(editorAgentRegistry.releaseBufferSnapshot(dirty.sessionId, digest)).toBe(false);
+    expect(verifiedCommitBuffersClean(deps, root, "run-1")).toBe(false);
+    expect(editorAgentRegistry.refreshBufferSnapshot({ ...dirty, dirtyFiles: [] }, digest)).toBe(
+      false,
+    );
+    expect(verifiedCommitBuffersClean(deps, root, "run-1")).toBe(false);
+    const clean = { ...dirty, dirtyFiles: [], updatedAt: dirty.updatedAt + 1 };
+    expect(editorAgentRegistry.refreshBufferSnapshot(clean, digest)).toBe(true);
+    expect(editorAgentRegistry.releaseBufferSnapshot(dirty.sessionId, digest)).toBe(true);
+    expect(verifiedCommitBuffersClean(deps, root, "run-1")).toBe(true);
+  });
+
   it("admits clean buffers and proven unrelated dirty roots, then notices a newly dirty target", () => {
     expect(verifiedCommitBuffersClean(deps, root, "run-2")).toBe(true);
     const other = join(scratch, "other");

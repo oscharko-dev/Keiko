@@ -84,17 +84,6 @@ export interface EditorContentDelta {
   readonly sizeBytes: number;
 }
 
-/** The bounded Monaco selection handed to the host by the Ask Keiko command (Issue #2119). */
-export interface EditorSelectionCapture {
-  /** Fixed discriminator matching the existing agent snapshot text-mode contract. */
-  readonly textMode: "selection";
-  readonly range: EditorRange;
-  /** Text read from `getValueInRange(range)` only; never an implicit active-buffer fallback. */
-  readonly text: string;
-}
-
-export type AskKeikoAboutSelectionHandler = (selection: EditorSelectionCapture) => void;
-
 /**
  * Explicit host-owned debug surface. Its absence is the default-off capability state: no gutter,
  * command, or paused-value rendering is registered until the caller supplies this complete port.
@@ -268,19 +257,6 @@ export interface KeikoCodeEditorProps {
    * *class* — never a message, a path or buffer content. Absent when the host surfaces no such state.
    */
   readonly onLanguageIntelligence?: EditorLanguageIntelligenceReporter | undefined;
-  /**
-   * Host handler for the "Generate Tests" command (Issue #1205). When present, the editor registers a
-   * Keiko action into Monaco's native command palette (F1), the context menu, and the `Cmd/Ctrl+Alt+T`
-   * keybinding; the run delegates here, to the host's governed test-generation flow (#1202). Absent
-   * when the host offers no test generation (e.g. a non-source buffer), so the action never registers.
-   */
-  readonly onGenerateTests?: (() => void) | undefined;
-  /**
-   * Host handler for "Ask Keiko about this selection" (Issue #2119). The command is registered only
-   * when this callback exists and is disabled by Monaco when no non-empty selection exists. The
-   * payload contains only the live selected range and its text; the host owns chat-session routing.
-   */
-  readonly onAskKeikoAboutSelection?: AskKeikoAboutSelectionHandler | undefined;
   /** Host handler for the F2 Rename Symbol command (Epic #2089, Issue #2105). */
   readonly onRenameSymbol?: (() => void) | undefined;
   /** Host-owned, read-only Git hunk source for event-driven gutter decorations (ADR-0127). */

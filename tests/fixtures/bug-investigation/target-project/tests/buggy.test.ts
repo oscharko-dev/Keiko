@@ -1,11 +1,17 @@
-import { describe, expect, it } from "vitest";
-import { half } from "../src/buggy.js";
+import { readdirSync } from "node:fs";
+import { describe, it } from "node:test";
+import { strictEqual } from "node:assert";
+// Refresh the fixture's single-entry source parent before loading the atomically replaced module.
+// Docker Desktop can otherwise retain a stale bind-mount dentry after the real workflow patch.
+readdirSync(new URL("../src/", import.meta.url));
 
-// This regression test FAILS against the buggy source (half(10) === 3.33…) and PASSES once the
-// integration test applies the fix (n / 2). It is the verified evidence that the bug reproduces and
-// the fix resolves it.
-describe("half", () => {
-  it("returns half of the input", () => {
-    expect(half(10)).toBe(5);
+const { half } = (await import(
+  new URL("../src/buggy.ts", import.meta.url).href
+)) as typeof import("../src/buggy.js");
+
+// The real workflow integration executes this regression before and after applying the fix.
+void describe("half", () => {
+  void it("returns half of the input", () => {
+    strictEqual(half(10), 5);
   });
 });

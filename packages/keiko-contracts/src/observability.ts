@@ -91,6 +91,8 @@ export {
   isSupportIncidentSurface,
   normalizeKeikoFrame,
   normalizeKeikoFrameSignature,
+  normalizeDefectFrameSignature,
+  clientDefectContext,
   parseSupportIncidentFileName,
   parseSupportIncidentFingerprintClaimFileName,
   parseSupportIncidentRecord,

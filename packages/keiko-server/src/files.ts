@@ -732,7 +732,13 @@ async function classifyEntry(
   if (entry.isDirectory() && !entry.isSymbolicLink()) {
     return metadataFreeDirectoryEntry(
       { name: entry.name, path: childRelativePath, extension: extensionOf(entry.name) },
-      true,
+      !pathIsDenied(childRelativePath),
+    );
+  }
+  if (pathIsDenied(childRelativePath)) {
+    return metadataFreeDirectoryEntry(
+      { name: entry.name, path: childRelativePath, extension: extensionOf(entry.name) },
+      false,
     );
   }
   const linkStats = await lstat(entryPath);
@@ -763,8 +769,25 @@ function childRelative(parentRelativePath: string, name: string): string {
   return parentRelativePath.length === 0 ? name : `${parentRelativePath}/${name}`;
 }
 
-function skipEntry(rel: string): boolean {
-  return pathIsDenied(rel);
+const PRESENTABLE_EXCLUDED_DIRECTORIES = new Set([
+  "node_modules",
+  ".keiko",
+  ".codex",
+  ".claude",
+  ".playwright-mcp",
+  ".idea",
+  ".cache",
+  ".next",
+  ".turbo",
+  ".git",
+]);
+
+function isPresentableExcludedDirectory(entry: Dirent): boolean {
+  return entry.isDirectory() && PRESENTABLE_EXCLUDED_DIRECTORIES.has(entry.name.toLowerCase());
+}
+
+function skipEntry(rel: string, entry: Dirent): boolean {
+  return pathIsDenied(rel) && !isPresentableExcludedDirectory(entry);
 }
 
 async function mapInBatches<T, R>(
@@ -795,11 +818,13 @@ async function listTreeEntries(
     for await (const entry of dir) {
       // Deny filtering happens BEFORE the truncation counter so a directory packed with denied
       // entries (e.g. node_modules/**) cannot exhaust the 1000-entry budget and hide real files
-      // behind `truncated: true`. .gitignore is intentionally not a Files visibility filter:
+      // behind `truncated: true`. Known non-secret runtime directories remain name-only,
+      // unavailable rows; their children still fail the same deny boundary.
+      // .gitignore is intentionally not a Files visibility filter:
       // safe dotfiles and generated files must remain visible and connectable.
       const rel = childRelative(relativePath, entry.name);
       if (!metadataIsSafe(rel, redactor)) continue;
-      if (skipEntry(rel)) continue;
+      if (skipEntry(rel, entry)) continue;
       if (dirents.length >= MAX_DIRECTORY_ENTRIES) {
         truncated = true;
         break;

@@ -109,8 +109,8 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
     "projectPathPrivacy",
     CHAT_TITLE_IS_DEFAULT_CFG_KEY,
   ],
-  editor: ["openFiles", "layoutJson", "rootSessionsJson"],
-  files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot"],
+  editor: ["openFiles", "layoutJson", "rootSessionsJson", "rootBinding"],
+  files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot", "rootBinding"],
   // The Coding Workbench can explicitly open the user-selected repository rather than an active
   // task worktree. Retain only this closed marker, never an arbitrary binding instruction.
   governedGit: ["rootBinding"],
@@ -182,6 +182,8 @@ function sanitizeSetMarker(value: unknown): AppWindow["cfg"][string] {
 
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
+  "files:rootBinding": sanitizeCodingRepositoryBinding,
+  "editor:rootBinding": sanitizeCodingRepositoryBinding,
   "governedPullRequest:descriptionOwnerAndRepo": sanitizeGitHubOwnerAndRepo,
   "governedPullRequest:descriptionPrNumber": sanitizePullRequestNumber,
   "governedPullRequest:descriptionProposalId": sanitizeOpaqueReferenceValue,

@@ -450,6 +450,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
   readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly renderFailure?: "shell" | "window-body" | undefined;
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
@@ -657,14 +658,26 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   );
 }
 
+function hasValidRenderFailure(value: Record<string, unknown>): boolean {
+  if (value.renderFailure === undefined) return true;
+  return (
+    value.kind === "boundary" &&
+    (value.renderFailure === "shell" || value.renderFailure === "window-body")
+  );
+}
+
+function hasValidOperationalContext(value: Record<string, unknown>): boolean {
+  return hasValidVoiceCaptureContext(value) && hasValidGitContext(value);
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
   const { errorKind, loss, parentCorrelationId } = value;
   if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
   if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
   if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
-  if (!hasValidVoiceCaptureContext(value)) return false;
-  if (!hasValidGitContext(value)) return false;
+  if (!hasValidRenderFailure(value)) return false;
+  if (!hasValidOperationalContext(value)) return false;
   if (!hasValidClosedReportContext(value)) return false;
   return (
     hasValidComposerContext(value) &&
@@ -715,6 +728,10 @@ export const CLIENT_STAGE_IDS = [
   "chat bind",
   "command palette",
   "chat history deletion",
+  "files directory load",
+  "files directory navigation",
+  "files project selection",
+  "editor project selection",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
@@ -755,6 +772,7 @@ export interface ClientStageSettledIngestRequest {
   readonly durationMs: number;
   readonly correlationId?: string | undefined;
   readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
+  readonly navigationOutcome?: ClientNavigationOutcome | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -770,7 +788,37 @@ const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "durationMs",
   "correlationId",
   "deletion",
+  "navigationOutcome",
 ]);
+
+export const CLIENT_NAVIGATION_OUTCOMES = [
+  "applied",
+  "unavailable",
+  "failed",
+  "dropped",
+  "stale",
+  "cancelled",
+  "deferred",
+] as const;
+export type ClientNavigationOutcome = (typeof CLIENT_NAVIGATION_OUTCOMES)[number];
+const NAVIGATION_OUTCOMES: ReadonlySet<string> = new Set(CLIENT_NAVIGATION_OUTCOMES);
+const NAVIGATION_OUTCOME_STAGES: ReadonlySet<string> = new Set([
+  "editor project selection",
+  "files directory load",
+  "files directory navigation",
+  "files project selection",
+]);
+
+function hasValidNavigationOutcome(value: Record<string, unknown>): boolean {
+  if (value.navigationOutcome === undefined) return true;
+  return (
+    value.phase === "settled" &&
+    typeof value.stage === "string" &&
+    NAVIGATION_OUTCOME_STAGES.has(value.stage) &&
+    typeof value.navigationOutcome === "string" &&
+    NAVIGATION_OUTCOMES.has(value.navigationOutcome)
+  );
+}
 
 const CHAT_HISTORY_DELETION_COUNT_KEYS: ReadonlySet<string> = new Set([
   "requestedCount",
@@ -788,6 +836,10 @@ function hasValidStageDeletion(value: Record<string, unknown>): boolean {
   if (!isBoundedNonNegativeInteger(counts.failedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (value.phase === "started") return counts.deletedCount === 0 && counts.failedCount === 0;
   return counts.deletedCount + counts.failedCount === counts.requestedCount;
+}
+
+function hasValidStageContext(value: Record<string, unknown>): boolean {
+  return hasValidStageDeletion(value) && hasValidNavigationOutcome(value);
 }
 
 function isClientStageId(value: unknown): value is ClientStageId {
@@ -818,7 +870,7 @@ export function isClientStageIngestRequest(value: unknown): value is ClientStage
   if (!isClientStageId(value.stage)) return false;
   if (!isBoundedPositiveInteger(value.ordinal, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
-  if (!hasValidStageDeletion(value)) return false;
+  if (!hasValidStageContext(value)) return false;
   if (value.phase === "started") return value.durationMs === undefined;
   if (value.phase === "settled") {
     return isBoundedNonNegativeInteger(value.durationMs, CLIENT_STAGE_DURATION_MS_MAX);

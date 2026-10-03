@@ -1,5 +1,10 @@
 import type { Route } from "@playwright/test";
 import { describe, expect, it } from "vitest";
+import {
+  EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
+  parseEditorAgentSnapshotRequest,
+  type EditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts/editor-agent";
 
 import { createRuntimeFixture } from "./coding-workbench-live-runtime-fixtures.js";
 import {
@@ -29,7 +34,62 @@ function capturedRoute(payload: string | null): CapturedRoute {
   return { route, fulfillment: () => fulfillment };
 }
 
+function editorSnapshot(): EditorAgentSessionSnapshot {
+  return {
+    schemaVersion: "1",
+    sessionId: "fixture-editor-session",
+    windowId: "fixture-editor-window",
+    workspaceRoot: "/fixture-workspace",
+    activePaneId: "pane-1",
+    panes: [{ paneId: "pane-1", activeFile: null, openFiles: [] }],
+    dirtyFiles: [],
+    activeFile: null,
+    cursor: null,
+    selection: null,
+    diagnosticsSummary: null,
+    textMode: "none",
+    updatedAt: 1,
+  };
+}
+
+const PASSIVE_REQUESTS = [
+  { schemaVersion: "1", kind: "buffer-snapshot", snapshot: editorSnapshot() },
+  {
+    schemaVersion: "1",
+    kind: "buffer-release",
+    sessionId: "fixture-editor-session",
+    bufferSnapshotCapability: "A".repeat(EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS),
+  },
+];
+
 describe("parseFixtureEditorSnapshotRequest", (): void => {
+  it.each(PASSIVE_REQUESTS)(
+    "does not model passive $kind requests as executable bridge registrations",
+    async (request): Promise<void> => {
+      expect(parseEditorAgentSnapshotRequest(request).ok).toBe(true);
+      const fixture = createRuntimeFixture({});
+      const captured = capturedRoute(JSON.stringify(request));
+      await handleEditorSnapshotRoute(captured.route, "/api/editor/agent/snapshot", fixture);
+      expect(captured.fulfillment()?.status).toBe(400);
+      expect(fixture.editorSnapshotRegistrations).toBe(0);
+      expect(fixture.validationErrors).toEqual([
+        "passive buffer requests are outside the Workbench bridge fixture",
+      ]);
+    },
+  );
+
+  it("keeps existing Workbench bridge snapshot registration", async (): Promise<void> => {
+    const fixture = createRuntimeFixture({});
+    const snapshot = editorSnapshot();
+    const request = capturedRoute(
+      JSON.stringify({ schemaVersion: "1", kind: "snapshot", snapshot }),
+    );
+    await handleEditorSnapshotRoute(request.route, "/api/editor/agent/snapshot", fixture);
+    expect(request.fulfillment()?.status).toBe(200);
+    expect(fixture.editorSnapshotRegistrations).toBe(1);
+    expect(fixture.validationErrors).toEqual([]);
+  });
+
   it("delegates decoded requests to the production contract parser", (): void => {
     expect(parseFixtureEditorSnapshotRequest('{"schemaVersion":"1"}')).toEqual({
       ok: true,

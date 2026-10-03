@@ -94,10 +94,10 @@ const CODING_APP_SESSION_PAIRED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-const CODING_APP_SESSION_LOCAL_SESSION_ISSUED_OPERATION = defineActivityLogOperation({
+const CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "coding-app-session.local-session.issued",
+  op: "coding-app-session.local-session.confirmed",
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionLocalSession",
@@ -106,7 +106,7 @@ const CODING_APP_SESSION_LOCAL_SESSION_ISSUED_OPERATION = defineActivityLogOpera
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["coding-app-session-pairing"],
-  proofIds: ["coding-app-session.local-session.issued.request"],
+  proofIds: ["coding-app-session.local-session.confirmed.request"],
   releaseImpact: "patch",
 });
 
@@ -291,25 +291,24 @@ export async function handleCodingAppSessionPair(
 }
 
 /**
- * POST /local-session — ensure a usable local app-session for a Keiko server that was launched with
- * launcher authority. This keeps normal reloads and reused browser tabs from depending on a fragile
- * one-time URL fragment while preserving the fail-closed posture when no launcher-backed pairing
- * authority exists.
+ * POST /local-session — confirm an already authenticated browser session without minting authority.
+ * Missing, forged, expired and revoked cookies remain content-free. Only launcher-attested /pair
+ * issues a session; ordinary reloads preserve the valid cookie without a new prompt.
  */
 export function handleCodingAppSessionLocalSession(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
   const result = deps.codingAppSessionChannel?.ensureLocalSession(readSessionCookie(ctx.req));
-  if (result?.status !== "issued") return ackResult();
+  if (result?.status !== "active") return ackResult();
   appSessionActivity(deps).write(
     activityLogEvent(
-      CODING_APP_SESSION_LOCAL_SESSION_ISSUED_OPERATION,
+      CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
       {},
     ),
   );
-  return ackResult(issuedCookie(ctx.req, result.cookieToken));
+  return ackResult();
 }
 
 function currentSnapshot(

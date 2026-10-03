@@ -4,6 +4,10 @@
 
 Accepted
 
+> **Amended by owner decision (2026-10-03).** The ordinary Editor agent bridge and Chat handoffs
+> are retired (ADR-0061). Shared governed contracts remain for independent execution consumers.
+> The ordinary Editor publishes only the passive buffer-safety state described below.
+
 > **Superseded in part by [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).**
 > The nine-action set is extended additively by `applyChangeset`; unverifiable per-file
 > preconditions fail closed, and optional authority, approval, diagnostics, and file-result fields
@@ -85,6 +89,10 @@ We keep `EDITOR_AGENT_SCHEMA_VERSION = "1"` and the existing shapes as the publi
 No type changes shape incompatibly; every addition below is additive (new exports, a widened conflict
 union, and a default applied at a parse boundary). A compatibility test pins the version constant.
 
+The 2026-10-03 retirement removes the exclusive Chat `kind: "bridge-action"` wrapper and its
+local authority producer. That retired request is rejected. Shared governed action/result shapes
+remain unchanged; the retirement does not grant new authority to remaining consumers.
+
 ### D2 — AC1: snapshot text defaults to `none`
 
 We add `DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE = "none"` and change the read-request parser so an
@@ -92,6 +100,12 @@ omitted `textMode` resolves to that default; a value that is present but is not 
 bounded modes is still a hard error. The resolved `EditorAgentSnapshotRequest` therefore always
 carries a concrete, safe-by-default mode, and the BFF (`shapeSnapshot`) already strips text for
 `none`. An agent that does not explicitly request text never receives document content.
+
+The ordinary Editor uses separate `buffer-snapshot` and `buffer-release` branches on the existing
+snapshot route. Its closed projection accepts only root, pane, open-file and dirty-file state,
+with null cursor, selection and diagnostics and `textMode: "none"`. The ownership token for
+refresh/clean release cannot authenticate an action stream, grant an agent decision, or make the
+record discoverable. Dirty-buffer checks retain the passive record on disconnect.
 
 ### D3 — AC2: write actions require a version/hash precondition
 

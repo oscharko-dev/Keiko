@@ -4,6 +4,21 @@
 
 Accepted
 
+> **Amended by owner decision (2026-10-03), recorded in ADR-0061.** The ordinary Editor no longer
+> supplies an executable browser bridge. Its owned safety-only dirty-buffer state is retained by
+> this registry, excluded from agent discovery and action/SSE authentication. The existing live
+> bridge protocol remains for independent active consumers such as the Coding Workbench.
+>
+> The ordinary Editor retains its owned snapshot capability and acknowledged dirty paths in
+> session storage for the exact window, pane, and root. Reload carries those dirty paths forward;
+> hydration or a clean initial render cannot erase them. Only a fresh successful save or explicit
+> discard settles the corresponding dirty state. A clean pane can release its record; a dirty
+> disconnect does not silently expire protection. After a server restart, a retained capability can
+> reseed an absent session ID, but cannot replace any existing passive or executable session.
+> Losing the local token while its dirty server record survives leaves that record protected: the
+> client cannot silently reclaim ownership or clear it. This is a fail-closed recovery limitation,
+> not an agent connection or an authority-granting fallback.
+
 > **Superseded in part by [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).**
 > The browser is no longer the exclusive mutation owner for multi-file closed-file changes. Later
 > runtime work reuses this registry/queue while governed server transactions apply atomically and

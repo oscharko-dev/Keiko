@@ -563,35 +563,11 @@ function buildDiagnosticsWiring(
 function buildCommandsWiring(
   latestProps: RefObject<KeikoCodeEditorProps>,
 ): WireEditorCommands | undefined {
-  if (
-    latestProps.current.onGenerateTests === undefined &&
-    latestProps.current.onAskKeikoAboutSelection === undefined &&
-    latestProps.current.onRenameSymbol === undefined
-  ) {
-    return undefined;
-  }
+  if (latestProps.current.onRenameSymbol === undefined) return undefined;
   return {
-    ...(latestProps.current.onGenerateTests === undefined
-      ? {}
-      : {
-          generateTests: (): void => {
-            latestProps.current.onGenerateTests?.();
-          },
-        }),
-    ...(latestProps.current.onAskKeikoAboutSelection === undefined
-      ? {}
-      : {
-          askKeikoAboutSelection: (selection): void => {
-            latestProps.current.onAskKeikoAboutSelection?.(selection);
-          },
-        }),
-    ...(latestProps.current.onRenameSymbol === undefined
-      ? {}
-      : {
-          renameSymbol: (): void => {
-            latestProps.current.onRenameSymbol?.();
-          },
-        }),
+    renameSymbol: (): void => {
+      latestProps.current.onRenameSymbol?.();
+    },
   };
 }
 
@@ -981,8 +957,6 @@ function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
     props.provideReferences,
     props.provideCodeActions,
     props.provideSignatureHelp,
-    props.onGenerateTests,
-    props.onAskKeikoAboutSelection,
     props.onRenameSymbol,
     props.editorGitGutter,
     props.editorBlame,

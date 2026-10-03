@@ -50,6 +50,20 @@ describe("log field redaction", () => {
     resetActivityLogRouteRedactor();
   });
 
+  it.each([
+    REDACTED_KEY,
+    REDACTED_LENGTH,
+    REDACTED_PATH,
+    REDACTED_PERSONAL,
+    REDACTED_SECRET,
+    REDACTED_SHAPE,
+  ])("preserves the exact existing redaction marker %s on a second pass", (marker) => {
+    expect(redactLogString(marker)).toBe(marker);
+    expect(redactLogFields({ modelId: marker })).toEqual({ modelId: marker });
+  });
+  it("does not preserve a customer-shaped redaction marker", () => {
+    expect(redactLogString("[redacted:CustomerPayroll]")).toBe(REDACTED_SHAPE);
+  });
   it("keeps the evidence fields the instrumentation surface is built from", () => {
     const fields = redactLogFields({
       endpoint: "https://gateway.internal:8443",

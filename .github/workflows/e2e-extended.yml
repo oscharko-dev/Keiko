@@ -38,12 +38,7 @@ jobs:
         suite:
           - test:e2e:editor-baseline-1377
           - test:e2e:editor-layout-1375
-          - test:e2e:editor-chat-2119
-          # Restored #1395 invariant as a targeted pin against today's surface (ADR-0058,
-          # ADR-0066): sensitive-path denial, the authority-missing fail-closed default, and the
-          # redacted audit feed. Wired from day one on purpose. The #1394 undo/redo round-trip
-          # joins this suite once #3070 lands the product fix.
-          - test:e2e:editor-agent-pins
+          - test:e2e:editor-manual-pins
           # Issues #2852/#2867: these release-evidence journeys had silently rotted while present
           # only as npm scripts. Keep their current Workbench and editor contracts exercised.
           - test:e2e:coding-workbench-2253

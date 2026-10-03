@@ -137,13 +137,15 @@ const ALL_STATUSES: readonly VerificationStatus[] = [
 // handled by the SpawnFn-wrapper monitor, so it does not appear here. The network policy is resolved by
 // `resolveStepNetwork` from the run's enforcement mode and probed backend availability (ADR-0043); for
 // an enforced "none" run, runCommand wraps the spawn through keiko-sandbox and records the attestation,
-// which `buildAppliedLimits` reports honestly.
+// which `buildAppliedLimits` reports honestly. Repository execution always requests the existing
+// execution-root filesystem boundary, independently of any network compatibility setting.
 function policyForStep(limits: VerificationResourceLimits, network: NetworkPolicy): SandboxPolicy {
   return {
     ...DEFAULT_SANDBOX_POLICY,
     maxOutputBytes: limits.maxOutputBytes,
     defaultTimeoutMs: limits.wallTimeMs,
     network,
+    filesystem: "execution-root",
   };
 }
 

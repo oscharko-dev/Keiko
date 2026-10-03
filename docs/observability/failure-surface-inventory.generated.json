@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0fee2c823218e3e624aa99b53cb3d0e6748a59974aa4c9a7e981ae5c718acc63"
+    "catalogDigest": "e0f4dba60f0c2eb9f9a2adbaf76b381cbf1bcfebc52f84488d29c71c6ff53377"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 496,
-    "proofCount": 503,
-    "resolvedProofCount": 503,
-    "failureClassCount": 332,
+    "operationCount": 502,
+    "proofCount": 509,
+    "resolvedProofCount": 509,
+    "failureClassCount": 334,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -113,7 +113,10 @@
         "sse.run-events.resume",
         "sse.stream.closed",
         "store.journey-outcomes.migration",
-        "store.opened"
+        "store.opened",
+        "support.report.ui.completed",
+        "support.report.ui.failed",
+        "support.report.ui.started"
       ],
       "scenarios": ["bff.crash", "bff.dependency-failure", "bff.rejection"]
     },
@@ -256,7 +259,7 @@
       "operations": [
         "coding-app-session.channel.closed",
         "coding-app-session.channel.opened",
-        "coding-app-session.local-session.issued",
+        "coding-app-session.local-session.confirmed",
         "coding-app-session.paired",
         "coding-app-session.rotated",
         "coding-app-session.signed-out",
@@ -466,6 +469,7 @@
       "ports": ["ModelGatewayLogSink", "ServerLogSink"],
       "operations": [
         "dap.debug-runtime.selected",
+        "editor.buffer-safety.state",
         "editor.local-history.rekey.completed",
         "editor.local-history.rekey.failed",
         "editor.producer-turn.completed",
@@ -473,6 +477,7 @@
         "editor.verification.execute",
         "editor.verification.workspace",
         "editor.workspace-watch.authority-revoked",
+        "editor.workspace-watch.health-changed",
         "git-change.chat.blocked",
         "git-change.chat.connected",
         "git-change.chat.refreshed",
@@ -641,6 +646,7 @@
         "security.windows-portable-legacy-launcher.system-root-refused",
         "security.windows-shortcut.system-binary-missing",
         "security.windows-shortcut.system-root-refused",
+        "sqlite.state-path.refused",
         "support.manifest.rebuilt",
         "support.query.completed",
         "support.query.failed",
@@ -769,6 +775,7 @@
     "document-not-refreshed": ["memory-knowledge.dependency-failure"],
     "editor-local-history-rekey": ["editor-delivery.dependency-failure"],
     "editor-producer-turn": ["editor-delivery.dependency-failure"],
+    "editor-workspace-watch-availability": ["editor-delivery.dependency-failure"],
     "editor-workspace-watch-authority": ["editor-delivery.rejection"],
     "embedding-batch": ["memory-knowledge.rejection", "model-gateway.rejection"],
     "embedding-batch-grouping": ["memory-knowledge.dependency-failure"],
@@ -971,6 +978,7 @@
     "ui-process-stop-escalation": ["ui.crash"],
     "ui-process-stop-request": ["ui.crash"],
     "ui-store-migration": ["bff.dependency-failure"],
+    "sqlite-state-path": ["runtime-packages.rejection"],
     "ui-store-open": ["bff.dependency-failure"],
     "update-candidate-authority": ["runtime-packages.rejection"],
     "update-runtime": ["runtime-packages.dependency-failure"],
@@ -997,7 +1005,7 @@
     "workspace-script-trust": ["tools-workflows.rejection"],
     "workspace-script-trust-admission": ["tools-workflows.rejection"],
     "support-query": ["runtime-packages.dependency-failure"],
-    "support-report": ["runtime-packages.dependency-failure"]
+    "support-report": ["bff.dependency-failure", "runtime-packages.dependency-failure"]
   },
   "proofs": {
     "activity-log.loss.heartbeat-summary": [
@@ -1157,7 +1165,7 @@
     "coding-app-session.channel.opened.live": [
       "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
     ],
-    "coding-app-session.local-session.issued.request": [
+    "coding-app-session.local-session.confirmed.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
     ],
     "coding-app-session.paired.request": [
@@ -1401,6 +1409,9 @@
     "dap.debug-runtime.selected.emitted-line": [
       "packages/keiko-server/src/editor/dap/debugLaunchPlan.test.ts"
     ],
+    "editor.buffer-safety.state.lifecycle": [
+      "packages/keiko-server/src/editor/agentRoutes.test.ts"
+    ],
     "editor.local-history.rekey.completed.emitted-line": [
       "packages/keiko-server/src/editor/localHistory/localHistoryCapture.test.ts"
     ],
@@ -1423,6 +1434,9 @@
     ],
     "editor.workspace-watch.authority-revoked.emitted-line": [
       "packages/keiko-server/src/editor/watch/workspaceWatchRoutes.test.ts"
+    ],
+    "editor.workspace-watch.health-changed.transitions": [
+      "packages/keiko-server/src/editor/watch/workspaceWatchService.test.ts"
     ],
     "embedding.batch.array-unsupported.emitted-line": [
       "packages/keiko-model-gateway/src/openai-embedding-adapter.logging.test.ts"
@@ -2206,6 +2220,9 @@
     "speech.tts.stream.peek.failed.emitted-line": [
       "packages/keiko-model-gateway/src/text-to-speech-adapter.test.ts"
     ],
+    "sqlite.state-path.refused.authority": [
+      "packages/keiko-security/src/sqlite-state-path.test.ts"
+    ],
     "sse.run-events.resume.line": ["packages/keiko-server/src/run-handlers-sse-resume.test.ts"],
     "sse.stream.closed.line": ["packages/keiko-server/src/sse-write.test.ts"],
     "store.encryption-checkpoint-degraded.state": [
@@ -2253,6 +2270,15 @@
     "support.report.failed.report-lifecycle": ["packages/keiko-cli/src/support-report-cli.test.ts"],
     "support.report.started.report-lifecycle": [
       "packages/keiko-cli/src/support-report-cli.test.ts"
+    ],
+    "support.report.ui.completed.lifecycle": [
+      "packages/keiko-server/src/support-report-routes.test.ts"
+    ],
+    "support.report.ui.failed.lifecycle": [
+      "packages/keiko-server/src/support-report-routes.test.ts"
+    ],
+    "support.report.ui.started.lifecycle": [
+      "packages/keiko-server/src/support-report-routes.test.ts"
     ],
     "task-workspace.identity.creation-time-probe.line": [
       "packages/keiko-server/src/task-workspace/activity-log.test.ts"

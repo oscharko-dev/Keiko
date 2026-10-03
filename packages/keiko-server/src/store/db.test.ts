@@ -5,6 +5,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
   mkdtempSync,
+  realpathSync,
   readFileSync,
   rmSync,
   statSync,
@@ -40,7 +41,7 @@ function must<T>(value: T | undefined): T {
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "keiko-uidb-"));
+  tmpDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-uidb-"));
 });
 
 afterEach(() => {

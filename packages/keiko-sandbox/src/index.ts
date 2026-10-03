@@ -25,6 +25,11 @@ export {
 } from "./debug-capsule.js";
 export { probeBackends, currentPlatform, isExecutableOnPath } from "./probe.js";
 export {
+  resolveLocalDockerEndpoint,
+  LocalDockerEndpointUnavailableError,
+  type LocalDockerEndpoint,
+} from "./local-docker-endpoint.js";
+export {
   attestDarwinGitExecutable,
   resolveDarwinGitExecutable,
   type AttestedDarwinGitExecutable,

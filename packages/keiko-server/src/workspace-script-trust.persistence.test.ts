@@ -3,7 +3,7 @@
 // assertion is failure-first against the pre-#2521 process-local Map: a grant made in one store
 // instance was invisible to the next, so every "survives restart" expectation fails before this change.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -28,7 +28,7 @@ let dbPath: string;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "keiko-trust-ws-"));
   writeFileSync(join(root, "package.json"), MANIFEST, "utf8");
-  stateDir = mkdtempSync(join(tmpdir(), "keiko-trust-db-"));
+  stateDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-trust-db-"));
   dbPath = join(stateDir, "ui.db");
 });
 

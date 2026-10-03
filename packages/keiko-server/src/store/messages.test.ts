@@ -2,7 +2,7 @@
 
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -230,7 +230,7 @@ function createOnDiskStoreFixture(): {
 }
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), "keiko-messages-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-messages-"));
   proj = join(tmp, "p");
   mkdirSync(proj);
   let t = 1;

@@ -619,6 +619,40 @@ authority. The recorded product version identifies the bundled package versions,
 version-consistency gate keeps in lockstep; persisted events retain their exact
 build/release/platform classes and registry/schema/catalog digests.
 
+New exports replace correlation, parent and opaque customer identifiers with consistent ordinal
+references local to that report. The mapping is never exported; causal joins remain intact without
+revealing the original labels. Paths, routes and prose remain redaction markers. Diagnostic modules,
+declared Error classes and technical tokens must belong to the generated product-source inventory
+or a closed runtime vocabulary; merely looking like a technical identifier does not authorize a
+string. Unknown diagnostic details are omitted or marked, with insufficient evidence reported when
+immutable failure provenance cannot be preserved. Historical schema-1 reports remain readable.
+Archived releases use their producing release's pinned code-module inventory, paired with the
+archived registry identity. Module moves in a later release therefore do not discard an otherwise
+valid historical failure frame. These inventories are generated from trusted release commits,
+never from customer reports, and decoded within a fixed byte limit.
+For an explicitly selected desktop failure, sufficiency and segment references derive from the
+selected causal evidence rather than the later click-time incident window. Missing or truncated
+evidence remains insufficient under the ordinary query and report validators.
+
+The desktop exposes the same canonical report as a local JSON download at actionable failures.
+The healthy workspace footer has no report action. Exact browser resize notifications and Monaco
+cancellations are classified before failure caps; they do not create incidents or report actions.
+An uncaught browser error or rejected promise
+reveals a compact, dismissible footer action tied to that failure; handled contextual errors retain
+their own action. Each active failure permits one successful download, with a 1.5-second completion
+status, while failed creation remains retryable and unmounting cancels pending work. The selected
+incident and compressed event section travel together, so support can inspect the evidence without
+access to the customer's complete logs. Export uses the existing paired application session and a
+bounded worker; it never uploads externally by itself.
+
+Browser-only failures retain at most 100 projected diagnostics for report delivery. Export waits
+for ingest acknowledgement; if the original delivery failed or was throttled, a human report action
+may redeliver it under the same correlation, within a separate six-per-minute client budget and the
+server's unchanged admission limits. The 35-second export deadline includes that delivery. Missing
+delivery remains retryable without exporting an unrelated incident or filing another reporting
+incident. Successful saves deliberately excluded from history by secret protection have no report
+action; degraded history protection retains its contextual action.
+
 The fixed bounds are 10 MiB for the entire file, 1 MiB for the incident projection, 16 MiB for the
 decoded event section, 64 KiB per event, 20,000 records, 12 JSON nesting levels, 250,000
 containers, 3,000,000 values and 256 keys per object. The shape bounds are checked on the raw text
@@ -690,6 +724,15 @@ unsafe recovery state fail closed. No stage is treated as a valid report merely 
 the next export into the directory names how many `.keiko-publish-<24 hex>-<n>.stage` files it
 found, and the runtime-state contract classifies them, with the closed report names, as Keiko-owned
 in `support-reports/`. The strict reader rejects incomplete bytes and invalid digests.
+
+**Desktop local export (owner decision, 2026-10-03):** an explicit report action downloads the same
+validated, content-free report through the browser. Its configured download destination and
+filesystem permissions apply, including a default Downloads directory without a save dialog.
+The browser API cannot enforce the CLI's 0700/0600 modes, exclusive no-follow publication, or
+owner-private receiving-file check. Those guarantees above apply to CLI exports, not browser
+downloads. Keiko performs no automatic upload or disclosure. A downloaded report must still pass
+the canonical offline validator before it is analyzed; operators who use the owner-private CLI
+reader first place it in a private directory and file according to the receiving-file contract.
 
 `keiko support analyze FILE [--correlation-id ID] [--json] [--clusters] [--seed] [--emit-fixture PATH]`
 reads only the explicitly chosen owner-private, single-link regular file. It reads bounded chunks,
@@ -1028,11 +1071,16 @@ request":
   (#3557). A live dev log showed 416 of 449 `client.diagnostic` lines were a window's routine
   stage evidence, all at `warn` with `errorKind: unknown`, burying the real failures. The route
   now accepts four closed shapes, each with its own operations:
-  - a message: `client.diagnostic`, a failure at `warn`, as above;
-  - a window stage: `client.stage.started` / `client.stage.settled` at `info`. One
+  - a message: `client.diagnostic`, at `error` for operation timeouts so the existing automatic
+    incident trigger retains their window; other client warnings remain at `warn`;
+  - a window or folder-navigation stage: `client.stage.started` / `client.stage.settled` at `info`.
+    Folder stages use `files-directory-load`, `files-directory-navigation`,
+    `files-project-selection`, and `editor-project-selection`. Directory loads send their
+    stage correlation id with the HTTP request; failed reads emit a correlated body-free
+    diagnostic and settle. Paths and document bodies are never recorded. One
     client-minted correlation id per mount joins both phases, and the duration is monotonic and
     bounded to the contract's ceiling. A window chunk that has not arrived 10 seconds after its
-    stage started is reported as stalled, a `client.diagnostic` with `errorKind: timeout` under
+    stage started is reported as stalled, a `client.diagnostic` at `error` with `errorKind: timeout` under
     that stage's id, and the window offers the reload that requests it fresh: a chunk request the
     browser loses never settles, and the bundler keeps it pending, so nothing inside the page can
     request it again (dev CI run 35438847738, a WebKit network process crash);
@@ -1158,11 +1206,17 @@ claim tool calling, never while a subscription source is selected, and only the 
 Workbench would elect is awaited. A profile read that
 finds nothing to prove writes no automatic record, and its absence is then not a lost call.
 
+For received reports, first analyze the artifact without a correlation selector. New exports
+replace local labels with artifact-local ordinal references. Select the exported root from
+`incident.correlation.rootCorrelationId` or a validated timeline reference when using
+`support analyze FILE --correlation-id <exported-ref>`. The UI Support ID and original run/request
+IDs below select only the originating installation's Activity Log; no reverse mapping is exported.
+
 The Coding Workbench gateway connects each authenticated request to its run with
 `parentCorrelationId: runId`. An upstream chat or stream failure keeps the request correlation on
 its redacted diagnostic and names the run as parent, so concurrent failed requests remain
-distinguishable. `keiko support analyze --correlation-id <requestId>` retrieves the diagnostic;
-`keiko support analyze --correlation-id <runId>` retrieves the run's closed turn-failure projection
+distinguishable. `keiko support query --correlation-id <requestId> --json` retrieves the diagnostic;
+`keiko support query --correlation-id <runId> --json` retrieves the run's closed turn-failure projection
 and its linked request timeline. The analyzer follows an explicit `parentCorrelationId` edge for
 one hop and includes every line with that child request correlation, including provider dispatch
 and diagnostics that do not repeat the parent field. Direct request lookup remains available;
@@ -1452,7 +1506,24 @@ Two identifiers serve two purposes. `incidentId` is random and names one occurre
 `defectFingerprint` is deterministic and versioned over allowlisted stable inputs (owning surface,
 operation, closed `errorKind`, normalized Keiko frame signature) and carries no time, process,
 instance, host, user or path value; it groups recurrences for deduplication and fix linkage. A change
-to its inputs or algorithm bumps the algorithm version; a golden-value test enforces that.
+to its inputs or algorithm bumps the algorithm version; a golden-value test enforces that. Version 1
+preimages remain unchanged and historical records remain readable. Client diagnostics use version 2:
+closed diagnostic/render/module context and reduced shipped browser-chunk digests distinguish known
+failure shapes without retaining messages, paths or customer identifiers. Line and column do not
+enter either version. Shipped chunk digests may change across releases, so version-two browser
+fingerprints do not promise cross-release grouping.
+
+Browser diagnostics can still be indistinguishable when they carry no usable product frame or
+closed feature context. Their retention claim is therefore scoped to the occurrence's validated
+causal reference as well as its defect fingerprint. Replaying the same request deduplicates; a later
+request retains its own window instead of discarding it under a fourteen-day coarse defect claim.
+The local claim key is a hash and is never exported as a customer reference. Existing automatic
+slot quotas and evaluation rate limits apply; full quotas surface explicit loss. Browser candidates
+may use only eight of the twenty-four automatic slots and at most two of the six evaluations per
+rolling minute. This reserves sixteen automatic slots and four evaluations for server failures
+without enlarging the shared bounds. The same atomic slot claims and closed rejection evidence
+apply to both classes. Server failures
+and historical version-one browser records keep their fingerprint-scoped deduplication.
 
 The descriptor has a strict public projection and a richer, still body-free private projection from
 the same record; both expose the sufficiency status, and only the private one carries reasons and
@@ -1461,7 +1532,7 @@ reserved for explicit reports, 4 KiB each), and candidates expire after 14 days.
 
 Both the defectFingerprint dedup rule and the count quotas hold atomically across every process
 sharing the state directory (#3533 review 4050606506), not from a directory-listing count two
-processes could each read as "still free": a registered failure claims its fingerprint's own
+processes could each read as "still free": a registered failure claims its deduplication key's own
 `fingerprint-<64 hex>.claim` file by exclusive-create before it decides duplicate-or-new, and every
 candidate claims one of a bounded pool of `slot-<NN>.claim` files (automatics from slot 0 up, user
 reports from the top down, so the reserve holds without a shared counter) before its record is
@@ -1470,7 +1541,7 @@ repair/uninstall ownership predicate already calls, so state-paths.ts needed no 
 A claim releases with its record on dismissal or expiry. Between a claim and its record, and between
 a record's exclusive create and its bytes, another process can see a claim without a record or an
 unreadable record at any moment, so such a file is treated as in flight until it is older than a
-one-minute grace by its own mtime: a second occurrence of the same defect deduplicates onto the id
+one-minute grace by its own mtime: a repeat of the same retention key deduplicates onto the id
 the claim names instead of taking the claim over, and neither the orphan sweep nor torn-record
 recovery removes it. Only an older file has lost its writer (a crash in that gap) and is swept,
 against a fresh, per-claim read taken at sweep time, never a snapshot taken earlier in the same

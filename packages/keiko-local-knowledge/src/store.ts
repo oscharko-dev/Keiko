@@ -29,6 +29,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
+  assertSqliteStatePath,
   chmodIfPresent,
   ensureDirHardened,
   FILE_MODE,
@@ -443,7 +444,9 @@ function quarantineFile(target: string, cause?: unknown): void {
   );
 }
 
-function tryOpenAndMigrate(dbPath: string): OpenAttempt {
+function tryOpenAndMigrate(dbPath: string, logSink?: KnowledgeLogSink): OpenAttempt {
+  if (dbPath !== ":memory:")
+    assertSqliteStatePath(dbPath, { store: "local-knowledge", sink: logSink });
   let db: DatabaseSync;
   try {
     db = new DatabaseSync(dbPath);
@@ -529,12 +532,14 @@ function logStoreQuarantine(
 }
 
 export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeStore {
+  if (opts.dbPath !== ":memory:")
+    assertSqliteStatePath(opts.dbPath, { store: "local-knowledge", sink: opts.logSink });
   ensureDirHardened(dirname(opts.dbPath));
-  let attempt = tryOpenAndMigrate(opts.dbPath);
+  let attempt = tryOpenAndMigrate(opts.dbPath, opts.logSink);
   if (attempt.status === "corrupt") {
     const corruptionCause = attempt.cause;
     quarantineFile(opts.dbPath, corruptionCause);
-    attempt = tryOpenAndMigrate(opts.dbPath);
+    attempt = tryOpenAndMigrate(opts.dbPath, opts.logSink);
     logStoreQuarantine(opts, corruptionCause, attempt.status === "ok");
   }
   if (attempt.status !== "ok") {

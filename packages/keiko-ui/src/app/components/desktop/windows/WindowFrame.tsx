@@ -18,8 +18,10 @@ import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
   WorkspaceBinding,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { Icons, type IconName } from "../Icons";
 import { useOptionalActiveWorkspace } from "../context/ActiveWorkspaceContext";
 import { useOptionalChatSessionProject } from "../context/ChatSessionContext";
@@ -180,6 +182,7 @@ interface SelectBodyOptions {
   readonly selectedRoot: string | null;
   readonly activeRoot: string | null;
   readonly activeBinding: WorkspaceBinding | null;
+  readonly activeInstance: WorkspaceInstance | null;
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly focusWindow: (id: string) => void;
@@ -201,6 +204,7 @@ function selectBody({
   selectedRoot,
   activeRoot,
   activeBinding,
+  activeInstance,
   updateCfg,
   openWindow,
   focusWindow,
@@ -235,6 +239,7 @@ function selectBody({
         selectedRoot,
         activeRoot,
         activeBinding,
+        activeInstance,
         updateCfg,
         openWindow,
         focusWindow,
@@ -265,6 +270,7 @@ function selectBody({
       selectedRoot,
       activeRoot,
       activeBinding,
+      activeInstance,
       updateCfg,
       openWindow,
       focusWindow,
@@ -859,25 +865,34 @@ function raiseWindowForInteraction(api: WorkspaceApi, id: string): void {
 // window the user had moved to in the meantime — observed as a "Close Files window" click that
 // could never land because the editor kept re-raising itself over it.
 //
-// Two facts separate the two cases, both already recorded by the product:
-//   * the app shell writes `document.documentElement.dataset.inputModality` and sets it to
-//     `keyboard` only for a bare Tab keydown (pointer presses set `pointer`), and
-//   * a focus stolen by a window's own content arrives while the previously focused element sits
-//     in ANOTHER window.
-// Raise when the modality says the user tabbed here, or when the focus did not come out of a
-// different window at all. A pointer press never needs this path: `onPointerDown` raises first.
-function focusCameFromAnotherWindow(relatedTarget: EventTarget | null): boolean {
-  if (!(relatedTarget instanceof Element)) return false;
-  const previousWindow = relatedTarget.closest(".window");
-  if (previousWindow === null) return false;
-  return previousWindow !== relatedTarget.ownerDocument.activeElement?.closest(".window");
+// Only a recorded Tab traversal requests a keyboard raise. Programmatic focus from a closing
+// palette, the document body or a null relatedTarget is not evidence of a user switching windows.
+function raisesOnKeyboardFocus(): boolean {
+  return (
+    typeof document !== "undefined" && document.documentElement.dataset.inputModality === "keyboard"
+  );
 }
 
-function raisesOnKeyboardFocus(relatedTarget: EventTarget | null): boolean {
-  const tabbed =
-    typeof document !== "undefined" &&
-    document.documentElement.dataset.inputModality === "keyboard";
-  return tabbed || !focusCameFromAnotherWindow(relatedTarget);
+function deferredKeyboardFocusStillOwnsWindow(frame: HTMLElement, interaction: number): boolean {
+  return (
+    frame.isConnected &&
+    frame.closest("[inert]") === null &&
+    windowInteractionCount === interaction &&
+    frame.contains(document.activeElement)
+  );
+}
+
+function deferKeyboardWindowRaise(frame: HTMLElement, api: WorkspaceApi, id: string): void {
+  const interaction = windowInteractionCount;
+  window.setTimeout(() => {
+    if (!deferredKeyboardFocusStillOwnsWindow(frame, interaction)) {
+      reportClientDiagnostic("workspace-window: deferred keyboard focus superseded", {
+        kind: "other",
+      });
+      return;
+    }
+    api.focus(id);
+  }, 0);
 }
 
 function delayedFocusStillTargetsWindow(target: EventTarget | null): boolean {
@@ -935,6 +950,7 @@ function WindowFrameImpl({
   const selectedRoot = activeProject?.available === true ? activeProject.path : null;
   const activeRoot = activeWorkspace?.activeRoot ?? null;
   const activeBinding = activeWorkspace?.activeBinding ?? null;
+  const activeInstance = activeWorkspace?.activeInstance ?? null;
   const [draggingWindow, setDraggingWindow] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<((flushPending?: boolean) => void) | null>(null);
@@ -1018,6 +1034,7 @@ function WindowFrameImpl({
         selectedRoot,
         activeRoot,
         activeBinding,
+        activeInstance,
         updateCfg,
         openWindow,
         focusWindow,
@@ -1038,6 +1055,7 @@ function WindowFrameImpl({
       selectedRoot,
       activeRoot,
       activeBinding,
+      activeInstance,
       updateCfg,
       openWindow,
       focusWindow,
@@ -1458,8 +1476,8 @@ function WindowFrameImpl({
       // The !top guard matters: makeFocus bumps z unconditionally, so without it
       // every Tab step inside the top window would trigger a state update.
       onFocusCapture={(event) => {
-        if (!top && raisesOnKeyboardFocus(event.relatedTarget)) {
-          window.setTimeout(() => api.focus(win.id), 0);
+        if (!top && raisesOnKeyboardFocus()) {
+          deferKeyboardWindowRaise(event.currentTarget, api, win.id);
         }
       }}
     >

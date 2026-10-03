@@ -174,13 +174,13 @@ export function WorkspaceTrustBanner({
 
 export function WorkspaceTrustDecisionDialog({
   action,
-  initialPrompt,
+  failed = false,
   mutating,
   onCancel,
   onConfirm,
 }: {
   readonly action: WorkspaceTrustDecision;
-  readonly initialPrompt: boolean;
+  readonly failed?: boolean | undefined;
   readonly mutating: boolean;
   readonly onCancel: () => void;
   readonly onConfirm: () => Promise<boolean>;
@@ -223,7 +223,15 @@ export function WorkspaceTrustDecisionDialog({
         <p className={styles.cmpIntro} id="workspace-trust-dialog-description">
           {description}
         </p>
-        <p className={styles.cmpHelp}>{t("workspaceTrust.dialog.serverConfirmed")}</p>
+        {failed ? (
+          <p role="alert" className={styles.cmpHelp}>
+            {t(
+              action === "grant"
+                ? "workspaceTrust.updateFailed"
+                : "workspaceTrust.updateFailedTrusted",
+            )}
+          </p>
+        ) : null}
         <div className={styles.cmpDialogActions}>
           <button
             ref={cancelRef}
@@ -232,9 +240,7 @@ export function WorkspaceTrustDecisionDialog({
             disabled={mutating}
             onClick={onCancel}
           >
-            {initialPrompt
-              ? t("workspaceTrust.dialog.stayRestricted")
-              : t("workspaceTrust.dialog.cancel")}
+            {t("workspaceTrust.dialog.cancel")}
           </button>
           <button
             type="button"

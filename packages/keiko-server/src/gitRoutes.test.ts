@@ -395,6 +395,47 @@ describe("GET /api/git/status", () => {
     });
   });
 
+  it("reports selected ignored roots and derives untracked folders from real Git records", async () => {
+    await runRealGit(["init", "--quiet"]);
+    await mkdir(join(root, "new"));
+    await mkdir(join(root, "mixed"));
+    await mkdir(join(root, "dist"));
+    await writeFile(join(root, ".gitignore"), "dist/\n");
+    await writeFile(join(root, "new", "inside.md"), "new");
+    await writeFile(join(root, "mixed", "tracked.md"), "tracked");
+    await runRealGit(["add", ".gitignore", "mixed/tracked.md"]);
+    await writeFile(join(root, "mixed", "new.md"), "new");
+    await writeFile(join(root, "dist", "inside.md"), "ignored");
+    const status = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}&includeIgnored=true`),
+      deps(defaultGitProcessRunner),
+    );
+    expect(status.body).toMatchObject({ untrackedDirectories: ["new"] });
+    const incompleteRunner: GitProcessRunner = async (args, options) => {
+      const response = await defaultGitProcessRunner(args, options);
+      return args.includes("ls-files") ? { ...response, truncated: true } : response;
+    };
+    const incomplete = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}&includeIgnored=true`),
+      deps(incompleteRunner),
+    );
+    expect(incomplete.body).not.toHaveProperty("untrackedDirectories");
+    const limited = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}&includeIgnored=true`),
+      {
+        ...deps(defaultGitProcessRunner),
+        gitRouteOptions: { runner: defaultGitProcessRunner, maxChanges: 1 },
+      },
+    );
+    expect(limited.body).toHaveProperty("truncated", true);
+    expect(limited.body).not.toHaveProperty("untrackedDirectories");
+    const selected = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(join(root, "dist"))}&includeIgnored=true`),
+      deps(defaultGitProcessRunner),
+    );
+    expect(selected.body).toMatchObject({ selectedRootIgnored: true, changes: [] });
+  });
+
   it("opts into ignored entries without counting ignored-only paths as dirty", async () => {
     const runner = vi
       .fn<GitProcessRunner>()

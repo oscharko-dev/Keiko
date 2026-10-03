@@ -80,6 +80,17 @@ This shapes the product _and_ how you work on it:
   verified merge without a second human handoff. Never push directly to `dev`, force-push, bypass a
   required check, dismiss a finding to obtain green status, or merge outside the ADR-0135
   direct-check path.
+- Explicit Files/Editor folder selections use the existing `coding-repository` presentation
+  binding for Git repositories and ordinary folders alike. Task-bound windows retain the active
+  workspace override and navigation within that root. Never let a Files title name a configured
+  root while its tree shows a different resolved root. Folder navigation and reads record body-free
+  client stage lifecycle evidence on the existing Activity Log (ADR-0090 D4).
+- **Ordinary Editor scope (owner decision, 2026-10-03):** the Editor is a human-operated file
+  editor. Its agent presence/history, incoming action execution, and Editor/Chat handoffs are
+  retired. Preserve manual file operations and the ownership-bound, content-free dirty-buffer
+  safety state; that state must never make the Editor discoverable or executable as an agent
+  session. Chat repository search and the separate Coding Workbench are outside this retirement.
+  Shared runtime contracts remain only where active consumers need them (ADR-0061).
 - **Never** weaken a trust boundary, evidence redaction, or a governance gate to make something
   pass. Fail closed. If a gate blocks you, the gate is usually right.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
@@ -501,7 +512,11 @@ system that exists, never beside it:
   and retention changes preserve ordering, compatibility classification, explicit truncation/loss,
   and support-export reconstruction.
 - **Saved reports remain under human control.** A support export or replay fixture is written only
-  to the local destination the user selected. Keiko does not upload it, attach it to GitHub, open an
+  through a user-initiated local export. CLI exports enforce owner-private directories and files;
+  desktop exports use the browser's download destination and filesystem permissions, including its
+  configured Downloads folder. A browser download does not promise CLI permission enforcement or
+  a destination picker. This desktop behavior is the owner's accepted local export workflow.
+  Keiko does not upload it, attach it to GitHub, open an
   issue, or otherwise disclose it automatically. Content-bearing optional sections require their
   existing explicit consent; adding a new destination or disclosure path is a separate authority
   and privacy decision, never an implied extension of logging.
@@ -596,8 +611,12 @@ already recorded:
    analyzed projection, never unvalidated report bytes. Human views, clusters, deterministic
    seeds and explicitly selected replay fixtures derive from the same validated evidence.
 3. **Investigate from the validated timeline.**
-   `keiko support analyze report.json --correlation-id <id> --json > timeline.json` emits that
-   validated timeline; `keiko investigate --from-timeline timeline.json` consumes it.
+   New exports replace local identifiers with artifact-local ordinal references. The UI Support ID
+   selects local evidence on the originating installation; it cannot select a received report.
+   Read the unfiltered analysis first, then use its `incident.correlation.rootCorrelationId` or a
+   validated timeline's exported reference as `<exported-ref>` in
+   `keiko support analyze report.json --correlation-id <exported-ref> --json > timeline.json`.
+   This emits that validated timeline; `keiko investigate --from-timeline timeline.json` consumes it.
 4. **Read sufficiency and integrity before trusting a seed.** Closed reasons, coverage and loss
    expose missing causal evidence, lifecycle transitions and unsupported identities. Authenticity
    stays unknown. The seed warnings name unavailable evidence classes; never replace them with

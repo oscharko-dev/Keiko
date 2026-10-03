@@ -1,6 +1,6 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runVerifyCli } from "./verify.js";
 import type { CliIo } from "./runner.js";
@@ -57,25 +57,6 @@ function writeWorkspaceFile(relPath: string, content: string): void {
   const abs = join(dir, relPath);
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(abs, content, "utf8");
-}
-
-function prependFakeNpxToPath(): () => void {
-  const fakeBin = mkdtempSync(join(tmpdir(), "keiko-verify-bin-"));
-  const executable = join(fakeBin, process.platform === "win32" ? "npx.cmd" : "npx");
-  const body =
-    process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/usr/bin/env sh\nexit 0\n";
-  writeFileSync(executable, body, "utf8");
-  chmodSync(executable, 0o755);
-  const oldPath = process.env.PATH;
-  process.env.PATH = `${fakeBin}${delimiter}${oldPath ?? ""}`;
-  return (): void => {
-    if (oldPath === undefined) {
-      delete process.env.PATH;
-    } else {
-      process.env.PATH = oldPath;
-    }
-    rmSync(fakeBin, { recursive: true, force: true });
-  };
 }
 
 beforeEach(() => {
@@ -176,15 +157,21 @@ describe("runVerifyCli", () => {
     VERIFY_CLI_SPAWN_TIMEOUT_MS,
   );
 
-  it("runs a targeted-test step from --changed and reports command evidence", async () => {
-    writePackage({ test: 'node -e "process.exit(0)"' }, { devDependencies: { vitest: "4.1.7" } });
-    writeWorkspaceFile("src/add.ts", "export const add = (a, b) => a + b;\n");
-    writeWorkspaceFile("src/add.test.ts", "test('add', () => {});\n");
-    const restorePath = prependFakeNpxToPath();
-    try {
+  it(
+    "runs a real targeted Node test from --changed and reports command evidence",
+    async () => {
+      writePackage({ test: "node --test" });
+      writeWorkspaceFile("src/add.js", "exports.add = (a, b) => a + b;\n");
+      writeWorkspaceFile(
+        "src/add.test.js",
+        "const { test } = require('node:test');\n" +
+          "const { strictEqual } = require('node:assert');\n" +
+          "const { add } = require('./add.js');\n" +
+          "test('add', () => strictEqual(add(1, 2), 3));\n",
+      );
       const c = makeIo();
       const code = await runVerifyCli(
-        ["--dir", dir, "--only", "targeted-test", "--changed", "src/add.ts", "--json"],
+        ["--dir", dir, "--only", "targeted-test", "--changed", "src/add.js", "--json"],
         c.io,
       );
       expect(code).toBe(0);
@@ -195,12 +182,11 @@ describe("runVerifyCli", () => {
       expect(parsed.results[0]).toMatchObject({
         kind: "targeted-test",
         status: "passed",
-        command: "npx vitest run src/add.test.ts",
+        command: "node --test src/add.test.js",
       });
-    } finally {
-      restorePath();
-    }
-  });
+    },
+    VERIFY_CLI_SPAWN_TIMEOUT_MS,
+  );
 
   it("fails instead of reporting a false pass when targeted verification has no changed files", async () => {
     writePackage({ test: 'node -e "process.exit(0)"' }, { devDependencies: { vitest: "4.1.7" } });

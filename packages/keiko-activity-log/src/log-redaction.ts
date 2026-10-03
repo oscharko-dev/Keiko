@@ -160,6 +160,14 @@ export const REDACTED_SHAPE = "[redacted:shape]";
 export const REDACTED_SECRET = "[redacted:secret]";
 export const REDACTED_PATH = "[redacted:path]";
 export const REDACTED_PERSONAL = "[redacted:personal]";
+const REDACTION_MARKERS = new Set([
+  REDACTED_KEY,
+  REDACTED_LENGTH,
+  REDACTED_SHAPE,
+  REDACTED_SECRET,
+  REDACTED_PATH,
+  REDACTED_PERSONAL,
+]);
 export const DROPPED_DEPTH = "[dropped:depth]";
 // Sibling of DROPPED_DEPTH: a bounded marker appended to a truncated array, so a reader can tell
 // "this list really only had 16 entries" from "this list had more and the rest were dropped" —
@@ -546,6 +554,7 @@ function looksLikeFilesystemPath(value: string): boolean {
 // The one place a string is judged. The length cap runs first so every later scan is bounded;
 // the most specific verdict wins after that.
 export function redactLogString(value: string): string {
+  if (REDACTION_MARKERS.has(value)) return value;
   if (value.length > MAX_LOG_STRING_LENGTH) return REDACTED_LENGTH;
   if (looksLikeSecret(value)) return REDACTED_SECRET;
   if (looksLikePersonalIdentifier(value)) return REDACTED_PERSONAL;
@@ -623,7 +632,7 @@ function isConformingFrame(value: unknown): value is string {
 // Browser coordinates are untrusted even after wire validation. Digest the asset identity here,
 // at the persistence boundary, so a forged but shape-conforming basename cannot disclose content.
 // Operators can map the domain-separated digest back to an asset in the exact shipped build.
-function redactBrowserFrame(frame: string): string {
+export function redactBrowserFrame(frame: string): string {
   if (!isClientDiagnosticFrame(frame)) return frame;
   const coordinateOffset = frame.indexOf(":");
   const identity = sha256Hex(

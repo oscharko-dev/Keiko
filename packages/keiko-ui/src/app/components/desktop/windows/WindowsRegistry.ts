@@ -3,6 +3,7 @@ import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
   WorkspaceBinding,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   OpenEditorFileRequest,
@@ -104,7 +105,6 @@ interface ChatWindowCfg extends WindowCfgRecord {
   readonly title?: string;
   readonly modelId?: string;
   readonly projectPathPrivacy?: "omit";
-  readonly selectionHandoffId?: string;
   readonly newChatRequestId?: string;
 }
 
@@ -254,6 +254,8 @@ export interface WindowRenderContext {
   readonly activeRoot: string | null;
   /** Issue #446 — the derived active binding (taskId/boundSurfaces/activeRoot), or null when unbound. */
   readonly activeBinding: WorkspaceBinding | null;
+  /** The server-owned instance identifies local checkouts separately from private worktrees. */
+  readonly activeInstance?: WorkspaceInstance | null;
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   /**
    * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result

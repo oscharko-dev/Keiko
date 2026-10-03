@@ -35,7 +35,7 @@
 //
 // KEIKO-3557: this route accepts TWO closed report shapes on the same rate limit, size bound, and
 // rejection/loss accounting above. A message report (the shape this header describes) reaches
-// `client.diagnostic` — a FAILURE, always at warn. A stage report (`useWindowStageEvidence`,
+// `client.diagnostic` — a FAILURE, at error for timeouts and warn otherwise. A stage report (`useWindowStageEvidence`,
 // keiko-ui: a desktop window placeholder mounting and later unmounting) reaches
 // `client.stage.started`/`client.stage.settled` instead — the ORDINARY case, at info, with no
 // `errorKind`. Routing routine evidence through the failure-shaped operation is exactly the defect
@@ -366,6 +366,12 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["git-sync", "git-history"],
     },
+    renderFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["shell", "window-body"],
+    },
     clientNoteDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     readyState: { type: "integer", dataClass: "count", required: false },
     clientKind: {
@@ -547,6 +553,10 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "chat-bind",
   "command-palette",
   "chat-history-deletion",
+  "files-directory-load",
+  "files-directory-navigation",
+  "files-project-selection",
+  "editor-project-selection",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -557,6 +567,10 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "chat bind": "chat-bind",
   "command palette": "command-palette",
   "chat history deletion": "chat-history-deletion",
+  "files directory load": "files-directory-load",
+  "files directory navigation": "files-directory-navigation",
+  "files project selection": "files-project-selection",
+  "editor project selection": "editor-project-selection",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its
@@ -600,7 +614,15 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
   category: "diagnostic",
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientStageSettled",
-  fields: CLIENT_STAGE_FIELDS,
+  fields: {
+    ...CLIENT_STAGE_FIELDS,
+    navigationOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["applied", "unavailable", "failed", "dropped", "stale", "cancelled", "deferred"],
+    },
+  },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -1430,6 +1452,7 @@ function projectClientFailure(
   extra: Record<string, unknown>,
 ): void {
   if (request.moduleLoadFailure !== undefined) extra.moduleLoadFailure = request.moduleLoadFailure;
+  if (request.renderFailure !== undefined) extra.renderFailure = request.renderFailure;
   if (request.errorEvidence !== undefined) {
     extra.errorClass = request.errorEvidence.errorClass;
     extra.frames = request.errorEvidence.frames;
@@ -1663,7 +1686,10 @@ function logClientDiagnostic(
   projectClientLoss(request.loss, extra);
   extra.completeness = "complete";
   extra.loss = "none";
-  getServerLogger().warn(
+  // Failed operations and browser crashes must reach the existing automatic incident trigger.
+  const logger = getServerLogger();
+  const level = clientDiagnosticLevel(request);
+  logger[level](
     activityLogEvent(
       CLIENT_DIAGNOSTIC_OPERATION,
       {
@@ -1673,6 +1699,17 @@ function logClientDiagnostic(
       extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
     ),
   );
+}
+
+function clientDiagnosticLevel(request: ClientDiagnosticIngestRequest): "warn" | "error" {
+  const errorKind = requestDiagnosticErrorKind(request);
+  return errorKind === "timeout" ||
+    request.renderFailure !== undefined ||
+    request.moduleLoadFailure !== undefined ||
+    request.kind === "window-error" ||
+    request.kind === "unhandled-rejection"
+    ? "error"
+    : "warn";
 }
 
 function logClientComposerActivity(
@@ -1728,6 +1765,9 @@ function logClientStageSettled(
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
         ...request.deletion,
+        ...(request.navigationOutcome === undefined
+          ? {}
+          : { navigationOutcome: request.navigationOutcome }),
         completeness: "complete",
         loss: "none",
       },

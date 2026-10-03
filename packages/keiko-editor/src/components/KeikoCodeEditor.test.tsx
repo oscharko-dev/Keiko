@@ -932,37 +932,6 @@ describe("KeikoCodeEditor — selection and cursor reporting", () => {
     expect(onSelectionChange).toHaveBeenCalledWith(null);
   });
 
-  it("runs Ask Keiko through the mounted action with the latest host callback", async () => {
-    const initialHandler = vi.fn();
-    const latestHandler = vi.fn();
-    const { rerender } = render(
-      <KeikoCodeEditor {...baseProps({ onAskKeikoAboutSelection: initialHandler })} />,
-    );
-    await flushMount();
-    rerender(<KeikoCodeEditor {...baseProps({ onAskKeikoAboutSelection: latestHandler })} />);
-    const selection = {
-      startLineNumber: 1,
-      startColumn: 7,
-      endLineNumber: 1,
-      endColumn: 12,
-      isEmpty: (): boolean => false,
-    };
-    const getValueInRange = vi.fn(() => "value");
-
-    captured.editor?.runAction("keiko.editor.askKeikoAboutSelection", {
-      getSelection: () => selection,
-      getModel: () => ({ getValueInRange }),
-    });
-
-    expect(initialHandler).not.toHaveBeenCalled();
-    expect(getValueInRange).toHaveBeenCalledWith(selection);
-    expect(latestHandler).toHaveBeenCalledWith({
-      textMode: "selection",
-      range: { start: { line: 0, column: 6 }, end: { line: 0, column: 11 } },
-      text: "value",
-    });
-  });
-
   it("keeps debug affordances absent by default and mounts only the closed controls when injected", async () => {
     const handlers = {
       continue: vi.fn(),

@@ -46,12 +46,6 @@ export const EDITOR_COMMANDS: readonly EditorCommand[] = [
     title: "Reject Suggestion",
     requiredCapabilities: [],
   },
-  { id: "editor.generateTests", title: "Generate Tests", requiredCapabilities: ["generateTests"] },
-  {
-    id: "editor.askKeikoAboutSelection",
-    title: "Ask Keiko about this selection",
-    requiredCapabilities: ["askKeikoAboutSelection"],
-  },
   { id: "editor.renameSymbol", title: "Rename Symbol", requiredCapabilities: ["renameSymbol"] },
   {
     id: "editor.runVerification",
@@ -142,8 +136,6 @@ const STATE_GATES: Readonly<Record<EditorCommandId, (ctx: EditorCommandContext) 
   "editor.runLint": (ctx) => !ctx.verificationRunning,
   "editor.runBuild": (ctx) => !ctx.verificationRunning,
   "editor.cancelVerification": (ctx) => ctx.verificationRunning,
-  "editor.generateTests": () => true,
-  "editor.askKeikoAboutSelection": (ctx) => ctx.hasSelection,
   "editor.renameSymbol": (ctx) => !ctx.readOnly,
   "editor.previewPatch": () => true,
   "editor.openDiff": () => true,

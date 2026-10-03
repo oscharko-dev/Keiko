@@ -78,7 +78,8 @@ function snapshot(revision: number): EditorM7WorkspaceSnippetSnapshot {
 beforeEach(() => {
   FakeEventSource.instances = [];
   vi.stubGlobal("EventSource", FakeEventSource);
-  vi.stubGlobal("crypto", {});
+  const browserCrypto = globalThis.crypto;
+  vi.stubGlobal("crypto", { getRandomValues: browserCrypto.getRandomValues.bind(browserCrypto) });
   api.currentSnapshot = snapshot(0);
   api.fetchWorkspaceSnippets.mockImplementation(() => Promise.resolve(api.currentSnapshot));
   api.mutateWorkspaceSnippets.mockReset();

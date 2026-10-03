@@ -26,3 +26,7 @@ export {
   type AnalyzedSupportReport,
   type AnalyzedSupportReportTimeline,
 } from "./support-report.js";
+
+export * from "./support-incident-resolution.js";
+export * from "./support-local-query.js";
+export * from "./support-desktop-report.js";

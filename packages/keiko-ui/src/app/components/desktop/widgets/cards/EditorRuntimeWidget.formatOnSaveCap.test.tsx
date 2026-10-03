@@ -58,7 +58,6 @@ vi.mock("../../../../../lib/api", async () => {
     requestEditorRenameApply: vi.fn(),
     requestEditorCodeActions: vi.fn(),
     requestEditorSignatureHelp: vi.fn(),
-    requestEditorTestGeneration: vi.fn(),
   };
 });
 

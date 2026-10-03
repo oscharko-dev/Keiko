@@ -1,17 +1,11 @@
 import type { IncomingMessage } from "node:http";
-import { existsSync, readFileSync, renameSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { isAbsolute, join, resolve } from "node:path";
-import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import type { RouteContext, RouteResult } from "./routes.js";
+import type { UiHandlerDeps } from "./deps.js";
 import { errorBody } from "./routes.js";
-import { savePrivateJson } from "./private-json.js";
 
 const MAX_WORKSPACE_STATE_BODY_BYTES = 256_000;
 const MAX_WORKSPACE_WINDOWS = 128;
 const MAX_WORKSPACE_CONNECTIONS = 512;
-const WORKSPACE_STATE_SCHEMA_VERSION = 1;
-const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 
 interface WorkspaceStateSnapshot {
   readonly revision: number;
@@ -26,7 +20,7 @@ let workspaceState: WorkspaceStateSnapshot = {
   connections: [],
   updatedAtMs: 0,
 };
-let loadedWorkspaceStatePath: string | null | undefined;
+// Durable layout belongs to browser localStorage (ADR-0027); the BFF only coordinates revisions.
 
 class InvalidWorkspaceState extends Error {
   public constructor(message: string) {
@@ -106,95 +100,6 @@ function emptyWorkspaceState(): WorkspaceStateSnapshot {
   return { revision: 0, windows: [], connections: [], updatedAtMs: 0 };
 }
 
-function workspaceStatePathFromEnv(): string | null {
-  const dir = process.env.KEIKO_UI_DATA_DIR;
-  if (dir === undefined || dir.trim().length === 0 || dir.includes("\0")) return null;
-  if (!isAbsolute(dir)) return null;
-  return join(resolve(dir), WORKSPACE_STATE_FILENAME);
-}
-
-function isValidRevisionValue(value: unknown): boolean {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isBoundedArray(value: unknown, max: number): boolean {
-  return Array.isArray(value) && value.length <= max;
-}
-
-function isValidUpdatedAtValue(value: unknown): boolean {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-function isWorkspaceStateSnapshot(value: unknown): value is WorkspaceStateSnapshot {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    isValidRevisionValue(record.revision) &&
-    isBoundedArray(record.windows, MAX_WORKSPACE_WINDOWS) &&
-    isBoundedArray(record.connections, MAX_WORKSPACE_CONNECTIONS) &&
-    isValidUpdatedAtValue(record.updatedAtMs)
-  );
-}
-
-function parseWorkspaceStateEnvelope(raw: unknown): WorkspaceStateSnapshot | null {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
-  const record = raw as Record<string, unknown>;
-  if (record.schemaVersion !== WORKSPACE_STATE_SCHEMA_VERSION) return null;
-  const snapshot = record.workspace;
-  return isWorkspaceStateSnapshot(snapshot) ? snapshot : null;
-}
-
-function quarantineWorkspaceStateFile(path: string, cause: unknown): void {
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const quarantinePath = `${path}.corrupt.${stamp}`;
-  atomicPublishRename(path, quarantinePath, { rename: renameSync });
-  savePrivateJson(`${quarantinePath}.diagnostic.json`, {
-    incidentId: randomUUID(),
-    store: "workspace-state",
-    timestamp: new Date().toISOString(),
-    statePath: path,
-    quarantinedPath: quarantinePath,
-    cause: cause instanceof Error ? cause.name : typeof cause,
-  });
-}
-
-function loadWorkspaceStateFromDisk(path: string): WorkspaceStateSnapshot {
-  if (!existsSync(path)) return emptyWorkspaceState();
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-    const envelope = parseWorkspaceStateEnvelope(parsed);
-    if (envelope === null) {
-      throw new Error("unsupported workspace state envelope");
-    }
-    return envelope;
-  } catch (error) {
-    try {
-      quarantineWorkspaceStateFile(path, error);
-    } catch {
-      // If quarantine itself fails, keep the process alive with an empty in-memory snapshot. The
-      // next PUT will still require a matching revision and will attempt a normal private write.
-    }
-    return emptyWorkspaceState();
-  }
-}
-
-function ensureWorkspaceStateLoaded(): string | null {
-  const path = workspaceStatePathFromEnv();
-  if (path !== loadedWorkspaceStatePath) {
-    loadedWorkspaceStatePath = path;
-    workspaceState = path === null ? emptyWorkspaceState() : loadWorkspaceStateFromDisk(path);
-  }
-  return path;
-}
-
-function persistWorkspaceState(path: string | null): void {
-  if (path === null) return;
-  savePrivateJson(path, {
-    schemaVersion: WORKSPACE_STATE_SCHEMA_VERSION,
-    workspace: workspaceState,
-  });
-}
-
 function headerValues(req: IncomingMessage, name: "if-match" | "if-none-match"): readonly string[] {
   const header = req.headers[name];
   const value = Array.isArray(header) ? header.join(",") : header;
@@ -229,8 +134,10 @@ function workspacePayloadMatches(
   );
 }
 
-export function handleGetWorkspaceState(ctx: RouteContext): RouteResult {
-  ensureWorkspaceStateLoaded();
+export function handleGetWorkspaceState(
+  ctx: RouteContext,
+  _deps?: Pick<UiHandlerDeps, "env">,
+): RouteResult {
   const etag = workspaceStateEtag(workspaceState.revision);
   const headers = { ETag: etag, "Cache-Control": "no-store" };
   if (requestMatchesWorkspaceState(ctx.req)) {
@@ -273,9 +180,11 @@ function workspaceWritePreconditionResult(
   return undefined;
 }
 
-export async function handlePutWorkspaceState(ctx: RouteContext): Promise<RouteResult> {
+export async function handlePutWorkspaceState(
+  ctx: RouteContext,
+  _deps?: Pick<UiHandlerDeps, "env">,
+): Promise<RouteResult> {
   try {
-    const statePath = ensureWorkspaceStateLoaded();
     const body = await readJsonObject(ctx.req);
     const windows = requireArray(body, "windows", MAX_WORKSPACE_WINDOWS);
     const connections = requireArray(body, "connections", MAX_WORKSPACE_CONNECTIONS);
@@ -287,7 +196,6 @@ export async function handlePutWorkspaceState(ctx: RouteContext): Promise<RouteR
       connections,
       updatedAtMs: Date.now(),
     };
-    persistWorkspaceState(statePath);
     return {
       status: 200,
       body: { workspace: workspaceState },
@@ -309,5 +217,4 @@ export async function handlePutWorkspaceState(ctx: RouteContext): Promise<RouteR
 
 export function resetWorkspaceStateForTests(): void {
   workspaceState = emptyWorkspaceState();
-  loadedWorkspaceStatePath = undefined;
 }

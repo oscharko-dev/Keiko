@@ -12,6 +12,8 @@
 // files wholesale, and shared hooks must not ride inside them (see hooks/useLinkRevision.ts).
 
 import { useEffect } from "react";
+import { isMonacoCancellation } from "@/lib/benign-browser-error";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { recordClientDiagnosticLoss, reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 
@@ -21,6 +23,7 @@ export function useUnhandledRejectionLog(): void {
   useEffect(() => {
     let logged = 0;
     const onRejection = (event: PromiseRejectionEvent): void => {
+      if (isMonacoCancellation(event.reason)) return;
       if (logged >= MAX_LOGGED_REJECTIONS) {
         recordClientDiagnosticLoss("rejectionsSuppressed");
         return;
@@ -28,7 +31,12 @@ export function useUnhandledRejectionLog(): void {
       logged += 1;
       reportClientDiagnostic(
         `[keiko] unhandled promise rejection: ${clientErrorSummary(event.reason)}`,
-        { correlationId: correlationIdOf(event.reason), kind: "unhandled-rejection" },
+        {
+          correlationId: correlationIdOf(event.reason) ?? crypto.randomUUID(),
+          kind: "unhandled-rejection",
+          globalFailure: true,
+          errorEvidence: clientErrorEvidence(event.reason),
+        },
       );
     };
     window.addEventListener("unhandledrejection", onRejection);

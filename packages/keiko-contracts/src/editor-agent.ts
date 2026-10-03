@@ -606,6 +606,21 @@ export interface EditorAgentBridgeSnapshotRequest {
   readonly bridgeDecisionCapability?: string | undefined;
 }
 
+/** Passive unsaved-buffer protection; its ownership token grants no execution authority. */
+export interface EditorBufferSnapshotRequest {
+  readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
+  readonly kind: "buffer-snapshot";
+  readonly snapshot: EditorAgentSessionSnapshot;
+  readonly bufferSnapshotCapability?: string | undefined;
+}
+
+export interface EditorBufferReleaseRequest {
+  readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
+  readonly kind: "buffer-release";
+  readonly sessionId: string;
+  readonly bufferSnapshotCapability: string;
+}
+
 export interface EditorAgentActionResultRequest {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
   readonly kind: "result";
@@ -619,19 +634,7 @@ export interface EditorAgentActionResultRequest {
   readonly reviewDecision?: "rejected" | undefined;
 }
 
-/**
- * A browser-originated action request. The capability authenticates the live bridge only and is
- * never copied onto the queued action or emitted over SSE.
- */
-export interface EditorAgentBridgeActionRequest {
-  readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
-  readonly kind: "action";
-  readonly action: EditorAgentAction;
-  readonly bridgeDecisionCapability: string;
-}
-
-export type EditorAgentActionsPostBody =
-  EditorAgentAction | EditorAgentBridgeActionRequest | EditorAgentActionResultRequest;
+export type EditorAgentActionsPostBody = EditorAgentAction | EditorAgentActionResultRequest;
 
 export interface EditorAgentSessionsResponse {
   readonly sessions: readonly EditorAgentSessionSnapshot[];
@@ -644,6 +647,7 @@ export interface EditorAgentActionQueuedResponse {
 export interface EditorAgentSnapshotResponse {
   readonly snapshot: EditorAgentSessionSnapshot | null;
   readonly bridgeDecisionCapability?: string | undefined;
+  readonly bufferSnapshotCapability?: string | undefined;
 }
 
 export interface EditorAgentParseOk<T> {
@@ -1976,13 +1980,97 @@ function parseReadSnapshotRequest(
   };
 }
 
+const BUFFER_PANE_KEYS = new Set(["paneId", "activeFile", "openFiles"]);
+const BUFFER_SNAPSHOT_KEYS = new Set([
+  "schemaVersion",
+  "sessionId",
+  "windowId",
+  "workspaceRoot",
+  "rootBinding",
+  "activePaneId",
+  "panes",
+  "dirtyFiles",
+  "activeFile",
+  "cursor",
+  "selection",
+  "diagnosticsSummary",
+  "textMode",
+  "updatedAt",
+]);
+
+export function isEditorBufferSafetySnapshot(value: unknown): value is EditorAgentSessionSnapshot {
+  return (
+    isEditorAgentSessionSnapshot(value) &&
+    value.textMode === "none" &&
+    value.cursor === null &&
+    value.selection === null &&
+    value.diagnosticsSummary === null &&
+    Object.keys(value).every((key) => BUFFER_SNAPSHOT_KEYS.has(key)) &&
+    value.panes.every((pane) => Object.keys(pane).every((key) => BUFFER_PANE_KEYS.has(key)))
+  );
+}
+
+function parseBufferSnapshotRequest(
+  value: Record<string, unknown>,
+): EditorAgentParse<EditorBufferSnapshotRequest> {
+  const capability = value.bufferSnapshotCapability;
+  const keys = new Set(["schemaVersion", "kind", "snapshot", "bufferSnapshotCapability"]);
+  if (
+    value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
+    !isEditorBufferSafetySnapshot(value.snapshot) ||
+    !Object.keys(value).every((key) => keys.has(key)) ||
+    (capability !== undefined && !isEditorAgentBridgeDecisionCapability(capability))
+  ) {
+    return { ok: false, errors: ["buffer safety snapshot is invalid"] };
+  }
+  return {
+    ok: true,
+    value: {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "buffer-snapshot",
+      snapshot: value.snapshot,
+      ...(capability === undefined ? {} : { bufferSnapshotCapability: capability }),
+    },
+  };
+}
+
+function parseBufferReleaseRequest(
+  value: Record<string, unknown>,
+): EditorAgentParse<EditorBufferReleaseRequest> {
+  const keys = new Set(["schemaVersion", "kind", "sessionId", "bufferSnapshotCapability"]);
+  if (
+    value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
+    !isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES) ||
+    !isEditorAgentBridgeDecisionCapability(value.bufferSnapshotCapability) ||
+    !Object.keys(value).every((key) => keys.has(key))
+  ) {
+    return { ok: false, errors: ["buffer safety release is invalid"] };
+  }
+  return {
+    ok: true,
+    value: {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "buffer-release",
+      sessionId: value.sessionId,
+      bufferSnapshotCapability: value.bufferSnapshotCapability,
+    },
+  };
+}
+
 export function parseEditorAgentSnapshotRequest(
   value: unknown,
-): EditorAgentParse<EditorAgentSnapshotRequest | EditorAgentBridgeSnapshotRequest> {
+): EditorAgentParse<
+  | EditorAgentSnapshotRequest
+  | EditorAgentBridgeSnapshotRequest
+  | EditorBufferSnapshotRequest
+  | EditorBufferReleaseRequest
+> {
   if (!isRecord(value)) return { ok: false, errors: ["request must be an object"] };
-  return value.kind === "snapshot"
-    ? parseBridgeSnapshotRequest(value)
-    : parseReadSnapshotRequest(value);
+  if (value.kind === "snapshot") return parseBridgeSnapshotRequest(value);
+  if (value.kind === "buffer-snapshot") return parseBufferSnapshotRequest(value);
+  if (value.kind === "buffer-release") return parseBufferReleaseRequest(value);
+  if (value.kind !== undefined) return { ok: false, errors: ["snapshot request kind is invalid"] };
+  return parseReadSnapshotRequest(value);
 }
 
 function canonicalRange(range: LanguageRange): LanguageRange {
@@ -2255,13 +2343,6 @@ function canonicalActionResult(result: EditorAgentActionResult): EditorAgentActi
   };
 }
 
-const EDITOR_AGENT_BRIDGE_ACTION_REQUEST_KEYS = new Set([
-  "schemaVersion",
-  "kind",
-  "action",
-  "bridgeDecisionCapability",
-]);
-
 const EDITOR_AGENT_ACTION_RESULT_REQUEST_KEYS = new Set([
   "schemaVersion",
   "kind",
@@ -2269,28 +2350,6 @@ const EDITOR_AGENT_ACTION_RESULT_REQUEST_KEYS = new Set([
   "bridgeDecisionCapability",
   "reviewDecision",
 ]);
-
-function parseBridgeActionRequest(
-  value: Record<string, unknown>,
-): EditorAgentParse<EditorAgentBridgeActionRequest> {
-  if (
-    value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
-    !Object.keys(value).every((key) => EDITOR_AGENT_BRIDGE_ACTION_REQUEST_KEYS.has(key)) ||
-    !isEditorAgentAction(value.action) ||
-    !isEditorAgentBridgeDecisionCapability(value.bridgeDecisionCapability)
-  ) {
-    return { ok: false, errors: ["browser action request is invalid"] };
-  }
-  return {
-    ok: true,
-    value: {
-      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-      kind: "action",
-      action: canonicalEditorAgentAction(value.action),
-      bridgeDecisionCapability: value.bridgeDecisionCapability,
-    },
-  };
-}
 
 // A review's Reject is the only decision a result request names, and only on a failed result.
 function isReviewDecisionFor(
@@ -2337,22 +2396,16 @@ function parseActionResultRequest(
 function invalidActionsPostBody(): EditorAgentParseFail {
   return {
     ok: false,
-    errors: ["body must be an editor agent action, browser action request, or action result"],
+    errors: ["body must be an editor agent action or action result"],
   };
 }
 
 export function parseEditorAgentActionsPostBody(
   value: unknown,
 ): EditorAgentParse<EditorAgentActionsPostBody> {
-  // KEIKO-0747: route by the discriminator BEFORE the bare-action branch. isEditorAgentAction
-  // does not enforce exact-keys, so a body carrying { kind: "action", ...allEditorAgentActionFields }
-  // used to fall through to the bare-action branch — its `kind` and `bridgeDecisionCapability`
-  // fields silently discarded. The bridge and result branches carry their own exact-keys guards
-  // and are the only correct match for a discriminated payload.
-  if (isRecord(value) && (value.kind === "action" || value.kind === "result")) {
-    return value.kind === "action"
-      ? parseBridgeActionRequest(value)
-      : parseActionResultRequest(value);
+  // Discriminated wrappers must never fall through to permissive bare-action validation.
+  if (isRecord(value) && value.kind !== undefined) {
+    return value.kind === "result" ? parseActionResultRequest(value) : invalidActionsPostBody();
   }
   if (isEditorAgentAction(value)) {
     return { ok: true, value: canonicalEditorAgentAction(value) };

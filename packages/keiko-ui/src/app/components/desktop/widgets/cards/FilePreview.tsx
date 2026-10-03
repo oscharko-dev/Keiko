@@ -2,6 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
+import { SupportReportButton } from "../../SupportReportButton";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { bffRequestErrorKind } from "@/lib/http";
 import { ApiError, fetchFilesPreview } from "../../../../../lib/api";
 import { copyTextToClipboard } from "../../../../../lib/clipboard";
 import { formatBytesPrecise as formatBytes } from "../../../../../lib/format";
@@ -53,27 +59,25 @@ function searchableDocumentMessage(label: string, t: I18nTranslate): string {
 }
 
 interface PreviewError {
-  readonly message: string;
   readonly denied: boolean;
+  readonly correlationId: string;
 }
 
 type PreviewRefreshStatus = "idle" | "refreshing" | "refreshed" | "failed";
 type MetadataCopyTarget = "name" | "path";
 type CopyStatusKind = "nameCopied" | "pathCopied" | "clipboardFailed";
 
-function classifyError(error: unknown, t: I18nTranslate): PreviewError {
+function classifyError(error: unknown, requestCorrelationId: string): PreviewError {
+  const correlationId = correlationIdOf(error) ?? requestCorrelationId;
   if (error instanceof ApiError && error.code === "DENIED") {
-    return { message: deniedPreviewMessage(t), denied: true };
+    return { denied: true, correlationId };
   }
-  if (error instanceof Error) {
-    // fetchJson falls back to a bare "HTTP <status>" when the BFF error envelope is
-    // unparseable — not a user-facing sentence (audit F044 C348).
-    const message = /^HTTP \d+$/.test(error.message)
-      ? t("filePreview.error.loadFailed")
-      : error.message;
-    return { message, denied: false };
-  }
-  return { message: t("filePreview.error.unreadable"), denied: false };
+  reportClientDiagnostic("File preview read failed", {
+    correlationId,
+    errorKind: bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+  });
+  return { denied: false, correlationId };
 }
 
 function formatDate(timestamp: number): string {
@@ -438,7 +442,8 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
     setRefreshStatus(isManualRefresh ? "refreshing" : "idle");
     if (!isManualRefresh) setPreview(null);
 
-    void fetchFilesPreview(root, path)
+    const correlationId = newClientCorrelationId();
+    void fetchFilesPreview(root, path, correlationId)
       .then((response) => {
         if (!cancelled) {
           setPreview(response);
@@ -447,7 +452,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(classifyError(err, t));
+          setError(classifyError(err, correlationId));
           if (isManualRefresh) setRefreshStatus("failed");
         }
       })
@@ -457,7 +462,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
     return () => {
       cancelled = true;
     };
-  }, [path, root, refreshKey, t]);
+  }, [path, root, refreshKey]);
 
   useEffect(() => {
     if (refreshStatus !== "refreshed") return undefined;
@@ -597,12 +602,15 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       ) : null}
       {error !== null ? (
         <div className="fpv-state fpv-error" role="alert">
-          <span>{error.message}</span>
+          <span>{error.denied ? deniedPreviewMessage(t) : t("filePreview.error.unreadable")}</span>
           {/* Denied is a deliberate safety invariant, not a transient failure — no Retry. */}
           {!error.denied ? (
-            <button type="button" className="fpv-retry" onClick={refreshPreview}>
-              {t("filePreview.retry")}
-            </button>
+            <>
+              <button type="button" className="fpv-retry" onClick={refreshPreview}>
+                {t("filePreview.retry")}
+              </button>
+              <SupportReportButton correlationId={error.correlationId} />
+            </>
           ) : null}
         </div>
       ) : null}

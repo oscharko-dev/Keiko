@@ -250,6 +250,7 @@ export function bffRequestErrorKind(error: unknown): ActivityLogErrorKind {
     if (error.status >= 500) return "unavailable";
     return error.status >= 400 ? "invalid-request" : "unknown";
   }
+  if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
   if (error instanceof DOMException && error.name === "AbortError") return "cancelled";
   // `fetch` rejects a transport failure (refused connection, lost network) with a TypeError.
   return error instanceof TypeError ? "unavailable" : "unknown";

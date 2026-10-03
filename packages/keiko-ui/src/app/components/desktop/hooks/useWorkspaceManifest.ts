@@ -69,6 +69,7 @@ function resolvePathReadAuthority(
 export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceManifestView {
   const tracksRoot = hasTrackedRoot(rootPath);
   const [manifest, setManifest] = useState<WorkspaceManifest | null>(null);
+  const [manifestRoot, setManifestRoot] = useState(rootPath);
   const [loading, setLoading] = useState(tracksRoot);
   const [pathReadAuthority, setPathReadAuthority] = useState<
     WorkspaceManifestView["pathReadAuthority"]
@@ -77,14 +78,22 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
   const [mutating, setMutating] = useState(false);
   const [issue, setIssue] = useState<"load" | "mutation" | null>(null);
   const requestRef = useRef(0);
-  const manifestRef = useRef(manifest);
-  manifestRef.current = manifest;
+  // Membership keeps multi-root hosts mounted during an in-workspace selection. The requested
+  // root also keeps a removal snapshot visible so the host can dispose the removed member.
+  const containsRoot = manifest?.roots.some((entry) => entry.canonicalRoot === rootPath) === true;
+  const resolvedManifest = manifestRoot === rootPath || containsRoot ? manifest : null;
+  const resolvedLoading = tracksRoot && manifestRoot !== rootPath && !containsRoot ? true : loading;
+  const rootRef = useRef(rootPath);
+  rootRef.current = rootPath;
+  const manifestRef = useRef(resolvedManifest);
+  manifestRef.current = resolvedManifest;
 
   const refresh = useCallback(async (): Promise<void> => {
     requestRef.current += 1;
     const request = requestRef.current;
     if (!hasTrackedRoot(rootPath)) {
       setManifest(null);
+      setManifestRoot(rootPath);
       setLoading(false);
       setAuthorityRoot(undefined);
       setPathReadAuthority("available");
@@ -92,17 +101,19 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
     }
     setLoading(true);
     setAuthorityRoot(rootPath);
-    setPathReadAuthority("checking");
+    if (manifestRef.current === null) setPathReadAuthority("checking");
     try {
       const access = await fetchWorkspaceManifestAccess();
       if (request === requestRef.current) {
         setManifest(manifestContainingRoot(access.manifests, rootPath));
+        setManifestRoot(rootPath);
         setPathReadAuthority(access.session === "unpaired" ? "unpaired" : "available");
         setIssue(null);
       }
     } catch {
       if (request === requestRef.current) {
         setManifest(null);
+        setManifestRoot(rootPath);
         setPathReadAuthority("unavailable");
         setIssue("load");
       }
@@ -131,6 +142,7 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
         // coherent, since the discarded response can no longer run its own `finally`.
         requestRef.current += 1;
         setManifest(next);
+        setManifestRoot(rootPath);
         setLoading(false);
         setAuthorityRoot(rootPath);
         setPathReadAuthority("available");
@@ -160,10 +172,12 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
       setIssue(null);
       try {
         const next = await action(current, actor);
+        if (manifestRef.current?.workspaceId !== current.workspaceId) return false;
         setManifest(next);
+        setManifestRoot(rootRef.current);
         return true;
       } catch {
-        setIssue("mutation");
+        if (manifestRef.current?.workspaceId === current.workspaceId) setIssue("mutation");
         return false;
       } finally {
         setMutating(false);
@@ -179,9 +193,9 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
 
   return useMemo<WorkspaceManifestView>(
     () => ({
-      manifest,
+      manifest: resolvedManifest,
       pathReadAuthority: resolvedPathReadAuthority,
-      loading,
+      loading: resolvedLoading,
       mutating,
       issue,
       refresh,
@@ -200,6 +214,14 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
           focusWorkspaceRoot(current, actor, targetRootRef),
         ),
     }),
-    [issue, loading, manifest, mutate, mutating, refresh, resolvedPathReadAuthority],
+    [
+      issue,
+      resolvedLoading,
+      resolvedManifest,
+      mutate,
+      mutating,
+      refresh,
+      resolvedPathReadAuthority,
+    ],
   );
 }

@@ -50,7 +50,7 @@ import {
   openPdfCitationPreviewSession,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
-  queueEditorAgentBridgeAction,
+  postEditorBufferSafetyRequest,
   pdfCitationPreviewDocumentUrl,
   prepareUpdateRemediationStatus,
   reconnectProject,
@@ -313,8 +313,7 @@ describe("editor agent bridge capability serialization", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ snapshot: null, bridgeDecisionCapability: capability }))
-      .mockResolvedValueOnce(jsonResponse({ result: { status: "succeeded" } }))
-      .mockResolvedValueOnce(jsonResponse({ result: { status: "queued" } }));
+      .mockResolvedValueOnce(jsonResponse({ result: { status: "succeeded" } }));
     vi.stubGlobal("fetch", fetchMock);
     const snapshot = {
       schemaVersion: "1",
@@ -345,16 +344,6 @@ describe("editor agent bridge capability serialization", () => {
         status: "succeeded",
       },
     });
-    const action = {
-      schemaVersion: "1",
-      actionId: "action-2",
-      idempotencyKey: "key-2",
-      sessionId: "session-1",
-      type: "applyPatch",
-      patch: "patch",
-    } as const;
-    await queueEditorAgentBridgeAction(action, capability);
-
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/api/editor/agent/snapshot",
@@ -384,18 +373,60 @@ describe("editor agent bridge capability serialization", () => {
         }),
       }),
     );
+  });
+});
+
+describe("passive editor buffer ownership serialization", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  it("uses the existing snapshot route without minting or supplying a bridge decision capability", async () => {
+    const capability = "A".repeat(43);
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse({ snapshot: null })));
+    vi.stubGlobal("fetch", fetchMock);
+    const request = {
+      schemaVersion: "1",
+      kind: "buffer-snapshot",
+      bufferSnapshotCapability: capability,
+      snapshot: {
+        schemaVersion: "1",
+        sessionId: "buffer:window:pane:root",
+        windowId: "window",
+        workspaceRoot: "/repo",
+        activePaneId: "pane",
+        panes: [],
+        dirtyFiles: [],
+        activeFile: null,
+        cursor: null,
+        selection: null,
+        diagnosticsSummary: null,
+        textMode: "none",
+        updatedAt: 1,
+      },
+    } as const;
+    await postEditorBufferSafetyRequest(request);
+    const release = {
+      schemaVersion: "1",
+      kind: "buffer-release",
+      sessionId: request.snapshot.sessionId,
+      bufferSnapshotCapability: capability,
+    } as const;
+    await postEditorBufferSafetyRequest(release);
     expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      "/api/editor/agent/actions",
+      1,
+      "/api/editor/agent/snapshot",
       expect.objectContaining({
-        body: JSON.stringify({
-          schemaVersion: "1",
-          kind: "action",
-          action,
-          bridgeDecisionCapability: capability,
-        }),
+        method: "POST",
+        body: JSON.stringify(request),
+        signal: expect.any(AbortSignal),
       }),
     );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/editor/agent/snapshot",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(release) }),
+    );
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("bridgeDecisionCapability");
   });
 });
 
@@ -1299,9 +1330,12 @@ describe("files API helpers", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await fetchFilesTree("/repo space", "src/app.ts");
-    await fetchFilesPreview("/repo space", "src/app.ts");
-    await fetchFilesContent("/repo space", "src/app.ts");
+    await fetchFilesTree("/repo space", "src/app.ts", "ui-directory-0001");
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      "X-Keiko-Correlation-Id": "ui-directory-0001",
+    });
+    await fetchFilesPreview("/repo space", "src/app.ts", "ui-preview-0001");
+    await fetchFilesContent("/repo space", "src/app.ts", "ui-content-0001");
     await saveFilesContent({
       root: "/repo space",
       path: "src/app.ts",
@@ -1320,14 +1354,20 @@ describe("files API helpers", () => {
       2,
       "/api/files/preview?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
-        headers: expect.objectContaining({ Accept: "application/json" }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "X-Keiko-Correlation-Id": "ui-preview-0001",
+        }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
       "/api/files/content?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
-        headers: expect.objectContaining({ Accept: "application/json" }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "X-Keiko-Correlation-Id": "ui-content-0001",
+        }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -2439,6 +2479,24 @@ describe("fetchProjects", () => {
 describe("cloneRepository", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("bounds folder registration so a stalled server cannot hold the launcher forever", async () => {
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    const fetchMock = vi.fn().mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const pending = createProject({ path: "/repo/app" });
+    const rejection = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+    controller.abort(new DOMException("Timed out", "TimeoutError"));
+    await rejection;
+    expect(timeout).toHaveBeenCalledWith(15_000);
+    timeout.mockRestore();
   });
 
   it.each(["register", "clone"])(

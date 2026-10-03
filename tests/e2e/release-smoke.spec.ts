@@ -586,6 +586,21 @@ test("files editor opens, edits, saves, conflicts, reloads, and closes @smoke", 
   assertNoPageErrors();
 });
 
+async function expectRootRelativeTreeIds(
+  filesWindow: ReturnType<Page["getByRole"]>,
+): Promise<void> {
+  const identifiers = await filesWindow
+    .locator('[role="treeitem"].tr-row')
+    .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-path") ?? ""));
+  expect(identifiers.length).toBeGreaterThan(0);
+  expect(
+    identifiers.every(
+      (id) =>
+        id.length > 0 && !id.startsWith("/") && !/^[A-Za-z]:/u.test(id) && !id.includes(":\\"),
+    ),
+  ).toBe(true);
+}
+
 test("selected workspace keeps root-relative ids and internal navigation @smoke", async ({
   page,
   request,
@@ -603,6 +618,13 @@ test("selected workspace keeps root-relative ids and internal navigation @smoke"
   await page.goto("/");
   const filesWindow = page.getByRole("region", { name: /^Files/u });
   await expect(filesWindow).toBeVisible();
+  const currentPath = filesWindow.getByRole("textbox", { name: "Current folder path" });
+  await expect(currentPath).toHaveValue(projectPath);
+  await expect(currentPath).toHaveAttribute("readonly", "");
+  const up = filesWindow.getByRole("button", { name: "Open parent folder" });
+  const returnToRoot = filesWindow.getByRole("button", { name: "Return to project folder" });
+  await expect(up).toBeDisabled();
+  await expect(returnToRoot).toBeDisabled();
 
   // Opening the project root works and a nested package folder navigates without failure (AC1/AC2).
   await openTreePath(filesWindow, "packages");
@@ -611,20 +633,24 @@ test("selected workspace keeps root-relative ids and internal navigation @smoke"
     filesWindow.locator('[role="treeitem"].tr-row[data-path="packages/keiko-cli/src"]'),
   ).toBeVisible();
 
-  // AC2: every visible tree identifier is root-relative — none is an absolute machine path.
-  const identifiers = await filesWindow
-    .locator('[role="treeitem"].tr-row')
-    .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-path") ?? ""));
-  expect(identifiers.length).toBeGreaterThan(0);
-  expect(
-    identifiers.every(
-      (id) =>
-        id.length > 0 && !id.startsWith("/") && !/^[A-Za-z]:/u.test(id) && !id.includes(":\\"),
-    ),
-  ).toBe(true);
-
+  await expectRootRelativeTreeIds(filesWindow);
+  await expect(currentPath).toHaveValue(join(projectPath, "packages", "keiko-cli"));
+  await expect(up).toBeEnabled();
+  await up.click();
+  await expect(currentPath).toHaveValue(join(projectPath, "packages"));
+  await expect(
+    filesWindow.locator('[role="treeitem"].tr-row[data-path="packages/keiko-cli"]'),
+  ).toBeVisible();
+  await expectRootRelativeTreeIds(filesWindow);
+  await returnToRoot.click();
+  await expect(currentPath).toHaveValue(projectPath);
+  await expect(
+    filesWindow.locator('[role="treeitem"].tr-row[data-path="README.md"]'),
+  ).toBeVisible();
+  await expectRootRelativeTreeIds(filesWindow);
+  await expect(up).toBeDisabled();
+  await expect(returnToRoot).toBeDisabled();
   await expect(filesWindow.getByRole("textbox", { name: /Folder path/u })).toHaveCount(0);
-  await expect(filesWindow.getByRole("button", { name: "Open parent folder" })).toHaveCount(0);
 
   assertNoPageErrors();
 });
@@ -635,8 +661,8 @@ test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, 
   browserName,
 }, testInfo) => {
   // Issue #1205: the browser interaction smoke for the VS Code-feeling UX — the unified status bar,
-  // accessible tabs, live cursor reporting, and Monaco's native command palette carrying the Keiko
-  // Generate Tests command — against the real app path (no mocks).
+  // accessible tabs, live cursor reporting, and Monaco's native command palette — against the real
+  // manual editor path (no mocks).
   const projectPath = createProjectFixture();
   const relativePath = "packages/keiko-cli/src/run.ts";
   writeFileSync(join(projectPath, relativePath), "", "utf8");
@@ -661,16 +687,19 @@ test("editor presents the VS Code-feeling UX surface: status bar, tabs, cursor, 
   await enterInitialMonacoText(page, editorWindow, "const answer = 42;", projectPath, browserName);
   await expect(statusBar.locator('[data-field="cursor"]')).toHaveText("Ln 1, Col 19");
 
-  // Command palette integration: F1 opens Monaco's native palette carrying the Keiko Generate Tests
-  // command alongside the built-ins.
+  // Execute a built-in manual command and verify the duplicated text and live cursor.
   await editorWindow.locator(".monaco-editor").first().click();
   await page.keyboard.press("F1");
   const palette = page.locator(".quick-input-widget");
   await expect(palette).toBeVisible();
-  await page.keyboard.type("Generate Tests");
-  await expect(palette.getByText("Generate Tests").first()).toBeVisible();
-  await page.keyboard.press("Escape");
+  await page.keyboard.type("Copy Line Down");
+  await palette.getByRole("option", { name: /^Copy Line Down,/u }).click();
   await expect(palette).toBeHidden();
+  await expect(editorWindow.locator(".view-lines .view-line")).toHaveText([
+    "const answer = 42;",
+    "const answer = 42;",
+  ]);
+  await expect(statusBar.locator('[data-field="cursor"]')).toHaveText("Ln 2, Col 19");
 
   await testInfo.attach("editor-vscode-ux", {
     body: await editorWindow.screenshot(),

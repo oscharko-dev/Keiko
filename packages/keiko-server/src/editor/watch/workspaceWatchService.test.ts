@@ -1,4 +1,12 @@
+import { resetServerLogger } from "../../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../../tests/support/activity-log-proof.js";
+import { createServerLogger, setServerLogger } from "../../observability/index.js";
 import type { Dirent, Stats } from "node:fs";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   lstat,
   mkdir,
@@ -151,6 +159,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  resetServerLogger();
   await rm(root, { recursive: true, force: true });
   await rm(outside, { recursive: true, force: true });
 });
@@ -193,7 +202,554 @@ async function drainInitialBaseline(
   await waitForCondition(() => manager.snapshot(root).queueDepth === 0);
 }
 
+function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
+  let complete: (() => void) | undefined;
+  const promise = new Promise<void>((done) => {
+    complete = done;
+  });
+  return {
+    promise,
+    resolve: (): void => {
+      if (complete === undefined) throw new Error("Expected deferred signal");
+      complete();
+    },
+  };
+}
+
+function holdDirectory(
+  fileSystem: InjectedFileSystem,
+  directory: string,
+): {
+  reached: ReturnType<typeof deferredSignal>;
+  release: ReturnType<typeof deferredSignal>;
+} {
+  const reached = deferredSignal();
+  const release = deferredSignal();
+  fileSystem.readdir.mockImplementation(async (path): Promise<readonly Dirent[]> => {
+    const entries = await readdir(path, { withFileTypes: true });
+    if (path === directory) {
+      reached.resolve();
+      await release.promise;
+    }
+    return entries.sort((left, right) => left.name.localeCompare(right.name));
+  });
+  return { reached, release };
+}
+
+async function gapAndResume(
+  manager: ReturnType<typeof createWorkspaceWatchService>,
+  adapter: FakeAdapter,
+  subscription: ReturnType<ReturnType<typeof createWorkspaceWatchService>["subscribe"]>,
+  path: string,
+  onEvent: (event: EditorM7WatchEvent) => void,
+): Promise<ReturnType<ReturnType<typeof createWorkspaceWatchService>["subscribe"]>> {
+  if (subscription.kind !== "ok") throw new Error("Expected subscription");
+  subscription.unsubscribe();
+  adapter.emit({ eventType: "rename", filename: path });
+  const next = manager.subscribe({ root, onEvent });
+  await waitForCondition(() => manager.snapshot(root).health === "healthy");
+  return next;
+}
+
 describe("workspace watch service", () => {
+  it("re-seeds an aborted initial baseline before polling without fabricating creations", async () => {
+    await mkdir(join(root, "nested"));
+    await writeFile(join(root, "existing.txt"), "original");
+    await writeFile(join(root, "nested", "existing.txt"), "original");
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    let failed = false;
+    let settled = 0;
+    fileSystem.readdir.mockImplementation(async (path): Promise<readonly Dirent[]> => {
+      if (path === join(root, "nested") && !failed) {
+        failed = true;
+        throw errno("ENOENT");
+      }
+      return readdir(path, { withFileTypes: true });
+    });
+    const events: EditorM7WatchEvent[] = [];
+    const manager = createWorkspaceWatchService({
+      adapter,
+      fileSystem,
+      fallbackPollMs: 5,
+      coalesceMs: 0,
+      onScanSettled: (): void => {
+        settled += 1;
+      },
+    });
+    try {
+      manager.subscribe({
+        root,
+        onEvent: (event): void => {
+          events.push(event);
+        },
+      });
+      await waitForCondition(() => settled >= 2 && manager.snapshot(root).health === "healthy");
+      expect(failed).toBe(true);
+      expect(events.filter((event) => event.kind === "created")).toEqual([]);
+      expect(events.some((event) => event.kind === "rescan")).toBe(true);
+      await writeFile(join(root, "existing.txt"), "changed contents");
+      adapter.emit({ eventType: "change", filename: "existing.txt" });
+      await waitForCondition(() => events.some((event) => event.kind === "changed"));
+      expect(events.filter((event) => event.kind === "created")).toEqual([]);
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it("does not rescan permanent degradation on lease renewal", async () => {
+    await writeFile(join(root, "keep.txt"), "one");
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    const manager = createWorkspaceWatchService({ adapter, fileSystem, coalesceMs: 0 });
+    try {
+      let lease = manager.subscribe({ root, onEvent: vi.fn() });
+      await drainInitialBaseline(manager, adapter);
+      adapter.emit({ eventType: "change", filename: ".DS_Store" });
+      fileSystem.readdir.mockClear();
+      for (let index = 0; index < 6; index += 1) {
+        if (lease.kind !== "ok") throw new Error("Expected subscription");
+        lease.unsubscribe();
+        lease = manager.subscribe({ root, onEvent: vi.fn() });
+        await drainInitialBaseline(manager, adapter);
+      }
+      expect(fileSystem.readdir).not.toHaveBeenCalled();
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it("removes deleted metadata once and classifies a recreated file as created", async () => {
+    await writeFile(join(root, "gone.txt"), "one");
+    const adapter = new FakeAdapter();
+    const onEvent = vi.fn<(event: EditorM7WatchEvent) => void>();
+    const manager = createWorkspaceWatchService({ adapter, coalesceMs: 0 });
+    try {
+      let lease = manager.subscribe({ root, onEvent });
+      await drainInitialBaseline(manager, adapter);
+      await unlink(join(root, "gone.txt"));
+      lease = await gapAndResume(manager, adapter, lease, "gone.txt", onEvent);
+      await writeFile(join(root, "other.txt"), "two");
+      await gapAndResume(manager, adapter, lease, "other.txt", onEvent);
+      expect(onEvent.mock.calls.filter(([event]) => event.kind === "deleted")).toHaveLength(1);
+      await writeFile(join(root, "gone.txt"), "three");
+      adapter.emit({ eventType: "rename", filename: "gone.txt" });
+      await waitForCondition(() => onEvent.mock.calls.length === 3);
+      expect(onEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "created", relativePath: "gone.txt" }),
+      );
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it.each([false, true])(
+    "rejects a stale diff after concurrent change (lease gap: %s)",
+    async (gap) => {
+      await mkdir(join(root, "a"));
+      await mkdir(join(root, "b"));
+      await writeFile(join(root, "b/base.txt"), "one");
+      const adapter = new FakeAdapter();
+      const fileSystem = new InjectedFileSystem();
+      const onEvent = vi.fn();
+      const manager = createWorkspaceWatchService({
+        adapter,
+        fileSystem,
+        coalesceMs: 0,
+        fallbackPollMs: 10,
+      });
+      let held: ReturnType<typeof holdDirectory> | undefined;
+      try {
+        let lease = manager.subscribe({ root, onEvent });
+        await drainInitialBaseline(manager, adapter);
+        held = holdDirectory(fileSystem, join(root, "b"));
+        if (lease.kind !== "ok") throw new Error("Expected subscription");
+        lease.unsubscribe();
+        adapter.emit({ eventType: "rename", filename: "b/base.txt" });
+        lease = manager.subscribe({ root, onEvent });
+        await held.reached.promise;
+        if (lease.kind !== "ok") throw new Error("Expected subscription");
+        if (gap) lease.unsubscribe();
+        await writeFile(join(root, "a/new.txt"), "two");
+        adapter.emit({ eventType: "rename", filename: "a/new.txt" });
+        if (gap) manager.subscribe({ root, onEvent });
+        else await waitForCondition(() => manager.snapshot(root).queueDepth === 0);
+        held.release.resolve();
+        await waitForCondition(() => manager.snapshot(root).health === "healthy");
+        expect(onEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "created", relativePath: "a/new.txt" }),
+        );
+        expect(onEvent).not.toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "deleted", relativePath: "a/new.txt" }),
+        );
+      } finally {
+        held?.release.resolve();
+        manager.disposeAll();
+      }
+    },
+  );
+
+  it.each([".next", "node_modules", ".git", ".idea", ".claude"])(
+    "refreshes only the parent entry for unavailable directory %s",
+    async (name) => {
+      const adapter = new FakeAdapter();
+      const fileSystem = new InjectedFileSystem();
+      const manager = createWorkspaceWatchService({ adapter, fileSystem, coalesceMs: 0 });
+      const onEvent = vi.fn();
+      try {
+        manager.subscribe({ root, onEvent });
+        await drainInitialBaseline(manager, adapter);
+        fileSystem.lstat.mockClear();
+        fileSystem.stat.mockClear();
+        fileSystem.realpath.mockClear();
+        fileSystem.readdir.mockClear();
+        for (let event = 0; event < 20; event += 1)
+          adapter.emit({ eventType: "rename", filename: name });
+        expect(manager.snapshot(root).queueDepth).toBe(1);
+        await waitForCondition(() => onEvent.mock.calls.length > 0);
+        expect(onEvent).toHaveBeenCalledWith(
+          expect.objectContaining({ kind: "changed", relativePath: "", entryKind: "directory" }),
+        );
+        adapter.emit({ eventType: "change", filename: `${name}/private.txt` });
+        expect(onEvent).toHaveBeenCalledTimes(1);
+        expect(fileSystem.lstat).not.toHaveBeenCalled();
+        expect(fileSystem.stat).not.toHaveBeenCalled();
+        expect(fileSystem.realpath).not.toHaveBeenCalled();
+        expect(fileSystem.readdir).not.toHaveBeenCalled();
+        expect(manager.snapshot(root).health).toBe("healthy");
+      } finally {
+        manager.disposeAll();
+      }
+    },
+  );
+
+  it("requires a snapshot for a cursor from a restarted watch session", () => {
+    const manager = service(new FakeAdapter());
+    try {
+      expect(manager.subscribe({ root, lastSequence: 700, onEvent: vi.fn() })).toMatchObject({
+        kind: "ok",
+        snapshotRequired: true,
+        snapshot: { requiresSnapshot: true },
+      });
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it("retains one seed across a metadata lease pause and announces absorbed unattended changes", async () => {
+    await writeFile(join(root, "existing.txt"), "one");
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fileSystem.lstat.mockImplementationOnce(async (path): Promise<Stats> => {
+      await held;
+      return lstat(path);
+    });
+    const manager = createWorkspaceWatchService({ adapter, fileSystem, coalesceMs: 0 });
+    try {
+      const first = manager.subscribe({ root, onEvent: vi.fn() });
+      await waitForCondition(() => fileSystem.lstat.mock.calls.length === 1);
+      if (first.kind !== "ok") throw new Error("Expected subscription");
+      const statReads = fileSystem.stat.mock.calls.length;
+      first.unsubscribe();
+      await writeFile(join(root, "unattended.txt"), "two");
+      adapter.emit({ eventType: "rename", filename: "unattended.txt" });
+      release?.();
+      for (let turn = 0; turn < 5; turn += 1) await yieldToEventLoop();
+      expect(fileSystem.realpath).not.toHaveBeenCalled();
+      expect(fileSystem.stat).toHaveBeenCalledTimes(statReads);
+      const onEvent = vi.fn();
+      manager.subscribe({ root, onEvent });
+      await drainInitialBaseline(manager, adapter);
+      await waitForCondition(() => manager.snapshot(root).health === "healthy");
+      expect(onEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "rescan", relativePath: "" }),
+      );
+      expect(fileSystem.readdir).toHaveBeenCalledTimes(2);
+      expect(onEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "created", relativePath: "existing.txt" }),
+      );
+    } finally {
+      manager.disposeAll();
+    }
+  });
+  it("reconciles unattended changes when an authorized subscriber resumes", async () => {
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({ adapter, coalesceMs: 0, idleTearDownMs: 30_000 });
+    const args = {
+      root,
+      onEvent: vi.fn(),
+      reproveRoot: (): WorkspaceRootAccess => createOrdinaryWorkspaceRootAccess(root),
+    };
+    const first = manager.subscribe(args);
+    await drainInitialBaseline(manager, adapter);
+    if (first.kind !== "ok") throw new Error("Expected subscription");
+    first.unsubscribe();
+    await writeFile(join(root, "while-paused.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "while-paused.txt" });
+    expect(manager.snapshot(root).health).toBe("rescanRequired");
+
+    manager.subscribe(args);
+
+    await waitForCondition(() => manager.snapshot(root).health === "healthy");
+    expect(args.onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "created", relativePath: "while-paused.txt" }),
+    );
+    manager.disposeAll();
+  });
+
+  it("pauses an in-flight baseline during a stream lease gap without false degradation", async () => {
+    await writeFile(join(root, "existing.txt"), "one");
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    let releaseRead: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    fileSystem.readdir.mockImplementationOnce(async (path) => {
+      await held;
+      return readdir(path, { withFileTypes: true });
+    });
+    const manager = createWorkspaceWatchService({ adapter, fileSystem, coalesceMs: 0 });
+    try {
+      const first = manager.subscribe({ root, onEvent: vi.fn() });
+      await waitForCondition(() => fileSystem.readdir.mock.calls.length === 1);
+      if (first.kind !== "ok") throw new Error("Expected subscription");
+      first.unsubscribe();
+      releaseRead?.();
+      for (let turn = 0; turn < 5; turn += 1) await yieldToEventLoop();
+      expect(manager.snapshot(root).health).toBe("healthy");
+      expect(fileSystem.lstat).not.toHaveBeenCalled();
+      const onEvent = vi.fn();
+      manager.subscribe({ root, onEvent });
+      await drainInitialBaseline(manager, adapter);
+      await writeFile(join(root, "existing.txt"), "two");
+      adapter.emit({ eventType: "change", filename: "existing.txt" });
+      await waitForCondition(() => onEvent.mock.calls.length > 0);
+      expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: "changed" }));
+      expect(fileSystem.readdir).toHaveBeenCalledOnce();
+    } finally {
+      releaseRead?.();
+      manager.disposeAll();
+    }
+  });
+
+  it("publishes an honest recovered snapshot after reconciling an unattended change", async () => {
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({ adapter, coalesceMs: 0 });
+    const onSnapshot = vi.fn();
+    try {
+      const first = manager.subscribe({ root, onEvent: vi.fn(), onSnapshot });
+      await drainInitialBaseline(manager, adapter);
+      if (first.kind !== "ok") throw new Error("Expected subscription");
+      first.unsubscribe();
+      await writeFile(join(root, "gap.txt"), "one");
+      adapter.emit({ eventType: "rename", filename: "gap.txt" });
+      expect(manager.snapshot(root).health).toBe("rescanRequired");
+      manager.subscribe({ root, onEvent: vi.fn(), onSnapshot });
+      await waitForCondition(() => manager.snapshot(root).health === "healthy");
+      expect(onSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ health: "healthy", degradedReasons: [] }),
+      );
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it("reuses a healthy baseline across repeated leases without full rescans", async () => {
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    const manager = createWorkspaceWatchService({ adapter, fileSystem, coalesceMs: 0 });
+    try {
+      let lease = manager.subscribe({ root, onEvent: vi.fn() });
+      await drainInitialBaseline(manager, adapter);
+      fileSystem.readdir.mockClear();
+      for (let index = 0; index < 6; index += 1) {
+        if (lease.kind !== "ok") throw new Error("Expected subscription");
+        lease.unsubscribe();
+        lease = manager.subscribe({ root, onEvent: vi.fn() });
+        await yieldToEventLoop();
+      }
+      expect(fileSystem.readdir).not.toHaveBeenCalled();
+      expect(manager.snapshot(root).health).toBe("healthy");
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it("releases a suspended nonempty scan at the bounded idle shutdown", async () => {
+    await writeFile(join(root, "unread-after-cancel.txt"), "one");
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    const held = holdDirectory(fileSystem, root);
+    const onScanSettled = vi.fn();
+    const manager = createWorkspaceWatchService({
+      adapter,
+      fileSystem,
+      idleTearDownMs: 20,
+      onScanSettled,
+    });
+    try {
+      const first = manager.subscribe({ root, onEvent: vi.fn() });
+      await held.reached.promise;
+      if (first.kind !== "ok") throw new Error("Expected subscription");
+      first.unsubscribe();
+      held.release.resolve();
+      for (let turn = 0; turn < 5; turn += 1) await yieldToEventLoop();
+      expect(onScanSettled).not.toHaveBeenCalled();
+      await waitForCondition(() => adapter.handles[0]?.close.mock.calls.length === 1);
+      await waitForCondition(() => onScanSettled.mock.calls.length === 1);
+      expect(fileSystem.lstat).not.toHaveBeenCalled();
+      expect(fileSystem.readdir).toHaveBeenCalledOnce();
+    } finally {
+      held.release.resolve();
+      manager.disposeAll();
+    }
+  });
+
+  it("settles a suspended nonempty scan when resumed authority is revoked", async () => {
+    await writeFile(join(root, "unread-after-revocation.txt"), "one");
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    const held = holdDirectory(fileSystem, root);
+    const onScanSettled = vi.fn();
+    const manager = createWorkspaceWatchService({ adapter, fileSystem, onScanSettled });
+    try {
+      const first = manager.subscribe({ root, onEvent: vi.fn() });
+      await held.reached.promise;
+      if (first.kind !== "ok") throw new Error("Expected subscription");
+      first.unsubscribe();
+      held.release.resolve();
+      for (let turn = 0; turn < 5; turn += 1) await yieldToEventLoop();
+      expect(onScanSettled).not.toHaveBeenCalled();
+      expect(
+        manager.subscribe({ root, onEvent: vi.fn(), reproveRoot: () => undefined }),
+      ).toMatchObject({
+        kind: "rootUnavailable",
+      });
+      await waitForCondition(() => onScanSettled.mock.calls.length === 1);
+      expect(adapter.handles[0]?.close).toHaveBeenCalledOnce();
+      expect(fileSystem.lstat).not.toHaveBeenCalled();
+      expect(fileSystem.readdir).toHaveBeenCalledOnce();
+    } finally {
+      held.release.resolve();
+      manager.disposeAll();
+    }
+  });
+
+  it("records body-free degraded and recovered state once with closed reasons", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({ adapter, coalesceMs: 0 });
+    try {
+      const args = { root, onEvent: vi.fn(), correlationId: "watch-session-000001" };
+      const first = manager.subscribe(args);
+      await drainInitialBaseline(manager, adapter);
+      if (first.kind !== "ok") throw new Error("Expected subscription");
+      first.unsubscribe();
+      await writeFile(join(root, "gap.txt"), "customer body");
+      adapter.emit({ eventType: "change", filename: "gap.txt" });
+      adapter.emit({ eventType: "change", filename: "gap.txt" });
+      manager.subscribe(args);
+      await waitForCondition(() => manager.snapshot(root).health === "healthy");
+      const records = sink.events.filter(
+        (event) => event.op === "editor.workspace-watch.health-changed",
+      );
+      expect(records).toHaveLength(2);
+      const lines = records.map(formatActivityLogProofLine);
+      expectActivityLogProof("editor.workspace-watch.health-changed.transitions", lines[0] ?? "");
+      expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+        health: "rescanRequired",
+        previousHealth: "healthy",
+        reasons: ["ambiguous-event"],
+        correlationId: args.correlationId,
+        errorKind: "unavailable",
+      });
+      expect(JSON.parse(lines[1] ?? "")).toMatchObject({ health: "healthy", reasons: [] });
+      expect(lines.join("")).not.toContain(root);
+      expect(lines.join("")).not.toContain("customer body");
+      expect(lines.join("")).not.toContain("gap.txt");
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it("does not start polling scans while the initial baseline is still reading", async () => {
+    const adapter = new FakeAdapter();
+    adapter.recursive = false;
+    const fileSystem = new InjectedFileSystem();
+    let releaseRead: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    fileSystem.readdir.mockImplementation(async (path): Promise<readonly Dirent[]> => {
+      await held;
+      return readdir(path, { withFileTypes: true });
+    });
+    const manager = createWorkspaceWatchService({ adapter, fileSystem, fallbackPollMs: 5 });
+    try {
+      manager.subscribe({ root, onEvent: vi.fn() });
+      await waitForCondition(() => fileSystem.readdir.mock.calls.length > 0);
+      adapter.fail();
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      expect(fileSystem.readdir).toHaveBeenCalledOnce();
+    } finally {
+      manager.disposeAll();
+      releaseRead?.();
+    }
+  });
+
+  it("ignores excluded native event storms before repeating root authority work", async () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    const reproveRoot = vi.fn(() => createOrdinaryWorkspaceRootAccess(root));
+    try {
+      manager.subscribe({ root, onEvent: vi.fn(), reproveRoot });
+      await drainInitialBaseline(manager, adapter);
+      reproveRoot.mockClear();
+      for (let index = 0; index < 100; index += 1) {
+        adapter.emit({ eventType: "change", filename: ".keiko/dev/activity.log" });
+        adapter.emit({ eventType: "change", filename: "node_modules/package/index.js" });
+      }
+      expect(reproveRoot).not.toHaveBeenCalled();
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it("yields synchronous capability scans so pending requests can run before baseline completion", async () => {
+    await Promise.all(
+      Array.from({ length: 64 }, (_, index) =>
+        writeFile(join(root, `file-${String(index)}.txt`), "x"),
+      ),
+    );
+    const adapter = new FakeAdapter();
+    const capability = new RecordingWorkspaceFs();
+    const manager = service(adapter);
+    try {
+      manager.subscribe({
+        root,
+        onEvent: vi.fn(),
+        reproveRoot: (): WorkspaceRootAccess => ({
+          kind: "managed-task",
+          canonicalRoot: root,
+          fs: capability,
+          repositoryRoot: root,
+        }),
+      });
+      await yieldToEventLoop();
+      expect(capability.calls.filter((call) => call === "stat").length).toBeLessThan(64);
+      await drainInitialBaseline(manager, adapter);
+      expect(capability.calls.filter((call) => call === "stat").length).toBeGreaterThanOrEqual(64);
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
   it("shares one native watcher per canonical root and closes it after the last unsubscribe", async () => {
     const adapter = new FakeAdapter();
     const manager = service(adapter);

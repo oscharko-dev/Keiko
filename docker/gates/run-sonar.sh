@@ -250,6 +250,7 @@ say "Analysing"
 # sonar.projectKey is deliberately NOT the real project key: nothing here may be mistaken for, or
 # uploaded over, the organisation's analysis. Coverage is not supplied on purpose — coverage has its
 # own gate (`check:coverage:new-code`) and importing it here would double the runtime for no signal.
+# Override the shared CI LCOV setting: concurrent coverage runs may replace those report files.
 # An array, not an unquoted expansion: a changed path containing a space would otherwise split into
 # two arguments and silently scan the wrong scope.
 scanner_args=()
@@ -272,6 +273,7 @@ fi
 KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm --no-deps scanner \
   ${scanner_args[@]+"${scanner_args[@]}"} \
   -Dsonar.javascript.node.maxspace="${node_maxspace}" \
+  -Dsonar.javascript.lcov.reportPaths="" \
   -Dsonar.projectKey="${project}" \
   -Dsonar.projectName="Keiko (local pre-push scan)" \
   -Dsonar.scm.disabled=true \
