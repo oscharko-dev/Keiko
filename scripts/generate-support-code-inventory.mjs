@@ -1,11 +1,11 @@
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { format } from "prettier";
 import ts from "typescript";
 import { Buffer } from "node:buffer";
 import { execFileSync } from "node:child_process";
-import { deflateSync } from "node:zlib";
+import { deflateSync, inflateSync } from "node:zlib";
 import { releasePrecedes, supportedReleases } from "./generate-support-registry-history.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
@@ -284,7 +284,77 @@ function errorClasses(classes, diagnostics) {
   return [...new Set([...errors, ...diagnostics])].sort(compareCodeUnits);
 }
 
-export function archivedCodeModules(version, execute = execFileSync) {
+function archivedLiteral(node) {
+  if (!ts.isObjectLiteralExpression(node))
+    throw new TypeError("Archived code inventory entry is not a literal object");
+  const fields = new Set(["release", "sourceCommit", "catalogDigest", "modules"]);
+  const entries = node.properties.map((property) => {
+    if (
+      !ts.isPropertyAssignment(property) ||
+      !ts.isIdentifier(property.name) ||
+      !fields.delete(property.name.text) ||
+      !ts.isStringLiteral(property.initializer)
+    )
+      throw new TypeError("Archived code inventory entry has invalid fields");
+    return [property.name.text, property.initializer.text];
+  });
+  if (fields.size !== 0) throw new TypeError("Archived code inventory entry is incomplete");
+  return Object.fromEntries(entries);
+}
+
+function storedModuleHistory() {
+  const path = join(repoRoot, target);
+  if (!existsSync(path)) return [];
+  const tree = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true);
+  for (const statement of tree.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (declaration.name.getText(tree) !== "SUPPORT_CODE_MODULE_HISTORY") continue;
+      const initializer = declaration.initializer;
+      if (initializer === undefined || !ts.isAsExpression(initializer))
+        throw new TypeError("Archived code inventory is not a literal declaration");
+      if (!ts.isArrayLiteralExpression(initializer.expression))
+        throw new TypeError("Archived code inventory is not an array literal");
+      return initializer.expression.elements.map(archivedLiteral);
+    }
+  }
+  return [];
+}
+
+function decodedModuleInventory(modules) {
+  const maximumCompressedBytes = 1024 * 1024 + 1024;
+  if (modules.length > Math.ceil(maximumCompressedBytes / 3) * 4)
+    throw new RangeError("Archived compressed code inventory exceeds its ceiling");
+  const compressed = Buffer.from(modules, "base64");
+  if (compressed.length > maximumCompressedBytes || compressed.toString("base64") !== modules)
+    throw new TypeError("Archived code inventory is not bounded canonical base64");
+  const decoded = inflateSync(compressed, { maxOutputLength: 1024 * 1024, info: true });
+  if (decoded.engine.bytesWritten !== compressed.length)
+    throw new TypeError("Archived code inventory contains trailing compressed input");
+  return decoded.buffer;
+}
+
+function compressedModuleInventory(json, metadata, previous) {
+  const retained = previous.find(
+    (archive) =>
+      archive.release === metadata.release &&
+      archive.sourceCommit === metadata.sourceCommit &&
+      archive.catalogDigest === metadata.catalogDigest,
+  );
+  if (retained !== undefined) {
+    const decoded = decodedModuleInventory(retained.modules);
+    // zlib versions may encode identical content differently. Reuse only the independently
+    // reconstructed source inventory; the release, commit and catalog must also match exactly.
+    if (decoded.equals(Buffer.from(json))) return retained.modules;
+  }
+  return deflateSync(json, { level: 9 }).toString("base64");
+}
+
+export function archivedCodeModules(
+  version,
+  execute = execFileSync,
+  previous = storedModuleHistory(),
+) {
   const runGit = (args) =>
     execute(resolveHostExecutable("git"), args, {
       cwd: repoRoot,
@@ -312,12 +382,8 @@ export function archivedCodeModules(version, execute = execFileSync) {
       const json = JSON.stringify([...new Set(modules)].sort(compareCodeUnits));
       if (Buffer.byteLength(json) > 1024 * 1024)
         throw new RangeError("Archived code inventory exceeds its ceiling");
-      return {
-        release,
-        sourceCommit,
-        catalogDigest: registry.catalogDigest,
-        modules: deflateSync(json, { level: 9 }).toString("base64"),
-      };
+      const metadata = { release, sourceCommit, catalogDigest: registry.catalogDigest };
+      return { ...metadata, modules: compressedModuleInventory(json, metadata, previous) };
     });
 }
 

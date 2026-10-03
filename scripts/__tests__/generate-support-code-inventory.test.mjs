@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { deflateSync, inflateSync } from "node:zlib";
+import { Buffer } from "node:buffer";
 
 import {
   archivedCodeModules,
@@ -21,6 +23,15 @@ function source(root, path, text) {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, text);
   return file;
+}
+
+function historicalGit(_file, args) {
+  if (args[0] === "tag") return "v1.1.9";
+  if (args[0] === "rev-parse") return "a".repeat(40);
+  if (args[0] === "ls-tree") return "packages/keiko-server/src/example.ts\n";
+  if (args[0] === "show")
+    return JSON.stringify({ typedRegistry: { catalogDigest: "d".repeat(64) } });
+  throw new Error("Unexpected Git operation");
 }
 
 describe("support report code inventory", () => {
@@ -88,6 +99,57 @@ describe("support report code inventory", () => {
     currentCommit = "e".repeat(40);
     expect(archivedCodeModules("1.1.11", execute)).toEqual(before);
     expect(archivedCodeModules("1.1.11-rc.1", execute)).toEqual(before);
+  });
+
+  it("retains equivalent historical compressed bytes across supported encoder versions", () => {
+    const [archive] = archivedCodeModules("1.1.11", historicalGit, []);
+    const canonical = inflateSync(Buffer.from(archive.modules, "base64"));
+    const previous = {
+      ...archive,
+      modules: deflateSync(canonical, { level: 1 }).toString("base64"),
+    };
+    expect(previous.modules).not.toBe(archive.modules);
+    expect(archivedCodeModules("1.1.11", historicalGit, [previous])).toEqual([previous]);
+  });
+
+  it("never retains compressed history with different content or provenance", () => {
+    const [archive] = archivedCodeModules("1.1.11", historicalGit, []);
+    const changed = {
+      ...archive,
+      modules: deflateSync('["keiko-server/customer"]', { level: 1 }).toString("base64"),
+    };
+    expect(archivedCodeModules("1.1.11", historicalGit, [changed])).toEqual([archive]);
+    const wrongCommit = { ...archive, sourceCommit: "b".repeat(40) };
+    const wrongCatalog = { ...archive, catalogDigest: "e".repeat(64) };
+    expect(archivedCodeModules("1.1.11", historicalGit, [wrongCommit])).toEqual([archive]);
+    expect(archivedCodeModules("1.1.11", historicalGit, [wrongCatalog])).toEqual([archive]);
+  });
+
+  it("rejects corrupt or oversized retained compressed history before admitting it", () => {
+    const [archive] = archivedCodeModules("1.1.11", historicalGit, []);
+    const oversized = {
+      ...archive,
+      modules: deflateSync("x".repeat(1024 * 1024 + 1)).toString("base64"),
+    };
+    expect(() => archivedCodeModules("1.1.11", historicalGit, [oversized])).toThrow();
+    expect(() =>
+      archivedCodeModules("1.1.11", historicalGit, [{ ...archive, modules: "invalid" }]),
+    ).toThrow();
+  });
+
+  it("rejects retained archives with trailing text or bytes and noncanonical base64", () => {
+    const [archive] = archivedCodeModules("1.1.11", historicalGit, []);
+    const bytes = Buffer.from(archive.modules, "base64");
+    const invalid = [
+      `${archive.modules}customer text`,
+      `${archive.modules}\n`,
+      Buffer.concat([bytes, Buffer.from("customer text")]).toString("base64"),
+      "A".repeat(2 * 1024 * 1024),
+    ];
+    for (const modules of invalid)
+      expect(() =>
+        archivedCodeModules("1.1.11", historicalGit, [{ ...archive, modules }]),
+      ).toThrow();
   });
 
   it("matches the checked-in inventory derived from current product sources", async () => {
