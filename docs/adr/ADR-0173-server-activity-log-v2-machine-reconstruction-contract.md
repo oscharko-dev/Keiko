@@ -619,6 +619,19 @@ authority. The recorded product version identifies the bundled package versions,
 version-consistency gate keeps in lockstep; persisted events retain their exact
 build/release/platform classes and registry/schema/catalog digests.
 
+New exports replace correlation, parent and opaque customer identifiers with consistent ordinal
+references local to that report. The mapping is never exported; causal joins remain intact without
+revealing the original labels. Paths, routes and prose remain redaction markers. Diagnostic modules,
+declared Error classes and technical tokens must belong to the generated product-source inventory
+or a closed runtime vocabulary; merely looking like a technical identifier does not authorize a
+string. Unknown diagnostic details are omitted or marked, with insufficient evidence reported when
+immutable failure provenance cannot be preserved. Historical schema-1 reports remain readable.
+
+The desktop exposes the same canonical report as a local JSON download in the workspace footer and
+at actionable failures. The selected incident and compressed event section travel together, so
+support can inspect the evidence without access to the customer's complete logs. Export uses the
+existing paired application session and a bounded worker; it never uploads externally by itself.
+
 The fixed bounds are 10 MiB for the entire file, 1 MiB for the incident projection, 16 MiB for the
 decoded event section, 64 KiB per event, 20,000 records, 12 JSON nesting levels, 250,000
 containers, 3,000,000 values and 256 keys per object. The shape bounds are checked on the raw text

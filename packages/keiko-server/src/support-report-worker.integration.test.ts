@@ -43,7 +43,8 @@ describe("real canonical support report worker", () => {
     const response = await runSupportReportJob(stateDir, "desktop-worker-failure");
     const report = parseSupportReport(response.reportJson);
     const analyzed = analyzeSupportReport(response.reportJson);
-    expect(report.incident.correlation.rootCorrelationId).toBe("desktop-worker-failure");
+    expect(report.incident.correlation.rootCorrelationId).toMatch(/^id\d{6}$/u);
+    expect(response.reportJson).not.toContain("desktop-worker-failure");
     expect(analyzed.selection.status).toBe("complete");
     expect(listSupportIncidents(stateDir)).toHaveLength(1);
     expect(response.reportJson).not.toContain(stateDir);
@@ -84,7 +85,7 @@ describe("real canonical support report worker", () => {
     const response = await runSupportReportJob(stateDir);
     const report = parseSupportReport(response.reportJson);
     expect(report.incident.incidentId).toBe(retained.incidentId);
-    expect(report.incident.correlation.rootCorrelationId).toBe("desktop-worker-failure");
+    expect(report.incident.correlation.rootCorrelationId).toMatch(/^id\d{6}$/u);
     expect(analyzeSupportReport(response.reportJson).selection.status).toBe("complete");
     expect(response.reportJson).not.toContain("routine-request-");
     expect(listSupportIncidents(stateDir)).toHaveLength(1);

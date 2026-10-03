@@ -172,6 +172,8 @@
     "check:activity-log": "node scripts/check-activity-log.mjs",
     "test:activity-log-scenarios": "node scripts/run-activity-log-scenarios.mjs",
     "generate:op-catalog": "node scripts/generate-op-catalog.mjs",
+    "generate:support-code-inventory": "node scripts/generate-support-code-inventory.mjs",
+    "check:support-code-inventory": "node scripts/generate-support-code-inventory.mjs --check",
     "check:package-graph": "node scripts/check-package-graph.mjs",
     "check:version-consistency": "node scripts/check-version-consistency.mjs",
     "check:release-required-workflows": "node scripts/check-release-required-workflow-names.mjs",

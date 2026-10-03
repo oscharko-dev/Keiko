@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listSupportIncidents } from "../support-incident.js";
 import {
@@ -53,7 +54,8 @@ describe("desktop canonical support report", () => {
       ),
     ).toBe(true);
     expect(analyzed.selection.status).toBe("complete");
-    expect(report.incident.correlation.rootCorrelationId).toBe("desktop-failure-1");
+    expect(report.incident.correlation.rootCorrelationId).toMatch(/^id\d{6}$/u);
+    expect(response.reportJson).not.toContain("desktop-failure-1");
     expect(response.reportJson).not.toContain(stateDir);
     expect(response.reportJson).not.toContain("unrelated-failure-2");
     expect(listSupportIncidents(stateDir)).toHaveLength(1);
@@ -78,6 +80,37 @@ describe("desktop canonical support report", () => {
     expect(analyzed.selection.status).not.toBe("complete");
     expect(listSupportIncidents(stateDir)).toHaveLength(1);
   });
+
+  it("exports joined opaque references without customer labels in headers or compressed evidence", () => {
+    const now = Date.now();
+    const process = fixtureProcess(4242, "aabbccdd");
+    const parent = "ClientAcmePayroll.xlsx";
+    const child = "ClientAcmeConfidentialChat";
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, { op: "client.diagnostic", correlationId: parent }),
+      fixtureLine(process, now + 1, {
+        op: "client.diagnostic",
+        correlationId: child,
+        parentCorrelationId: parent,
+        fields: { workspaceId: parent, repositoryId: child },
+      }),
+    ]);
+    const response = createDesktopSupportReport(stateDir, child);
+    const report = parseSupportReport(response.reportJson);
+    const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+    for (const canary of [parent, child]) {
+      expect(response.reportJson).not.toContain(canary);
+      expect(evidence).not.toContain(canary);
+    }
+    const analyzed = analyzeSupportReport(response.reportJson);
+    expect(analyzed.selection.status).toBe("complete");
+    expect(report.evidence.recordCount).toBeGreaterThanOrEqual(2);
+    expect(
+      analyzed.analysis.timelines.some((timeline) =>
+        timeline.lines.some((line) => line.parentCorrelationId !== undefined),
+      ),
+    ).toBe(true);
+  });
   it("makes a manual report select the latest retained failure instead of overflowing on unrelated traffic", () => {
     writeFailures();
     const now = Date.now();
@@ -98,9 +131,9 @@ describe("desktop canonical support report", () => {
     const response = createDesktopSupportReport(stateDir);
     const report = parseSupportReport(response.reportJson);
     const analyzed = analyzeSupportReport(response.reportJson);
-    expect(report.incident.correlation.rootCorrelationId).toBe("unrelated-failure-2");
+    expect(report.incident.correlation.rootCorrelationId).toMatch(/^id\d{6}$/u);
     expect(analyzed.selection.status).toBe("complete");
-    expect(response.reportJson).toContain("unrelated-failure-2");
+    expect(report.incident.incidentId).toBe(listSupportIncidents(stateDir).at(-1)?.incidentId);
     expect(response.reportJson).not.toContain("routine-request-2999");
     expect(listSupportIncidents(stateDir)).toHaveLength(2);
   });
