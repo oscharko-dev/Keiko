@@ -212,23 +212,6 @@ function worktreeRootForTarget(target: string): string {
   return AUTHORITY_TARGET_RELATIVE_PATH.split("/").reduce((root) => dirname(root), target);
 }
 
-async function hasEditorSession(page: Page, root: string): Promise<boolean> {
-  const response = await page.request.get("/api/editor/agent/sessions");
-  if (!response.ok()) return false;
-  const body = (await response.json()) as {
-    readonly sessions?: readonly {
-      readonly activeFile?: string;
-      readonly workspaceRoot?: string;
-    }[];
-  };
-  return (
-    body.sessions?.some(
-      (session) =>
-        session.workspaceRoot === root && session.activeFile === AUTHORITY_TARGET_RELATIVE_PATH,
-    ) ?? false
-  );
-}
-
 interface ChangesetAuditProjection {
   readonly actionType?: string;
   readonly conflictCode?: string;
@@ -249,7 +232,7 @@ async function latestChangesetAudit(page: Page): Promise<ChangesetAuditProjectio
   );
 }
 
-async function openRealBinaryEditorBridge(page: Page): Promise<void> {
+async function openRealBinaryManualEditor(page: Page): Promise<void> {
   if (!realBinaryJourney) return;
   const targets = findManagedTargetFiles(managedRoot, 4);
   expect(targets).toHaveLength(1);
@@ -265,7 +248,18 @@ async function openRealBinaryEditorBridge(page: Page): Promise<void> {
   // addressed by selector rather than by role. Expansion is also reachable via Arrow Right.
   await workspace.locator('button.tr-caret-btn[aria-label="Expand folder: src"]').click();
   await openTreeFile(workspace, AUTHORITY_TARGET_RELATIVE_PATH);
-  await expect.poll(() => hasEditorSession(page, root)).toBe(true);
+  // The ordinary Editor owns manual buffers only. Its readiness comes from the loaded
+  // document, independently of the Workbench's governed changeset bridge.
+  await expect(
+    workspace.getByRole("textbox", {
+      name: `Editor: ${AUTHORITY_TARGET_RELATIVE_PATH} in ${root}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(workspace.locator(".monaco-editor .view-lines").first()).toContainText(
+    AUTHORITY_EDITED_CONTENT.trimEnd(),
+  );
+  await expect(workspace.locator('[data-field="save"]').first()).toHaveText("Saved");
   await assertInheritedWorkspaceTrust(page);
   await activateWindow(page.locator('section[data-window-id="coding"]'));
 }
@@ -282,7 +276,11 @@ async function openRealBinaryEditorBridge(page: Page): Promise<void> {
 async function registerTrustedRepositoryProject(page: Page): Promise<void> {
   const created = await page.request.post("/api/projects", {
     headers: { "x-keiko-csrf": "1" },
-    data: { path: repositoryRoot, name: "Authority Fixture Repository" },
+    data: {
+      path: repositoryRoot,
+      name: "Authority Fixture Repository",
+      selectionIntent: "explicit-folder-selection",
+    },
   });
   expect(created.status()).toBe(201);
   const body = (await created.json()) as { readonly warning?: unknown };
@@ -445,7 +443,7 @@ async function proveLiveActivityTimeline(
   await proveUnpairedClientReadsNoQuestionText(request, new URL(page.url()).origin, runId);
   await answerVisibleQuestion(page);
   await approveRealBinaryChangeset(page);
-  await openRealBinaryEditorBridge(page);
+  await openRealBinaryManualEditor(page);
   await proveVerificationActivity(timeline);
   await expect(
     timeline.getByText(FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX, { exact: false }),
