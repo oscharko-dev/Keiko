@@ -5113,9 +5113,9 @@ export type {
   LinuxGatewayDiagnosticKind,
 } from "./diagnostics.js";
 // ─── Store fingerprint (Epic #3233 §6.2, Wave 4a) ────────────────────────────────
-// A redacted, point-in-time snapshot of one persisted store's schema/integrity state, embedded
-// in the support bundle manifest's `storeFingerprints` array. `isStoreFingerprint` is the
-// fail-closed guard the manifest assembler uses to refuse a malformed value instead of embedding
+// A redacted, point-in-time snapshot of one persisted store's schema/integrity state, as the
+// retired support bundle manifest's `storeFingerprints` array carried it. `isStoreFingerprint` is
+// the fail-closed guard the support analyzer uses to refuse a malformed value instead of trusting
 // it.
 export type { StoreFingerprint } from "./store-fingerprint.js";
 export type { isStoreFingerprint } from "./store-fingerprint.js";
