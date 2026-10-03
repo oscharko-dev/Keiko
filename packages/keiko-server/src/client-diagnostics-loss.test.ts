@@ -253,6 +253,7 @@ describe("client diagnostics loss evidence", () => {
     expect(expectActivityLogProof("client.diagnostic.line", line ?? "")).toMatchObject({
       clientKind: "window-error",
       errorKind: "internal",
+      level: "error",
       clientBufferEvicted: 3,
       clientPostsFailed: 1,
       clientErrorsSuppressed: 2,
@@ -261,6 +262,20 @@ describe("client diagnostics loss evidence", () => {
     expect(counters["client-buffer-evicted"]).toBe(3);
     expect(counters["client-post-failed"]).toBe(1);
     expect(counters["client-error-suppressed"]).toBe(2);
+  });
+
+  it("retains failed client operations at incident-triggering severity", async () => {
+    const body = JSON.stringify({
+      message: "[keiko] editor file load failed: ApiError",
+      clientTs: CLIENT_TS,
+      errorKind: "internal",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    const [line] = lines("client.diagnostic");
+    expect(expectActivityLogProof("client.diagnostic.line", line ?? "")).toMatchObject({
+      errorKind: "internal",
+      level: "error",
+    });
   });
 
   it("refuses a report whose loss block is not closed", async () => {

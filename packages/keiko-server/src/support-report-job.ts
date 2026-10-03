@@ -9,6 +9,7 @@ import {
   prepareDesktopSupportReport,
   SupportReportError,
 } from "@oscharko-dev/keiko-activity-log/reader";
+import { isValidCorrelationId } from "./correlation.js";
 import { causeChain, keikoStackFrames, errorKindOf } from "./observability/index.js";
 
 export type SupportReportJobReason =
@@ -23,7 +24,7 @@ export interface SupportReportWorkerFailure {
 export type SupportReportWorkerMessage =
   | SupportReportWorkerFailure
   | { readonly ok: true; readonly report: DesktopSupportReportResponse }
-  | { readonly kind: "prepare" };
+  | { readonly kind: "prepare"; readonly correlationId?: string | undefined };
 export interface SupportReportPreparedMessage {
   readonly kind: "prepared";
   readonly record: SupportIncidentRecord;
@@ -73,8 +74,15 @@ function reportMessageHandler(
         return;
       }
       prepareStarted = true;
+      if (
+        (value.correlationId !== undefined && !isValidCorrelationId(value.correlationId)) ||
+        (correlationId !== undefined && value.correlationId !== correlationId)
+      ) {
+        reject(new SupportReportJobError("selection-unavailable"));
+        return;
+      }
       try {
-        prepareReport(worker, stateDir, correlationId);
+        prepareReport(worker, stateDir, value.correlationId);
       } catch (error) {
         reject(error);
       }

@@ -1,7 +1,8 @@
 // Deny-list wiring for the Files BFF (`/api/files/*`). Reuses
 // `src/workspace/ignore.ts` unchanged: `isDenied` is the always-on security
-// gate that filters secret/dep/build/vcs/log entries from both tree listings
-// and previews. See ADR-0016.
+// gate for content, navigation, and mutations. The tree may show metadata-free,
+// unavailable rows for known non-secret runtime directories from an authorized
+// parent listing; secrets and their directory names remain excluded.
 
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 

@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import {
   MAX_SUPPORT_REPORT_EVENT_BYTES,
+  activityLogOperationSchema,
   supportIncidentPrivateProjection,
   supportReportFileName,
   type DesktopSupportReportResponse,
@@ -10,9 +11,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   listSupportIncidents,
+  SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   recordUserReportedIncident,
   supportIncidentSegmentFiles,
 } from "../support-incident.js";
+import { listSupportIncidentEntries } from "../support-incident-store.js";
 import { DEFAULT_SUPPORT_QUERY_LIMITS, type SupportQuerySelection } from "./support-query.js";
 import { executeLocalSupportQuery } from "./support-local-query.js";
 import {
@@ -92,12 +95,48 @@ export function prepareDesktopSupportReport(
   return existing ?? createReportIncident(stateDir, correlationId ?? randomUUID());
 }
 
-/** Validate a specific error before the owner creates a retained incident for it. */
+function recentFailureCorrelation(stateDir: string): string | undefined {
+  const now = Date.now();
+  const records = listSupportIncidentEntries(stateDir)
+    .flatMap((entry) => {
+      const record = entry.record;
+      return record !== undefined &&
+        record.expiresAtMs > now &&
+        record.createdAtMs >= now - SUPPORT_INCIDENT_WINDOW_BEFORE_MS
+        ? [record]
+        : [];
+    })
+    .reverse();
+  for (const record of records) {
+    const correlationId = record.correlation.rootCorrelationId;
+    if (correlationId === undefined) continue;
+    const query = executeLocalSupportQuery(
+      stateDir,
+      correlationSelection(correlationId),
+      REPORT_QUERY_LIMITS,
+      {
+        trigger: "export",
+        persist: false,
+      },
+    );
+    if (
+      query.result.events.some(
+        (event) =>
+          event.role === "closure" &&
+          activityLogOperationSchema(event.parsed.view.op)?.lifecycle === "failure",
+      )
+    )
+      return correlationId;
+  }
+  return undefined;
+}
+
+/** Read-only selection: validate a requested error or reuse the most recent retained failure. */
 export function validateDesktopSupportReportSelection(
   stateDir: string,
   correlationId?: string,
-): void {
-  if (correlationId === undefined) return;
+): string | undefined {
+  if (correlationId === undefined) return recentFailureCorrelation(stateDir);
   const query = executeLocalSupportQuery(
     stateDir,
     correlationSelection(correlationId),
@@ -105,6 +144,7 @@ export function validateDesktopSupportReportSelection(
     { trigger: "export", persist: false },
   );
   if (query.result.events.length === 0) throw new SupportReportError("selection-unavailable");
+  return correlationId;
 }
 
 /** Read-only composition: safe to run off the server request event loop. */
@@ -136,10 +176,10 @@ export function createDesktopSupportReport(
   stateDir: string,
   correlationId?: string,
 ): DesktopSupportReportResponse {
-  validateDesktopSupportReportSelection(stateDir, correlationId);
+  const selectedCorrelation = validateDesktopSupportReportSelection(stateDir, correlationId);
   return createPreparedDesktopSupportReport(
     stateDir,
-    prepareDesktopSupportReport(stateDir, correlationId),
-    correlationId,
+    prepareDesktopSupportReport(stateDir, selectedCorrelation),
+    selectedCorrelation,
   );
 }

@@ -1671,10 +1671,9 @@ function logClientDiagnostic(
   projectClientLoss(request.loss, extra);
   extra.completeness = "complete";
   extra.loss = "none";
-  // A timed-out user operation is a registered failure. Warning-only persistence prevents the
-  // Activity Log's existing automatic incident trigger from retaining its diagnostic window.
+  // Failed operations and browser crashes must reach the existing automatic incident trigger.
   const logger = getServerLogger();
-  const level = requestDiagnosticErrorKind(request) === "timeout" ? "error" : "warn";
+  const level = clientDiagnosticLevel(request);
   logger[level](
     activityLogEvent(
       CLIENT_DIAGNOSTIC_OPERATION,
@@ -1685,6 +1684,16 @@ function logClientDiagnostic(
       extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
     ),
   );
+}
+
+function clientDiagnosticLevel(request: ClientDiagnosticIngestRequest): "warn" | "error" {
+  const errorKind = requestDiagnosticErrorKind(request);
+  return errorKind === "timeout" ||
+    errorKind === "internal" ||
+    request.kind === "window-error" ||
+    request.kind === "unhandled-rejection"
+    ? "error"
+    : "warn";
 }
 
 function logClientComposerActivity(

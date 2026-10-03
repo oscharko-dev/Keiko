@@ -2441,6 +2441,24 @@ describe("cloneRepository", () => {
     vi.unstubAllGlobals();
   });
 
+  it("bounds folder registration so a stalled server cannot hold the launcher forever", async () => {
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    const fetchMock = vi.fn().mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const pending = createProject({ path: "/repo/app" });
+    const rejection = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+    controller.abort(new DOMException("Timed out", "TimeoutError"));
+    await rejection;
+    expect(timeout).toHaveBeenCalledWith(15_000);
+    timeout.mockRestore();
+  });
+
   it.each(["register", "clone"])(
     "preserves the %s attempt correlation and CSRF headers",
     async (operation) => {

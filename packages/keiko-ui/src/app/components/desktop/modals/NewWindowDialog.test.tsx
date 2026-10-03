@@ -862,12 +862,22 @@ describe("NewWindowDialog native directory browse", () => {
       );
       const input = await screen.findByDisplayValue("/repo");
       fireEvent.change(input, { target: { value: "/selected/project" } });
+      vi.mocked(createProject).mockResolvedValue({
+        project: { ...project(), path: "/selected/project", workspaceAvailable: true },
+      });
       fireEvent.click(
         screen.getByRole("button", { name: type === "files" ? "Open Files" : "Open Editor" }),
       );
-      expect(onConfirm).toHaveBeenCalledWith(
-        expect.objectContaining({ root: "/selected/project", rootBinding: "coding-repository" }),
+      await waitFor(() =>
+        expect(onConfirm).toHaveBeenCalledWith(
+          expect.objectContaining({ root: "/selected/project", rootBinding: "coding-repository" }),
+        ),
       );
+      if (type === "editor")
+        expect(createProject).toHaveBeenCalledWith(
+          { path: "/selected/project" },
+          expect.any(String),
+        );
     },
   );
 

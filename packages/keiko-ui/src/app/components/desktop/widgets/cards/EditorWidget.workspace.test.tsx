@@ -11,7 +11,7 @@ async function nextFrame(): Promise<void> {
     });
   });
 }
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import {
   EDITOR_VERIFICATION_KINDS,
@@ -306,6 +306,12 @@ vi.mock("./editorHotExitStore", async (importOriginal) => {
       return Promise.resolve();
     }),
   };
+});
+
+beforeEach(() => {
+  createProjectMock.mockImplementation(async ({ path }: { readonly path: string }) => ({
+    project: { path, workspaceAvailable: true },
+  }));
 });
 
 afterEach(() => {
@@ -942,7 +948,7 @@ describe("EditorWidget workspace session", () => {
     expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
   });
 
-  it("anchors a single absolute file outside the root to a containing root via openFile (#1374 AC3)", () => {
+  it("anchors a single absolute file outside the root to a containing root via openFile (#1374 AC3)", async () => {
     // Exercises the editor's openFile single-file-target contract directly: handed an absolute file
     // that does not live under the current root, it selects the file's containing directory as the
     // root and opens the basename root-relative (AC3 "selects a containing root"). The pure
@@ -952,14 +958,69 @@ describe("EditorWidget workspace session", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open absolute file outside root" }));
 
-    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/other/project");
+    await waitFor(() =>
+      expect(screen.getByTestId("runtime-root")).toHaveTextContent("/other/project"),
+    );
     expect(screen.getByTestId("runtime-file")).toHaveTextContent("main.py");
     expect(onWorkspaceChange).toHaveBeenCalledWith(
       expect.objectContaining({ root: "/other/project", file: "main.py" }),
     );
   });
 
-  it("remains mounted with the embedded tree after switching to a new root (#1374 AC4)", () => {
+  it("registers a selected plain folder before replacing the editor root", async () => {
+    let resolveProject: (value: unknown) => void = () => undefined;
+    createProjectMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveProject = resolve;
+        }),
+    );
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    expect(createProjectMock).toHaveBeenCalledWith({ path: "/next" }, expect.any(String));
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    expect(createProjectMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
+    await act(async () =>
+      resolveProject({ project: { path: "/canonical/next", workspaceAvailable: true } }),
+    );
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/canonical/next");
+  });
+
+  it("protects edits made while a new folder connection is pending", async () => {
+    let resolveProject: (value: unknown) => void = () => undefined;
+    createProjectMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveProject = resolve;
+        }),
+    );
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    await act(async () => resolveProject({ project: { path: "/next", workspaceAvailable: true } }));
+    expect(await screen.findByRole("dialog", { name: "Unsaved editor changes" })).toHaveTextContent(
+      "src/a.ts",
+    );
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("src/a.ts");
+  });
+
+  it("keeps the previous editor usable when a folder cannot acquire workspace membership", async () => {
+    createProjectMock.mockResolvedValueOnce({
+      project: { path: "/next", workspaceAvailable: false },
+    });
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    expect(await screen.findByTestId("editor-workspace-registration-notice")).toHaveTextContent(
+      "Folder could not be opened. Try again.",
+    );
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("src/a.ts");
+  });
+
+  it("remains mounted with the embedded tree after switching to a new root (#1374 AC4)", async () => {
     const onWorkspaceChange = vi.fn();
     render(<EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />);
 
@@ -969,7 +1030,7 @@ describe("EditorWidget workspace session", () => {
     // ("arbitrary folder opening …": an unavailable root renders role="alert").
     fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
 
-    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next");
+    await waitFor(() => expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next"));
     expect(screen.getByTestId("files-probe")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open next root" })).toBeEnabled();
     expect(onWorkspaceChange).toHaveBeenCalledWith(
@@ -1137,7 +1198,9 @@ describe("EditorWidget workspace session", () => {
     expect(screen.getByTestId("runtime-file")).toHaveTextContent("src/a.ts");
     fireEvent.click(screen.getByRole("button", { name: "Open absolute file outside root" }));
     fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
-    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/other/project");
+    await waitFor(() =>
+      expect(screen.getByTestId("runtime-root")).toHaveTextContent("/other/project"),
+    );
     expect(screen.getByTestId("runtime-file")).toHaveTextContent("main.py");
     expect(screen.queryByRole("button", { name: "Select src/a.ts" })).toBeNull();
   });
@@ -1157,7 +1220,7 @@ describe("EditorWidget workspace session", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
-    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next");
+    await waitFor(() => expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next"));
     expect(screen.getByTestId("runtime-file")).toHaveTextContent("");
     expect(onWorkspaceChange).toHaveBeenLastCalledWith(
       expect.objectContaining({

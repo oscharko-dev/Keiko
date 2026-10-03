@@ -53,7 +53,12 @@ class InnerWindowBodyBoundary extends Component<
     this.setState({ correlationId });
     reportClientDiagnostic(
       `[keiko] window body crashed: ${this.props.windowType}: ${clientErrorSummary(error)}`,
-      { correlationId, errorKind: "internal", errorEvidence: clientErrorEvidence(error) },
+      {
+        correlationId,
+        kind: "window-error",
+        errorKind: "internal",
+        errorEvidence: clientErrorEvidence(error),
+      },
     );
   }
 

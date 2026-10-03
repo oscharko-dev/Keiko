@@ -1,5 +1,7 @@
 "use client";
 
+import EditorSurfaceLoading from "./EditorSurfaceLoading";
+
 import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
 import dynamic from "next/dynamic";
 import {
@@ -53,6 +55,7 @@ import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
 import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
 import { EditorOutlinePanel } from "./EditorOutlinePanel";
 import { EditorEmptyState } from "./EditorEmptyState";
+import { useEditorProjectConnection } from "./useEditorProjectConnection";
 import { useRegisterEditorPaletteHost } from "../../EditorPaletteHostRegistryContext";
 import { useEditorShellActions, type EditorShellActions } from "../../EditorShellActionsContext";
 import {
@@ -130,7 +133,7 @@ const EditorRuntimeWidget = dynamic<EditorRuntimeWidgetProps>(
   () => import("./EditorRuntimeWidget"),
   {
     ssr: false,
-    loading: () => <div className="ed-host-loading" aria-hidden="true" />,
+    loading: EditorSurfaceLoading,
   },
 );
 
@@ -594,8 +597,20 @@ export function EditorWidget({
     layoutJson,
   });
   const [workspaceRoot, setWorkspaceRoot] = useState(initialRoot);
+  const [connectingProject, setConnectingProject] = useState(false);
   const [workspaceRegistrationNotice, setWorkspaceRegistrationNotice] =
     useState<WorkspaceRegistrationNoticeState | null>(null);
+  const setConnectionNotice = useCallback(
+    (message: string | null): void => {
+      setWorkspaceRegistrationNotice(message === null ? null : { root: workspaceRoot, message });
+    },
+    [workspaceRoot],
+  );
+  const connectProjectRoot = useEditorProjectConnection({
+    root: workspaceRoot,
+    onNotice: setConnectionNotice,
+    onBusy: setConnectingProject,
+  });
   const editorSettings = useEditorSettings(nonEmptyRoot(workspaceRoot));
   const editorShortcutRegistry = useMemo(
     () => resolveEffectiveKeyboardShortcuts(editorSettings.applied.keybindingOverrides),
@@ -926,32 +941,39 @@ export function EditorWidget({
     setPendingClose(null);
   }, []);
 
+  const dirtyRootCloseRef = useRef({ requestDirtyClose, dirtyFiles: dirtyFileList });
+  dirtyRootCloseRef.current = { requestDirtyClose, dirtyFiles: dirtyFileList };
+
   const openRoot = useCallback(
-    (nextRoot: string): void => {
-      const normalizedRoot = nextRoot.trim();
-      if (normalizedRoot.length === 0) return;
-      const apply = (): void => {
-        const nextLayout = editorLayoutReducer(layoutRef.current, {
-          type: "replace-root",
-          root: normalizedRoot,
-          sidebarWidth: layoutRef.current.sidebarWidth,
+    (nextRoot: string, alreadyConnected = false): void => {
+      const selectedRoot = nextRoot.trim();
+      if (selectedRoot.length === 0) return;
+      const selectConnectedRoot = (normalizedRoot: string): void => {
+        const apply = (): void => {
+          const nextLayout = editorLayoutReducer(layoutRef.current, {
+            type: "replace-root",
+            root: normalizedRoot,
+            sidebarWidth: layoutRef.current.sidebarWidth,
+          });
+          const settle = startFilesNavigationEvidence("editor project selection");
+          setWorkspaceRoot(normalizedRoot);
+          setDirtyByPane({});
+          commitLayout(nextLayout, normalizedRoot, true);
+          settle();
+        };
+        const firstPaneId =
+          editorLayoutPaneIds(layoutRef.current)[0] ?? layoutRef.current.activePaneId;
+        dirtyRootCloseRef.current.requestDirtyClose({
+          paneId: firstPaneId,
+          files: dirtyRootCloseRef.current.dirtyFiles,
+          reason: "root-change",
+          apply,
         });
-        const settle = startFilesNavigationEvidence("editor project selection");
-        setWorkspaceRoot(normalizedRoot);
-        setDirtyByPane({});
-        commitLayout(nextLayout, normalizedRoot, true);
-        settle();
       };
-      const firstPaneId =
-        editorLayoutPaneIds(layoutRef.current)[0] ?? layoutRef.current.activePaneId;
-      requestDirtyClose({
-        paneId: firstPaneId,
-        files: dirtyFileList,
-        reason: "root-change",
-        apply,
-      });
+      if (alreadyConnected) selectConnectedRoot(selectedRoot);
+      else void connectProjectRoot(selectedRoot, selectConnectedRoot);
     },
-    [commitLayout, dirtyFileList, requestDirtyClose],
+    [commitLayout, connectProjectRoot],
   );
 
   const openFile = useCallback(
@@ -962,12 +984,12 @@ export function EditorWidget({
       const target = selectWorkspaceFileTarget(nextRoot, nextFile);
       if (target === null || target.file.length === 0) return;
       const changesRoot = target.root !== workspaceRoot;
-      const apply = (): void => {
+      const apply = (connectedRoot = target.root): void => {
         const current = layoutRef.current;
         const base = changesRoot
           ? editorLayoutReducer(current, {
               type: "replace-root",
-              root: target.root,
+              root: connectedRoot,
               sidebarWidth: current.sidebarWidth,
             })
           : current;
@@ -977,20 +999,22 @@ export function EditorWidget({
           file: target.file,
         });
         const settle = startFilesNavigationEvidence("editor project selection");
-        setWorkspaceRoot(target.root);
+        setWorkspaceRoot(connectedRoot);
         if (changesRoot) setDirtyByPane({});
-        commitLayout(nextLayout, target.root, changesRoot);
+        commitLayout(nextLayout, connectedRoot, changesRoot);
         settle();
       };
       if (!changesRoot) return apply();
-      requestDirtyClose({
-        paneId: layoutRef.current.activePaneId,
-        files: dirtyFileList,
-        reason: "root-change",
-        apply,
+      void connectProjectRoot(target.root, (connectedRoot) => {
+        dirtyRootCloseRef.current.requestDirtyClose({
+          paneId: layoutRef.current.activePaneId,
+          files: dirtyRootCloseRef.current.dirtyFiles,
+          reason: "root-change",
+          apply: () => apply(connectedRoot),
+        });
       });
     },
-    [commitLayout, dirtyFileList, requestDirtyClose, workspaceRoot],
+    [commitLayout, connectProjectRoot, workspaceRoot],
   );
 
   const selectOpenFile = useCallback(
@@ -1889,7 +1913,10 @@ export function EditorWidget({
     // Unbound editor (opened without a project root, e.g. toggled from the left rail): offer the
     // native OS folder picker so the user can choose a project and start working (ADR-0118).
     return (
-      <EditorEmptyState onOpenRoot={openRoot} onWorkspaceNotice={setWorkspaceRegistrationNotice} />
+      <EditorEmptyState
+        onOpenRoot={(root) => openRoot(root, true)}
+        onWorkspaceNotice={setWorkspaceRegistrationNotice}
+      />
     );
   }
 
@@ -2069,6 +2096,8 @@ export function EditorWidget({
               onReveal={revealOutlineSymbol}
             />
             <FilesWidget
+              presentation="project"
+              openingRoot={connectingProject}
               root={workspaceRoot}
               activeFilePath={activeFile.length > 0 ? activeFile : undefined}
               openFilesDirectly

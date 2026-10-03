@@ -1100,6 +1100,7 @@ export async function createProject(
     {
       method: "POST",
       body: JSON.stringify(input),
+      signal: AbortSignal.timeout(15_000),
     },
     undefined,
     correlationId,

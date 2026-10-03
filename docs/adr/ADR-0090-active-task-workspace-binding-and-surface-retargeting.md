@@ -137,7 +137,18 @@ history is bounded, preserves Back/Forward across explicitly selected roots and
 resets when a task-bound root switches. Files titles use the resolved root and an
 empty Editor shows its project root, so neither can label another root as the
 selected project. Navigation and directory reads emit body-free client stage
-lifecycle evidence through the existing Activity Log. Legacy
+lifecycle evidence through the existing Activity Log. Explicit Editor root changes
+reuse project registration and require current workspace membership before committing
+the canonical root, including ordinary folders without Git, so local history retains
+its identity checks. A failed connection preserves the previous editor and its buffers.
+The Editor keeps a project hierarchy rooted at the selected directory; folder rows
+expand and collapse without replacing the root. Files uses directory navigation with
+Back/Forward/Up. Both views retain safe hidden and Git-ignored entries with independent
+visual semantics: hidden names are muted, Git-ignored names use the warning tone, and
+ignored directory descendants inherit the decoration. Authorized parent listings may
+show known non-secret runtime/dependency directory names as metadata-free, unavailable
+rows. Content, children, mutations, symlink targets, and secret paths retain the existing
+deny boundary; this presentation exception does not change connected-context discovery. Legacy
 repository windows that already persisted a `.keiko/.../task-workspaces/...`
 `resolvedRoot` are repaired back to their configured repository root before they
 render or produce Chat connected scopes; they must not look like the main

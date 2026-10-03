@@ -1,0 +1,67 @@
+.cmpEntry[data-hidden="true"] :global(.tr-name) {
+  color: var(--fg-dim);
+  opacity: 0.7;
+}
+
+.cmpEntry[data-git-ignored="true"] {
+  background: color-mix(in oklch, var(--warn) 7%, transparent);
+}
+
+.cmpEntry[data-git-ignored="true"] :global(.tr-name) {
+  color: var(--warn);
+}
+
+.cmpEntry[data-readable="false"] {
+  opacity: 0.6;
+}
+
+.cmpProjectRoot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 0;
+  background: var(--accent-dim);
+  color: var(--fg);
+  text-align: left;
+}
+
+.cmpRootName {
+  flex-shrink: 0;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.cmpRootPath {
+  overflow: hidden;
+  color: var(--fg-dim);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmpCaret {
+  display: flex;
+  transition: transform 120ms;
+}
+
+.cmpCaret[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.cmpUnavailable {
+  margin-left: auto;
+  color: var(--fg-dim);
+  font-size: 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmpCaret {
+    transition: none;
+  }
+}

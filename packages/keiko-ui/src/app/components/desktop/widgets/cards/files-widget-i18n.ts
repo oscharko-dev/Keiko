@@ -15,6 +15,10 @@ const EN_FILES_WIDGET_MESSAGES = {
   "git.folder.conflicted": "Folder contains {count} Git changes, including conflicts",
   "git.folder.deleted": "Folder contains {count} Git changes, including deleted files",
   "git.ignored": "Ignored by Git",
+  "tree.hidden": "Hidden",
+  "tree.connectionFailed": "Folder could not be opened. Try again.",
+  "tree.unavailable": "Unavailable",
+  "tree.projectRoot": "Project: {name}",
   "git.decorationsIncomplete":
     "Git decorations incomplete: showing only the first {count} changes.",
 } as const;
@@ -35,6 +39,10 @@ const DE_FILES_WIDGET_MESSAGES = {
   "git.folder.conflicted": "Ordner enthält {count} Git-Änderungen, einschließlich Konflikten",
   "git.folder.deleted": "Ordner enthält {count} Git-Änderungen, einschließlich gelöschter Dateien",
   "git.ignored": "Von Git ignoriert",
+  "tree.hidden": "Versteckt",
+  "tree.connectionFailed": "Ordner konnte nicht geöffnet werden. Erneut versuchen.",
+  "tree.unavailable": "Nicht verfügbar",
+  "tree.projectRoot": "Projekt: {name}",
   "git.decorationsIncomplete":
     "Git-Dekorationen unvollständig: Nur die ersten {count} Änderungen werden angezeigt.",
 } satisfies FilesWidgetMessageCatalog;

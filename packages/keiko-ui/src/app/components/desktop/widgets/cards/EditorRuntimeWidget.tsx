@@ -306,6 +306,7 @@ import {
 } from "./editorDocumentUri";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { SupportReportButton } from "../../SupportReportButton";
+import EditorSurfaceLoading from "./EditorSurfaceLoading";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
@@ -317,7 +318,7 @@ const RestoreIcon = Icons.restore;
 
 const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"), {
   ssr: false,
-  loading: () => <div className="ed-host-loading" aria-hidden="true" />,
+  loading: EditorSurfaceLoading,
 });
 
 const EditorDebugSessionHost = dynamic<

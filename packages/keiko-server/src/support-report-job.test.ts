@@ -53,6 +53,20 @@ describe("bounded desktop support-report worker", () => {
     });
   });
 
+  it("rejects a worker selection that retargets the explicitly requested error", async () => {
+    const result = runSupportReportJob("/private-report-state", "requested-failure");
+    activeWorker().emit("message", { kind: "prepare", correlationId: "different-failure" });
+    await expect(result).rejects.toMatchObject({ reason: "selection-unavailable" });
+    expect(workers.terminate).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an invalid automatically selected correlation before incident preparation", async () => {
+    const result = runSupportReportJob("/private-report-state");
+    activeWorker().emit("message", { kind: "prepare", correlationId: "private\ncontent" });
+    await expect(result).rejects.toMatchObject({ reason: "selection-unavailable" });
+    expect(workers.terminate).toHaveBeenCalledOnce();
+  });
+
   it("terminates a stalled worker at the deadline", async () => {
     vi.useFakeTimers();
     const result = runSupportReportJob("/private-report-state");

@@ -38,6 +38,7 @@ import { restoreModalFocusAfterUnlock } from "./modalFocusRestore";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
+import { useEditorProjectConnection } from "../widgets/cards/useEditorProjectConnection";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import {
   useOptionalWidgetTranslate,
@@ -1100,6 +1101,12 @@ export function NewWindowDialog({
   const [cfg, setCfg] = useState<Cfg>(() => initialCfg(fields));
   const [shown, setShown] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
+  const [connectingEditor, setConnectingEditor] = useState(false);
+  const connectEditorRoot = useEditorProjectConnection({
+    root: "",
+    onNotice: setDialogError,
+    onBusy: setConnectingEditor,
+  });
   const nativeDialogSupported = useNativeFileDialogCapability();
   const firstFieldRef = useRef<HTMLElement | null>(null);
   const dlgRef = useRef<HTMLDialogElement | null>(null);
@@ -1188,6 +1195,18 @@ export function NewWindowDialog({
             type === "files" ? "files project selection" : "editor project selection",
           )
         : undefined;
+    if (
+      type === "editor" &&
+      typeof selectedCfg.root === "string" &&
+      selectedCfg.root.trim().length > 0
+    ) {
+      if (connectingEditor) return;
+      void connectEditorRoot(selectedCfg.root.trim(), (root) => {
+        onConfirm({ ...selectedCfg, root });
+        settle?.();
+      });
+      return;
+    }
     onConfirm(withChatUntitledMarker(type, fields, selectedCfg));
     settle?.();
   };
@@ -1315,8 +1334,13 @@ export function NewWindowDialog({
             <button type="button" className="dlg-btn" onClick={onClose}>
               {translate("common.cancel")}
             </button>
-            <button type="button" className="dlg-btn dlg-primary" onClick={submit}>
-              {cta}
+            <button
+              type="button"
+              className="dlg-btn dlg-primary"
+              disabled={connectingEditor}
+              onClick={submit}
+            >
+              {connectingEditor ? translate("editor.empty.opening") : cta}
             </button>
           </div>
         ) : null}

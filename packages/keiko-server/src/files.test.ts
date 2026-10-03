@@ -1859,7 +1859,7 @@ describe("desktop files browser", () => {
     expect(listing.truncated).toBe(true);
   });
 
-  it("filters deny-listed entries from the tree (including the .env.example exception)", async () => {
+  it("filters secret entries and shows unavailable runtime directories (including the .env.example exception)", async () => {
     await writeFile(join(root, ".env"), "SECRET=1\n");
     await writeFile(join(root, ".env.example"), "SECRET=example\n");
     await writeFile(join(root, "id_rsa"), "-----BEGIN PRIVATE KEY-----\n");
@@ -1887,14 +1887,47 @@ describe("desktop files browser", () => {
     expect(names).not.toContain(".env");
     expect(names).not.toContain("id_rsa");
     expect(names).not.toContain("server.pem");
-    expect(names).not.toContain("node_modules");
-    expect(names).not.toContain(".git");
-    expect(names).not.toContain(".keiko");
-    expect(names).not.toContain(".codex");
-    expect(names).not.toContain(".claude");
-    expect(names).not.toContain(".playwright-mcp");
-    expect(names).not.toContain(".idea");
+    expect(names).toContain("node_modules");
+    expect(listing.entries.find((entry) => entry.name === "node_modules")?.readable).toBe(false);
+    expect(names).toContain(".git");
+    expect(listing.entries.find((entry) => entry.name === ".git")?.readable).toBe(false);
+    expect(names).toContain(".keiko");
+    expect(listing.entries.find((entry) => entry.name === ".keiko")?.readable).toBe(false);
+    expect(names).toContain(".codex");
+    expect(listing.entries.find((entry) => entry.name === ".codex")?.readable).toBe(false);
+    expect(names).toContain(".claude");
+    expect(listing.entries.find((entry) => entry.name === ".claude")?.readable).toBe(false);
+    expect(names).toContain(".playwright-mcp");
+    expect(listing.entries.find((entry) => entry.name === ".playwright-mcp")?.readable).toBe(false);
+    expect(names).toContain(".idea");
+    expect(listing.entries.find((entry) => entry.name === ".idea")?.readable).toBe(false);
     expect(names).not.toContain("keiko.config.json");
+  });
+
+  it("shows known excluded directory names without exposing their contents or metadata", async () => {
+    await mkdir(join(root, "node_modules"));
+    await mkdir(join(root, ".claude"));
+    await mkdir(join(root, ".ssh"));
+    await writeFile(join(root, ".env"), "SECRET=1\n");
+    const listing = await readFilesTree(store, root, "");
+    expect(listing.entries).toEqual(
+      expect.arrayContaining([
+        {
+          name: "node_modules",
+          path: "node_modules",
+          kind: "directory",
+          extension: null,
+          readable: false,
+        },
+        { name: ".claude", path: ".claude", kind: "directory", extension: null, readable: false },
+      ]),
+    );
+    expect(listing.entries.map((entry) => entry.name)).not.toContain(".ssh");
+    expect(listing.entries.map((entry) => entry.name)).not.toContain(".env");
+    await expect(readFilesTree(store, root, "node_modules")).rejects.toMatchObject({
+      code: "DENIED",
+    });
+    await expect(readFilesTree(store, root, ".claude")).rejects.toMatchObject({ code: "DENIED" });
   });
 
   it("rejects navigation into a denied subtree with 403 DENIED", async () => {

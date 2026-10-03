@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
-import { analyzeSupportReport, parseSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  analyzeSupportReport,
+  parseSupportReport,
+  prepareDesktopSupportReport,
+} from "@oscharko-dev/keiko-activity-log/reader";
 import {
   fixtureLine,
   fixtureProcess,
@@ -59,5 +63,31 @@ describe("real canonical support report worker", () => {
     const response = await runSupportReportJob(stateDir);
     expect(analyzeSupportReport(response.reportJson).selection.status).not.toBe("complete");
     expect(listSupportIncidents(stateDir)).toHaveLength(1);
+  });
+
+  it("keeps manual export focused on a retained failure under unrelated request traffic", async () => {
+    failure();
+    const retained = prepareDesktopSupportReport(stateDir, "desktop-worker-failure");
+    const now = Date.now();
+    const process = fixtureProcess(4444, "ccddeeff");
+    writeFixtureSegment(
+      stateDir,
+      segmentIdentity(process, now, 1),
+      Array.from({ length: 3000 }, (_, index) =>
+        fixtureLine(process, now + index, {
+          op: "http.request.body.received",
+          correlationId: `routine-request-${String(index)}`,
+          fields: { contentType: "application/json", receivedBytes: 2 },
+        }),
+      ),
+    );
+    const response = await runSupportReportJob(stateDir);
+    const report = parseSupportReport(response.reportJson);
+    expect(report.incident.incidentId).toBe(retained.incidentId);
+    expect(report.incident.correlation.rootCorrelationId).toBe("desktop-worker-failure");
+    expect(analyzeSupportReport(response.reportJson).selection.status).toBe("complete");
+    expect(response.reportJson).not.toContain("routine-request-");
+    expect(listSupportIncidents(stateDir)).toHaveLength(1);
+    expect(existsSync(join(stateDir, "activity-log-manifests"))).toBe(false);
   });
 });

@@ -9,6 +9,8 @@ const UpIcon = Icons.arrowUp;
 const FolderIcon = Icons.folder;
 
 interface FilesRootBarProps {
+  readonly showNavigation?: boolean;
+  readonly opening?: boolean;
   readonly navigation: FilesNavigation;
   readonly draft: string;
   readonly editable: boolean;
@@ -100,15 +102,17 @@ function RootPath(props: FilesRootBarProps): ReactNode {
         spellCheck={false}
         value={props.draft}
         readOnly={!props.editable}
+        disabled={props.opening}
         onChange={(event): void => props.onDraftChange(event.target.value)}
       />
       {props.editable ? (
         <button
           type="submit"
+          disabled={props.opening}
           className="files-root-open"
           title={t("filesWidget.rootBar.openFolderTitle")}
         >
-          {t("filesWidget.rootBar.open")}
+          {t(props.opening ? "editor.empty.opening" : "filesWidget.rootBar.open")}
         </button>
       ) : null}
     </div>
@@ -121,12 +125,13 @@ export function FilesRootBar(props: FilesRootBarProps): ReactNode {
     <form
       className={`files-root-bar ${styles.cmpRootBar}`}
       aria-label={t("filesWidget.rootBar.label")}
+      aria-busy={props.opening === true}
       onSubmit={(event): void => {
         event.preventDefault();
-        if (props.editable) props.onOpen(props.draft);
+        if (props.editable && props.opening !== true) props.onOpen(props.draft);
       }}
     >
-      <RootControls {...props} />
+      {props.showNavigation !== false ? <RootControls {...props} /> : null}
       <RootPath {...props} />
     </form>
   );

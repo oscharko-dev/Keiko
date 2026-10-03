@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listSupportIncidents } from "../support-incident.js";
 import {
   fixtureLine,
@@ -18,6 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   rmSync(stateDir, { recursive: true, force: true });
+  vi.useRealTimers();
 });
 
 function writeFailures(): void {
@@ -76,5 +77,31 @@ describe("desktop canonical support report", () => {
     ).toBe(true);
     expect(analyzed.selection.status).not.toBe("complete");
     expect(listSupportIncidents(stateDir)).toHaveLength(1);
+  });
+  it("makes a manual report select the latest retained failure instead of overflowing on unrelated traffic", () => {
+    writeFailures();
+    const now = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    createDesktopSupportReport(stateDir, "desktop-failure-1");
+    vi.setSystemTime(now + 1000);
+    createDesktopSupportReport(stateDir, "unrelated-failure-2");
+    const process = fixtureProcess(4444, "ccddeeff");
+    const noise = Array.from({ length: 3000 }, (_, index) =>
+      fixtureLine(process, now + index, {
+        op: "http.request.body.received",
+        correlationId: `routine-request-${String(index)}`,
+        fields: { contentType: "application/json", receivedBytes: 2 },
+      }),
+    );
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), noise);
+    const response = createDesktopSupportReport(stateDir);
+    const report = parseSupportReport(response.reportJson);
+    const analyzed = analyzeSupportReport(response.reportJson);
+    expect(report.incident.correlation.rootCorrelationId).toBe("unrelated-failure-2");
+    expect(analyzed.selection.status).toBe("complete");
+    expect(response.reportJson).toContain("unrelated-failure-2");
+    expect(response.reportJson).not.toContain("routine-request-2999");
+    expect(listSupportIncidents(stateDir)).toHaveLength(2);
   });
 });

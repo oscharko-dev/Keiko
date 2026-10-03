@@ -907,7 +907,7 @@ describe("FilesWidget", () => {
     render(<FilesWidget root="/repo" openFilesDirectly onOpenFile={onOpenFile} />);
 
     const row = await screen.findByRole("treeitem", { name: "ignored.log, Ignored by Git" });
-    expect(row.closest("[data-git-ignored='true']")).toHaveStyle({ opacity: "0.55" });
+    expect(row).toHaveAttribute("data-git-ignored", "true");
     expect(screen.queryByLabelText(/Git changed: ignored\.log/iu)).toBeNull();
     await userEvent.click(row);
     expect(onOpenFile).toHaveBeenCalledWith("/repo", "ignored.log");
@@ -1201,6 +1201,88 @@ describe("FilesWidget", () => {
     expect(session.replaceChat).not.toHaveBeenCalled();
   });
 
+  it("keeps the project root and siblings visible when an editor folder opens", async () => {
+    vi.mocked(fetchFilesTree).mockImplementation(async (_root, path = "") => ({
+      root: "/repo",
+      path,
+      truncated: false,
+      entries:
+        path === ""
+          ? [
+              { name: "src", path: "src", kind: "directory", extension: null, readable: true },
+              { ...treeEntryBase, name: "README.md", path: "README.md", kind: "file" },
+            ]
+          : [{ ...treeEntryBase, name: "inside.ts", path: "src/inside.ts", kind: "file" }],
+    }));
+    render(<FilesWidget root="/repo" presentation="project" />);
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^src$/i }));
+    expect(await screen.findByText("inside.ts")).toBeInTheDocument();
+    expect(screen.getByText("README.md")).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: "Project: repo" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await userEvent.click(screen.getByRole("treeitem", { name: /^src$/i }));
+    expect(screen.queryByText("inside.ts")).toBeNull();
+    expect(screen.getByText("README.md")).toBeInTheDocument();
+  });
+
+  it("distinguishes hidden directories and ignored folders and their descendants", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(availableGitStatus([gitChange("generated/", "!")]));
+    vi.mocked(fetchFilesTree).mockImplementation(async (_root, path = "") => ({
+      root: "/repo",
+      path,
+      truncated: false,
+      entries:
+        path === ""
+          ? [
+              {
+                name: ".github",
+                path: ".github",
+                kind: "directory",
+                extension: null,
+                readable: true,
+              },
+              {
+                name: "generated",
+                path: "generated",
+                kind: "directory",
+                extension: null,
+                readable: true,
+              },
+            ]
+          : [{ ...treeEntryBase, name: "inside.ts", path: "generated/inside.ts", kind: "file" }],
+    }));
+    const onOpenFile = vi.fn();
+    render(
+      <FilesWidget root="/repo" presentation="project" openFilesDirectly onOpenFile={onOpenFile} />,
+    );
+    const hidden = await screen.findByRole("treeitem", { name: ".github, Hidden" });
+    expect(hidden).toHaveAttribute("data-hidden", "true");
+    expect(hidden).not.toHaveAttribute("data-git-ignored");
+    const ignored = await screen.findByRole("treeitem", { name: "generated, Ignored by Git" });
+    expect(ignored).toHaveAttribute("data-git-ignored", "true");
+    expect(ignored).not.toHaveAttribute("data-hidden");
+    await userEvent.click(ignored);
+    const child = await screen.findByRole("treeitem", { name: "inside.ts, Ignored by Git" });
+    expect(child).toHaveAttribute("data-git-ignored", "true");
+    await userEvent.click(child);
+    expect(onOpenFile).toHaveBeenCalledWith("/repo", "generated/inside.ts");
+  });
+
+  it("does not warn about Git for an ordinary folder", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValue({
+      root: "/notes",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: ".notes.md", path: ".notes.md", kind: "file" }],
+    });
+    render(<FilesWidget root="/notes" />);
+    const row = await screen.findByRole("treeitem", { name: ".notes.md, Hidden" });
+    expect(row).not.toHaveAttribute("data-git-ignored");
+    expect(screen.queryByText("Git unavailable")).toBeNull();
+  });
+
   it("navigates back, forward and up inside a bound project without changing its root", async () => {
     vi.mocked(fetchFilesTree).mockImplementation(async (_root, path = "") => ({
       root: "/repo",
@@ -1400,7 +1482,8 @@ describe("FilesWidget", () => {
 
     render(<FilesWidget root="/repo" />);
 
-    expect(await screen.findByText("access denied")).toBeInTheDocument();
+    expect(await screen.findByText("Unable to read this folder.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
   });
 

@@ -18,7 +18,8 @@ Choose **Create error report** in the workspace footer, or beside a failed edito
 window crash, file-tree load, or degraded local-history save. Keiko downloads one canonical
 `keiko-support-v1-*.json` file. Attach that file to the support channel you use; Keiko does not
 automatically upload it or require a CLI command. A contextual button selects the originating
-correlation; the footer creates a bounded incident window for problems without a contextual button.
+correlation. The footer selects the most recent retained failure from the last 15 minutes; when no
+recent failure is retained, it creates a bounded incident window and marks missing evidence.
 
 The local paired app session authorizes the report endpoint. The browser cannot select a state
 directory. One worker performs bounded, read-only evidence scans with a 30-second deadline and a

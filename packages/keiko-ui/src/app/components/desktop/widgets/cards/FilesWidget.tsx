@@ -42,6 +42,8 @@ import {
   startFilesNavigationEvidence,
 } from "@/lib/files-navigation-evidence";
 import { FilesRootBar } from "./FilesRootBar";
+import { SupportReportButton } from "../../SupportReportButton";
+import { correlationIdOf } from "@/lib/client-error-summary";
 import { useFilesNavigation } from "./useFilesNavigation";
 import {
   GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
@@ -55,6 +57,8 @@ import {
 import { useWorkspaceWatch } from "./useWorkspaceWatch";
 import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationDetail } from "./workspace-file-events";
 import selectableTextStyles from "./shared/selectableText.module.css";
+import presentationStyles from "./FilesPresentation.module.css";
+import { ProjectTreeRoot } from "./ProjectTreeRoot";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const FolderIcon = Icons.folder;
@@ -71,6 +75,8 @@ const CopyIcon = Icons.copy;
 const TrashIcon = Icons.trash;
 
 interface FilesWidgetProps {
+  readonly presentation?: "directory" | "project";
+  readonly openingRoot?: boolean;
   readonly root?: string;
   readonly activeFilePath?: string | undefined;
   readonly openFilesDirectly?: boolean | undefined;
@@ -151,6 +157,7 @@ function gitPathFromTreePath(visibleDirectoryPath: string | null, path: string):
 }
 
 interface DirectoryState {
+  readonly correlationId?: string | undefined;
   readonly entries: readonly FilesTreeEntry[];
   readonly truncated: boolean;
   readonly loading: boolean;
@@ -424,6 +431,7 @@ function gitStatusSummary(state: GitStatusState, t: I18nTranslate): string | nul
   const status = state.status;
   if (status === null) return null;
   if (!status.available) {
+    if (status.reason === "not-a-repository") return null;
     return status.state === "unsafe"
       ? t("filesWidget.gitStatus.unsafe")
       : t("filesWidget.gitStatus.repoUnavailable");
@@ -572,6 +580,8 @@ function handleTreeMutationKey(
 
 export function FilesWidget({
   root,
+  presentation = "directory",
+  openingRoot = false,
   activeFilePath,
   openFilesDirectly = false,
   watchActive = true,
@@ -824,7 +834,8 @@ export function FilesWidget({
             entries: current[path]?.entries ?? [],
             truncated: current[path]?.truncated ?? false,
             loading: false,
-            error: errorMessage(error, t),
+            error: t("filesWidget.error.unableToReadFolder"),
+            correlationId: correlationIdOf(error),
             notice: null,
           },
         }));
@@ -1175,7 +1186,7 @@ export function FilesWidget({
 
   const openContextMenu = useCallback(
     (event: ReactMouseEvent, entry: FilesTreeEntry | null): void => {
-      if (!mutationsEnabled) return;
+      if (!mutationsEnabled || (entry?.kind === "directory" && !entry.readable)) return;
       event.preventDefault();
       event.stopPropagation();
       // Remember the row the menu opened on so focus returns there on close (GEN-UI-KEYBOARD-003).
@@ -1294,6 +1305,10 @@ export function FilesWidget({
 
   const enterDirectory = (entry: FilesTreeEntry): void => {
     if (!entry.readable) return;
+    if (presentation === "project") {
+      toggleDirectory(entry);
+      return;
+    }
     goToDirectory(entry.path);
   };
 
@@ -1496,6 +1511,26 @@ export function FilesWidget({
     activeFileChangeRef.current?.(entry.path, fileRoot);
   };
 
+  const visibilityOf = (
+    entry: FilesTreeEntry,
+  ): { hidden: boolean; ignored: boolean; label: string | undefined } => {
+    const hidden = entry.name.startsWith(".");
+    const ignored = entry.path.split("/").some((_segment, index, segments) => {
+      const path = segments.slice(0, index + 1).join("/");
+      return ignoredGitPaths.has(path) || ignoredGitPaths.has(`${path}/`);
+    });
+    const labels = [
+      hidden ? tGit("tree.hidden") : "",
+      ignored ? tGit("git.ignored") : "",
+      !entry.readable && entry.kind === "directory" ? tGit("tree.unavailable") : "",
+    ].filter(Boolean);
+    return {
+      hidden,
+      ignored,
+      label: labels.length > 0 ? [entry.name, ...labels].join(", ") : undefined,
+    };
+  };
+
   const renderDirectoryEntry = (
     entry: FilesTreeEntry,
     depth: number,
@@ -1504,6 +1539,7 @@ export function FilesWidget({
     const open = expanded.has(entry.path);
     const state = directories[entry.path];
     const gitAggregate = gitDirectoryByPath.get(entry.path);
+    const visibility = visibilityOf(entry);
     return (
       <div className="tr-row-wrap" key={entry.path}>
         <div className="tr-dir-line" style={{ paddingLeft: treeIndent(depth) }}>
@@ -1530,9 +1566,12 @@ export function FilesWidget({
             </span>
           </button>
           <button
-            className="tr-row tr-dir-enter"
+            className={`tr-row tr-dir-enter ${presentationStyles.cmpEntry}`}
             role="treeitem"
             aria-level={depth + 1}
+            aria-label={visibility.label}
+            data-hidden={visibility.hidden || undefined}
+            data-git-ignored={visibility.ignored || undefined}
             aria-selected={currentDirectoryPath === entry.path}
             data-active={currentDirectoryPath === entry.path}
             data-readable={entry.readable}
@@ -1540,7 +1579,9 @@ export function FilesWidget({
             type="button"
             draggable={mutationsEnabled && entry.readable}
             aria-disabled={entry.readable ? undefined : true}
-            aria-describedby={entry.readable ? undefined : unreadableReasonId}
+            aria-describedby={
+              entry.readable || entry.kind === "directory" ? undefined : unreadableReasonId
+            }
             aria-expanded={open}
             onPointerEnter={(event) => scheduleTreeTooltip(event, entryTip)}
             onPointerMove={moveTreeTooltip}
@@ -1571,6 +1612,9 @@ export function FilesWidget({
               <FolderIcon size={14} />
             </span>
             <span className="tr-name tr-folder">{entry.name}</span>
+            {!entry.readable && entry.kind === "directory" ? (
+              <span className={presentationStyles.cmpUnavailable}>{tGit("tree.unavailable")}</span>
+            ) : null}
             {gitAggregate !== undefined ? (
               <span
                 className="tr-badge tr-git"
@@ -1595,7 +1639,8 @@ export function FilesWidget({
 
   const renderFileEntry = (entry: FilesTreeEntry, depth: number, entryTip: string): ReactNode => {
     const change = gitChangeByPath.get(entry.path);
-    const ignored = ignoredGitPaths.has(entry.path);
+    const visibility = visibilityOf(entry);
+    const ignored = visibility.ignored;
     const decoration = change === undefined ? null : gitChangeDecoration(change);
     const labelIdBase = fileTreeItemLabelId(fileTreeItemLabelPrefix, entry.path);
     const nameId = `${labelIdBase}-name`;
@@ -1610,19 +1655,20 @@ export function FilesWidget({
     ].join(" ");
     return (
       <div
-        className="tr-row tr-file"
+        className={`tr-row tr-file ${presentationStyles.cmpEntry}`}
         key={entry.path}
         role="treeitem"
         aria-level={depth + 1}
         aria-selected={activeTreePath === entry.path}
-        aria-label={ignored ? `${entry.name}, ${tGit("git.ignored")}` : undefined}
-        aria-labelledby={ignored ? undefined : labelledBy}
+        aria-label={visibility.label}
+        aria-labelledby={visibility.label === undefined ? labelledBy : undefined}
         aria-disabled={entry.readable ? undefined : true}
         aria-describedby={entry.readable ? undefined : unreadableReasonId}
         tabIndex={0}
         data-active={activeTreePath === entry.path}
         data-readable={entry.readable}
         data-path={entry.path}
+        data-hidden={visibility.hidden || undefined}
         data-git-ignored={ignored || undefined}
         draggable={mutationsEnabled && entry.readable}
         onContextMenu={(event) => openContextMenu(event, entry)}
@@ -1643,11 +1689,7 @@ export function FilesWidget({
           event.preventDefault();
           openFileEntry(entry);
         }}
-        style={
-          ignored
-            ? { opacity: 0.55, paddingLeft: treeIndent(depth) }
-            : { paddingLeft: treeIndent(depth) }
-        }
+        style={{ paddingLeft: treeIndent(depth) }}
       >
         <span className="tr-caret tr-caret-ghost" aria-hidden="true">
           <ChevronRIcon size={11} />
@@ -1713,7 +1755,11 @@ export function FilesWidget({
       );
     }
     const unreadableTitle = t("filesWidget.tree.unreadableLinkReason");
-    const entryTip = entry.readable ? entry.path : unreadableTitle;
+    const entryTip = entry.readable
+      ? entry.path
+      : entry.kind === "directory"
+        ? tGit("tree.unavailable")
+        : unreadableTitle;
     // #2906 review (comment 3865167721): a readable symlink-to-directory (kind: "symlink",
     // symlinkTargetKind: "directory") is server-listable exactly like a real directory, so it must
     // route through renderDirectoryEntry -- which is already written generically against `entry`
@@ -1764,6 +1810,7 @@ export function FilesWidget({
             <button type="button" className="files-retry" onClick={() => retryDirectory(path)}>
               {t("filesWidget.directory.retry")}
             </button>
+            <SupportReportButton correlationId={state.correlationId} compact />
           </div>
         ) : null}
         {/* Truncation notice sits ABOVE the rows so it is visible as soon as the folder opens
@@ -1947,6 +1994,8 @@ export function FilesWidget({
 
   const renderRootBar = (): ReactNode => (
     <FilesRootBar
+      showNavigation={presentation === "directory"}
+      opening={openingRoot}
       navigation={navigation}
       draft={rootDraft}
       editable={onRootChange !== undefined}
@@ -2020,7 +2069,10 @@ export function FilesWidget({
   // error block, inline editor and load-more button are none of those. Nesting them under the tree
   // is what axe reported as a critical aria-required-children violation on a populated root (#2605).
   const renderRootTree = (): ReactNode => {
-    const { notices, rows, trailer } = directorySections(currentDirectoryPath ?? "", 0);
+    const { notices, rows, trailer } = directorySections(
+      currentDirectoryPath ?? "",
+      presentation === "project" ? 1 : 0,
+    );
     // `tr files-tree` stays on THIS element: it is the flex item that owns `overflow: auto`, and
     // the C203 rule `.files .files-tree { min-height: 0 }` is what lets it shrink below its content
     // so scrolling engages instead of the tree growing the window body. globals.css is SHA-locked,
@@ -2038,7 +2090,24 @@ export function FilesWidget({
           tabIndex={-1}
           onKeyDown={onTreeKeyDown}
         >
-          {rows}
+          {presentation === "project" ? (
+            <ProjectTreeRoot
+              root={resolvedRoot ?? apiRoot}
+              expanded={expanded.has("")}
+              onToggle={() =>
+                setExpanded((current) => {
+                  const next = new Set(current);
+                  if (next.has("")) next.delete("");
+                  else next.add("");
+                  return next;
+                })
+              }
+            >
+              {rows}
+            </ProjectTreeRoot>
+          ) : (
+            rows
+          )}
         </div>
         {trailer}
       </div>
