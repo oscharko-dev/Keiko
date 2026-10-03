@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSupportReport } from "./support-report-api";
+import { clientErrorEvidence } from "./client-error-evidence";
+import { observeFilesDirectoryRead } from "./files-navigation-evidence";
+import { bffRequestErrorKind } from "./http";
+import { setClientDiagnosticWriter } from "./client-diagnostics";
 import {
   fanOutClientDiagnostic,
   clientDiagnosticPostFailureCount,
@@ -71,6 +75,72 @@ describe("browser incident delivery before report selection", () => {
     expect(retry).toMatchObject({ correlationId, errorEvidence: diagnostic.errorEvidence });
     expect(JSON.stringify(retry)).not.toContain("customer prose");
     expect(JSON.parse(fetch.mock.calls[2]?.[1]?.body as string)).toEqual({ correlationId });
+  });
+
+  it.each(["Editor file load", "Files directory read", "File preview read"])(
+    "redelivers an offline %s failure without browser-global metadata",
+    async (surface) => {
+      const failure = new TypeError("offline customer prose");
+      const fetch = vi
+        .fn()
+        .mockRejectedValueOnce(failure)
+        .mockResolvedValueOnce(new Response(null, { status: 204 }))
+        .mockResolvedValueOnce(reportResponse());
+      vi.stubGlobal("fetch", fetch);
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      fanOutClientDiagnostic(`${surface} failed: TypeError`, {
+        correlationId,
+        errorKind: bffRequestErrorKind(failure),
+        errorEvidence: clientErrorEvidence(failure),
+      });
+      await vi.waitFor(() => expect(clientDiagnosticPostFailureCount()).toBe(1));
+      expect(await createSupportReport(correlationId)).toEqual(report);
+      expect(fetch.mock.calls.map(([path]) => path)).toEqual([
+        "/api/diagnostics/client",
+        "/api/diagnostics/client",
+        "/api/diagnostics/report",
+      ]);
+      const replay = JSON.parse(fetch.mock.calls[1]?.[1]?.body as string) as unknown;
+      expect(replay).toMatchObject({
+        correlationId,
+        errorKind: "unavailable",
+        errorEvidence: {
+          errorClass: "TypeError",
+          frames: [],
+          causeChain: [],
+        },
+      });
+      expect(JSON.stringify(replay)).not.toContain("customer prose");
+      expect(JSON.parse(fetch.mock.calls[2]?.[1]?.body as string)).toEqual({ correlationId });
+    },
+  );
+
+  it("replays the actual Files read failure after the client diagnostic budget was exhausted", async () => {
+    const fetch = vi.fn((path: string, _init: RequestInit): Promise<Response> =>
+      Promise.resolve(
+        path.endsWith("/report") ? reportResponse() : new Response(null, { status: 204 }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    setClientDiagnosticWriter(fanOutClientDiagnostic);
+    for (let index = 0; index < 20; index += 1) fanOutClientDiagnostic("bounded prior failure");
+    await expect(
+      observeFilesDirectoryRead(
+        (): Promise<never> => Promise.reject(new TypeError("customer path and content")),
+        { correlationId, settle: (): void => undefined },
+      ),
+    ).rejects.toThrow("Workspace directory read failed");
+    const beforeReport = fetch.mock.calls.length;
+    expect(await createSupportReport(correlationId)).toEqual(report);
+    expect(fetch.mock.calls.slice(beforeReport).map(([path]) => path)).toEqual([
+      "/api/diagnostics/client",
+      "/api/diagnostics/report",
+    ]);
+    const replay = JSON.parse(fetch.mock.calls[beforeReport]?.[1]?.body as string) as unknown;
+    expect(replay).toMatchObject({ correlationId, message: "Workspace directory read failed" });
+    expect(JSON.stringify(replay)).not.toContain("customer path and content");
   });
 
   it("redelivers a client-throttled boundary failure once through the bounded report budget", async () => {

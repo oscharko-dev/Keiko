@@ -439,12 +439,17 @@ const REPORT_RETRY_LIMIT = 6;
 const reportDeliveries = new Map<string, ReportDelivery>();
 let reportRetryWindow = freshPostWindow();
 
+// Contextual file/folder failures need the same exact-id replay as uncaught browser failures:
+// their original request may fail before the BFF can retain any evidence. Routine lifecycle
+// reports remain unretained; only already-projected failure evidence enters this bounded cache.
 function browserReportCorrelation(meta: ClientDiagnosticMeta | undefined): string | undefined {
   if (meta === undefined) return undefined;
   if (
     meta.kind !== "window-error" &&
     meta.kind !== "unhandled-rejection" &&
-    meta.renderFailure === undefined
+    meta.renderFailure === undefined &&
+    meta.errorKind === undefined &&
+    meta.errorEvidence === undefined
   )
     return undefined;
   return validCorrelationId(meta.correlationId);
