@@ -302,20 +302,13 @@ function rotateEntries(
   return [...entries.slice(offset), ...entries.slice(0, offset)];
 }
 
-function orderBudgetGroup(
-  entries: readonly SharedEventSourceEntry[],
-  slots: number,
-  priority: "essential" | "background",
-  rotate: boolean,
-): SharedEventSourceEntry[] {
-  return rotate
-    ? rotateEntries(entries, slots, priority)
-    : [...entries.filter(hasLease), ...entries.filter((entry) => !hasLease(entry))];
+function retainLeasedEntries(entries: readonly SharedEventSourceEntry[]): SharedEventSourceEntry[] {
+  return [...entries.filter(hasLease), ...entries.filter((entry) => !hasLease(entry))];
 }
 
 function selectBudgetEntries(
   entries: readonly SharedEventSourceEntry[],
-  rotate: boolean,
+  order: typeof rotateEntries,
 ): Set<SharedEventSourceEntry> {
   const pinned = entries.filter((entry) => !replayableEntry(entry) && hasLease(entry));
   const essential = entries.filter(
@@ -327,17 +320,20 @@ function selectBudgetEntries(
   return new Set(
     [
       ...pinned,
-      ...orderBudgetGroup(essential, essentialSlots, "essential", rotate),
-      ...orderBudgetGroup(background, backgroundSlots, "background", rotate),
+      ...order(essential, essentialSlots, "essential"),
+      ...order(background, backgroundSlots, "background"),
     ].slice(0, MAX_SHARED_CONNECTIONS),
   );
 }
 
 // Keep healthy leases stable between contention ticks. Essential streams precede recoverable
 // background metadata; active streams without replay retain their connection until completion.
-function refreshStreamBudget(rotate = false): void {
+function refreshStreamBudget(mode: "retain" | "rotate" = "retain"): void {
   const entries = eligibleEntries();
-  const selected = selectBudgetEntries(entries, rotate);
+  const selected = selectBudgetEntries(
+    entries,
+    mode === "rotate" ? rotateEntries : retainLeasedEntries,
+  );
   for (const entry of sourcesByUrl.values()) {
     if (!selected.has(entry) && hasLease(entry)) suspendEntry(entry);
   }
@@ -346,7 +342,7 @@ function refreshStreamBudget(rotate = false): void {
     clearBudgetTimer();
     return;
   }
-  budgetTimer ??= window.setInterval(() => refreshStreamBudget(true), STREAM_LEASE_MS);
+  budgetTimer ??= window.setInterval(() => refreshStreamBudget("rotate"), STREAM_LEASE_MS);
 }
 
 function reconcileCapacity(backgroundStreamsSuspended: boolean): void {

@@ -18,14 +18,13 @@ export interface EditorBufferOwnership {
 
 function mintCapability(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return btoa(String.fromCharCode(...bytes))
+  return btoa(String.fromCodePoint(...bytes))
     .replaceAll("+", "-")
     .replaceAll("/", "_")
-    .replace(/=+$/, "");
+    .slice(0, -1);
 }
 
-function readTimestamp(value: unknown): number {
-  const updatedAt = value ?? 0;
+function readTimestamp(updatedAt: unknown = 0): number {
   if (typeof updatedAt !== "number" || !Number.isSafeInteger(updatedAt) || updatedAt < 0)
     throw new TypeError("Invalid buffer ownership");
   return updatedAt;
@@ -73,7 +72,7 @@ function candidateKeys(sessionId: string): readonly string[] {
     const candidate = window.localStorage.key(index);
     if (candidate?.startsWith(key + ":publisher:") === true) siblings.push(candidate);
   }
-  return [key, ...siblings.sort()];
+  return [key, ...siblings.sort((left, right) => left.localeCompare(right))];
 }
 
 function acquireLock(key: string): Promise<(() => void) | null> {

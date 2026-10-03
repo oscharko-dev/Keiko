@@ -66,6 +66,7 @@ describe("durable passive buffer ownership", () => {
     { capability: "invalid", dirtyFiles: ["a.ts"] },
     { capability: "a".repeat(43), dirtyFiles: ["../outside.ts"] },
     { capability: "a".repeat(43), dirtyFiles: [17] },
+    { capability: "a".repeat(43), dirtyFiles: ["a.ts"], updatedAt: null },
   ])("refuses malformed durable ownership rather than replacing its guard", async (record) => {
     const key = "keiko.editor.buffer-safety.v1:" + snapshot.sessionId;
     window.localStorage.setItem(key, JSON.stringify(record));
