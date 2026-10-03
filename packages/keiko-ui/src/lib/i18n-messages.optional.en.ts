@@ -1293,8 +1293,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "grounded.inspection.searches": "Search operations",
   "grounded.inspection.selectedReads": "Read for this answer",
   "grounded.inspection.excerptBytes": "Selected excerpt size",
-  "grounded.inspection.input": "Model input",
-  "grounded.inspection.output": "Model output",
+  "grounded.inspection.input": "Model budget: input",
+  "grounded.inspection.output": "Model budget: output",
+  "grounded.inspection.modelBudgetHint":
+    "These are budget counters, capped at the planned model budget. The conversation context shows the measured or estimated complete input.",
   "grounded.inspection.rerank": "Rerank",
   "grounded.inspection.duration": "Response duration",
   "grounded.inspection.timeLimit": "Source search time limit",

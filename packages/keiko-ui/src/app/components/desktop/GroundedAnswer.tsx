@@ -351,6 +351,7 @@ function ContextPackSummary({
         {t("grounded.inspection.readHint", { max: formatCap(contextPack.budget.filesReadMax) })}
       </p>
       <p className="grounded-meta">{t("grounded.inspection.timeHint")}</p>
+      <p className="grounded-meta">{t("grounded.inspection.modelBudgetHint")}</p>
       {contextPack.rankingSummary === undefined ? null : (
         <RankingRationale summary={contextPack.rankingSummary} />
       )}

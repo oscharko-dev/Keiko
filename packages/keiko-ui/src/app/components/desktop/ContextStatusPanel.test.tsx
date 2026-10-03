@@ -96,7 +96,7 @@ describe("ContextStatusPanel", () => {
     expect(meta).toHaveTextContent("34.0k est. source tokens");
     expect(meta).toHaveTextContent("Moderate pressure");
     expect(meta).toHaveTextContent("Source groups: 2");
-    expect(meta).toHaveTextContent("Compaction active");
+    expect(meta).toHaveTextContent("Conversation history compaction used");
   });
 
   it("renders the token total, pressure label, and compaction status as aggregate rows", () => {
@@ -112,15 +112,15 @@ describe("ContextStatusPanel", () => {
     expect(text).toContain("34.0k tok");
     expect(text).toContain("Budget pressure");
     expect(text).toContain("Moderate");
-    expect(text).toContain("Compaction");
-    expect(text).toContain("Compaction active");
+    expect(text).toContain("Conversation history compaction");
+    expect(text).toContain("Conversation history compaction used");
   });
 
   it("shows Inactive when compaction did not fire", () => {
     const { container } = render(
       <ContextStatusPanel contextSummary={summary({ compactionActive: false })} />,
     );
-    expect(container.textContent).toContain("Compaction inactive");
+    expect(container.textContent).toContain("No conversation history compaction");
   });
 
   it("renders only lanes with a count > 0, humanized, with the integer count", () => {

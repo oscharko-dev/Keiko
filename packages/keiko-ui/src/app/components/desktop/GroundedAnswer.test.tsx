@@ -851,9 +851,9 @@ describe("GroundedAnswer", () => {
     expect(region.textContent).toContain("Selected excerpt size");
     expect(region.textContent).toContain("12.1 KB / 128.0 KB");
     // uiux-fix F051 C318: token counts are thousands-separated for readability.
-    expect(region.textContent).toContain("Model input");
+    expect(region.textContent).toContain("Model budget: input");
     expect(region.textContent).toContain("1,500 / 32,000 tokens");
-    expect(region.textContent).toContain("Model output");
+    expect(region.textContent).toContain("Model budget: output");
     expect(region.textContent).toContain("400 / 4,096 tokens");
     expect(region.textContent).toContain("Rerank");
     expect(region.textContent).toContain("0 / 0 calls");

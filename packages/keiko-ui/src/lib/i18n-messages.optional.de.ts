@@ -1345,8 +1345,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "grounded.inspection.searches": "Suchvorgänge",
   "grounded.inspection.selectedReads": "Für die Antwort gelesen",
   "grounded.inspection.excerptBytes": "Größe ausgewählter Auszüge",
-  "grounded.inspection.input": "Modell-Eingabe",
-  "grounded.inspection.output": "Modell-Ausgabe",
+  "grounded.inspection.input": "Modellbudget: Eingabe",
+  "grounded.inspection.output": "Modellbudget: Ausgabe",
+  "grounded.inspection.modelBudgetHint":
+    "Dies sind Budgetzähler, begrenzt auf das geplante Modellbudget. Der Gesprächskontext zeigt die gemessene oder geschätzte vollständige Eingabe.",
   "grounded.inspection.rerank": "Neusortierungen",
   "grounded.inspection.duration": "Antwortdauer",
   "grounded.inspection.timeLimit": "Suchzeitlimit",
