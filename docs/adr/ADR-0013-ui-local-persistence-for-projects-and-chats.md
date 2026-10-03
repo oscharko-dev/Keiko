@@ -243,11 +243,12 @@ database file or symlinked data directory.
 The default app-data path remains `~/.keiko/keiko-ui.db`. All precedence branches validate the
 joined database filename and SQLite's `-wal`, `-shm`, and `-journal` siblings. The shared
 `keiko-security/fs-hardening` preflight rejects symlinks, non-regular or multiply linked leaves,
-and symlinked ancestors before directory creation, SQLite open, or permission tightening. Both UI
-and memory database factories recheck before each open, including corruption recovery, and emit a
+and symlinked ancestors before directory creation, SQLite open, or permission tightening. UI, memory and local-knowledge database factories recheck before each open, including corruption recovery, and emit a
 body-free `sqlite.state-path.refused` event when a configured sink is available. This prevents
 pre-existing repository-planted redirects; Node's pathname-only SQLite API does not provide an
-atomic guarantee against concurrent replacement by the same operating-system user.
+atomic guarantee against concurrent replacement by the same operating-system user. The fixed,
+root-owned macOS `/var` and `/tmp` aliases to `/private` are accepted; application-created links
+below them are still refused.
 
 ### D5 — Schema, PRAGMA user_version, and migration runner
 

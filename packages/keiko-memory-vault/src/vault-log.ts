@@ -68,7 +68,7 @@ export type MemoryVaultLogKeySource = "env" | "keychain" | "keyfile";
 // (#2906 KEIKO-0713 / KEIKO-0877). Never a memory body, a tag, a scope coordinate, a vault
 // key, or a filesystem path.
 export interface MemoryVaultLogExtra {
-  readonly store?: "ui" | "memory-vault" | undefined;
+  readonly store?: "ui" | "memory-vault" | "local-knowledge" | undefined;
   readonly keySource?: MemoryVaultLogKeySource | undefined;
   readonly reopened?: boolean | undefined;
   readonly fromScope?: "plaintext" | undefined;

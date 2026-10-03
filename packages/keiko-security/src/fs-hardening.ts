@@ -94,7 +94,7 @@ const SQLITE_STATE_PATH_REFUSED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["ui", "memory-vault"],
+      values: ["ui", "memory-vault", "local-knowledge"],
     },
     failureKind: {
       type: "string",
@@ -112,7 +112,7 @@ const SQLITE_STATE_PATH_REFUSED = defineActivityLogOperation({
 });
 
 interface SqliteStatePathFields {
-  readonly store: "ui" | "memory-vault";
+  readonly store: "ui" | "memory-vault" | "local-knowledge";
   readonly failureKind: SqliteStatePathFailure;
 }
 type SqliteStatePathEvent = ReturnType<
@@ -120,7 +120,7 @@ type SqliteStatePathEvent = ReturnType<
 >;
 
 interface SqliteStatePathOptions {
-  readonly store: "ui" | "memory-vault";
+  readonly store: "ui" | "memory-vault" | "local-knowledge";
   readonly sink?: { readonly write: (event: SqliteStatePathEvent) => void } | undefined;
 }
 
@@ -147,10 +147,23 @@ function sqlitePathStat(path: string): BigIntStats | undefined {
 function verifySqliteAncestors(path: string): void {
   for (const ancestor of directoryChain(dirname(resolve(path)))) {
     const stat = sqlitePathStat(ancestor);
+    // macOS owns these fixed root aliases. Descendants are still checked individually;
+    // repository-created links (including links below the system temporary root) are refused.
+    if (isMacSystemAlias(ancestor, stat)) continue;
     if (stat !== undefined && (!stat.isDirectory() || stat.isSymbolicLink())) {
       throw new SqliteStatePathError("unsafe-ancestor");
     }
   }
+}
+
+function isMacSystemAlias(path: string, stat: BigIntStats | undefined): boolean {
+  return (
+    process.platform === "darwin" &&
+    (path === "/var" || path === "/tmp") &&
+    stat?.isSymbolicLink() === true &&
+    stat.uid === 0n &&
+    realpathSync(path) === `/private${path}`
+  );
 }
 
 function verifySqlitePath(path: string): void {

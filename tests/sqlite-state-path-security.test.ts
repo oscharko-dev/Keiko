@@ -17,6 +17,7 @@ import { resolveUiDbPath } from "../packages/keiko-server/src/store/paths.js";
 import { openMemoryDatabase } from "../packages/keiko-memory-vault/src/db.js";
 import { resolveMemoryDbPath } from "../packages/keiko-memory-vault/src/paths.js";
 import { TEST_CIPHER } from "../packages/keiko-memory-vault/src/_support.js";
+import { openKnowledgeStore } from "../packages/keiko-local-knowledge/src/store.js";
 
 import { SqliteStatePathError } from "@oscharko-dev/keiko-security/fs-hardening";
 import {
@@ -73,6 +74,48 @@ const stores = [
     resolve: (state: string): string => resolveMemoryDbPath(state, {}),
   },
 ] as const;
+
+describe("local knowledge SQLite path authority", (): void => {
+  it.each(["ancestor", "leaf", "hard-link", "-wal", "-shm", "-journal"])(
+    "refuses a planted %s before changing external state",
+    (shape): void => {
+      const { state, outside } = fixture();
+      const target = join(outside, "capsules.db");
+      const external = new DatabaseSync(target);
+      external.exec("CREATE TABLE sentinel(value TEXT)");
+      external.close();
+      const before = readFileSync(target);
+      const path = join(state, "local-knowledge", "capsules.db");
+      if (shape === "ancestor") symlinkSync(outside, join(state, "local-knowledge"));
+      else {
+        mkdirSync(join(state, "local-knowledge"));
+        if (shape === "hard-link") linkSync(target, path);
+        else symlinkSync(target, `${path}${shape === "leaf" ? "" : shape}`);
+      }
+      const events: unknown[] = [];
+      expect(() =>
+        openKnowledgeStore({
+          dbPath: path,
+          logSink: {
+            write: (event) => {
+              events.push(event);
+            },
+          },
+        }),
+      ).toThrow(SqliteStatePathError);
+      expect(readFileSync(target)).toEqual(before);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        op: "sqlite.state-path.refused",
+        extra: {
+          store: "local-knowledge",
+          failureKind: shape === "ancestor" ? "unsafe-ancestor" : "unsafe-target",
+        },
+      });
+      expect(JSON.stringify(events)).not.toContain(outside);
+    },
+  );
+});
 describe.each(stores)("$name SQLite path authority", (store): void => {
   it.each(["", "-wal", "-shm", "-journal"])(
     "refuses planted %s symlink before SQLite or chmod touches the target",
