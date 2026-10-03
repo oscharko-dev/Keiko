@@ -19,6 +19,7 @@ import {
   supportIncidentPrivateProjection,
   supportReportFileName,
   type SupportIncidentRecord,
+  type SupportIncidentDescriptorRecord,
   type SupportReport,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -29,13 +30,15 @@ import {
 import {
   createFileServerLogSink,
   reportServerLogFailure,
-  recordUserReportedIncident,
   listSupportIncidents,
   readSupportIncident,
   supportIncidentSegmentFiles,
   type ServerLogSink,
 } from "@oscharko-dev/keiko-activity-log";
 import {
+  prepareManualSupportReportIncident,
+  readManualSupportReportEvidence,
+  DesktopSupportReportPreparationError,
   analyzeSupportReport,
   buildSupportReport,
   describeErrorKind,
@@ -134,23 +137,22 @@ function createdIncident(
   selector: SupportSelectorArgs | undefined,
   correlationId: string,
   io: CliIo,
-): SupportIncidentRecord {
+): SupportIncidentDescriptorRecord {
   if (selector?.defectFingerprint !== undefined)
     throw new SupportReportError("selection-unavailable");
-  const creation = recordUserReportedIncident(stateDir, {
-    correlationId: selector?.correlationId ?? correlationId,
-  });
-  if (creation.status === "rejected")
-    io.err(`keiko support export: the incident was not recorded (${creation.reason})\n`);
-  if (creation.status === "rejected" || creation.record === undefined)
+  try {
+    return prepareManualSupportReportIncident(stateDir, selector?.correlationId ?? correlationId);
+  } catch (error) {
+    if (!(error instanceof DesktopSupportReportPreparationError)) throw error;
+    io.err(`keiko support export: the incident was not recorded (${error.reason})\n`);
     throw new SupportReportError("selection-unavailable");
-  return creation.record;
+  }
 }
 
 // A window that cannot be read whole still yields an honest report: its incident is described by
 // its segment references alone and is explicitly insufficient with the closed reason.
 function reportIncident(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   stateDir: string,
   selected?: SupportQueryResult,
 ): SupportReport["incident"] {
@@ -203,17 +205,19 @@ async function makeReport(
   const record = existing ?? createdIncident(stateDir, args.selector, correlationId, io);
   const query =
     selected ??
-    (await selectionQuery(
-      {
-        incidentId: record.incidentId,
-        correlationId: undefined,
-        defectFingerprint: undefined,
-        filter: {},
-      },
-      stateDir,
-      io,
-      correlationId,
-    ));
+    ("slotIndex" in record
+      ? await selectionQuery(
+          {
+            incidentId: record.incidentId,
+            correlationId: undefined,
+            defectFingerprint: undefined,
+            filter: {},
+          },
+          stateDir,
+          io,
+          correlationId,
+        )
+      : readManualSupportReportEvidence(stateDir, record));
   return buildSupportReport(
     reportIncident(
       record,

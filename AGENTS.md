@@ -582,7 +582,9 @@ the `role` discovery gave each alias (`chat`, `embedding`, `voice`, `rerank`, `u
 counts. The `inspected` `chat.context.management` line also carries the meter reading's optional
 counts: stored and projected history, knowledge-source tokens, the sent and available reference
 counts, the last knowledge request (measured and estimated), the system, summary and message shares,
-the automatic-compaction trigger, and the assumed-window and pending-probe flags.
+the automatic-compaction trigger, and the assumed-window and pending-probe flags. Grounded
+readings also carry the conversation lane budget and unused source capacity separately; a
+conversation checkpoint is validated against that lane, not against the entire model window.
 `search.entailment.judged` records, per grounded answer the judge read, the judged, unsupported and
 undecided claim counts, so the displayed "N unsupported claims" is reconstructable, and
 `hiddenProseClaimCount` counts the claims it could not judge because bracketed prose was stripped.
@@ -603,6 +605,9 @@ Before you read code, form a hypothesis, or ask a human for a screenshot, read w
 already recorded:
 
 1. **Get the artifact.** Use `keiko support export --incident <id>` or a correlation selector.
+   Manual UI and CLI export must also work at retained incident capacity through the canonical
+   transient descriptor, without evicting incidents or widening retention. UI export requires an
+   authenticated app session; scoped-cookie refresh reuses its verified bearer and absolute expiry.
    Received evidence is one canonical private report; raw logs, legacy open bundles and inclusion
    flags are not accepted at the support-report boundary. For local debugging, use
    `keiko support query --correlation-id <id> --json` on the existing Activity Log.

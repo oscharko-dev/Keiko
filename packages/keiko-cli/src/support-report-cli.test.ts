@@ -21,7 +21,12 @@ import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
+import {
+  closeFileServerLogSinks,
+  MAX_SUPPORT_INCIDENTS,
+  listSupportIncidents,
+  recordUserReportedIncident,
+} from "@oscharko-dev/keiko-activity-log";
 import {
   ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
   analyzeLogText,
@@ -307,6 +312,63 @@ async function withProductStack<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 describe("support report CLI and private publication", () => {
+  it("exports an honest manual window at a full candidate quota without a selector", async () => {
+    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1) {
+      expect(
+        recordUserReportedIncident(stateDir, { correlationId: `full-manual-${String(slot)}` })
+          .status,
+      ).toBe("created");
+    }
+    const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
+    const destination = join(root, "manual-quota-report");
+    const captured = capture();
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", destination],
+      captured.io,
+      {},
+      { cwd: root, controlActivityStateDir: controlStateDir },
+    );
+    expect(code).toBe(0);
+    const filename = readdirSync(destination).find((entry) => entry.endsWith(".json"));
+    if (filename === undefined) throw new TypeError("Missing manual quota report");
+    const reportJson = readSupportReportFile(join(destination, filename));
+    const analyzed = analyzeSupportReport(reportJson);
+    expect(analyzed.selection.status).toBe("complete");
+    expect(
+      analyzed.analysis.timelines
+        .flatMap((timeline) => timeline.lines)
+        .some((line) => line.op === "client.diagnostic"),
+    ).toBe(true);
+    expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+      retainedIds,
+    );
+    expect(parseSupportReport(reportJson).incident.pin.status).toBe("rejected");
+  });
+
+  it("exports the selected retained evidence at a full candidate quota without a browser session", async () => {
+    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1) {
+      expect(
+        recordUserReportedIncident(stateDir, { correlationId: `full-${String(slot)}` }).status,
+      ).toBe("created");
+    }
+    const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
+    const destination = join(root, "quota-report");
+    const exported = await runExport(destination);
+    expect(exported.code).toBe(0);
+    const filename = readdirSync(destination).find((entry) => entry.endsWith(".json"));
+    if (filename === undefined) throw new TypeError("Missing quota report");
+    const reportJson = readSupportReportFile(join(destination, filename));
+    expect(
+      analyzeSupportReport(reportJson)
+        .analysis.timelines.flatMap((timeline) => timeline.lines)
+        .some((line) => line.op === "client.diagnostic"),
+    ).toBe(true);
+    expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+      retainedIds,
+    );
+    expect(parseSupportReport(reportJson).incident.pin.status).toBe("rejected");
+  });
+
   it("assesses a historical selected correlation closure rather than the export-time window", async () => {
     seedGatewayFailure(75 * 60_000);
     await exportReport();

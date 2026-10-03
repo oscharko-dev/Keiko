@@ -147,6 +147,40 @@ describe("Chat context window breakdown", () => {
     expect(knowledge).toHaveTextContent("25%");
   });
 
+  it("explains a grounded conversation lane separately from available source capacity", () => {
+    const panel = openGroundedPanel({
+      ...groundedStatus(),
+      conversationInputBudgetTokens: 8_000,
+      autoCompactionAtTokens: 8_052,
+      contextWindowTokens: 128_000,
+      inputBudgetTokens: 116_000,
+      reservedOutputTokens: 8_000,
+      safetyMarginTokens: 4_000,
+      segments: [
+        { id: "system", tokens: 310 },
+        { id: "messages", tokens: 3_871, count: 4 },
+        { id: "knowledge", tokens: 542, count: 4 },
+        { id: "free", tokens: 3_329 },
+        { id: "compaction-buffer", tokens: 800 },
+        { id: "source-capacity", tokens: 107_148 },
+        { id: "output-reserve", tokens: 8_000 },
+        { id: "safety-margin", tokens: 4_000 },
+      ],
+      estimatedInputTokens: 4_723,
+    });
+    expect(within(panel).getByText("Additional source capacity")).toBeInTheDocument();
+    expect(within(panel).getByText("Conversation headroom")).toBeInTheDocument();
+    expect(
+      within(panel).getByText(
+        "Keiko compacts the conversation at 90% of its 8,000-token lane. Source capacity is separate.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(panel).getByText("3,329 conversation tokens until automatic compaction."),
+    ).toBeInTheDocument();
+    expect(within(panel).queryByText(/90% of usable input capacity/)).toBeNull();
+  });
+
   it("warns when references were left out and states the measured request size", () => {
     const panel = openGroundedPanel();
     expect(within(panel).getByRole("note")).toHaveTextContent(
@@ -510,6 +544,33 @@ describe("Chat context request diagnostics", () => {
       />,
     );
     expect(contextApi.fetch).toHaveBeenCalledTimes(requests);
+  });
+
+  it("refreshes when connected sources change before another message is sent", async () => {
+    const session = contextSession();
+    if (session.activeChat === undefined) throw new Error("missing fixture chat");
+    const view = render(<ChatContextMeterContainer session={session} />);
+    await screen.findByRole("button", { name: /approximately 80% used/ });
+    contextApi.fetch.mockResolvedValue(status(1_000));
+    view.rerender(
+      <ChatContextMeterContainer
+        session={{
+          ...session,
+          activeChat: {
+            ...session.activeChat,
+            connectedScopes: [
+              {
+                kind: "workspace-root",
+                relativePaths: [],
+                connectedAtMs: 2,
+              },
+            ],
+          },
+        }}
+      />,
+    );
+    await screen.findByRole("button", { name: /approximately 10% used/ });
+    expect(contextApi.fetch).toHaveBeenCalledTimes(2);
   });
 
   it("reports a correlated status failure without its response body or chat identity", async () => {

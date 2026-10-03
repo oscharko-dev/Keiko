@@ -61,14 +61,19 @@ function ContextMetrics({ status }: { readonly status: ChatContextStatusWire }):
 // Input shares use the design system's categorical data colours; space that is not input (free,
 // compaction buffer, reserves) is drawn neutral or hatched, never distinguished by colour alone.
 
-function segmentLabel(t: I18nTranslate, segment: ChatContextSegmentWire): string {
+function segmentLabel(
+  t: I18nTranslate,
+  segment: ChatContextSegmentWire,
+  grounded: boolean,
+): string {
   const labels: Record<ChatContextSegmentWire["id"], string> = {
     system: t("chat.context.segment.system"),
     summary: t("chat.context.segment.summary"),
     messages: t("chat.context.segment.messages"),
     knowledge: t("chat.context.segment.knowledge"),
-    free: t("chat.context.segment.free"),
+    free: t(grounded ? "chat.context.segment.conversationFree" : "chat.context.segment.free"),
     "compaction-buffer": t("chat.context.segment.compactionBuffer"),
+    "source-capacity": t("chat.context.segment.sourceCapacity"),
     "output-reserve": t("chat.context.outputReserve"),
     "safety-margin": t("chat.context.safetyMargin"),
   };
@@ -138,7 +143,7 @@ function SegmentRow({
     <li className={styles.cmpLegendRow} data-segment={segment.id}>
       <span className={styles.cmpSwatch} data-segment={segment.id} aria-hidden="true" />
       <span className={styles.cmpLegendLabel}>
-        {segmentLabel(t, segment)}
+        {segmentLabel(t, segment, status.conversationInputBudgetTokens !== undefined)}
         {detail === undefined ? null : <span className={styles.cmpLegendDetail}>{detail}</span>}
       </span>
       <span className={styles.cmpLegendValue}>{segment.tokens.toLocaleString(locale)}</span>
@@ -223,7 +228,12 @@ function ContextNotes({ status }: { readonly status: ChatContextStatusWire }): R
       )}
       {until === undefined ? null : (
         <p className={styles.cmpHelp}>
-          {t("chat.context.untilCompaction", { tokens: number(until) })}
+          {t(
+            status.conversationInputBudgetTokens === undefined
+              ? "chat.context.untilCompaction"
+              : "chat.context.untilConversationCompaction",
+            { tokens: number(until) },
+          )}
         </p>
       )}
     </>
@@ -276,6 +286,23 @@ function ContextFootnotes({ status }: { readonly status: ChatContextStatusWire }
   );
 }
 
+function AutomaticCompactionNote({
+  status,
+}: {
+  readonly status: ChatContextStatusWire | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const tokens = status?.conversationInputBudgetTokens;
+  return (
+    <p className={styles.cmpHelp}>
+      {t(tokens === undefined ? "chat.context.automatic" : "chat.context.automaticGrounded", {
+        tokens: tokens?.toLocaleString(locale) ?? "",
+      })}
+    </p>
+  );
+}
+
 function ContextDetails(props: ChatContextMeterProps): ReactNode {
   const t = useTranslate();
   return (
@@ -286,7 +313,7 @@ function ContextDetails(props: ChatContextMeterProps): ReactNode {
         <ContextSummary status={props.status} />
       )}
       <p className={styles.cmpHelp}>{t("chat.context.estimate")}</p>
-      <p className={styles.cmpHelp}>{t("chat.context.automatic")}</p>
+      <AutomaticCompactionNote status={props.status} />
       <p className={styles.cmpHelp}>{t("chat.context.retained")}</p>
       {props.status?.knowledgeSources === undefined ? null : (
         <p className={styles.cmpHelp}>{t("chat.context.sourcesPolicy")}</p>

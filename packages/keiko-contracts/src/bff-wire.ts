@@ -447,7 +447,8 @@ export interface ChatsResponse {
  *   messages          — the conversation messages the next request carries verbatim
  *   knowledge         — retrieved Knowledge Pod / folder excerpts (never compacted; trimmed by rank)
  *   free              — room left before automatic compaction starts
- *   compaction-buffer — the usable input above the 90 % automatic-compaction threshold
+ *   compaction-buffer — remaining conversation capacity above its automatic-compaction threshold
+ *   source-capacity   — additional usable input reserved for freshly retrieved grounded sources
  *   output-reserve    — tokens reserved for the answer
  *   safety-margin     — estimation headroom that is never planned for input
  */
@@ -458,6 +459,7 @@ export type ChatContextSegmentId =
   | "knowledge"
   | "free"
   | "compaction-buffer"
+  | "source-capacity"
   | "output-reserve"
   | "safety-margin";
 
@@ -530,7 +532,9 @@ export interface ChatContextStatusWire {
    * Absent from servers that predate the breakdown.
    */
   readonly segments?: readonly ChatContextSegmentWire[] | undefined;
-  /** Input tokens at which Keiko compacts automatically before the next request (90 %). */
+  /** The bounded conversation lane in a grounded chat; sources use the remaining usable input. */
+  readonly conversationInputBudgetTokens?: number | undefined;
+  /** Input tokens at which Keiko compacts its conversation lane before the next request (90 %). */
   readonly autoCompactionAtTokens?: number | undefined;
   /**
    * True while the probe that asks the deployment for its undeclared window is still running: the

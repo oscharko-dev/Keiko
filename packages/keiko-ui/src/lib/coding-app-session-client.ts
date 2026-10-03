@@ -7,7 +7,8 @@
  * a content-free acknowledgement and, on approval, sets the HttpOnly session cookie — and strips the
  * fragment from the address bar and history entry immediately, whether or not it was well-formed.
  * Normal reloads and reused tabs confirm an existing valid cookie. A missing, revoked or
- * restart-invalidated session needs a fresh launcher attestation; confirmation never issues one.
+ * restart-invalidated session needs a fresh launcher attestation; confirmation never issues a
+ * session. It refreshes scoped cookie projections of an already verified bearer after an upgrade.
  *
  * Redemption success is deliberately unobservable here (the acknowledgement never distinguishes
  * approval from denial, and page script cannot read the HttpOnly cookie); the questions surface
@@ -92,7 +93,8 @@ export async function redeemCodingAppSessionPairingFragment(
 }
 
 /**
- * Confirm this browser's existing app-session cookie without issuing or replacing it. The endpoint
+ * Confirm this browser's existing app-session bearer and refresh its exact scoped cookie
+ * projections without minting a session or replacing the token. The endpoint
  * intentionally acknowledges without revealing whether the cookie is valid; subsequent channel
  * reads report the honest paired/unpaired state.
  */

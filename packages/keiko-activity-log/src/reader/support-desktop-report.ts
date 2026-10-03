@@ -58,7 +58,10 @@ function correlationSelection(correlationId: string): SupportQuerySelection {
   };
 }
 
-function createReportIncident(stateDir: string, correlationId: string): SupportIncidentDescriptorRecord {
+export function prepareManualSupportReportIncident(
+  stateDir: string,
+  correlationId: string,
+): SupportIncidentDescriptorRecord {
   const created = recordUserReportedIncident(stateDir, { correlationId });
   if (created.status === "rejected") {
     if (created.reason === "quota-exhausted") {
@@ -89,7 +92,10 @@ function incidentDescriptor(
   }
 }
 
-function incidentSelection(stateDir: string, record: SupportIncidentDescriptorRecord): SupportQuerySelection {
+function incidentSelection(
+  stateDir: string,
+  record: SupportIncidentDescriptorRecord,
+): SupportQuerySelection {
   const segmentIds = new Set(
     supportIncidentSegmentFiles(stateDir, record).map((segment) => segment.segmentId),
   );
@@ -101,6 +107,22 @@ function incidentSelection(stateDir: string, record: SupportIncidentDescriptorRe
     requiredClasses: { kind: "observed-failures" },
     unresolved: false,
   };
+}
+
+/** Read a manual descriptor's bounded window without requiring a persistent candidate slot. */
+export function readManualSupportReportEvidence(
+  stateDir: string,
+  record: SupportIncidentDescriptorRecord,
+): ReturnType<typeof executeLocalSupportQuery> {
+  return executeLocalSupportQuery(
+    stateDir,
+    incidentSelection(stateDir, record),
+    REPORT_QUERY_LIMITS,
+    {
+      trigger: "export",
+      persist: false,
+    },
+  );
 }
 
 /** Only the owner thread creates incidents and retention pins. No log-content scan runs here. */
@@ -117,7 +139,10 @@ export function prepareDesktopSupportReport(
         );
   return (
     existing ??
-    createReportIncident(stateDir, correlationId ?? requestCorrelationId ?? randomUUID())
+    prepareManualSupportReportIncident(
+      stateDir,
+      correlationId ?? requestCorrelationId ?? randomUUID(),
+    )
   );
 }
 

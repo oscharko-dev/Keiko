@@ -1232,6 +1232,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.unavailable": "Context estimate unavailable",
   "chat.context.estimate":
     "Estimated for the next request; knowledge chats include the latest question's source share. Your draft and attachments are added when you send.",
+  "chat.context.automaticGrounded":
+    "Keiko compacts the conversation at 90% of its {tokens}-token lane. Source capacity is separate.",
+  "chat.context.segment.sourceCapacity": "Additional source capacity",
+  "chat.context.segment.conversationFree": "Conversation headroom",
+  "chat.context.untilConversationCompaction":
+    "{tokens} conversation tokens until automatic compaction.",
   "chat.context.automatic":
     "Keiko compacts automatically at 90% of usable input capacity before sending the next request.",
   "chat.context.retained":
@@ -1263,7 +1269,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.lastRequestEstimated": "Last knowledge request: about {tokens} tokens (estimated).",
   "chat.context.untilCompaction": "{tokens} tokens until automatic compaction.",
   "chat.context.sourcesPolicy":
-    "Knowledge sources are retrieved fresh for every question and never summarized. Compaction only condenses the conversation, which gets at most a third of the input for knowledge questions.",
+    "Knowledge sources are retrieved fresh for every question and never summarized. Compaction only condenses the conversation, which gets at most 8,000 tokens and a third of the usable input for knowledge questions.",
   "chat.context.windowAssumed":
     "The gateway declares no context window for this model. Keiko plans with the assumed value and adopts the real window automatically as soon as the provider states it.",
   "chat.context.pending":

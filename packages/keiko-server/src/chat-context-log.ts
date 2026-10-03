@@ -98,6 +98,8 @@ const CHAT_CONTEXT_MANAGEMENT = defineActivityLogOperation({
     // from the log alone (PR #3678 review): the trigger (a grounded chat's lane-based one differs
     // from the whole-window one), the last knowledge request and the known shares.
     autoCompactionAtTokens: { type: "integer", dataClass: "count", required: false },
+    conversationInputBudgetTokens: { type: "integer", dataClass: "count", required: false },
+    sourceCapacityTokens: { type: "integer", dataClass: "count", required: false },
     lastRequestTokens: { type: "integer", dataClass: "count", required: false },
     lastRequestMeasured: { type: "boolean", dataClass: "closed-enum", required: false },
     lastRequestEstimatedTokens: { type: "integer", dataClass: "count", required: false },
@@ -159,6 +161,7 @@ type ContextManagementStatus = Pick<
       | "knowledgeSources"
       | "contextWindowAssumed"
       | "autoCompactionAtTokens"
+      | "conversationInputBudgetTokens"
       | "lastRequest"
       | "segments"
       | "contextWindowProbePending"
@@ -181,6 +184,9 @@ function contextStatusEvidence(status: ContextManagementStatus): Evidence {
     ...segmentEvidence(status.segments),
     ...(status.contextWindowAssumed === true ? { contextWindowAssumed: true } : {}),
     ...(status.contextWindowProbePending === true ? { contextWindowProbePending: true } : {}),
+    ...(status.conversationInputBudgetTokens === undefined
+      ? {}
+      : { conversationInputBudgetTokens: status.conversationInputBudgetTokens }),
     ...(status.autoCompactionAtTokens === undefined
       ? {}
       : { autoCompactionAtTokens: status.autoCompactionAtTokens }),
@@ -214,6 +220,7 @@ const SEGMENT_EVIDENCE_FIELDS = new Map([
   ["system", "systemTokens"],
   ["summary", "summaryTokens"],
   ["messages", "messageTokens"],
+  ["source-capacity", "sourceCapacityTokens"],
 ]);
 
 function segmentEvidence(segments: ContextManagementStatus["segments"]): Evidence {

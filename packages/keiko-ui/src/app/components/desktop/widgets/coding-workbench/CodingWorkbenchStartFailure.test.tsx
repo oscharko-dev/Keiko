@@ -7,10 +7,19 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { createSupportReport, downloadSupportReport } from "@/lib/support-report-api";
+import { resetSupportReportOutcomesForTests } from "../../SupportReportButton";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
+
+vi.mock("@/lib/support-report-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/support-report-api")>()),
+  createSupportReport: vi.fn(),
+  downloadSupportReport: vi.fn(),
+  createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
+}));
 
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
@@ -235,6 +244,7 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
   afterEach((): void => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    resetSupportReportOutcomesForTests();
   });
 
   it("surfaces a rejected start as a visible alert carrying the error code and correlation id", async (): Promise<void> => {
@@ -257,5 +267,13 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED");
     expect(alert).toHaveTextContent(CORRELATION_ID);
+    const report = { fileName: "report.json", reportJson: "{}" };
+    vi.mocked(createSupportReport).mockResolvedValueOnce(report);
+    await user.click(screen.getByRole("button", { name: "Create error report" }));
+    expect(createSupportReport).toHaveBeenCalledExactlyOnceWith(
+      CORRELATION_ID,
+      expect.any(AbortSignal),
+    );
+    expect(downloadSupportReport).toHaveBeenCalledExactlyOnceWith(report);
   });
 });

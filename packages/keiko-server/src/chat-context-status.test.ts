@@ -395,6 +395,37 @@ describe("grounded context status", () => {
     expect(status.pendingCompaction).toBeDefined();
   });
 
+  it("uses the same bounded conversation lane to read a saved grounded compaction", () => {
+    const { deps, chatId } = fixture();
+    const modelDeps = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 128_000,
+        reservedOutputTokens: 8_000,
+        safetyMarginTokens: 4_000,
+      }),
+    };
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    const user = currentMessage(deps, chatId, "Continue reviewing the documentation.");
+    const continuity = groundedConversationContinuity(modelDeps, user, "fixture");
+    const compaction = continuity.compaction;
+    if (compaction === undefined) throw new Error("expected grounded compaction");
+    persistChatCompactionEvidence(modelDeps, {
+      compaction,
+      chatId,
+      modelId: "fixture",
+      messageCount: deps.store.countMessages(chatId),
+      startedAt: 1,
+      finishedAt: 2,
+      correlationId: "corr-grounded-lane-compaction",
+    });
+
+    const status = readChatContextStatus(modelDeps, chatId, "fixture");
+    expect(status.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(segmentOf(status, "summary").tokens).toBeGreaterThan(0);
+    expect(status.pendingCompaction).toBeUndefined();
+  });
+
   it("keeps a model-only chat free of a source share", () => {
     const { deps, chatId } = fixture(2);
     const status = readChatContextStatus(deps, chatId, "fixture");
@@ -450,6 +481,7 @@ describe("composer context status and manual maintenance", () => {
         estimatedInputTokens: 9_000,
         inputBudgetTokens: 20_000,
         autoCompactionAtTokens: 12_400,
+        conversationInputBudgetTokens: 8_000,
         knowledgeSources: { tokens: 6_000, sentReferenceCount: 4, availableReferenceCount: 16 },
         lastRequest: { promptTokens: 8_800, measured: true, estimatedTokens: 9_100 },
         segments: [
@@ -457,6 +489,7 @@ describe("composer context status and manual maintenance", () => {
           { id: "summary", tokens: 300 },
           { id: "messages", tokens: 2_000, count: 6 },
           { id: "knowledge", tokens: 6_000, count: 4 },
+          { id: "source-capacity", tokens: 9_600 },
         ],
         contextWindowProbePending: true,
       },
@@ -468,6 +501,8 @@ describe("composer context status and manual maintenance", () => {
     expect(expectActivityLogProof("chat.context.management.line", line)).toMatchObject({
       correlationId: "corr-inspected-reading",
       autoCompactionAtTokens: 12_400,
+      conversationInputBudgetTokens: 8_000,
+      sourceCapacityTokens: 9_600,
       knowledgeSourceTokens: 6_000,
       sentReferenceCount: 4,
       availableReferenceCount: 16,
@@ -479,6 +514,14 @@ describe("composer context status and manual maintenance", () => {
       messageTokens: 2_000,
       contextWindowProbePending: true,
     });
+    const report = analyzeLogText(line);
+    expect(report.sufficiency.status).toBe("complete");
+    expect(
+      report.timelines
+        .find((timeline) => timeline.correlationId === "corr-inspected-reading")
+        ?.lines.some((entry) => entry.op === "chat.context.management"),
+    ).toBe(true);
+    expect(line).not.toContain("Kurze Frage");
   });
   it.each([
     "Was kostet das Modell Qwen?",

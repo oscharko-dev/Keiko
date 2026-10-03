@@ -26,6 +26,7 @@ import {
   modelSourceLabel,
   startBlockedReason,
   visibleAlert,
+  visibleAlertFailure,
 } from "./codingWorkbenchLabels";
 
 // Echo translator: announcements are asserted on their catalog keys so the tests pin the
@@ -368,6 +369,25 @@ describe("visibleAlert mutation failures (F-09a)", () => {
       },
     };
   }
+
+  it("selects the visible mutation before a concurrent resource failure for reporting", () => {
+    const state = failedMutationState("mutation-support-id");
+    const resourceError = {
+      code: "UNAVAILABLE",
+      message: "redacted",
+      retryable: true,
+      correlationId: "resource-support-id",
+    };
+    const concurrent = {
+      ...state,
+      runtime: { ...state.runtime, status: "error" as const, error: resourceError },
+    };
+    expect(visibleAlertFailure(concurrent)).toBe(state.mutation.error);
+    expect(
+      visibleAlertFailure({ ...concurrent, mutation: { ...state.mutation, error: null } }),
+    ).toBe(resourceError);
+    expect(visibleAlertFailure(createInitialCodingWorkbenchRuntimeState())).toBeNull();
+  });
 
   it("names the machine error code for any failed mutation", () => {
     const alert = visibleAlert(failedMutationState(), tv, false);

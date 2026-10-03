@@ -112,11 +112,43 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
       expect(channel.sessionCount()).toBe(0);
     },
   );
-  it("local-session confirms a launcher-paired cookie without issuing or widening authority", () => {
+  it("local-session restores every scoped cookie using the same verified bearer", () => {
     const { channel, cookie } = pairedChannel();
     const count = channel.sessionCount();
-    expect(handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers).toBeUndefined();
+    const headers = handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers;
+    const projections = headers?.["Set-Cookie"];
+    expect(projections).toHaveLength(13);
+    expect(String(projections)).toContain("Path=/api/diagnostics/report;");
+    const values = Array.isArray(projections) ? projections : [];
+    for (const projection of values) {
+      if (!projection.includes("Max-Age=0")) expect(projection.split(";")[0]).toBe(cookie);
+    }
     expect(channel.sessionCount()).toBe(count);
+  });
+
+  it("scoped cookie repair never extends absolute expiry or revives a revoked session", () => {
+    let now = 0;
+    const registry = createSessionRegistry({ now: () => now, absoluteTtlMs: 1000 });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("Pairing failed");
+    const cookie = `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`;
+    now = 500;
+    expect(handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers).toBeDefined();
+    now = 1001;
+    expect(handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers).toBeUndefined();
+    const replacement = channel.pair(fakePairingRequestBody());
+    if (!replacement.paired) throw new TypeError("Replacement pairing failed");
+    channel.signOut(replacement.cookieToken);
+    expect(
+      handleCodingAppSessionLocalSession(
+        ctx(`${APP_SESSION_COOKIE_NAME}=${replacement.cookieToken}`),
+        deps(channel),
+      ).headers,
+    ).toBeUndefined();
   });
 
   it("rotate without a composed channel acknowledges without a cookie", () => {

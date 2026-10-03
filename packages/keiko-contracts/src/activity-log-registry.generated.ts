@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e0f4dba60f0c2eb9f9a2adbaf76b381cbf1bcfebc52f84488d29c71c6ff53377" as const;
+  "12dbea493d103bd5bd7cce0111f286dc45f3a52c61a781b3f7288b375130aedd" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1000,6 +1000,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       autoCompactionAtTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      conversationInputBudgetTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      sourceCapacityTokens: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -32389,6 +32399,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "conversationInputBudgetTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "inputBudget",
               type: "integer",
               dataClass: "count",
@@ -32450,6 +32466,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "sentReferenceCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "sourceCapacityTokens",
               type: "integer",
               dataClass: "count",
               required: false,

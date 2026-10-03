@@ -5,7 +5,9 @@ import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   listSupportIncidents,
+  MAX_SUPPORT_INCIDENTS,
   recordRegisteredFailureIncident,
+  recordUserReportedIncident,
   createFileServerLogSink,
   closeFileServerLogSinks,
 } from "@oscharko-dev/keiko-activity-log";
@@ -103,6 +105,30 @@ describe("real canonical support report worker", () => {
     expect(listSupportIncidents(stateDir)).toHaveLength(1);
     expect(response.reportJson).not.toContain(stateDir);
     // The worker may compute a missing acceleration manifest, but never publish it.
+    expect(existsSync(join(stateDir, "activity-log-manifests"))).toBe(false);
+  });
+
+  it("downloads the selected failure through the real worker when all candidate slots are occupied", async () => {
+    failure();
+    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1) {
+      expect(
+        recordUserReportedIncident(stateDir, { correlationId: `occupied-${String(slot)}` }).status,
+      ).toBe("created");
+    }
+    const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
+    const response = await runSupportReportJob(stateDir, "desktop-worker-failure");
+    const report = parseSupportReport(response.reportJson);
+    const analyzed = analyzeSupportReport(response.reportJson);
+    expect(analyzed.selection.status).toBe("complete");
+    expect(report.incident.pin.status).toBe("rejected");
+    expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+      retainedIds,
+    );
+    expect(listSupportIncidents(stateDir)).toHaveLength(MAX_SUPPORT_INCIDENTS);
+    const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+    expect(evidence).toContain('"op":"client.diagnostic"');
+    expect(evidence).toContain('"errorKind":"timeout"');
+    expect(evidence).not.toContain("desktop-worker-failure");
     expect(existsSync(join(stateDir, "activity-log-manifests"))).toBe(false);
   });
 

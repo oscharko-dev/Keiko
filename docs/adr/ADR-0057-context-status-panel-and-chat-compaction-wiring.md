@@ -133,6 +133,22 @@ per-lane source counts from `contextSummary.laneCounts`, plus a "Compaction acti
 compaction" indicator from `contextSummary.compactionActive`. It reuses `MetricRow`
 (GroundedAnswer.tsx:68) for all rows and `formatTokens` (lib/format.ts:94) for token numbers.
 
+The live composer meter is a separate request projection. Grounded conversation history has its
+own lane, capped at 8,000 tokens and a third of the usable input. Automatic compaction is triggered
+at 90% of that lane, even when the full model input is mostly empty. The meter identifies the lane
+budget explicitly, shows conversation headroom and its remaining compaction buffer separately from
+additional source capacity, and never labels unused source capacity as a conversation buffer.
+Source excerpts are fetched afresh per question and are trimmed, rather than summarized, to fit the
+remaining input. The previous grounded request's source share is an estimate for the next turn;
+the allocator's assembled estimate and provider/gateway request accounting remain distinct.
+
+Checkpoint validation and manual compaction use the same bounded conversation profile as grounded
+sending. A valid 8,000-token lane checkpoint is not invalidated by comparison with a larger full
+model window. The meter refreshes when connected folder, knowledge or Git-change scopes change,
+without requiring another sent message to update its grounding posture. Body-free
+`chat.context.management` evidence includes `conversationInputBudgetTokens` and
+`sourceCapacityTokens` so its displayed lane and unused source capacity can be reconstructed.
+
 The panel is mounted inside `GroundedAnswerPanel` (ChatWindow.tsx:1147–1176), which already
 conditionally renders when a grounded answer is present. `ContextStatusPanel` receives only the
 optional `contextSummary?: GroundedAnswerContextSummary` prop; it renders `null` when the field

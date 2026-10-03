@@ -1,6 +1,7 @@
 "use client";
 
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
+import { SupportReportButton } from "../../SupportReportButton";
 import {
   CodingWorkbenchRepositorySelector,
   type WorkbenchExecutionLocation,
@@ -81,6 +82,7 @@ import {
 } from "@/lib/useCodingWorkbenchRuntime";
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
 import type {
+  CodingWorkbenchClientError,
   CodingWorkbenchMutationKind,
   CodingWorkbenchMutationState,
   CodingWorkbenchRuntimeState,
@@ -158,6 +160,7 @@ import {
   modelSourceLabel,
   startBlockedReason,
   visibleAlert,
+  visibleAlertFailure,
 } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
@@ -1022,11 +1025,18 @@ interface WorkbenchContentProps {
   readonly runIsActive: boolean;
 }
 
-function WorkbenchAlert({ message }: { readonly message: string | null }): ReactNode {
+function WorkbenchAlert({
+  message,
+  failure,
+}: {
+  readonly message: string | null;
+  readonly failure: CodingWorkbenchClientError | null;
+}): ReactNode {
   if (message === null) return null;
   return (
     <p className={styles.alert} role="alert">
       <span aria-hidden="true">!</span> {message}
+      {failure !== null ? <SupportReportButton correlationId={failure.correlationId} /> : null}
     </p>
   );
 }
@@ -1123,7 +1133,7 @@ function WorkbenchContent({
         {lifecycleAnnouncement(state, t, research.grant)}
       </p>
       <div className={styles.body}>
-        <WorkbenchAlert message={alert} />
+        <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
         <WorkbenchColumns {...columns} />
       </div>
     </section>

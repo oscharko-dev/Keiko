@@ -93,7 +93,9 @@ the `role` discovery gave each alias (`chat`, `embedding`, `voice`, `rerank`, `u
 counts. The `inspected` `chat.context.management` line also carries the meter reading's optional
 counts: stored and projected history, knowledge-source tokens, the sent and available reference
 counts, the last knowledge request (measured and estimated), the system, summary and message shares,
-the automatic-compaction trigger, and the assumed-window and pending-probe flags.
+the automatic-compaction trigger, and the assumed-window and pending-probe flags. Grounded
+readings also carry the conversation lane budget and unused source capacity separately; a
+conversation checkpoint is validated against that lane, not against the entire model window.
 `search.entailment.judged` records, per grounded answer the judge read, the judged, unsupported and
 undecided claim counts, so the displayed "N unsupported claims" is reconstructable, and
 `hiddenProseClaimCount` counts the claims it could not judge because bracketed prose was stripped.
@@ -248,6 +250,10 @@ both production composition and these consumers when changing this wiring.
 ## Support reports
 
 For local defect evidence, use `keiko support export --incident <id>` or a correlation selector.
+Manual UI and CLI export remain available when all retained incident slots are occupied: the
+canonical exporter can use a transient descriptor without evicting incidents or widening retention.
+The UI report route requires an authenticated app session. Confirming a valid session refreshes
+its scoped cookies using the same bearer; it neither mints authority nor extends registry expiry.
 The canonical owner-private report has embedded integrity, a 10 MiB hard ceiling (`--max-bytes`
 may only lower it) and explicit sufficiency. `--out` names a private directory, never a file; the
 filename always uses the fixed product/schema/incident/date class. Inclusion flags and raw-log or

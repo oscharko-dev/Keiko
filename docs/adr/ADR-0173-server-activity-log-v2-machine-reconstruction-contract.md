@@ -734,6 +734,17 @@ downloads. Keiko performs no automatic upload or disclosure. A downloaded report
 the canonical offline validator before it is analyzed; operators who use the owner-private CLI
 reader first place it in a private directory and file according to the receiving-file contract.
 
+The shared desktop report action preserves the selected error when reporting itself fails. A
+session refusal names launcher recovery, a local service failure names application recovery, and a
+rate refusal names the bounded retry delay; none grants authority or automatically replays a write.
+A full 32-candidate store must not prevent manual export of already retained evidence. Desktop and CLI
+export may prepare the canonical user-report descriptor without a persistent slot or retention pin,
+then compose and validate the same bounded report. Existing candidates are never evicted for this
+purpose, and the descriptor reports its rejected pin rather than implying protected retention.
+Unknown selected correlations remain refused before any descriptor is created. The existing
+`support.incident.rejected`, `support.report.ui.*`, HTTP request and client diagnostic events retain
+the quota, export outcome and closed recovery failure class.
+
 `keiko support analyze FILE [--correlation-id ID] [--json] [--clusters] [--seed] [--emit-fixture PATH]`
 reads only the explicitly chosen owner-private, single-link regular file. It reads bounded chunks,
 checks UTF-8, canonical JSON, nesting, every section and record, identity and provenance, all
@@ -935,6 +946,12 @@ counts, estimated removed-prefix and summary costs, savings, final estimated pro
 effective input budget and image reserve. This evidence survives generation timeout or
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
 not provider-measured usage, and no conversation or image content is recorded.
+
+The live grounded context meter records `conversationInputBudgetTokens` and
+`sourceCapacityTokens` on `chat.context.management`. Its compaction threshold applies to the
+bounded conversation lane, not the whole model input; unused source capacity remains separately
+identified. Checkpoint validity uses that same lane profile. These fields are counts only and
+retain the existing timeline, causal correlation and sufficiency contract.
 
 Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
 `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,

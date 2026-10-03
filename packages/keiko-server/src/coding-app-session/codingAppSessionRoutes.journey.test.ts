@@ -124,13 +124,13 @@ describe("authenticated app-session channel journey (ADR-0141, #2477)", () => {
     }
   });
 
-  it("a launcher-attested session survives local confirmation without a new cookie", async () => {
+  it("local confirmation restores scoped projections of the same launcher-attested session", async () => {
     const server = await startServer();
     try {
       await expect(ensureLocalSession(server)).resolves.toBeUndefined();
       expect(await snapshotContent(server)).toBeNull();
       const cookie = await pairSession(server);
-      await expect(ensureLocalSession(server, cookie)).resolves.toBeUndefined();
+      await expect(ensureLocalSession(server, cookie)).resolves.toBe(cookie);
       expect(await snapshotContent(server, cookie)).toEqual(CANARY);
       expect(await readStreamContent(server, cookie)).toEqual(CANARY);
     } finally {

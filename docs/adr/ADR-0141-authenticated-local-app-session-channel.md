@@ -95,7 +95,9 @@ returns the content-free projection. The exact launcher-to-browser delivery of t
 finalized with the UI plumbing in W1.5; the server-side authority, the session, and the channel are
 complete and independently testable through the port here.
 
-The local-session restore route only confirms an existing valid bearer. Composing a launcher
+The local-session restore route only confirms an existing valid bearer and refreshes its exact
+scoped cookie projections. It neither mints a session nor extends the server-owned absolute lifetime. This repairs
+missing projections after an upgrade, including the authenticated support-report route. Composing a launcher
 pairing port is never itself client attestation: an absent, forged, revoked or expired cookie cannot
 mint a new session. The launcher fragment is redeemed only by the existing single-use `/pair`
 endpoint. Valid-cookie reloads remain automatic and do not widen authority.

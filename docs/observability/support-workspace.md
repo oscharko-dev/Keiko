@@ -41,6 +41,41 @@ export records body-free `support.report.started` and `support.report.completed`
 path) in the selected state directory's Activity Log; a refused destination is recorded in the
 CLI control state instead.
 
+## Desktop export and recovery
+
+Use **Create error report** on a visible error to download the canonical report for that error's
+Support ID. Chat, Files, Editor loading failures, window and shell boundaries use the same action;
+uncaught browser failures expose it in the desktop footer. Creation has one bounded deadline, blocks
+duplicate clicks and remains retryable after failure. A failed export keeps the original error and
+Support ID visible; its own reporting failure never replaces that selection. Keiko does not upload
+or send the download. Share it manually through your approved support channel.
+
+The diagnostic candidate store holds at most 32 retained candidates. That internal capacity is not a
+count of unresolved product defects. A full store does not prevent an explicit desktop or CLI export of
+retained log evidence: the report can use a transient incident descriptor without adding a candidate
+or evicting existing candidates. Its rejected retention pin is recorded honestly. Report size,
+selection, redaction and validation bounds still apply; unknown selections still fail closed.
+
+If the report action says to open Keiko from the launcher, the local application session was refused.
+Open Keiko through its trusted launcher and retry the **same** error's report. Refreshing an old tab
+alone cannot restore a session invalidated by a server restart. Report requests wait for application bootstrap and require a valid paired session. Local session
+confirmation restores missing scoped cookie projections of an already valid bearer after an upgrade;
+it never mints authority or extends the server-owned absolute lifetime. Neither recovery nor error reporting
+bypasses that authority.
+
+If Keiko is unavailable, restore the local application, then retry. If report requests are rate
+limited, wait one minute before retrying. When the desktop cannot run, an operator can still use the
+installed CLI on the originating machine without a browser or model provider:
+
+```bash
+keiko support export --correlation-id <support-id> --state-dir <installation-state-directory>
+```
+
+Select the same state directory as the affected installation. Do not send raw logs or configuration
+as a substitute. A support report cannot recover evidence already removed by retention or a log that
+was never durably written; the canonical result records insufficiency or a closed refusal instead
+of claiming a complete reconstruction.
+
 ## On the support team's machine
 
 1. Receive the file manually into an access-controlled workspace, under a locally chosen filename.

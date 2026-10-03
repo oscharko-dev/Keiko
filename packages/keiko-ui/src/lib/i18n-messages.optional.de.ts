@@ -1283,6 +1283,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.unavailable": "Kontextschätzung nicht verfügbar",
   "chat.context.estimate":
     "Geschätzt für die nächste Anfrage, bei Wissens-Chats mit dem Quellenanteil der letzten Frage. Entwurf und Anhänge kommen beim Senden hinzu.",
+  "chat.context.automaticGrounded":
+    "Keiko kompaktiert den Gesprächsverlauf ab 90 % seines Bereichs von {tokens} Tokens. Die Quellenkapazität ist separat.",
+  "chat.context.segment.sourceCapacity": "Zusätzliche Quellenkapazität",
+  "chat.context.segment.conversationFree": "Freier Gesprächsbereich",
+  "chat.context.untilConversationCompaction":
+    "Noch {tokens} Gesprächs-Tokens bis zur automatischen Kompaktierung.",
   "chat.context.automatic":
     "Keiko kompaktiert ab 90 % der nutzbaren Eingabe-Kapazität automatisch vor der nächsten Anfrage.",
   "chat.context.retained":
@@ -1315,7 +1321,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Letzte Wissensanfrage: ungefähr {tokens} Tokens (geschätzt).",
   "chat.context.untilCompaction": "Noch {tokens} Tokens bis zur automatischen Kompaktierung.",
   "chat.context.sourcesPolicy":
-    "Quellen werden für jede Frage frisch abgerufen und nie zusammengefasst. Kompaktiert wird nur der Gesprächsverlauf; er erhält bei Wissensfragen höchstens ein Drittel der Eingabe.",
+    "Quellen werden für jede Frage frisch abgerufen und nie zusammengefasst. Kompaktiert wird nur der Gesprächsverlauf; er erhält bei Wissensfragen höchstens 8.000 Tokens und ein Drittel der nutzbaren Eingabe.",
   "chat.context.windowAssumed":
     "Das Gateway meldet für dieses Modell kein Kontextfenster. Keiko plant mit dem angenommenen Wert und übernimmt das tatsächliche Fenster automatisch, sobald der Anbieter es meldet.",
   "chat.context.pending":

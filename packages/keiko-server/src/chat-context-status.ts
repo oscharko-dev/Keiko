@@ -303,13 +303,18 @@ export function readChatContextStatus(
   correlationId?: string,
 ): ChatContextStatusWire {
   const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
-  const checkpoint = checkpointForProfile(deps, chatId, profile, correlationId);
-  const counted = countHistory(deps, chatId, profile, checkpoint);
-  const grounded = groundedShare(deps, chatId, profile, counted.latestPromptContext);
-  // A grounded question compacts the conversation inside its own lane, not against the whole
-  // window, so the projection uses the lane the send path uses (PR #3678 review).
+  const currentGrounding = groundedShare(deps, chatId, profile, undefined);
+  // Checkpoint validity, counting and pending compaction use the same conversation profile as
+  // the grounded send path. Comparing its 8,000-token checkpoint against a full model window
+  // would discard a valid checkpoint as though that lane had expanded.
   const conversationProfile =
-    grounded === undefined ? profile : groundedConversationLaneProfile(profile);
+    currentGrounding === undefined ? profile : groundedConversationLaneProfile(profile);
+  const checkpoint = checkpointForProfile(deps, chatId, conversationProfile, correlationId);
+  const counted = countHistory(deps, chatId, conversationProfile, checkpoint);
+  const grounded =
+    currentGrounding === undefined
+      ? undefined
+      : { ...currentGrounding, lastPrompt: counted.latestPromptContext };
   const pending = pendingCompaction(deps, chatId, conversationProfile, counted, correlationId);
   const breakdown = contextBreakdown({
     profile,
@@ -332,6 +337,9 @@ export function readChatContextStatus(
     ),
     segments: breakdown.segments,
     autoCompactionAtTokens: breakdown.autoCompactionAtTokens,
+    ...(grounded === undefined
+      ? {}
+      : { conversationInputBudgetTokens: grounded.historyLaneTokens }),
   };
 }
 
@@ -365,7 +373,11 @@ function manualCompactionCandidate(
   modelId: string,
   correlationId: string,
 ): ContextCompactionRecord | undefined {
-  const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
+  const modelProfile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
+  const profile =
+    groundedShare(deps, chatId, modelProfile, undefined) === undefined
+      ? modelProfile
+      : groundedConversationLaneProfile(modelProfile);
   const snapshot = capturedStoredHistory(deps, chatId, profile, correlationId);
   // The conversation's own stored size: in a grounded chat the reading also carries the sources,
   // which compaction never touches (PR #3678 review).

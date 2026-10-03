@@ -67,6 +67,24 @@ describe("contextBreakdown", () => {
     expect(total(breakdown)).toBe(16_384);
   });
 
+  it("separates a large model's unused source capacity from its conversation buffer", () => {
+    const profile = deriveContextProfile({
+      maxInputTokens: 128_000,
+      reservedOutputTokens: 8_000,
+      safetyMarginTokens: 4_000,
+    });
+    const breakdown = contextBreakdown({
+      profile,
+      conversation: { ...CONVERSATION, messageTokens: 3_871 },
+      grounded: { historyLaneTokens: 8_000, lastPrompt: { ...LAST_PROMPT, sourceTokens: 542 } },
+    });
+    const byId = new Map(breakdown.segments.map((segment) => [segment.id, segment.tokens]));
+    expect(byId.get("free")).toBe(3_329);
+    expect(byId.get("compaction-buffer")).toBe(800);
+    expect(byId.get("source-capacity")).toBe(107_148);
+    expect(total(breakdown)).toBe(profile.maxInputTokens);
+  });
+
   it("draws a grounded chat without an answer yet with an empty source share", () => {
     const breakdown = contextBreakdown({
       profile: PROFILE,

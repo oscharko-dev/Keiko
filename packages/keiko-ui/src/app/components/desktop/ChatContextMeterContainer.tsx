@@ -39,7 +39,14 @@ function useChatContext(session: ContextSession): {
   const chatId = session.activeChat?.id;
   const projectPath = session.activeChat?.projectPath;
   const modelId = session.selectedModel;
-  const key = JSON.stringify([chatId, projectPath, modelId]);
+  const key = JSON.stringify([
+    chatId,
+    projectPath,
+    modelId,
+    session.activeChat?.connectedScopes ?? session.activeChat?.connectedScope,
+    session.activeChat?.localKnowledgeScopes ?? session.activeChat?.localKnowledgeScope,
+    session.activeChat?.gitChangeScopes,
+  ]);
   const busy = session.sending || session.regeneratingMessageId !== undefined;
   const historyKey = JSON.stringify(session.messages.map((message) => message.id));
   const [state, setState] = useState<ContextState>({ key, compacting: false, error: false });

@@ -293,14 +293,16 @@ export async function handleCodingAppSessionPair(
 /**
  * POST /local-session — confirm an already authenticated browser session without minting authority.
  * Missing, forged, expired and revoked cookies remain content-free. Only launcher-attested /pair
- * issues a session; ordinary reloads preserve the valid cookie without a new prompt.
+ * issues a session; ordinary reloads refresh every scoped projection of the verified existing
+ * bearer so newly protected routes work after an upgrade. Registry absolute expiry remains unchanged.
  */
 export function handleCodingAppSessionLocalSession(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
-  const result = deps.codingAppSessionChannel?.ensureLocalSession(readSessionCookie(ctx.req));
-  if (result?.status !== "active") return ackResult();
+  const cookieToken = readSessionCookie(ctx.req);
+  const result = deps.codingAppSessionChannel?.ensureLocalSession(cookieToken);
+  if (result?.status !== "active" || cookieToken === undefined) return ackResult();
   appSessionActivity(deps).write(
     activityLogEvent(
       CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION,
@@ -308,7 +310,7 @@ export function handleCodingAppSessionLocalSession(
       {},
     ),
   );
-  return ackResult();
+  return ackResult(issuedCookie(ctx.req, cookieToken));
 }
 
 function currentSnapshot(
