@@ -232,6 +232,7 @@ describe("connectionUtils — general workspace contracts", () => {
     expect(subText("files", { root: "/repo" })).toBe("/repo");
     expect(subText("browser", { url: "https://example.test" })).toBe("https://example.test");
     expect(subText("editor", { file: "src/app.ts" })).toBe("src/app.ts");
+    expect(subText("editor", { root: "/repo" })).toBe("/repo");
     expect(subText("editor", { root: "/repo", file: "src/app.ts" })).toBe("src/app.ts — /repo");
     expect(subText("terminal", { cwd: "/repo" })).toBe("/repo");
     // GEN-DOC-DRIFT-001 — the 'review' (base/head) and 'agents' (role) subText branches were dead:
@@ -314,6 +315,7 @@ describe("subText — chat untitled marker (locale-independent)", () => {
 
   it("leaves every other window type untouched by the marker", () => {
     expect(subText("files", { root: "/repo", titleIsDefault: true })).toBe("/repo");
+    expect(subText("files", { root: "/repo", resolvedRoot: "/actual" })).toBe("/actual");
     expect(subText("terminal", { cwd: "/repo", titleIsDefault: true })).toBe("/repo");
   });
 });

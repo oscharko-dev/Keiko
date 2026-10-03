@@ -3093,6 +3093,7 @@ describe("FilesWindowSessionHost", () => {
 
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       root: "/work",
+      rootBinding: "coding-repository",
       activeFilePath: undefined,
       activeDirectoryPath: undefined,
       resolvedRoot: undefined,

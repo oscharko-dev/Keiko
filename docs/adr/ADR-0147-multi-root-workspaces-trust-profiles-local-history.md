@@ -199,6 +199,13 @@ tagged fact union `known | unknown | unavailable | absent`; no `undefined`, empt
 default, or inferred trust is valid. Unknown, unavailable, absent, malformed, corrupt, stale, or
 mismatched state resolves to restricted.
 
+Opening a folder or file in the editor does not raise a trust dialog or mount a persistent
+restricted-mode banner. Ordinary navigation, reading, and editing stay available while execution
+metadata loads or is unavailable. Explicit trust management remains available through settings
+and editor commands; failures are reported in that requested action. Execution consumers continue
+to evaluate their server-owned authority and trust before acting. The editor's readiness attribute
+reports catalog completion only and never waits for an opening-time approval.
+
 A trust record is server-owned. Under
 [ADR-0155](ADR-0155-root-scoped-workspace-trust-binding.md), its dimensions split into two roles:
 

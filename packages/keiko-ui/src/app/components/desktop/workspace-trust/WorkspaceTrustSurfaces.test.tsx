@@ -160,7 +160,6 @@ describe("Workspace Trust governance surfaces", () => {
       <I18nProvider>
         <WorkspaceTrustDecisionDialog
           action="grant"
-          initialPrompt
           mutating={false}
           onCancel={onCancel}
           onConfirm={onConfirm}
@@ -168,7 +167,7 @@ describe("Workspace Trust governance surfaces", () => {
       </I18nProvider>,
     );
 
-    const stayRestricted = screen.getByRole("button", { name: "Stay restricted" });
+    const stayRestricted = screen.getByRole("button", { name: "Cancel" });
     const dialog = screen.getByRole("alertdialog");
     expect(dialog.parentElement?.parentElement).toBe(document.body);
     await waitFor(() => expect(stayRestricted).toHaveFocus());

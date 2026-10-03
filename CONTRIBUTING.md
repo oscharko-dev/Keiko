@@ -252,3 +252,14 @@ legacy bundle input are refused. Validate a manually received file offline with
 [the support workspace guide](docs/observability/support-workspace.md). Nothing is sent by these
 commands. `npm run set-version` regenerates the historical registry snapshots the analyzer selects
 from, so a release needs no extra step.
+
+## Files and Editor navigation
+
+Explicit folder selections in the New Window dialog and Editor root picker preserve
+the selected root through the existing `coding-repository` presentation binding.
+The same behavior applies to Git repositories and ordinary folders. Task-bound
+windows retain the active workspace projection and allow navigation within it;
+explicit repository Files windows also allow path changes. Back/Forward history is
+bounded and clears on task-bound root switches. Files titles reflect their resolved
+root; an empty Editor names its project. Navigation and directory reads record
+body-free client stage lifecycle evidence on the existing Activity Log.

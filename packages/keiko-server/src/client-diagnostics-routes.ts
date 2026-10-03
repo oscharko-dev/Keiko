@@ -547,6 +547,10 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "chat-bind",
   "command-palette",
   "chat-history-deletion",
+  "files-directory-load",
+  "files-directory-navigation",
+  "files-project-selection",
+  "editor-project-selection",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -557,6 +561,10 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "chat bind": "chat-bind",
   "command palette": "command-palette",
   "chat history deletion": "chat-history-deletion",
+  "files directory load": "files-directory-load",
+  "files directory navigation": "files-directory-navigation",
+  "files project selection": "files-project-selection",
+  "editor project selection": "editor-project-selection",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its

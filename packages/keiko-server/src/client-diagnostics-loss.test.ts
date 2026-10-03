@@ -275,6 +275,39 @@ describe("client diagnostics loss evidence", () => {
 
   // KEIKO-3557: proves the new lifecycle operations reach the production file sink with a complete
   // v2 identity, exactly like every other registered operation — not merely a buffered test event.
+  it.each([
+    "files directory load",
+    "files directory navigation",
+    "files project selection",
+    "editor project selection",
+  ] as const)("persists %s as reconstructable navigation lifecycle evidence", async (stage) => {
+    const body = { kind: "stage", stage, ordinal: 3 };
+    expect(
+      (await handleClientDiagnosticIngest(context(JSON.stringify({ ...body, phase: "started" }))))
+        .status,
+    ).toBe(204);
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(JSON.stringify({ ...body, phase: "settled", durationMs: 2 })),
+        )
+      ).status,
+    ).toBe(204);
+    const expected = {
+      correlationId: CORRELATION_ID,
+      stage: stage.replaceAll(" ", "-"),
+      completeness: "complete",
+      loss: "none",
+    };
+    expect(
+      expectActivityLogProof("client.stage.started.line", lines("client.stage.started")[0] ?? ""),
+    ).toMatchObject(expected);
+    expect(
+      expectActivityLogProof("client.stage.settled.line", lines("client.stage.settled")[0] ?? ""),
+    ).toMatchObject(expected);
+    expect(lines("client.diagnostic")).toEqual([]);
+  });
+
   it("persists a started stage report as client.stage.started", async () => {
     const body = JSON.stringify({
       kind: "stage",

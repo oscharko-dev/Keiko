@@ -1567,6 +1567,7 @@ describe("workspace widget renderer registry", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Change root" }));
     expect(unboundCtx.updateCfg).toHaveBeenCalledWith({
       root: "/next",
+      rootBinding: "coding-repository",
       activeFilePath: undefined,
       activeDirectoryPath: undefined,
       resolvedRoot: undefined,

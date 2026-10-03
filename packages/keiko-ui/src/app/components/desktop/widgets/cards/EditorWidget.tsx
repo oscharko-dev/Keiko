@@ -1,5 +1,6 @@
 "use client";
 
+import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
 import dynamic from "next/dynamic";
 import {
   useCallback,
@@ -23,7 +24,6 @@ import type {
   EditorPaneStateV2,
   EditorSplitDirection,
   EditorSplitDropZone,
-  WorkspaceTrustStatus,
 } from "@oscharko-dev/keiko-contracts";
 import {
   activeEditorPane,
@@ -75,7 +75,6 @@ import {
 } from "./useEditorVerificationRun";
 import { useEditorSettings } from "./useEditorSettings";
 import {
-  WorkspaceTrustBanner,
   WorkspaceTrustDecisionDialog,
   type WorkspaceTrustDecision,
 } from "../../workspace-trust/WorkspaceTrustSurfaces";
@@ -136,6 +135,7 @@ const EditorRuntimeWidget = dynamic<EditorRuntimeWidgetProps>(
 );
 
 export interface EditorWidgetWorkspacePatch {
+  readonly rootBinding?: "coding-repository" | undefined;
   readonly root?: string | undefined;
   readonly file?: string | undefined;
   readonly openFiles?: readonly string[] | undefined;
@@ -146,7 +146,6 @@ export interface EditorWidgetProps extends EditorRuntimeWidgetProps {
   readonly layoutJson?: string | undefined;
   readonly onWorkspaceChange?: ((patch: EditorWidgetWorkspacePatch) => void) | undefined;
   readonly onOpenProblems?: ((projectPath: string) => void) | undefined;
-  readonly onOpenWorkspaceTrust?: (() => void) | undefined;
   readonly workspaceTrustUiAvailable?: boolean | undefined;
 }
 
@@ -470,23 +469,11 @@ function nonEmptyRoot(value: string): string | undefined {
   return value.length > 0 ? value : undefined;
 }
 
-/**
- * #2696 — deterministic post-trust readiness signal for browser regression harnesses. Reports
- * `"true"` only once the workspace-trust status for the bound root has resolved (or definitively
- * failed to resolve) AND the initial-prompt decision has been committed, so an observer can read
- * the prompt's presence in that same commit instead of racing it with a timeout. Derived outside
- * the component so the widget's cognitive complexity is unaffected.
- */
+// Execution metadata readiness is independent of ordinary file opening.
 function resolveTrustSettledAttribute(
   verification: EditorVerificationRunControls,
-  promptedTrustRoot: string | null,
-  workspaceRoot: string,
 ): "true" | "false" {
-  if (!verification.catalogSettled) return "false";
-  const initialPromptPending =
-    verification.catalog?.workspaceTrust.trust === "restricted" &&
-    promptedTrustRoot !== workspaceRoot;
-  return initialPromptPending ? "false" : "true";
+  return verification.catalogSettled ? "true" : "false";
 }
 
 function WorkspaceRegistrationNotice({
@@ -505,45 +492,6 @@ function WorkspaceRegistrationNotice({
       <span className={trustStyles.cmpBannerCopy}>{notice.message}</span>
     </output>
   );
-}
-
-/**
- * Whether this binding still owes the human the one-per-binding "opening on an untrusted root"
- * question, and whether answering it means raising the prompt.
- *
- * The latch is consumed on the FIRST resolved trust state whatever it says. Consuming it only for
- * `restricted` left it unspent when the editor opened on a trusted root, so a later explicit
- * revocation re-raised the first-open prompt and asked the human to grant back what they had just
- * revoked. Lives outside the component, like `resolveTrustSettledAttribute` above, so the widget's
- * cognitive complexity is unaffected.
- */
-/**
- * What the editor trust banner should report, if anything.
- *
- * `catalog === null` alone is not a failed read: it is also the state before the first read returns
- * and right after a root switch resets it. Treating it as "load" made the banner assert "Workspace
- * Trust could not be read safely" on every editor open — including for a fully trusted root, where
- * it then vanished — inverting the #2625 requirement that a read FAILURE be distinguishable from
- * every other state. `catalogSettled` turns true only once the read resolved or definitively failed.
- *
- * Outside the component, like its neighbours, so the widget's cognitive complexity is unaffected.
- */
-function trustBannerIssue(
-  trustMutationIssue: "load" | "update" | undefined,
-  verification: EditorVerificationRunControls,
-): "load" | "update" | undefined {
-  if (trustMutationIssue !== undefined) return trustMutationIssue;
-  return verification.catalog === null && verification.catalogSettled ? "load" : undefined;
-}
-
-function initialTrustLatchDecision(
-  status: WorkspaceTrustStatus | undefined,
-  promptedTrustRoot: string | null,
-  workspaceRoot: string,
-): "skip" | "latch" | "latch-and-prompt" {
-  if (workspaceRoot.length === 0 || status === undefined) return "skip";
-  if (promptedTrustRoot === workspaceRoot) return "skip";
-  return status.trust === "restricted" ? "latch-and-prompt" : "latch";
 }
 
 // Issue #2747 — a line reveal is addressed to the file cfg named alongside it, and every pane below
@@ -626,7 +574,6 @@ export function EditorWidget({
   layoutJson,
   onWorkspaceChange,
   onOpenProblems,
-  onOpenWorkspaceTrust,
   workspaceTrustUiAvailable = true,
   onOpenDebugPanel,
   sessionActive = true,
@@ -684,16 +631,10 @@ export function EditorWidget({
   // the live root).
   const [trustDecision, setTrustDecision] = useState<{
     readonly action: WorkspaceTrustDecision;
-    readonly initialPrompt: boolean;
     readonly root: string;
   } | null>(null);
   const [trustMutationIssue, setTrustMutationIssue] = useState<"update">();
   const [trustMutationPending, setTrustMutationPending] = useState(false);
-  // The root whose initial trust prompt has already been raised. This is state rather than a ref
-  // because the `data-trust-settled` readiness attribute below is derived from it (#2696): the
-  // attribute has to flip in exactly the commit that mounts the initial prompt, so the value must
-  // participate in rendering.
-  const [promptedTrustRoot, setPromptedTrustRoot] = useState<string | null>(null);
   const [heldTab, setHeldTab] = useState<DraggedTab | null>(null);
   // GEN-PERF-EDITOR-003 — the tab-drag "held" visual is read from a ref inside the memoized
   // per-pane renderTabHandle closure, so that closure stays referentially stable (it no
@@ -745,14 +686,18 @@ export function EditorWidget({
   );
 
   const commitLayout = useCallback(
-    (nextLayout: EditorLayoutStateV2, nextRoot = workspaceRoot): void => {
+    (nextLayout: EditorLayoutStateV2, nextRoot = workspaceRoot, selectedRoot = false): void => {
       const normalized = normalizeEditorLayoutStructure(nextRoot, nextLayout);
       setLayout(normalized);
       // Re-home the per-pane dirty index onto the committed layout so a dirty tab
       // keeps its marker and unsaved-changes prompt as it moves between panes and
       // no orphaned flag survives on a collapsed pane (Issue #1375 AC3).
       setDirtyByPane((current) => reconcileEditorDirtyByPane(current, normalized));
-      if (nextRoot.length > 0) onWorkspaceChange?.(buildPatch(nextRoot, normalized));
+      if (nextRoot.length > 0)
+        onWorkspaceChange?.({
+          ...buildPatch(nextRoot, normalized),
+          ...(selectedRoot ? { rootBinding: "coding-repository" as const } : {}),
+        });
     },
     [buildPatch, onWorkspaceChange, workspaceRoot],
   );
@@ -788,7 +733,6 @@ export function EditorWidget({
       // the new root. Fail closed by dismissing everything trust-scoped.
       setTrustDecision(null);
       setTrustMutationIssue(undefined);
-      setPromptedTrustRoot(null);
     }
     if (nextRoot.length === 0 || onWorkspaceChange === undefined) return;
     const normalizedFileChanged = (file?.trim() ?? "") !== nextActivePane.activeFile;
@@ -992,9 +936,11 @@ export function EditorWidget({
           root: normalizedRoot,
           sidebarWidth: layoutRef.current.sidebarWidth,
         });
+        const settle = startFilesNavigationEvidence("editor project selection");
         setWorkspaceRoot(normalizedRoot);
         setDirtyByPane({});
-        commitLayout(nextLayout, normalizedRoot);
+        commitLayout(nextLayout, normalizedRoot, true);
+        settle();
       };
       const firstPaneId =
         editorLayoutPaneIds(layoutRef.current)[0] ?? layoutRef.current.activePaneId;
@@ -1015,16 +961,36 @@ export function EditorWidget({
       // (AC3). An unresolvable candidate is dropped so the editor stays on its current usable state.
       const target = selectWorkspaceFileTarget(nextRoot, nextFile);
       if (target === null || target.file.length === 0) return;
-      const paneId = activeEditorPane(layoutRef.current).id;
-      const nextLayout = editorLayoutReducer(layoutRef.current, {
-        type: "open-file",
-        paneId,
-        file: target.file,
+      const changesRoot = target.root !== workspaceRoot;
+      const apply = (): void => {
+        const current = layoutRef.current;
+        const base = changesRoot
+          ? editorLayoutReducer(current, {
+              type: "replace-root",
+              root: target.root,
+              sidebarWidth: current.sidebarWidth,
+            })
+          : current;
+        const nextLayout = editorLayoutReducer(base, {
+          type: "open-file",
+          paneId: activeEditorPane(base).id,
+          file: target.file,
+        });
+        const settle = startFilesNavigationEvidence("editor project selection");
+        setWorkspaceRoot(target.root);
+        if (changesRoot) setDirtyByPane({});
+        commitLayout(nextLayout, target.root, changesRoot);
+        settle();
+      };
+      if (!changesRoot) return apply();
+      requestDirtyClose({
+        paneId: layoutRef.current.activePaneId,
+        files: dirtyFileList,
+        reason: "root-change",
+        apply,
       });
-      setWorkspaceRoot(target.root);
-      commitLayout(nextLayout, target.root);
     },
-    [commitLayout],
+    [commitLayout, dirtyFileList, requestDirtyClose, workspaceRoot],
   );
 
   const selectOpenFile = useCallback(
@@ -1717,31 +1683,6 @@ export function EditorWidget({
     activeFile: activeFile.length > 0 ? activeFile : null,
   });
 
-  // The initial prompt answers one question — "this binding is opening on an untrusted root" — and
-  // it is answered once per binding. The latch used to be taken only when the FIRST resolved state
-  // was `restricted`, so opening on a trusted root left it unconsumed: a later explicit revocation
-  // by the human moved trust to `restricted` and re-raised the first-open prompt, asking them to
-  // grant what they had just deliberately revoked, and labelling it `initialPrompt`. Consuming the
-  // latch on the first resolved state whatever it says keeps the prompt for a genuine untrusted
-  // open and keeps a revoke a revoke.
-  useEffect(() => {
-    const decision = initialTrustLatchDecision(
-      verification.catalog?.workspaceTrust,
-      promptedTrustRoot,
-      workspaceRoot,
-    );
-    if (decision === "skip") return;
-    setPromptedTrustRoot(workspaceRoot);
-    if (decision === "latch-and-prompt" && workspaceTrustUiAvailable) {
-      setTrustDecision({ action: "grant", initialPrompt: true, root: workspaceRoot });
-    }
-  }, [
-    promptedTrustRoot,
-    verification.catalog?.workspaceTrust,
-    workspaceRoot,
-    workspaceTrustUiAvailable,
-  ]);
-
   useEffect(() => {
     if (workspaceTrustUiAvailable) return;
     setTrustDecision(null);
@@ -1799,10 +1740,8 @@ export function EditorWidget({
       runFileTests: verification.runFileTests,
       runWorkspaceVerification: verification.runWorkspaceVerification,
       cancelVerification: verification.cancelVerification,
-      trustWorkspaceScripts: () =>
-        setTrustDecision({ action: "grant", initialPrompt: false, root: workspaceRoot }),
-      revokeWorkspaceScriptTrust: () =>
-        setTrustDecision({ action: "revoke", initialPrompt: false, root: workspaceRoot }),
+      trustWorkspaceScripts: () => setTrustDecision({ action: "grant", root: workspaceRoot }),
+      revokeWorkspaceScriptTrust: () => setTrustDecision({ action: "revoke", root: workspaceRoot }),
       openProblems: () => onOpenProblems?.(workspaceRoot),
       openFileHistory: openActiveFileHistory,
       openDebugPanel: () => onOpenDebugPanel?.(),
@@ -2086,7 +2025,7 @@ export function EditorWidget({
       loading: false,
     } satisfies EditorOutlineSnapshot);
 
-  const trustSettled = resolveTrustSettledAttribute(verification, promptedTrustRoot, workspaceRoot);
+  const trustSettled = resolveTrustSettledAttribute(verification);
 
   return (
     <div
@@ -2172,22 +2111,6 @@ export function EditorWidget({
           notice={workspaceRegistrationNotice}
           workspaceRoot={workspaceRoot}
         />
-        {workspaceTrustUiAvailable ? (
-          <WorkspaceTrustBanner
-            status={verification.catalog?.workspaceTrust}
-            // `catalog === null` alone is not a failed read: it is also the state before the first
-            // read returns, and the state right after a root switch resets it. Treating it as "load"
-            // made the banner assert "Workspace Trust could not be read safely" on every editor
-            // open — including for a fully trusted root, where it then vanished — which is the
-            // opposite of the #2625 requirement that a read FAILURE be distinguishable from every
-            // other state. `catalogSettled` is the fact that separates them: it turns true only once
-            // the read has resolved or definitively failed.
-            issue={trustBannerIssue(trustMutationIssue, verification)}
-            surface="editor"
-            onManage={onOpenWorkspaceTrust}
-            editor
-          />
-        ) : null}
         <div
           className={`ed-panes ed-panes-root ${trustStyles.cmpEditorPanes}${
             singlePane ? " single" : ""
@@ -2227,7 +2150,7 @@ export function EditorWidget({
       {workspaceTrustUiAvailable && trustDecision !== null && pendingClose === null ? (
         <WorkspaceTrustDecisionDialog
           action={trustDecision.action}
-          initialPrompt={trustDecision.initialPrompt}
+          failed={trustMutationIssue !== undefined}
           mutating={trustMutationPending}
           onCancel={() => setTrustDecision(null)}
           onConfirm={confirmTrustDecision}

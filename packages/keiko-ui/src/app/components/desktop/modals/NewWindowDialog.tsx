@@ -37,6 +37,7 @@ import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { restoreModalFocusAfterUnlock } from "./modalFocusRestore";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import {
   useOptionalWidgetTranslate,
@@ -1174,7 +1175,21 @@ export function NewWindowDialog({
     },
   };
   const submit = (): void => {
-    if (type !== "agents") onConfirm(withChatUntitledMarker(type, fields, cfg));
+    if (type === "agents") return;
+    const selectedCfg =
+      (type === "files" || type === "editor") &&
+      typeof cfg.root === "string" &&
+      cfg.root.trim().length > 0
+        ? { ...cfg, rootBinding: "coding-repository" }
+        : cfg;
+    const settle =
+      type === "files" || type === "editor"
+        ? startFilesNavigationEvidence(
+            type === "files" ? "files project selection" : "editor project selection",
+          )
+        : undefined;
+    onConfirm(withChatUntitledMarker(type, fields, selectedCfg));
+    settle?.();
   };
 
   const onKey = (e: KeyboardEvent<HTMLDialogElement>): void => {

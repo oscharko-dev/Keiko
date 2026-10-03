@@ -852,6 +852,25 @@ describe("NewWindowDialog agents: start-run contract", () => {
 });
 
 describe("NewWindowDialog native directory browse", () => {
+  it.each(["files", "editor"] as const)(
+    "pins an explicitly opened %s project to the selected repository",
+    async (type) => {
+      vi.mocked(fetchProjects).mockResolvedValue({ projects: [project()] });
+      const onConfirm = vi.fn();
+      render(
+        <NewWindowDialog type={type} types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />,
+      );
+      const input = await screen.findByDisplayValue("/repo");
+      fireEvent.change(input, { target: { value: "/selected/project" } });
+      fireEvent.click(
+        screen.getByRole("button", { name: type === "files" ? "Open Files" : "Open Editor" }),
+      );
+      expect(onConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({ root: "/selected/project", rootBinding: "coding-repository" }),
+      );
+    },
+  );
+
   it("browses the Files root natively and confirms the picked folder", async () => {
     const user = userEvent.setup();
     vi.mocked(fetchProjects).mockResolvedValue({
@@ -888,7 +907,10 @@ describe("NewWindowDialog native directory browse", () => {
     await waitFor(() => expect(rootInput).toHaveValue("/repo-root"));
 
     fireEvent.click(screen.getByRole("button", { name: "Open Files" }));
-    expect(onConfirm).toHaveBeenCalledWith({ root: "/repo-root" });
+    expect(onConfirm).toHaveBeenCalledWith({
+      root: "/repo-root",
+      rootBinding: "coding-repository",
+    });
   });
 
   it("treats native cancellation as a non-event", async () => {

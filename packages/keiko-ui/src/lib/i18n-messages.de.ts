@@ -194,7 +194,6 @@ export const DE_MESSAGES = {
     "Der Widerruf stoppt oder deaktiviert Arbeitsbereichsskripte, Sprachserver und Agentenausführung für diese Wurzel.",
   "workspaceTrust.dialog.serverConfirmed":
     "Keiko ändert Funktionen erst, nachdem der Server die Entscheidung bestätigt hat.",
-  "workspaceTrust.dialog.stayRestricted": "Eingeschränkt bleiben",
   "workspaceTrust.dialog.cancel": "Abbrechen",
   "workspaceTrust.dialog.trust": "Arbeitsbereich vertrauen",
   "workspaceTrust.dialog.revoke": "Vertrauen widerrufen",
@@ -2132,6 +2131,10 @@ export const DE_MESSAGES = {
   "filesWidget.diff.truncated": "Diff bei {size} abgeschnitten.",
   "filesWidget.diff.regionLabel": "Git-Diff: {path}",
   "filesWidget.diff.empty": "Kein Diff verfügbar.",
+  "filesWidget.navigation.back": "Zum vorherigen Ordner",
+  "filesWidget.navigation.forward": "Zum nächsten Ordner",
+  "filesWidget.navigation.root": "Zum Projektordner zurückkehren",
+  "filesWidget.navigation.currentPath": "Aktueller Ordnerpfad",
   "filesWidget.rootBar.label": "Stammordner",
   "filesWidget.rootBar.openParent": "Übergeordneten Ordner öffnen",
   "filesWidget.rootBar.pathLabel": "Ordnerpfad — beliebigen Ordner auf diesem Computer öffnen",

@@ -80,6 +80,11 @@ This shapes the product _and_ how you work on it:
   verified merge without a second human handoff. Never push directly to `dev`, force-push, bypass a
   required check, dismiss a finding to obtain green status, or merge outside the ADR-0135
   direct-check path.
+- Explicit Files/Editor folder selections use the existing `coding-repository` presentation
+  binding for Git repositories and ordinary folders alike. Task-bound windows retain the active
+  workspace override and navigation within that root. Never let a Files title name a configured
+  root while its tree shows a different resolved root. Folder navigation and reads record body-free
+  client stage lifecycle evidence on the existing Activity Log (ADR-0090 D4).
 - **Never** weaken a trust boundary, evidence redaction, or a governance gate to make something
   pass. Fail closed. If a gate blocks you, the gate is usually right.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are

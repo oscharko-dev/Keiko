@@ -807,3 +807,12 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   a red-then-green regression test.
 - [Troubleshooting guide](../troubleshooting/README.md) — the `logs/` row in the
   "Log locations and debug mode" table, alongside the other operator-facing log files.
+
+### Folder navigation evidence
+
+The existing `client.stage.started` and `client.stage.settled` operations record
+`files-directory-load`, `files-directory-navigation`, `files-project-selection`,
+and `editor-project-selection`. Each pair shares a correlation id and opaque ordinal;
+a successful directory load joins its HTTP response correlation as a parent. A failed
+read emits a correlated, body-free client diagnostic and still settles its stage.
+Neither paths, filenames, Git details nor document bodies enter these reports.

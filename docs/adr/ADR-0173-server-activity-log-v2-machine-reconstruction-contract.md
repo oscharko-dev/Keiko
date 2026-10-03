@@ -1029,7 +1029,11 @@ request":
   stage evidence, all at `warn` with `errorKind: unknown`, burying the real failures. The route
   now accepts four closed shapes, each with its own operations:
   - a message: `client.diagnostic`, a failure at `warn`, as above;
-  - a window stage: `client.stage.started` / `client.stage.settled` at `info`. One
+  - a window or folder-navigation stage: `client.stage.started` / `client.stage.settled` at `info`.
+    Folder stages use `files-directory-load`, `files-directory-navigation`,
+    `files-project-selection`, and `editor-project-selection`. Successful directory loads
+    join their HTTP response correlation as a parent; failed reads emit a correlated body-free
+    diagnostic and settle. Paths and document bodies are never recorded. One
     client-minted correlation id per mount joins both phases, and the duration is monotonic and
     bounded to the contract's ceiling. A window chunk that has not arrived 10 seconds after its
     stage started is reported as stalled, a `client.diagnostic` with `errorKind: timeout` under

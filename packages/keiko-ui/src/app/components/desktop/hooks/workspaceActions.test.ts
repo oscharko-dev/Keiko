@@ -2037,6 +2037,7 @@ describe("makeMutations.openEditorFile", () => {
       cfg: {
         root: "/repo",
         file: "packages/keiko-harness/src/context.ts",
+        rootBinding: "coding-repository",
         openFiles: ["src/old.ts", "packages/keiko-harness/src/context.ts"],
         revealLineStart: 50,
         revealLineEnd: 57,

@@ -1885,6 +1885,7 @@ function updateEditorCfg(
   const rootChanged = patch.root !== undefined && patch.root !== configuredRoot;
   ctx.updateCfg({
     root: patch.root,
+    ...(patch.rootBinding === undefined ? {} : { rootBinding: patch.rootBinding }),
     file: patch.file,
     openFiles: patch.openFiles,
     layoutJson: patch.layoutJson,
@@ -1994,9 +1995,6 @@ function editorSessionBaseProps(
     onOpenProblems: (projectPath) => {
       ctx.openWindow("problems", { projectPath });
     },
-    onOpenWorkspaceTrust: () => {
-      ctx.openWindow("workspaceTrust");
-    },
     onOpenDebugPanel: () => {
       if (targetRoot !== undefined) {
         ctx.openWindow("debug", {
@@ -2071,6 +2069,7 @@ export function FilesWindowSessionHost({
   const onRootChange = (nextRoot: string): void => {
     ctx.updateCfg({
       root: nextRoot,
+      rootBinding: "coding-repository",
       activeFilePath: undefined,
       activeDirectoryPath: undefined,
       resolvedRoot: undefined,
@@ -2086,9 +2085,18 @@ export function FilesWindowSessionHost({
       <FilesWidget
         {...(root === undefined ? {} : { root })}
         onActiveFileChange={onActiveFileChange}
-        {...(root === undefined ? { onRootChange } : {})}
+        {...(root === undefined || str(cfg, "rootBinding") === "coding-repository"
+          ? { onRootChange }
+          : {})}
         onOpenFile={(fileRoot: string, path: string) =>
-          ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] })
+          ctx.openWindow("editor", {
+            root: fileRoot,
+            file: path,
+            openFiles: [path],
+            ...(str(cfg, "rootBinding") === "coding-repository"
+              ? { rootBinding: "coding-repository" }
+              : {}),
+          })
         }
         onOpenGitDelivery={onOpenGitDelivery}
       />

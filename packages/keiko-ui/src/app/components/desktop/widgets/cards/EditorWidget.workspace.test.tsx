@@ -972,6 +972,9 @@ describe("EditorWidget workspace session", () => {
     expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next");
     expect(screen.getByTestId("files-probe")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open next root" })).toBeEnabled();
+    expect(onWorkspaceChange).toHaveBeenCalledWith(
+      expect.objectContaining({ root: "/next", rootBinding: "coding-repository" }),
+    );
   });
 
   it("ignores empty root, file, and tab-selection intents from embedded controls", () => {
@@ -1120,6 +1123,23 @@ describe("EditorWidget workspace session", () => {
     );
     expect(screen.getByRole("dialog", { name: "Unsaved editor changes" })).toBeInTheDocument();
     expect(screen.getByTestId("runtime-file")).toHaveTextContent("src/a.ts");
+  });
+
+  it("protects dirty buffers when a file outside the project selects another root", async () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open absolute file outside root" }));
+    expect(await screen.findByRole("dialog", { name: "Unsaved editor changes" })).toHaveTextContent(
+      "src/a.ts",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("src/a.ts");
+    fireEvent.click(screen.getByRole("button", { name: "Open absolute file outside root" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/other/project");
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("main.py");
+    expect(screen.queryByRole("button", { name: "Select src/a.ts" })).toBeNull();
   });
 
   it("discards dirty files before changing the editor root", async () => {
@@ -2611,7 +2631,7 @@ describe("EditorWidget — Issue #1375 layout regression hardening", () => {
 
 // ─── Issue #2696 — deterministic post-trust readiness signal on the workspace root ───────────────
 // `data-trust-settled` is the attribute browser regression harnesses settle on instead of racing
-// the initial trust prompt with a timeout. `fetch` is stubbed PER TEST and unstubbed in a `finally`
+// catalog completion with a timeout. `fetch` is stubbed PER TEST and unstubbed in a `finally`
 // so the suite's other cases keep running against the unstubbed environment.
 
 type CatalogOutcome = "trusted" | "restricted" | "unavailable";
@@ -2727,12 +2747,7 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
     stubVerificationFetch("restricted");
     try {
       const { container } = render(
-        <EditorWidget
-          root="/managed/task"
-          file="src/a.ts"
-          workspaceTrustUiAvailable={false}
-          onOpenWorkspaceTrust={vi.fn()}
-        />,
+        <EditorWidget root="/managed/task" file="src/a.ts" workspaceTrustUiAvailable={false} />,
       );
       const workspace = workspaceRootOf(container);
 
@@ -2753,23 +2768,15 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
     }
   });
 
-  it("discards an open trust decision when a managed workspace takes over presentation", async () => {
+  it("keeps ordinary editor opening uninterrupted across presentation changes", async () => {
     stubVerificationFetch("restricted");
     try {
       const { rerender } = render(<EditorWidget root="/repo" file="src/a.ts" />);
 
-      expect(
-        await screen.findByRole("alertdialog", { name: /Trust this workspace/iu }),
-      ).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo"));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
 
-      rerender(
-        <EditorWidget
-          root="/repo"
-          file="src/a.ts"
-          workspaceTrustUiAvailable={false}
-          onOpenWorkspaceTrust={vi.fn()}
-        />,
-      );
+      rerender(<EditorWidget root="/repo" file="src/a.ts" workspaceTrustUiAvailable={false} />);
       expect(screen.queryByRole("alertdialog")).toBeNull();
 
       rerender(<EditorWidget root="/repo" file="src/a.ts" workspaceTrustUiAvailable />);
@@ -2783,7 +2790,7 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
     }
   });
 
-  it("reports settled only in the commit that has already mounted the initial trust prompt", async () => {
+  it("opens a restricted workspace without a trust prompt or warning banner", async () => {
     stubVerificationFetch("restricted");
     try {
       const { container } = render(<EditorWidget root="/repo" file="src/a.ts" />);
@@ -2802,16 +2809,14 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
         observer.disconnect();
       }
 
-      // The whole point of the signal: once it reads "true" the prompt is ALREADY in the DOM, so a
-      // SYNCHRONOUS read resolves it. A `findBy*` here would re-introduce the race it removes.
-      expect(
-        screen.getByRole("alertdialog", { name: /Trust this workspace/iu }),
-      ).toBeInTheDocument();
+      // Resolved execution metadata must never turn ordinary file opening into an approval flow.
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.queryByTestId("workspace-trust-banner-editor")).toBeNull();
       expect(observations.some((entry) => entry.settled === "true")).toBe(true);
       expect(
         observations
           .filter((entry) => entry.settled === "true")
-          .every((entry) => entry.promptMounted),
+          .every((entry) => !entry.promptMounted),
       ).toBe(true);
     } finally {
       vi.unstubAllGlobals();
@@ -2819,7 +2824,7 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
     }
   });
 
-  it("re-arms the signal on a root switch and re-prompts only from the NEW restricted root", async () => {
+  it("re-arms catalog readiness on a root switch without prompting for either root", async () => {
     const pendingB = deferredCatalog();
     stubVerificationFetchByRoot(
       new Map([
@@ -2833,24 +2838,17 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
       await waitFor(() => {
         expect(workspace).toHaveAttribute("data-trust-settled", "true");
       });
-      expect(
-        screen.getByRole("alertdialog", { name: /Trust this workspace/iu }),
-      ).toBeInTheDocument();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.queryByTestId("workspace-trust-banner-editor")).toBeNull();
 
       const observations: SettledObservation[] = [];
       const observer = observeSettledTransitions(workspace, observations);
       try {
         rerender(<EditorWidget root="/repo-b" file="src/a.ts" />);
-        // A switch to an undecided root re-arms the signal: /repo-a's prompt is dismissed and
-        // readiness drops back to "false" until /repo-b's own trust state resolves.
+        // Readiness resets until the new root returns its own execution catalog.
         await waitFor(() => {
           expect(workspace).toHaveAttribute("data-trust-settled", "false");
         });
-        // The stale-catalog class (#2696): while /repo-b's catalog is still in flight the ONLY
-        // trust state in the tree is /repo-a's. A prompt standing here could only have been raised
-        // from the previous root's catalog — which is exactly the pairing the render-phase catalog
-        // invalidation rules out. An effect-based invalidation raises it one commit after the
-        // switch, before /repo-b has said anything at all.
         expect(screen.queryByRole("alertdialog")).toBeNull();
 
         await act(async () => {
@@ -2863,17 +2861,15 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
         observer.disconnect();
       }
 
-      // Re-settling is again a conjunction: the prompt for the NEW root is already mounted in the
-      // commit that reports "true", so a synchronous read resolves it.
-      expect(
-        screen.getByRole("alertdialog", { name: /Trust this workspace/iu }),
-      ).toBeInTheDocument();
+      // The new root settles without mounting a prompt or persistent trust warning.
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.queryByTestId("workspace-trust-banner-editor")).toBeNull();
       expect(observations.some((entry) => entry.settled === "false")).toBe(true);
       expect(observations.some((entry) => entry.settled === "true")).toBe(true);
       expect(
         observations
           .filter((entry) => entry.settled === "true")
-          .every((entry) => entry.promptMounted),
+          .every((entry) => !entry.promptMounted),
       ).toBe(true);
     } finally {
       vi.unstubAllGlobals();
@@ -2926,11 +2922,6 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
   });
 
   it("does not re-raise the initial prompt after the human revokes trust", async () => {
-    // The initial prompt answers "this binding is opening on an untrusted root", once per binding.
-    // The latch was only consumed when the FIRST resolved state was `restricted`, so opening on a
-    // TRUSTED root left it unconsumed — and an explicit revocation then moved trust to `restricted`
-    // and re-raised the first-open prompt, asking the human to grant back what they had just
-    // deliberately revoked, flagged `initialPrompt`.
     let outcome: CatalogOutcome = "trusted";
     let catalogRequests = 0;
     vi.stubGlobal(
@@ -2947,7 +2938,6 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
       await waitFor(() => {
         expect(workspace).toHaveAttribute("data-trust-settled", "true");
       });
-      // Opening on a trusted root raises nothing, which is what leaves the latch unconsumed.
       expect(screen.queryByRole("alertdialog")).toBeNull();
 
       // The human revokes: the catalog now reports restricted, exactly as the real revoke path

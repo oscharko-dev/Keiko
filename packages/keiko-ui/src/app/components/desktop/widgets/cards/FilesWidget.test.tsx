@@ -1201,6 +1201,38 @@ describe("FilesWidget", () => {
     expect(session.replaceChat).not.toHaveBeenCalled();
   });
 
+  it("navigates back, forward and up inside a bound project without changing its root", async () => {
+    vi.mocked(fetchFilesTree).mockImplementation(async (_root, path = "") => ({
+      root: "/repo",
+      path,
+      truncated: false,
+      entries:
+        path === ""
+          ? [
+              {
+                ...treeEntryBase,
+                name: "src",
+                path: "src",
+                kind: "directory",
+                sizeBytes: undefined,
+                modifiedAt: undefined,
+              },
+            ]
+          : [{ ...treeEntryBase, name: "inside.ts", path: "src/inside.ts", kind: "file" }],
+    }));
+    render(<FilesWidget root="/repo" />);
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^src$/i }));
+    expect(await screen.findByText("inside.ts")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Back to previous folder" }));
+    expect(await screen.findByRole("treeitem", { name: /^src$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Forward to next folder" }));
+    expect(await screen.findByText("inside.ts")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open parent folder" }));
+    expect(await screen.findByRole("treeitem", { name: /^src$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open parent folder" })).toBeDisabled();
+    expect(screen.getByLabelText("Current folder path")).toHaveValue("/repo");
+  });
+
   it("refreshes the current folder without jumping back to the root", async () => {
     vi.mocked(fetchFilesTree)
       .mockResolvedValueOnce({

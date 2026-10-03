@@ -127,8 +127,17 @@ read; managed worktree reconciliation remains scoped to managed instances. Openi
 the Coding Workbench with a registered repository requires no separate Code setup.
 Changing the Git window's repository or the Chat project never silently retargets
 an existing Coding Workbench window.
-Repository Files/Editor windows opened from Git carry `rootBinding:
-"coding-repository"` and preserve the same configured repository root. Legacy
+Repository Files/Editor windows opened from Git or an explicit folder selection in the
+New Window dialog carry `rootBinding: "coding-repository"` and preserve the same
+configured root. This presentation binding also applies to ordinary folders without
+Git; it grants no execution authority. Explicit path changes in a repository Files
+window or the Editor root picker keep that binding. Legacy task-bound windows retain
+the active-root override, but always expose navigation within that root. Folder
+history is bounded, preserves Back/Forward across explicitly selected roots and
+resets when a task-bound root switches. Files titles use the resolved root and an
+empty Editor shows its project root, so neither can label another root as the
+selected project. Navigation and directory reads emit body-free client stage
+lifecycle evidence through the existing Activity Log. Legacy
 repository windows that already persisted a `.keiko/.../task-workspaces/...`
 `resolvedRoot` are repaired back to their configured repository root before they
 render or produce Chat connected scopes; they must not look like the main

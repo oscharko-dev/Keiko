@@ -38,6 +38,12 @@ import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
 import {
+  observeFilesDirectoryRead,
+  startFilesNavigationEvidence,
+} from "@/lib/files-navigation-evidence";
+import { FilesRootBar } from "./FilesRootBar";
+import { useFilesNavigation } from "./useFilesNavigation";
+import {
   GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
   gitRepositoryStateInvalidationRoots,
 } from "./git-repository-state-events";
@@ -56,7 +62,6 @@ const ChevronRIcon = Icons.chevronR;
 const DiffIcon = Icons.diff;
 const BackIcon = Icons.back;
 const CloseIcon = Icons.close;
-const ArrowUpIcon = Icons.arrowUp;
 const GitIcon = Icons.git;
 const BranchIcon = Icons.branch;
 const FileGlyphIcon = Icons.file;
@@ -515,7 +520,7 @@ function readSharedFilesTree(root: string, path: string): Promise<FilesTreeRespo
   const key = `${root}\u0000${path}`;
   const existing = filesTreeRequests.get(key);
   if (existing !== undefined) return existing;
-  const request = fetchFilesTree(root, path).finally(() => {
+  const request = observeFilesDirectoryRead(() => fetchFilesTree(root, path)).finally(() => {
     filesTreeRequests.delete(key);
   });
   filesTreeRequests.set(key, request);
@@ -588,7 +593,11 @@ export function FilesWidget({
   // (real) root whenever the widget loads a folder, so it always shows where we are.
   const [rootDraft, setRootDraft] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [currentDirectoryPath, setCurrentDirectoryPath] = useState<string | null>(null);
+  const navigation = useFilesNavigation(apiRoot, onRootChange);
+  const currentDirectoryPath = navigation.path;
+  const previousDirectoryRef = useRef<string | null>(null);
+  const currentDirectoryRef = useRef(currentDirectoryPath);
+  currentDirectoryRef.current = currentDirectoryPath;
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [directoryRenderLimits, setDirectoryRenderLimits] = useState<Record<string, number>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
@@ -784,8 +793,7 @@ export function FilesWidget({
         if (isStale()) return;
         if (path === "") {
           setResolvedRoot(response.root);
-          activeFileChangeRef.current?.(null, response.root, null);
-          setCurrentDirectoryPath(null);
+          activeFileChangeRef.current?.(null, response.root, currentDirectoryRef.current);
         }
         touchDirectoryAccess(path);
         setDirectories((current) => {
@@ -803,7 +811,9 @@ export function FilesWidget({
           return pruneDirectoryCache(
             next,
             directoryAccessOrderRef.current,
-            pinnedDirectoryPaths(expandedRef.current),
+            pinnedDirectoryPaths(
+              new Set([...expandedRef.current, currentDirectoryRef.current ?? ""]),
+            ),
           );
         });
       } catch (error: unknown) {
@@ -827,7 +837,7 @@ export function FilesWidget({
     directoryLoadSeqRef.current += 1;
     setSelectedPath(null);
     setGitDiffState(null);
-    setCurrentDirectoryPath(null);
+    previousDirectoryRef.current = null;
     activeFileChangeRef.current?.(null, null, null);
     setResolvedRoot(null);
     setExpanded(new Set([""]));
@@ -929,20 +939,22 @@ export function FilesWidget({
       const target = next.trim();
       if (onRootChange === undefined || target.length === 0) return;
       if (target === visibleRootPath) return;
+      const settle = startFilesNavigationEvidence("files project selection");
       onRootChange(target);
+      settle();
     },
     [onRootChange, visibleRootPath],
   );
 
-  const goToDirectory = useCallback(
-    (path: string | null): void => {
-      setSelectedPath(null);
-      setCurrentDirectoryPath(path);
-      activeFileChangeRef.current?.(null, resolvedRoot ?? apiRoot, path);
-      if (path !== null && directories[path] === undefined) void loadDirectory(path);
-    },
-    [apiRoot, directories, loadDirectory, resolvedRoot],
-  );
+  const goToDirectory = navigation.visit;
+  useEffect((): void => {
+    if (previousDirectoryRef.current === currentDirectoryPath) return;
+    previousDirectoryRef.current = currentDirectoryPath;
+    setSelectedPath(null);
+    activeFileChangeRef.current?.(null, resolvedRoot ?? apiRoot, currentDirectoryPath);
+    const path = currentDirectoryPath ?? "";
+    if (directories[path] === undefined) void loadDirectory(path);
+  }, [apiRoot, currentDirectoryPath, directories, loadDirectory, resolvedRoot]);
 
   const refreshCurrentDirectory = useCallback((): void => {
     setSelectedPath(null);
@@ -1933,47 +1945,21 @@ export function FilesWidget({
     );
   }
 
-  const renderRootBar = (): ReactNode => {
-    if (onRootChange === undefined) return null;
-    return (
-      <form
-        className="files-root-bar"
-        role="group"
-        aria-label={t("filesWidget.rootBar.label")}
-        onSubmit={(event) => {
-          event.preventDefault();
-          openRoot(rootDraft);
-        }}
-      >
-        <button
-          type="button"
-          className="files-root-up"
-          onClick={goUp}
-          disabled={currentDirectoryPath === null && parentDir(resolvedRoot ?? apiRoot) === null}
-          title={t("filesWidget.rootBar.openParent")}
-          aria-label={t("filesWidget.rootBar.openParent")}
-        >
-          <ArrowUpIcon size={13} />
-        </button>
-        <input
-          type="text"
-          className="files-root-input mono"
-          aria-label={t("filesWidget.rootBar.pathLabel")}
-          placeholder={t("filesWidget.rootBar.pathPlaceholder")}
-          spellCheck={false}
-          value={rootDraft}
-          onChange={(event) => setRootDraft(event.target.value)}
-        />
-        <button
-          type="submit"
-          className="files-root-open"
-          title={t("filesWidget.rootBar.openFolderTitle")}
-        >
-          {t("filesWidget.rootBar.open")}
-        </button>
-      </form>
-    );
-  };
+  const renderRootBar = (): ReactNode => (
+    <FilesRootBar
+      navigation={navigation}
+      draft={rootDraft}
+      editable={onRootChange !== undefined}
+      canGoUp={
+        currentDirectoryPath !== null ||
+        (onRootChange !== undefined && parentDir(resolvedRoot ?? apiRoot) !== null)
+      }
+      onDraftChange={setRootDraft}
+      onOpen={openRoot}
+      onUp={goUp}
+      onRoot={() => goToDirectory(null)}
+    />
+  );
 
   const renderGitSummary = (): ReactNode => {
     if (gitSummary === null) return null;

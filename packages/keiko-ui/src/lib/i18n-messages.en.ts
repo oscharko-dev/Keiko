@@ -184,7 +184,6 @@ export const EN_MESSAGES = {
     "Revoking trust stops or disables workspace scripts, language servers, and agent execution for this root.",
   "workspaceTrust.dialog.serverConfirmed":
     "Keiko changes capabilities only after the server confirms the decision.",
-  "workspaceTrust.dialog.stayRestricted": "Stay restricted",
   "workspaceTrust.dialog.cancel": "Cancel",
   "workspaceTrust.dialog.trust": "Trust workspace",
   "workspaceTrust.dialog.revoke": "Revoke trust",
@@ -2067,6 +2066,10 @@ export const EN_MESSAGES = {
   "filesWidget.diff.truncated": "Diff truncated at {size}.",
   "filesWidget.diff.regionLabel": "Git diff: {path}",
   "filesWidget.diff.empty": "No diff available.",
+  "filesWidget.navigation.back": "Back to previous folder",
+  "filesWidget.navigation.forward": "Forward to next folder",
+  "filesWidget.navigation.root": "Return to project folder",
+  "filesWidget.navigation.currentPath": "Current folder path",
   "filesWidget.rootBar.label": "Folder root",
   "filesWidget.rootBar.openParent": "Open parent folder",
   "filesWidget.rootBar.pathLabel": "Folder path — open any folder on this machine",

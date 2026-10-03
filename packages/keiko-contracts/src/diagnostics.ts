@@ -715,6 +715,10 @@ export const CLIENT_STAGE_IDS = [
   "chat bind",
   "command palette",
   "chat history deletion",
+  "files directory load",
+  "files directory navigation",
+  "files project selection",
+  "editor project selection",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
