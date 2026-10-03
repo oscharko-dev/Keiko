@@ -1,11 +1,18 @@
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  resetServerLogger,
+  setSupportIncidentTriggerForTests,
+  drainSupportIncidentCandidates,
+} from "../../../tests/support/activity-log-test-support.js";
 import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -25,6 +32,8 @@ import {
   redactLogFields,
   formatRegisteredServerLogLine,
   serverLogProcessIdentity,
+  createActivityLogSink,
+  listSupportIncidents,
 } from "@oscharko-dev/keiko-activity-log";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 
@@ -436,6 +445,61 @@ describe("POST /api/diagnostics/client", () => {
     );
     expect(sink.lines().join("")).not.toContain("private issue content");
     expect(sink.lines().join("")).not.toContain("server-log.write-failed");
+  });
+
+  it("logs a client load timeout at error so the registered incident trigger can retain it", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "desktop editor widget chunk: stalled",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_editor-stall-0001",
+          errorKind: "timeout",
+        }),
+      ),
+    );
+    expect(clientDiagnosticEvents(sink)).toEqual([
+      expect.objectContaining({
+        level: "error",
+        op: "client.diagnostic",
+        correlationId: "ui_editor-stall-0001",
+        errorKind: "timeout",
+      }),
+    ]);
+  });
+
+  it("creates a retained local incident for a browser timeout through the production log sink", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "keiko-client-timeout-"));
+    setSupportIncidentTriggerForTests(true);
+    const sink = createActivityLogSink(stateDir, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "desktop editor widget chunk: stalled",
+            clientTs: CLIENT_TS,
+            correlationId: "ui_retained-timeout-0001",
+            errorKind: "timeout",
+          }),
+        ),
+      );
+      drainSupportIncidentCandidates();
+      expect(listSupportIncidents(stateDir)).toEqual([
+        expect.objectContaining({
+          trigger: "registered-failure",
+          fingerprint: expect.objectContaining({ op: "client.diagnostic", errorKind: "timeout" }),
+          correlation: expect.objectContaining({ rootCorrelationId: "ui_retained-timeout-0001" }),
+          pin: expect.objectContaining({ status: "pinned" }),
+        }),
+      ]);
+    } finally {
+      setSupportIncidentTriggerForTests(undefined);
+      resetServerLogger();
+      sink.close?.();
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it.each(["voice-dialogue", "markdown-layout"])(

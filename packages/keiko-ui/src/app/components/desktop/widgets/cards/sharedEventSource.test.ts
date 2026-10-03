@@ -76,6 +76,40 @@ afterEach(() => {
 });
 
 describe("subscribeSharedEventSource", () => {
+  it("bounds persistent connections and rotates queued roots without losing replay cursors", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const releases = Array.from({ length: 7 }, (_, index) =>
+        subscribeSharedEventSource(
+          `/api/editor/watch/events?root=${String(index)}`,
+          ["change"],
+          vi.fn(),
+        ),
+      );
+      expect(FakeEventSource.instances.filter((source) => !source.closed)).toHaveLength(3);
+      const first = FakeEventSource.instances[0];
+      first?.listeners
+        .get("change")
+        ?.forEach((listener) =>
+          listener(new MessageEvent("change", { data: "{}", lastEventId: "42" })),
+        );
+      vi.advanceTimersByTime(15_000);
+      expect(FakeEventSource.instances.filter((source) => !source.closed)).toHaveLength(3);
+      expect(
+        new Set(FakeEventSource.instances.map((source) => source.url.split("&")[0])).size,
+      ).toBe(7);
+      expect(
+        FakeEventSource.instances.some((source) => source.url.includes("lastEventId=42")),
+      ).toBe(true);
+      releases.forEach((release) => release());
+      expect(FakeEventSource.instances.every((source) => source.closed)).toBe(true);
+    } finally {
+      resetSharedEventSourcesForTests();
+      vi.useRealTimers();
+    }
+  });
+
   it("opens same-origin API streams", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
 

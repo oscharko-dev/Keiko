@@ -305,6 +305,9 @@ import {
   safeDomIdSegment,
 } from "./editorDocumentUri";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const EditorIcon = Icons.editor;
@@ -2819,6 +2822,10 @@ function EditorRuntimeWidget({
       } catch (err: unknown) {
         if (signal.cancelled) return;
         setLoadState({ status: "error", message: errorMessage(err) });
+        reportClientDiagnostic(`[keiko] editor file load failed: ${clientErrorSummary(err)}`, {
+          correlationId: correlationIdOf(err) ?? newClientCorrelationId(),
+          errorKind: bffRequestErrorKind(err),
+        });
         throw err;
       }
     },
@@ -6684,12 +6691,12 @@ function EditorRuntimeWidget({
         <output className="ed-recovery" data-testid="editor-workspace-watch-status">
           <span>
             {workspaceWatch.snapshotRequired
-              ? "Workspace file events require a refresh."
-              : `Workspace file watching is ${workspaceWatch.health}.`}
+              ? commonT("editor.runtime.watchRefresh")
+              : commonT("editor.runtime.watchInterrupted")}
           </span>
           <span className="spacer" />
           <button type="button" className="ed-reload" onClick={requestReload}>
-            Refresh
+            {commonT("editor.runtime.refresh")}
           </button>
         </output>
       ) : null}
@@ -6713,32 +6720,34 @@ function EditorRuntimeWidget({
   };
 
   const renderLocalHistoryProtectionBanner = (): ReactNode => {
-    if (localHistoryProtection?.status === "degraded") {
-      return (
-        <output className="ed-recovery" data-testid="editor-local-history-protection">
-          <span>
-            {commonT("editor.localHistoryProtection.savedUnprotected")}{" "}
-            {localHistoryProtectionGuidance(localHistoryProtection.reason)}{" "}
+    if (
+      localHistoryProtection?.status !== "degraded" &&
+      localHistoryProtection?.status !== "suppressed"
+    )
+      return null;
+    const degraded = localHistoryProtection.status === "degraded";
+    return (
+      <output className="ed-recovery" data-testid="editor-local-history-protection">
+        <span>
+          {commonT(
+            degraded
+              ? "editor.localHistoryProtection.savedBrief"
+              : "editor.localHistoryProtection.suppressedBrief",
+          )}
+        </span>
+        <details>
+          <summary>{commonT("editor.runtime.details")}</summary>
+          <p>
+            {degraded
+              ? localHistoryProtectionGuidance(localHistoryProtection.reason)
+              : commonT("editor.localHistoryProtection.suppressedSecretDetected")}{" "}
             {commonT("editor.localHistoryProtection.diagnosticReference", {
               correlationId: localHistoryProtection.correlationId,
             })}
-          </span>
-        </output>
-      );
-    }
-    if (localHistoryProtection?.status === "suppressed") {
-      return (
-        <output className="ed-recovery" data-testid="editor-local-history-protection">
-          <span>
-            {commonT("editor.localHistoryProtection.suppressedSecretDetected")}{" "}
-            {commonT("editor.localHistoryProtection.diagnosticReference", {
-              correlationId: localHistoryProtection.correlationId,
-            })}
-          </span>
-        </output>
-      );
-    }
-    return null;
+          </p>
+        </details>
+      </output>
+    );
   };
 
   const renderExternalChangeBanner = (): ReactNode => (

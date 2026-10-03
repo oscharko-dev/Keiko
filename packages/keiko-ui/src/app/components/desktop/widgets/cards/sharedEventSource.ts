@@ -54,6 +54,12 @@ const RECONNECT_JITTER_MS = 500;
 let visibilityListenerInstalled = false;
 let capacityUnsubscribe: (() => void) | undefined;
 let nextSourceGeneration = 0;
+// Leave connections for finite reads, diagnostics, the run stream and development HMR.
+const MAX_SHARED_CONNECTIONS = 3;
+const STREAM_LEASE_MS = 5_000;
+let budgetTimer: number | undefined;
+let budgetCursor = 0;
+let budgetReported = false;
 
 export interface SharedEventSourceOptions {
   readonly priority?: "essential" | "background";
@@ -141,7 +147,7 @@ function scheduleReconnect(entry: SharedEventSourceEntry): void {
   }
   entry.reconnectTimer = window.setTimeout(() => {
     entry.reconnectTimer = undefined;
-    openEntrySource(entry);
+    refreshStreamBudget();
   }, reconnectDelay(entry));
 }
 
@@ -217,32 +223,72 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
     closeEntrySource(entry);
     repairSessionOnce(entry, streak);
     scheduleReconnect(entry);
+    refreshStreamBudget();
   };
   for (const type of entry.subscribersByType.keys()) {
     source.addEventListener(type, dispatcherFor(entry, type));
   }
 }
 
-function reconcileCapacity(backgroundStreamsSuspended: boolean): void {
+function clearBudgetTimer(): void {
+  if (budgetTimer === undefined) return;
+  window.clearInterval(budgetTimer);
+  budgetTimer = undefined;
+}
+
+function eligibleEntries(): SharedEventSourceEntry[] {
+  if (documentHidden()) return [];
+  return [...sourcesByUrl.values()].filter(
+    (entry) =>
+      entry.refCount > 0 &&
+      entry.reconnectTimer === undefined &&
+      (entry.essentialRefCount > 0 || !backgroundBrowserStreamsSuspended()),
+  );
+}
+
+// Shared subscriptions retain their listeners and replay cursor while waiting for a connection.
+// Rotate bounded leases fairly: one root must not hold every HTTP/1.1 slot forever, and queued
+// roots must eventually reconnect through their normal snapshot/replay recovery path.
+function refreshStreamBudget(rotate = false): void {
+  const entries = eligibleEntries();
+  const overBudget = entries.length > MAX_SHARED_CONNECTIONS;
+  if (overBudget && rotate) budgetCursor = (budgetCursor + MAX_SHARED_CONNECTIONS) % entries.length;
+  if (!overBudget) budgetCursor = 0;
+  const selected = new Set(
+    Array.from(
+      { length: Math.min(entries.length, MAX_SHARED_CONNECTIONS) },
+      (_, index) => entries[(budgetCursor + index) % entries.length],
+    ),
+  );
   for (const entry of sourcesByUrl.values()) {
-    if (entry.essentialRefCount > 0) {
-      openEntrySource(entry);
-    } else if (backgroundStreamsSuspended) {
-      suspendEntry(entry);
-    } else {
-      openEntrySource(entry);
-    }
+    if (!selected.has(entry) && entry.source !== null) suspendEntry(entry);
   }
+  for (const entry of selected) if (entry !== undefined) openEntrySource(entry);
+  if (!overBudget) {
+    clearBudgetTimer();
+    budgetReported = false;
+    return;
+  }
+  if (!budgetReported) {
+    budgetReported = true;
+    // i18n-exempt: body-free activity diagnostic, never user-facing copy
+    reportClientDiagnostic("[keiko] shared-event-source connection budget reached (limit=3)");
+  }
+  budgetTimer ??= window.setInterval(() => refreshStreamBudget(true), STREAM_LEASE_MS);
+}
+
+function reconcileCapacity(backgroundStreamsSuspended: boolean): void {
+  if (backgroundStreamsSuspended) budgetCursor = 0;
+  refreshStreamBudget();
 }
 
 function handleVisibilityChange(): void {
   if (documentHidden()) {
     for (const entry of sourcesByUrl.values()) suspendEntry(entry);
+    clearBudgetTimer();
     return;
   }
-  for (const entry of sourcesByUrl.values()) {
-    openEntrySource(entry);
-  }
+  refreshStreamBudget();
 }
 
 function ensureVisibilityListener(): void {
@@ -301,7 +347,7 @@ export function subscribeSharedEventSource(
     entry.subscribersByType.set(type, subscribers);
     dispatcherFor(entry, type);
   }
-  openEntrySource(entry);
+  refreshStreamBudget();
   // React effect cleanups may run more than once; a second call must not double-decrement the
   // ref counts (an essential underflow would suspend streams that still have live subscribers).
   let unsubscribed = false;
@@ -328,10 +374,14 @@ export function subscribeSharedEventSource(
     ) {
       suspendEntry(entry);
     }
-    if (entry.refCount > 0) return;
+    if (entry.refCount > 0) {
+      refreshStreamBudget();
+      return;
+    }
     clearReconnectTimer(entry);
     closeEntrySource(entry);
     sourcesByUrl.delete(url);
+    refreshStreamBudget();
     removeVisibilityListenerIfIdle();
   };
 }
@@ -346,6 +396,9 @@ export function resetSharedEventSourcesForTests(): void {
     closeEntrySource(entry);
   }
   sourcesByUrl.clear();
+  clearBudgetTimer();
+  budgetCursor = 0;
+  budgetReported = false;
   nextSourceGeneration = 0;
   removeVisibilityListenerIfIdle();
 }

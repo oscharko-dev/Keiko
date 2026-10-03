@@ -643,6 +643,26 @@ A candidate is created in two ways:
 - **By you.** `keiko support incident report` records a problem Keiko did not detect. It needs no
   failure event; every report is its own occurrence.
 
+Client operation timeouts are persisted as `client.diagnostic` at `error`, so the existing automatic
+trigger can retain their window. Other client warnings keep their warning severity. A browser
+diagnostic whose POST never reaches the BFF cannot create a server-side candidate; the browser
+transport reports delivery failure and counts the lost evidence. Report export and offline analysis
+do not themselves add a desktop notification or recover a blocked server.
+
+Workspace metadata scans yield to the event loop before synchronous capability reads and pause
+between short work slices. Baseline and fallback scans share one in-progress guard. Closing the
+session or losing all subscribers stops traversal, and excluded native events (including internal
+`.keiko` activity) are discarded before repeated authority work. This keeps background observation
+from starving HTTP handling; authority is still re-proved at effect boundaries.
+
+The shared browser EventSource manager admits at most three persistent connections and rotates
+five-second leases when more streams are subscribed. Pending subscriptions retain their listeners
+and replay cursors; reconnect backoff, visibility suspension and interactive reservations still
+apply. A body-free budget diagnostic names saturation once per episode. Watch sessions retain their
+metadata baseline for a bounded 30-second idle period, and an interrupted baseline can be seeded
+again when a subscriber resumes. Finite file reads and diagnostic delivery can therefore use the
+remaining HTTP/1.1 connections instead of waiting indefinitely behind editor metadata streams.
+
 Each candidate pins the Activity Log from 15 minutes before to 5 minutes after the incident, across
 every process, including segments sealed later in that window. For the automatic trigger, that pin is
 published synchronously in the same turn as the failure that caused it, before any later maintenance
@@ -816,3 +836,9 @@ and `editor-project-selection`. Each pair shares a correlation id and opaque ord
 a successful directory load joins its HTTP response correlation as a parent. A failed
 read emits a correlated, body-free client diagnostic and still settles its stage.
 Neither paths, filenames, Git details nor document bodies enter these reports.
+
+Desktop workspace manifests are scoped to the requested root immediately on navigation. A previous
+workspace cannot retarget a newly selected directory while its manifest fetch is pending. Workspace
+watch subscriptions reconcile unattended changes after resuming under fresh subscriber authority.
+Editor watch notices use the selected locale; local-history detail and correlation references remain
+available in a collapsed Details disclosure.

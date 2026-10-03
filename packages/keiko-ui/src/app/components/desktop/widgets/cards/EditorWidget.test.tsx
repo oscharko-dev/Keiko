@@ -1148,9 +1148,10 @@ describe("EditorWidget — edit and save", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Save" }));
 
     const warning = await screen.findByTestId("editor-local-history-protection");
-    expect(warning).toHaveTextContent(
-      "File saved, but Local History could not protect this version.",
-    );
+    expect(warning).toHaveTextContent("Saved. File history unavailable.");
+    expect(warning.querySelector("details")).not.toHaveAttribute("open");
+    await userEvent.click(screen.getByText("Details", { selector: "summary" }));
+    expect(warning.querySelector("details")).toHaveAttribute("open");
     expect(warning).toHaveTextContent("Reconnect this project");
     expect(warning).toHaveTextContent("local-history-correlation-2811");
     expect(surface.props?.saveStatus).toBe("saved");

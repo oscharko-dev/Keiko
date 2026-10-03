@@ -30,6 +30,7 @@ import {
   saveFilesContent,
 } from "../../../../../lib/api";
 import { I18N_STORAGE_KEY, I18nProvider } from "../../../../../lib/i18n";
+import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
@@ -271,6 +272,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetClientDiagnosticWriter();
   surface.props = null;
   diffSurface.props = null;
   _resetEditorAgentBridgeStateForTests();
@@ -279,6 +281,26 @@ afterEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
   window.localStorage.removeItem(I18N_STORAGE_KEY);
+});
+
+describe("EditorRuntimeWidget load failure", () => {
+  it("reports a timed-out file read without its path or error text and keeps Retry available", async () => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    vi.mocked(fetchFilesContent).mockRejectedValueOnce(
+      new DOMException("private failure detail", "TimeoutError"),
+    );
+    render(
+      <I18nProvider>
+        <EditorRuntimeWidget root="/private/repo" file="secret-name.ts" />
+      </I18nProvider>,
+    );
+    expect(await screen.findByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(diagnostic).toHaveBeenCalledWith(
+      "[keiko] editor file load failed: TimeoutError",
+      expect.objectContaining({ errorKind: "timeout" }),
+    );
+  });
 });
 
 /**

@@ -35,7 +35,7 @@
 //
 // KEIKO-3557: this route accepts TWO closed report shapes on the same rate limit, size bound, and
 // rejection/loss accounting above. A message report (the shape this header describes) reaches
-// `client.diagnostic` — a FAILURE, always at warn. A stage report (`useWindowStageEvidence`,
+// `client.diagnostic` — a FAILURE, at error for timeouts and warn otherwise. A stage report (`useWindowStageEvidence`,
 // keiko-ui: a desktop window placeholder mounting and later unmounting) reaches
 // `client.stage.started`/`client.stage.settled` instead — the ORDINARY case, at info, with no
 // `errorKind`. Routing routine evidence through the failure-shaped operation is exactly the defect
@@ -1671,7 +1671,11 @@ function logClientDiagnostic(
   projectClientLoss(request.loss, extra);
   extra.completeness = "complete";
   extra.loss = "none";
-  getServerLogger().warn(
+  // A timed-out user operation is a registered failure. Warning-only persistence prevents the
+  // Activity Log's existing automatic incident trigger from retaining its diagnostic window.
+  const logger = getServerLogger();
+  const level = requestDiagnosticErrorKind(request) === "timeout" ? "error" : "warn";
+  logger[level](
     activityLogEvent(
       CLIENT_DIAGNOSTIC_OPERATION,
       {

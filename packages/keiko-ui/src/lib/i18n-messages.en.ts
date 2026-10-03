@@ -34,6 +34,12 @@ export const EN_MESSAGES = {
   "editor.empty.workspaceUnavailable":
     "The saved workspace identity is no longer current. Remove the stale project entry before reconnecting this folder.",
   "editor.runtime.chooseFile": "Choose a file from the project tree to start editing.",
+  "editor.runtime.watchRefresh": "File list needs updating.",
+  "editor.runtime.watchInterrupted": "File watching interrupted.",
+  "editor.runtime.refresh": "Refresh",
+  "editor.runtime.details": "Details",
+  "editor.localHistoryProtection.savedBrief": "Saved. File history unavailable.",
+  "editor.localHistoryProtection.suppressedBrief": "Saved without a history entry.",
   "editor.outline.title": "Outline",
   "editor.outline.workspaceLabel": "Workspace outline",
   "editor.outline.hide": "Hide outline panel",

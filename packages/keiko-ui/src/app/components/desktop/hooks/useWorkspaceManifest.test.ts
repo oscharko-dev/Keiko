@@ -81,6 +81,23 @@ const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
 };
 
 describe("useWorkspaceManifest", () => {
+  it("does not expose the previous workspace while a selected root is loading", async () => {
+    const alpha = manifest("ws-a", ["alpha"]);
+    fetchManifestAccess.mockResolvedValueOnce({ session: "paired", manifests: [alpha] });
+    const view = renderHook(({ root }) => useWorkspaceManifest(root), {
+      initialProps: { root: "/ws/alpha" },
+    });
+    await waitFor(() => expect(view.result.current.manifest).toBe(alpha));
+    fetchManifestAccess.mockReturnValueOnce(new Promise(() => undefined));
+
+    view.rerender({ root: "/plain/notes" });
+
+    expect(view.result.current.manifest).toBeNull();
+    act(() => emitChanged({ ...alpha, revision: 2 }));
+    expect(view.result.current.manifest).toBeNull();
+    expect(view.result.current.pathReadAuthority).toBe("checking");
+  });
+
   it("loads the manifest containing the tracked root and clears on miss", async () => {
     const alpha = manifest("ws-a", ["alpha"]);
     fetchManifestAccess.mockResolvedValue({

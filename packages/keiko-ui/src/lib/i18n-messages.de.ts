@@ -37,6 +37,12 @@ export const DE_MESSAGES = {
     "Die gespeicherte Workspace-Identität ist nicht mehr aktuell. Entfernen Sie den veralteten Projekteintrag, bevor Sie diesen Ordner erneut verbinden.",
   "editor.runtime.chooseFile":
     "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
+  "editor.runtime.watchRefresh": "Dateiliste aktualisieren.",
+  "editor.runtime.watchInterrupted": "Dateiüberwachung unterbrochen.",
+  "editor.runtime.refresh": "Aktualisieren",
+  "editor.runtime.details": "Details",
+  "editor.localHistoryProtection.savedBrief": "Gespeichert. Dateiverlauf nicht verfügbar.",
+  "editor.localHistoryProtection.suppressedBrief": "Ohne Eintrag im Dateiverlauf gespeichert.",
   "editor.outline.title": "Gliederung",
   "editor.outline.workspaceLabel": "Arbeitsbereichsgliederung",
   "editor.outline.hide": "Gliederungsbereich ausblenden",

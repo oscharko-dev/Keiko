@@ -1,4 +1,5 @@
 import type { Dirent, Stats } from "node:fs";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import {
   lstat,
   mkdir,
@@ -194,6 +195,103 @@ async function drainInitialBaseline(
 }
 
 describe("workspace watch service", () => {
+  it("reconciles unattended changes when an authorized subscriber resumes", async () => {
+    const adapter = new FakeAdapter();
+    const manager = createWorkspaceWatchService({ adapter, coalesceMs: 0, idleTearDownMs: 30_000 });
+    const args = {
+      root,
+      onEvent: vi.fn(),
+      reproveRoot: () => createOrdinaryWorkspaceRootAccess(root),
+    };
+    const first = manager.subscribe(args);
+    await drainInitialBaseline(manager, adapter);
+    if (first.kind !== "ok") throw new Error("Expected subscription");
+    first.unsubscribe();
+    await writeFile(join(root, "while-paused.txt"), "one", "utf8");
+    adapter.emit({ eventType: "rename", filename: "while-paused.txt" });
+    expect(manager.snapshot(root).health).toBe("rescanRequired");
+
+    manager.subscribe(args);
+
+    await waitForCondition(() => manager.snapshot(root).health === "healthy");
+    expect(args.onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "created", relativePath: "while-paused.txt" }),
+    );
+    manager.disposeAll();
+  });
+
+  it("does not start polling scans while the initial baseline is still reading", async () => {
+    const adapter = new FakeAdapter();
+    adapter.recursive = false;
+    const fileSystem = new InjectedFileSystem();
+    let releaseRead: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    fileSystem.readdir.mockImplementation(async (path): Promise<readonly Dirent[]> => {
+      await held;
+      return readdir(path, { withFileTypes: true });
+    });
+    const manager = createWorkspaceWatchService({ adapter, fileSystem, fallbackPollMs: 5 });
+    try {
+      manager.subscribe({ root, onEvent: vi.fn() });
+      await waitForCondition(() => fileSystem.readdir.mock.calls.length > 0);
+      adapter.fail();
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      expect(fileSystem.readdir).toHaveBeenCalledOnce();
+    } finally {
+      manager.disposeAll();
+      releaseRead?.();
+    }
+  });
+
+  it("ignores excluded native event storms before repeating root authority work", async () => {
+    const adapter = new FakeAdapter();
+    const manager = service(adapter);
+    const reproveRoot = vi.fn(() => createOrdinaryWorkspaceRootAccess(root));
+    try {
+      manager.subscribe({ root, onEvent: vi.fn(), reproveRoot });
+      await drainInitialBaseline(manager, adapter);
+      reproveRoot.mockClear();
+      for (let index = 0; index < 100; index += 1) {
+        adapter.emit({ eventType: "change", filename: ".keiko/dev/activity.log" });
+        adapter.emit({ eventType: "change", filename: "node_modules/package/index.js" });
+      }
+      expect(reproveRoot).not.toHaveBeenCalled();
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it("yields synchronous capability scans so pending requests can run before baseline completion", async () => {
+    await Promise.all(
+      Array.from({ length: 64 }, (_, index) =>
+        writeFile(join(root, `file-${String(index)}.txt`), "x"),
+      ),
+    );
+    const adapter = new FakeAdapter();
+    const capability = new RecordingWorkspaceFs();
+    const manager = service(adapter);
+    try {
+      manager.subscribe({
+        root,
+        onEvent: vi.fn(),
+        reproveRoot: (): WorkspaceRootAccess => ({
+          kind: "managed-task",
+          canonicalRoot: root,
+          fs: capability,
+          repositoryRoot: root,
+        }),
+      });
+      await yieldToEventLoop();
+      expect(capability.calls.filter((call) => call === "stat").length).toBeLessThan(64);
+      await drainInitialBaseline(manager, adapter);
+      expect(capability.calls.filter((call) => call === "stat").length).toBeGreaterThanOrEqual(64);
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
   it("shares one native watcher per canonical root and closes it after the last unsubscribe", async () => {
     const adapter = new FakeAdapter();
     const manager = service(adapter);

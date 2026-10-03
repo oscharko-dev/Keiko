@@ -1,6 +1,10 @@
 import { type Dirent, type FSWatcher, type Stats, watch } from "node:fs";
 import { readdir, realpath, stat, lstat } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import {
+  setImmediate as yieldToEventLoop,
+  setTimeout as pauseBackgroundWork,
+} from "node:timers/promises";
 import { isAbsolute, join, posix as pathPosix, relative, resolve } from "node:path";
 
 import type {
@@ -187,11 +191,12 @@ const NODE_FILE_SYSTEM: WorkspaceWatchFileSystem = {
   readdir: async (path): Promise<readonly Dirent[]> => readdir(path, { withFileTypes: true }),
 };
 
-// Keeps a synchronous throw from a capability filesystem on the promise path, so every call site
-// observes one failure mode instead of two.
-function deferred<T>(read: () => T): Promise<T> {
+// Capability reads are synchronous. A resolved promise alone keeps a whole scan inside the
+// microtask queue and starves HTTP requests; yield to libuv before each metadata read instead.
+async function deferred<T>(read: () => T): Promise<T> {
+  await yieldToEventLoop();
   try {
-    return Promise.resolve(read());
+    return read();
   } catch (error) {
     return Promise.reject(error instanceof Error ? error : new Error(String(error)));
   }
@@ -277,7 +282,8 @@ function proveRoot(
 
 const DEFAULT_CONFIG: Omit<WatchConfig, "adapter" | "fileSystem"> = {
   coalesceMs: 50,
-  idleTearDownMs: 3_000,
+  // Short browser stream leases can resume without rebuilding the same metadata baseline.
+  idleTearDownMs: 30_000,
   fallbackPollMs: 2_000,
   maxQueueDepth: 1_024,
   maxBatchSize: 128,
@@ -286,7 +292,16 @@ const DEFAULT_CONFIG: Omit<WatchConfig, "adapter" | "fileSystem"> = {
   maxScanEntries: 20_000,
 };
 
-const EXCLUDED_SEGMENTS = new Set(["node_modules", ".next", ".turbo", "dist", "build", "out"]);
+const EXCLUDED_SEGMENTS = new Set([
+  "node_modules",
+  ".next",
+  ".turbo",
+  "dist",
+  "build",
+  "out",
+  ".keiko",
+  ".git",
+]);
 const EXCLUDED_PREFIXES = [".git/objects", ".git/logs", ".codex", ".keiko/private"] as const;
 
 // User/workspace-configurable `watcherExclusions` (validated upstream by keiko-contracts'
@@ -492,6 +507,7 @@ class WorkspaceWatchSession {
   private baselineReady: Promise<void> | null = null;
   private flushing = false;
   private scanning = false;
+  private scanYieldAt = 0;
   private disposed = false;
   private additionalExclusions: WatchExclusions = NO_EXCLUSIONS;
   private exclusionsInitialized = false;
@@ -597,7 +613,12 @@ class WorkspaceWatchSession {
   }
 
   private ensureStarted(): void {
-    if (this.disposed || this.handle !== null || this.pollTimer !== null) return;
+    if (this.disposed || this.pollTimer !== null) return;
+    if (this.handle !== null) {
+      this.startBaselineSeed();
+      if (this.degradedReasons.has("ambiguous-event")) void this.scanAndEmitDiff();
+      return;
+    }
     // The native watcher has no WorkspaceFs equivalent, so it is gated by the same fresh re-proof
     // and bound to `this.root` — which proveRoot() has just confirmed is the capability's own
     // canonicalRoot, so the watch cannot be started on a root nobody proved.
@@ -633,6 +654,7 @@ class WorkspaceWatchSession {
 
   private handleRawEvent(event: WorkspaceWatchRawEvent): void {
     if (this.disposed) return;
+    if (this.isExcludedRawEvent(event)) return;
     const proof = this.currentAuthority();
     if (proof === null) {
       this.markUnattendedChange();
@@ -661,6 +683,21 @@ class WorkspaceWatchSession {
       oldRelativePath: oldRelativePath ?? undefined,
       eventType: event.eventType,
     });
+  }
+
+  // Discarding excluded activity needs no authority proof or filesystem effect. In particular,
+  // recording a diagnostic in .keiko must not feed another expensive watch reconciliation.
+  // A move from a visible path still reaches authority and unsafe-path handling.
+  private isExcludedRawEvent(event: WorkspaceWatchRawEvent): boolean {
+    if (event.eventType === "overflow") return false;
+    const path = normalizeEventPath(event.filename);
+    const oldPath = normalizeEventPath(event.oldFilename);
+    return (
+      path !== null &&
+      hardExcluded(path, this.additionalExclusions) &&
+      (event.oldFilename === undefined ||
+        (oldPath !== null && hardExcluded(oldPath, this.additionalExclusions)))
+    );
   }
 
   private queue(change: PendingChange): void {
@@ -780,12 +817,18 @@ class WorkspaceWatchSession {
   }
 
   private async seedBaseline(): Promise<void> {
-    const next = await this.scanTree();
-    if (next === null || !next.complete || this.disposed || !this.ensureLiveRootAuthority()) {
-      return;
+    this.scanning = true;
+    try {
+      const next = await this.scanTree();
+      if (next === null || !next.complete || this.disposed || !this.ensureLiveRootAuthority()) {
+        this.baselineReady = null;
+        return;
+      }
+      this.known.clear();
+      for (const metadata of next.entries.values()) this.known.set(metadata.relativePath, metadata);
+    } finally {
+      this.scanning = false;
     }
-    this.known.clear();
-    for (const metadata of next.entries.values()) this.known.set(metadata.relativePath, metadata);
   }
 
   private async scanAndEmitDiff(): Promise<void> {
@@ -807,6 +850,7 @@ class WorkspaceWatchSession {
   }
 
   private async scanTree(): Promise<ScanResult | null> {
+    this.scanYieldAt = performance.now() + 8;
     const fileSystem = this.effectFileSystem();
     if (fileSystem === null) return null;
     try {
@@ -836,8 +880,9 @@ class WorkspaceWatchSession {
   private async scanDirectory(start: string): Promise<ScanResult> {
     const found = new Map<string, FileMetadata>();
     const queue = [start];
-    while (queue.length > 0) {
-      const current = queue.shift() ?? "";
+    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+      if (this.disposed || this.subscribers.size === 0) return { entries: found, complete: false };
+      const current = queue[cursor] ?? "";
       const result = await this.scanOneDirectory(current, found, queue);
       if (result === "complete") continue;
       this.emitRescan(
@@ -867,6 +912,11 @@ class WorkspaceWatchSession {
     }
     if (!this.ensureLiveRootAuthority()) return "unavailable";
     for (const name of names) {
+      if (performance.now() >= this.scanYieldAt) {
+        await pauseBackgroundWork(8);
+        this.scanYieldAt = performance.now() + 8;
+      }
+      if (this.disposed || this.subscribers.size === 0) return "unavailable";
       const outcome = await this.scanDirectoryEntry(relativeDirectory, name, found, queue);
       if (outcome !== "continue") return outcome;
     }
