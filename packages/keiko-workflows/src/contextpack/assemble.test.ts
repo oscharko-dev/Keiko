@@ -246,6 +246,22 @@ describe("assembleContextPack", () => {
     ).toBe(true);
   });
 
+  it("merges ranking and assembly omissions once per path with the actual assembly reason", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      ranked: [{ ...candidate("a.ts", 0.9), omitted: "generated" }, candidate("b.ts", 0.8)],
+      omittedFromRanking: [
+        { scopePath: "a.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW - 1 },
+        { scopePath: "a.ts", reason: "near-duplicate", omittedAtMs: FIXED_NOW - 1 },
+      ],
+    };
+    const result = await assembleContextPack(input, { nowMs: fixedNow });
+    expect(result.pack.omitted).toEqual([
+      { scopePath: "a.ts", reason: "generated", omittedAtMs: FIXED_NOW },
+    ]);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+
   it("micro-index key is sensitive to budget so cached packs cannot violate a new budget", async () => {
     // Copilot review on PR #252: a cached pack assembled for budget A would otherwise be
     // returned for a request with budget B, even if usage would exceed B.excerptBytesMax.

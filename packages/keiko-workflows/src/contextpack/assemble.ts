@@ -460,13 +460,28 @@ function cacheConnectedFile(file: ConnectedFileEntry): object {
   };
 }
 
-function buildStableId(input: AssembleInput, plan: BuildPlan): string {
+function mergeOmittedEntries(
+  ranked: readonly OmittedContextEntry[],
+  assembled: readonly OmittedContextEntry[],
+): readonly OmittedContextEntry[] {
+  const byPath = new Map<string, OmittedContextEntry>();
+  for (const entry of [...ranked, ...assembled]) {
+    byPath.set(entry.scopePath, entry);
+  }
+  return [...byPath.values()];
+}
+
+function buildStableId(
+  input: AssembleInput,
+  plan: BuildPlan,
+  omitted: readonly OmittedContextEntry[],
+): string {
   const fingerprint = sha256Hex(
     JSON.stringify({
       scope: cacheScope(input.scope),
       query: cacheQuery(input.query),
       files: plan.files.map(cacheConnectedFile),
-      omitted: [...input.omittedFromRanking, ...plan.extraOmitted].map(cacheOmitted),
+      omitted: omitted.map(cacheOmitted),
       uncertainty: plan.uncertainty.map(cacheUncertainty),
     }),
   );
@@ -479,15 +494,16 @@ function buildStableId(input: AssembleInput, plan: BuildPlan): string {
 }
 
 function buildPack(input: AssembleInput, plan: BuildPlan, nowMs: number): ConnectedContextPack {
+  const omitted = mergeOmittedEntries(input.omittedFromRanking, plan.extraOmitted);
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-    stableId: buildStableId(input, plan),
+    stableId: buildStableId(input, plan, omitted),
     scope: input.scope,
     query: input.query,
     budget: input.budget,
     usage: plan.usage,
     files: plan.files,
-    omitted: [...input.omittedFromRanking, ...plan.extraOmitted],
+    omitted,
     uncertainty: plan.uncertainty,
     emittedAtMs: nowMs,
     ledgerRef: undefined,

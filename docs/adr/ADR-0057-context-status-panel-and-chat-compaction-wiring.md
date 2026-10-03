@@ -99,6 +99,11 @@ receive an identical result — backward-compatible by construction.
 The grounded-QA call site in `keiko-server` already computes `deriveGroundedContextAssembly` for
 the evidence path (PR5 W3). It will pass the same result as the fourth argument.
 
+The source observer counts every excerpt already selected in the canonical pack without a second
+eviction pass. Its pressure reports overflow honestly; it does not alter selection. Source omission
+or trimming never activates conversation compaction. Connected and hybrid turns project the actual
+prepared conversation-history splice into `compactionActive`.
+
 **Why this shape**: `ContextLaneId` is a finite string literal union locked in
 `context-engineering.ts:15–23`; it carries no path information. `totalEstimatedTokens` and
 `budgetPressure` are a number and an enum. `includedItems` is a count. The type is structurally
@@ -142,11 +147,13 @@ Source excerpts are fetched afresh per question and are trimmed, rather than sum
 remaining input. The previous grounded request's source share is an estimate for the next turn;
 the allocator's assembled estimate and provider/gateway request accounting remain distinct.
 
-The answer disclosure is labeled **Source context**. Its estimate counts source-excerpt content;
+The answer disclosure is labeled **Source context**. Its estimate counts selected source-excerpt content;
 prompt formatting, system instructions and conversation messages belong to the full-request
 accounting shown by the conversation meter. Populated source groups have localized names; the
 repository group is labeled **Repository excerpts**, whose item count can differ from files read
-and citation references. The panel never presents a source-only estimate as the total prompt.
+and citation references. Fitting the gateway request can reduce the selected excerpts; the actual
+sent source share is recorded separately in `promptContext`. The panel never presents a source-only
+estimate as the total prompt.
 
 Checkpoint validation and manual compaction use the same bounded conversation profile as grounded
 sending. A valid 8,000-token lane checkpoint is not invalidated by comparison with a larger full

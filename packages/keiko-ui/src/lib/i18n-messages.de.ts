@@ -1450,7 +1450,7 @@ export const DE_MESSAGES = {
   "scope.connect.connecting": "Wird verbunden…",
   "context.details.aria": "Details zur Kontextzusammenstellung",
   "context.details.hint":
-    "Geschätzte Tokens der Quellenausschnitte für diese Antwort mit {estimator}. Die Formatierung der Anfrage benötigt zusätzliche Tokens. Die Gesprächsanzeige umfasst die gesamte Anfrage einschließlich Nachrichten und Systemanweisungen.",
+    "Geschätzte Tokens der ausgewählten Quellenausschnitte mit {estimator}. Beim Einpassen in die Modellanfrage können Ausschnitte reduziert werden; die Formatierung benötigt zusätzliche Tokens. Die Gesprächsanzeige umfasst die gesamte Anfrage einschließlich Nachrichten und Systemanweisungen.",
   "context.details.title": "Quellenkontext",
   "context.pressure.low": "Niedrig",
   "context.pressure.moderate": "Mittel",
@@ -1462,7 +1462,7 @@ export const DE_MESSAGES = {
   "context.compaction.active": "Kompaktierung aktiv",
   "context.compaction.inactive": "Kompaktierung inaktiv",
   "context.metric.estimator": "Schätzer",
-  "context.metric.assembledEstimate": "Schätzung der Quellenausschnitte",
+  "context.metric.assembledEstimate": "Schätzung der ausgewählten Quellenausschnitte",
   "context.metric.tokensShort": "{tokens} Tok.",
   "context.metric.budgetPressure": "Budgetdruck",
   "context.metric.compaction": "Kompaktierung",

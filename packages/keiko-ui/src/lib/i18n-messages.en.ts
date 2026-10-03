@@ -1405,7 +1405,7 @@ export const EN_MESSAGES = {
   "scope.connect.connecting": "Connecting…",
   "context.details.aria": "Context assembly details",
   "context.details.hint":
-    "Estimated source-excerpt tokens for this answer, using {estimator}. Prompt formatting adds tokens. The conversation meter shows the full request, including messages and system instructions.",
+    "Estimated tokens of the selected source excerpts, using {estimator}. Fitting the model request may reduce these excerpts; prompt formatting adds tokens. The conversation meter shows the full request, including messages and system instructions.",
   "context.details.title": "Source context",
   "context.pressure.low": "Low",
   "context.pressure.moderate": "Moderate",
@@ -1417,7 +1417,7 @@ export const EN_MESSAGES = {
   "context.compaction.active": "Compaction active",
   "context.compaction.inactive": "Compaction inactive",
   "context.metric.estimator": "Estimator",
-  "context.metric.assembledEstimate": "Source-excerpt estimate",
+  "context.metric.assembledEstimate": "Selected source-excerpt estimate",
   "context.metric.tokensShort": "{tokens} tok",
   "context.metric.budgetPressure": "Budget pressure",
   "context.metric.compaction": "Compaction",

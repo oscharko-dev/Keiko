@@ -108,7 +108,7 @@ describe("ContextStatusPanel", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("Estimator");
     expect(text).toContain(DEFAULT_TOKEN_ESTIMATOR_ID);
-    expect(text).toContain("Source-excerpt estimate");
+    expect(text).toContain("Selected source-excerpt estimate");
     expect(text).toContain("34.0k tok");
     expect(text).toContain("Budget pressure");
     expect(text).toContain("Moderate");
