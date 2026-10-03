@@ -124,6 +124,24 @@ function packWith(
 }
 
 describe("parseInlineCitations", () => {
+  it("ignores proposed code arrays and example references inside Markdown code", () => {
+    const answer = [
+      "Example: `[missing.ts:2]`.",
+      "```ts",
+      "expect(createBulkQuote([1, 1.01])).toBe('Quote: 10.25 EUR');",
+      "expect(() => createBulkQuote([Number.NaN])).toThrow(RangeError);",
+      "expect(() => createBulkQuote([30.01])).toThrow(RangeError);",
+      "// [missing.ts:4]",
+      "```",
+      "Actual source: [src/services/createQuote.ts:1-7].",
+      "Unsupported prose source: [missing.ts:9].",
+    ].join("\n");
+    expect(parseInlineCitations(answer).map((citation) => citation.raw)).toEqual([
+      "src/services/createQuote.ts:1-7",
+      "missing.ts:9",
+    ]);
+  });
+
   it("extracts [path:line-range] markers and dedupes", () => {
     const cites = parseInlineCitations(
       "The route is defined in [src/http/routes.ts:10-20] and again [src/http/routes.ts:10-20].",

@@ -31,6 +31,7 @@ import {
   citationFindingTotalSuffix,
   citationMarkerIndices,
   findCitationMarkerGroups,
+  markdownCodeRanges,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
@@ -170,7 +171,13 @@ function citationDedupKey(citation: ParsedInlineCitation): string {
 export function parseInlineCitations(answerText: string): readonly ParsedInlineCitation[] {
   const out: ParsedInlineCitation[] = [];
   const seen = new Set<string>();
+  const code = markdownCodeRanges(answerText);
+  let nextCode = 0;
   for (const match of answerText.matchAll(BRACKET_RE)) {
+    while (code[nextCode] !== undefined && (code[nextCode]?.end ?? 0) <= match.index) {
+      nextCode += 1;
+    }
+    if ((code[nextCode]?.start ?? Number.POSITIVE_INFINITY) <= match.index) continue;
     if (isMarkdownLink(answerText, match)) {
       continue;
     }
