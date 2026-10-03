@@ -1,15 +1,19 @@
 // Shared incident resolution for desktop and CLI support reports.
 import {
   activityLogOperationSchema,
+  MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
+  MAX_SUPPORT_REPORT_TIMELINE_BYTES,
   type SupportIncident,
   type SupportIncidentRecord,
   type SupportIncidentSufficiency,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
+import type { SupportQueryResult } from "./support-query.js";
 import type { SupportIncidentSegmentFile } from "../support-incident.js";
 import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
 import {
   ACTIVITY_LOG_EVIDENCE_INTEGRITY,
+  ActivityLogAnalyzeBudgetError,
   analyzeLogLines,
   type ActivityLogEvidenceSummary,
   type ActivityLogTextLine,
@@ -208,4 +212,41 @@ export function unresolvedSupportIncident(
       },
     },
   };
+}
+
+/** Selected desktop and CLI closures share one bounded descriptor analysis. */
+function selectedSegments(query: SupportQueryResult): readonly SupportIncidentSegmentFile[] {
+  const segments = new Map<string, SupportIncidentSegmentFile>();
+  for (const { file } of query.events) {
+    if (file.segmentId === undefined || (file.kind !== "active" && file.kind !== "sealed"))
+      continue;
+    segments.set(file.segmentId, {
+      segmentId: file.segmentId,
+      state: file.kind,
+      sizeBytes: file.sizeBytes,
+      path: file.path,
+    });
+  }
+  return [...segments.values()];
+}
+
+export function resolveSelectedSupportIncident(
+  record: SupportIncidentRecord,
+  selected: SupportQueryResult,
+): ReturnType<typeof resolveSupportIncidentAnalysis> {
+  const segments = selectedSegments(selected);
+  try {
+    const analysis = analyzeLogLines(
+      selected.events.map((event) => ({ text: event.text, terminated: true })),
+      {
+        maxTimelineRecords: MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
+        maxTimelineBytes: MAX_SUPPORT_REPORT_TIMELINE_BYTES,
+      },
+    );
+    return resolveSupportIncidentAnalysis(record, segments, analysis);
+  } catch (error) {
+    if (!(error instanceof ActivityLogAnalyzeBudgetError)) throw error;
+    // Reuse the canonical budget-exceeded descriptor; retain the query's selected evidence.
+    return unresolvedSupportIncident(record, segments, "window-too-large");
+  }
 }

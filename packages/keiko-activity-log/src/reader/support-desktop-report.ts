@@ -2,8 +2,6 @@
 import { randomUUID } from "node:crypto";
 import {
   MAX_SUPPORT_REPORT_EVENT_BYTES,
-  MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
-  MAX_SUPPORT_REPORT_TIMELINE_BYTES,
   supportIncidentPrivateProjection,
   supportReportFileName,
   type DesktopSupportReportResponse,
@@ -16,7 +14,6 @@ import {
   recordUserReportedIncident,
   supportIncidentSegmentFiles,
   type SupportIncidentRejection,
-  type SupportIncidentSegmentFile,
 } from "../support-incident.js";
 import { listSupportIncidentEntries } from "../support-incident-store.js";
 import {
@@ -27,7 +24,7 @@ import {
 import { executeLocalSupportQuery } from "./support-local-query.js";
 import {
   resolveSupportIncident,
-  resolveSupportIncidentAnalysis,
+  resolveSelectedSupportIncident,
   unresolvedSupportIncident,
   SupportIncidentWindowError,
 } from "./support-incident-resolution.js";
@@ -36,8 +33,6 @@ import {
   serializeSupportReport,
   SupportReportError,
 } from "./support-report.js";
-
-import { ActivityLogAnalyzeBudgetError, analyzeLogLines } from "./support-analyze.js";
 
 const REPORT_QUERY_LIMITS = {
   ...DEFAULT_SUPPORT_QUERY_LIMITS,
@@ -69,53 +64,14 @@ function createReportIncident(stateDir: string, correlationId: string): SupportI
   return created.record;
 }
 
-function selectedSegments(query: SupportQueryResult): readonly SupportIncidentSegmentFile[] {
-  const segments = new Map<string, SupportIncidentSegmentFile>();
-  for (const { file } of query.events) {
-    if (file.segmentId === undefined || (file.kind !== "active" && file.kind !== "sealed"))
-      continue;
-    segments.set(file.segmentId, {
-      segmentId: file.segmentId,
-      state: file.kind,
-      sizeBytes: file.sizeBytes,
-      path: file.path,
-    });
-  }
-  return [...segments.values()];
-}
-
-function selectedIncident(
-  record: SupportIncidentRecord,
-  segments: readonly SupportIncidentSegmentFile[],
-  selected: SupportQueryResult,
-): ReturnType<typeof resolveSupportIncidentAnalysis> {
-  try {
-    const analysis = analyzeLogLines(
-      selected.events.map((event) => ({ text: event.text, terminated: true })),
-      {
-        maxTimelineRecords: MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
-        maxTimelineBytes: MAX_SUPPORT_REPORT_TIMELINE_BYTES,
-      },
-    );
-    return resolveSupportIncidentAnalysis(record, segments, analysis);
-  } catch (error) {
-    if (!(error instanceof ActivityLogAnalyzeBudgetError)) throw error;
-    // Reuse the canonical budget-exceeded descriptor; retain the query's selected evidence.
-    return unresolvedSupportIncident(record, segments, "window-too-large");
-  }
-}
-
 function incidentDescriptor(
   stateDir: string,
   record: SupportIncidentRecord,
   selected?: SupportQueryResult,
 ): SupportReport["incident"] {
-  const segments =
-    selected === undefined
-      ? supportIncidentSegmentFiles(stateDir, record)
-      : selectedSegments(selected);
+  const segments = selected === undefined ? supportIncidentSegmentFiles(stateDir, record) : [];
   if (selected !== undefined) {
-    return supportIncidentPrivateProjection(selectedIncident(record, segments, selected));
+    return supportIncidentPrivateProjection(resolveSelectedSupportIncident(record, selected));
   }
   try {
     return supportIncidentPrivateProjection(resolveSupportIncident(record, segments, stateDir));

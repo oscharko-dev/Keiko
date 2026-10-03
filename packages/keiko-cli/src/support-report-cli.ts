@@ -53,6 +53,8 @@ import {
   type AnalyzedSupportReport,
   type ReproductionSeed,
   type SupportAnalyzeOptions,
+  type SupportQueryResult,
+  resolveSelectedSupportIncident,
 } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   cliControlStateConflictsWithTarget,
@@ -150,7 +152,10 @@ function createdIncident(
 function reportIncident(
   record: SupportIncidentRecord,
   stateDir: string,
+  selected?: SupportQueryResult,
 ): SupportReport["incident"] {
+  if (selected !== undefined)
+    return supportIncidentPrivateProjection(resolveSelectedSupportIncident(record, selected));
   const segments = supportIncidentSegmentFiles(stateDir, record);
   try {
     return supportIncidentPrivateProjection(resolveSupportIncident(record, segments, stateDir));
@@ -210,7 +215,11 @@ async function makeReport(
       correlationId,
     ));
   return buildSupportReport(
-    reportIncident(record, stateDir),
+    reportIncident(
+      record,
+      stateDir,
+      args.selector?.correlationId === undefined ? undefined : query.result,
+    ),
     query.result,
     args.maxBytes ?? MAX_SUPPORT_REPORT_BYTES,
   );

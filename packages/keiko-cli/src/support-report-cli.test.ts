@@ -14,6 +14,7 @@ import {
   statSync,
   symlinkSync,
   writeFileSync,
+  utimesSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -100,11 +101,11 @@ function seed(): void {
     fixtureLine(process, now, { op: "client.diagnostic", correlationId: CORRELATION }),
   ]);
 }
-function seedGatewayFailure(): void {
+function seedGatewayFailure(ageMs = 0): void {
   rmSync(join(stateDir, "logs"), { recursive: true });
   const process = fixtureProcess(4242, "aabbccdd");
-  const now = Date.now();
-  writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+  const now = Date.now() - ageMs;
+  const segment = writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
     fixtureLine(process, now, {
       op: "gateway.chat.started",
       correlationId: CORRELATION,
@@ -144,6 +145,7 @@ function seedGatewayFailure(): void {
       },
     }),
   ]);
+  utimesSync(segment, now / 1000, now / 1000);
 }
 async function exportReport(out = root): Promise<ReturnType<typeof capture>> {
   const result = capture();
@@ -305,6 +307,18 @@ async function withProductStack<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 describe("support report CLI and private publication", () => {
+  it("assesses a historical selected correlation closure rather than the export-time window", async () => {
+    seedGatewayFailure(75 * 60_000);
+    await exportReport();
+    const exported = readSupportReportFile(path);
+    const report = parseSupportReport(exported);
+    const decoded = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+    expect(decoded).toContain("gateway.chat.failed");
+    expect(report.incident.segments.length).toBeGreaterThan(0);
+    expect(report.incident.lineCount).toBeGreaterThan(0);
+    expect(report.incident.sufficiencyStatus).toBe("complete");
+    expect(analyzeSupportReport(exported).selection.status).toBe("complete");
+  });
   it("publishes exactly one private report and a versioned validated machine view", async () => {
     const result = await exportReport();
     expect(result.output.join("")).toContain("Nothing has been sent.");
