@@ -1814,7 +1814,7 @@ describe("FilesWidget", () => {
       (call) => call[1]?.stageReport?.stage === "files directory load",
     );
     expect(navigation?.[1]?.stageReport.phase).toBe("started");
-    expect(read?.[1]?.parentCorrelationId).toBe(navigation?.[1]?.correlationId);
+    expect(read?.[1]?.correlationId).toBe(navigation?.[1]?.correlationId);
     expect(writer.mock.calls.some((call) => call[1]?.stageReport?.phase === "settled")).toBe(false);
     child.reject(new ApiError("DENIED", "private body", 403));
     await screen.findByText("This folder cannot be opened.");
@@ -1864,7 +1864,7 @@ describe("FilesWidget", () => {
       (call) => call[1]?.stageReport?.stage === "files directory load",
     );
     expect(navigation?.[1]?.stageReport.phase).toBe("started");
-    expect(read?.[1]?.parentCorrelationId).toBe(navigation?.[1]?.correlationId);
+    expect(read?.[1]?.correlationId).toBe(navigation?.[1]?.correlationId);
     expect(writer.mock.calls.some((call) => call[1]?.stageReport?.phase === "settled")).toBe(false);
     await act(async () =>
       selected.resolve({ root: "/new", path: "", truncated: false, entries: [] }),

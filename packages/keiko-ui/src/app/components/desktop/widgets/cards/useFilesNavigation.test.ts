@@ -83,11 +83,11 @@ function expectLifecyclePair(
     },
   });
   expect(readStarted).toMatchObject({
-    parentCorrelationId: started?.correlationId,
+    correlationId: started?.correlationId,
     stageReport: { phase: "started" },
   });
   expect(readSettled).toMatchObject({
-    parentCorrelationId: started?.correlationId,
+    correlationId: started?.correlationId,
     stageReport: { phase: "settled", navigationOutcome: "applied" },
   });
 }

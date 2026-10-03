@@ -38,13 +38,11 @@ export interface FilesNavigationRead {
 export function startFilesNavigationEvidence(
   stage: ClientStageId,
   correlationId = newClientCorrelationId(),
-  parentCorrelationId?: string,
 ): (response?: unknown, navigationOutcome?: ClientNavigationOutcome) => void {
   const ordinal = ++nextOrdinal;
   const startedAt = performance.now();
   reportClientDiagnostic("Workspace navigation started", {
     correlationId,
-    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
     stageReport: { stage, phase: "started", ordinal },
   });
   let settled = false;
@@ -53,7 +51,6 @@ export function startFilesNavigationEvidence(
     settled = true;
     reportClientDiagnostic("Workspace navigation settled", {
       correlationId,
-      ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
       stageReport: {
         stage,
         phase: "settled",
@@ -72,9 +69,9 @@ export async function observeFilesDirectoryRead<T>(
   read: (correlationId: string) => Promise<T>,
   navigation?: FilesNavigationRead,
 ): Promise<T> {
-  const correlationId = newClientCorrelationId();
+  const correlationId = navigation?.correlationId ?? newClientCorrelationId();
   const settle = readStageAvailable()
-    ? startFilesNavigationEvidence("files directory load", correlationId, navigation?.correlationId)
+    ? startFilesNavigationEvidence("files directory load", correlationId)
     : (): void => undefined;
   let response: T | undefined;
   let outcome: ClientNavigationOutcome = "failed";
@@ -85,7 +82,6 @@ export async function observeFilesDirectoryRead<T>(
   } catch (error: unknown) {
     reportClientDiagnostic("Workspace directory read failed", {
       correlationId,
-      ...(navigation === undefined ? {} : { parentCorrelationId: navigation.correlationId }),
       errorKind: bffRequestErrorKind(error),
       errorEvidence: clientErrorEvidence(error),
     });

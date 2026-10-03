@@ -802,12 +802,19 @@ export const CLIENT_NAVIGATION_OUTCOMES = [
 ] as const;
 export type ClientNavigationOutcome = (typeof CLIENT_NAVIGATION_OUTCOMES)[number];
 const NAVIGATION_OUTCOMES: ReadonlySet<string> = new Set(CLIENT_NAVIGATION_OUTCOMES);
+const NAVIGATION_OUTCOME_STAGES: ReadonlySet<string> = new Set([
+  "editor project selection",
+  "files directory load",
+  "files directory navigation",
+  "files project selection",
+]);
 
 function hasValidNavigationOutcome(value: Record<string, unknown>): boolean {
   if (value.navigationOutcome === undefined) return true;
   return (
     value.phase === "settled" &&
-    (value.stage === "editor project selection" || value.stage === "files directory load") &&
+    typeof value.stage === "string" &&
+    NAVIGATION_OUTCOME_STAGES.has(value.stage) &&
     typeof value.navigationOutcome === "string" &&
     NAVIGATION_OUTCOMES.has(value.navigationOutcome)
   );

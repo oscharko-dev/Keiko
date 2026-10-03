@@ -1381,6 +1381,10 @@ describe("closed diagnostic navigation and render context", () => {
       };
       expect(isClientStageIngestRequest({ ...base, stage: "editor project selection" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files directory load" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "files directory navigation" })).toBe(
+        true,
+      );
+      expect(isClientStageIngestRequest({ ...base, stage: "files project selection" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "chat bind" })).toBe(false);
       expect(
         isClientStageIngestRequest({
