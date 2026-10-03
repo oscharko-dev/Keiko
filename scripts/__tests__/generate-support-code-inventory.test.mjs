@@ -24,6 +24,47 @@ function source(root, path, text) {
 }
 
 describe("support report code inventory", () => {
+  it("retains declared diagnostic fallback classes without collecting dynamic labels", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-support-inventory-"));
+    roots.push(root);
+    source(root, "src/cli/main.ts", "export const cli = true;");
+    source(
+      root,
+      "packages/keiko-server/src/diagnostic.ts",
+      `
+      import { emitServerDiagnostic } from "./diagnostics-log.js";
+      emitServerDiagnostic(sink, { errorClass: error === undefined ? "OpenCodeTurnFailure" : contentFreeErrorClass(error) });
+      emitServerDiagnostic(sink, { errorClass: "RuntimeTaskDispatchFailure" });
+      emitServerDiagnostic(sink, { errorClass: customerClass });
+      emitServerDiagnostic(sink, { errorClass: "Customer Notebook" });
+      emitServerDiagnostic(sink, { errorClass: \`Customer\${customerClass}\` });
+      class CustomerSubclass extends OpenCodeTurnFailure {}
+      const arbitrary = { errorClass: customerClass, message: "CustomerNotebook" };
+      const customerField = { errorClass: "CustomerLiteralClass" };
+      const unsuitable = { errorClass: "Customer Notebook" };
+      `,
+    );
+    source(
+      root,
+      "packages/keiko-server/src/diagnostic.test.ts",
+      'const fixture = { errorClass: "CustomerFixtureClass" };',
+    );
+    source(
+      root,
+      "packages/keiko-server/src/other.ts",
+      'import { emitServerDiagnostic } from "./customer/diagnostics-log.js"; emitServerDiagnostic(sink, { errorClass: "CustomerImporterClass" });',
+    );
+    source(
+      root,
+      "packages/keiko-server/src/bare.ts",
+      'import { emitServerDiagnostic } from "diagnostics-log.js"; emitServerDiagnostic(sink, { errorClass: "CustomerBareClass" });',
+    );
+    const result = await generateSupportCodeInventory(root);
+    expect(result).toContain('"OpenCodeTurnFailure"');
+    expect(result).toContain('"RuntimeTaskDispatchFailure"');
+    expect(result).not.toContain("Customer");
+    expect(result).not.toContain("customerClass");
+  });
   it("does not change archived history when the current release tag appears or moves", () => {
     const tags = ["v1.1.9", "v1.1.10"];
     let currentCommit = "c".repeat(40);
