@@ -24,7 +24,7 @@ export class StructuralExecutionStoppedError extends Error {
 }
 
 export function createStructuralExecutionControl(
-  elapsedMsMax: number,
+  elapsedMsMax: number | null,
   nowMs: () => number = Date.now,
   signal?: AbortSignal,
   deadlineAtMs?: number,
@@ -33,7 +33,7 @@ export function createStructuralExecutionControl(
   return {
     nowMs,
     deadlineAtMs: Math.min(
-      startedAtMs + Math.max(0, elapsedMsMax),
+      startedAtMs + Math.max(0, elapsedMsMax ?? Infinity),
       deadlineAtMs ?? Number.POSITIVE_INFINITY,
     ),
     ...(signal === undefined ? {} : { signal }),
@@ -334,6 +334,20 @@ function optionalWorkspaceOperations(
  * structural retrieval. Resource cleanup is exempt so an expired request can still close a
  * descriptor that it opened while active.
  */
+async function* controlledDirectoryEntries(
+  fs: WorkspaceFs,
+  path: string,
+  control: StructuralExecutionControl,
+): AsyncIterable<import("./fs.js").WorkspaceDirEntry> {
+  const iterate = fs.iterateDirectory;
+  if (iterate === undefined) return;
+  assertStructuralExecutionActive(control);
+  for await (const entry of iterate(path)) {
+    assertStructuralExecutionActive(control);
+    yield entry;
+  }
+}
+
 export function executionControlledWorkspaceFs(
   fs: WorkspaceFs,
   control: StructuralExecutionControl,
@@ -359,6 +373,12 @@ export function executionControlledWorkspaceFs(
       assertStructuralExecutionActive(control);
       return fs.exists(path);
     },
+    ...(fs.iterateDirectory === undefined
+      ? {}
+      : {
+          iterateDirectory: (path: string): AsyncIterable<import("./fs.js").WorkspaceDirEntry> =>
+            controlledDirectoryEntries(fs, path, control),
+        }),
     ...optionalSynchronousReadOperations(fs, control),
     ...optionalAsynchronousReadOperations(fs, control),
     ...optionalWorkspaceOperations(fs, control),

@@ -26,6 +26,16 @@ import {
 } from "@oscharko-dev/keiko-activity-log";
 import { redactRoutePath } from "./observability/route-template.js";
 
+const SERVER_DIAGNOSTIC_STAGES = ["grounded-pack-validation", "grounded-turn-completion"] as const;
+export type ServerDiagnosticStage = (typeof SERVER_DIAGNOSTIC_STAGES)[number];
+const DIAGNOSTIC_STAGE_SET: ReadonlySet<string> = new Set(SERVER_DIAGNOSTIC_STAGES);
+
+function diagnosticStage(value: unknown): ServerDiagnosticStage | undefined {
+  return typeof value === "string" && DIAGNOSTIC_STAGE_SET.has(value)
+    ? (value as ServerDiagnosticStage)
+    : undefined;
+}
+
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -39,6 +49,12 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
       dataClass: "opaque-id",
       required: true,
       maxLength: 160,
+    },
+    diagnosticStage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: SERVER_DIAGNOSTIC_STAGES,
     },
     diagnosticErrorClass: {
       type: "string",
@@ -187,6 +203,8 @@ export interface ServerDiagnosticRecord {
   readonly source: string;
   // The content-free error class (never the raw message), e.g. `Error`, `TransportError`.
   readonly errorClass: string;
+  /** Code-declared stage preserved by canonical export; never derived from error text. */
+  readonly diagnosticStage?: ServerDiagnosticStage | undefined;
   // A code-declared, allowlisted summary. Foreign error/provider/customer text is never read.
   // Typed as the closed `ServerDiagnosticSummary` union (Issue #3245) rather than `string`, so a
   // producer that assigns free text no longer compiles — `allowlistedSummary`'s runtime check
@@ -375,6 +393,7 @@ const UNSUPPORTED_REASON_FALLBACK = "unrecognised-mode";
 // `ts`; `correlationId`, `operation` and `errorClass` ride on the envelope.
 function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<string, unknown> {
   const fields: Record<string, unknown> = { source: record.source };
+  addBoundedField(fields, "diagnosticStage", diagnosticStage(record.diagnosticStage));
   addBoundedField(fields, "code", boundedDiagnosticCode(record.code));
   if (
     record.parentCorrelationId !== undefined &&
@@ -663,6 +682,8 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "capability-unenriched",
   "model-port-unavailable",
   "grounded-memory-enrichment-failed",
+  "grounded-context-pack-validation-failed",
+  "grounded-turn-completion-conflicted",
   "advisory-phase-summary",
   "salience-extraction-diagnostic",
   "salience-capture-dropped-queue-full",
@@ -854,6 +875,7 @@ function sanitizeDiagnosticRecord(record: ServerDiagnosticRecord): ServerDiagnos
     ...record,
     correlationId: sanitizedCorrelationId(record.correlationId),
     parentCorrelationId: sanitizedParentCorrelationId(record.parentCorrelationId),
+    diagnosticStage: diagnosticStage(record.diagnosticStage),
   };
 }
 

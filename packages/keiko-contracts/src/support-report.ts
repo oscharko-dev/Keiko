@@ -117,6 +117,9 @@ export interface DesktopSupportReportRequest {
 export interface DesktopSupportReportResponse {
   readonly fileName: string;
   readonly reportJson: string;
+  /** Session-bound, same-origin HTTP attachment of these exact canonical bytes. */
+  readonly downloadPath?: string | undefined;
+  readonly downloadExpiresAtMs?: number | undefined;
   readonly summary?:
     | {
         readonly status: DiagnosticSufficiencyStatus;

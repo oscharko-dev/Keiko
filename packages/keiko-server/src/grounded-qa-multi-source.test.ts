@@ -256,26 +256,12 @@ function coverageDiagnostics(
 function budgetSum(
   budgets: readonly ConnectedContextPack["budget"][],
 ): ConnectedContextPack["budget"] {
-  return budgets.reduce(
-    (acc, budget) => ({
-      searchCallsMax: acc.searchCallsMax + budget.searchCallsMax,
-      filesReadMax: acc.filesReadMax + budget.filesReadMax,
-      excerptBytesMax: acc.excerptBytesMax + budget.excerptBytesMax,
-      modelInputTokensMax: acc.modelInputTokensMax + budget.modelInputTokensMax,
-      modelOutputTokensMax: acc.modelOutputTokensMax + budget.modelOutputTokensMax,
-      elapsedMsMax: acc.elapsedMsMax + budget.elapsedMsMax,
-      rerankCallsMax: acc.rerankCallsMax + budget.rerankCallsMax,
+  return mergeContextPackSummaries(
+    budgets.map((budget, index) => {
+      const pack = { ...scopePack("src/fixture.ts", 1, String(index)), budget };
+      return buildGroundedAnswerContextPackSummary(pack, 1, 0);
     }),
-    {
-      searchCallsMax: 0,
-      filesReadMax: 0,
-      excerptBytesMax: 0,
-      modelInputTokensMax: 0,
-      modelOutputTokensMax: 0,
-      elapsedMsMax: 0,
-      rerankCallsMax: 0,
-    },
-  );
+  ).budget;
 }
 
 // Retriever that returns a distinct pack per source, keyed by the source's first relativePath, so

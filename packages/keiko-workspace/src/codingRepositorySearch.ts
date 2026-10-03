@@ -9,30 +9,22 @@ import {
   type CodingRepositorySearchRequest,
   type CodingRepositoryTruncationReason,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
-import { readWorkspaceFileForEditing } from "./discovery.js";
-import { WorkspaceReadError } from "./errors.js";
+import { readWorkspaceFileBytesPrefixForInternalUse } from "./discovery.js";
+import { FileTooLargeError, WorkspaceReadError } from "./errors.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
-import {
-  searchText,
-  type SearchLimits,
-  type SearchScope,
-  type SearchResult,
-} from "./repoSearch.js";
-import { deriveCandidateSetFromInventory, type CandidateSet } from "./repoSearchScan.js";
+import { searchText, type SearchLimits, type SearchScope } from "./repoSearch.js";
+import { isImageScopePath } from "./repoSearchScan.js";
 import {
   assertStructuralExecutionActive,
   executionControlledWorkspaceFs,
   type StructuralExecutionControl,
 } from "./structuralExecution.js";
 import type { WorkspaceInfo } from "./types.js";
-import { codingRepositoryInventory } from "./codingRepositorySearchInventory.js";
+
 import { codingRepositoryExcerpt } from "./codingRepositorySearchProjection.js";
-import {
-  boundCodingRepositoryResult,
-  searchTruncationReasons,
-} from "./codingRepositorySearchResult.js";
+import { boundCodingRepositoryResult } from "./codingRepositorySearchResult.js";
 import { buildMatcher } from "./repoSearchMatchers.js";
-import { looksBinary } from "./binaryDetect.js";
+import { decodeTextFileBytes } from "./binaryDetect.js";
 import {
   CodingRepositorySearchError,
   codingRepositoryFailure,
@@ -78,7 +70,7 @@ function createContext(
   const control = {
     nowMs,
     deadlineAtMs: Math.min(
-      startedAtMs + CODING_REPOSITORY_LIMITS.elapsedMs,
+      startedAtMs + (CODING_REPOSITORY_LIMITS.elapsedMs ?? Infinity),
       options.deadlineAtMs ?? Infinity,
     ),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
@@ -107,22 +99,38 @@ function retrievalQuery(request: CodingRepositorySearchRequest, nowMs: number): 
   };
 }
 
-function readHit(
+async function readCodingText(context: CodingRepositoryContext, path: string): Promise<string> {
+  if (isImageScopePath(path)) throw new WorkspaceReadError("non-text source", path);
+  const read = await readWorkspaceFileBytesPrefixForInternalUse(
+    context.scope.workspace,
+    path,
+    CODING_REPOSITORY_LIMITS.fileBytes,
+    context.fs,
+  );
+  if (!read.complete) {
+    throw new FileTooLargeError(
+      "file exceeds coding size cap",
+      path,
+      read.stat.size,
+      CODING_REPOSITORY_LIMITS.fileBytes,
+    );
+  }
+  const decoded = decodeTextFileBytes(read.bytes, { scopePath: path });
+  if (decoded === undefined) {
+    throw new WorkspaceReadError("non-text source", path);
+  }
+  return decoded.text;
+}
+
+async function readHit(
   context: CodingRepositoryContext,
   path: string,
   startLine: number,
   endLine: number,
   maxBytes: number,
-): CodingRepositoryHit {
-  const raw = readWorkspaceFileForEditing(
-    context.scope.workspace,
-    path,
-    { maxBytes: CODING_REPOSITORY_LIMITS.fileBytes },
-    context.fs,
-  );
-  if (looksBinary(new TextEncoder().encode(raw.rawText)))
-    throw new WorkspaceReadError("non-text source", path);
-  return codingRepositoryExcerpt(path, raw.rawText, startLine, endLine, maxBytes);
+): Promise<CodingRepositoryHit> {
+  const text = await readCodingText(context, path);
+  return codingRepositoryExcerpt(path, text, startLine, endLine, maxBytes);
 }
 
 async function searchHits(
@@ -130,44 +138,44 @@ async function searchHits(
   request: CodingRepositorySearchRequest,
 ): Promise<CodingRepositoryResult> {
   const query = retrievalQuery(request, context.startedAtMs);
-  const discovered = await codingRepositoryInventory(
-    context.scope,
-    query,
-    context.fs,
-    context.control,
-  );
+  const result = await searchText(context.scope, query, LIMITS, {
+    ...(request.mode === "literal" ? { queryInterpretation: { kind: "literal" } as const } : {}),
+    fs: context.fs,
+    nowMs: context.control.nowMs,
+    deadlineAtMs: context.control.deadlineAtMs,
+    ...(context.control.signal === undefined ? {} : { signal: context.control.signal }),
+    contentLane: "editor",
+    searchHints: { retrievalIntent: "targeted-code-search" },
+    candidatePathGlobs: { include: request.includeGlobs, exclude: request.excludeGlobs },
+  });
   assertStructuralExecutionActive(context.control);
-  const files = discovered.files.filter(
-    (file) => file.sizeBytes <= CODING_REPOSITORY_LIMITS.fileBytes,
-  );
-  const skippedFiles = discovered.files.length - files.length;
-  const inventory = { ...discovered, files };
-  const result = await searchInventory(context, request, query, inventory);
-  assertStructuralExecutionActive(context.control);
-  const hits = result.atoms.map((atom): CodingRepositoryHit =>
-    projectSearchHit(context, query, atom, request.mode === "literal"),
-  );
-  const truncationReasons = searchTruncationReasons(result, discovered, skippedFiles);
+  const hits: CodingRepositoryHit[] = [];
+  for (const atom of result.atoms) {
+    hits.push(await projectSearchHit(context, query, atom, request.mode === "literal"));
+  }
+  const truncationReasons: CodingRepositoryTruncationReason[] = [];
+  if (result.candidates.some((file) => file.omitted === "size-exceeded"))
+    truncationReasons.push("file-too-large");
+  if (result.coverage.reasons.includes("match-cap")) truncationReasons.push("result-limit");
   return boundCodingRepositoryResult({
     ok: true,
     kind: "search",
     hits,
     truncationReasons,
     metrics: {
-      candidatesDiscovered: discovered.diagnostics.filesDiscovered,
+      candidatesDiscovered: result.coverage.filesDiscovered,
       filesScanned: result.filesScanned,
-      skippedFiles:
-        skippedFiles + result.candidates.filter((file) => file.omitted !== undefined).length,
+      skippedFiles: result.coverage.filesSkipped,
       durationMs: Math.max(0, context.control.nowMs() - context.startedAtMs),
     },
   });
 }
 
-function readLines(
+async function readLines(
   context: CodingRepositoryContext,
   request: CodingRepositoryReadRequest,
-): CodingRepositoryResult {
-  const excerpt = readHit(
+): Promise<CodingRepositoryResult> {
+  const excerpt = await readHit(
     context,
     request.path,
     request.startLine,
@@ -207,7 +215,7 @@ export async function executeCodingRepositoryRequest(
     const result =
       captured.kind === "search"
         ? await searchHits(context, captured)
-        : readLines(context, captured);
+        : await readLines(context, captured);
     assertStructuralExecutionActive(context.control);
     return result;
   } catch (error) {
@@ -215,54 +223,19 @@ export async function executeCodingRepositoryRequest(
   }
 }
 
-async function searchInventory(
-  context: CodingRepositoryContext,
-  request: CodingRepositorySearchRequest,
-  query: RetrievalQuery,
-  inventory: CandidateSet,
-): Promise<SearchResult> {
-  return searchText(context.scope, query, LIMITS, {
-    ...(request.mode === "literal" ? { queryInterpretation: { kind: "literal" } as const } : {}),
-    fs: context.fs,
-    nowMs: context.control.nowMs,
-    deadlineAtMs: context.control.deadlineAtMs,
-    ...(context.control.signal === undefined ? {} : { signal: context.control.signal }),
-    contentLane: "editor",
-    searchHints: { retrievalIntent: "targeted-code-search" },
-    candidatePathGlobs: { include: request.includeGlobs, exclude: request.excludeGlobs },
-    candidateSetFor: (candidateQuery, limits, policy, predicate): CandidateSet =>
-      deriveCandidateSetFromInventory({
-        scope: context.scope,
-        query: candidateQuery,
-        limits,
-        policy,
-        fs: context.fs,
-        inventory,
-        candidatePathPredicate: predicate,
-        prescoreContent: false,
-        executionControl: context.control,
-      }),
-  });
-}
-
-function projectSearchHit(
+async function projectSearchHit(
   context: CodingRepositoryContext,
   query: RetrievalQuery,
   atom: EvidenceAtom,
   literal: boolean,
-): CodingRepositoryHit {
+): Promise<CodingRepositoryHit> {
   if (atom.lineRange === undefined)
     throw new WorkspaceReadError("search coordinate missing", atom.scopePath);
-  const raw = readWorkspaceFileForEditing(
-    context.scope.workspace,
-    atom.scopePath,
-    { maxBytes: CODING_REPOSITORY_LIMITS.fileBytes },
-    context.fs,
-  );
+  const text = await readCodingText(context, atom.scopePath);
   const range = atom.lineRange;
   const matcher = buildMatcher(query, literal ? { kind: "literal" } : undefined);
   if (
-    !raw.rawText
+    !text
       .split("\n")
       .slice(range.startLine - 1, range.endLine)
       .some((line) => matcher.match(line) > 0)
@@ -271,7 +244,7 @@ function projectSearchHit(
   }
   return codingRepositoryExcerpt(
     atom.scopePath,
-    raw.rawText,
+    text,
     range.startLine,
     range.endLine,
     CODING_REPOSITORY_LIMITS.snippetBytes,

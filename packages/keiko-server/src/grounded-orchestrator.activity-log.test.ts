@@ -28,6 +28,8 @@ import {
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import type { MicroIndex, RerankerSeam } from "@oscharko-dev/keiko-workflows";
+import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
@@ -344,7 +346,8 @@ function expectedRequestExtra(input: OrchestratorInput): Readonly<Record<string,
     excerptBytesMax: budget.excerptBytesMax,
     modelInputTokensMax: budget.modelInputTokensMax,
     modelOutputTokensMax: budget.modelOutputTokensMax,
-    elapsedMsMax: budget.elapsedMsMax,
+    ...(budget.elapsedMsMax === null ? {} : { elapsedMsMax: budget.elapsedMsMax }),
+    elapsedMsBounded: budget.elapsedMsMax !== null,
     rerankCallsMax: budget.rerankCallsMax,
   };
 }
@@ -493,6 +496,31 @@ function admissionOnlyExpectedWorkspaceIoActivity(): Readonly<Record<string, num
 }
 
 describe("retrieveConnectedContextPack activity log", () => {
+  it("logs actual selected excerpt observations without hypothetical source eviction", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const profile = deriveContextProfile({
+      maxInputTokens: 8,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const output = await retrieveConnectedContextPack(fixtureInput(), {
+      ...fixtureDeps(activityLog, CORRELATION_ID),
+      contextProfile: profile,
+    });
+    const observed = deriveGroundedContextAssembly(output.pack, profile);
+    const completed = activityLog.events.find(
+      (event) => event.op === "search.connected-context.completed",
+    );
+    expect(completed?.extra).toMatchObject({
+      contextSelectedExcerptCount: output.pack.files.flatMap((file) => file.excerpts).length,
+      contextSelectedExcerptEstimatedTokens: observed.totalEstimatedTokens,
+      contextBudgetPressure: "exceeded",
+      contextRecencyLayoutApplied: false,
+    });
+    expect(JSON.stringify(completed)).not.toContain(FIXTURE_ROOT);
+    expect(JSON.stringify(completed)).not.toContain(FIXTURE_QUERY_TEXT);
+  });
+
   it("persists the real producer lifecycle as body-free server-log lines", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-connected-context-log-"));
     const activityLog = createFileServerLogSink(stateDir, { level: "debug" });
@@ -598,7 +626,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     }
   });
 
-  it("persists cold indexing, warm reuse, and stale reconciliation from the real index", async () => {
+  it("persists uncapped live fallback and fresh reads with an injected index", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-connected-context-index-log-"));
     const activityLog = createFileServerLogSink(stateDir, { level: "debug" });
     const workspaceIndex = createWorkspaceIndex();
@@ -639,33 +667,21 @@ describe("retrieveConnectedContextPack activity log", () => {
       expect(warm.correlationId).toBe(`${CORRELATION_ID}-warm`);
       expectWorkspaceIndexCounters(cold);
       expectWorkspaceIndexCounters(warm);
-      expect(nestedExtra(cold, "workspaceIndex")).toMatchObject({
-        providerStatus: "available",
-        searchMode: "persistent-cold",
-        loadStatus: "miss",
-        saveStatus: "succeeded",
-        reusedRecords: 0,
-        loadFailures: 0,
-        saveFailures: 0,
-      });
-      expect(nestedExtra(cold, "workspaceIndex").indexedRecords).toBeGreaterThan(0);
-      expect(nestedExtra(warm, "workspaceIndex")).toMatchObject({
-        providerStatus: "available",
-        searchMode: "persistent-warm",
-        loadStatus: "hit",
-        loadFailures: 0,
-        saveFailures: 0,
-      });
-      expect(nestedExtra(warm, "workspaceIndex").reusedRecords).toBeGreaterThan(0);
-      expectWorkspaceIndexCounters(stale);
-      expect(stale.correlationId).toBe(`${CORRELATION_ID}-stale`);
-      expect(nestedExtra(stale, "workspaceIndex")).toMatchObject({
-        providerStatus: "available",
-        searchMode: "persistent-reconciled",
-        loadFailures: 0,
-        saveFailures: 0,
-      });
-      expect(nestedExtra(stale, "workspaceIndex").staleRecords).toBeGreaterThan(0);
+      for (const line of [cold, warm, stale]) {
+        expectWorkspaceIndexCounters(line);
+        expect(nestedExtra(line, "workspaceIndex")).toMatchObject({
+          providerStatus: "available",
+          searchMode: "live-fallback",
+          loadStatus: "not-attempted",
+          saveStatus: "not-attempted",
+          indexedRecords: 0,
+          reusedRecords: 0,
+          staleRecords: 0,
+          loadFailures: 0,
+          saveFailures: 0,
+        });
+        expect(nestedExtra(line, "workspaceIo").contentReadCalls).toBeGreaterThan(0);
+      }
       for (const secret of privateFixtureValues()) expect(raw).not.toContain(secret);
     } finally {
       activityLog.close?.();
@@ -673,7 +689,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     }
   });
 
-  it("persists fail-open workspace-index load and save failures as body-free counters", async () => {
+  it("keeps uncapped source coverage independent of an unavailable index store", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-connected-context-index-failure-log-"));
     const activityLog = createFileServerLogSink(stateDir, { level: "debug" });
     const workspaceIndex: WorkspaceIndex = {
@@ -700,14 +716,12 @@ describe("retrieveConnectedContextPack activity log", () => {
       expectWorkspaceIndexCounters(completedDetails);
       expect(nestedExtra(completedDetails, "workspaceIndex")).toMatchObject({
         providerStatus: "available",
-        loadStatus: "failed",
-        saveStatus: "failed",
+        searchMode: "live-fallback",
+        loadStatus: "not-attempted",
+        saveStatus: "not-attempted",
+        loadFailures: 0,
+        saveFailures: 0,
       });
-      expect(["request-local-cold", "request-local-warm", "request-local-reconciled"]).toContain(
-        nestedExtra(completedDetails, "workspaceIndex").searchMode,
-      );
-      expect(nestedExtra(completedDetails, "workspaceIndex").loadFailures).toBeGreaterThan(0);
-      expect(nestedExtra(completedDetails, "workspaceIndex").saveFailures).toBeGreaterThan(0);
       for (const secret of privateFixtureValues()) expect(raw).not.toContain(secret);
       expect(raw).not.toContain("private index");
     } finally {

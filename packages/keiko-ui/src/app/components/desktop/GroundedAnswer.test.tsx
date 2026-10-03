@@ -308,7 +308,7 @@ describe("GroundedAnswer", () => {
     // 3 + 2 = 5 files not searched, with each reason quantified.
     expect(screen.getByText(/5 files were not searched/)).toBeInTheDocument();
     expect(screen.getByText(/3 larger than 2 MB/)).toBeInTheDocument();
-    expect(screen.getByText(/2 binary or an unsupported format/)).toBeInTheDocument();
+    expect(screen.getByText(/2 binary/)).toBeInTheDocument();
     expect(
       screen.getByText(
         /Repository Search reads text, code, and small DOCX, XLSX, and text-layer PDF/,
@@ -331,10 +331,10 @@ describe("GroundedAnswer", () => {
     render(<GroundedAnswer answer={a} busy={false} />);
     expect(screen.getAllByText(/Partial coverage/).length).toBeGreaterThan(0);
     expect(screen.getByText(/5 files were not searched/)).toBeInTheDocument();
-    expect(screen.getByText(/1 a scanned document with no text layer/)).toBeInTheDocument();
-    expect(screen.getByText(/1 a password-protected document/)).toBeInTheDocument();
-    expect(screen.getByText(/2 an unsupported document format/)).toBeInTheDocument();
-    expect(screen.getByText(/1 a malformed document/)).toBeInTheDocument();
+    expect(screen.getByText(/1 no text layer/)).toBeInTheDocument();
+    expect(screen.getByText(/1 password-protected document/)).toBeInTheDocument();
+    expect(screen.getByText(/2 unsupported format/)).toBeInTheDocument();
+    expect(screen.getByText(/1 malformed document/)).toBeInTheDocument();
     expect(
       screen.getByText(
         /Repository Search reads text, code, and small DOCX, XLSX, and text-layer PDF/,
@@ -644,11 +644,11 @@ describe("GroundedAnswer", () => {
     const chip = screen.getByText("src/foo.ts:1-4").closest(".grounded-citation");
     expect(chip).toHaveAttribute(
       "title",
-      "Evidence citation in src/foo.ts at lines 1-4 — relevance 0.87",
+      "Evidence citation in src/foo.ts at lines 1-4 — relevance 0.87 (retrieval rank, not answer confidence)",
     );
     // The score carries a screen-reader-only label so it is not announced as a bare number.
     expect(chip?.querySelector(".grounded-citation-score .sr-only")?.textContent).toBe(
-      "relevance ",
+      "relevance 0.87 (retrieval rank, not answer confidence)",
     );
   });
 
@@ -722,7 +722,7 @@ describe("GroundedAnswer", () => {
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     expect(screen.getByText("src/qux.ts").closest(".grounded-citation")).toHaveAttribute(
       "title",
-      "Evidence citation in src/qux.ts — relevance 0.87",
+      "Evidence citation in src/qux.ts — relevance 0.87 (retrieval rank, not answer confidence)",
     );
   });
 
@@ -763,9 +763,7 @@ describe("GroundedAnswer", () => {
       />,
     );
     // uiux-fix F012 C161: user-language wording instead of "evidence atoms" jargon.
-    expect(
-      screen.getByText("Not used: 3 excerpts (binary: 1, low relevance: 2)"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Not used: 3 files (binary: 1, low relevance: 2)")).toBeInTheDocument();
   });
 
   it("uses the context pack as the canonical omitted-count source", () => {
@@ -783,9 +781,7 @@ describe("GroundedAnswer", () => {
     );
 
     expect(screen.getByText(/1 citation.*5 \/ 32 files read.*3 not used/)).toBeInTheDocument();
-    expect(
-      screen.getByText("Not used: 3 excerpts (binary: 1, low relevance: 2)"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Not used: 3 files (binary: 1, low relevance: 2)")).toBeInTheDocument();
     expect(screen.queryByText(/99 not used|Not used: 99/)).not.toBeInTheDocument();
   });
 
@@ -803,13 +799,13 @@ describe("GroundedAnswer", () => {
     expect(region.textContent).toContain("Scope: 2 files in files");
   });
 
-  it("workspace-root scope renders the literal 'workspace root' and omits the file count", () => {
+  it("workspace-root scope renders the connected folder label without a file count", () => {
     const a = answer({
       contextPack: contextPack({ scopeKind: "workspace-root", fileCount: -1 }),
     });
     render(<GroundedAnswer answer={a} busy={false} />);
     const region = screen.getByRole("region", { name: "Context inspection summary" });
-    expect(region.textContent).toContain("Scope: workspace root");
+    expect(region.textContent).toContain("Scope: connected folder");
     expect(region.textContent).not.toContain("-1");
   });
 
@@ -848,22 +844,23 @@ describe("GroundedAnswer", () => {
     const region = screen.getByRole("region", { name: "Context inspection summary" });
     // uiux-fix F012 C162: bytes/time use the shared lib/format presenters; the
     // searched row reads symmetrically; queryKind is humanized (C160).
-    expect(region.textContent).toContain("Searched");
+    expect(region.textContent).toContain("Search operations");
     expect(region.textContent).toContain("3 / 16 searches");
     expect(region.textContent).toContain("Read");
     expect(region.textContent).toContain("5 / 32 files");
-    expect(region.textContent).toContain("Bytes");
+    expect(region.textContent).toContain("Selected excerpt size");
     expect(region.textContent).toContain("12.1 KB / 128.0 KB");
     // uiux-fix F051 C318: token counts are thousands-separated for readability.
-    expect(region.textContent).toContain("Input");
+    expect(region.textContent).toContain("Model input");
     expect(region.textContent).toContain("1,500 / 32,000 tokens");
-    expect(region.textContent).toContain("Output");
+    expect(region.textContent).toContain("Model output");
     expect(region.textContent).toContain("400 / 4,096 tokens");
     expect(region.textContent).toContain("Rerank");
     expect(region.textContent).toContain("0 / 0 calls");
-    expect(region.textContent).toContain("Time");
-    expect(region.textContent).toContain("1.8 s / 30.0 s");
-    expect(region.textContent).toContain("Query");
+    expect(region.textContent).toContain("Response duration");
+    expect(region.textContent).toContain("1.8 s");
+    expect(region.textContent).toContain("Source search time limit30.0 s");
+    expect(region.textContent).toContain("Search type");
     expect(region.textContent).toContain("natural language");
     expect(region.textContent).not.toContain("natural-language");
   });
@@ -1498,6 +1495,48 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
       </I18nProvider>,
     );
   }
+
+  it("separates German recursive traversal from selected reads and source time bounds", async () => {
+    const pack = contextPack({
+      scopeKind: "workspace-root",
+      fileCount: -1,
+      budget: { ...contextPack().budget, elapsedMsMax: null },
+      coverage: {
+        incomplete: false,
+        reasons: [],
+        filesDiscovered: 200_002,
+        filesAfterPolicy: 200_002,
+        filesScanned: 200_002,
+        filesSkipped: 0,
+        truncated: false,
+        ignoredByDiscovery: 0,
+        deniedByDiscovery: 0,
+        depthPrunedByDiscovery: 0,
+        maxFilesPrunedByDiscovery: 0,
+        matchesReturned: 2,
+        elapsedMs: 34_700,
+        limits: { maxFilesScanned: null, maxMatchesReturned: 50, elapsedMsMax: null },
+      },
+      omittedCount: 3,
+      omittedCounts: { ...OMITTED_COUNTS_ZERO, binary: 1, "low-relevance": 2 },
+    });
+    renderInLocale("de", answer({ contextPack: pack, citations: [citation({ score: 1 })] }));
+    const region = await screen.findByRole("region", { name: "Prüfung verbundener Dateien" });
+    expect(within(region).getByText("Rekursiv geprüft")).toBeInTheDocument();
+    expect(region).toHaveTextContent("200,002 / 200,002 Dateien");
+    expect(within(region).getByText("Für die Antwort gelesen")).toBeInTheDocument();
+    expect(region).toHaveTextContent("5 / 32 Dateien");
+    expect(region).toHaveTextContent("32 ist das Lesebudget für diese Antwort");
+    expect(within(region).getByText("Suchzeitlimit")).toBeInTheDocument();
+    expect(region).toHaveTextContent("Kein Suchzeitlimit");
+    expect(region).toHaveTextContent("Modellaufrufe haben eigene Wartezeiten");
+    expect(region).not.toHaveTextContent("Searched");
+    expect(region).not.toHaveTextContent("∞");
+    expect(screen.getByText(/Nicht als Quelle verwendet: 3 Dateien/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Relevanz 1.00 (Suchrang, keine Antwortsicherheit)"),
+    ).toBeInTheDocument();
+  });
 
   it("counts the distinct dangling marker indices, not the marker objects", () => {
     const a = localKnowledgeAnswer();

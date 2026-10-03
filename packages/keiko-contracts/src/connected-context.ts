@@ -165,7 +165,8 @@ export interface ExplorationBudget {
   readonly excerptBytesMax: number;
   readonly modelInputTokensMax: number;
   readonly modelOutputTokensMax: number;
-  readonly elapsedMsMax: number;
+  // Null keeps selected-source exploration cancellable without an artificial time cutoff.
+  readonly elapsedMsMax: number | null;
   readonly rerankCallsMax: number;
 }
 
@@ -176,7 +177,7 @@ export const DEFAULT_EXPLORATION_BUDGET: ExplorationBudget = Object.freeze({
   excerptBytesMax: 131_072,
   modelInputTokensMax: 116_000,
   modelOutputTokensMax: 4_096,
-  elapsedMsMax: 30_000,
+  elapsedMsMax: null,
   rerankCallsMax: 1,
 });
 
@@ -409,9 +410,9 @@ export const CONTEXT_COVERAGE_TRUNCATION_REASONS: readonly ContextCoverageTrunca
 ] as const;
 
 export interface ContextCoverageLimits {
-  readonly maxFilesScanned: number;
+  readonly maxFilesScanned: number | null;
   readonly maxMatchesReturned: number;
-  readonly elapsedMsMax: number;
+  readonly elapsedMsMax: number | null;
 }
 
 // Path-free coverage summary for repository search. Counts and closed reason enums are safe for
@@ -601,7 +602,6 @@ export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudge
     [usage.excerptBytes, budget.excerptBytesMax],
     [usage.modelInputTokens, budget.modelInputTokensMax],
     [usage.modelOutputTokens, budget.modelOutputTokensMax],
-    [usage.elapsedMs, budget.elapsedMsMax],
     [usage.rerankCalls, budget.rerankCallsMax],
   ];
   for (const dim of dims) {
@@ -621,7 +621,11 @@ export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudge
       return false;
     }
   }
-  return true;
+  if (!isFiniteNonNegativeInteger(usage.elapsedMs)) return false;
+  return (
+    budget.elapsedMsMax === null ||
+    (isFiniteNonNegativeInteger(budget.elapsedMsMax) && usage.elapsedMs <= budget.elapsedMsMax)
+  );
 }
 
 function pushIf(reasons: string[], condition: boolean, reason: string): void {
@@ -1174,11 +1178,11 @@ function validatePackUncertainty(
 
 function checkBudgetDimension(
   used: number,
-  cap: number,
+  cap: number | null,
   dimension: string,
   reasons: string[],
 ): void {
-  if (!isFiniteNonNegativeInteger(cap)) {
+  if (!(dimension === "elapsedMs" && cap === null) && !isFiniteNonNegativeInteger(cap)) {
     reasons.push(`budget.${dimension}Max not a finite non-negative integer`);
     return;
   }
@@ -1186,7 +1190,7 @@ function checkBudgetDimension(
     reasons.push(`pack.usage.${dimension} invalid`);
     return;
   }
-  if (used > cap) {
+  if (cap !== null && used > cap) {
     reasons.push(`pack.usage.${dimension} exceeds budget`);
   }
 }
@@ -1434,7 +1438,10 @@ function validateCoverageCounters(
   for (const field of COVERAGE_LIMIT_FIELDS) {
     pushIf(
       reasons,
-      !isFiniteNonNegativeInteger(coverage.limits[field]),
+      !(
+        (field === "maxFilesScanned" || field === "elapsedMsMax") &&
+        coverage.limits[field] === null
+      ) && !isFiniteNonNegativeInteger(coverage.limits[field]),
       `coverage.${field} invalid`,
     );
   }

@@ -455,6 +455,8 @@ interface FsOperationCounts {
   readonly stat: number;
   readonly readDir: number;
   readonly unboundedReadDir: number;
+  readonly streamedReadDir: number;
+  readonly streamedReadDirEntries: number;
   readonly readDirEntries: number;
   readonly realPath: number;
   readonly exists: number;
@@ -465,6 +467,7 @@ function countingNodeFs(): {
   readonly fs: WorkspaceFs;
   readonly counts: () => FsOperationCounts;
 } {
+  const iterate = nodeWorkspaceFs.iterateDirectory;
   let readFileUtf8Calls = 0;
   let descriptorUtf8Calls = 0;
   let containedDescriptorUtf8Calls = 0;
@@ -476,6 +479,8 @@ function countingNodeFs(): {
   let statCalls = 0;
   let readDirCalls = 0;
   let unboundedReadDirCalls = 0;
+  let streamedReadDirCalls = 0;
+  let streamedReadDirEntries = 0;
   let readDirEntries = 0;
   let realPathCalls = 0;
   let existsCalls = 0;
@@ -499,6 +504,19 @@ function countingNodeFs(): {
         statCalls += 1;
         return nodeWorkspaceFs.stat(absolutePath);
       },
+      ...(iterate === undefined
+        ? {}
+        : {
+            iterateDirectory: async function* (path): AsyncIterable<WorkspaceDirEntry> {
+              readDirCalls += 1;
+              streamedReadDirCalls += 1;
+              for await (const entry of iterate.call(nodeWorkspaceFs, path)) {
+                readDirEntries += 1;
+                streamedReadDirEntries += 1;
+                yield entry;
+              }
+            },
+          }),
       readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
         readDirCalls += 1;
         if (maxEntries === undefined) unboundedReadDirCalls += 1;
@@ -642,6 +660,8 @@ function countingNodeFs(): {
       stat: statCalls,
       readDir: readDirCalls,
       unboundedReadDir: unboundedReadDirCalls,
+      streamedReadDir: streamedReadDirCalls,
+      streamedReadDirEntries,
       readDirEntries,
       realPath: realPathCalls,
       exists: existsCalls,
@@ -1033,21 +1053,21 @@ function workspaceReadOperationCount(operations: FsOperationCounts): number {
 // The paired size and anchor-shape checks catch query-invariant work being repeated; these ceilings
 // intentionally pin bounded growth, rather than claiming a general asymptotic proof.
 //
-// readDir/readDirEntries are pinned to (approximately) ONE full traversal, not a multiple (#3347
-// P1): this query selects both the lexical and the structural ring plus the symbol-file and trace
-// search contexts, and prior to the ring-retrieval discovery cache (grounded-orchestrator.ts's
-// `ringDiscoveryFs`) each of those rebuilt its own candidate inventory over the same workspace tree
-// — a 65-package/133-directory fixture measured readDirCalls=532 (four full traversals) instead of
-// one. Measured on the production Node adapter: readDir === directoryCount exactly at both fixture
-// sizes (37/37 and 135/135) — the additive headroom below only guards against incidental variance,
-// not a reintroduced repeated walk.
+// #3347 keeps one shared structural inventory for all structural rings/anchors. Unlimited lexical
+// retrieval now walks its source stream separately, without storing the whole source corpus. Count
+// iterator work explicitly and bound each path to one traversal, so neither path can hide a repeated
+// per-ring walk in the other's allowance. The original structural ceilings remain unchanged.
 function expectAbsoluteRetrievalIoBound(measurement: TraversalMeasurement): void {
   const { directoryCount, fileCount, operations } = measurement;
   const contentReadByteCeiling =
     16 * measurement.fixtureContentBytes + 32 * measurement.maxReadableFixtureFileBytes;
   expect(operations.unboundedReadDir).toBe(0);
-  expect(operations.readDir).toBeLessThanOrEqual(directoryCount + 16);
-  expect(operations.readDirEntries).toBeLessThanOrEqual(2 * directoryCount + 32);
+  expect(operations.readDir - operations.streamedReadDir).toBeLessThanOrEqual(directoryCount + 16);
+  expect(operations.streamedReadDir).toBeLessThanOrEqual(directoryCount + 16);
+  expect(operations.readDirEntries - operations.streamedReadDirEntries).toBeLessThanOrEqual(
+    2 * directoryCount + 32,
+  );
+  expect(operations.streamedReadDirEntries).toBeLessThanOrEqual(2 * directoryCount + 32);
   expect(workspaceReadOperationCount(operations)).toBeLessThanOrEqual(16 * fileCount + 32);
   expect(operations.contentReadBytes).toBeLessThanOrEqual(contentReadByteCeiling);
   expect(operations.stat).toBeLessThanOrEqual(22 * fileCount + 14 * directoryCount);
@@ -1070,11 +1090,14 @@ function expectLinearRetrievalGrowth(
     large.operations[key] - small.operations[key];
   const addedReadOperations =
     workspaceReadOperationCount(large.operations) - workspaceReadOperationCount(small.operations);
-  // #3347 P1: one shared discovery snapshot means each added directory is walked once, not once per
-  // ring — the delta tracks addedDirectories directly rather than a multiple of it.
-  expect(delta("readDir")).toBeLessThanOrEqual(addedDirectories + 16);
+  // Preserve one structural snapshot and one live lexical stream as the workspace grows.
+  expect(delta("readDir") - delta("streamedReadDir")).toBeLessThanOrEqual(addedDirectories + 16);
+  expect(delta("streamedReadDir")).toBeLessThanOrEqual(addedDirectories + 16);
   expect(delta("unboundedReadDir")).toBeLessThanOrEqual(4 * addedDirectories);
-  expect(delta("readDirEntries")).toBeLessThanOrEqual(2 * addedDirectories + 32);
+  expect(delta("readDirEntries") - delta("streamedReadDirEntries")).toBeLessThanOrEqual(
+    2 * addedDirectories + 32,
+  );
+  expect(delta("streamedReadDirEntries")).toBeLessThanOrEqual(2 * addedDirectories + 32);
   expect(addedReadOperations).toBeLessThanOrEqual(16 * addedFiles + 16);
   expect(delta("contentReadBytes")).toBeLessThanOrEqual(
     16 * addedFixtureBytes + 16 * largestReadableFileBytes,
@@ -1146,6 +1169,66 @@ describe("scanFirstSymbolLine", () => {
 });
 
 describe("runGroundedExploration", () => {
+  it.each([
+    ["MinifiedStartProbe", "START-VALUE-17"],
+    ["MinifiedMiddleProbe", "MIDDLE-VALUE-29"],
+    ["MinifiedEndProbe", "END-VALUE-43"],
+  ])(
+    "retains %s and its value from a near-2MiB one-line ordinary HTML file",
+    async (marker, value) => {
+      const start = "<html><body><p>MinifiedStartProbe=START-VALUE-17</p>";
+      const middle = "<p>MinifiedMiddleProbe=MIDDLE-VALUE-29</p>";
+      const end = "<p>MinifiedEndProbe=END-VALUE-43</p></body></html>";
+      const targetBytes = 2_097_120;
+      const paddingBytes = targetBytes - Buffer.byteLength(start + middle + end);
+      const firstPadding = Math.floor(paddingBytes / 2);
+      const content =
+        start + " ".repeat(firstPadding) + middle + " ".repeat(paddingBytes - firstPadding) + end;
+      writeFileSync(join(ROOT, "manual.html"), content);
+      expect(statSync(join(ROOT, "manual.html")).size).toBe(targetBytes);
+      const activityLog = createBufferedServerLogSink();
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({ kind: "exact-symbol", text: marker }),
+        }),
+        {
+          correlationId: undefined,
+          activityLog,
+          answerer: echoAnswerer,
+          fs: nodeWorkspaceFs,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+      const file = out.pack.files.find((candidate) => candidate.scopePath === "manual.html");
+      expect(file).toBeDefined();
+      const excerpts = file?.excerpts.map((excerpt) => excerpt.content).join("\n") ?? "";
+      expect(excerpts).toContain(marker);
+      expect(excerpts).toContain(value);
+      expect(
+        file?.excerpts.every(
+          (excerpt) =>
+            excerpt.atom.lineRange?.startLine === 1 && excerpt.atom.lineRange.endLine === 1,
+        ),
+      ).toBe(true);
+      expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
+      const completed = activityLog.events.find(
+        (event) => event.op === "search.connected-context.completed",
+      );
+      expect(completed?.extra).toMatchObject({
+        excerptAnchoredWindowCount: marker === "MinifiedStartProbe" ? 0 : 1,
+      });
+      expect(JSON.stringify(completed?.extra).includes(marker)).toBe(false);
+      expect(JSON.stringify(completed?.extra).includes(value)).toBe(false);
+    },
+  );
+
   it("composes plan → search → rank → excerpts → assemble → answer deterministically", async () => {
     const out = await runGroundedExploration(input(), {
       correlationId: undefined,
@@ -2426,7 +2509,7 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("surfaces incomplete coverage when workspace discovery prunes deep directories", async () => {
+  it("includes deeply nested eligible sources without an artificial depth cutoff", async () => {
     const deepDir = join(ROOT, ...Array.from({ length: 45 }, (_, i) => `depth-${String(i)}`));
     mkdirSync(deepDir, { recursive: true });
     writeFileSync(join(deepDir, "deep.ts"), "export const DepthProbe = 'hidden';\n");
@@ -2435,7 +2518,7 @@ describe("runGroundedExploration", () => {
     const out = await retrieveConnectedContextPack(
       input({
         scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
-        query: happyQuery({ text: "Investigate DepthProbe repository coverage" }),
+        query: happyQuery({ text: "Where is DepthProbe in deep.ts defined?" }),
       }),
       {
         correlationId: undefined,
@@ -2446,12 +2529,13 @@ describe("runGroundedExploration", () => {
     );
 
     const coverage = out.pack.diagnostics?.coverage;
-    const marker = out.pack.uncertainty.find((entry) => entry.kind === "scope-incomplete");
-    expect(coverage?.incomplete).toBe(true);
-    expect(coverage?.reasons).toContain("depth-pruned");
-    expect(coverage?.depthPrunedByDiscovery).toBeGreaterThan(0);
-    expect(marker?.claim).toContain("repository search coverage was incomplete");
-    expect(marker?.claim).toContain("depth-pruned");
+    expect(coverage?.incomplete).toBe(false);
+    expect(coverage?.reasons).not.toContain("depth-pruned");
+    expect(coverage?.depthPrunedByDiscovery).toBe(0);
+    expect(out.pack.omitted.filter((entry) => entry.scopePath.endsWith("deep.ts"))).toEqual([]);
+    expect(out.pack.files.map((file) => file.scopePath)).toContain(
+      relative(ROOT, join(deepDir, "deep.ts")),
+    );
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -3565,6 +3649,102 @@ describe("runGroundedExploration", () => {
     expect(providerSignal?.aborted).toBe(true);
     rejectProvider(new Error("late git provider rejection"));
     await Promise.resolve();
+  });
+
+  it("answers after a source scan crosses 30 seconds without clipping elapsed evidence", async () => {
+    let currentMs = NOW;
+    let delayed = false;
+    const counted = countingNodeFs();
+    const answerer = {
+      answer: vi.fn((question: string, pack: ConnectedContextPack): Promise<string> =>
+        echoAnswerer.answer(question, pack),
+      ),
+    };
+    const fs: WorkspaceFs = {
+      ...counted.fs,
+      readDir: (path, maxEntries) => {
+        const entries = counted.fs.readDir(path, maxEntries);
+        if (!delayed && path.endsWith("src")) {
+          currentMs += 34_700;
+          delayed = true;
+        }
+        return entries;
+      },
+    };
+    const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
+      fs,
+      nowMs: () => currentMs,
+      answerer,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    expect(delayed).toBe(true);
+    expect(answerer.answer).toHaveBeenCalledOnce();
+    expect(out.pack.files.length).toBeGreaterThan(0);
+    expect(out.pack.usage.elapsedMs).toBe(34_700);
+    expect(
+      out.pack.uncertainty.some(
+        (marker) => marker.kind === "budget-clipped" && marker.claim.includes("elapsedMs"),
+      ),
+    ).toBe(false);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("preserves the workspace streaming directory port through Chat request observation", async () => {
+    const iterate = nodeWorkspaceFs.iterateDirectory;
+    if (iterate === undefined) throw new Error("Node workspace streaming port missing");
+    const observed = vi.fn(iterate);
+    const log = createBufferedServerLogSink();
+    const out = await retrieveConnectedContextPack(input(), {
+      correlationId: undefined,
+      nowMs: () => NOW,
+      answerer: echoAnswerer,
+      fs: { ...nodeWorkspaceFs, iterateDirectory: observed },
+      detectWorkspace: () => fakeWorkspace(),
+      activityLog: log,
+    });
+    expect(observed).toHaveBeenCalled();
+    expect(out.pack.files.length).toBeGreaterThan(0);
+    const details = log.events.find(
+      (event) => event.op === "search.connected-context.completion-details",
+    );
+    const io = recordEventExtra(details?.extra, "workspaceIo");
+    expect(io.readDirCalls).toBeGreaterThanOrEqual(observed.mock.calls.length);
+    expect(io.readDirEntries).toBeGreaterThan(0);
+  });
+
+  it("cancels an uncapped source walk promptly before any provider generation", async () => {
+    const controller = new AbortController();
+    const base = countingNodeFs();
+    const answerer = {
+      answer: vi.fn((question: string, pack: ConnectedContextPack): Promise<string> =>
+        echoAnswerer.answer(question, pack),
+      ),
+    };
+    let cancelled = false;
+    const fs: WorkspaceFs = {
+      ...base.fs,
+      readDir: (path, maxEntries) => {
+        const entries = base.fs.readDir(path, maxEntries);
+        if (path.endsWith("src")) {
+          controller.abort();
+          cancelled = true;
+        }
+        return entries;
+      },
+    };
+    await expect(
+      runGroundedExploration(input(), {
+        correlationId: undefined,
+        fs,
+        signal: controller.signal,
+        nowMs: () => NOW,
+        answerer,
+        detectWorkspace: () => fakeWorkspace(),
+      }),
+    ).rejects.toBeInstanceOf(CancelledError);
+    expect(cancelled).toBe(true);
+    expect(answerer.answer).not.toHaveBeenCalled();
   });
 
   it("uses the budget governor to stop before an over-budget retrieval ring", async () => {
@@ -5244,10 +5424,7 @@ describe("ring-retrieval directory snapshot (#3347 P1)", () => {
       { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW, fs: countingFs },
     );
 
-    // Not vacuous: the product itself reports that enumerating this root reached a ring cap. Were a
-    // future cap change to lift every ring above this fan-out, this fails instead of passing while
-    // silently no longer exercising the case.
-    expect(out.pack.diagnostics?.coverage?.maxFilesPrunedByDiscovery ?? 0).toBeGreaterThan(0);
+    expect(out.pack.diagnostics?.coverage?.maxFilesPrunedByDiscovery ?? 0).toBe(0);
     expect(rootReads).toEqual([SENTINEL + 1]);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
@@ -5523,7 +5700,7 @@ describe("excerpt reads past the absolute deadline (#3347 P1)", () => {
     // read is the seam — it happens after the ring phase and immediately before the excerpt reads —
     // so no earlier phase can move this clock.
     const clock = scriptedExcerptClock({
-      lateMs: NOW + DEFAULT_EXPLORATION_BUDGET.elapsedMsMax,
+      lateMs: NOW + 30_000,
       crossDuringContentRead: true,
       startArmed: false,
     });
@@ -5532,14 +5709,17 @@ describe("excerpt reads past the absolute deadline (#3347 P1)", () => {
     });
     const activityLog = createBufferedServerLogSink();
 
-    const out = await retrieveConnectedContextPack(input(), {
-      correlationId: undefined,
-      answerer: echoAnswerer,
-      nowMs: clock.nowMs,
-      microIndex: cache.index,
-      fs: clock.fs,
-      activityLog,
-    });
+    const out = await retrieveConnectedContextPack(
+      input({ budget: { ...DEFAULT_EXPLORATION_BUDGET, elapsedMsMax: 30_000 } }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: clock.nowMs,
+        microIndex: cache.index,
+        fs: clock.fs,
+        activityLog,
+      },
+    );
 
     expect(out.pack.files.flatMap((file) => file.excerpts)).toEqual([]);
     expect(out.pack.usage.excerptBytes).toBe(0);

@@ -77,7 +77,8 @@ function formatCap(value: number): string {
 // Same "—" sentinel, but with a human-readable presenter (formatBytes/formatMs) for finite
 // caps — the metric rows must not show raw byte/millisecond values (uiux-fix F012 C162;
 // the CoverageNotice next to them already speaks in "2 MB").
-function formatCapWith(value: number, format: (n: number) => string): string {
+function formatCapWith(value: number | null, format: (n: number) => string): string {
+  if (value === null) return "∞";
   return Number.isFinite(value) ? format(value) : "—";
 }
 
@@ -109,16 +110,21 @@ function formatEcosystemEntry(eco: { readonly id: string; readonly count: number
   return `${eco.id} (${formatCount(eco.count)})`;
 }
 
-function formatScopeLabel(summary: GroundedAnswerContextPackSummary): string {
+function formatScopeLabel(summary: GroundedAnswerContextPackSummary, t: I18nTranslate): string {
   if (summary.scopeKind === "workspace-root") {
-    return "workspace root";
+    return t("grounded.inspection.scopeFolder");
   }
   // The opaque scopeId is BFF-internal (a sha256 prefix). Truncating to 8 hex chars keeps
   // it short enough to read but still distinguishable across binding sessions. The label
   // never carries the file count (Copilot PR #264 finding: "files (3 files)" double-prints
   // when the headline also prepends the count); the headline owns the count display.
   const idTail = summary.scopeId.slice(-8);
-  return `${humanizeToken(summary.scopeKind)} (${idTail})`;
+  const kind = t(
+    summary.scopeKind === "directory"
+      ? "grounded.inspection.scopeDirectory"
+      : "grounded.inspection.scopeFileList",
+  );
+  return `${kind} (${idTail})`;
 }
 
 export function MetricRow({
@@ -151,6 +157,7 @@ function RankingRationale({
 }: {
   readonly summary: GroundedAnswerRankingSummary;
 }): ReactNode {
+  const t = useTranslate();
   const buckets = Object.entries(summary.bucketCounts)
     .filter(([, count]) => count > 0)
     .sort(compareBucketEntries);
@@ -159,7 +166,9 @@ function RankingRationale({
   }
   return (
     <details className="grounded-ranking-rationale">
-      <summary aria-label="Why these files were selected">Why these files?</summary>
+      <summary aria-label={t("grounded.inspection.rankingAria")}>
+        {t("grounded.inspection.rankingTitle")}
+      </summary>
       <dl className="grounded-context-pack-dl">
         {buckets.map(([bucket, count]) => (
           <MetricRow
@@ -171,7 +180,9 @@ function RankingRationale({
       </dl>
       {summary.ecosystems.length > 0 ? (
         <p className="grounded-ranking-ecosystems">
-          {`Ecosystems: ${summary.ecosystems.map(formatEcosystemEntry).join(", ")}`}
+          {t("grounded.inspection.ecosystems", {
+            entries: summary.ecosystems.map(formatEcosystemEntry).join(", "),
+          })}
         </p>
       ) : null}
     </details>
@@ -183,15 +194,143 @@ function RankingRationale({
 // selected at search time, not a fixed count of "what was bound". Only the "files" scope
 // kind has a meaningful count to display (Copilot PR #264 — "1 file in directory" reads
 // as "this directory contains exactly one file" which it doesn't).
-function contextPackHeadline(contextPack: GroundedAnswerContextPackSummary, scope: string): string {
-  let headline: string;
-  if (contextPack.scopeKind !== "files") {
-    headline = `Scope: ${scope}`;
-  } else {
-    const suffix = contextPack.fileCount === 1 ? "" : "s";
-    headline = `Scope: ${String(contextPack.fileCount)} file${suffix} in ${scope}`;
-  }
-  return headline;
+const QUERY_KIND_LABELS: Readonly<
+  Record<GroundedAnswerContextPackSummary["queryKind"], MessageKey>
+> = {
+  "natural-language": "grounded.inspection.queryNatural",
+  "exact-symbol": "grounded.inspection.querySymbol",
+  "file-pattern": "grounded.inspection.queryFiles",
+  regex: "grounded.inspection.queryRegex",
+};
+
+function contextPackHeadline(
+  contextPack: GroundedAnswerContextPackSummary,
+  t: I18nTranslate,
+): string {
+  const scope = formatScopeLabel(contextPack, t);
+  return t(
+    contextPack.scopeKind === "files"
+      ? contextPack.fileCount === 1
+        ? "grounded.inspection.scopeFile"
+        : "grounded.inspection.scopeFiles"
+      : "grounded.inspection.scope",
+    {
+      scope,
+      count: contextPack.fileCount,
+    },
+  );
+}
+
+type InspectionMetric = readonly [string, string];
+
+function inspectionCount(t: I18nTranslate, key: MessageKey, used: number, max: number): string {
+  return t(key, { used: formatCount(used), max: formatCapWith(max, formatCount) });
+}
+
+function inspectionCoverageMetrics(
+  pack: GroundedAnswerContextPackSummary,
+  t: I18nTranslate,
+): readonly InspectionMetric[] {
+  const coverage = pack.coverage;
+  if (coverage === undefined) return [];
+  return [
+    [
+      t("grounded.inspection.recursive"),
+      inspectionCount(
+        t,
+        "grounded.inspection.fileCount",
+        coverage.filesScanned,
+        coverage.filesDiscovered,
+      ),
+    ],
+    [
+      t("grounded.inspection.coverage"),
+      t(coverage.incomplete ? "grounded.inspection.incomplete" : "grounded.inspection.complete"),
+    ],
+  ];
+}
+
+function inspectionReadMetrics(
+  { usage, budget }: GroundedAnswerContextPackSummary,
+  t: I18nTranslate,
+): readonly InspectionMetric[] {
+  return [
+    [
+      t("grounded.inspection.searches"),
+      inspectionCount(
+        t,
+        "grounded.inspection.searchCount",
+        usage.searchCalls,
+        budget.searchCallsMax,
+      ),
+    ],
+    [
+      t("grounded.inspection.selectedReads"),
+      inspectionCount(t, "grounded.inspection.fileCount", usage.filesRead, budget.filesReadMax),
+    ],
+    [
+      t("grounded.inspection.excerptBytes"),
+      `${formatBytes(usage.excerptBytes)} / ${formatCapWith(budget.excerptBytesMax, formatBytes)}`,
+    ],
+    [
+      t("grounded.inspection.rerank"),
+      inspectionCount(t, "grounded.inspection.callCount", usage.rerankCalls, budget.rerankCallsMax),
+    ],
+  ];
+}
+
+function inspectionModelMetrics(
+  { usage, budget }: GroundedAnswerContextPackSummary,
+  t: I18nTranslate,
+): readonly InspectionMetric[] {
+  return [
+    [
+      t("grounded.inspection.input"),
+      inspectionCount(
+        t,
+        "grounded.inspection.tokenCount",
+        usage.modelInputTokens,
+        budget.modelInputTokensMax,
+      ),
+    ],
+    [
+      t("grounded.inspection.output"),
+      inspectionCount(
+        t,
+        "grounded.inspection.tokenCount",
+        usage.modelOutputTokens,
+        budget.modelOutputTokensMax,
+      ),
+    ],
+  ];
+}
+
+function inspectionTimeMetrics(
+  pack: GroundedAnswerContextPackSummary,
+  t: I18nTranslate,
+): readonly InspectionMetric[] {
+  return [
+    [t("grounded.inspection.duration"), formatMs(pack.elapsedMs)],
+    [
+      t("grounded.inspection.timeLimit"),
+      pack.budget.elapsedMsMax === null
+        ? t("grounded.inspection.noTimeLimit")
+        : formatCapWith(pack.budget.elapsedMsMax, formatMs),
+    ],
+    [t("grounded.inspection.query"), t(QUERY_KIND_LABELS[pack.queryKind])],
+  ];
+}
+
+function inspectionMetrics(
+  pack: GroundedAnswerContextPackSummary,
+  t: I18nTranslate,
+): readonly InspectionMetric[] {
+  return [
+    ...inspectionCoverageMetrics(pack, t),
+    ...inspectionReadMetrics(pack, t),
+    ...inspectionModelMetrics(pack, t),
+    ...inspectionTimeMetrics(pack, t),
+  ];
 }
 
 function ContextPackSummary({
@@ -199,46 +338,22 @@ function ContextPackSummary({
 }: {
   readonly contextPack: GroundedAnswerContextPackSummary;
 }): ReactNode {
-  const { usage, budget } = contextPack;
-  const scope = formatScopeLabel(contextPack);
-  const headline = contextPackHeadline(contextPack, scope);
+  const t = useTranslate();
   return (
-    <section className="grounded-context-pack" aria-label="Context inspection summary">
-      <div className="grounded-context-pack-headline">{headline}</div>
+    <section className="grounded-context-pack" aria-label={t("grounded.inspection.aria")}>
+      <div className="grounded-context-pack-headline">{contextPackHeadline(contextPack, t)}</div>
       <dl className="grounded-context-pack-dl">
-        <MetricRow
-          label="Searched"
-          value={`${String(usage.searchCalls)} / ${formatCap(budget.searchCallsMax)} searches`}
-        />
-        <MetricRow
-          label="Read"
-          value={`${String(usage.filesRead)} / ${formatCap(budget.filesReadMax)} files`}
-        />
-        <MetricRow
-          label="Bytes"
-          value={`${formatBytes(usage.excerptBytes)} / ${formatCapWith(budget.excerptBytesMax, formatBytes)}`}
-        />
-        <MetricRow
-          label="Input"
-          value={`${formatCount(usage.modelInputTokens)} / ${formatCapWith(budget.modelInputTokensMax, formatCount)} tokens`}
-        />
-        <MetricRow
-          label="Output"
-          value={`${formatCount(usage.modelOutputTokens)} / ${formatCapWith(budget.modelOutputTokensMax, formatCount)} tokens`}
-        />
-        <MetricRow
-          label="Rerank"
-          value={`${String(usage.rerankCalls)} / ${formatCap(budget.rerankCallsMax)} calls`}
-        />
-        <MetricRow
-          label="Time"
-          value={`${formatMs(contextPack.elapsedMs)} / ${formatCapWith(budget.elapsedMsMax, formatMs)}`}
-        />
-        <MetricRow label="Query" value={humanizeToken(contextPack.queryKind)} />
+        {inspectionMetrics(contextPack, t).map(([label, value]) => (
+          <MetricRow key={label} label={label} value={value} />
+        ))}
       </dl>
-      {contextPack.rankingSummary !== undefined ? (
+      <p className="grounded-meta">
+        {t("grounded.inspection.readHint", { max: formatCap(contextPack.budget.filesReadMax) })}
+      </p>
+      <p className="grounded-meta">{t("grounded.inspection.timeHint")}</p>
+      {contextPack.rankingSummary === undefined ? null : (
         <RankingRationale summary={contextPack.rankingSummary} />
-      ) : null}
+      )}
     </section>
   );
 }
@@ -250,34 +365,42 @@ function formatRange(citation: GroundedEvidenceCitation): string {
   return `${citation.scopePath}:${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
 }
 
-function citationTitle(citation: GroundedEvidenceCitation): string {
-  // uiux-fix F051 C306 — the tooltip must explain the trailing decimal on the chip
-  // (a retrieval relevance score), not just the source location.
-  const relevance = `relevance ${citation.score.toFixed(2)}`;
-  // Issue #1285 — a document citation references extracted document text, not source lines; make
-  // that explicit so the line span is not read as an on-screen line number.
+function citationTitle(citation: GroundedEvidenceCitation, t: I18nTranslate): string {
   const kind =
     citation.documentFormat === undefined
-      ? "Evidence citation"
-      : `${citation.documentFormat.toUpperCase()} document evidence (extracted text)`;
-  if (citation.lineRange === undefined) {
-    return `${kind} in ${citation.scopePath} — ${relevance}`;
-  }
+      ? t("grounded.citation.evidence")
+      : t("grounded.citation.documentEvidence", { format: citation.documentFormat.toUpperCase() });
   const span =
-    citation.documentFormat === undefined
-      ? `at lines ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`
-      : `at extracted span ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
-  return `${kind} in ${citation.scopePath} ${span} — ${relevance}`;
+    citation.lineRange === undefined
+      ? ""
+      : t(
+          citation.documentFormat === undefined
+            ? "grounded.citation.lines"
+            : "grounded.citation.extractedSpan",
+          {
+            start: citation.lineRange.startLine,
+            end: citation.lineRange.endLine,
+          },
+        );
+  return t("grounded.citation.title", {
+    kind,
+    path: citation.scopePath,
+    span,
+    relevance: t("grounded.citation.relevance", { score: citation.score.toFixed(2) }),
+  });
 }
 
-// uiux-fix F051 C306 — the score was a naked decimal ("0.87") with no visual or accessible
-// label. The sr-only prefix gives screen readers "relevance 0.87" instead of a bare number;
-// sighted users get the explanation via the chip tooltip (citationTitle above / the LK title).
 function CitationScore({ score }: { readonly score: number }): ReactNode {
+  const t = useTranslate();
   return (
-    <span className="grounded-citation-score">
-      <span className="sr-only">relevance </span>
-      {score.toFixed(2)}
+    <span
+      className="grounded-citation-score"
+      title={t("grounded.citation.relevance", { score: score.toFixed(2) })}
+    >
+      <span className="sr-only">
+        {t("grounded.citation.relevance", { score: score.toFixed(2) })}
+      </span>
+      <span aria-hidden="true">{score.toFixed(2)}</span>
     </span>
   );
 }
@@ -291,13 +414,14 @@ function CitationReference({
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
 }): ReactNode {
+  const t = useTranslate();
   const documentFormat = citation.documentFormat?.toUpperCase();
   const canOpenRepositoryCitation =
     documentFormat === undefined &&
     openRepositoryReference !== undefined &&
     repositoryRoots.length > 0;
   return (
-    <span className="grounded-citation" title={citationTitle(citation)}>
+    <span className="grounded-citation" title={citationTitle(citation, t)}>
       {documentFormat === undefined ? null : (
         <>
           <span className="grounded-citation-doc-badge">{documentFormat}</span>
@@ -974,6 +1098,28 @@ function compareOmittedReasonEntries(
   return compareStrings(reasonA, reasonB);
 }
 
+const OMISSION_LABEL_KEYS: ReadonlyMap<string, MessageKey> = new Map([
+  ["outside-scope", "grounded.omission.outside-scope"],
+  ["binary", "grounded.omission.binary"],
+  ["generated", "grounded.omission.generated"],
+  ["ignored", "grounded.omission.ignored"],
+  ["size-exceeded", "grounded.omission.size-exceeded"],
+  ["near-duplicate", "grounded.omission.near-duplicate"],
+  ["low-relevance", "grounded.omission.low-relevance"],
+  ["redacted-only", "grounded.omission.redacted-only"],
+  ["budget-exhausted", "grounded.omission.budget-exhausted"],
+  ["tool-unavailable", "grounded.omission.tool-unavailable"],
+  ["unsupported-format", "grounded.omission.unsupported-format"],
+  ["no-text-layer", "grounded.omission.no-text-layer"],
+  ["malformed-document", "grounded.omission.malformed-document"],
+  ["encrypted-document", "grounded.omission.encrypted-document"],
+]);
+
+function omissionLabel(reason: string, t: I18nTranslate): string {
+  const key = OMISSION_LABEL_KEYS.get(reason);
+  return key === undefined ? humanizeToken(reason) : t(key);
+}
+
 function OmittedLine({
   omittedCount,
   omittedCounts,
@@ -981,19 +1127,18 @@ function OmittedLine({
   readonly omittedCount: number;
   readonly omittedCounts: GroundedAnswerContextPackSummary["omittedCounts"];
 }): ReactNode {
+  const t = useTranslate();
   if (omittedCount <= 0) return null;
   const reasonSummary = Object.entries(omittedCounts)
     .filter(([, count]) => count > 0)
     .sort(compareOmittedReasonEntries)
-    .map(([reason, count]) => `${humanizeToken(reason)}: ${String(count)}`)
+    .map(([reason, count]) => `${omissionLabel(reason, t)}: ${String(count)}`)
     .join(", ");
   const suffix = reasonSummary.length > 0 ? ` (${reasonSummary})` : "";
-  // uiux-fix F012 C161 — "evidence atoms" is pipeline vocabulary; knowledge workers read
-  // "excerpts". The CoverageNotice above speaks about whole files; this line is the
-  // excerpt-level account (it additionally counts relevance filtering).
+  // Omission entries are unique file paths, not excerpt atoms. Keep the same unit as the wire.
   return (
     <div className="grounded-meta">
-      {`Not used: ${String(omittedCount)} excerpt${omittedCount === 1 ? "" : "s"}${suffix}`}
+      {t("grounded.inspection.notUsed", { count: omittedCount, reasons: suffix })}
     </div>
   );
 }
@@ -1002,52 +1147,45 @@ function OmittedLine({
 // filtering (low-relevance / near-duplicate, where the file was read) and from by-design noise
 // exclusions (ignored deps/secrets). Surfacing these makes clear the answer does not cover the
 // whole folder: a file over the 2 MiB cap or a binary/unsupported format is otherwise invisible.
-const COVERAGE_GAP_REASONS: ReadonlyArray<{
-  readonly reason: keyof GroundedAnswerContextPackSummary["omittedCounts"];
-  readonly label: string;
-}> = [
-  { reason: "size-exceeded", label: "larger than 2 MB" },
-  { reason: "binary", label: "binary or an unsupported format" },
-  { reason: "tool-unavailable", label: "unreadable" },
-  // Bounded small-document extraction diagnostics (Issue #1285).
-  { reason: "unsupported-format", label: "an unsupported document format" },
-  { reason: "no-text-layer", label: "a scanned document with no text layer" },
-  { reason: "malformed-document", label: "a malformed document" },
-  { reason: "encrypted-document", label: "a password-protected document" },
+const COVERAGE_GAP_REASONS: readonly (keyof GroundedAnswerContextPackSummary["omittedCounts"])[] = [
+  "size-exceeded",
+  "binary",
+  "tool-unavailable",
+  "unsupported-format",
+  "no-text-layer",
+  "malformed-document",
+  "encrypted-document",
 ];
-// Repository Search now extracts bounded text from small DOCX/XLSX/text-layer-PDF documents
-// (Issue #1285); larger, scanned, encrypted, or other document formats stay on the Local Knowledge
-// path. Shown whenever a connected document or binary file was skipped.
-const REPOSITORY_DOCUMENT_NOTICE =
-  "Repository Search reads text, code, and small DOCX, XLSX, and text-layer PDF documents. Larger, scanned, encrypted, or other document formats remain available through Local Knowledge.";
 
 function CoverageNotice({
   omittedCounts,
 }: {
   readonly omittedCounts: GroundedAnswerContextPackSummary["omittedCounts"];
 }): ReactNode {
-  const gaps = COVERAGE_GAP_REASONS.map(({ reason, label }) => ({
-    label,
+  const t = useTranslate();
+  const gaps = COVERAGE_GAP_REASONS.map((reason) => ({
+    label: omissionLabel(reason, t),
     count: omittedCounts[reason] ?? 0,
   })).filter((gap) => gap.count > 0);
   const total = gaps.reduce((sum, gap) => sum + gap.count, 0);
   if (total <= 0) return null;
-  const detail = gaps.map((gap) => `${String(gap.count)} ${gap.label}`).join(", ");
-  const fileWord = total === 1 ? "file" : "files";
-  const verb = total === 1 ? "was" : "were";
-  const showDocumentNotice =
-    (omittedCounts.binary ?? 0) > 0 ||
-    (omittedCounts["unsupported-format"] ?? 0) > 0 ||
-    (omittedCounts["no-text-layer"] ?? 0) > 0 ||
-    (omittedCounts["malformed-document"] ?? 0) > 0 ||
-    (omittedCounts["encrypted-document"] ?? 0) > 0;
+  const detail = gaps.map((gap) => `${formatCount(gap.count)} ${gap.label}`).join(", ");
+  const showDocumentNotice = COVERAGE_GAP_REASONS.some(
+    (reason) =>
+      reason !== "size-exceeded" && reason !== "tool-unavailable" && omittedCounts[reason] > 0,
+  );
   return (
     <div className="grounded-coverage-notice" role="note">
-      <span className="grounded-coverage-notice-title">Partial coverage</span>
+      <span className="grounded-coverage-notice-title">{t("grounded.partialCoverage")}</span>
       <span>
-        {`This answer reflects only the searchable files in the connected scope — ${String(total)} ${fileWord} ${verb} not searched (${detail}). It does not cover the entire folder.`}
+        {t(
+          total === 1
+            ? "grounded.inspection.coverageGap.one"
+            : "grounded.inspection.coverageGap.other",
+          { count: formatCount(total), detail },
+        )}
       </span>
-      {showDocumentNotice ? <span>{REPOSITORY_DOCUMENT_NOTICE}</span> : null}
+      {showDocumentNotice ? <span>{t("grounded.inspection.documentHint")}</span> : null}
     </div>
   );
 }
@@ -1055,7 +1193,7 @@ function CoverageNotice({
 function hasCoverageWarning(
   omittedCounts: GroundedAnswerContextPackSummary["omittedCounts"],
 ): boolean {
-  return COVERAGE_GAP_REASONS.some(({ reason }) => omittedCounts[reason] > 0);
+  return COVERAGE_GAP_REASONS.some((reason) => omittedCounts[reason] > 0);
 }
 
 function AuditEvidenceLink({
@@ -1065,6 +1203,7 @@ function AuditEvidenceLink({
   readonly runId: string | undefined;
   readonly runIds?: readonly string[] | undefined;
 }): ReactNode {
+  const t = useTranslate();
   const ids = Array.from(new Set([...(runId === undefined ? [] : [runId]), ...(runIds ?? [])]));
   if (ids.length === 0) return null;
   // uiux-fix F012 C136/C164 — the endpoint returns a raw JSON manifest; same-tab navigation
@@ -1081,10 +1220,10 @@ function AuditEvidenceLink({
           rel="noopener noreferrer"
         >
           {ids.length === 1
-            ? "View connected-context audit evidence"
-            : `View connected-context audit evidence ${String(index + 1)}`}{" "}
+            ? t("grounded.inspection.audit")
+            : t("grounded.inspection.auditNumbered", { number: index + 1 })}{" "}
           {/* WCAG 3.2.2 — notify screen-reader users that this link opens in a new tab */}
-          <span className="sr-only">(opens in new tab)</span>
+          <span className="sr-only">{t("grounded.inspection.newTab")}</span>
         </a>
       ))}
     </div>

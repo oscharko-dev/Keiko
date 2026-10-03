@@ -459,6 +459,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
   readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
+  readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
@@ -654,7 +655,8 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
     isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal) &&
     isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
     isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
-    isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech)
+    isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech) &&
+    isOptional(value.supportReportDelivery, isClientSupportReportDelivery)
   );
 }
 
@@ -1532,6 +1534,9 @@ export interface ActivityLogReadinessSnapshot {
   readonly writer: ActivityLogWriterKind;
   // Events this process counted as lost since it started (bounded, see the loss ledger).
   readonly lostEvents: number;
+  /** Retained diagnostic candidates, never a count of confirmed or open defects. */
+  readonly retainedDiagnosticCount?: number | undefined;
+  readonly diagnosticCapacity?: number | undefined;
 }
 
 /** The `GET /api/health` body. `diagnostics` is additive; `status`/`version` keep their meaning. */
@@ -1563,6 +1568,22 @@ function hasCoherentReasons(
   return (readiness === "ready") === (reasons.length === 0);
 }
 
+function hasCoherentDiagnosticCapacity(value: Record<string, unknown>): boolean {
+  const count = value.retainedDiagnosticCount;
+  const capacity = value.diagnosticCapacity;
+  if (count === undefined && capacity === undefined) return true;
+  return (
+    typeof count === "number" &&
+    Number.isSafeInteger(count) &&
+    count >= 0 &&
+    typeof capacity === "number" &&
+    Number.isSafeInteger(capacity) &&
+    capacity > 0 &&
+    capacity <= 1000 &&
+    count <= capacity
+  );
+}
+
 export function isActivityLogReadinessSnapshot(
   value: unknown,
 ): value is ActivityLogReadinessSnapshot {
@@ -1574,6 +1595,16 @@ export function isActivityLogReadinessSnapshot(
     isSetMember(value.writer, WRITER_KIND_SET) &&
     typeof value.lostEvents === "number" &&
     Number.isSafeInteger(value.lostEvents) &&
-    value.lostEvents >= 0
+    value.lostEvents >= 0 &&
+    hasCoherentDiagnosticCapacity(value)
   );
+}
+
+/** A browser initiation, never acknowledgement that the operating system saved a file. */
+export type ClientSupportReportDelivery = "automatic" | "manual";
+
+export function isClientSupportReportDelivery(
+  value: unknown,
+): value is ClientSupportReportDelivery {
+  return value === "automatic" || value === "manual";
 }

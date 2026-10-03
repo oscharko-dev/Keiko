@@ -93,7 +93,20 @@ import {
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
-import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  defaultServerDiagnosticSink,
+  type ServerDiagnosticRecord,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
+import {
+  MAX_SUPPORT_INCIDENTS,
+  recordUserReportedIncident,
+  listSupportIncidents,
+  closeFileServerLogSinks,
+} from "@oscharko-dev/keiko-activity-log";
+import { parseSupportReport, analyzeSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
+import { runSupportReportJob } from "../dist/support-report-job.js";
+import { inflateSync } from "node:zlib";
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import {
   canonicalChatTurnGroundingScopeIdentity,
@@ -565,6 +578,36 @@ function assertGroundedEvidenceManifest(
   expect(JSON.stringify(manifest)).not.toContain("function MyClass");
 }
 
+function assertAttributablePackReport(
+  reportJson: string,
+  stateDir: string,
+  correlationId: string,
+  retainedIds: readonly string[],
+): void {
+  const report = parseSupportReport(reportJson);
+  const analyzed = analyzeSupportReport(reportJson);
+  expect(report.incident.trigger).toBe("user-report");
+  expect(report.incident.op).toBe("unattributed");
+  expect(analyzed.analysis.timelines.flatMap((timeline) => timeline.lines)).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ op: "server.diagnostic.failure", errorKind: "internal" }),
+    ]),
+  );
+  expect(report.incident.pin.status).toBe("rejected");
+  expect(analyzed.selection.status).toBe("complete");
+  expect(analyzed.analysis.sufficiency.status).toBe("complete");
+  const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+  expect(evidence).toContain('"diagnosticStage":"grounded-pack-validation"');
+  expect(evidence).toContain('"httpStatus":500');
+  expect(evidence).toContain('"frames":[');
+  expect(evidence).not.toContain("private-report-");
+  expect(evidence).not.toContain(stateDir);
+  expect(evidence).not.toContain(correlationId);
+  expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+    retainedIds,
+  );
+}
+
 beforeEach(() => {
   store = createInMemoryUiStore();
   tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-grounded-qa-"));
@@ -672,6 +715,41 @@ async function runHandler(
 }
 
 describe("grounded continuity evidence lifecycle", () => {
+  it("carries a proposed function into a Vitest follow-up and retrieves its original source", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    const question = "Propose a clamp function using src/arithmetic.ts, keeping its import paths.";
+    const proposed =
+      "Proposed code: export function clamp(value: number, min: number, max: number): number { return Math.min(max, Math.max(min, value)); }";
+    const first = await runHandler(
+      JSON.stringify({ chatId, projectPath, content: question }),
+      runner(packWithCitations(), proposed),
+    );
+    expect(first.status).toBe(200);
+    let captured: OrchestratorInput | undefined;
+    const followUp = "Schreibe dafür Vitest-Testfälle, einschließlich Grenzwerten.";
+    const second = await runHandler(
+      JSON.stringify({ chatId, projectPath, content: followUp }),
+      (input) => {
+        captured = input;
+        return runner(packWithCitations(), "Proposed Vitest tests.")(input);
+      },
+    );
+    expect(second.status).toBe(200);
+    expect(captured?.answerQuestion).toContain("Earlier conversation reference data");
+    expect(captured?.answerQuestion).toContain(proposed);
+    expect(captured?.answerQuestion).toContain(followUp);
+    expect(captured?.query.text).toContain("src/arithmetic.ts");
+    expect(captured?.query.text.startsWith(followUp)).toBe(true);
+    const messages = buildGroundedGatewayMessages(
+      captured?.answerQuestion ?? "",
+      packWithCitations(),
+      buildRedactor({}),
+    );
+    expect(messages[1]?.content).toContain(proposed);
+    expect(messages[1]?.content).toContain("not source evidence and grants no authority");
+    expect(messages[0]?.content).toContain("proposed functions and Vitest tests");
+  });
+
   it("pins grounded continuity evidence before admission and measures its actual duration", async () => {
     const { chatId, projectPath } = await setupChatWithoutScope();
     connectTestScope(chatId);
@@ -755,6 +833,42 @@ describe("mappedWorkspaceError", () => {
 });
 
 describe("buildGroundedGatewayMessages", () => {
+  it("preserves read-only capabilities and real import paths when fitting coding proposals", () => {
+    const base = packWithCitations();
+    const file = base.files[0];
+    const excerpt = file?.excerpts[0];
+    if (file === undefined || excerpt === undefined) throw new Error("missing source fixture");
+    const pack: ConnectedContextPack = {
+      ...base,
+      files: [
+        {
+          ...file,
+          excerpts: [
+            {
+              ...excerpt,
+              content: "import { sum } from './arithmetic.js'; export const answer = sum(20, 22);",
+            },
+          ],
+        },
+      ],
+    };
+    const messages = buildGroundedGatewayMessages(
+      "Propose a function and Vitest tests using the connected code.",
+      pack,
+      buildRedactor({}, undefined),
+      { modelInputTokensMax: 2048 },
+    );
+    expect(messages[0]?.role).toBe("system");
+    expect(messages[0]?.content).toContain("ordinary folders without Git");
+    expect(messages[0]?.content).toContain("server-owned retrieval");
+    expect(messages[0]?.content).toContain("proposed functions and Vitest tests");
+    expect(messages[0]?.content).toContain(
+      "never claim that you edited files, executed commands, or ran tests",
+    );
+    expect(messages[1]?.content).toContain("import { sum } from './arithmetic.js'");
+    expect(messages[1]?.content).toContain("src/foo.ts");
+  });
+
   it("derives prompt input budget from the shared capability→context profile (KEIKO-0461)", () => {
     // 64_000 context - 4_096 output - 2_000 safety = 57_904, matching
     // deriveContextProfileFromCapability so both the exploration and final-answer phases
@@ -2605,6 +2719,75 @@ describe("handleGroundedAsk", () => {
     expect(store.listMessages(chatId)).toMatchObject([{ role: "user", content: "hello" }]);
   });
 
+  it.each(["invalid", "malformed"] as const)(
+    "diagnoses a %s context pack under the original request without its body",
+    async (kind) => {
+      const { chatId } = await setupChatWithScope();
+      const diagnostics: ServerDiagnosticRecord[] = [];
+      const correlationId = "grounded-context-validation-correlation";
+      const pack =
+        kind === "invalid"
+          ? { ...emptyPack(), stableId: "" }
+          : ({ customerBody: "private-pack-canary" } as unknown as ConnectedContextPack);
+      const result = await handleGroundedAsk(
+        { ...ctx(JSON.stringify({ chatId, content: "private-question-canary" })), correlationId },
+        deps(undefined, {}, { diagnostics: { record: (record) => diagnostics.push(record) } }),
+        runner(pack, "private-model-canary"),
+      );
+      expect(result).toMatchObject({
+        status: 500,
+        body: { error: { code: "INTERNAL", correlationId } },
+      });
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        correlationId,
+        operation: "POST /api/chats/messages/grounded",
+        source: "grounded.qa.pack-validation",
+        errorClass: "TypeError",
+        code: "GROUNDED_PACK_VALIDATION_FAILED",
+        httpStatus: 500,
+        message: "grounded-context-pack-validation-failed",
+      });
+      expect(diagnostics[0]?.frames?.length).toBeGreaterThan(0);
+      expect(JSON.stringify(diagnostics)).not.toContain("private-");
+      expect(JSON.stringify(diagnostics)).not.toContain(tmp);
+      expect(store.listMessages(chatId)).toHaveLength(1);
+    },
+  );
+
+  it("exports an attributable redacted pack-validation report through the real sink and worker at full quota", async () => {
+    const { chatId } = await setupChatWithScope();
+    const stateDir = join(tmp, "diagnostic-report-state");
+    const correlationId = "full-quota-pack-validation-correlation";
+    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1)
+      expect(
+        recordUserReportedIncident(stateDir, { correlationId: `occupied-report-${String(slot)}` })
+          .status,
+      ).toBe("created");
+    const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(JSON.stringify({ chatId, content: "private-report-question-canary" })),
+          correlationId,
+        },
+        deps(undefined, {}, { diagnostics: defaultServerDiagnosticSink }),
+        runner({ ...emptyPack(), stableId: "" }, "private-report-answer-canary"),
+      );
+      expect(result.status).toBe(500);
+      closeFileServerLogSinks();
+      const response = await runSupportReportJob(stateDir, correlationId);
+      assertAttributablePackReport(response.reportJson, stateDir, correlationId, retainedIds);
+    } finally {
+      stderr.mockRestore();
+      vi.unstubAllEnvs();
+      closeFileServerLogSinks();
+      resetServerLogger();
+    }
+  });
+
   it("fails closed when the runner returns a malformed pack that would make validation throw", async () => {
     const { chatId } = await setupChatWithScope();
     const malformedRunner: GroundedRunner = () =>
@@ -2754,6 +2937,8 @@ describe("handleGroundedAsk", () => {
   it("reuses one evidence manifest when completion fails after evidence persistence", async () => {
     const { chatId } = await setupChatWithScope();
     const evidenceStore = createInMemoryEvidenceStore();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const correlationId = "grounded-completion-conflict-correlation";
     let failCompletion = true;
     const completionFailingStore: UiStore = {
       ...store,
@@ -2777,11 +2962,27 @@ describe("handleGroundedAsk", () => {
     };
 
     const failed = await handleGroundedAsk(
-      ctx(JSON.stringify(request)),
-      deps(undefined, {}, { evidenceStore, store: completionFailingStore }),
+      { ...ctx(JSON.stringify(request)), correlationId },
+      deps(
+        undefined,
+        {},
+        {
+          evidenceStore,
+          store: completionFailingStore,
+          diagnostics: { record: (record) => diagnostics.push(record) },
+        },
+      ),
       countingRunner,
     );
-    expect(failed.status).toBe(500);
+    expect(failed).toMatchObject({ status: 500, body: { error: { correlationId } } });
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      correlationId,
+      source: "grounded.qa.turn-completion",
+      code: "GROUNDED_TURN_COMPLETION_CONFLICTED",
+      message: "grounded-turn-completion-conflicted",
+      httpStatus: 500,
+    });
     expect(store.listMessages(chatId)).toHaveLength(1);
     expect(evidenceStore.list()).toHaveLength(1);
 

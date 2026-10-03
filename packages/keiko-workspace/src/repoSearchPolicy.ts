@@ -30,7 +30,9 @@ import {
   repositoryRouteQuery,
 } from "./repoSearchRoutes.js";
 import { repositorySourceLines } from "./repoSearchSourceClassification.js";
-import type { DiscoveredFile } from "./types.js";
+import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
+import type { WorkspaceFs } from "./fs.js";
+import { resolveWithinWorkspace } from "./paths.js";
 
 export type SearchIntent =
   | "project-metadata"
@@ -56,6 +58,7 @@ export type CandidateBucket =
   | "other";
 
 export interface SearchHints {
+  readonly hasGitMetadata?: boolean | undefined;
   readonly retrievalIntent?: SearchIntent | undefined;
   readonly lowValuePathAllowlist?: readonly string[] | undefined;
   readonly recentPaths?: readonly string[] | undefined;
@@ -961,6 +964,7 @@ function bucketCounts(
 export function resolveSearchPolicy(
   hasExplicitRelativePaths: boolean,
   hints: SearchHints | undefined,
+  hasGitMetadata = true,
 ): SearchPolicy {
   const mode = hasExplicitRelativePaths ? "explicit-scope" : "workspace-root-default";
   const intent = hints?.retrievalIntent ?? "generic";
@@ -968,10 +972,21 @@ export function resolveSearchPolicy(
     mode,
     intent,
     applyGitignore: mode === "workspace-root-default",
-    omitLowValueWorkspaceFiles: mode === "workspace-root-default",
+    omitLowValueWorkspaceFiles: mode === "workspace-root-default" && hasGitMetadata,
     lowValuePathAllowlist: normalizedHintPaths(hints?.lowValuePathAllowlist),
     recentPaths: normalizedHintPaths(hints?.recentPaths),
   };
+}
+
+/** Plain document folders have no repository-generated noise to infer from directory names. */
+export function resolveWorkspaceSearchPolicy(
+  scope: { readonly workspace: WorkspaceInfo; readonly relativePaths: readonly string[] },
+  fs: WorkspaceFs,
+  hints: SearchHints | undefined,
+): SearchPolicy {
+  const hasGitMetadata =
+    hints?.hasGitMetadata ?? fs.exists(resolveWithinWorkspace(scope.workspace.root, ".git"));
+  return resolveSearchPolicy(scope.relativePaths.length > 0, hints, hasGitMetadata);
 }
 
 // The legacy `gatherCandidates(scope, limits, fs)` overload predates the search-policy work and is

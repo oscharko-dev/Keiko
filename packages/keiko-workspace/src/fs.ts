@@ -18,7 +18,7 @@ import {
   rmSync,
   type BigIntStats,
 } from "node:fs";
-import { lstat, open, type FileHandle } from "node:fs/promises";
+import { lstat, open, opendir, type FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
@@ -104,6 +104,7 @@ export interface WorkspaceFs {
   ) => WorkspaceDescriptorUtf8Read;
   readonly stat: (absolutePath: string) => WorkspaceStat;
   readonly readDir: (absolutePath: string, maxEntries?: number) => readonly WorkspaceDirEntry[];
+  readonly iterateDirectory?: (absolutePath: string) => AsyncIterable<WorkspaceDirEntry>;
   readonly realPath: (absolutePath: string) => string;
   // Optional request-scoped canonical-root resolver. Containment may reuse this value for the
   // comparison base, while target paths must always continue through `realPath` so a replacement
@@ -237,6 +238,16 @@ function forwardedOptionalOperations(
   };
 }
 
+function forwardedDirectoryIteration(fs: WorkspaceFs): Partial<WorkspaceFs> {
+  const iterate = fs.iterateDirectory;
+  return iterate === undefined
+    ? {}
+    : {
+        iterateDirectory: (path: string): AsyncIterable<WorkspaceDirEntry> =>
+          iterate.call(fs, path),
+      };
+}
+
 /**
  * Builds a plain method-complete port without losing a class/prototype adapter's receiver: every
  * forwarder invokes the method through `fs.<method>(...)`, and that property access already binds
@@ -250,6 +261,7 @@ export function forwardWorkspaceFs(
     readFileUtf8: (path): string => fs.readFileUtf8(path),
     stat: (path): WorkspaceStat => fs.stat(path),
     readDir: (path, maxEntries): readonly WorkspaceDirEntry[] => fs.readDir(path, maxEntries),
+    ...forwardedDirectoryIteration(fs),
     realPath: (path): string => fs.realPath(path),
     exists: (path): boolean => fs.exists(path),
     ...forwardedSynchronousReads(fs),
@@ -846,10 +858,32 @@ function readDirectoryEntries(
   return entries;
 }
 
+async function* iterateDirectoryEntries(absolutePath: string): AsyncIterable<WorkspaceDirEntry> {
+  const before = await lstat(absolutePath, { bigint: true });
+  if (before.isSymbolicLink()) throw new WorkspaceDescriptorReadError("symbolic-link");
+  if (!before.isDirectory()) throw new WorkspaceDescriptorReadError("not-regular");
+  const directory = await opendir(absolutePath, { bufferSize: 32 });
+  let entries = 0;
+  for await (const entry of directory) {
+    if (entries % 32 === 0) {
+      assertDirectorySnapshot(before, await lstat(absolutePath, { bigint: true }));
+    }
+    entries += 1;
+    yield {
+      name: entry.name,
+      isDirectory: entry.isDirectory(),
+      isFile: entry.isFile(),
+      isSymbolicLink: entry.isSymbolicLink(),
+    };
+  }
+  assertDirectorySnapshot(before, await lstat(absolutePath, { bigint: true }));
+}
+
 export const nodeWorkspaceFs: WorkspaceFs = {
   readFileUtf8: (absolutePath: string): string => readFileSync(absolutePath, "utf8"),
   readFileUtf8SameDescriptor,
   readFileUtf8WithinRootSameDescriptor,
+  iterateDirectory: iterateDirectoryEntries,
   stat: (absolutePath: string): WorkspaceStat => {
     const stats = lstatSync(absolutePath, { bigint: true, throwIfNoEntry: true });
     return workspaceStat(stats, stats.isSymbolicLink());

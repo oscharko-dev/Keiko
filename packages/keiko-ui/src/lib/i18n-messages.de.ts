@@ -1052,6 +1052,9 @@ export const DE_MESSAGES = {
   "footer.version": "Keiko-Version {version}",
   "footer.versionLoading": "Version wird geladen",
   "footer.versionUnavailable": "Version nicht verfügbar",
+  "footer.diagnosticsRetained": "{count}/{capacity} gespeicherte Diagnosefälle",
+  "footer.diagnosticsRetainedDetail":
+    "Gespeicherte Diagnosekandidaten, keine bestätigten oder offenen Fehler. Fehlerberichte bleiben auch bei vollem Speicher verfügbar.",
   "footer.diagnosticsDegraded": "Diagnose eingeschränkt",
   "footer.diagnosticsUnavailable": "Diagnose nicht verfügbar",
   "footer.diagnosticsDetail":
@@ -1342,12 +1345,12 @@ export const DE_MESSAGES = {
   "workspace.empty.subtitle": "Fenster öffnen und loslegen",
   "scope.pill.connectedFolder": "Verbundener Ordner",
   "scope.pill.folder": "Ordner: {name}",
-  "scope.pill.repositoryScope": "Repository-Scope",
+  "scope.pill.repositoryScope": "Verbundener Stammordner",
   "scope.pill.connectedFile": "Verbundene Datei",
   "scope.pill.file": "Datei: {name}",
   "scope.pill.filesConnected": "{count} Dateien verbunden",
   "scope.pill.accessibleWithPath": "{label} ({path})",
-  "scope.boundary.noun.repository": "das verbundene Repository",
+  "scope.boundary.noun.repository": "den verbundenen Stammordner",
   "scope.boundary.noun.folder": "den verbundenen Ordner",
   "scope.boundary.noun.fileScope": "den verbundenen Datei-Scope",
   "scope.boundary.description":

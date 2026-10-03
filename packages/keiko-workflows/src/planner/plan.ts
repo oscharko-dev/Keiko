@@ -93,7 +93,7 @@ const RING_WEIGHTS: Readonly<Record<RetrievalRingKind, number>> = {
 // files and starved multi-file connected scopes (Epic #177 retrieval defect): the search could
 // never reach the file a question was actually about. These ceilings let a ring examine the
 // connected scope broadly while the excerpt READ phase keeps enforcing filesReadMax/excerptBytesMax.
-const SCAN_FILE_CEILING = 2048;
+const STRUCTURAL_SCAN_FILE_CEILING = 2048;
 // Evidence atoms returned for ranking. With the search facade's per-file match cap this represents
 // many candidate files (well beyond filesReadMax) so the ranker has real choice before the excerpt
 // phase reads the top files.
@@ -145,18 +145,24 @@ function atLeastOne(value: number): number {
   return Math.max(1, Math.floor(value));
 }
 
-function sliceLimits(budget: ExplorationBudget, weight: number): SearchLimits {
+function sliceLimits(
+  budget: ExplorationBudget,
+  weight: number,
+  kind: RetrievalRingKind,
+): SearchLimits {
   // Scanning is transient — each file is read to match lines, then discarded — and is bounded by
-  // elapsedMsMax, NOT by the excerpt-byte budget the model context is built from. Both the per-file
+  // an explicit elapsedMsMax when supplied and by human cancellation, not by the excerpt-byte
+  // budget the model context is built from. Default lexical traversal has no source count/time cap.
+  // Both the per-file
   // read cap and the scan breadth are therefore decoupled from excerptBytesMax (Epic #177 retrieval
   // fix); deriving them from the excerpt slice capped scanning at ~4 files of ~18 KiB and silently
   // skipped any larger or later-sorted file. The excerpt READ phase still enforces filesReadMax /
   // excerptBytesMax when it incorporates file content into the pack.
   return {
-    maxFilesScanned: atLeastOne(SCAN_FILE_CEILING * weight),
+    maxFilesScanned: kind === "lexical" ? null : atLeastOne(STRUCTURAL_SCAN_FILE_CEILING * weight),
     maxMatchesReturned: atLeastOne(MATCH_RETURN_CEILING * weight),
     maxBytesPerFileScanned: SCAN_BYTES_PER_FILE,
-    elapsedMsMax: atLeastOne(budget.elapsedMsMax * weight),
+    elapsedMsMax: budget.elapsedMsMax === null ? null : atLeastOne(budget.elapsedMsMax * weight),
   };
 }
 
@@ -179,7 +185,7 @@ function buildRing(
     kind,
     label: RING_LABELS[kind],
     anchorTerms: anchorTerms(anchors),
-    searchLimits: sliceLimits(budget, RING_WEIGHTS[kind]),
+    searchLimits: sliceLimits(budget, RING_WEIGHTS[kind], kind),
     rationale: RING_RATIONALES[kind],
   };
 }
@@ -352,7 +358,6 @@ interface ClarificationDecision {
   readonly clarification: ClarificationPrompt | undefined;
 }
 
-
 function decideClarification(
   anchors: readonly SearchAnchor[],
   scope: SelectedScope,
@@ -473,11 +478,7 @@ export function createExplorationPlan(
     text: input.query.text,
     maxAnchors: resolved.maxAnchors,
   });
-  const decision = decideClarification(
-    extraction.anchors,
-    input.scope,
-    classification.intent,
-  );
+  const decision = decideClarification(extraction.anchors, input.scope, classification.intent);
   const rings =
     decision.state === "ready"
       ? composeRings(extraction.anchors, input.scope, input.query, resolved.budget)

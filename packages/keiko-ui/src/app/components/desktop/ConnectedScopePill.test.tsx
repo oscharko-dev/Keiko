@@ -116,8 +116,8 @@ describe("ConnectedScopePill", () => {
       connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 },
     });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
-    expect(screen.getByText("Repository scope")).toBeInTheDocument();
-    expect(screen.getByText(/Keiko may inspect only the connected repository/i)).toHaveTextContent(
+    expect(screen.getByText("Connected root folder")).toBeInTheDocument();
+    expect(screen.getByText(/Keiko may inspect only the connected root folder/i)).toHaveTextContent(
       /safe-read exclusions and context budget limits apply/i,
     );
   });

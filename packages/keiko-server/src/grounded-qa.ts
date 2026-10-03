@@ -62,6 +62,7 @@ import {
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   type ConversationMemoryResultWire,
   type GroundedAnswer,
+  type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -166,7 +167,12 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { renderConversationMemoryContextBlock } from "./conversation-prompt.js";
-import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "./diagnostics-log.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
 import {
@@ -213,8 +219,46 @@ function payloadTooLarge(): RouteResult {
   };
 }
 
-export function internalError(message: string): RouteResult {
-  return { status: 500, body: errorBody("INTERNAL", message) };
+export function internalError(message: string, correlationId?: string): RouteResult {
+  return { status: 500, body: errorBody("INTERNAL", message, correlationId) };
+}
+
+const GROUNDED_INVARIANT_FAILURES = {
+  "pack-validation": {
+    code: "GROUNDED_PACK_VALIDATION_FAILED",
+    diagnosticStage: "grounded-pack-validation",
+    summary: "grounded-context-pack-validation-failed",
+    message: "Grounded answer context pack failed validation.",
+  },
+  "turn-completion": {
+    code: "GROUNDED_TURN_COMPLETION_CONFLICTED",
+    diagnosticStage: "grounded-turn-completion",
+    summary: "grounded-turn-completion-conflicted",
+    message: "Canonical grounded chat turn completion conflicted.",
+  },
+} as const;
+
+function groundedInvariantFailure(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  stage: keyof typeof GROUNDED_INVARIANT_FAILURES,
+): RouteResult {
+  const failure = GROUNDED_INVARIANT_FAILURES[stage];
+  const error =
+    stage === "pack-validation" ? new TypeError(failure.message) : new Error(failure.message);
+  emitServerDiagnostic(deps.diagnostics, {
+    ...serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(correlationId),
+      operation: "POST /api/chats/messages/grounded",
+      source: `grounded.qa.${stage}`,
+      error: Object.assign(error, { code: failure.code }),
+      summary: failure.summary,
+      redact: (message): string => redactString(deps.redactor, message),
+    }),
+    httpStatus: 500,
+    diagnosticStage: failure.diagnosticStage,
+  });
+  return internalError(failure.message, correlationId);
 }
 
 // Issue #154 (GAP-B) — the dynamic `error.message` of a GatewayError may echo the provider base
@@ -1001,8 +1045,7 @@ export function uncertaintyLines(
 }
 
 // The grounded system message is shared verbatim by the single-source and multi-source (#532)
-// paths so both apply the identical untrusted-evidence + citation + no-secret guardrails. The
-// single-source wire output must stay byte-identical (AC5), so this literal must not change.
+// paths so both apply the identical capability, untrusted-evidence, citation and no-secret rules.
 // GROUNDED_SYSTEM_PROMPT now lives in the dependency-free ./grounded-prompt.js leaf (re-exported
 // here for back-compat) so the hybrid path can interpolate it without a circular-import TDZ.
 export { GROUNDED_SYSTEM_PROMPT };
@@ -1580,7 +1623,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   const output = await runGroundedRunner(workerCtx, query);
   if (isRouteResult(output)) return output;
   if (!isValidGroundedPack(output.pack)) {
-    return internalError("Grounded answer context pack failed validation.");
+    return groundedInvariantFailure(deps, workerCtx.correlationId, "pack-validation");
   }
   const cancelResult = ensureRouteNotCancelled(workerCtx.signal, deps, workerCtx.correlationId);
   if (cancelResult !== undefined) return cancelResult;
@@ -2322,6 +2365,36 @@ function admittedGroundingScopeFailure(
   });
 }
 
+function withHistoryCompactionSummary(
+  pack: GroundedAnswerContextPackSummary,
+): GroundedAnswerContextPackSummary {
+  return pack.contextSummary === undefined
+    ? pack
+    : {
+        ...pack,
+        contextSummary: { ...pack.contextSummary, compactionActive: true },
+      };
+}
+
+function withGroundedCompactionSummary(
+  prepared: PreparedGroundedAsk,
+  result: RouteResult,
+): RouteResult {
+  if (
+    prepared.continuity?.compaction === undefined ||
+    result.status !== 200 ||
+    !groundedAnswerBody(result.body)
+  )
+    return result;
+  const answer = result.body;
+  if (answer.groundingKind === "local-knowledge") return result;
+  const contextPack =
+    answer.groundingKind === "hybrid"
+      ? { ...answer.contextPack, folder: withHistoryCompactionSummary(answer.contextPack.folder) }
+      : withHistoryCompactionSummary(answer.contextPack);
+  return { ...result, body: { ...answer, contextPack } };
+}
+
 async function runAdmittedGroundedAsk(
   admitted: PreparedGroundedAsk,
   deps: UiHandlerDeps,
@@ -2358,7 +2431,10 @@ async function runAdmittedGroundedAsk(
       stagedAssistantId = result.body.assistantMessageId;
     }
     ensureNotCancelled(memoryPrepared.signal);
-    const withMemory = await attachGroundedMemory(memoryPrepared, deps, result);
+    const withMemory = withGroundedCompactionSummary(
+      memoryPrepared,
+      await attachGroundedMemory(memoryPrepared, deps, result),
+    );
     ensureNotCancelled(memoryPrepared.signal);
     const settled = settleGroundedChatTurn(memoryPrepared, deps, withMemory);
     persistGroundedContinuity(memoryPrepared, deps, settled);
@@ -2471,7 +2547,7 @@ function settleGroundedChatTurn(
   if (completion.kind !== "completed") {
     discardGroundedTurn(result.body.assistantMessageId);
     deps.store.failChatTurn(prepared.chat.id, commitTurnId);
-    return internalError("Canonical grounded chat turn completion conflicted.");
+    return groundedInvariantFailure(deps, prepared.correlationId, "turn-completion");
   }
   commitGroundedTurn(result.body.assistantMessageId);
   runGroundedPostCommitMemorySideEffects(prepared, deps, result.body);

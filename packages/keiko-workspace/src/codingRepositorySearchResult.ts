@@ -3,8 +3,7 @@ import {
   type CodingRepositoryResult,
   type CodingRepositoryTruncationReason,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
-import { clampToBytes, type SearchResult } from "./repoSearch.js";
-import type { CandidateSet } from "./repoSearchScan.js";
+import { clampToBytes } from "./repoSearch.js";
 
 function outputBytes(result: CodingRepositoryResult): number {
   return new TextEncoder().encode(JSON.stringify(result)).length;
@@ -40,22 +39,4 @@ export function boundCodingRepositoryResult(
     };
   }
   return { ...result, excerpt, truncationReasons };
-}
-
-export function searchTruncationReasons(
-  result: SearchResult,
-  inventory: CandidateSet,
-  skippedFiles: number,
-): CodingRepositoryTruncationReason[] {
-  const reasons = new Set<CodingRepositoryTruncationReason>();
-  if (inventory.diagnostics.maxFilesPrunedByDiscovery > 0) reasons.add("inventory-limit");
-  if (inventory.diagnostics.depthPrunedByDiscovery > 0) reasons.add("depth-limit");
-  if (skippedFiles > 0) reasons.add("file-too-large");
-  if (
-    result.filesScanned >= CODING_REPOSITORY_LIMITS.scannedFiles &&
-    result.coverage.reasons.includes("file-cap")
-  )
-    reasons.add("file-limit");
-  if (result.coverage.reasons.includes("match-cap")) reasons.add("result-limit");
-  return [...reasons];
 }

@@ -201,6 +201,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
   private readonly staleContentPreviewPaths = new Set<string>();
   private readonly searchTextSessions: RequestLocalSearchTextSessionPool =
     createRequestLocalSearchTextSessionPool();
+  private hasGitMetadata: boolean | undefined;
   private paths: readonly string[] | undefined;
   private symbolicLinks: readonly string[] | undefined;
   private codeIndexPromise: Promise<CodeIntelligenceIndex> | undefined;
@@ -485,10 +486,10 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
 
   private assertInventoryCovers(limits: SearchLimits): void {
     if (
-      limits.maxFilesScanned > this.limits.maxFilesScanned ||
+      (limits.maxFilesScanned ?? Infinity) > (this.limits.maxFilesScanned ?? Infinity) ||
       limits.maxMatchesReturned > this.limits.maxMatchesReturned ||
       limits.maxBytesPerFileScanned > this.limits.maxBytesPerFileScanned ||
-      limits.elapsedMsMax > this.limits.elapsedMsMax
+      (limits.elapsedMsMax ?? Infinity) > (this.limits.elapsedMsMax ?? Infinity)
     ) {
       throw new RangeError("request context does not cover the requested search limits");
     }
@@ -499,7 +500,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     deps: StructuralRequestSearchDeps,
   ): StructuralExecutionControl {
     const nowMs = this.executionControl.nowMs;
-    const callDeadlineAtMs = nowMs() + Math.max(0, limits.elapsedMsMax);
+    const callDeadlineAtMs = nowMs() + Math.max(0, limits.elapsedMsMax ?? Infinity);
     const signal = combinedAbortSignal(this.executionControl.signal, deps.signal);
     return {
       nowMs,
@@ -519,6 +520,15 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
     }
   }
 
+  private searchHints(hints: SearchHints | undefined): SearchHints {
+    if (structuralExecutionStopped(this.executionControl))
+      return { ...hints, hasGitMetadata: false };
+    this.hasGitMetadata ??= this.executionFs.exists(
+      resolveWithinWorkspace(this.scope.workspace.root, ".git"),
+    );
+    return { ...hints, hasGitMetadata: this.hasGitMetadata };
+  }
+
   public findFiles(
     query: RetrievalQuery,
     limits: SearchLimits,
@@ -532,7 +542,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
         fs: this.executionFs,
         nowMs: this.executionControl.nowMs,
         deadlineAtMs: control.deadlineAtMs,
-        ...(deps.searchHints === undefined ? {} : { searchHints: deps.searchHints }),
+        searchHints: this.searchHints(deps.searchHints),
         ...(control.signal === undefined ? {} : { signal: control.signal }),
         ...(deps.workspaceIndex === undefined ? {} : { workspaceIndex: deps.workspaceIndex }),
         ...(deps.semanticSearchProvider === undefined
@@ -564,7 +574,7 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
         fs: this.executionFs,
         nowMs: this.executionControl.nowMs,
         deadlineAtMs: control.deadlineAtMs,
-        ...(deps.searchHints === undefined ? {} : { searchHints: deps.searchHints }),
+        searchHints: this.searchHints(deps.searchHints),
         ...(control.signal === undefined ? {} : { signal: control.signal }),
         ...(deps.workspaceIndex === undefined ? {} : { workspaceIndex: deps.workspaceIndex }),
         ...(deps.semanticSearchProvider === undefined

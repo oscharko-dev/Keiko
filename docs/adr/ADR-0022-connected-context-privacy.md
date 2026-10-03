@@ -135,7 +135,17 @@ but is not a prerequisite to inspect the user's accepted root. Empty and punctua
 requests still require clarification, and implicit roots retain their narrowing guards.
 Repository orientation uses the existing recursive file-discovery facade in addition to
 metadata and overview documents; a source-only folder must produce actual source evidence.
-All existing path denials, byte limits, cancellation and exploration budgets still apply.
+Recursive lexical search and file discovery visit the accepted scope without a default file-count
+or elapsed-time cutoff. `null` limits express that policy on the wire; internal execution controls
+still honor an explicit caller deadline or cancellation. Directory entries stream in bounded batches,
+source bytes are processed with bounded concurrency, and only bounded best matches and diagnostic
+summaries survive the scan. Text files up to and including 2 MiB are eligible regardless of extension;
+images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
+Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
+Existing path denials, explicit ignore policy, output/model budgets and redaction remain enforced.
+Filesystem resource exhaustion remains a technical failure: for example, an installation's
+descriptor allowance can constrain deeply nested directory traversal. Directory iterators close on
+failure or cancellation; an I/O failure never becomes a complete-search claim or a silent scope cap.
 
 The search match identifies where to read; it is not the entire context for the answer.
 Connected-context assembly retains each bounded, actually read surrounding window once,

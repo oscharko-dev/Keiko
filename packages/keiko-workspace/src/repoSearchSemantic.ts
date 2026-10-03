@@ -32,6 +32,9 @@ export interface SemanticSearchProvider {
 export interface SemanticSearchSession {
   readonly provider: SemanticSearchProvider;
   readonly documents: SemanticSearchDocument[];
+  readonly maxDocumentBytes?: number;
+  readonly maxDocuments?: number;
+  documentBytes?: number;
 }
 
 export interface SemanticSearchExecutionOptions {
@@ -137,18 +140,30 @@ function validMatch(
 export function createSemanticSearchSession(
   provider: SemanticSearchProvider | undefined,
   query: RetrievalQuery,
+  bounds?: { readonly maxDocumentBytes: number; readonly maxDocuments: number },
 ): SemanticSearchSession | undefined {
   if (provider === undefined || query.kind === "regex" || query.kind === "file-pattern") {
     return undefined;
   }
-  return { provider, documents: [] };
+  return { provider, documents: [], ...bounds, documentBytes: 0 };
 }
 
 export function collectSemanticSearchDocument(
   session: SemanticSearchSession | undefined,
   document: SemanticSearchDocument,
 ): void {
-  session?.documents.push(document);
+  if (session === undefined || session.documents.length >= (session.maxDocuments ?? Infinity))
+    return;
+  if (session.maxDocumentBytes === undefined) {
+    session.documents.push(document);
+    return;
+  }
+  const available = session.maxDocumentBytes - (session.documentBytes ?? 0);
+  if (available <= 0) return;
+  const bytes = new TextEncoder().encode(document.text).subarray(0, available);
+  const text = new TextDecoder("utf-8").decode(bytes).replace(/\uFFFD$/u, "");
+  session.documentBytes = (session.documentBytes ?? 0) + bytes.length;
+  session.documents.push({ ...document, text });
 }
 
 export function semanticSearchTool(providerName: string): string {
@@ -164,7 +179,7 @@ function startSemanticSearchExecution(
     signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]);
   const state = { timedOut: false };
   const timeout =
-    options.timeoutMs === undefined
+    options.timeoutMs === undefined || !Number.isFinite(options.timeoutMs)
       ? undefined
       : setTimeout(
           () => {

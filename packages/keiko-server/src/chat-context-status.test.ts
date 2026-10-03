@@ -528,6 +528,9 @@ describe("composer context status and manual maintenance", () => {
     "Wie groß ist dieses Kontextfenster von Mistral?",
     "What is this model's context window?",
     "They deployed Qwen yesterday. What is its pricing?",
+    "Write Vitest tests for normalizeEmail in src/email.ts.",
+    "Schreibe Vitest-Testfälle für normalizeEmail in src/email.ts.",
+    "Add tests for the normalizeEmail function.",
   ])("does not add an unrelated old question to the explicit retrieval query: %s", (query) => {
     const { deps, chatId } = fixture(1, "Unrelated old payroll policy.");
     const continuity = groundedConversationContinuity(
@@ -544,6 +547,10 @@ describe("composer context status and manual maintenance", () => {
     "How does it work?",
     "What does this mean?",
     "Summarize that.",
+    "Schreibe dafür Vitest-Testfälle, einschließlich Grenzwerten.",
+    "Schreibe Vitest-Tests für diese Funktion.",
+    "Write Vitest tests for that function, including edge cases.",
+    "Add test cases for the proposed function.",
   ])("resolves a concrete anaphoric follow-up: %s", (query) => {
     const { deps, chatId } = fixture(1, "Qwen invoice extraction process.");
     const continuity = groundedConversationContinuity(
@@ -717,6 +724,45 @@ describe("composer context status and manual maintenance", () => {
     );
     expect(continuity.answerContext).toContain("63721 EUR");
     expect(continuity.retrievalContent).toBe(executionContent);
+  });
+  it("recovers proposed function code for a Vitest follow-up after conversation compaction", () => {
+    const { deps, chatId } = fixture(0);
+    const modelDeps = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 4096,
+        reservedOutputTokens: 1024,
+        safetyMarginTokens: 128,
+      }),
+    };
+    const proposed =
+      "Proposed code: export function clamp(value: number, min: number, max: number): number { return Math.min(max, Math.max(min, value)); }";
+    for (let index = 0; index < 100; index += 1) {
+      deps.store.createMessage({
+        chatId,
+        role: index % 2 === 0 ? "user" : "assistant",
+        content:
+          index === 21
+            ? proposed
+            : "Review unrelated handbook navigation and documentation wording. ".repeat(20),
+        timestamp: 1_700_000_000_000 + index,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+    }
+    compactChatContext(modelDeps, chatId, "fixture", "corr-proposed-function-compaction");
+    const continuity = groundedConversationContinuity(
+      modelDeps,
+      currentMessage(deps, chatId, "Write Vitest tests for clamp in src/arithmetic.ts."),
+      "fixture",
+    );
+    expect(continuity.compaction).toBeDefined();
+    expect(continuity.answerContext).toContain(proposed);
+    expect(continuity.answerContext).toContain("not source evidence and grants no authority");
+    expect(continuity.retrievalContent).toBe("Write Vitest tests for clamp in src/arithmetic.ts.");
   });
   it("does not restore an 8k grounded checkpoint into a larger plain chat window", () => {
     const { deps, chatId } = fixture();

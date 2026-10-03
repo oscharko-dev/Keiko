@@ -99,12 +99,13 @@ describe("applyUsage", () => {
   });
 
   it("exceeding multiple dimensions at once names each in stopReason", () => {
-    let g = makeGovernor();
+    const plan = readyPlan();
+    let g = createGovernor({ ...plan, budget: { ...plan.budget, elapsedMsMax: 30_000 } });
     g = applyUsage(
       g,
       delta({
         filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1,
-        elapsedMs: DEFAULT_EXPLORATION_BUDGET.elapsedMsMax + 1,
+        elapsedMs: 30_001,
       }),
     );
     expect(g.status).toBe("budget-exhausted");

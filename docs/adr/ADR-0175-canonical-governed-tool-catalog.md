@@ -216,10 +216,11 @@ first edit, with a diagnostic naming only the digest of the event type; the refu
 labels (type, tool, status, byte size, refusing gate) now travel in that diagnostic's `code`.
 
 Repository search v1 is local lexical/literal/safe-regex/symbol search through the workspace owner.
-It caps query characters at 200, hits at 50, file bytes at an inclusive 2 MiB, time at
-5 seconds, snippets at 512 bytes and result at 64 KiB. Discovery and scanning do not impose an
-arbitrary file-count ceiling on the selected folder; the absolute request deadline, cancellation
-and output caps still apply, with incomplete coverage reported explicitly. Each include and exclude list has at
+It caps query characters at 200, hits at 50, file bytes at an inclusive 2 MiB, snippets at
+512 bytes and result at 64 KiB. Discovery and scanning do not impose an arbitrary file-count,
+depth or source-search time ceiling on the selected folder. An explicit request deadline,
+cancellation and output caps still apply, with incomplete coverage reported explicitly. Source-search
+waiting is separate from the model gateway's execution budgets. Each include and exclude list has at
 most 32 globs of 200 characters. Yield after at most 32 candidates. Search must reject dangerous
 regexes, honor cancellation during inventory and scanning, and report omitted coverage. Existing
 `repoSearch` defaults of 200 hits do not widen the coding projection's 50-hit cap.

@@ -179,6 +179,30 @@ describe("describeError machine-token bounds for code and requestId", (): void =
 });
 
 describe("emitServerDiagnostic (RB-6)", () => {
+  it("admits only code-declared diagnostic stages before any sink observes them", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const record = serverDiagnosticFromError({
+      correlationId: "diagnostic-stage-test",
+      operation: "unit.stage",
+      source: "unit",
+      error: new TypeError(),
+      redact: identity,
+    });
+    const sink = {
+      record: (value: ServerDiagnosticRecord): void => {
+        records.push(value);
+      },
+    };
+    emitServerDiagnostic(sink, { ...record, diagnosticStage: "grounded-pack-validation" });
+    emitServerDiagnostic(sink, {
+      ...record,
+      diagnosticStage: "private-stage-canary",
+    } as unknown as ServerDiagnosticRecord);
+    expect(records[0]?.diagnosticStage).toBe("grounded-pack-validation");
+    expect(records[1]?.diagnosticStage).toBeUndefined();
+    expect(JSON.stringify(records)).not.toContain("private-stage-canary");
+  });
+
   it("keeps arbitrary provider and customer body text out of the diagnostic record", () => {
     const bodyMarker = "fixture-customer-provider-body-marker";
     const record = serverDiagnosticFromError({

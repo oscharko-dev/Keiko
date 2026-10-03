@@ -42,7 +42,7 @@ import { workspaceDirectoryFingerprint } from "./workspaceDirectorySnapshot.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
-export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 5;
+export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 6;
 
 export interface WorkspaceIndexCandidatePathPolicy {
   readonly include: readonly string[];

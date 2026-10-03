@@ -558,6 +558,8 @@ export type SupportIncidentCreation =
   | { readonly status: "rejected"; readonly reason: SupportIncidentRejection };
 
 export interface SupportIncidentOptions {
+  /** Inspect readable live candidates without expiry cleanup or writer ownership. */
+  readonly readOnly?: boolean | undefined;
   readonly env?: ServerLogEnv | undefined;
   readonly nowMs?: number | undefined;
   // The correlation of the user action (Report a problem); a fresh one is minted when absent.
@@ -655,7 +657,7 @@ function buildDescriptor(
   context: CandidateContext,
   pin: SupportIncidentPin,
   incidentId: string,
- ): SupportIncidentDescriptorRecord {
+): SupportIncidentDescriptorRecord {
   const identity = serverLogProcessIdentity();
   return {
     schemaVersion: SUPPORT_INCIDENT_SCHEMA_VERSION,
@@ -704,7 +706,12 @@ export function prepareUnretainedUserReportIncident(
       correlation: { rootCorrelationId: safeCorrelationId, childCorrelationIds: [] },
       evidenceCorrelationId: safeCorrelationId,
     },
-    { stateDir, nowMs: Date.now(), env: process.env, defectFingerprint: computeDefectFingerprint(input) },
+    {
+      stateDir,
+      nowMs: Date.now(),
+      env: process.env,
+      defectFingerprint: computeDefectFingerprint(input),
+    },
     { status: "rejected", pinnedSegmentCount: 0, pinnedBytes: 0, evidenceLostBeforePin: false },
     randomBytes(16).toString("hex"),
   );
@@ -1227,9 +1234,12 @@ export function listSupportIncidents(
   options: SupportIncidentOptions = {},
 ): readonly SupportIncidentRecord[] {
   const correlationId = options.correlationId ?? randomUUID();
-  return sweepExpiredEntries(stateDir, options.nowMs ?? Date.now(), correlationId).flatMap(
-    (entry) => (entry.record === undefined ? [] : [entry.record]),
-  );
+  const nowMs = options.nowMs ?? Date.now();
+  const entries =
+    options.readOnly === true
+      ? listSupportIncidentEntries(stateDir).filter((entry) => openEntry(entry, nowMs))
+      : sweepExpiredEntries(stateDir, nowMs, correlationId);
+  return entries.flatMap((entry) => (entry.record === undefined ? [] : [entry.record]));
 }
 
 /**

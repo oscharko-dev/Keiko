@@ -9,6 +9,12 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
+import {
+  MAX_SUPPORT_REPORT_BYTES,
+  type DesktopSupportReportResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { SupportReportDownload } from "@/lib/support-report-api";
 import {
   currentGlobalClientFailure,
   dismissGlobalClientFailure,
@@ -19,10 +25,14 @@ import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary"
 import { bffRequestErrorKind } from "@/lib/http";
 import styles from "./SupportReportButton.module.css";
 
-const FEEDBACK_MS = 1500;
 const REPORT_DEADLINE_MS = 35_000;
 const MAX_FULFILLED_REPORTS = 128;
-type ReportOutcome = AbortController | "fulfilled";
+interface ReadyReport {
+  readonly report: DesktopSupportReportResponse;
+  readonly download: SupportReportDownload;
+  readonly bytes: number;
+}
+type ReportOutcome = AbortController | ReadyReport;
 const outcomes = new Map<string, ReportOutcome>();
 const outcomeListeners = new Set<() => void>();
 
@@ -51,15 +61,48 @@ function releaseReport(key: string, controller: AbortController): void {
   notifyOutcomes();
 }
 
-function fulfillReport(key: string): void {
-  outcomes.set(key, "fulfilled");
-  const fulfilled = [...outcomes].filter(([, outcome]) => outcome === "fulfilled");
-  for (const [expired] of fulfilled.slice(0, -MAX_FULFILLED_REPORTS)) outcomes.delete(expired);
+function fulfilledReports(): readonly (readonly [string, ReadyReport])[] {
+  return [...outcomes].flatMap(([key, outcome]) =>
+    outcome instanceof AbortController ? [] : [[key, outcome] as const],
+  );
+}
+
+function forgetReadyReport(key: string): void {
+  const outcome = outcomes.get(key);
+  if (outcome === undefined || outcome instanceof AbortController) return;
+  outcome.download.dispose();
+  outcomes.delete(key);
+  notifyOutcomes();
+}
+
+function fulfillReport(
+  key: string,
+  report: DesktopSupportReportResponse,
+  download: SupportReportDownload,
+): void {
+  const bytes = new TextEncoder().encode(report.reportJson).byteLength;
+  if (bytes > MAX_SUPPORT_REPORT_BYTES) {
+    download.dispose();
+    throw new TypeError("Support report cache budget exceeded");
+  }
+  outcomes.set(key, { report, download, bytes });
+  let retainedBytes = fulfilledReports().reduce((total, [, ready]) => total + ready.bytes, 0);
+  const ready = fulfilledReports();
+  for (const [expired, entry] of ready) {
+    if (retainedBytes <= MAX_SUPPORT_REPORT_BYTES && outcomes.size <= MAX_FULFILLED_REPORTS) break;
+    if (expired === key) continue;
+    retainedBytes -= entry.bytes;
+    entry.download.dispose();
+    outcomes.delete(expired);
+  }
   notifyOutcomes();
 }
 
 export function resetSupportReportOutcomesForTests(): void {
-  for (const outcome of outcomes.values()) if (outcome !== "fulfilled") outcome.abort();
+  for (const outcome of outcomes.values()) {
+    if (outcome instanceof AbortController) outcome.abort();
+    else outcome.download.dispose();
+  }
   outcomes.clear();
   notifyOutcomes();
 }
@@ -68,12 +111,14 @@ interface SupportReportButtonProps {
   readonly correlationId?: string | undefined;
   readonly errorKey?: string | undefined;
   readonly compact?: boolean;
-  readonly onFulfilled?: (() => void) | undefined;
 }
+
+type ReportFailure = "error" | "session-denied" | "service-unavailable" | "rate-limited";
+type ReportStatus = "idle" | "busy" | "saved" | ReportFailure;
 
 interface ReportFeedback {
   readonly key: string;
-  readonly state: "idle" | "saved" | "error" | "fulfilled";
+  readonly state: "idle" | "saved" | ReportFailure;
 }
 
 interface ReportRequestRef {
@@ -123,13 +168,23 @@ function useReportCancellation(key: string): ReportRequestRef {
   return request;
 }
 
-function useSupportReportAction({
-  correlationId,
-  errorKey,
-  onFulfilled,
-}: SupportReportButtonProps): {
-  readonly status: "idle" | "busy" | "saved" | "error" | "hidden";
+function useReportExpiry(key: string, outcome: ReportOutcome | undefined): void {
+  useEffect((): (() => void) | undefined => {
+    if (outcome === undefined || outcome instanceof AbortController) return undefined;
+    const expiresAtMs = outcome.download.expiresAtMs;
+    if (expiresAtMs === undefined) return undefined;
+    const timeout = window.setTimeout(
+      () => forgetReadyReport(key),
+      Math.max(0, expiresAtMs - Date.now()),
+    );
+    return (): void => window.clearTimeout(timeout);
+  }, [key, outcome]);
+}
+
+function useSupportReportAction({ correlationId, errorKey }: SupportReportButtonProps): {
+  readonly status: ReportStatus;
   readonly create: () => Promise<void>;
+  readonly ready?: ReadyReport;
 } {
   const localId = useId();
   const key = correlationId ?? errorKey ?? localId;
@@ -138,29 +193,18 @@ function useSupportReportAction({
     () => outcomes.get(key),
     () => undefined,
   );
+  useReportExpiry(key, outcome);
   const [feedback, setFeedback] = useState<ReportFeedback>({
     key,
     state: "idle",
   });
   const request = useReportCancellation(key);
   const currentFeedback = feedback.key === key ? feedback.state : "idle";
-  useEffect(() => {
-    if (outcome !== "fulfilled") return;
-    if (currentFeedback !== "saved") {
-      onFulfilled?.();
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setFeedback({ key, state: "fulfilled" });
-      onFulfilled?.();
-    }, FEEDBACK_MS);
-    return (): void => window.clearTimeout(timer);
-  }, [currentFeedback, key, onFulfilled, outcome]);
   const create = (): Promise<void> => runReport(key, correlationId, request, setFeedback);
-  if (currentFeedback === "saved") return { status: "saved", create };
-  if (outcome === "fulfilled" || currentFeedback === "fulfilled")
-    return { status: "hidden", create };
-  return { status: outcome === undefined ? currentFeedback : "busy", create };
+  if (outcome !== undefined && !(outcome instanceof AbortController))
+    return { status: "saved", create, ready: outcome };
+  const idleFeedback = currentFeedback === "saved" ? "idle" : currentFeedback;
+  return { status: outcome === undefined ? idleFeedback : "busy", create };
 }
 
 async function runReport(
@@ -182,11 +226,12 @@ async function runReport(
     signal.throwIfAborted();
     api.downloadSupportReport(report);
     setFeedback({ key, state: "saved" });
-    fulfillReport(key);
+    fulfillReport(key, report, api.createSupportReportDownload(report));
+    reportSupportDownload(correlationId, "automatic");
   } catch (error) {
     if (controller.signal.aborted || request.current !== pending) return;
     releaseReport(key, controller);
-    setFeedback({ key, state: "error" });
+    setFeedback({ key, state: reportFailure(error) });
     // The transport already accounts for missing evidence. Do not create another incident for
     // the same offline delivery or replace the selected original error with a reporting failure.
     if (isReportDeliveryUnavailable(error, api, signal)) return;
@@ -199,10 +244,50 @@ async function runReport(
   }
 }
 
+function reportSupportDownload(
+  correlationId: string | undefined,
+  deliveryMode: "automatic" | "manual",
+): void {
+  reportClientDiagnostic("[keiko] support report download initiated", {
+    correlationId,
+    supportReportDelivery: deliveryMode,
+  });
+}
+
+function reportFailure(error: unknown): ReportFailure {
+  switch (bffRequestErrorKind(error)) {
+    case "authority-denied":
+      return "session-denied";
+    case "unavailable":
+      return "service-unavailable";
+    case "rate-limited":
+      return "rate-limited";
+    default:
+      return "error";
+  }
+}
+
+function reportFeedbackKey(status: ReportStatus): MessageKey | undefined {
+  switch (status) {
+    case "saved":
+      return "supportReport.saved";
+    case "error":
+      return "supportReport.failed";
+    case "session-denied":
+      return "supportReport.sessionDenied";
+    case "service-unavailable":
+      return "supportReport.serviceUnavailable";
+    case "rate-limited":
+      return "supportReport.rateLimited";
+    default:
+      return undefined;
+  }
+}
+
 export function SupportReportButton(props: SupportReportButtonProps): ReactNode {
   const t = useTranslate();
-  const { status, create } = useSupportReportAction(props);
-  if (status === "hidden") return null;
+  const { status, create, ready } = useSupportReportAction(props);
+  const feedbackKey = reportFeedbackKey(status);
   return (
     <span className={styles.cmpControl}>
       {status !== "saved" ? (
@@ -215,10 +300,18 @@ export function SupportReportButton(props: SupportReportButtonProps): ReactNode 
           {t(status === "busy" ? "supportReport.creating" : "supportReport.create")}
         </button>
       ) : null}
-      {status === "saved" || status === "error" ? (
-        <output className={styles.cmpFeedback}>
-          {t(status === "saved" ? "supportReport.saved" : "supportReport.failed")}
-        </output>
+      {ready !== undefined ? (
+        <a
+          className={`${props.compact === true ? "ft-seg" : "lk-btn"} ${styles.cmpAction}`}
+          href={ready.download.href}
+          download={ready.report.fileName}
+          onClick={() => reportSupportDownload(props.correlationId, "manual")}
+        >
+          {t("supportReport.download")}
+        </a>
+      ) : null}
+      {feedbackKey !== undefined ? (
+        <output className={styles.cmpFeedback}>{t(feedbackKey)}</output>
       ) : null}
     </span>
   );
@@ -232,9 +325,12 @@ export function GlobalSupportReportAction(): ReactNode {
     () => null,
   );
   const ordinal = failure?.ordinal;
+  const correlationId = failure?.correlationId;
   const dismiss = useCallback((): void => {
-    if (ordinal !== undefined) dismissGlobalClientFailure(ordinal);
-  }, [ordinal]);
+    if (ordinal === undefined) return;
+    forgetReadyReport(correlationId ?? `global-error-${ordinal}`);
+    dismissGlobalClientFailure(ordinal);
+  }, [correlationId, ordinal]);
   if (failure === null) return null;
   return (
     <fieldset className={styles.cmpControl} aria-label={t("supportReport.create")}>
@@ -242,7 +338,6 @@ export function GlobalSupportReportAction(): ReactNode {
         compact
         correlationId={failure.correlationId}
         errorKey={`global-error-${failure.ordinal}`}
-        onFulfilled={dismiss}
       />
       <button
         className={`ft-seg ${styles.cmpAction}`}

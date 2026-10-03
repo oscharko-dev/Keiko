@@ -689,6 +689,19 @@ describe("SupportIncident candidates", () => {
   });
 
   describe("expiry, recovery, and dismissal", () => {
+    it("inspects unexpired candidates without sweeping files or claiming writer ownership", () => {
+      const { record } = created(recordUserReportedIncident(stateDir));
+      const retained = storeNames();
+      expect(
+        listSupportIncidents(stateDir, { nowMs: record.expiresAtMs - 1, readOnly: true }),
+      ).toEqual([record]);
+      expect(listSupportIncidents(stateDir, { nowMs: record.expiresAtMs, readOnly: true })).toEqual(
+        [],
+      );
+      expect(storeNames()).toEqual(retained);
+      expect(lines("support.incident.expired")).toEqual([]);
+    });
+
     it("expires an unreported candidate predictably and says so", () => {
       const { record } = created(recordUserReportedIncident(stateDir));
       expect(listSupportIncidents(stateDir, { nowMs: record.expiresAtMs - 1 })).toEqual([record]);

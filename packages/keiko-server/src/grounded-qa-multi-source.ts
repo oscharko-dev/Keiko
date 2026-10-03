@@ -188,7 +188,10 @@ function sumBudget(
       excerptBytesMax: acc.excerptBytesMax + s.budget.excerptBytesMax,
       modelInputTokensMax: acc.modelInputTokensMax + s.budget.modelInputTokensMax,
       modelOutputTokensMax: acc.modelOutputTokensMax + s.budget.modelOutputTokensMax,
-      elapsedMsMax: acc.elapsedMsMax + s.budget.elapsedMsMax,
+      elapsedMsMax:
+        acc.elapsedMsMax === null || s.budget.elapsedMsMax === null
+          ? null
+          : acc.elapsedMsMax + s.budget.elapsedMsMax,
       rerankCallsMax: acc.rerankCallsMax + s.budget.rerankCallsMax,
     }),
     {
@@ -300,12 +303,16 @@ function sumCoverage(summaries: readonly CoverageSummary[], field: SummableCover
 
 function mergeCoverageLimits(summaries: readonly CoverageSummary[]): CoverageSummary["limits"] {
   return {
-    maxFilesScanned: summaries.reduce((sum, coverage) => sum + coverage.limits.maxFilesScanned, 0),
+    maxFilesScanned: summaries.some((coverage) => coverage.limits.maxFilesScanned === null)
+      ? null
+      : summaries.reduce((sum, coverage) => sum + (coverage.limits.maxFilesScanned ?? 0), 0),
     maxMatchesReturned: summaries.reduce(
       (sum, coverage) => sum + coverage.limits.maxMatchesReturned,
       0,
     ),
-    elapsedMsMax: summaries.reduce((sum, coverage) => sum + coverage.limits.elapsedMsMax, 0),
+    elapsedMsMax: summaries.some((coverage) => coverage.limits.elapsedMsMax === null)
+      ? null
+      : summaries.reduce((sum, coverage) => sum + (coverage.limits.elapsedMsMax ?? 0), 0),
   };
 }
 

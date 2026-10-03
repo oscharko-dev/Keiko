@@ -1024,6 +1024,9 @@ export const EN_MESSAGES = {
   "footer.version": "Keiko version {version}",
   "footer.versionLoading": "version loading",
   "footer.versionUnavailable": "version unavailable",
+  "footer.diagnosticsRetained": "{count}/{capacity} retained diagnostic cases",
+  "footer.diagnosticsRetainedDetail":
+    "Retained diagnostic candidates, not confirmed or open bugs. Error reports remain available even when this storage is full.",
   "footer.diagnosticsDegraded": "Diagnostics degraded",
   "footer.diagnosticsUnavailable": "Diagnostics unavailable",
   "footer.diagnosticsDetail":
@@ -1305,12 +1308,12 @@ export const EN_MESSAGES = {
   "workspace.empty.subtitle": "Open a window to start working",
   "scope.pill.connectedFolder": "Connected folder",
   "scope.pill.folder": "Folder: {name}",
-  "scope.pill.repositoryScope": "Repository scope",
+  "scope.pill.repositoryScope": "Connected root folder",
   "scope.pill.connectedFile": "Connected file",
   "scope.pill.file": "File: {name}",
   "scope.pill.filesConnected": "{count} files connected",
   "scope.pill.accessibleWithPath": "{label} ({path})",
-  "scope.boundary.noun.repository": "the connected repository",
+  "scope.boundary.noun.repository": "the connected root folder",
   "scope.boundary.noun.folder": "the connected folder",
   "scope.boundary.noun.fileScope": "the connected file scope",
   "scope.boundary.description":

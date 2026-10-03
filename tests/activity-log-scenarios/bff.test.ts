@@ -36,6 +36,15 @@ import {
   readPersistedActivityLog,
 } from "../support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
+import {
+  MAX_SUPPORT_INCIDENTS,
+  dismissSupportIncident,
+  listSupportIncidents,
+  recordUserReportedIncident,
+} from "@oscharko-dev/keiko-activity-log";
+import { supportDiagnosticCapacity } from "../../packages/keiko-server/src/support-diagnostic-capacity.js";
+import type { RouteContext } from "../../packages/keiko-server/src/routes.js";
+import type { UiHandlerDeps } from "../../packages/keiko-server/src/deps.js";
 
 function parseLine(line: string | undefined): Record<string, unknown> {
   return JSON.parse(line ?? "") as Record<string, unknown>;
@@ -321,6 +330,47 @@ describe("Activity Log scenario: bff", () => {
     resetServerLogger();
     vi.unstubAllEnvs();
     rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("keeps bounded diagnostic storage visible after candidate quota rejection", async () => {
+    const startedAtMs = Date.now();
+    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1)
+      expect(
+        recordUserReportedIncident(stateDir, { correlationId: `bff-retained-${String(slot)}` })
+          .status,
+      ).toBe("created");
+    expect(recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" })).toEqual({
+      status: "rejected",
+      reason: "quota-exhausted",
+    });
+    expect(
+      supportDiagnosticCapacity(
+        { correlationId: "bff-retained-0" } as RouteContext,
+        { env: { KEIKO_STATE_DIR: stateDir } } as UiHandlerDeps,
+      ),
+    ).toEqual({
+      retainedDiagnosticCount: MAX_SUPPORT_INCIDENTS,
+      diagnosticCapacity: MAX_SUPPORT_INCIDENTS,
+    });
+    for (const retained of listSupportIncidents(stateDir).slice(0, 2))
+      expect(
+        dismissSupportIncident(stateDir, retained.incidentId, {
+          correlationId: retained.correlation.rootCorrelationId,
+        }),
+      ).toBe("dismissed");
+    expect(recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" }).status).toBe(
+      "created",
+    );
+    const trace = await expectActivityLogScenario("bff.loss", {
+      stateDir,
+      startedAtMs,
+      expectedOps: [
+        "support.incident.created",
+        "support.incident.rejected",
+        "support.diagnostics.capacity",
+      ],
+    });
+    expect(trace.failureClasses).toContain("support-incident");
   });
 
   it("drives a bounded request body through overflow, cancellation and a stream failure to a complete crash record", async () => {

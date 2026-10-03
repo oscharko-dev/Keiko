@@ -10,7 +10,7 @@ export const DEFAULT_BINARY_PROBE: BinaryProbeOptions = {
   maxProbeBytes: 4096,
 } as const;
 
-export type TextByteEncoding = "utf-8" | "utf-16le" | "utf-16be";
+export type TextByteEncoding = "utf-8" | "utf-16le" | "utf-16be" | "windows-1252";
 
 export interface DecodedTextBytes {
   readonly encoding: TextByteEncoding;
@@ -18,6 +18,7 @@ export interface DecodedTextBytes {
 }
 
 export interface DecodeTextBytesOptions {
+  readonly scopePath?: string | undefined;
   readonly allowIncompleteTail?: boolean | undefined;
 }
 
@@ -79,6 +80,7 @@ export function detectTextByteEncoding(
   bytes: Uint8Array,
   options?: BinaryProbeOptions,
 ): TextByteEncoding | undefined {
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
   if (hasUtf16LeBom(bytes)) {
     return "utf-16le";
   }
@@ -114,20 +116,59 @@ export function completeTextBytePrefix(bytes: Uint8Array, encoding: TextByteEnco
   if (encoding === "utf-8") {
     return bytes.subarray(0, validUtf8PrefixLength(bytes));
   }
-  return bytes.subarray(0, bytes.length - (bytes.length % 2));
+  return encoding === "windows-1252" ? bytes : bytes.subarray(0, bytes.length - (bytes.length % 2));
+}
+
+function htmlMetaCharset(tag: string): string | undefined {
+  const attributes = new Map<string, string>();
+  const pattern = /([^\s/>=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gu;
+  for (const match of tag.matchAll(pattern)) {
+    const name = match[1]?.toLowerCase();
+    if (name !== undefined && !attributes.has(name))
+      attributes.set(name, match[2] ?? match[3] ?? match[4] ?? "");
+  }
+  const direct = attributes.get("charset");
+  if (direct !== undefined) return direct;
+  if (attributes.get("http-equiv")?.toLowerCase() !== "content-type") return undefined;
+  return /\bcharset\s*=\s*([a-zA-Z0-9_-]+)/u.exec(attributes.get("content") ?? "")?.[1];
+}
+
+function declaredHtmlEncoding(
+  bytes: Uint8Array,
+  scopePath: string | undefined,
+): TextByteEncoding | false | undefined {
+  if (scopePath === undefined || !/\.(?:html?|xhtml)$/iu.test(scopePath)) return undefined;
+  const prefix = new TextDecoder("windows-1252")
+    .decode(bytes.subarray(0, 1024))
+    .replace(/<!--[\s\S]*?(?:-->|$)/gu, "");
+  for (const match of prefix.matchAll(/<meta\b[^>]*>/giu)) {
+    const charset = htmlMetaCharset(match[0])?.trim().toLowerCase();
+    if (charset === undefined) continue;
+    if (charset === "utf-8" || charset === "utf8") return "utf-8";
+    if (charset === "windows-1252" || charset === "iso-8859-1" || charset === "latin1")
+      return "windows-1252";
+    return false;
+  }
+  return undefined;
 }
 
 export function decodeTextBytes(
   bytes: Uint8Array,
-  encoding: TextByteEncoding = detectTextByteEncoding(bytes) ?? "utf-8",
+  encoding?: TextByteEncoding,
   options?: DecodeTextBytesOptions,
 ): DecodedTextBytes | undefined {
+  const selected =
+    encoding ??
+    detectTextByteEncoding(bytes) ??
+    declaredHtmlEncoding(bytes, options?.scopePath) ??
+    "utf-8";
+  if (selected === false) return undefined;
   const complete =
-    options?.allowIncompleteTail === true ? completeTextBytePrefix(bytes, encoding) : bytes;
+    options?.allowIncompleteTail === true ? completeTextBytePrefix(bytes, selected) : bytes;
   try {
     return {
-      encoding,
-      text: new TextDecoder(encoding, { fatal: true }).decode(complete),
+      encoding: selected,
+      text: new TextDecoder(selected, { fatal: true }).decode(complete),
     };
   } catch {
     return undefined;
@@ -173,4 +214,27 @@ export function looksBinary(bytes: Uint8Array, options?: BinaryProbeOptions): bo
     }
   }
   return exceedsBinaryControlThreshold(bytes[0] ?? 0, nulCount, controlCount, limit);
+}
+
+function decodedTextLooksBinary(text: string): boolean {
+  let controls = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 32 && !isAllowedControlByte(code)) controls += 1;
+  }
+  return exceedsBinaryControlThreshold(text.charCodeAt(0), 0, controls, text.length);
+}
+
+/** Classify the complete, size-admitted file consistently for search and source reads. */
+export function decodeTextFileBytes(
+  bytes: Uint8Array,
+  options?: DecodeTextBytesOptions,
+): DecodedTextBytes | undefined {
+  const decoded = decodeTextBytes(bytes, undefined, options);
+  return decoded === undefined ||
+    decoded.text.includes("\0") ||
+    decodedTextLooksBinary(decoded.text) ||
+    looksBinary(bytes, { maxProbeBytes: bytes.length })
+    ? undefined
+    : decoded;
 }

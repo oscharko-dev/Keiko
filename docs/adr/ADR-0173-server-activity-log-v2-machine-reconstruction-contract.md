@@ -639,8 +639,9 @@ The healthy workspace footer has no report action. Exact browser resize notifica
 cancellations are classified before failure caps; they do not create incidents or report actions.
 An uncaught browser error or rejected promise
 reveals a compact, dismissible footer action tied to that failure; handled contextual errors retain
-their own action. Each active failure permits one successful download, with a 1.5-second completion
-status, while failed creation remains retryable and unmounting cancels pending work. The selected
+their own action. Each active failure shares one bounded report generation, keeps a download link
+available for repeated attempts, and remains visible until human dismissal. Failed creation remains
+retryable and unmounting cancels pending work. The selected
 incident and compressed event section travel together, so support can inspect the evidence without
 access to the customer's complete logs. Export uses the existing paired application session and a
 bounded worker; it never uploads externally by itself.
@@ -733,6 +734,20 @@ owner-private receiving-file check. Those guarantees above apply to CLI exports,
 downloads. Keiko performs no automatic upload or disclosure. A downloaded report must still pass
 the canonical offline validator before it is analyzed; operators who use the owner-private CLI
 reader first place it in a private directory and file according to the receiving-file contract.
+
+Browser delivery is reported as initiation, never as an acknowledged operating-system save. The
+report action keeps a **Download report** link after its automatic attempt, allowing a real user
+gesture to retry the same bytes without a second report request. The BFF serves those canonical
+bytes as an HTTP attachment at `/api/diagnostics/report/download/:downloadId`; every request requires
+the exact existing session that generated the artifact. The opaque reference conveys no authority.
+Process-local delivery caching is bounded by 10 MiB of UTF-8 report bytes, 128 entries and a
+15-minute lifetime; expiry makes report creation available again. The response uses `no-store`,
+`nosniff`, and the closed canonical filename. Older-server local object URLs are released on
+eviction or explicit global-error dismissal. A global error stays visible until human dismissal.
+The body-free `support.report.ui.delivered` state records attachment response bytes written by the
+server, without claiming that the operating system saved them. The routine
+`client.support-report.download-started` line records `automatic` or `manual` initiation under the
+selected error's correlation; it records no report body, destination, filename or saved claim.
 
 The shared desktop report action preserves the selected error when reporting itself fails. A
 session refusal names launcher recovery, a local service failure names application recovery, and a

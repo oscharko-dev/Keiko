@@ -635,6 +635,18 @@ describe("buildGroundedAnswerContextPackSummary contextSummary (ADR-0057 D1)", (
     expect(withCompaction.contextSummary?.compactionActive).toBe(true);
   });
 
+  it("does not label source eviction as conversation compaction", () => {
+    const summary = buildGroundedAnswerContextPackSummary(
+      pack(),
+      0,
+      0,
+      assemblyDiagnostics({
+        lanes: [laneDiag("repo-evidence", 7, "drop-lowest-score")],
+      }),
+    );
+    expect(summary.contextSummary?.compactionActive).toBe(false);
+  });
+
   it("structural path-free: contextSummary JSON contains no '/' and no fixture scopePath", () => {
     const dangerous = pack({
       scope: { ...scope("files", ["src/secret/path.ts"]), scopeId: "cs-leakid-0000" },

@@ -11,7 +11,7 @@ const LINE_TIMEOUT_CHECK_INTERVAL = 256;
 const MAX_ENCLOSING_RANGE_LINES = 80;
 
 export interface LineSelectionRunner {
-  readonly limits: { readonly elapsedMsMax: number };
+  readonly limits: { readonly elapsedMsMax: number | null };
   readonly matcher: LineMatcher;
   readonly nowMs: () => number;
   readonly startMs: number;
@@ -701,7 +701,7 @@ function lineSelectionStopped(
   if (lineIndex % LINE_TIMEOUT_CHECK_INTERVAL !== 0) return false;
   const currentMs = runner.nowMs();
   return (runner.deadlineAtMs !== undefined && currentMs >= runner.deadlineAtMs) ||
-    currentMs - runner.startMs > runner.limits.elapsedMsMax
+    currentMs - runner.startMs > (runner.limits.elapsedMsMax ?? Infinity)
     ? markStopped(state, "timeout")
     : false;
 }

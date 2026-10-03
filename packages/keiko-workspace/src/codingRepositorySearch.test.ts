@@ -158,7 +158,10 @@ describe("workspace-owned coding repository handler", () => {
   });
   it("omits oversized sources before scanning and reports the bound", async () => {
     const result = await executeCodingRepositoryRequest(workspace(), request("marker"), {
-      fs: memFs("/ws", { "src/large.ts": "marker".repeat(100_000), "src/small.ts": "marker" }),
+      fs: memFs("/ws", {
+        "src/large.ts": `marker${"x".repeat(CODING_REPOSITORY_LIMITS.fileBytes)}`,
+        "src/small.ts": "marker",
+      }),
     });
     expect(result.ok && result.kind === "search" && result.hits.map((hit) => hit.path)).toEqual([
       "src/small.ts",
@@ -171,7 +174,7 @@ describe("workspace-owned coding repository handler", () => {
       { ...request("marker"), maxResults: 1 },
       {
         fs: memFs("/ws", {
-          "src/large.ts": "marker".repeat(100_000),
+          "src/large.ts": `marker${"x".repeat(CODING_REPOSITORY_LIMITS.fileBytes)}`,
           "src/a.ts": "marker",
           "src/b.ts": "marker",
         }),
@@ -267,19 +270,13 @@ describe("workspace-owned coding repository handler", () => {
   });
 });
 
-// The production discovery/scan loops cooperatively yield to the event loop every 32 entries
-// (discovery.ts ASYNC_DISCOVERY_YIELD_EVERY_ENTRIES, repoSearch.ts SCAN_YIELD_INTERVAL) so a
-// large cold-workspace walk never blocks the event loop for real users. Exercising the exact
-// 2,000-file / 50,000-candidate contract ceilings below is the whole point of these two tests, so
-// the fixtures cannot be made cheaper without weakening the bound each one proves — the fixed
-// per-entry `setImmediate` cost is real production behaviour, not fixture overhead, and it is
-// consistently amplified on shared/contended GitHub-hosted runners well past the suite's default
-// 15s `testTimeout` (vitest.config.ts). A justified per-test timeout keeps the assertions intact.
+// Exercise the retired count ceilings with the production cooperative traversal. The larger
+// synthetic corpus can take longer on shared runners; this timeout belongs only to the test.
 const COOPERATIVE_YIELD_CEILING_TEST_TIMEOUT_MS = 30_000;
 
 describe("bounded candidate inventory and cooperative scan", () => {
   it(
-    "never scans beyond 2,000 files",
+    "searches beyond the former 2,000-file cap within the inventory ceiling",
     async () => {
       const files = Object.fromEntries(
         Array.from({ length: 2_001 }, (_, index) => [`src/${String(index)}.ts`, "marker"]),
@@ -288,20 +285,21 @@ describe("bounded candidate inventory and cooperative scan", () => {
         fs: memFs("/ws", files),
         nowMs: () => 0,
       });
-      expect(result.ok && result.metrics.filesScanned).toBe(2_000);
-      expect(result.ok && result.truncationReasons).toContain("file-limit");
+      expect(result.ok && result.metrics.filesScanned).toBe(2_001);
+      expect(CODING_REPOSITORY_LIMITS.scannedFiles).toBeNull();
+      expect(result.ok && result.truncationReasons).not.toContain("file-limit");
     },
     COOPERATIVE_YIELD_CEILING_TEST_TIMEOUT_MS,
   );
   it(
-    "never inventories beyond 50,000 candidates",
+    "visits every eligible candidate beyond the former 50,000-file inventory cap",
     async () => {
       const result = await executeCodingRepositoryRequest(workspace(), request("marker"), {
         fs: broadInventoryFs(),
         nowMs: () => 0,
       });
-      expect(result.ok && result.metrics.candidatesDiscovered).toBe(50_000);
-      expect(result.ok && result.truncationReasons).toContain("inventory-limit");
+      expect(result.ok && result.metrics.candidatesDiscovered).toBe(50_001);
+      expect(result.ok && result.truncationReasons).not.toContain("inventory-limit");
     },
     COOPERATIVE_YIELD_CEILING_TEST_TIMEOUT_MS,
   );
@@ -344,7 +342,7 @@ describe("bounded candidate inventory and cooperative scan", () => {
     ).rejects.toMatchObject({ reason: "file-unreadable" });
   });
   it.each([
-    ["large", "marker".repeat(100_000), 1, "file-too-large"],
+    ["large", `marker${"x".repeat(CODING_REPOSITORY_LIMITS.fileBytes)}`, 1, "file-too-large"],
     ["range", "marker", 2, "invalid-request"],
   ] as const)(
     "rejects %s reads through the owning failure taxonomy",

@@ -159,17 +159,17 @@ describe("CONNECTED_CONTEXT_SCHEMA_VERSION", () => {
 
 // ─── Default budget ──────────────────────────────────────────────────────────
 describe("DEFAULT_EXPLORATION_BUDGET", () => {
-  it("has seven independent dimensions, all integer and non-negative", () => {
+  it("has finite content budgets and no default source-time cutoff", () => {
     const dims: readonly number[] = [
       DEFAULT_EXPLORATION_BUDGET.searchCallsMax,
       DEFAULT_EXPLORATION_BUDGET.filesReadMax,
       DEFAULT_EXPLORATION_BUDGET.excerptBytesMax,
       DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
       DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax,
-      DEFAULT_EXPLORATION_BUDGET.elapsedMsMax,
       DEFAULT_EXPLORATION_BUDGET.rerankCallsMax,
     ];
-    expect(dims).toHaveLength(7);
+    expect(DEFAULT_EXPLORATION_BUDGET.elapsedMsMax).toBeNull();
+    expect(dims).toHaveLength(6);
     for (const value of dims) {
       expect(Number.isInteger(value)).toBe(true);
       expect(value).toBeGreaterThanOrEqual(0);
@@ -303,6 +303,12 @@ describe("isValidLineRange", () => {
 
 // ─── isWithinBudget ───────────────────────────────────────────────────────────
 describe("isWithinBudget", () => {
+  it("keeps a complete source scan beyond 30 seconds within the default time policy", () => {
+    expect(isWithinBudget({ ...happyUsage(), elapsedMs: 34_700 }, DEFAULT_EXPLORATION_BUDGET)).toBe(
+      true,
+    );
+  });
+
   it("returns true when every dimension equals its cap", () => {
     const usage: ExplorationUsage = {
       searchCalls: DEFAULT_EXPLORATION_BUDGET.searchCallsMax,
@@ -310,7 +316,7 @@ describe("isWithinBudget", () => {
       excerptBytes: DEFAULT_EXPLORATION_BUDGET.excerptBytesMax,
       modelInputTokens: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
       modelOutputTokens: DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax,
-      elapsedMs: DEFAULT_EXPLORATION_BUDGET.elapsedMsMax,
+      elapsedMs: 0,
       rerankCalls: DEFAULT_EXPLORATION_BUDGET.rerankCallsMax,
     };
     expect(isWithinBudget(usage, DEFAULT_EXPLORATION_BUDGET)).toBe(true);
@@ -1298,6 +1304,22 @@ describe("validateConnectedContextPack", () => {
       },
     };
 
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it("accepts complete streamed coverage with no count or time ceiling", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: coverageDiagnostics({
+          incomplete: false,
+          truncated: false,
+          reasons: [],
+          limits: { maxFilesScanned: null, maxMatchesReturned: 50, elapsedMsMax: null },
+        }),
+      },
+    };
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
 

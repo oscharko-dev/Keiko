@@ -103,7 +103,7 @@ describe("desktop support report transport", () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const report: DesktopSupportReportResponse = {
-      fileName: "report.json",
+      fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
       reportJson: '{"private":"report-canary"}',
       summary: {
         status: "complete",
@@ -120,7 +120,17 @@ describe("desktop support report transport", () => {
       context('{"correlationId":"selected-correlation"}'),
       deps(),
     );
-    expect(result).toEqual({ status: 200, body: report, headers: { "Cache-Control": "no-store" } });
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        ...report,
+        downloadPath: expect.stringMatching(
+          /^\/api\/diagnostics\/report\/download\/[a-f0-9-]{36}$/u,
+        ),
+        downloadExpiresAtMs: expect.any(Number),
+      },
+      headers: { "Cache-Control": "no-store" },
+    });
     expect(runSupportReportJob).toHaveBeenCalledWith(
       "/server-private-report-state",
       "selected-correlation",
@@ -190,7 +200,7 @@ describe("desktop support report transport", () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const report: DesktopSupportReportResponse = {
-      fileName: "report.json",
+      fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
       reportJson: "{}",
       summary: {
         status: "insufficient",
@@ -235,7 +245,10 @@ describe("desktop support report transport", () => {
   });
 
   it("bounds repeated downloads without queueing scans", async () => {
-    vi.mocked(runSupportReportJob).mockResolvedValue({ fileName: "report.json", reportJson: "{}" });
+    vi.mocked(runSupportReportJob).mockResolvedValue({
+      fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+      reportJson: "{}",
+    });
     for (let index = 0; index < 6; index++)
       expect((await handleCreateSupportReport(context("{}"), deps())).status).toBe(200);
     expect((await handleCreateSupportReport(context("{}"), deps())).status).toBe(429);

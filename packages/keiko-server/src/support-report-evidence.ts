@@ -70,6 +70,32 @@ const COMPLETED = defineActivityLogOperation({
   },
   proofIds: ["support.report.ui.completed.lifecycle"],
 });
+const DELIVERED = defineActivityLogOperation({
+  ...BASE,
+  op: "support.report.ui.delivered",
+  emitter: "support-report-evidence.emitSupportReportDelivered",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  fields: {
+    reportBytes: { type: "integer", dataClass: "count", required: true },
+    ...COMPLETE,
+  },
+  proofIds: ["support.report.ui.delivered.line"],
+});
+
+export function emitSupportReportDelivered(
+  correlationId: string | undefined,
+  reportBytes: number,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      DELIVERED,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      { reportBytes, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
 const FAILED = defineActivityLogOperation({
   ...BASE,
   op: "support.report.ui.failed",

@@ -6,6 +6,17 @@ import {
 } from "./local-knowledge-grounded-qa.js";
 
 describe("grounded answer prompts", () => {
+  it("describes read-only recursive retrieval while permitting proposed code and Vitest tests", () => {
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("ordinary folders without Git");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("server-owned retrieval");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("read-only");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("proposed functions and Vitest tests");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("preserve import paths");
+    expect(GROUNDED_SYSTEM_PROMPT).toContain(
+      "never claim that you edited files, executed commands, or ran tests",
+    );
+  });
+
   it("instructs connected-file answers to preserve code and token literals exactly", () => {
     expect(GROUNDED_SYSTEM_PROMPT).toContain(
       "copy them exactly as shown, preserving ASCII punctuation and hyphen characters",

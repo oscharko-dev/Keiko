@@ -74,9 +74,6 @@
     }
   },
   "src/app/components/desktop/GroundedAnswer.tsx": {
-    "complexity": {
-      "count": 1
-    },
     "max-lines-per-function": {
       "count": 3
     }

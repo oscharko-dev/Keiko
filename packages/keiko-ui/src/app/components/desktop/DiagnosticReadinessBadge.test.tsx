@@ -36,6 +36,57 @@ describe("DiagnosticReadinessBadge", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("shows full retained capacity neutrally while reporting remains available", () => {
+    const { container } = render(
+      <DiagnosticReadinessBadge
+        snapshot={snapshot({
+          readiness: "ready",
+          reasons: [],
+          retainedDiagnosticCount: 32,
+          diagnosticCapacity: 32,
+        })}
+      />,
+    );
+    expect(screen.getByText("32/32 retained diagnostic cases")).toBeInTheDocument();
+    expect(container.firstElementChild).toHaveAttribute("data-readiness", "ready");
+    expect(
+      screen.getByText(/Retained diagnostic candidates, not confirmed or open bugs/u),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Error reports remain available/u)).toBeInTheDocument();
+    expect(screen.queryByText("Diagnostics degraded")).toBeNull();
+  });
+
+  it("describes retained candidates honestly in German", async () => {
+    window.localStorage.setItem("keiko.locale", "de");
+    render(
+      <I18nProvider>
+        <DiagnosticReadinessBadge
+          snapshot={snapshot({
+            readiness: "ready",
+            reasons: [],
+            retainedDiagnosticCount: 32,
+            diagnosticCapacity: 32,
+          })}
+        />
+      </I18nProvider>,
+    );
+    expect(await screen.findByText("32/32 gespeicherte Diagnosefälle")).toBeInTheDocument();
+    expect(screen.getByText(/keine bestätigten oder offenen Fehler/u)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Fehlerberichte bleiben auch bei vollem Speicher verfügbar/u),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps writer degradation visible alongside the neutral candidate count", () => {
+    render(
+      <DiagnosticReadinessBadge
+        snapshot={snapshot({ retainedDiagnosticCount: 3, diagnosticCapacity: 32 })}
+      />,
+    );
+    expect(screen.getByText(/Diagnostics degraded/u)).toBeInTheDocument();
+    expect(screen.getByText(/3\/32 retained diagnostic cases/u)).toBeInTheDocument();
+  });
+
   it("names a degraded state and describes it with its reason", () => {
     const { container } = render(<DiagnosticReadinessBadge snapshot={snapshot()} />);
     const detail =

@@ -49,8 +49,8 @@ function formatTokenCount(tokens: number): string {
   return tokens.toString();
 }
 
-function finiteRatio(used: number, budget: number): number | undefined {
-  if (!Number.isFinite(budget) || budget <= 0) {
+function finiteRatio(used: number, budget: number | null): number | undefined {
+  if (budget === null || !Number.isFinite(budget) || budget <= 0) {
     return undefined;
   }
   return used / budget;

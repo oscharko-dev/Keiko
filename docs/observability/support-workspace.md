@@ -46,9 +46,23 @@ CLI control state instead.
 Use **Create error report** on a visible error to download the canonical report for that error's
 Support ID. Chat, Files, Editor loading failures, window and shell boundaries use the same action;
 uncaught browser failures expose it in the desktop footer. Creation has one bounded deadline, blocks
-duplicate clicks and remains retryable after failure. A failed export keeps the original error and
+duplicate clicks and remains retryable after failure. After generation it initiates a local download
+and keeps **Download report** available as a real browser link to the same report, so a dismissed or
+blocked download can be retried without regenerating evidence. "Download started" reports an
+initiation; a browser cannot confirm an operating-system save. The shared cache holds at most 10 MiB
+of report bytes. HTTP attachments retain the same canonical output for at most 15 minutes and
+require the original authenticated local session on every attempt. Expiry restores report creation;
+the reference alone cannot download anything. Older-server object URLs are released on eviction.
+Global errors remain until the person dismisses them; successful generation alone never dismisses
+the only recovery action. A failed export keeps the original error and
 Support ID visible; its own reporting failure never replaces that selection. Keiko does not upload
 or send the download. Share it manually through your approved support channel.
+
+The footer shows retained diagnostic cases as a neutral count whenever any are stored. Its detail
+explains that these are diagnostic candidates, not confirmed or open defects. Writer degradation
+remains a separate warning. Health inspection counts readable, unexpired candidates without
+expiring files or claiming writer ownership; report creation remains available at full capacity.
+Count changes emit body-free `support.diagnostics.capacity` evidence with counts only.
 
 The diagnostic candidate store holds at most 32 retained candidates. That internal capacity is not a
 count of unresolved product defects. A full store does not prevent an explicit desktop or CLI export of

@@ -1,5 +1,6 @@
 import type { DesktopSupportReportRequest } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
+import { cacheSupportReportDownload } from "./support-report-download.js";
 import { readJsonRequestBody } from "./bounded-request-body.js";
 import { isValidCorrelationId } from "./correlation.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
@@ -32,7 +33,8 @@ export async function handleCreateSupportReport(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+  const session = resolveAppSessionReadAuthority(deps, ctx.req);
+  if (session === undefined) {
     return {
       status: 403,
       body: errorBody("DENIED", "Local session unavailable.", ctx.correlationId),
@@ -57,13 +59,14 @@ export async function handleCreateSupportReport(
     };
   if (!limiter.tryAcquire("support-report", Date.now()))
     return { status: 429, body: errorBody("RATE_LIMITED", "Try again later.", ctx.correlationId) };
-  return createReportResponse(ctx, deps, request);
+  return createReportResponse(ctx, deps, request, session.sessionId);
 }
 
 async function createReportResponse(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   request: DesktopSupportReportRequest,
+  sessionId: string,
 ): Promise<RouteResult> {
   const controller = new AbortController();
   const cancel = (): void => {
@@ -80,7 +83,11 @@ async function createReportResponse(
       ctx.correlationId,
     );
     emitSupportReportCompleted(ctx.correlationId, report);
-    return { status: 200, body: report, headers: { "Cache-Control": "no-store" } };
+    return {
+      status: 200,
+      body: { ...report, ...cacheSupportReportDownload(deps, sessionId, report) },
+      headers: { "Cache-Control": "no-store" },
+    };
   } catch (error) {
     if (!(error instanceof SupportReportJobError)) throw error;
     emitSupportReportFailed(ctx.correlationId, error);

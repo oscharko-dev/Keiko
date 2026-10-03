@@ -562,6 +562,24 @@ describe("client diagnostic loss counts", () => {
 // #3532: the readiness `/api/health` reports and `keiko status` prints.
 describe("isActivityLogReadinessSnapshot", () => {
   const ready = { readiness: "ready", reasons: [], writer: "production-file", lostEvents: 0 };
+  it("accepts coherent retained diagnostic capacity and rejects incomplete or invalid counts", () => {
+    expect(
+      isActivityLogReadinessSnapshot({
+        ...ready,
+        retainedDiagnosticCount: 32,
+        diagnosticCapacity: 32,
+      }),
+    ).toBe(true);
+    for (const fields of [
+      { retainedDiagnosticCount: 32 },
+      { diagnosticCapacity: 32 },
+      { retainedDiagnosticCount: 33, diagnosticCapacity: 32 },
+      { retainedDiagnosticCount: -1, diagnosticCapacity: 32 },
+      { retainedDiagnosticCount: 1.5, diagnosticCapacity: 32 },
+      { retainedDiagnosticCount: 0, diagnosticCapacity: 0 },
+    ])
+      expect(isActivityLogReadinessSnapshot({ ...ready, ...fields })).toBe(false);
+  });
 
   it("accepts every closed state, reason and writer in a coherent combination", () => {
     for (const writer of ACTIVITY_LOG_WRITER_KINDS) {
@@ -1424,5 +1442,19 @@ describe("closed diagnostic navigation and render context", () => {
         renderFailure: "CustomerFile",
       }),
     ).toBe(false);
+  });
+});
+
+// Initiating a browser download is routine evidence and never proof of an OS save.
+describe("support report download evidence", () => {
+  it("accepts only automatic or manual initiation without report content", () => {
+    for (const supportReportDelivery of ["automatic", "manual"])
+      expect(isClientDiagnosticIngestRequest({ ...validRequest(), supportReportDelivery })).toBe(
+        true,
+      );
+    for (const supportReportDelivery of ["saved", "uploaded", { text: "private report" }, 1])
+      expect(isClientDiagnosticIngestRequest({ ...validRequest(), supportReportDelivery })).toBe(
+        false,
+      );
   });
 });

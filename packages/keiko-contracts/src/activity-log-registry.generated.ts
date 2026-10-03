@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "12dbea493d103bd5bd7cce0111f286dc45f3a52c61a781b3f7288b375130aedd" as const;
+  "0e3fe424cd3b446309a6bdd8c4a3f72cb5a1ff0bcbbac36abe7bb39cc5b0b344" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3703,6 +3703,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["client-stage"],
     proofIds: ["client.stage.started.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.support-report.download-started",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientSupportReportDownload",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      deliveryMode: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["automatic", "manual"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["support-report"],
+    proofIds: ["client.support-report.download-started.line"],
     releaseImpact: "patch",
   },
   {
@@ -24153,6 +24185,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      excerptAnchoredWindowCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       usageModelInputTokens: {
         type: "integer",
         dataClass: "count",
@@ -24176,6 +24213,27 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       selectedFileCount: {
         type: "integer",
         dataClass: "count",
+        required: false,
+      },
+      contextSelectedExcerptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      contextSelectedExcerptEstimatedTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      contextBudgetPressure: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["low", "moderate", "high", "exceeded"],
+      },
+      contextRecencyLayoutApplied: {
+        type: "boolean",
+        dataClass: "closed-enum",
         required: false,
       },
       omittedCount: {
@@ -24823,6 +24881,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       elapsedMsMax: {
         type: "integer",
         dataClass: "duration",
+        required: false,
+      },
+      elapsedMsBounded: {
+        type: "boolean",
+        dataClass: "closed-enum",
         required: false,
       },
       rerankCallsMax: {
@@ -26271,6 +26334,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         maxLength: 160,
       },
+      diagnosticStage: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["grounded-pack-validation", "grounded-turn-completion"],
+      },
       diagnosticErrorClass: {
         type: "string",
         dataClass: "error-kind",
@@ -27230,6 +27299,42 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "capability",
     failureClasses: ["ui-store-open"],
     proofIds: ["store.opened.identity"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "support.diagnostics.capacity",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "support-diagnostic-capacity.recordCapacity",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      retainedCandidateCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      candidateCapacity: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["support-incident"],
+    proofIds: ["support.diagnostics.capacity.line"],
     releaseImpact: "patch",
   },
   {
@@ -28244,6 +28349,37 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "capability",
     failureClasses: ["support-report"],
     proofIds: ["support.report.ui.completed.lifecycle"],
+    releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "support.report.ui.delivered",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "support-report-evidence.emitSupportReportDelivered",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reportBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["support-report"],
+    proofIds: ["support.report.ui.delivered.line"],
     releaseImpact: "minor",
   },
   {
@@ -40721,6 +40857,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "contextBudgetPressure",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "contextRecencyLayoutApplied",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "contextSelectedExcerptCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "contextSelectedExcerptEstimatedTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "coverageDepthPruned",
               type: "integer",
               dataClass: "count",
@@ -40764,6 +40924,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "entailmentUnavailableUncertaintyCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "excerptAnchoredWindowCount",
               type: "integer",
               dataClass: "count",
               required: false,
@@ -41373,6 +41539,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           safeContextFields: [
             {
               name: "caseSensitive",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "elapsedMsBounded",
               type: "boolean",
               dataClass: "closed-enum",
               required: false,
@@ -61117,6 +61289,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "diagnosticStage",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "diagnosticSummary",
               type: "string",
               dataClass: "opaque-id",
@@ -62296,16 +62474,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
     {
       failureClass: "support-incident",
       requirementContract: "support-incident",
-      productSurfaces: ["keiko-activity-log"],
+      productSurfaces: ["keiko-activity-log", "keiko-server"],
       lifecycleTransitions: ["end", "loss", "start", "state"],
       lifecycleOperations: {
         start: ["support.incident.created"],
-        state: ["support.incident.deduplicated"],
+        state: ["support.diagnostics.capacity", "support.incident.deduplicated"],
         end: ["support.incident.dismissed", "support.incident.expired"],
         failure: [],
         loss: ["support.incident.rejected"],
       },
       causalEdges: [
+        {
+          op: "support.diagnostics.capacity",
+          mode: "correlation",
+        },
         {
           op: "support.incident.created",
           mode: "correlation",
@@ -62329,6 +62511,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       lossSignals: ["support.incident.rejected"],
       resourceSignals: [
+        "support.diagnostics.capacity",
         "support.incident.created",
         "support.incident.deduplicated",
         "support.incident.dismissed",
@@ -62336,6 +62519,36 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       replayReferences: [],
       operations: [
+        {
+          op: "support.diagnostics.capacity",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "candidateCapacity",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "retainedCandidateCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["support.diagnostics.capacity.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "support.incident.created",
           owner: "keiko-activity-log",
@@ -62983,12 +63196,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["end", "failure", "start", "state"],
       lifecycleOperations: {
         start: ["support.report.started", "support.report.ui.started"],
-        state: ["support.report.degraded"],
+        state: [
+          "client.support-report.download-started",
+          "support.report.degraded",
+          "support.report.ui.delivered",
+        ],
         end: ["support.report.completed", "support.report.ui.completed"],
         failure: ["support.report.failed", "support.report.ui.failed"],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "client.support-report.download-started",
+          mode: "correlation",
+        },
         {
           op: "support.report.completed",
           mode: "correlation",
@@ -63010,6 +63231,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "support.report.ui.delivered",
+          mode: "correlation",
+        },
+        {
           op: "support.report.ui.failed",
           mode: "correlation",
         },
@@ -63020,14 +63245,40 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       lossSignals: [],
       resourceSignals: [
+        "client.support-report.download-started",
         "support.report.completed",
         "support.report.degraded",
         "support.report.started",
         "support.report.ui.completed",
+        "support.report.ui.delivered",
         "support.report.ui.started",
       ],
       replayReferences: [],
       operations: [
+        {
+          op: "client.support-report.download-started",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "deliveryMode",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.support-report.download-started.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "support.report.completed",
           owner: "keiko-cli",
@@ -63352,6 +63603,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["support.report.ui.completed.lifecycle"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "support.report.ui.delivered",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "reportBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["support.report.ui.delivered.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -67203,6 +67478,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.session-repair.recovered": "client-diagnostics",
     "client.stage.settled": "client-diagnostics",
     "client.stage.started": "client-diagnostics",
+    "client.support-report.download-started": "client-diagnostics",
     "coding-app-session.channel.closed": "tools-workflows",
     "coding-app-session.channel.opened": "tools-workflows",
     "coding-app-session.local-session.confirmed": "tools-workflows",
@@ -67596,6 +67872,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "store.encryption-migrated": "memory-knowledge",
     "store.journey-outcomes.migration": "bff",
     "store.opened": "bff",
+    "support.diagnostics.capacity": "bff",
     "support.incident.created": "lifecycle-crash",
     "support.incident.deduplicated": "lifecycle-crash",
     "support.incident.dismissed": "lifecycle-crash",
@@ -67609,6 +67886,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "support.report.failed": "runtime-packages",
     "support.report.started": "runtime-packages",
     "support.report.ui.completed": "bff",
+    "support.report.ui.delivered": "bff",
     "support.report.ui.failed": "bff",
     "support.report.ui.started": "bff",
     "task-workspace.identity.creation-time-probe": "tools-workflows",

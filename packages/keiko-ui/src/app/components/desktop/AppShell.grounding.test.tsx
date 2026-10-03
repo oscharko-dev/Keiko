@@ -1687,6 +1687,92 @@ describe("AppShell grounding connections", () => {
     });
   });
 
+  it("replaces a restored Files edge after an in-flight initial acknowledgement", async (): Promise<void> => {
+    const initial = deferred<{ readonly chats: readonly Chat[] }>();
+    const oldScope = fileScope("/manual-old");
+    const otherScope = fileScope("/independent-folder");
+    const active = chat({ connectedScopes: [oldScope, otherScope], updatedAt: 1 });
+    const api = workspaceApi();
+    const connection: Connection = {
+      id: "files-edge",
+      a: "files-1",
+      b: "chat-window",
+      boundScopeElided: true,
+    };
+    const windows = [
+      win("files", { root: "/manual-old", rootBinding: "coding-repository" }),
+      win("files", { root: "/independent-folder" }, "files-independent"),
+      win("chat", { chatId: active.id, projectPath: "/repo" }, "chat-window"),
+    ];
+    mocks.state.session = { ...mocks.state.session!, activeChat: undefined, chats: [] };
+    const independentConnection: Connection = {
+      id: "independent-edge",
+      a: "files-independent",
+      b: "chat-window",
+      boundRoot: "/independent-folder",
+      boundScopeKind: "workspace-root",
+    };
+    const connections = [connection, independentConnection];
+    mocks.state.workspaceResult = workspaceResult(windows, connections, api);
+    mocks.fetchChats.mockReturnValueOnce(initial.promise);
+    const view = render(<AppShell />);
+    await screen.findByTestId("workspace");
+    await waitFor(() => expect(mocks.fetchChats).toHaveBeenCalled());
+    const nextScope = fileScope("/manual-new");
+    const updated = chat({
+      connectedScopes: [otherScope, nextScope],
+      groundingScopeIdentity: "gsi-v1:" + "b".repeat(64),
+      updatedAt: 3,
+    });
+    mocks.updateChatConnectedScopes.mockResolvedValue({ chat: updated });
+    mocks.state.workspaceResult = workspaceResult(
+      [
+        { ...windows[0]!, cfg: { root: "/manual-new", rootBinding: "coding-repository" } },
+        ...windows.slice(1),
+      ],
+      connections,
+      api,
+    );
+    view.rerender(<AppShell />);
+    await act(async (): Promise<void> => {
+      initial.resolve({ chats: [active] });
+    });
+    await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalled());
+    const requested = mocks.updateChatConnectedScopes.mock.calls.at(
+      -1,
+    )?.[1] as ChatConnectedScope[];
+    expect(requested.map((scope) => scope.root)).toEqual(["/independent-folder", "/manual-new"]);
+    expect(mocks.state.session?.replaceChat).toHaveBeenLastCalledWith(updated);
+  });
+
+  it("does not reconnect a Files edge removed while its initial lookup is pending", async (): Promise<void> => {
+    const initial = deferred<{ readonly chats: readonly Chat[] }>();
+    const api = workspaceApi();
+    const windows = [
+      win("files", { root: "/manual-old" }),
+      win("chat", { chatId: "chat-1", projectPath: "/repo" }, "chat-window"),
+    ];
+    const edge: Connection = {
+      id: "files-edge",
+      a: "files-1",
+      b: "chat-window",
+      boundScopeElided: true,
+    };
+    mocks.state.session = { ...mocks.state.session!, activeChat: undefined, chats: [] };
+    mocks.state.workspaceResult = workspaceResult(windows, [edge], api);
+    mocks.fetchChats.mockReturnValueOnce(initial.promise);
+    const view = render(<AppShell />);
+    await screen.findByTestId("workspace");
+    await waitFor(() => expect(mocks.fetchChats).toHaveBeenCalled());
+    mocks.state.workspaceResult = workspaceResult(windows, [], api);
+    view.rerender(<AppShell />);
+    await act(async (): Promise<void> => {
+      initial.resolve({ chats: [chat()] });
+    });
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(api.updateConnBoundScope).not.toHaveBeenCalled();
+  });
+
   // Issue #2723 — the connected-scope rebind scan (chatWindowIdOf via useEffect) must reach its
   // per-connection body at least once; when neither endpoint is a chat window and no bind-time
   // snapshot exists, chatWindowIdOf returns null and the scan skips the connection entirely.

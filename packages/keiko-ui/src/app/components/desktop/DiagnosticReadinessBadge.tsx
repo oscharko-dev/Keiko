@@ -34,16 +34,40 @@ interface DiagnosticReadinessBadgeProps {
   readonly snapshot: ActivityLogReadinessSnapshot | undefined;
 }
 
+function readinessText(
+  snapshot: ActivityLogReadinessSnapshot,
+  t: ReturnType<typeof useTranslate>,
+): { readonly label: string | undefined; readonly detail: string | undefined } {
+  const label =
+    snapshot.readiness === "ready"
+      ? undefined
+      : snapshot.readiness === "degraded"
+        ? t("footer.diagnosticsDegraded")
+        : t("footer.diagnosticsUnavailable");
+  const detail =
+    snapshot.readiness === "ready"
+      ? undefined
+      : t("footer.diagnosticsDetail", {
+          reasons: snapshot.reasons
+            .map((reason) => t(READINESS_REASON_MESSAGES[reason]))
+            .join(", "),
+        });
+  return { label, detail };
+}
+
 export function DiagnosticReadinessBadge({ snapshot }: DiagnosticReadinessBadgeProps): ReactNode {
   const t = useTranslate();
-  if (snapshot === undefined || snapshot.readiness === "ready") return null;
-  const label =
-    snapshot.readiness === "degraded"
-      ? t("footer.diagnosticsDegraded")
-      : t("footer.diagnosticsUnavailable");
-  const detail = t("footer.diagnosticsDetail", {
-    reasons: snapshot.reasons.map((reason) => t(READINESS_REASON_MESSAGES[reason])).join(", "),
-  });
+  if (snapshot === undefined) return null;
+  const count = snapshot.retainedDiagnosticCount ?? 0;
+  if (snapshot.readiness === "ready" && count === 0) return null;
+  const countLabel =
+    count > 0
+      ? t("footer.diagnosticsRetained", { count, capacity: snapshot.diagnosticCapacity ?? 0 })
+      : undefined;
+  const { label: readinessLabel, detail: readinessDetail } = readinessText(snapshot, t);
+  const detail = [readinessDetail, count > 0 ? t("footer.diagnosticsRetainedDetail") : undefined]
+    .filter(Boolean)
+    .join(" ");
   return (
     <span
       className={`ui-tip cmp-tip-start ${styles.cmpReadinessBadge}`}
@@ -51,7 +75,12 @@ export function DiagnosticReadinessBadge({ snapshot }: DiagnosticReadinessBadgeP
       data-tip={detail}
     >
       <ActivityIcon size={13} />
-      <span className={styles.cmpReadinessLabel}>{label}</span>
+      {readinessLabel !== undefined ? (
+        <span className={styles.cmpReadinessLabel}>{readinessLabel}</span>
+      ) : null}
+      {countLabel !== undefined ? (
+        <span className={styles.cmpRetainedLabel}>{countLabel}</span>
+      ) : null}
       <span className="sr-only">{detail}</span>
     </span>
   );

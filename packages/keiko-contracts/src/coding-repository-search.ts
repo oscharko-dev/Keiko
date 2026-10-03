@@ -6,14 +6,14 @@ import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "./workspace-contract-primitiv
 export const CODING_REPOSITORY_LIMITS = Object.freeze({
   queryChars: 200,
   returnedHits: 50,
-  scannedFiles: 2_000,
-  fileBytes: 512 * 1024,
-  elapsedMs: 5_000,
+  scannedFiles: null,
+  fileBytes: 2 * 1024 * 1024,
+  elapsedMs: null,
   snippetBytes: 512,
   outputBytes: 64 * 1024,
   globs: 32,
   globChars: 200,
-  inventoryFiles: 50_000,
+  inventoryFiles: null,
   yieldEvery: 32,
 });
 

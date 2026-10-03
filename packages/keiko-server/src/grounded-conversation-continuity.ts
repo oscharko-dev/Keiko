@@ -168,7 +168,7 @@ function renderContinuityMessages(
 }
 
 const REFERENT_PATTERNS: readonly RegExp[] = [
-  /\b(?:dazu|davon|dessen|hierzu|dabei|dort|weitermachen|weiterführen)\b/iu,
+  /\b(?:dazu|dafür|hierfür|davon|dessen|hierzu|dabei|dort|weitermachen|weiterführen)\b/iu,
   /\b(?:was|wie|warum)\s+(?:ist|bedeutet|funktioniert)\s+(?:das|dies)\s*[.!?]*$/iu,
   /\b(?:explain|summarize|compare|continue|clarify|describe)\s+(?:it|this|that|them|these|those)\s*[.!?]*$/iu,
 ];
@@ -210,6 +210,7 @@ function matchesReferentCommand(
 function needsReferentResolution(content: string): boolean {
   return (
     REFERENT_PATTERNS.some((pattern) => pattern.test(content)) ||
+    isAnaphoricTestRequest(content) ||
     matchesReferentCommand(
       content,
       /\b(?:erkläre?|beschreibe?|prüfe?|vergleiche?|fasse?)\s+/giu,
@@ -221,6 +222,18 @@ function needsReferentResolution(content: string): boolean {
       /\b(?:what|how|why)\s+(?:does|is|do|are|was)\s+/giu,
       /^(?:it|this|that|they|these|those)$/iu,
       ENGLISH_REFERENT_SUFFIXES,
+    )
+  );
+}
+
+function isAnaphoricTestRequest(content: string): boolean {
+  if (!/\b(?:tests?|testfälle|testcases|vitest)\b/iu.test(content)) return false;
+  return (
+    /\bfor\s+(?:this|that|the proposed)\s+(?:function|code|implementation|component)\b/iu.test(
+      content,
+    ) ||
+    /\bfür\s+(?:diese|die vorgeschlagene)\s+(?:funktion|implementierung|komponente)\b/iu.test(
+      content,
     )
   );
 }

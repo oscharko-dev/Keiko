@@ -1303,6 +1303,37 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  it("persists browser report initiation without claiming an OS save or creating a failure incident", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "Keiko support download initiated.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_support-download-0001",
+      supportReportDelivery: "manual",
+    });
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.support-report.download-started",
+    );
+    const record = expectActivityLogProof(
+      "client.support-report.download-started.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_support-download-0001",
+      deliveryMode: "manual",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("errorKind");
+    expect(record).not.toHaveProperty("reportJson");
+    expect(analyzeLogText(formatActivityLogProofLine(event ?? {})).sufficiency.status).toBe(
+      "complete",
+    );
+  });
+
   // PR #3678 review: the read-aloud preparation keeps a bracketed path and drops grounded markers;
   // its counts land on their own line under the synthesis request's correlation.
   it("persists a read-aloud preparation as client.answer.speech-prepared", async () => {

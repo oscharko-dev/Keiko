@@ -16,6 +16,12 @@
   white-space: nowrap;
 }
 
+.cmpReadinessBadge[data-readiness="ready"] {
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+  background: var(--surface-2);
+}
+
 .cmpReadinessBadge[data-readiness="unavailable"] {
   border-color: color-mix(in oklch, var(--feedback-danger) 45%, var(--border-subtle));
   color: color-mix(in oklch, var(--feedback-danger) 78%, var(--text-primary));
@@ -25,6 +31,12 @@
 /* The centred version signature leaves little room on a narrow footer: the badge keeps its icon
    and its screen-reader description there and drops the visible word. */
 @media (max-width: 640px) {
+  .cmpRetainedLabel {
+    max-width: 15ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   .cmpReadinessLabel {
     display: none;
   }

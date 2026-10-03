@@ -43,6 +43,7 @@ import {
   type ClientDiagnosticGitClientOperation,
   type ClientDiagnosticAnswerCopy,
   type ClientDiagnosticAnswerSpeech,
+  type ClientSupportReportDelivery,
   type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
@@ -160,6 +161,7 @@ export interface ClientDiagnosticMeta {
   // An answer prepared for the voice dialogue (PR #3678 review): the marker groups removed and kept,
   // under the correlation its synthesis request carries, never the spoken text.
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
+  readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

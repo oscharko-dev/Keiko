@@ -19,8 +19,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
-  readWorkspaceFile,
   readWorkspaceFileForEditing,
+  readWorkspaceFileBytesPrefixForInternalUse,
   type WorkspaceContentLane,
 } from "./discovery.js";
 import {
@@ -35,7 +35,6 @@ import {
   nodeWorkspaceFs,
   WorkspaceDescriptorReadError,
   type WorkspaceFs,
-  type WorkspaceStat,
 } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -80,7 +79,7 @@ import {
 import {
   lowValueRescuePolicy,
   policyOmissionReason,
-  resolveSearchPolicy,
+  resolveWorkspaceSearchPolicy,
   routeQueryTermsForSearch,
   withSemanticRankingDiagnostics,
   type SearchDiagnostics,
@@ -88,6 +87,9 @@ import {
   type SearchPolicy,
 } from "./repoSearchPolicy.js";
 import type { WorkspaceInfo } from "./types.js";
+import { decodeTextFileBytes } from "./binaryDetect.js";
+import { anchoredExcerptByteWindow } from "./repoSearchExcerptWindow.js";
+import { collectStreamedSearchText, type StreamedSearchCollection } from "./repoSearchStream.js";
 import {
   assertStructuralExecutionActive,
   executionControlledWorkspaceFs,
@@ -125,17 +127,17 @@ export interface SearchScope {
 }
 
 export interface SearchLimits {
-  readonly maxFilesScanned: number;
+  readonly maxFilesScanned: number | null;
   readonly maxMatchesReturned: number;
   readonly maxBytesPerFileScanned: number;
-  readonly elapsedMsMax: number;
+  readonly elapsedMsMax: number | null;
 }
 
 export const DEFAULT_SEARCH_LIMITS: SearchLimits = {
-  maxFilesScanned: 2_000,
+  maxFilesScanned: null,
   maxMatchesReturned: 200,
-  maxBytesPerFileScanned: 524_288,
-  elapsedMsMax: 5_000,
+  maxBytesPerFileScanned: 2_097_152,
+  elapsedMsMax: null,
 } as const;
 
 // Upper bound (2 MiB) on how many bytes of a file readExcerpt will load to reach a requested line
@@ -160,6 +162,8 @@ export interface SearchResult {
 }
 
 export interface ReadExcerptRequest {
+  // Trusted query anchors reposition a clipped view without widening the returned byte cap.
+  readonly anchors?: readonly string[] | undefined;
   readonly scopePath: string;
   readonly startLine: number;
   readonly endLine: number;
@@ -167,6 +171,7 @@ export interface ReadExcerptRequest {
 }
 
 export interface ReadExcerptResult {
+  readonly anchoredWindowApplied?: boolean | undefined;
   readonly atom: EvidenceAtom;
   readonly content: string;
   readonly truncated: boolean;
@@ -231,10 +236,6 @@ export function clampToBytes(
   const buffer = encoded.subarray(0, maxBytes);
   const excerpt = new TextDecoder("utf-8", { fatal: false }).decode(buffer).replace(/\uFFFD$/u, "");
   return { excerpt, truncated: true };
-}
-
-function decodeUtf8Prefix(bytes: Uint8Array): string {
-  return new TextDecoder("utf-8", { fatal: false }).decode(bytes).replace(/\uFFFD$/u, "");
 }
 
 function assertQuery(query: RetrievalQuery): void {
@@ -326,11 +327,12 @@ function inferredCoverageReasons(
   }
   if (
     inputs.candidateTruncated &&
-    (stats.depthPrunedByDiscovery === 0 || stats.filesDiscovered >= inputs.limits.maxFilesScanned)
+    (stats.depthPrunedByDiscovery === 0 ||
+      stats.filesDiscovered >= (inputs.limits.maxFilesScanned ?? Infinity))
   ) {
     reasons.add("file-cap");
   }
-  if (inputs.elapsedMs > inputs.limits.elapsedMsMax) {
+  if (inputs.elapsedMs > (inputs.limits.elapsedMsMax ?? Infinity)) {
     reasons.add("timeout");
   }
   return reasons;
@@ -499,7 +501,7 @@ function effectiveScanCandidateLimit(runner: SearchTextRunner, candidateCount: n
   );
   return Math.min(
     candidateCount,
-    runner.limits.maxFilesScanned,
+    runner.limits.maxFilesScanned ?? 2048,
     PROJECT_METADATA_SCAN_MAX_FILES,
     matchScaledLimit,
   );
@@ -538,7 +540,7 @@ function buildSearchTextRunner(
     signal: deps.signal,
     matcher: buildMatcher(query, deps.queryInterpretation),
     fingerprint: fingerprintFor(query, deps.queryInterpretation),
-    policy: resolveSearchPolicy(scope.relativePaths.length > 0, deps.searchHints),
+    policy: resolveWorkspaceSearchPolicy(scope, deps.fs, deps.searchHints),
     query,
     contentLane: deps.contentLane ?? "evidence",
     ...(deps.candidatePathGlobs === undefined
@@ -554,7 +556,13 @@ function buildSearchTextRunner(
     semantic:
       deps.contentLane === "editor"
         ? undefined
-        : createSemanticSearchSession(deps.semanticSearchProvider, query),
+        : createSemanticSearchSession(
+            deps.semanticSearchProvider,
+            query,
+            limits.maxFilesScanned === null
+              ? { maxDocumentBytes: 131_072, maxDocuments: 32 }
+              : undefined,
+          ),
   };
 }
 
@@ -849,7 +857,7 @@ function workspaceIndexCompatibleRun(runner: SearchTextRunner): boolean {
   // so sharing one index across both lanes would either poison a persisted evidence artifact with
   // secret-shaped tokens or hand the editor lane back the very redacted text it was fixed to stop
   // matching on. The editor lane therefore always runs uncached.
-  if (runner.contentLane === "editor") {
+  if (runner.contentLane === "editor" || runner.limits.maxFilesScanned === null) {
     return false;
   }
   return runner.policy.lowValuePathAllowlist.length === 0 && runner.policy.recentPaths.length === 0;
@@ -863,7 +871,7 @@ function workspaceIndexScopeKey(
     scope,
     workspaceIndexPolicyShape(runner),
     runner.limits.maxBytesPerFileScanned,
-    runner.limits.maxFilesScanned,
+    runner.limits.maxFilesScanned ?? 2048,
     runner.candidatePathGlobs,
   );
 }
@@ -1008,7 +1016,7 @@ function prepareAffectedWorkspaceIndexSnapshot(
       scope: workspaceIndexSnapshotScope(affectedScope, runner),
       policy: workspaceIndexPolicyShape(runner),
       maxBytesPerFileScanned: runner.limits.maxBytesPerFileScanned,
-      maxFilesScanned: runner.limits.maxFilesScanned,
+      maxFilesScanned: runner.limits.maxFilesScanned ?? 2048,
       discovery: candidateSetDiscoverySnapshot(candidateSet, discoveryFiles, []),
       records,
     }),
@@ -1436,7 +1444,7 @@ function workspaceIndexSessionSnapshot(
     scope: workspaceIndexSnapshotScope(scope, runner),
     policy: workspaceIndexPolicyShape(runner),
     maxBytesPerFileScanned: runner.limits.maxBytesPerFileScanned,
-    maxFilesScanned: runner.limits.maxFilesScanned,
+    maxFilesScanned: runner.limits.maxFilesScanned ?? 2048,
     discovery: candidateSetDiscoverySnapshot(
       session.candidateSet,
       [...session.discoveryByPath.values()],
@@ -1765,7 +1773,7 @@ function remainingRunnerTimeMs(runner: SearchTextRunner): number {
 }
 
 function runnerDeadlineAtMs(runner: SearchTextRunner): number {
-  const relativeDeadlineAtMs = runner.startMs + Math.max(0, runner.limits.elapsedMsMax);
+  const relativeDeadlineAtMs = runner.startMs + Math.max(0, runner.limits.elapsedMsMax ?? Infinity);
   return Math.min(runner.deadlineAtMs ?? relativeDeadlineAtMs, relativeDeadlineAtMs);
 }
 
@@ -1839,7 +1847,7 @@ function shouldConsiderLowValueRescue(
   if (!runner.policy.omitLowValueWorkspaceFiles || primary.atoms.length > 0) {
     return false;
   }
-  if (primary.state.filesScanned >= runner.limits.maxFilesScanned) {
+  if (primary.state.filesScanned >= (runner.limits.maxFilesScanned ?? Infinity)) {
     return false;
   }
   if (runner.query.kind === "exact-symbol") {
@@ -1863,7 +1871,7 @@ function hasLowValueEvidenceSkipped(
 }
 
 function remainingScanLimit(runner: SearchTextRunner, primary: SearchTextCollection): number {
-  return Math.max(0, runner.limits.maxFilesScanned - primary.state.filesScanned);
+  return Math.max(0, (runner.limits.maxFilesScanned ?? Infinity) - primary.state.filesScanned);
 }
 
 function lowValueOnlyCandidateSet(
@@ -2169,7 +2177,7 @@ function snapshotForSessionRanking(
     scope: workspaceIndexSnapshotScope(scope, runner),
     policy: workspaceIndexPolicyShape(runner),
     maxBytesPerFileScanned: runner.limits.maxBytesPerFileScanned,
-    maxFilesScanned: runner.limits.maxFilesScanned,
+    maxFilesScanned: runner.limits.maxFilesScanned ?? 2048,
     discovery: candidateSetDiscoverySnapshot(
       session.candidateSet,
       sessionDiscoveryFiles(session),
@@ -2482,6 +2490,78 @@ async function executeSearchTextWithSession(
   return finalizedSearchTextResult(searchRunner, rescued, truncationReasons, workspaceIndexSession);
 }
 
+function streamedCoverage(
+  runner: SearchTextRunner,
+  collected: StreamedSearchCollection,
+  matchesReturned: number,
+  elapsedMs: number,
+): ContextCoverageDiagnostics {
+  const reasons = coverageReasons(collected.state.truncationReasons ?? new Set());
+  return {
+    incomplete: reasons.length > 0,
+    reasons,
+    filesDiscovered: collected.filesDiscovered,
+    filesAfterPolicy: collected.filesAfterPolicy,
+    filesScanned: collected.state.filesScanned,
+    filesSkipped: collected.filesSkipped + collected.ignored + collected.denied,
+    oversizedFilesScanned: 0,
+    lowValueRescueFilesDiscovered: collected.diagnostics.lowValueRescueFilesDiscovered ?? 0,
+    lowValueRescueFilesScanned: collected.diagnostics.lowValueRescueFilesScanned ?? 0,
+    truncated: reasons.length > 0,
+    ignoredByDiscovery: collected.ignored,
+    deniedByDiscovery: collected.denied,
+    depthPrunedByDiscovery: 0,
+    maxFilesPrunedByDiscovery: 0,
+    matchesReturned: matchesReturned,
+    elapsedMs,
+    limits: {
+      maxFilesScanned: null,
+      maxMatchesReturned: runner.limits.maxMatchesReturned,
+      elapsedMsMax: runner.limits.elapsedMsMax,
+    },
+  };
+}
+
+async function executeStreamedSearchText(
+  runner: SearchTextRunner,
+  pathPattern?: RegExp,
+): Promise<SearchResult> {
+  const collected = await collectStreamedSearchText(
+    runner,
+    runnerExecutionControl(runner),
+    pathPattern,
+  );
+  const semantic =
+    runnerStopReason(runner) === undefined
+      ? await runSemanticSearchSession(runner.semantic, runner.query, runner.signal, {
+          timeoutMs: remainingRunnerTimeMs(runner),
+          onTimeout: (): void => {
+            markRunnerStop(collected.state, "timeout");
+          },
+        })
+      : [];
+  const atoms = mergeSearchAtoms(
+    collected.atoms,
+    semantic.map((match) => semanticAtom(runner, match)),
+    runner.limits.maxMatchesReturned,
+  );
+  const elapsedMs = elapsed(runner);
+  return {
+    atoms,
+    candidates: collected.candidates,
+    filesScanned: collected.state.filesScanned,
+    oversizedFilesScanned: 0,
+    elapsedMs,
+    truncated: collected.state.truncated,
+    diagnostics: withSemanticRankingDiagnostics(
+      collected.diagnostics,
+      bestLexicalAtomsByPath(collected.atoms),
+      semantic,
+    ),
+    coverage: streamedCoverage(runner, collected, atoms.length, elapsedMs),
+  };
+}
+
 async function executeSearchText(
   scope: SearchScope,
   query: RetrievalQuery,
@@ -2489,6 +2569,7 @@ async function executeSearchText(
   deps: FacadeDeps,
   runner: SearchTextRunner,
 ): Promise<SearchResult> {
+  if (runner.limits.maxFilesScanned === null) return executeStreamedSearchText(runner);
   const workspaceIndexSession =
     deps.workspaceIndex === undefined || !workspaceIndexCompatibleRun(runner)
       ? undefined
@@ -2526,8 +2607,9 @@ function requestLocalSessionKey(
   limits: SearchLimits,
   deps: FacadeDeps,
 ): string | undefined {
-  const policy = resolveSearchPolicy(scope.relativePaths.length > 0, deps.searchHints);
+  const policy = resolveWorkspaceSearchPolicy(scope, deps.fs ?? nodeWorkspaceFs, deps.searchHints);
   if (
+    limits.maxFilesScanned === null ||
     deps.contentLane === "editor" ||
     policy.lowValuePathAllowlist.length > 0 ||
     policy.recentPaths.length > 0
@@ -2846,7 +2928,7 @@ function hitFileListingLimit(
     state.truncationReasons.add("aborted");
     return true;
   }
-  if (state.filesScanned >= limits.maxFilesScanned) {
+  if (state.filesScanned >= (limits.maxFilesScanned ?? Infinity)) {
     state.truncationReasons.add("file-cap");
     return true;
   }
@@ -2857,7 +2939,7 @@ function hitFileListingLimit(
   const currentMs = nowMs();
   if (
     (deadlineAtMs !== undefined && currentMs >= deadlineAtMs) ||
-    currentMs - startMs > limits.elapsedMsMax
+    currentMs - startMs > (limits.elapsedMsMax ?? Infinity)
   ) {
     state.truncationReasons.add("timeout");
     return true;
@@ -2936,7 +3018,7 @@ function shouldConsiderLowValueFileListingRescue(
   if (!policy.omitLowValueWorkspaceFiles || state.atoms.length > 0) {
     return false;
   }
-  if (state.filesScanned >= limits.maxFilesScanned) {
+  if (state.filesScanned >= (limits.maxFilesScanned ?? Infinity)) {
     return false;
   }
   return (
@@ -2999,7 +3081,7 @@ function fileListingStopReason(
   if (isAborted(inputs.signal)) return "aborted";
   const currentMs = ctx.nowMs();
   return (inputs.deadlineAtMs !== undefined && currentMs >= inputs.deadlineAtMs) ||
-    currentMs - inputs.startMs > inputs.limits.elapsedMsMax
+    currentMs - inputs.startMs > (inputs.limits.elapsedMsMax ?? Infinity)
     ? "timeout"
     : undefined;
 }
@@ -3025,8 +3107,8 @@ function gatherLowValueFileCandidates(
   return gatherCandidates(ctx.scope, inputs.query, limits, inputs.fs, policy, undefined, {
     nowMs: ctx.nowMs,
     deadlineAtMs: Math.min(
-      inputs.deadlineAtMs ?? inputs.startMs + inputs.limits.elapsedMsMax,
-      inputs.startMs + inputs.limits.elapsedMsMax,
+      inputs.deadlineAtMs ?? inputs.startMs + (inputs.limits.elapsedMsMax ?? Infinity),
+      inputs.startMs + (inputs.limits.elapsedMsMax ?? Infinity),
     ),
     ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
   });
@@ -3048,7 +3130,10 @@ function rescueLowValueFileListings(
   ) {
     return { state: inputs.state, candidateSet: inputs.candidateSet };
   }
-  const maxFilesScanned = Math.max(0, inputs.limits.maxFilesScanned - inputs.state.filesScanned);
+  const maxFilesScanned = Math.max(
+    0,
+    (inputs.limits.maxFilesScanned ?? Infinity) - inputs.state.filesScanned,
+  );
   const lowValuePolicy = lowValueRescuePolicy(inputs.policy);
   const lowValueLimits = { ...inputs.limits, maxFilesScanned };
   const gatheredSet = gatherLowValueFileCandidates(ctx, inputs, lowValueLimits, lowValuePolicy);
@@ -3128,8 +3213,8 @@ function findFilesCandidateSet(
     ? gatherCandidates(scope, query, limits, fs, policy, undefined, {
         nowMs,
         deadlineAtMs: Math.min(
-          deadlineAtMs ?? startMs + limits.elapsedMsMax,
-          startMs + limits.elapsedMsMax,
+          deadlineAtMs ?? startMs + (limits.elapsedMsMax ?? Infinity),
+          startMs + (limits.elapsedMsMax ?? Infinity),
         ),
         ...(signal === undefined ? {} : { signal }),
       })
@@ -3149,7 +3234,7 @@ function executeFindFilesSync(inputs: FindFilesExecutionInputs): SearchResult {
   if (stopped !== undefined) return stopped;
   const effectiveLimits = effectiveFindFilesLimits(query, limits);
   const ctx = findFilesContext(scope, query, nowMs);
-  const policy = resolveSearchPolicy(scope.relativePaths.length > 0, inputs.hints);
+  const policy = resolveWorkspaceSearchPolicy(scope, fs, inputs.hints);
   const candidateSet = findFilesCandidateSet(inputs, policy);
   const stoppedAfterDiscovery = stoppedFindFilesResult(
     nowMs,
@@ -3185,7 +3270,7 @@ function findFilesSync(request: FindFilesRequest): SearchResult {
     nowMs,
     deadlineAtMs: Math.min(
       deadlineAtMs ?? Number.POSITIVE_INFINITY,
-      startMs + Math.max(0, limits.elapsedMsMax),
+      startMs + Math.max(0, limits.elapsedMsMax ?? Infinity),
     ),
     ...(signal === undefined ? {} : { signal }),
   };
@@ -3285,6 +3370,16 @@ export async function findFiles(
   if (query.kind !== "file-pattern") {
     throw new RepoSearchInvalidQueryError("findFiles requires a file-pattern query");
   }
+  if (limits.maxFilesScanned === null) {
+    const pattern = compileGlob(query.text, query.caseSensitive);
+    const matchQuery = { ...query, kind: "regex" as const, text: "." };
+    const runner = {
+      ...searchTextRunner(scope, matchQuery, limits, deps),
+      query,
+      fingerprint: fingerprintFor(query),
+    };
+    return executeStreamedSearchText(runner, pattern);
+  }
   const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;
   return await Promise.resolve(
@@ -3305,7 +3400,7 @@ export async function findFiles(
 function buildExcerptFingerprint(request: ReadExcerptRequest): string {
   return fingerprintFor({
     kind: "natural-language",
-    text: `${request.scopePath}:${request.startLine.toString()}-${request.endLine.toString()}`,
+    text: `${request.scopePath}:${request.startLine.toString()}-${request.endLine.toString()}${request.anchors === undefined ? "" : JSON.stringify(request.anchors)}`,
     caseSensitive: false,
     maxResults: 1,
     emittedAtMs: 0,
@@ -3367,7 +3462,18 @@ function assertExcerptReadableByPolicy(requestPath: string, realScopePath: strin
   }
 }
 
+function assertExcerptAnchors(request: ReadExcerptRequest): void {
+  if (request.anchors === undefined) return;
+  if (
+    !Array.isArray(request.anchors) ||
+    request.anchors.some((anchor: unknown) => typeof anchor !== "string" || anchor.length === 0)
+  ) {
+    throw new RepoSearchInvalidRangeError("invalid excerpt anchors");
+  }
+}
+
 function assertExcerptRange(request: ReadExcerptRequest): void {
+  assertExcerptAnchors(request);
   if (
     !Number.isInteger(request.startLine) ||
     !Number.isInteger(request.endLine) ||
@@ -3442,100 +3548,63 @@ function excerptFileLines(
   fs: WorkspaceFs,
   lane: WorkspaceContentLane,
 ): readonly string[] {
-  const opts = { maxBytes: MAX_EXCERPT_FILE_BYTES };
-  if (lane === "editor") {
-    return readWorkspaceFileForEditing(scope.workspace, request.scopePath, opts, fs).rawText.split(
-      "\n",
+  const raw = readWorkspaceFileForEditing(
+    scope.workspace,
+    request.scopePath,
+    { maxBytes: MAX_EXCERPT_FILE_BYTES },
+    fs,
+  ).rawText;
+  return excerptTextLines(raw, request.scopePath, lane);
+}
+
+function excerptTextLines(
+  raw: string,
+  scopePath: string,
+  lane: WorkspaceContentLane,
+): readonly string[] {
+  if (raw.includes("\0")) {
+    throw new RepoSearchUnsupportedFileError(
+      `cannot read excerpt of binary file: ${scopePath}`,
+      "binary",
     );
   }
-  return readWorkspaceFile(scope.workspace, request.scopePath, opts, fs).text.split("\n");
-}
-
-// Reads the bounded byte prefix of an oversized file. An IO failure of that probe is the same
-// one-file, non-denial read outcome `readExcerptLines` degrades for a WorkspaceReadError, so it
-// costs this excerpt alone; anything else keeps propagating.
-async function excerptPrefixBytes(
-  readFileBytes: NonNullable<WorkspaceFs["readFileBytes"]>,
-  targetPath: string,
-  expected: WorkspaceStat,
-  scopePath: string,
-): Promise<Uint8Array> {
-  try {
-    return await readFileBytes(targetPath, MAX_EXCERPT_FILE_BYTES, "reject", expected);
-  } catch (readErr) {
-    if (isIoError(readErr)) {
-      throw excerptUnreadable(scopePath);
-    }
-    throw readErr;
-  }
-}
-
-interface OversizedExcerptInputs {
-  readonly request: ReadExcerptRequest;
-  readonly fs: WorkspaceFs;
-  readonly targetPath: string;
-  readonly expected: WorkspaceStat;
-  readonly lane: WorkspaceContentLane;
-  // The budget error that sent the read down this path. It is rethrown unchanged whenever the
-  // bounded prefix cannot answer the request, so a caller still sees the original file-too-large
-  // outcome instead of a fallback-specific error it does not handle.
-  readonly tooLarge: FileTooLargeError;
-}
-
-// The bounded fallback for a file that exceeded the excerpt read budget: decode the byte prefix the
-// port can still serve, re-check the descriptor identity so a file rewritten mid-read is reported
-// rather than mixed, and split the lines under the caller's lane (the editor lane keeps raw text —
-// see the note on excerptFileLines about redaction shifting line coordinates).
-async function oversizedExcerptLines(inputs: OversizedExcerptInputs): Promise<readonly string[]> {
-  const { request, fs, targetPath, expected, lane, tooLarge } = inputs;
-  const readFileBytes = fs.readFileBytes;
-  if (readFileBytes === undefined) {
-    throw tooLarge;
-  }
-  const bytes = await excerptPrefixBytes(readFileBytes, targetPath, expected, request.scopePath);
-  const prefix = decodeUtf8Prefix(bytes);
-  if (!isWorkspacePathSnapshotCurrent(fs, targetPath, targetPath, expected)) {
-    throw new RepoSearchUnsupportedFileError("file changed during excerpt read", "io-error");
-  }
-  const lines = (lane === "editor" ? prefix : redact(prefix)).split("\n");
-  if (request.startLine > lines.length) {
-    throw tooLarge;
-  }
-  return lines;
+  return (lane === "editor" ? raw : redact(raw)).split("\n");
 }
 
 async function readExcerptLines(
   scope: SearchScope,
   request: ReadExcerptRequest,
   fs: WorkspaceFs,
-  targetPath: string,
-  expected: WorkspaceStat,
   lane: WorkspaceContentLane,
 ): Promise<readonly string[]> {
   try {
-    return excerptFileLines(scope, request, fs, lane);
-  } catch (err) {
-    // The guarded read lane serves content ONLY through the bounded same-descriptor primitive
-    // (ADR-0005 D1). Everything it reports as a WorkspaceReadError — a port that does not offer
-    // that primitive, a stat it cannot take, a path it cannot resolve, or a file whose identity
-    // changed under the open descriptor — is a non-denial read outcome for ONE file, the same
-    // class assertExcerptNotBinary re-classifies one call earlier. Degrade it to the same skip so
-    // a concurrently rewritten (or unreadable) file costs its own excerpt instead of the whole
-    // grounded answer. PathDeniedError/PathEscapeError are distinct types and still propagate.
-    if (err instanceof WorkspaceReadError) {
-      throw excerptUnreadable(request.scopePath);
-    }
-    if (!(err instanceof FileTooLargeError)) {
-      throw err;
-    }
-    return await oversizedExcerptLines({
-      request,
+    if (fs.readFileBytes === undefined || fs.readFileUtf8SameDescriptor === undefined)
+      return excerptFileLines(scope, request, fs, lane);
+    const read = await readWorkspaceFileBytesPrefixForInternalUse(
+      scope.workspace,
+      request.scopePath,
+      MAX_EXCERPT_FILE_BYTES,
       fs,
-      targetPath,
-      expected,
-      lane,
-      tooLarge: err,
-    });
+    );
+    if (!read.complete) {
+      throw new FileTooLargeError(
+        "file exceeds excerpt size cap",
+        request.scopePath,
+        read.stat.size,
+        MAX_EXCERPT_FILE_BYTES,
+      );
+    }
+    const decoded = decodeTextFileBytes(read.bytes, { scopePath: request.scopePath });
+    if (decoded === undefined) {
+      throw new RepoSearchUnsupportedFileError(
+        `cannot decode excerpt: ${request.scopePath}`,
+        "binary",
+      );
+    }
+    return excerptTextLines(decoded.text, request.scopePath, lane);
+  } catch (error) {
+    if (error instanceof WorkspaceReadError) throw excerptUnreadable(request.scopePath);
+    throw error;
   }
 }
 
@@ -3556,14 +3625,27 @@ function assertExcerptStartWithinLines(
 function excerptWindow(
   request: ReadExcerptRequest,
   allLines: readonly string[],
-): { readonly content: string; readonly truncated: boolean; readonly endLine: number } {
+): {
+  readonly content: string;
+  readonly truncated: boolean;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly anchoredWindowApplied: boolean;
+} {
   const sourceEndLine = Math.min(request.endLine, allLines.length);
   const slice = allLines.slice(request.startLine - 1, request.endLine).join("\n");
   const clamped = clampToBytes(slice, request.maxBytes);
+  const anchored =
+    clamped.truncated && request.anchors !== undefined
+      ? anchoredExcerptByteWindow(slice, request.anchors, request.maxBytes, request.startLine)
+      : undefined;
+  if (anchored !== undefined) return { ...anchored, truncated: true, anchoredWindowApplied: true };
   const returnedLineCount = clamped.excerpt.split("\n").length;
   return {
     content: clamped.excerpt,
     truncated: clamped.truncated,
+    anchoredWindowApplied: false,
+    startLine: request.startLine,
     endLine: clamped.truncated
       ? Math.min(sourceEndLine, request.startLine + returnedLineCount - 1)
       : sourceEndLine,
@@ -3572,6 +3654,30 @@ function excerptWindow(
 
 function excerptExecutionError(reason: "aborted" | "timeout"): RepoSearchUnsupportedFileError {
   return new RepoSearchUnsupportedFileError(`repo-search operation ${reason}`, reason);
+}
+
+function excerptResultForWindow(
+  scope: SearchScope,
+  request: ReadExcerptRequest,
+  window: ReturnType<typeof excerptWindow>,
+  nowMs: () => number,
+): ReadExcerptResult {
+  const atom = buildAtom({
+    scopeId: scope.scopeId,
+    scopePath: request.scopePath,
+    lineRange: { startLine: window.startLine, endLine: window.endLine },
+    provenanceKind: "excerpt-read",
+    tool: "repo.readExcerpt",
+    queryFingerprint: buildExcerptFingerprint(request),
+    score: 1,
+    emittedAtMs: nowMs(),
+  });
+  return {
+    atom,
+    content: window.content,
+    truncated: window.truncated,
+    ...(window.anchoredWindowApplied ? { anchoredWindowApplied: true } : {}),
+  };
 }
 
 async function readExcerptWithControl(
@@ -3596,36 +3702,27 @@ async function readExcerptWithControl(
   assertExcerptReadableByPolicy(request.scopePath, target.realScopePath);
   assertExcerptWithinSelectedScope(scope, target.realScopePath);
   const stat = fs.stat(target.path);
+  if (stat.size > MAX_EXCERPT_FILE_BYTES) {
+    throw new FileTooLargeError(
+      "file exceeds excerpt size cap",
+      request.scopePath,
+      stat.size,
+      MAX_EXCERPT_FILE_BYTES,
+    );
+  }
   await assertExcerptNotBinary(fs, target.path, stat.size, request.scopePath);
   assertStructuralExecutionActive(control);
   // Read enough of the file to reach the requested line window (bounded by MAX_EXCERPT_FILE_BYTES),
-  // then clamp the returned content to the caller's request.maxBytes budget. For files larger than
-  // the read cap, the optional raw-byte port can still serve early windows from the bounded prefix.
-  const allLines = await readExcerptLines(
-    scope,
-    request,
-    fs,
-    target.path,
-    stat,
-    deps.contentLane ?? "evidence",
-  );
+  // then clamp the returned content to the caller's request.maxBytes budget. The total file size
+  // must remain within the same inclusive cap as recursive search.
+  const allLines = await readExcerptLines(scope, request, fs, deps.contentLane ?? "evidence");
   if (!isWorkspacePathSnapshotCurrent(fs, target.path, target.path, stat)) {
     throw new RepoSearchUnsupportedFileError("file changed during excerpt read", "io-error");
   }
   assertStructuralExecutionActive(control);
   assertExcerptStartWithinLines(request, allLines);
   const window = excerptWindow(request, allLines);
-  const atom = buildAtom({
-    scopeId: scope.scopeId,
-    scopePath: request.scopePath,
-    lineRange: { startLine: request.startLine, endLine: window.endLine },
-    provenanceKind: "excerpt-read",
-    tool: "repo.readExcerpt",
-    queryFingerprint: buildExcerptFingerprint(request),
-    score: 1,
-    emittedAtMs: nowMs(),
-  });
-  return { atom, content: window.content, truncated: window.truncated };
+  return excerptResultForWindow(scope, request, window, nowMs);
 }
 
 export async function readExcerpt(

@@ -409,7 +409,7 @@ describe("createExplorationPlan", () => {
     expect(p.planId).toMatch(/^pl-[0-9a-f]{16}$/);
   });
 
-  it("budget slicing: every ring's searchLimits are integers ≥ 1", () => {
+  it("budget slicing: output limits stay finite while source scan time is uncapped", () => {
     const p = plan({
       scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
       query: happyQuery({ text: "look at src/a/b.ts and `Foo` and src/c/d.ts" }),
@@ -417,15 +417,12 @@ describe("createExplorationPlan", () => {
     expect(p.state).toBe("ready");
     for (const ring of p.rings) {
       const limits = ring.searchLimits;
-      for (const v of [
-        limits.maxFilesScanned,
-        limits.maxMatchesReturned,
-        limits.maxBytesPerFileScanned,
-        limits.elapsedMsMax,
-      ]) {
+      for (const v of [limits.maxMatchesReturned, limits.maxBytesPerFileScanned]) {
         expect(Number.isInteger(v)).toBe(true);
         expect(v).toBeGreaterThanOrEqual(1);
       }
+      expect(limits.elapsedMsMax).toBeNull();
+      if (ring.kind === "lexical") expect(limits.maxFilesScanned).toBeNull();
       expect(limits.maxBytesPerFileScanned).toBeGreaterThanOrEqual(8192);
     }
   });
@@ -446,14 +443,9 @@ describe("createExplorationPlan", () => {
     const lexical = p.rings.find((r) => r.kind === "lexical");
     expect(lexical).toBeDefined();
     const lexicalLimits = lexical?.searchLimits;
-    // The number of files an excerpt-byte-derived cap would have allowed (the old, buggy bound).
-    const excerptDerivedFiles = Math.floor(
-      (p.budget.excerptBytesMax * 0.55) / (lexicalLimits?.maxBytesPerFileScanned ?? 1),
-    );
-    // Scan breadth must now exceed both that excerpt-derived cap and filesReadMax, so an
-    // alphabetically-late but relevant file is still examined.
-    expect(lexicalLimits?.maxFilesScanned ?? 0).toBeGreaterThan(excerptDerivedFiles);
-    expect(lexicalLimits?.maxFilesScanned ?? 0).toBeGreaterThan(p.budget.filesReadMax);
+    // Recursive breadth has no file-count or time cap; excerpt reads retain their own limits.
+    expect(lexicalLimits?.maxFilesScanned).toBeNull();
+    expect(lexicalLimits?.elapsedMsMax).toBeNull();
     // The per-file scan read cap keeps its 8 KiB floor across every ring.
     for (const ring of p.rings) {
       expect(ring.searchLimits.maxBytesPerFileScanned).toBeGreaterThanOrEqual(8192);

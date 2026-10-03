@@ -886,6 +886,7 @@ function AppShellInner(): ReactNode {
   }, [shortcutRoot]);
   const wsRef = useRef<HTMLDivElement>(null);
   const wsWinsForBindingRef = useRef<readonly AppWindow[] | null>(null);
+  const wsConnectionsForBindingRef = useRef<readonly Connection[]>([]);
   // Operator-configurable grounding caps — fetched once on mount, fall back to compile-time
   // defaults until /api/config resolves (or if an older server omits effectiveGroundingLimits).
   const [groundingLimits, setGroundingLimits] = useState<GroundingLimits>(DEFAULT_GROUNDING_LIMITS);
@@ -1009,9 +1010,17 @@ function AppShellInner(): ReactNode {
       const lkScopes = effectiveLocalKnowledgeScopes(chat);
       if (isScopeConnected(current, nextScope)) {
         if (previousScope !== null) {
-          const res = await updateChatConnectedScopes(chat.id, current.length > 0 ? current : null);
-          rememberGroundingChat(res.chat);
-          session.replaceChat(res.chat);
+          const persisted = await persistCurrentChatScopes(
+            target,
+            attempt,
+            chat.id,
+            effectiveScopes(chat),
+            current,
+            updateChatConnectedScopes,
+            rememberGroundingChat,
+          );
+          if (persisted === undefined) return false;
+          session.replaceChat(persisted);
         }
         return true;
       }
@@ -1032,7 +1041,7 @@ function AppShellInner(): ReactNode {
           target,
           attempt,
           chat.id,
-          current,
+          effectiveScopes(chat),
           next,
           updateChatConnectedScopes,
           rememberGroundingChat,
@@ -1069,19 +1078,38 @@ function AppShellInner(): ReactNode {
       t,
     ],
   );
+  // A restored edge has no persisted path snapshot. Remember its acknowledged scope before
+  // draining the next queued root change; enqueue-time snapshots may still be elided.
+  const acknowledgedFilesScopesRef = useRef(new Map<string, ChatConnectedScope>());
   const replaceFilesScope = useCallback(
     async (
       chatWindowId: string,
       nextScope: ChatConnectedScope,
       previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
+      connectionId?: string,
     ): Promise<boolean> => {
       try {
+        const chatKey = groundingMutationKey(chatWindowId, target);
+        const edgeKey = connectionId === undefined ? undefined : `${connectionId}\u0000${chatKey}`;
         return await serializeChatMutation(
           groundingMutationQueueRef.current,
-          groundingMutationKey(chatWindowId, target),
-          async (attempt): Promise<boolean> =>
-            replaceFilesScopeNow(chatWindowId, nextScope, attempt, previousScope, target),
+          chatKey,
+          async (attempt): Promise<boolean> => {
+            const confirmed =
+              edgeKey === undefined ? undefined : acknowledgedFilesScopesRef.current.get(edgeKey);
+            const accepted = await replaceFilesScopeNow(
+              chatWindowId,
+              nextScope,
+              attempt,
+              confirmed ?? previousScope,
+              target,
+            );
+            if (accepted && attempt.isCurrent() && edgeKey !== undefined) {
+              acknowledgedFilesScopesRef.current.set(edgeKey, nextScope);
+            }
+            return accepted;
+          },
         );
       } catch (error: unknown) {
         return rejectForConnectionFailure(
@@ -1402,6 +1430,7 @@ function AppShellInner(): ReactNode {
     onWindowLimitReached: reportWindowLimit,
   });
   wsWinsForBindingRef.current = ws.wins;
+  wsConnectionsForBindingRef.current = ws.conns;
 
   // GEN-PERF-WORKSPACE-007 — this rebind scan only depends on the connection set
   // and each endpoint window's type/cfg (filesChatBindScope derives from cfg paths,
@@ -1443,6 +1472,11 @@ function AppShellInner(): ReactNode {
   }, [workspaceLinkRevision, ws.api]);
   useEffect(() => {
     if (ws.wins === null) return;
+    const liveEdges = new Set(ws.conns.map((conn) => conn.id));
+    for (const key of acknowledgedFilesScopesRef.current.keys()) {
+      if (!liveEdges.has(key.split("\u0000")[0] ?? ""))
+        acknowledgedFilesScopesRef.current.delete(key);
+    }
     for (const conn of ws.conns) {
       const a = ws.winsById.get(conn.a);
       const b = ws.winsById.get(conn.b);
@@ -1453,9 +1487,27 @@ function AppShellInner(): ReactNode {
       if (nextScope === null) continue;
       const previousScope = boundScopeOf(conn);
       if (connectedScopeKey(previousScope) === connectedScopeKey(nextScope)) continue;
-      void replaceFilesScope(chatWindowId, nextScope, previousScope).then((accepted) => {
-        if (accepted) ws.api.updateConnBoundScope(conn.id, nextScope);
-      });
+      const chatWindow = a.type === "chat" ? a : b;
+      const conversationId =
+        chatIdFromWindow(chatWindow) ?? chatWindowRuntimeTarget(chatWindowId)?.conversationId;
+      if (conversationId === undefined) continue;
+      const target: ChatBindingTarget = {
+        conversationId,
+        projectPath:
+          persistedChatProjectPath(chatWindow) ??
+          runtimeProjectPathForChat(chatWindowId, conversationId),
+        isCurrent: (): boolean =>
+          wsConnectionsForBindingRef.current.some(
+            (edge) => edge.id === conn.id && edge.a === conn.a && edge.b === conn.b,
+          ) &&
+          (chatIdFromWindow(wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId)) ??
+            chatWindowRuntimeTarget(chatWindowId)?.conversationId) === conversationId,
+      };
+      void replaceFilesScope(chatWindowId, nextScope, previousScope, target, conn.id).then(
+        (accepted) => {
+          if (accepted) ws.api.updateConnBoundScope(conn.id, nextScope);
+        },
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- workspaceLinkRevision is the cfg/conn-change signal; ws.wins/winsById/conns are read fresh when it bumps (geometry-only frames must not re-run the scan)
   }, [replaceFilesScope, ws.api, workspaceLinkRevision]);

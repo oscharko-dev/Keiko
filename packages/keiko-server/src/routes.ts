@@ -10,6 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HealthResponse } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { UiHandlerDeps } from "./deps.js";
+import { supportDiagnosticCapacity } from "./support-diagnostic-capacity.js";
 import { currentActivityLogReadiness } from "@oscharko-dev/keiko-activity-log";
 import { errorBody, type ApiError } from "./route-error.js";
 export { errorBody } from "./route-error.js";
@@ -396,6 +397,7 @@ import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
 import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
 import { GIT_DELIVERY_JOURNEY_ROUTE_GROUP } from "./gitDelivery/journeyRoutes.js";
 import { GIT_CHANGE_ROUTE_GROUP } from "./gitChangeRoutes.js";
+import { handleDownloadSupportReport } from "./support-report-download.js";
 import { handleCreateSupportReport } from "./support-report-routes.js";
 import { handleClientDiagnosticIngest } from "./client-diagnostics-routes.js";
 
@@ -445,11 +447,11 @@ export interface RouteDefinition {
 // `diagnostics` is additive (#3532): the Activity Log readiness evaluated before this server
 // accepted work, with a live lost-event count. It is a closed, body-free projection — states,
 // reason codes and a count — so a health probe never discloses a path or an error message.
-function health(): RouteResult {
+function health(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const body: HealthResponse = {
     status: "ok",
     version: SDK_VERSION,
-    diagnostics: currentActivityLogReadiness(),
+    diagnostics: { ...currentActivityLogReadiness(), ...supportDiagnosticCapacity(ctx, deps) },
   };
   return { status: 200, body };
 }
@@ -1629,6 +1631,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // `correlationId`. See client-diagnostics-routes.ts for the trust boundary this route enforces.
   { method: "POST", pattern: "/api/diagnostics/client", handler: handleClientDiagnosticIngest },
   { method: "POST", pattern: "/api/diagnostics/report", handler: handleCreateSupportReport },
+  {
+    method: "GET",
+    pattern: "/api/diagnostics/report/download/:downloadId",
+    handler: handleDownloadSupportReport,
+  },
 ];
 
 interface PreparedRoute {

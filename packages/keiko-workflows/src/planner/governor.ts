@@ -76,7 +76,7 @@ function violatedDimensions(usage: ExplorationUsage, budget: ExplorationBudget):
   const out: string[] = [];
   for (const key of USAGE_KEYS) {
     const cap = budget[BUDGET_KEY_FOR_USAGE[key]];
-    if (usage[key] > cap) {
+    if (cap !== null && usage[key] > cap) {
       out.push(key);
     }
   }

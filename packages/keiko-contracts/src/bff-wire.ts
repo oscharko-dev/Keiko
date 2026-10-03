@@ -1430,7 +1430,8 @@ function buildRankingSummary(pack: ConnectedContextPack): GroundedAnswerRankingS
 
 // Derives the path-free context aggregate from the assembly diagnostics. laneCounts is built over
 // the full CONTEXT_LANE_IDS list so every lane has a count (lanes absent from diagnostics default to
-// 0); compactionActive is true when any lane recorded a compactionReason. Reads only counts and the
+// 0); compactionActive records conversation history compaction only. Source exclusion is not
+// conversation compaction. Reads only counts and the
 // budget-pressure enum — never a scopePath, scopeId, excerpt, or score.
 function buildContextSummary(
   diagnostics: ContextAssemblyDiagnostics,
@@ -1447,7 +1448,9 @@ function buildContextSummary(
     totalEstimatedTokens: diagnostics.totalEstimatedTokens,
     budgetPressure: diagnostics.budgetPressure,
     laneCounts,
-    compactionActive: diagnostics.lanes.some((lane) => lane.compactionReason !== undefined),
+    compactionActive: diagnostics.lanes.some(
+      (lane) => lane.laneId === "history-summary" && lane.compactionReason !== undefined,
+    ),
   };
 }
 

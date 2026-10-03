@@ -54,7 +54,11 @@ function memScope(
     relativePaths: [],
     ...overrides,
   };
-  return { scope, fs: memFs(MEM_ROOT, files) };
+  const fs = memFs(MEM_ROOT, files);
+  return {
+    scope,
+    fs: { ...fs, exists: (path): boolean => path === `${MEM_ROOT}/.git` || fs.exists(path) },
+  };
 }
 
 function nlq(text: string, overrides: Partial<RetrievalQuery> = {}): RetrievalQuery {
@@ -654,16 +658,16 @@ describe("searchText (memFs)", () => {
     expect(r.content).toContain("TARGET");
   });
 
-  it("reads an early excerpt window from a file larger than the excerpt read cap", async () => {
+  it("rejects even early excerpt windows when the total file exceeds 2 MiB", async () => {
     const big = `TARGET\n${"x".repeat(2_200_000)}`;
     const { scope, fs } = memScope({ "src/huge.ts": big });
-    const r = await readExcerpt(
-      scope,
-      { scopePath: "src/huge.ts", startLine: 1, endLine: 1, maxBytes: 64 },
-      { fs },
-    );
-    expect(r.content).toBe("TARGET");
-    expect(r.truncated).toBe(false);
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src/huge.ts", startLine: 1, endLine: 1, maxBytes: 64 },
+        { fs },
+      ),
+    ).rejects.toBeInstanceOf(FileTooLargeError);
   });
 
   it("keeps deep excerpt windows beyond the bounded prefix as FileTooLargeError", async () => {
@@ -1096,10 +1100,15 @@ describe("searchText (memFs)", () => {
       "src/top.ts": "match\n",
       [deepPath]: "match\n",
     });
-    const r = await searchText(scope, nlq("match"), DEFAULT_SEARCH_LIMITS, {
-      fs,
-      nowMs: FIXED_NOW,
-    });
+    const r = await searchText(
+      scope,
+      nlq("match"),
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2_000 },
+      {
+        fs,
+        nowMs: FIXED_NOW,
+      },
+    );
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/top.ts"]);
     expect(r.truncated).toBe(true);
     expect(r.coverage.incomplete).toBe(true);
@@ -1108,7 +1117,7 @@ describe("searchText (memFs)", () => {
     expect(r.coverage.filesSkipped).toBeGreaterThan(0);
   });
 
-  it("scans the bounded prefix of oversize files and marks coverage truncated", async () => {
+  it("omits oversized files without emitting prefix matches and marks coverage truncated", async () => {
     const content = `needle in prefix\n${"alpha\n".repeat(20)}`;
     const { scope, fs } = memScope({ "src/a.ts": content });
     const limits: SearchLimits = {
@@ -1116,12 +1125,11 @@ describe("searchText (memFs)", () => {
       maxBytesPerFileScanned: 50,
     };
     const r = await searchText(scope, nlq("needle"), limits, { fs, nowMs: FIXED_NOW });
-    expect(r.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts"]);
-    expect(r.atoms[0]?.lineRange).toEqual({ startLine: 1, endLine: 1 });
+    expect(r.atoms).toEqual([]);
     expect(r.truncated).toBe(true);
-    expect(r.oversizedFilesScanned).toBe(1);
-    expect(r.candidates.some((c) => c.scopePath === "src/a.ts" && c.omitted !== undefined)).toBe(
-      false,
+    expect(r.oversizedFilesScanned).toBe(0);
+    expect(r.candidates).toContainEqual(
+      expect.objectContaining({ scopePath: "src/a.ts", omitted: "size-exceeded" }),
     );
   });
 
@@ -1136,7 +1144,7 @@ describe("searchText (memFs)", () => {
     const r = await searchText(scope, nlq("needle"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.atoms).toHaveLength(0);
     expect(r.truncated).toBe(true);
-    expect(r.oversizedFilesScanned).toBe(1);
+    expect(r.oversizedFilesScanned).toBe(0);
   });
 
   it("returns an empty result for an empty workspace", async () => {
@@ -1256,7 +1264,7 @@ describe("searchText (memFs)", () => {
     expect(r.diagnostics?.intent).toBe("project-metadata");
   });
 
-  it("bounds project metadata scans to the ranked candidate prefix", async () => {
+  it("scans the full metadata scope while retaining canonical manifests and bounded matches", async () => {
     const files: Record<string, string> = {
       "pom.xml":
         "<project>\n  <properties>\n    <maven.compiler.release>21</maven.compiler.release>\n  </properties>\n</project>\n",
@@ -1279,7 +1287,7 @@ describe("searchText (memFs)", () => {
     );
 
     expect(r.atoms.map((atom) => atom.scopePath)).toContain("pom.xml");
-    expect(r.filesScanned).toBeLessThan(700);
+    expect(r.filesScanned).toBe(701);
     expect(r.truncated).toBe(true);
   });
 
@@ -1676,10 +1684,15 @@ describe("findFiles (memFs)", () => {
       { [tooDeepPath]: "class TooDeep {}" },
       { relativePaths: ["backend"] },
     );
-    const r = await findFiles(scope, fpq("**/*.java"), DEFAULT_SEARCH_LIMITS, {
-      fs,
-      nowMs: FIXED_NOW,
-    });
+    const r = await findFiles(
+      scope,
+      fpq("**/*.java"),
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2_000 },
+      {
+        fs,
+        nowMs: FIXED_NOW,
+      },
+    );
     expect(r.atoms).toHaveLength(0);
     expect(r.truncated).toBe(true);
     expect(r.diagnostics?.depthPrunedByDiscovery).toBeGreaterThan(0);
@@ -1712,6 +1725,88 @@ describe("findFiles (memFs)", () => {
 });
 
 describe("readExcerpt (memFs)", () => {
+  it("keeps an anchored match and value near the end of one long UTF-8 line", async () => {
+    const content = "é🙂".repeat(20_000) + " TargetManualProbe=END-VALUE-43";
+    const { scope, fs } = memScope({ "src/manual.html": content });
+    const result = await readExcerpt(
+      scope,
+      {
+        scopePath: "src/manual.html",
+        startLine: 1,
+        endLine: 1,
+        maxBytes: 128,
+        anchors: ["TargetManualProbe"],
+      },
+      { fs, nowMs: FIXED_NOW },
+    );
+    expect(result.content.includes("TargetManualProbe=END-VALUE-43")).toBe(true);
+    expect(result.content.includes("\uFFFD")).toBe(false);
+    expect(new TextEncoder().encode(result.content).length).toBeLessThanOrEqual(128);
+    expect(result.atom.lineRange).toEqual({ startLine: 1, endLine: 1 });
+    expect(result.truncated).toBe(true);
+  });
+
+  it("reports actual source lines after anchoring inside a truncated multi-line window", async () => {
+    const content = "L1\n" + "padding\n".repeat(100) + "TargetManualProbe=29\nL103";
+    const { scope, fs } = memScope({ "src/manual.html": content });
+    const result = await readExcerpt(
+      scope,
+      {
+        scopePath: "src/manual.html",
+        startLine: 1,
+        endLine: 103,
+        maxBytes: 64,
+        anchors: ["TargetManualProbe"],
+      },
+      { fs, nowMs: FIXED_NOW },
+    );
+    expect(result.content.includes("TargetManualProbe=29")).toBe(true);
+    expect(result.atom.lineRange?.startLine).toBeGreaterThan(1);
+    expect(result.atom.lineRange?.endLine).toBe(103);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("distinguishes differently anchored views while keeping each byte cap", async () => {
+    const content = " ".repeat(10_000) + "MiddleAnchor=29" + " ".repeat(10_000) + "EndAnchor=43";
+    const { scope, fs } = memScope({ "src/manual.html": content });
+    const request = { scopePath: "src/manual.html", startLine: 1, endLine: 1, maxBytes: 128 };
+    const middle = await readExcerpt(
+      scope,
+      { ...request, anchors: ["MiddleAnchor"] },
+      { fs, nowMs: FIXED_NOW },
+    );
+    const end = await readExcerpt(
+      scope,
+      { ...request, anchors: ["EndAnchor"] },
+      { fs, nowMs: FIXED_NOW },
+    );
+    expect(middle.content.includes("MiddleAnchor=29")).toBe(true);
+    expect(end.content.includes("EndAnchor=43")).toBe(true);
+    expect(middle.atom.stableId).not.toBe(end.atom.stableId);
+    expect(middle.anchoredWindowApplied).toBe(true);
+    expect(end.anchoredWindowApplied).toBe(true);
+  });
+
+  it("does not restore a secret when selecting an anchored source window", async () => {
+    const syntheticKey = "sk-" + "a".repeat(48);
+    const content = " ".repeat(10_000) + "TargetManualProbe api_key=" + syntheticKey;
+    const { scope, fs } = memScope({ "src/manual.html": content });
+    const result = await readExcerpt(
+      scope,
+      {
+        scopePath: "src/manual.html",
+        startLine: 1,
+        endLine: 1,
+        maxBytes: 128,
+        anchors: ["TargetManualProbe"],
+      },
+      { fs, nowMs: FIXED_NOW },
+    );
+    expect(result.content.includes("TargetManualProbe")).toBe(true);
+    expect(result.content.includes(syntheticKey)).toBe(false);
+    expect(result.atom.redactionState).toBe("redacted");
+  });
+
   it("starts no filesystem operation after an inherited deadline has expired", async () => {
     const { scope, fs: base } = memScope({ "src/a.ts": "L1\n" });
     const measured = measuredExcerptFs(base);
@@ -2042,7 +2137,11 @@ describe("Copilot finding fixes (memFs)", () => {
           });
         },
       };
-      const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 30 };
+      const limits: SearchLimits = {
+        ...DEFAULT_SEARCH_LIMITS,
+        maxFilesScanned: 2_000,
+        elapsedMsMax: 30,
+      };
 
       const resultPromise = searchText(scope, exq("alpha"), limits, { fs, nowMs, workspaceIndex });
 
@@ -2512,14 +2611,14 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     );
   });
 
-  it("does not drop source files that contain a sparse embedded NUL", async () => {
+  it("omits files with embedded NUL bytes despite a textual prefix", async () => {
     file("src/a.ts", "needle\u0000still textual\n");
     const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
       nowMs: FIXED_NOW,
     });
-    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts"]);
+    expect(r.atoms).toEqual([]);
     expect(r.candidates.some((c) => c.scopePath === "src/a.ts" && c.omitted === "binary")).toBe(
-      false,
+      true,
     );
   });
 

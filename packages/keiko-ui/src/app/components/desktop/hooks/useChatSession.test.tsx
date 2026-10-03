@@ -1807,6 +1807,43 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
   // (server returning the {chat, messages} delta so the client applies it locally with zero
   // refetch) is a cross-package follow-up in keiko-server/keiko-contracts; this pins the client
   // never regresses to more than one of each per grounded turn.
+  it("uses the confirmed folder replacement token for the next typed grounded turn", async (): Promise<void> => {
+    const { result } = await setupGroundedSession([], {
+      connectedScopes: [
+        { kind: "workspace-root", relativePaths: [], root: "/manual-old", connectedAtMs: 1 },
+      ],
+    });
+    const persisted = chat({
+      ...result.current.activeChat,
+      id: "chat-grounded",
+      connectedScopes: [
+        { kind: "workspace-root", relativePaths: [], root: "/manual-new", connectedAtMs: 2 },
+      ],
+      groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+      updatedAt: 3,
+    });
+    act(() => {
+      notifyChatUpsert(persisted);
+    });
+    vi.mocked(askGrounded).mockResolvedValue({
+      answer: "manual answer",
+      citations: [],
+    } as unknown as Awaited<ReturnType<typeof askGrounded>>);
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [persisted] });
+    await act(async () => {
+      await result.current.sendMessage({ text: "Find the compressor maintenance interval" });
+    });
+    expect(askGrounded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: persisted.id,
+        expectedGroundingScopeIdentity: persisted.groundingScopeIdentity,
+      }),
+      expect.any(AbortSignal),
+      undefined,
+    );
+    expect(result.current.activeChat?.connectedScopes).toEqual(persisted.connectedScopes);
+  });
+
   it("issues exactly one messages fetch and one chats fetch per grounded turn", async () => {
     const { result } = await setupGroundedSession();
 

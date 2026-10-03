@@ -1091,6 +1091,31 @@ const CLIENT_ANSWER_SPEECH_PREPARED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.support-report.download-started",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSupportReportDownload",
+  fields: {
+    deliveryMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["automatic", "manual"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["support-report"],
+  proofIds: ["client.support-report.download-started.line"],
+  releaseImpact: "patch",
+});
+
 // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits — the
 // trigger, the search box, or an option — instead of leaving it to the workspace's own Escape
 // shortcut, which otherwise would have cleared the window selection while the menu stayed open. This
@@ -1646,6 +1671,25 @@ function logClientAnswerSpeech(
   return true;
 }
 
+function logClientSupportReportDownload(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  if (request.supportReportDelivery === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        deliveryMode: request.supportReportDelivery,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
 // The closed report shapes, each of which owns its own registered line.
 function logClosedClientReport(
   request: ClientDiagnosticIngestRequest,
@@ -1655,7 +1699,8 @@ function logClosedClientReport(
     logClientSelectDismissed(request, correlationId) ||
     logClientKnowledgeCatalog(request, correlationId) ||
     logClientAnswerCopy(request, correlationId) ||
-    logClientAnswerSpeech(request, correlationId)
+    logClientAnswerSpeech(request, correlationId) ||
+    logClientSupportReportDownload(request, correlationId)
   );
 }
 
@@ -2170,7 +2215,8 @@ function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReport
   if (
     report.selectDismissal !== undefined ||
     report.knowledgeCatalog !== undefined ||
-    report.answerSpeech !== undefined
+    report.answerSpeech !== undefined ||
+    report.supportReportDelivery !== undefined
   ) {
     return "routine";
   }

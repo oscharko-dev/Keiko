@@ -18,6 +18,11 @@ import {
 import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import {
+  admittedSearchScopeEntry,
+  canonicalSearchScopeRelativePaths,
+  resolveEntryWalkRoot,
+} from "./repoSearchEntries.js";
+import {
   containedRealPathInfo,
   isAllowedContainedPathParent,
   isCanonicalAllowedContainedPath,
@@ -44,6 +49,7 @@ import {
 import {
   StructuralExecutionStoppedError,
   structuralExecutionStopped,
+  assertStructuralExecutionActive,
   type StructuralExecutionControl,
 } from "./structuralExecution.js";
 import {
@@ -63,6 +69,7 @@ interface Walk {
   readonly directorySnapshots: Map<string, WorkspaceDirectorySnapshot>;
   readonly skippedSymbolicLinks: string[];
   readonly failOnReadError: boolean;
+  readonly retainMembership?: boolean;
   readonly entryLimit?: number | undefined;
   readonly executionControl?: StructuralExecutionControl | undefined;
   entriesVisited: number;
@@ -264,6 +271,10 @@ function currentEntryStat(
 }
 
 function recordSkippedSymbolicLink(walk: Walk, relPath: string): void {
+  if (walk.retainMembership === false) {
+    walk.denied += 1;
+    return;
+  }
   if (walk.skippedSymbolicLinks.length >= walk.opts.maxFiles) {
     walk.maxFilesPruned += 1;
   } else {
@@ -587,6 +598,141 @@ export async function discoverCandidateInventoryAsync(
   const entryLimit = Math.max(opts.maxFiles * 2, opts.maxFiles + opts.maxDepth + 1);
   const walk = await runWalkAsync(workspace, opts, fs, true, executionControl, entryLimit);
   return candidateDiscoveryResult(walk);
+}
+
+export interface StreamingDiscoveryStats {
+  readonly filesDiscovered: number;
+  readonly ignored: number;
+  readonly denied: number;
+}
+
+interface StreamingWalk {
+  entriesSinceYield: number;
+  readonly walk: Walk;
+  readonly onFile: (file: DiscoveredFile) => Promise<void>;
+  filesDiscovered: number;
+}
+
+async function* streamingDirectoryEntries(
+  fs: WorkspaceFs,
+  path: string,
+): AsyncIterable<WorkspaceDirEntry> {
+  if (fs.iterateDirectory !== undefined) {
+    yield* fs.iterateDirectory(path);
+    return;
+  }
+  for (const entry of fs.readDir(path)) yield entry;
+}
+
+async function visitStreamingEntry(
+  state: StreamingWalk,
+  relativeDir: string,
+  entry: WorkspaceDirEntry,
+): Promise<void> {
+  await yieldToEventLoop(state);
+  const walk = state.walk;
+  const path = childRelative(relativeDir, entry.name);
+  if (!isAllowed(walk, path, entry.isDirectory)) return;
+  if (entry.isSymbolicLink) {
+    recordSkippedSymbolicLink(walk, path);
+    return;
+  }
+  const current = currentContainedEntry(walk, path);
+  if (current === undefined || !isAllowed(walk, path, current.stat.isDirectory)) return;
+  if (current.stat.isDirectory) await visitStreamingDirectory(state, current.absolutePath, path);
+  else if (current.stat.isFile) {
+    state.filesDiscovered += 1;
+    await state.onFile({ relativePath: path, sizeBytes: current.stat.size });
+  }
+}
+
+async function visitStreamingDirectory(
+  state: StreamingWalk,
+  absolute: string,
+  relativeDir: string,
+): Promise<void> {
+  try {
+    const current = currentContainedDirectory(state.walk, absolute, relativeDir);
+    if (current === undefined) return;
+    for await (const entry of streamingDirectoryEntries(state.walk.fs, current)) {
+      if (state.walk.executionControl !== undefined)
+        assertStructuralExecutionActive(state.walk.executionControl);
+      await visitStreamingEntry(state, relativeDir, entry);
+    }
+    currentContainedDirectory(state.walk, current, relativeDir);
+  } catch (error) {
+    failedDirectoryRead(state.walk, relativeDir, error);
+  }
+}
+
+function streamingScopeWalk(
+  workspace: WorkspaceInfo,
+  relativePaths: readonly string[],
+  applyGitignore: boolean,
+  fs: WorkspaceFs,
+  control: StructuralExecutionControl,
+): Walk {
+  const selectedRoot =
+    relativePaths.length === 0 ? workspace.root : resolveEntryWalkRoot(fs, workspace.root);
+  const selectedFs =
+    relativePaths.length === 0 ? fs : workspaceFsBoundToCanonicalRoot(fs, selectedRoot);
+  return {
+    ...createWalk(
+      { ...workspace, root: selectedRoot },
+      { maxDepth: Infinity, maxFiles: Infinity, applyGitignore },
+      selectedFs,
+      true,
+      control,
+    ),
+    retainMembership: false,
+  };
+}
+
+async function visitSelectedStreamingPath(state: StreamingWalk, path: string): Promise<void> {
+  const walk = state.walk;
+  if (path === "") {
+    await visitStreamingDirectory(state, walk.root, "");
+    return;
+  }
+  if (!isAllowed(walk, path, false)) return;
+  const current = admittedSearchScopeEntry(walk.fs, walk.root, path);
+  if (current?.stat.isDirectory) await visitStreamingDirectory(state, current.path, path);
+  else if (current?.stat.isFile) {
+    state.filesDiscovered += 1;
+    await state.onFile({ relativePath: path, sizeBytes: current.stat.size });
+  }
+}
+
+/** Visit an admitted scope without retaining a path inventory or imposing a file-count ceiling. */
+export async function visitWorkspaceFiles(
+  workspace: WorkspaceInfo,
+  relativePaths: readonly string[],
+  applyGitignore: boolean,
+  fs: WorkspaceFs,
+  control: StructuralExecutionControl,
+  onFile: (file: DiscoveredFile) => Promise<void>,
+  onStats?: (stats: StreamingDiscoveryStats) => void,
+): Promise<StreamingDiscoveryStats> {
+  const walk = streamingScopeWalk(workspace, relativePaths, applyGitignore, fs, control);
+  const state: StreamingWalk = { walk, onFile, filesDiscovered: 0, entriesSinceYield: 0 };
+  const selected =
+    relativePaths.length === 0 ? [""] : canonicalSearchScopeRelativePaths(relativePaths);
+  try {
+    for (const path of selected) {
+      if (
+        selected.some((other) => other !== path && (other === "" || path.startsWith(`${other}/`)))
+      )
+        continue;
+      await visitSelectedStreamingPath(state, path);
+    }
+    return { filesDiscovered: state.filesDiscovered, ignored: walk.ignored, denied: walk.denied };
+  } finally {
+    onStats?.({
+      filesDiscovered: state.filesDiscovered,
+      ignored: walk.ignored,
+      denied: walk.denied,
+    });
+  }
 }
 
 function candidateDiscoveryResult(walk: Walk): CandidateDiscoveryResult {

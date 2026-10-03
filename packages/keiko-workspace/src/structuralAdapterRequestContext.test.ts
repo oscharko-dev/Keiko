@@ -10,7 +10,7 @@ import { PathEscapeError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import { importGraphAdapter } from "./importGraph.js";
 import {
-  DEFAULT_SEARCH_LIMITS,
+  DEFAULT_SEARCH_LIMITS as PUBLIC_SEARCH_LIMITS,
   searchText,
   type SearchLimits,
   type SearchScope,
@@ -30,6 +30,13 @@ import {
 import type { WorkspaceInfo } from "./types.js";
 import { testSourcePairingAdapter } from "./testSourcePairing.js";
 import { createWorkspaceIndex, type WorkspaceIndex } from "./workspaceIndex.js";
+
+// These tests exercise the explicitly bounded structural/index acceleration path.
+const BOUNDED_REQUEST_LIMITS = {
+  ...PUBLIC_SEARCH_LIMITS,
+  maxFilesScanned: 2_000,
+  elapsedMsMax: 5_000,
+};
 
 const ROOT = "/workspace";
 const FIXED_NOW = (): number => 1_700_000_000_000;
@@ -93,7 +100,7 @@ function naturalLanguage(text: string): RetrievalQuery {
 }
 
 function limits(maxFilesScanned: number): SearchLimits {
-  return { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned };
+  return { ...BOUNDED_REQUEST_LIMITS, maxFilesScanned };
 }
 
 function manySourceFiles(count: number): Readonly<Record<string, string>> {
@@ -236,14 +243,14 @@ async function runAdapters(useContext: boolean): Promise<RunAllResult> {
   const searchScope = scope();
   const requestContext = createStructuralAdapterRequestContext(
     searchScope,
-    DEFAULT_SEARCH_LIMITS,
+    BOUNDED_REQUEST_LIMITS,
     fs,
   );
   return runStructuralAdapters(
     createDefaultStructuralRegistry({ ecosystems: [] }),
     searchScope,
     query(),
-    DEFAULT_SEARCH_LIMITS,
+    BOUNDED_REQUEST_LIMITS,
     fs,
     {
       nowMs: FIXED_NOW,
@@ -256,11 +263,11 @@ describe("StructuralAdapterRequestContext", () => {
   it("shares one promise per structural product and one candidate inventory across products", async () => {
     const searchScope = scope();
     const baseline = countingFs();
-    const expectedCandidates = gatherCandidates(searchScope, DEFAULT_SEARCH_LIMITS, baseline.fs);
+    const expectedCandidates = gatherCandidates(searchScope, BOUNDED_REQUEST_LIMITS, baseline.fs);
     const measured = countingFs();
     const context = createStructuralAdapterRequestContext(
       searchScope,
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       measured.fs,
     );
 
@@ -284,12 +291,12 @@ describe("StructuralAdapterRequestContext", () => {
   it("avoids process-cache fingerprint walks for its request-local code index", async () => {
     const searchScope = scope();
     const direct = countingFs();
-    const candidates = gatherCandidates(searchScope, DEFAULT_SEARCH_LIMITS, direct.fs);
+    const candidates = gatherCandidates(searchScope, BOUNDED_REQUEST_LIMITS, direct.fs);
     const directRealPathBefore = direct.realPathCount();
     const directStatBefore = direct.statCount();
     buildCodeIntelligenceIndexFromCandidates(
       searchScope,
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       direct.fs,
       candidates,
       { disableCache: true },
@@ -298,7 +305,7 @@ describe("StructuralAdapterRequestContext", () => {
     const measured = countingFs();
     const context = createStructuralAdapterRequestContext(
       searchScope,
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       measured.fs,
     );
     context.candidatePaths();
@@ -325,7 +332,7 @@ describe("StructuralAdapterRequestContext", () => {
     };
     const context = createStructuralAdapterRequestContext(
       scope(["src/math.ts"]),
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       fs,
     );
     const products = [
@@ -361,14 +368,14 @@ describe("StructuralAdapterRequestContext", () => {
     const boundFs = memFs(ROOT, FILES);
     const context = createStructuralAdapterRequestContext(
       boundScope,
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       boundFs,
     );
     const registry = { adapters: [] };
     const deps = { nowMs: FIXED_NOW, requestContext: context };
 
     await expect(
-      runStructuralAdapters(registry, scope(), query(), DEFAULT_SEARCH_LIMITS, boundFs, deps),
+      runStructuralAdapters(registry, scope(), query(), BOUNDED_REQUEST_LIMITS, boundFs, deps),
     ).rejects.toThrow("structural request context binding mismatch");
     await expect(
       runStructuralAdapters(registry, boundScope, query(), limits(1), boundFs, deps),
@@ -378,7 +385,7 @@ describe("StructuralAdapterRequestContext", () => {
         registry,
         boundScope,
         query(),
-        DEFAULT_SEARCH_LIMITS,
+        BOUNDED_REQUEST_LIMITS,
         memFs(ROOT, FILES),
         deps,
       ),
@@ -390,7 +397,7 @@ describe("StructuralAdapterRequestContext", () => {
     const boundFs = memFs(ROOT, FILES);
     const context = createStructuralAdapterRequestContext(
       mutableScope,
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       boundFs,
     );
     const adapter: StructuralAdapter = {
@@ -412,7 +419,7 @@ describe("StructuralAdapterRequestContext", () => {
         { adapters: [adapter] },
         mutableScope,
         query(),
-        DEFAULT_SEARCH_LIMITS,
+        BOUNDED_REQUEST_LIMITS,
         boundFs,
         { nowMs: FIXED_NOW, requestContext: context },
       ),
@@ -424,7 +431,7 @@ describe("StructuralAdapterRequestContext", () => {
     const boundFs = memFs(ROOT, FILES);
     const context = createStructuralAdapterRequestContext(
       boundScope,
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       boundFs,
     );
     const deps = { nowMs: FIXED_NOW, requestContext: context };
@@ -437,11 +444,11 @@ describe("StructuralAdapterRequestContext", () => {
 
     for (const adapter of adapters) {
       await expect(
-        adapter.lookup(scope(), query(), DEFAULT_SEARCH_LIMITS, boundFs, deps),
+        adapter.lookup(scope(), query(), BOUNDED_REQUEST_LIMITS, boundFs, deps),
       ).rejects.toThrow("structural request context binding mismatch");
       if (adapter.coverage !== undefined) {
         await expect(
-          adapter.coverage(scope(), DEFAULT_SEARCH_LIMITS, boundFs, deps),
+          adapter.coverage(scope(), BOUNDED_REQUEST_LIMITS, boundFs, deps),
         ).rejects.toThrow("structural request context binding mismatch");
       }
     }
@@ -460,10 +467,10 @@ describe("StructuralAdapterRequestContext", () => {
       const boundFs = memFs(ROOT, FILES);
       const context = createStructuralAdapterRequestContext(
         mutableScope,
-        DEFAULT_SEARCH_LIMITS,
+        BOUNDED_REQUEST_LIMITS,
         boundFs,
       );
-      const pending = adapter.lookup(mutableScope, query(), DEFAULT_SEARCH_LIMITS, boundFs, {
+      const pending = adapter.lookup(mutableScope, query(), BOUNDED_REQUEST_LIMITS, boundFs, {
         nowMs: FIXED_NOW,
         requestContext: context,
       });
@@ -477,10 +484,10 @@ describe("StructuralAdapterRequestContext", () => {
         const coverageFs = memFs(ROOT, FILES);
         const coverageContext = createStructuralAdapterRequestContext(
           coverageScope,
-          DEFAULT_SEARCH_LIMITS,
+          BOUNDED_REQUEST_LIMITS,
           coverageFs,
         );
-        const pendingCoverage = coverage(coverageScope, DEFAULT_SEARCH_LIMITS, coverageFs, {
+        const pendingCoverage = coverage(coverageScope, BOUNDED_REQUEST_LIMITS, coverageFs, {
           nowMs: FIXED_NOW,
           requestContext: coverageContext,
         });
@@ -503,7 +510,7 @@ describe("StructuralAdapterRequestContext", () => {
 
     for (const adapter of adapters) {
       const boundScope = scope();
-      const mutableLimits = { ...DEFAULT_SEARCH_LIMITS };
+      const mutableLimits = { ...BOUNDED_REQUEST_LIMITS };
       const boundFs = memFs(ROOT, FILES);
       const context = createStructuralAdapterRequestContext(boundScope, mutableLimits, boundFs);
       const pending = adapter.lookup(boundScope, query(), mutableLimits, boundFs, {
@@ -518,7 +525,7 @@ describe("StructuralAdapterRequestContext", () => {
 
   it("rejects bound scope and limit objects mutated after context creation", async () => {
     const boundScope = scope(["src/math.ts"]);
-    const boundLimits = { ...DEFAULT_SEARCH_LIMITS };
+    const boundLimits = { ...BOUNDED_REQUEST_LIMITS };
     const boundFs = memFs(ROOT, FILES);
     const context = createStructuralAdapterRequestContext(boundScope, boundLimits, boundFs);
     await context.symbolGraph();
@@ -529,7 +536,7 @@ describe("StructuralAdapterRequestContext", () => {
     }).toThrow("structural request context binding mismatch");
 
     const limitScope = scope();
-    const mutableLimits = { ...DEFAULT_SEARCH_LIMITS };
+    const mutableLimits = { ...BOUNDED_REQUEST_LIMITS };
     const limitContext = createStructuralAdapterRequestContext(limitScope, mutableLimits, boundFs);
     mutableLimits.maxFilesScanned = 1;
     expect(() => {
@@ -559,7 +566,7 @@ describe("StructuralAdapterRequestContext", () => {
     const measured = countingFs();
     const context = createStructuralAdapterRequestContext(
       scope(),
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       measured.fs,
       { nowMs: FIXED_NOW },
     );
@@ -567,11 +574,11 @@ describe("StructuralAdapterRequestContext", () => {
       retrievalIntent: "targeted-code-search" as const,
       recentPaths: ["src/math.ts"],
     };
-    const first = await context.findFiles(filePattern(), DEFAULT_SEARCH_LIMITS, {
+    const first = await context.findFiles(filePattern(), BOUNDED_REQUEST_LIMITS, {
       searchHints,
     });
     const afterFirst = measured.readDirCount();
-    const second = await context.findFiles(filePattern(), DEFAULT_SEARCH_LIMITS, {
+    const second = await context.findFiles(filePattern(), BOUNDED_REQUEST_LIMITS, {
       searchHints: { ...searchHints, recentPaths: [...searchHints.recentPaths] },
     });
 
@@ -887,16 +894,16 @@ describe("StructuralAdapterRequestContext", () => {
     };
     const context = createStructuralAdapterRequestContext(
       scope(),
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       measured.fs,
       { nowMs: FIXED_NOW },
     );
 
     const [calculate, loadUsers] = await Promise.all([
-      context.searchText(query("calculate"), DEFAULT_SEARCH_LIMITS, {
+      context.searchText(query("calculate"), BOUNDED_REQUEST_LIMITS, {
         workspaceIndex,
       }),
-      context.searchText(query("loadUsers"), DEFAULT_SEARCH_LIMITS, {
+      context.searchText(query("loadUsers"), BOUNDED_REQUEST_LIMITS, {
         workspaceIndex,
       }),
     ]);
@@ -1193,12 +1200,12 @@ describe("StructuralAdapterRequestContext", () => {
     const measured = countingFs();
     const context = createStructuralAdapterRequestContext(
       scope(),
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       measured.fs,
       { nowMs: FIXED_NOW },
     );
 
-    await context.searchText(naturalLanguage("calculate"), DEFAULT_SEARCH_LIMITS, {
+    await context.searchText(naturalLanguage("calculate"), BOUNDED_REQUEST_LIMITS, {
       workspaceIndex: createWorkspaceIndex(),
     });
 
@@ -1251,7 +1258,7 @@ describe("StructuralAdapterRequestContext", () => {
           return result;
         },
       };
-      const capped = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1 };
+      const capped = { ...BOUNDED_REQUEST_LIMITS, elapsedMsMax: 1 };
       const context = createStructuralAdapterRequestContext(scope(), capped, fs, {
         nowMs: () => currentMs,
       });
@@ -1279,7 +1286,7 @@ describe("StructuralAdapterRequestContext", () => {
         return stat;
       },
     };
-    const capped = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1 };
+    const capped = { ...BOUNDED_REQUEST_LIMITS, elapsedMsMax: 1 };
     const context = createStructuralAdapterRequestContext(scope(), capped, fs, {
       nowMs: () => currentMs,
     });
@@ -1302,10 +1309,10 @@ describe("StructuralAdapterRequestContext", () => {
         return stat;
       },
     };
-    const context = createStructuralAdapterRequestContext(scope(), DEFAULT_SEARCH_LIMITS, fs, {
+    const context = createStructuralAdapterRequestContext(scope(), BOUNDED_REQUEST_LIMITS, fs, {
       nowMs: () => currentMs,
     });
-    const narrow = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1 };
+    const narrow = { ...BOUNDED_REQUEST_LIMITS, elapsedMsMax: 1 };
 
     const result = await context.findFiles(filePattern(), narrow);
 
@@ -1318,7 +1325,7 @@ describe("StructuralAdapterRequestContext", () => {
   it("does not let a per-call deadline outlive the shared request deadline", async () => {
     const measured = countingFs(manySourceFiles(8));
     let currentMs = 0;
-    const capped = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1 };
+    const capped = { ...BOUNDED_REQUEST_LIMITS, elapsedMsMax: 1 };
     const context = createStructuralAdapterRequestContext(scope(), capped, measured.fs, {
       nowMs: () => currentMs,
     });
@@ -1335,7 +1342,7 @@ describe("StructuralAdapterRequestContext", () => {
   it("inherits an earlier orchestration deadline instead of starting a fresh search window", async () => {
     const measured = countingFs(manySourceFiles(8));
     let currentMs = 50;
-    const wide = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 };
+    const wide = { ...BOUNDED_REQUEST_LIMITS, elapsedMsMax: 1_000 };
     const context = createStructuralAdapterRequestContext(scope(), wide, measured.fs, {
       nowMs: () => currentMs,
       deadlineAtMs: 75,
@@ -1355,7 +1362,7 @@ describe("StructuralAdapterRequestContext", () => {
   it("does not reset the shared deadline after warming file and text candidate inventories", async () => {
     const measured = countingFs(manySourceFiles(4));
     let currentMs = 0;
-    const capped = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 10 };
+    const capped = { ...BOUNDED_REQUEST_LIMITS, elapsedMsMax: 10 };
     const context = createStructuralAdapterRequestContext(scope(), capped, measured.fs, {
       nowMs: () => currentMs,
     });
@@ -1378,7 +1385,7 @@ describe("StructuralAdapterRequestContext", () => {
   it("does not reset the shared deadline for a warm serialized workspace-index session", async () => {
     const measured = countingFs(manySourceFiles(4));
     let currentMs = 0;
-    const capped = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 10 };
+    const capped = { ...BOUNDED_REQUEST_LIMITS, elapsedMsMax: 10 };
     const context = createStructuralAdapterRequestContext(scope(), capped, measured.fs, {
       nowMs: () => currentMs,
     });
@@ -1399,7 +1406,7 @@ describe("StructuralAdapterRequestContext", () => {
     const releaseLoad = deferred();
     let currentMs = 0;
     let loadCount = 0;
-    const capped = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 1_000 };
+    const capped = { ...BOUNDED_REQUEST_LIMITS, elapsedMsMax: 1_000 };
     const workspaceIndex: WorkspaceIndex = {
       loadSnapshot: async () => {
         loadCount += 1;
@@ -1436,13 +1443,13 @@ describe("StructuralAdapterRequestContext", () => {
     const callAbort = new AbortController();
     const context = createStructuralAdapterRequestContext(
       scope(),
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       measured.fs,
       { signal: requestAbort.signal },
     );
     requestAbort.abort();
 
-    const result = await context.findFiles(filePattern(), DEFAULT_SEARCH_LIMITS, {
+    const result = await context.findFiles(filePattern(), BOUNDED_REQUEST_LIMITS, {
       signal: callAbort.signal,
     });
 
@@ -1456,13 +1463,13 @@ describe("StructuralAdapterRequestContext", () => {
     const callAbort = new AbortController();
     const context = createStructuralAdapterRequestContext(
       scope(),
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       measured.fs,
       { signal: requestAbort.signal },
     );
     callAbort.abort();
 
-    const result = await context.searchText(query(), DEFAULT_SEARCH_LIMITS, {
+    const result = await context.searchText(query(), BOUNDED_REQUEST_LIMITS, {
       signal: callAbort.signal,
     });
 
@@ -1478,7 +1485,7 @@ describe("StructuralAdapterRequestContext", () => {
     const measured = countingFs();
     const context = createStructuralAdapterRequestContext(
       scope(),
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       measured.fs,
       { nowMs: FIXED_NOW },
     );
@@ -1486,14 +1493,14 @@ describe("StructuralAdapterRequestContext", () => {
       lowValuePathAllowlist: ["dist/one.ts"],
       recentPaths: ["src/math.ts"],
     };
-    await context.findFiles(filePattern(), DEFAULT_SEARCH_LIMITS, {
+    await context.findFiles(filePattern(), BOUNDED_REQUEST_LIMITS, {
       searchHints: { ...common, retrievalIntent: "targeted-code-search" },
     });
     const afterFirst = measured.readDirCount();
-    await context.findFiles(filePattern(), DEFAULT_SEARCH_LIMITS, {
+    await context.findFiles(filePattern(), BOUNDED_REQUEST_LIMITS, {
       searchHints: { ...common, retrievalIntent: "diagnostic-search" },
     });
-    await context.findFiles(filePattern(), DEFAULT_SEARCH_LIMITS, {
+    await context.findFiles(filePattern(), BOUNDED_REQUEST_LIMITS, {
       searchHints: {
         ...common,
         retrievalIntent: "targeted-code-search",
@@ -1502,7 +1509,7 @@ describe("StructuralAdapterRequestContext", () => {
     });
     expect(measured.readDirCount()).toBe(afterFirst);
 
-    await context.findFiles(filePattern(), DEFAULT_SEARCH_LIMITS, {
+    await context.findFiles(filePattern(), BOUNDED_REQUEST_LIMITS, {
       searchHints: {
         ...common,
         retrievalIntent: "targeted-code-search",
@@ -1518,7 +1525,7 @@ describe("StructuralAdapterRequestContext", () => {
     const measured = countingFs(files);
     const context = createStructuralAdapterRequestContext(
       scope(),
-      DEFAULT_SEARCH_LIMITS,
+      BOUNDED_REQUEST_LIMITS,
       measured.fs,
       { nowMs: FIXED_NOW },
     );

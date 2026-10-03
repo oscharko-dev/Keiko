@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BINARY_PROBE,
   decodeTextBytes,
+  decodeTextFileBytes,
   detectTextByteEncoding,
   looksBinary,
 } from "./binaryDetect.js";
@@ -103,5 +104,61 @@ describe("looksBinary", () => {
   it("treats UTF-16LE-shaped text without BOM as text", () => {
     const bytes = new Uint8Array([0x63, 0x00, 0x6c, 0x00, 0x61, 0x00, 0x73, 0x00, 0x73, 0x00]);
     expect(looksBinary(bytes)).toBe(false);
+  });
+});
+
+describe("declared HTML character encoding", () => {
+  const legacy = (markup: string): Uint8Array => Buffer.from(markup, "latin1");
+  it.each(["windows-1252", "ISO-8859-1", "latin1"])("decodes declared %s", (encoding) => {
+    const bytes = legacy(`<meta charset="${encoding}"><p>Ölwechsel</p>`);
+    expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.html" })?.text).toContain(
+      "Ölwechsel",
+    );
+  });
+  it("accepts an http-equiv declaration with reordered attributes", () => {
+    const bytes = legacy(
+      '<META content="text/html; charset=ISO-8859-1" HTTP-EQUIV="Content-Type"><p>Öl</p>',
+    );
+    expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.htm" })?.text).toContain("Öl");
+  });
+  it("does not guess legacy encoding for arbitrary text extensions", () => {
+    expect(
+      decodeTextBytes(legacy('<meta charset="windows-1252">Öl'), undefined, {
+        scopePath: "data.blob",
+      }),
+    ).toBeUndefined();
+  });
+  it("does not treat commented declarations as active metadata", () => {
+    const bytes = legacy('<!-- <meta charset="windows-1252"> --><p>Öl</p>');
+    expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.html" })).toBeUndefined();
+  });
+  it("does not guess an unsupported declared encoding", () => {
+    expect(
+      decodeTextBytes(legacy('<meta charset="shift-jis"><p>Öl</p>'), undefined, {
+        scopePath: "manual.html",
+      }),
+    ).toBeUndefined();
+  });
+  it("limits character declaration prescan to the first 1024 bytes", () => {
+    const bytes = legacy(`${" ".repeat(1024)}<meta charset="windows-1252"><p>Öl</p>`);
+    expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.html" })).toBeUndefined();
+  });
+  it("gives a UTF-8 BOM precedence over contradictory legacy metadata", () => {
+    const bytes = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from('<meta charset="windows-1252"><p>Öl</p>'),
+    ]);
+    expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.html" })?.text).toContain("Öl");
+  });
+});
+
+describe("complete decoded text eligibility", () => {
+  it.each(["utf8", "utf16le"] as const)("rejects binary controls behind a %s BOM", (encoding) => {
+    const bytes = Buffer.from("\uFEFFbinaryNeedle\n" + "\u0001".repeat(5_000), encoding);
+    expect(decodeTextFileBytes(bytes)).toBeUndefined();
+  });
+  it.each(["utf8", "utf16le"] as const)("preserves legitimate %s text with a BOM", (encoding) => {
+    const bytes = Buffer.from("\uFEFFÖlwechsel\t1250 Stunden\r\n第二章\n", encoding);
+    expect(decodeTextFileBytes(bytes)?.text).toBe("Ölwechsel\t1250 Stunden\r\n第二章\n");
   });
 });

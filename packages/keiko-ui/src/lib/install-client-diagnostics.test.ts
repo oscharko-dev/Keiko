@@ -1264,3 +1264,24 @@ it("posts reduced production frames and closed causes through the existing trans
     /private browser detail|private wrapper|https?:/,
   );
 });
+
+it("posts report download initiation through the routine budget and preserves failure capacity", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  for (let index = 0; index < 25; index += 1) {
+    fanOutClientDiagnostic("Keiko support report download initiated.", {
+      correlationId: "ui_support-download-0001",
+      supportReportDelivery: "manual",
+    });
+  }
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    correlationId: "ui_support-download-0001",
+    supportReportDelivery: "manual",
+  });
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("errorKind");
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+  expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});

@@ -153,7 +153,10 @@ import {
   tracePriority,
 } from "./grounded-evidence-selection.js";
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
-import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
+import {
+  attachContextBudgetDiagnostics,
+  deriveGroundedContextAssembly,
+} from "./grounded-context-diagnostics.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import {
   createServerLogger,
@@ -207,6 +210,7 @@ const SEARCH_CONNECTED_CONTEXT_STARTED_OPERATION = defineActivityLogOperation({
     modelInputTokensMax: { type: "integer", dataClass: "count", required: false },
     modelOutputTokensMax: { type: "integer", dataClass: "count", required: false },
     elapsedMsMax: { type: "integer", dataClass: "duration", required: false },
+    elapsedMsBounded: { type: "boolean", dataClass: "closed-enum", required: false },
     rerankCallsMax: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -239,11 +243,21 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
     usageSearchCalls: { type: "integer", dataClass: "count", required: false },
     usageFilesRead: { type: "integer", dataClass: "count", required: false },
     usageExcerptBytes: { type: "integer", dataClass: "count", required: false },
+    excerptAnchoredWindowCount: { type: "integer", dataClass: "count", required: false },
     usageModelInputTokens: { type: "integer", dataClass: "count", required: false },
     usageModelOutputTokens: { type: "integer", dataClass: "count", required: false },
     usageElapsedMs: { type: "integer", dataClass: "duration", required: false },
     usageRerankCalls: { type: "integer", dataClass: "count", required: false },
     selectedFileCount: { type: "integer", dataClass: "count", required: false },
+    contextSelectedExcerptCount: { type: "integer", dataClass: "count", required: false },
+    contextSelectedExcerptEstimatedTokens: { type: "integer", dataClass: "count", required: false },
+    contextBudgetPressure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["low", "moderate", "high", "exceeded"],
+    },
+    contextRecencyLayoutApplied: { type: "boolean", dataClass: "closed-enum", required: false },
     omittedCount: { type: "integer", dataClass: "count", required: false },
     uncertaintyCount: { type: "integer", dataClass: "count", required: false },
     scopeIncompleteUncertaintyCount: { type: "integer", dataClass: "count", required: false },
@@ -1074,7 +1088,7 @@ function clampUsageToBudget(usage: ExplorationUsage, budget: ExplorationBudget):
     excerptBytes: Math.min(usage.excerptBytes, budget.excerptBytesMax),
     modelInputTokens: Math.min(usage.modelInputTokens, budget.modelInputTokensMax),
     modelOutputTokens: Math.min(usage.modelOutputTokens, budget.modelOutputTokensMax),
-    elapsedMs: Math.min(usage.elapsedMs, budget.elapsedMsMax),
+    elapsedMs: Math.min(usage.elapsedMs, budget.elapsedMsMax ?? Number.POSITIVE_INFINITY),
     rerankCalls: Math.min(usage.rerankCalls, budget.rerankCallsMax),
   };
 }
@@ -1653,8 +1667,8 @@ function nonLexicalAtoms(
 }
 
 async function runNonLexicalRing(ring: NonLexicalRing, inputs: SearchInputs): Promise<RingResult> {
+  const startedAtMs = inputs.nowMs();
   const allResults = await runNonLexicalAdapters(ring, inputs);
-  const elapsedMs = allResults.reduce((sum, result) => sum + result.elapsedMs, 0);
   const cap = Math.min(ring.searchLimits.maxMatchesReturned, inputs.query.maxResults);
   const merged = mergeAtomsByStableId(allResults, cap);
   const git = await gitFileAtomsForRing(ring, inputs, cap);
@@ -1671,7 +1685,8 @@ async function runNonLexicalRing(ring: NonLexicalRing, inputs: SearchInputs): Pr
     atoms,
     omitted: [],
     uncertainty,
-    usage: usageDelta({ elapsedMs: elapsedMs + git.elapsedMs }),
+    // Adapters run concurrently: their duration sum would double-charge the same wall time.
+    usage: usageDelta({ elapsedMs: Math.max(0, Math.floor(inputs.nowMs() - startedAtMs)) }),
   };
 }
 
@@ -1798,7 +1813,7 @@ function elapsedDeadlineStop(
   if (inputs.nowMs() < inputs.deadlineAtMs) return undefined;
   const remainingElapsedMs = Math.max(
     0,
-    governor.plan.budget.elapsedMsMax - governor.usage.elapsedMs,
+    (governor.plan.budget.elapsedMsMax ?? Number.POSITIVE_INFINITY) - governor.usage.elapsedMs,
   );
   return {
     governor: applyUsage(governor, usageDelta({ elapsedMs: remainingElapsedMs })),
@@ -1859,6 +1874,7 @@ async function runAllRings(
 }
 
 export interface ExcerptInputs {
+  readonly anchors?: readonly string[] | undefined;
   readonly searchScope: SearchScope;
   readonly fs: WorkspaceFs;
   readonly budget: ExplorationBudget;
@@ -1870,6 +1886,7 @@ export interface ExcerptInputs {
 }
 
 export interface ExcerptReadSummary {
+  readonly anchoredWindowCount?: number | undefined;
   readonly excerpts: ReadonlyMap<string, readonly ExcerptWindow[]>;
   readonly uncertainty: readonly UncertaintyMarker[];
   // True when the absolute deadline stopped excerpt reading — either a read observed it after
@@ -4042,6 +4059,7 @@ function exhaustedDimensions(remainingFiles: number, remainingBytes: number): st
 }
 
 interface ReadPathExcerptWindowsResult {
+  readonly anchoredWindowCount: number;
   readonly windows: readonly ExcerptWindow[];
   readonly bytesConsumed: number;
   readonly omittedWindowCount: number;
@@ -4065,7 +4083,13 @@ function readExcerptWindow(
 ): Promise<ReadExcerptResult> {
   return readExcerpt(
     inputs.searchScope,
-    { scopePath, startLine: window.startLine, endLine: window.endLine, maxBytes },
+    {
+      scopePath,
+      startLine: window.startLine,
+      endLine: window.endLine,
+      maxBytes,
+      anchors: inputs.anchors,
+    },
     {
       fs: inputs.fs,
       nowMs: inputs.nowMs,
@@ -4083,6 +4107,7 @@ async function readPathExcerptWindows(
   const windows: ExcerptWindow[] = [];
   let bytesConsumed = 0;
   let truncatedWindowCount = 0;
+  let anchoredWindowCount = 0;
   let deadlineReached = false;
   const selection = excerptLineWindows(inputs.atomsByPath.get(scopePath));
   for (const window of selection.windows) {
@@ -4109,6 +4134,7 @@ async function readPathExcerptWindows(
     if (result.truncated) {
       truncatedWindowCount += 1;
     }
+    anchoredWindowCount += Number(result.anchoredWindowApplied === true);
     const actualRange = result.atom.lineRange;
     if (actualRange !== undefined) {
       windows.push({ ...actualRange, content: result.content });
@@ -4120,6 +4146,7 @@ async function readPathExcerptWindows(
     bytesConsumed,
     omittedWindowCount: selection.omittedWindowCount,
     truncatedWindowCount,
+    anchoredWindowCount,
     deadlineReached,
   };
 }
@@ -4217,16 +4244,14 @@ function excerptTaskStoppedByDeadline({
   return result?.deadlineReached === true || skippedReason === "timeout";
 }
 
-async function readKeptExcerpts(
-  keptPaths: readonly string[],
+function stoppedExcerptReads(
   inputs: ExcerptInputs,
-): Promise<ExcerptReadSummary> {
-  const excerpts = new Map<string, readonly ExcerptWindow[]>();
-  const uncertainty: UncertaintyMarker[] = [];
-  const { files: remainingFiles, bytes: remainingBytes } = remainingExcerptCapacity(inputs);
+  remainingFiles: number,
+  remainingBytes: number,
+): ExcerptReadSummary | undefined {
   if (inputs.nowMs() >= inputs.deadlineAtMs) {
     return {
-      excerpts,
+      excerpts: new Map(),
       uncertainty: [budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs())],
       elapsedBudgetBlocked: true,
     };
@@ -4234,11 +4259,23 @@ async function readKeptExcerpts(
   if (remainingFiles <= 0 || remainingBytes <= 0) {
     const dimensions = exhaustedDimensions(remainingFiles, remainingBytes);
     return {
-      excerpts,
+      excerpts: new Map(),
       uncertainty: [budgetClipped(`budget-exhausted on ${dimensions}`, inputs.nowMs())],
       elapsedBudgetBlocked: false,
     };
   }
+  return undefined;
+}
+
+async function readKeptExcerpts(
+  keptPaths: readonly string[],
+  inputs: ExcerptInputs,
+): Promise<ExcerptReadSummary> {
+  const excerpts = new Map<string, readonly ExcerptWindow[]>();
+  const uncertainty: UncertaintyMarker[] = [];
+  const { files: remainingFiles, bytes: remainingBytes } = remainingExcerptCapacity(inputs);
+  const stopped = stoppedExcerptReads(inputs, remainingFiles, remainingBytes);
+  if (stopped !== undefined) return stopped;
   const readablePaths = keptPaths.slice(0, remainingFiles);
   if (readablePaths.length < keptPaths.length) {
     uncertainty.push(budgetClipped("budget-exhausted on filesRead", inputs.nowMs()));
@@ -4265,7 +4302,15 @@ async function readKeptExcerpts(
   if (elapsedBudgetBlocked) {
     uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
   }
-  return { excerpts, uncertainty, elapsedBudgetBlocked };
+  return {
+    excerpts,
+    uncertainty,
+    elapsedBudgetBlocked,
+    anchoredWindowCount: results.reduce(
+      (count, task) => count + (task.result?.anchoredWindowCount ?? 0),
+      0,
+    ),
+  };
 }
 
 // Internal seam: package-local tests drive the excerpt-read step with a scripted clock, which the
@@ -4819,6 +4864,7 @@ interface GroundedAssemblyContext {
 }
 
 interface GroundedPackAssembly {
+  readonly anchoredWindowCount?: number | undefined;
   readonly pack: ConnectedContextPack;
   readonly elapsedBudgetBlocked: boolean;
 }
@@ -4935,6 +4981,7 @@ async function assembleGroundedPack(
     budget: plan.budget,
     initialUsage: prepared.initialUsage,
     atomsByPath: prepared.atomsByPath,
+    anchors: plan.anchors.filter((anchor) => anchor.kind !== "path").map((anchor) => anchor.term),
     nowMs,
     signal: deps.signal,
     deadlineAtMs,
@@ -4952,12 +4999,14 @@ async function assembleGroundedPack(
   return {
     pack: withGroundedContextDiagnostics(pack, deps),
     elapsedBudgetBlocked: excerptReads.elapsedBudgetBlocked,
+    anchoredWindowCount: excerptReads.anchoredWindowCount,
   };
 }
 
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly anchoredExcerptWindowCount?: number | undefined;
   readonly readBudgetBlocked: boolean;
   readonly elapsedBudgetBlocked: boolean;
   readonly workspaceIndexProviderStatus: "not-evaluated" | "available" | "unavailable";
@@ -5031,8 +5080,10 @@ const NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS = workspaceIndexActivityDiagnost
 function liveRetrievalCompletion(
   workspaceIndexAvailable: boolean,
   elapsedBudgetBlocked: boolean,
+  anchoredExcerptWindowCount: number | undefined,
 ): ConnectedContextCompletionStatus {
   return {
+    anchoredExcerptWindowCount,
     readBudgetBlocked: false,
     elapsedBudgetBlocked,
     workspaceIndexProviderStatus: workspaceIndexAvailable ? "available" : "unavailable",
@@ -5069,7 +5120,7 @@ interface ConnectedContextActivityIdentity {
   readonly excerptBytesMax: ActivityNumber;
   readonly modelInputTokensMax: ActivityNumber;
   readonly modelOutputTokensMax: ActivityNumber;
-  readonly elapsedMsMax: ActivityNumber;
+  readonly elapsedMsMax: ActivityNumber | null;
   readonly rerankCallsMax: ActivityNumber;
 }
 
@@ -5089,6 +5140,7 @@ interface ConnectedContextCommonActivityFields {
   readonly modelInputTokensMax?: number;
   readonly modelOutputTokensMax?: number;
   readonly elapsedMsMax?: number;
+  readonly elapsedMsBounded: boolean;
   readonly rerankCallsMax?: number;
   readonly completeness: "complete";
   readonly loss: "none";
@@ -5198,7 +5250,10 @@ function budgetActivityIdentity(
     excerptBytesMax: activityNumber(budget, "excerptBytesMax"),
     modelInputTokensMax: activityNumber(budget, "modelInputTokensMax"),
     modelOutputTokensMax: activityNumber(budget, "modelOutputTokensMax"),
-    elapsedMsMax: activityNumber(budget, "elapsedMsMax"),
+    elapsedMsMax:
+      activityProperty(budget, "elapsedMsMax") === null
+        ? null
+        : activityNumber(budget, "elapsedMsMax"),
     rerankCallsMax: activityNumber(budget, "rerankCallsMax"),
   };
 }
@@ -5229,15 +5284,15 @@ function connectedContextActivityIdentity(
   };
 }
 
-function validActivityNumber(value: ActivityNumber): number | undefined {
-  return value === "invalid" ? undefined : value;
+function validActivityNumber(value: ActivityNumber | null): number | undefined {
+  return typeof value === "number" ? value : undefined;
 }
 
 function connectedContextInputStatus(
   identity: ConnectedContextActivityIdentity,
 ): "valid" | "invalid" {
   const values: readonly (
-    ActivityNumber | ActivityBoolean | ActivityScopeKind | ActivityQueryKind
+    ActivityNumber | ActivityBoolean | ActivityScopeKind | ActivityQueryKind | null
   )[] = [
     identity.scopeKind,
     identity.queryKind,
@@ -5281,6 +5336,7 @@ function commonActivityExtra(
     ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
     ...(modelOutputTokensMax === undefined ? {} : { modelOutputTokensMax }),
     ...(elapsedMsMax === undefined ? {} : { elapsedMsMax }),
+    elapsedMsBounded: identity.elapsedMsMax !== null,
     ...(rerankCallsMax === undefined ? {} : { rerankCallsMax }),
     completeness: "complete",
     loss: "none",
@@ -5429,6 +5485,20 @@ function workspaceIoActivityExtra(
   };
 }
 
+function contextObservationActivityExtra(
+  pack: ConnectedContextPack,
+): Partial<ConnectedContextCompletedActivityFields> {
+  const profile = pack.diagnostics?.contextBudget?.profile;
+  if (profile === undefined) return {};
+  const observed = deriveGroundedContextAssembly(pack, profile);
+  return {
+    contextSelectedExcerptCount: observed.lanes.reduce((sum, lane) => sum + lane.includedItems, 0),
+    contextSelectedExcerptEstimatedTokens: observed.totalEstimatedTokens,
+    contextBudgetPressure: observed.budgetPressure,
+    contextRecencyLayoutApplied: observed.orderedForRecency,
+  };
+}
+
 function completionActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
@@ -5442,11 +5512,13 @@ function completionActivityExtra(
     usageSearchCalls: pack.usage.searchCalls,
     usageFilesRead: pack.usage.filesRead,
     usageExcerptBytes: pack.usage.excerptBytes,
+    excerptAnchoredWindowCount: execution.status.anchoredExcerptWindowCount ?? 0,
     usageModelInputTokens: pack.usage.modelInputTokens,
     usageModelOutputTokens: pack.usage.modelOutputTokens,
     usageElapsedMs: pack.usage.elapsedMs,
     usageRerankCalls: pack.usage.rerankCalls,
     selectedFileCount: pack.files.length,
+    ...contextObservationActivityExtra(pack),
     omittedCount: pack.omitted.length,
     uncertaintyCount: pack.uncertainty.length,
     ...uncertaintyActivityExtra(pack.uncertainty),
@@ -6015,6 +6087,23 @@ function observedCanonicalWorkspaceRoot(
   return canonical;
 }
 
+function observedDirectoryIteration(
+  fs: WorkspaceFs,
+  counters: MutableWorkspaceIoActivityCounters,
+): Pick<WorkspaceFs, "iterateDirectory"> {
+  const iterate = workspaceFsProperty(fs, "iterateDirectory");
+  if (iterate === undefined) return {};
+  return {
+    iterateDirectory: async function* (path): AsyncIterable<WorkspaceDirEntry> {
+      counters.readDirCalls += 1;
+      for await (const entry of iterate.call(fs, path)) {
+        addWorkspaceIoPayloadCount(counters, "readDirEntries", 1);
+        yield entry;
+      }
+    },
+  };
+}
+
 function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
   const counters: MutableWorkspaceIoActivityCounters = emptyWorkspaceIoActivityDiagnostics();
   const canonicalRoots = new Map<string, string>();
@@ -6046,6 +6135,7 @@ function requestScopedWorkspaceFs(fs: WorkspaceFs): WorkspaceIoActivity {
       counters.existsCalls += 1;
       return fs.exists(absolutePath);
     },
+    ...observedDirectoryIteration(fs, counters),
     ...observedSynchronousContentReads(fs, counters),
     ...observedAsyncContentReads(fs, counters),
     canonicalWorkspaceRoot: (absoluteRoot): string =>
@@ -6211,13 +6301,19 @@ function detectionGuardedFs(fs: WorkspaceFs, control: MetadataTraversalControl):
   });
 }
 
+function explorationDeadlineAtMs(startedAtMs: number, budget: ExplorationBudget): number {
+  return budget.elapsedMsMax === null
+    ? Number.POSITIVE_INFINITY
+    : startedAtMs + Math.max(0, budget.elapsedMsMax);
+}
+
 function prepareLiveRetrievalContext(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
   plan: ExplorationPlan,
   runtime: ConnectedContextRuntime,
 ): LiveRetrievalContext {
-  const deadlineAtMs = runtime.requestStartedAtMs + Math.max(0, plan.budget.elapsedMsMax);
+  const deadlineAtMs = explorationDeadlineAtMs(runtime.requestStartedAtMs, plan.budget);
   runtime.progress.phase = "workspace-detection";
   const detectionControl: MetadataTraversalControl = {
     signal: deps.signal,
@@ -6304,6 +6400,7 @@ async function retrieveLiveConnectedContext(
     liveRetrievalCompletion(
       context.workspaceIndexSource !== undefined,
       assembled.elapsedBudgetBlocked,
+      assembled.anchoredWindowCount,
     ),
     context.structuralContexts.diagnostics(),
     context.workspaceIndexActivity.diagnostics(),
@@ -6331,7 +6428,7 @@ async function emptyBudgetExhaustedRetrieval(
 ): Promise<ConnectedContextExecution> {
   runtime.progress.phase = "empty-pack-assembly";
   const stoppedGovernor = stop.elapsedBudgetBlocked
-    ? applyUsage(governor, usageDelta({ elapsedMs: plan.budget.elapsedMsMax }))
+    ? applyUsage(governor, usageDelta({ elapsedMs: plan.budget.elapsedMsMax ?? 0 }))
     : governor;
   const pack = await assembleEmptyGroundedPack({
     input,
@@ -6400,7 +6497,7 @@ async function executeConnectedContextRetrieval(
   };
   runtime.progress.phase = "budget-evaluation";
   const readBudgetBlock = readBudgetStopReason(plan.budget);
-  const deadlineAtMs = runtime.requestStartedAtMs + Math.max(0, plan.budget.elapsedMsMax);
+  const deadlineAtMs = explorationDeadlineAtMs(runtime.requestStartedAtMs, plan.budget);
   const elapsedBudgetBlock =
     runtime.nowMs() >= deadlineAtMs ? "budget-exhausted on elapsedMs" : undefined;
   const stopReason = readBudgetBlock ?? elapsedBudgetBlock;
@@ -6506,7 +6603,9 @@ function exhaustedAnswerBudgetDimensions(
     ...(answer.usage.completionTokens > pack.budget.modelOutputTokensMax
       ? ["modelOutputTokens"]
       : []),
-    ...(elapsedMs > pack.budget.elapsedMsMax ? ["elapsedMs"] : []),
+    ...(pack.budget.elapsedMsMax !== null && elapsedMs > pack.budget.elapsedMsMax
+      ? ["elapsedMs"]
+      : []),
   ];
 }
 
@@ -6532,7 +6631,10 @@ async function answerWithAvailableContext(
       ...pack.usage,
       modelInputTokens: Math.min(answer.usage.promptTokens, pack.budget.modelInputTokensMax),
       modelOutputTokens: Math.min(answer.usage.completionTokens, pack.budget.modelOutputTokensMax),
-      elapsedMs: Math.min(Math.max(pack.usage.elapsedMs, elapsedMs), pack.budget.elapsedMsMax),
+      elapsedMs: Math.min(
+        Math.max(pack.usage.elapsedMs, elapsedMs),
+        pack.budget.elapsedMsMax ?? Number.POSITIVE_INFINITY,
+      ),
     },
     uncertainty: [
       ...pack.uncertainty,

@@ -36,7 +36,13 @@ describe("ErrorNoticeFromError — correlation support id", () => {
   it("downloads a report for the support id displayed in the chat error", async () => {
     const report = { fileName: "report.json", reportJson: "{}" };
     const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
-    const download = vi.spyOn(reportApi, "downloadSupportReport").mockImplementation(() => undefined);
+    const download = vi
+      .spyOn(reportApi, "downloadSupportReport")
+      .mockImplementation(() => undefined);
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:report",
+      dispose: vi.fn(),
+    });
     const error = new ApiError("CLARIFICATION_NEEDED", "Need more context", 400);
     error.correlationId = "chat-search-failed";
     renderInLocale(error, "en");

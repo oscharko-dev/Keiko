@@ -15,6 +15,7 @@ vi.mock("@/lib/support-report-api", async () => {
   return {
     createSupportReport: api.create,
     downloadSupportReport: api.download,
+    createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
     SupportReportEvidenceUnavailable: class extends Error {},
   };
 });

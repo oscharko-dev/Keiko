@@ -26,6 +26,7 @@ import { resetSupportReportOutcomesForTests } from "./SupportReportButton";
 vi.mock("@/lib/support-report-api", () => ({
   createSupportReport: vi.fn(),
   downloadSupportReport: vi.fn(),
+  createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -117,7 +118,7 @@ describe("Footer — window status trigger", () => {
     expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
   });
 
-  it("removes the global error action after its one download and short confirmation", async () => {
+  it("keeps the global report downloadable until the person dismisses it", async () => {
     vi.useFakeTimers();
     vi.mocked(createSupportReport).mockResolvedValue({ fileName: "report.json", reportJson: "{}" });
     renderFooter();
@@ -131,9 +132,11 @@ describe("Footer — window status trigger", () => {
     );
     await act(async () => screen.getByRole("button", { name: "Create error report" }).click());
     expect(downloadSupportReport).toHaveBeenCalledOnce();
-    expect(screen.getByRole("status")).toHaveTextContent("Downloaded.");
+    expect(screen.getByRole("status")).toHaveTextContent("Download started.");
     await act(async () => vi.advanceTimersByTimeAsync(1500));
-    expect(screen.queryByRole("group", { name: "Create error report" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Download report" })).toBeInTheDocument();
+    expect(currentGlobalClientFailure()).not.toBeNull();
+    await act(async () => screen.getByRole("button", { name: "Close" }).click());
     expect(currentGlobalClientFailure()).toBeNull();
   });
 
