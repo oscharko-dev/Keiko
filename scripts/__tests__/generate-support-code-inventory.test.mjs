@@ -4,7 +4,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { generateSupportCodeInventory } from "../generate-support-code-inventory.mjs";
+import {
+  archivedCodeModules,
+  generateSupportCodeInventory,
+} from "../generate-support-code-inventory.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const roots = [];
@@ -21,6 +24,31 @@ function source(root, path, text) {
 }
 
 describe("support report code inventory", () => {
+  it("does not change archived history when the current release tag appears or moves", () => {
+    const tags = ["v1.1.9", "v1.1.10"];
+    let currentCommit = "c".repeat(40);
+    const execute = (_file, args) => {
+      if (args[0] === "tag") return tags.join("\n");
+      if (args[0] === "rev-parse")
+        return args[2].startsWith("v1.1.11")
+          ? currentCommit
+          : args[2].startsWith("v1.1.10")
+            ? "b".repeat(40)
+            : "a".repeat(40);
+      if (args[0] === "ls-tree") return "packages/keiko-server/src/example.ts\n";
+      if (args[0] === "show")
+        return JSON.stringify({ typedRegistry: { catalogDigest: "d".repeat(64) } });
+      throw new Error("Unexpected Git operation");
+    };
+    const before = archivedCodeModules("1.1.11", execute);
+    expect(before.map(({ release }) => release)).toEqual(["1.1.9", "1.1.10"]);
+    tags.push("v1.1.11");
+    expect(archivedCodeModules("1.1.11", execute)).toEqual(before);
+    currentCommit = "e".repeat(40);
+    expect(archivedCodeModules("1.1.11", execute)).toEqual(before);
+    expect(archivedCodeModules("1.1.11-rc.1", execute)).toEqual(before);
+  });
+
   it("matches the checked-in inventory derived from current product sources", async () => {
     expect(await generateSupportCodeInventory(repoRoot)).toBe(
       readFileSync(
