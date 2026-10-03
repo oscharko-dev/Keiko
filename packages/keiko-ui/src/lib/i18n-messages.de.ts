@@ -41,6 +41,13 @@ export const DE_MESSAGES = {
   "editor.runtime.watchInterrupted": "Dateiüberwachung unterbrochen.",
   "editor.runtime.refresh": "Aktualisieren",
   "editor.runtime.details": "Details",
+  "supportReport.create": "Fehlerbericht erstellen",
+  "supportReport.creating": "Bericht wird erstellt…",
+  "supportReport.saved": "Heruntergeladen.",
+  "supportReport.failed": "Bericht nicht verfügbar. Erneut versuchen.",
+  "editor.runtime.loadFailed": "Datei konnte nicht geöffnet werden.",
+  "editor.runtime.retry": "Erneut versuchen",
+
   "editor.localHistoryProtection.savedBrief": "Gespeichert. Dateiverlauf nicht verfügbar.",
   "editor.localHistoryProtection.suppressedBrief": "Ohne Eintrag im Dateiverlauf gespeichert.",
   "editor.outline.title": "Gliederung",
@@ -304,9 +311,9 @@ export const DE_MESSAGES = {
   "shell.error.reload": "Keiko neu laden",
   "shell.error.resetFailed":
     "Die gespeicherten Tastenkürzel konnten nicht zurückgesetzt werden. Lade neu, um es erneut zu versuchen, oder bearbeite die gespeicherten Einstellungen außerhalb von Keiko.",
-  "window.error.title": "Dieses Fenster hat einen Fehler ausgelöst",
+  "window.error.title": "Fenster konnte nicht geladen werden.",
   "window.error.body":
-    "Der Fensterinhalt ist beim Rendern abgestürzt. Andere Fenster sind nicht betroffen - versuche es erneut oder schließe dieses Fenster.",
+    "Bitte erneut versuchen.",
   "window.tooSmall.title": "Zu klein für {label}",
   "window.tooSmall.body": "Vergrößere das Fenster oder zoome den Inhalt heraus",
   "window.connectPort.title": "Mit einem anderen Fenster verbinden",

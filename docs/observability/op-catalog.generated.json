@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0dc23b2d58be70d08d08d17644644d384f7da12efc0325754e625f22c901f60c",
+    "catalogDigest": "dd5f9361cdfd08d890eb9c762f3ace8c28008f9563ba3c77919016c9001626db",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -29288,6 +29288,139 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "causal": "correlation",
+        "failureClasses": ["support-report"],
+        "releaseImpact": "minor",
+        "op": "support.report.ui.completed",
+        "emitter": "support-report-evidence.emitSupportReportCompleted",
+        "lifecycle": "end",
+        "analyzerProjection": "capability",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "reportBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "proofIds": ["support.report.ui.completed.lifecycle"],
+        "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:41",
+        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:107"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "causal": "correlation",
+        "failureClasses": ["support-report"],
+        "releaseImpact": "minor",
+        "op": "support.report.ui.failed",
+        "emitter": "support-report-evidence.emitSupportReportFailed",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "corrupt-report",
+              "unsafe-report",
+              "unsupported-report",
+              "report-budget-exceeded",
+              "legacy-input",
+              "selection-unavailable",
+              "seed-unavailable",
+              "busy",
+              "timeout",
+              "unavailable",
+              "cancelled"
+            ]
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "maxLength": 512,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 128,
+            "maxItems": 5
+          }
+        },
+        "proofIds": ["support.report.ui.failed.lifecycle"],
+        "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:53",
+        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:122"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "causal": "correlation",
+        "failureClasses": ["support-report"],
+        "releaseImpact": "minor",
+        "op": "support.report.ui.started",
+        "emitter": "support-report-evidence.emitSupportReportStarted",
+        "lifecycle": "start",
+        "analyzerProjection": "timeline",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "selector": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["correlation", "recent"]
+          }
+        },
+        "proofIds": ["support.report.ui.started.lifecycle"],
+        "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:24",
+        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:91"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "task-workspace.identity.creation-time-probe",
         "category": "diagnostic",
         "owner": "keiko-server",
@@ -40759,32 +40892,40 @@
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
         "failureClass": "support-report",
-        "requiredProductSurfaces": ["keiko-cli"],
+        "requiredProductSurfaces": ["keiko-cli", "keiko-server"],
         "requiredLifecycleOperations": {
-          "start": ["support.report.started"],
+          "start": ["support.report.started", "support.report.ui.started"],
           "state": ["support.report.degraded"],
-          "end": ["support.report.completed"],
-          "failure": ["support.report.failed"],
+          "end": ["support.report.completed", "support.report.ui.completed"],
+          "failure": ["support.report.failed", "support.report.ui.failed"],
           "loss": []
         },
         "requiredCausalOperations": [
           "support.report.completed",
           "support.report.degraded",
           "support.report.failed",
-          "support.report.started"
+          "support.report.started",
+          "support.report.ui.completed",
+          "support.report.ui.failed",
+          "support.report.ui.started"
         ],
         "requiredLossOperations": [],
         "requiredProofOperations": [
           "support.report.completed",
           "support.report.degraded",
           "support.report.failed",
-          "support.report.started"
+          "support.report.started",
+          "support.report.ui.completed",
+          "support.report.ui.failed",
+          "support.report.ui.started"
         ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
           "support.report.completed",
           "support.report.degraded",
-          "support.report.started"
+          "support.report.started",
+          "support.report.ui.completed",
+          "support.report.ui.started"
         ],
         "requiredEvidenceClasses": [
           "closed-enum",
@@ -40793,10 +40934,19 @@
           "digest",
           "error-kind",
           "loss-state",
-          "opaque-id"
+          "opaque-id",
+          "safe-platform-class"
         ],
-        "requiredFrameOperations": ["support.report.degraded", "support.report.failed"],
-        "requiredCauseOperations": ["support.report.degraded", "support.report.failed"]
+        "requiredFrameOperations": [
+          "support.report.degraded",
+          "support.report.failed",
+          "support.report.ui.failed"
+        ],
+        "requiredCauseOperations": [
+          "support.report.degraded",
+          "support.report.failed",
+          "support.report.ui.failed"
+        ]
       }
     ],
     "failureClassCoverage": {
@@ -73312,13 +73462,13 @@
         {
           "failureClass": "support-report",
           "requirementContract": "support-report",
-          "productSurfaces": ["keiko-cli"],
+          "productSurfaces": ["keiko-cli", "keiko-server"],
           "lifecycleTransitions": ["end", "failure", "start", "state"],
           "lifecycleOperations": {
-            "start": ["support.report.started"],
+            "start": ["support.report.started", "support.report.ui.started"],
             "state": ["support.report.degraded"],
-            "end": ["support.report.completed"],
-            "failure": ["support.report.failed"],
+            "end": ["support.report.completed", "support.report.ui.completed"],
+            "failure": ["support.report.failed", "support.report.ui.failed"],
             "loss": []
           },
           "causalEdges": [
@@ -73337,13 +73487,27 @@
             {
               "op": "support.report.started",
               "mode": "correlation"
+            },
+            {
+              "op": "support.report.ui.completed",
+              "mode": "correlation"
+            },
+            {
+              "op": "support.report.ui.failed",
+              "mode": "correlation"
+            },
+            {
+              "op": "support.report.ui.started",
+              "mode": "correlation"
             }
           ],
           "lossSignals": [],
           "resourceSignals": [
             "support.report.completed",
             "support.report.degraded",
-            "support.report.started"
+            "support.report.started",
+            "support.report.ui.completed",
+            "support.report.ui.started"
           ],
           "replayReferences": [],
           "operations": [
@@ -73604,6 +73768,102 @@
                 "causeChain": false
               },
               "proofIds": ["support.report.started.report-lifecycle"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "support.report.ui.completed",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "reportBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["support.report.ui.completed.lifecycle"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "support.report.ui.failed",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "causeChain",
+                  "type": "string-array",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "failureKind",
+                  "type": "string",
+                  "dataClass": "error-kind",
+                  "required": true
+                },
+                {
+                  "name": "frames",
+                  "type": "string-array",
+                  "dataClass": "safe-platform-class",
+                  "required": false
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "error-kind",
+                "loss-state",
+                "safe-platform-class"
+              ],
+              "frameCauseEvidence": {
+                "frames": true,
+                "causeChain": true
+              },
+              "proofIds": ["support.report.ui.failed.lifecycle"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "support.report.ui.started",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "start",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "selector",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["support.report.ui.started.lifecycle"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -79130,7 +79390,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/files.ts:3130",
+      "site": "packages/keiko-server/src/files.ts:3155",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -81861,6 +82121,24 @@
       "package": "keiko-server"
     },
     {
+      "op": "support.report.ui.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/support-report-evidence.ts:43",
+      "package": "keiko-server"
+    },
+    {
+      "op": "support.report.ui.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/support-report-evidence.ts:55",
+      "package": "keiko-server"
+    },
+    {
+      "op": "support.report.ui.started",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/support-report-evidence.ts:26",
+      "package": "keiko-server"
+    },
+    {
       "op": "task-workspace.identity.creation-time-probe",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/task-workspace/activity-log.ts:189",
@@ -82876,6 +83154,9 @@
     "support.report.degraded",
     "support.report.failed",
     "support.report.started",
+    "support.report.ui.completed",
+    "support.report.ui.failed",
+    "support.report.ui.started",
     "task-workspace.identity.creation-time-probe",
     "task-workspace.lifecycle",
     "task-workspace.manifest.reconnected",

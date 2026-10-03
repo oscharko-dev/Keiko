@@ -305,6 +305,7 @@ import {
   safeDomIdSegment,
 } from "./editorDocumentUri";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { SupportReportButton } from "../../SupportReportButton";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
@@ -2170,6 +2171,7 @@ function EditorRuntimeWidget({
   const [loadState, setLoadState] = useState<KeikoEditorLoadState>(
     initialEditorLoadState(hasTarget),
   );
+  const [loadCorrelationId, setLoadCorrelationId] = useState<string | undefined>(undefined);
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [localHistoryProtection, setLocalHistoryProtection] = useState<
@@ -2821,9 +2823,11 @@ function EditorRuntimeWidget({
         finishLoad(root, file, response, snapshot);
       } catch (err: unknown) {
         if (signal.cancelled) return;
+        const correlationId = correlationIdOf(err) ?? newClientCorrelationId();
+        setLoadCorrelationId(correlationId);
         setLoadState({ status: "error", message: errorMessage(err) });
         reportClientDiagnostic(`[keiko] editor file load failed: ${clientErrorSummary(err)}`, {
-          correlationId: correlationIdOf(err) ?? newClientCorrelationId(),
+          correlationId,
           errorKind: bffRequestErrorKind(err),
         });
         throw err;
@@ -6256,10 +6260,11 @@ function EditorRuntimeWidget({
     if (editorLoadError !== null) {
       panel = (
         <div className="ed-host-loading" role="alert">
-          <span>{`Editor failed to load: ${editorLoadError}`}</span>
+          <span>{commonT("editor.runtime.loadFailed")}</span>
           <button type="button" className="ed-reload" onClick={reload}>
-            Retry
+            {commonT("editor.runtime.retry")}
           </button>
+          <SupportReportButton correlationId={loadCorrelationId} />
         </div>
       );
     } else if (hasTarget && buffer !== null && fileModel !== null) {
@@ -6735,6 +6740,7 @@ function EditorRuntimeWidget({
               : "editor.localHistoryProtection.suppressedBrief",
           )}
         </span>
+        <SupportReportButton correlationId={localHistoryProtection.correlationId} />
         <details>
           <summary>{commonT("editor.runtime.details")}</summary>
           <p>

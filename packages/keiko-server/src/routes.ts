@@ -396,6 +396,7 @@ import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
 import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
 import { GIT_DELIVERY_JOURNEY_ROUTE_GROUP } from "./gitDelivery/journeyRoutes.js";
 import { GIT_CHANGE_ROUTE_GROUP } from "./gitChangeRoutes.js";
+import { handleCreateSupportReport } from "./support-report-routes.js";
 import { handleClientDiagnosticIngest } from "./client-diagnostics-routes.js";
 
 // A route handler returns the HTTP status and the JSON body to serialize, or STREAMING when it has
@@ -1627,6 +1628,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // report from the UI's client-diagnostics sink, joined to the server request it describes via
   // `correlationId`. See client-diagnostics-routes.ts for the trust boundary this route enforces.
   { method: "POST", pattern: "/api/diagnostics/client", handler: handleClientDiagnosticIngest },
+  { method: "POST", pattern: "/api/diagnostics/report", handler: handleCreateSupportReport },
 ];
 
 interface PreparedRoute {

@@ -1,3 +1,4 @@
+import { SupportReportButton } from "../SupportReportButton";
 import { useState, type ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
 import { StagePlaceholder } from "./StagePlaceholder";
@@ -37,9 +38,12 @@ export function createWindowChunkFallback(
           {t(stalled ? "window.chunkStalled" : "common.loading")}
         </StagePlaceholder>
         {stalled ? (
-          <button type="button" className="lk-btn" onClick={reload}>
-            {t("shell.error.reload")}
-          </button>
+          <>
+            <button type="button" className="lk-btn" onClick={reload}>
+              {t("shell.error.reload")}
+            </button>
+            <SupportReportButton />
+          </>
         ) : null}
       </>
     );

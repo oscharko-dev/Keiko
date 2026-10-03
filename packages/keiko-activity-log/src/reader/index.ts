@@ -29,3 +29,4 @@ export {
 
 export * from "./support-incident-resolution.js";
 export * from "./support-local-query.js";
+export * from "./support-desktop-report.js";

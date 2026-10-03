@@ -10,6 +10,8 @@
 // getDerivedStateFromError, a fallback with zero heavy dependencies. It renders inside I18nProvider
 // but above the shell, so every string still goes through the i18n API.
 
+import { SupportReportButton } from "./SupportReportButton";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { Component, type ReactNode } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { resetPersistedShortcutOverrides } from "./shellRecovery";
@@ -32,6 +34,7 @@ type RecoveryState = "idle" | "running" | "failed";
 
 interface AppShellBoundaryState {
   readonly failed: boolean;
+  readonly correlationId?: string | undefined;
   readonly recovery: RecoveryState;
 }
 
@@ -45,8 +48,12 @@ class InnerAppShellBoundary extends Component<InnerAppShellBoundaryProps, AppShe
   public override componentDidCatch(error: Error): void {
     // Same observable-not-silent idiom as WindowBodyBoundary: the crash must stay diagnosable from
     // the console even though the UI only shows the recovery surface.
+    const correlationId = correlationIdOf(error) ?? crypto.randomUUID();
+    this.setState({ correlationId });
     reportClientDiagnostic(`[keiko] app shell crashed: ${clientErrorSummary(error)}`, {
-      correlationId: correlationIdOf(error),
+      correlationId,
+      errorKind: "internal",
+      errorEvidence: clientErrorEvidence(error),
     });
   }
 
@@ -87,6 +94,7 @@ class InnerAppShellBoundary extends Component<InnerAppShellBoundaryProps, AppShe
             <button type="button" className={styles.action} onClick={this.reload}>
               {t("shell.error.reload")}
             </button>
+            <SupportReportButton correlationId={this.state.correlationId} />
           </div>
         </div>
       </div>

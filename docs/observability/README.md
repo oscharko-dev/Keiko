@@ -12,6 +12,24 @@ reader engine live in `@oscharko-dev/keiko-activity-log`; server routes and diag
 argument parsing, rendering, and publication remain their composition owners
 ([ADR-0179](../adr/ADR-0179-activity-log-package-boundary.md)).
 
+## Create a report in the browser
+
+Choose **Create error report** in the workspace footer, or beside a failed editor load,
+window crash, file-tree load, or degraded local-history save. Keiko downloads one canonical
+`keiko-support-v1-*.json` file. Attach that file to the support channel you use; Keiko does not
+automatically upload it or require a CLI command. A contextual button selects the originating
+correlation; the footer creates a bounded incident window for problems without a contextual button.
+
+The local paired app session authorizes the report endpoint. The browser cannot select a state
+directory. One worker performs bounded, read-only evidence scans with a 30-second deadline and a
+256 MiB heap ceiling. The existing Activity Log owner thread alone creates the incident and retention
+pin. Disconnecting cancels the worker. Incident resolution, query selection and canonical JSON
+validation are shared with CLI export; incomplete evidence stays explicitly incomplete.
+
+A downloaded report contains body-free evidence, build/registry identities, causal timelines and
+sufficiency reasons. It does not include file contents or raw workspace paths. The report requires
+the local server to respond; a stopped server cannot create an export through this endpoint.
+
 ## File location, segments, and retention
 
 Normal runtime activity lives in `<stateDir>/logs/`. `<stateDir>` is `./.keiko` by default, or

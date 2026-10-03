@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0dc23b2d58be70d08d08d17644644d384f7da12efc0325754e625f22c901f60c"
+    "catalogDigest": "dd5f9361cdfd08d890eb9c762f3ace8c28008f9563ba3c77919016c9001626db"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 496,
-    "proofCount": 503,
-    "resolvedProofCount": 503,
+    "operationCount": 499,
+    "proofCount": 506,
+    "resolvedProofCount": 506,
     "failureClassCount": 332,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -113,7 +113,10 @@
         "sse.run-events.resume",
         "sse.stream.closed",
         "store.journey-outcomes.migration",
-        "store.opened"
+        "store.opened",
+        "support.report.ui.completed",
+        "support.report.ui.failed",
+        "support.report.ui.started"
       ],
       "scenarios": ["bff.crash", "bff.dependency-failure", "bff.rejection"]
     },
@@ -997,7 +1000,7 @@
     "workspace-script-trust": ["tools-workflows.rejection"],
     "workspace-script-trust-admission": ["tools-workflows.rejection"],
     "support-query": ["runtime-packages.dependency-failure"],
-    "support-report": ["runtime-packages.dependency-failure"]
+    "support-report": ["bff.dependency-failure", "runtime-packages.dependency-failure"]
   },
   "proofs": {
     "activity-log.loss.heartbeat-summary": [
@@ -2253,6 +2256,15 @@
     "support.report.failed.report-lifecycle": ["packages/keiko-cli/src/support-report-cli.test.ts"],
     "support.report.started.report-lifecycle": [
       "packages/keiko-cli/src/support-report-cli.test.ts"
+    ],
+    "support.report.ui.completed.lifecycle": [
+      "packages/keiko-server/src/support-report-routes.test.ts"
+    ],
+    "support.report.ui.failed.lifecycle": [
+      "packages/keiko-server/src/support-report-routes.test.ts"
+    ],
+    "support.report.ui.started.lifecycle": [
+      "packages/keiko-server/src/support-report-routes.test.ts"
     ],
     "task-workspace.identity.creation-time-probe.line": [
       "packages/keiko-server/src/task-workspace/activity-log.test.ts"

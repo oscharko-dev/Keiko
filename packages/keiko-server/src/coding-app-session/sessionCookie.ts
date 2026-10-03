@@ -28,6 +28,7 @@ export const APP_SESSION_RUNS_COOKIE_PATH = "/api/runs";
 export const APP_SESSION_WORKSPACES_COOKIE_PATH = "/api/workspaces";
 export const APP_SESSION_DESKTOP_COOKIE_PATH = "/api/desktop/chat";
 export const APP_SESSION_TASK_WORKSPACES_COOKIE_PATH = "/api/task-workspaces";
+export const APP_SESSION_SUPPORT_REPORT_COOKIE_PATH = "/api/diagnostics/report";
 
 // Issuance and revocation use one list so a new protected family cannot retain a stale bearer.
 const APP_SESSION_ACTIVE_COOKIE_PATHS = [
@@ -40,6 +41,7 @@ const APP_SESSION_ACTIVE_COOKIE_PATHS = [
   APP_SESSION_WORKSPACES_COOKIE_PATH,
   APP_SESSION_DESKTOP_COOKIE_PATH,
   APP_SESSION_TASK_WORKSPACES_COOKIE_PATH,
+  APP_SESSION_SUPPORT_REPORT_COOKIE_PATH,
 ] as const;
 
 export interface SessionCookieOptions {

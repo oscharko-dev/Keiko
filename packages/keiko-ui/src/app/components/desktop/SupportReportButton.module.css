@@ -1,0 +1,11 @@
+.control {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2, 8px);
+}
+
+.feedback {
+  color: var(--text-secondary);
+  font-size: var(--text-sm, 12px);
+}

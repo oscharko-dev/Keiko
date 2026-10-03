@@ -1,0 +1,153 @@
+import { Worker } from "node:worker_threads";
+import {
+  type ActivityLogErrorKind,
+  type DesktopSupportReportResponse,
+  type SupportReportFailure,
+  type SupportIncidentRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  prepareDesktopSupportReport,
+  SupportReportError,
+} from "@oscharko-dev/keiko-activity-log/reader";
+import { causeChain, keikoStackFrames, errorKindOf } from "./observability/index.js";
+
+export type SupportReportJobReason =
+  SupportReportFailure | "busy" | "timeout" | "unavailable" | "cancelled";
+export interface SupportReportWorkerFailure {
+  readonly ok: false;
+  readonly reason: SupportReportJobReason;
+  readonly failureKind: ActivityLogErrorKind;
+  readonly frames: readonly string[];
+  readonly causeChain: readonly string[];
+}
+export type SupportReportWorkerMessage =
+  | SupportReportWorkerFailure
+  | { readonly ok: true; readonly report: DesktopSupportReportResponse }
+  | { readonly kind: "prepare" };
+export interface SupportReportPreparedMessage {
+  readonly kind: "prepared";
+  readonly record: SupportIncidentRecord;
+}
+
+export class SupportReportJobError extends Error {
+  public readonly frames: readonly string[];
+  public readonly causeChain: readonly string[];
+  public readonly failureKind: string;
+  public constructor(
+    public readonly reason: SupportReportJobReason,
+    error?: unknown,
+    diagnostic?: SupportReportWorkerFailure,
+  ) {
+    super(`support report unavailable: ${reason}`, { cause: error });
+    this.name = "SupportReportJobError";
+    this.frames = diagnostic?.frames ?? keikoStackFrames(error);
+    this.causeChain = diagnostic?.causeChain ?? causeChain(error);
+    this.failureKind = diagnostic?.failureKind ?? errorKindOf(error);
+  }
+}
+
+function prepareReport(worker: Worker, stateDir: string, correlationId: string | undefined): void {
+  try {
+    const record = prepareDesktopSupportReport(stateDir, correlationId);
+    worker.postMessage({ kind: "prepared", record } satisfies SupportReportPreparedMessage);
+  } catch (error) {
+    throw new SupportReportJobError(
+      error instanceof SupportReportError ? error.reason : "unavailable",
+      error,
+    );
+  }
+}
+
+function reportMessageHandler(
+  worker: Worker,
+  stateDir: string,
+  correlationId: string | undefined,
+  resolve: (report: DesktopSupportReportResponse) => void,
+  reject: (error: unknown) => void,
+): (value: SupportReportWorkerMessage) => void {
+  let prepareStarted = false;
+  return (value): void => {
+    if ("kind" in value) {
+      if (prepareStarted) {
+        reject(new SupportReportJobError("unavailable"));
+        return;
+      }
+      prepareStarted = true;
+      try {
+        prepareReport(worker, stateDir, correlationId);
+      } catch (error) {
+        reject(error);
+      }
+      return;
+    }
+    if (value.ok) resolve(value.report);
+    else reject(new SupportReportJobError(value.reason, undefined, value));
+  };
+}
+
+let running = false;
+
+async function awaitReport(
+  worker: Worker,
+  stateDir: string,
+  correlationId: string | undefined,
+  signal?: AbortSignal,
+): Promise<DesktopSupportReportResponse> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancel: (() => void) | undefined;
+  let accepting = true;
+  try {
+    return await new Promise<DesktopSupportReportResponse>((resolve, reject) => {
+      cancel = (): void => reject(new SupportReportJobError("cancelled"));
+      timer = setTimeout(() => reject(new SupportReportJobError("timeout")), 30_000);
+      signal?.addEventListener("abort", cancel, { once: true });
+      const onMessage = reportMessageHandler(worker, stateDir, correlationId, resolve, reject);
+      worker.on("message", (value: SupportReportWorkerMessage) => {
+        if (accepting) onMessage(value);
+      });
+      worker.once("error", (error: Error) =>
+        reject(new SupportReportJobError("unavailable", error)),
+      );
+      worker.once("exit", () => reject(new SupportReportJobError("unavailable")));
+      if (signal?.aborted === true) cancel();
+    });
+  } finally {
+    accepting = false;
+    clearTimeout(timer);
+    if (cancel !== undefined) signal?.removeEventListener("abort", cancel);
+  }
+}
+
+async function releaseWorker(worker: Worker | undefined): Promise<void> {
+  try {
+    await worker?.terminate();
+  } catch (error) {
+    throw new SupportReportJobError("unavailable", error);
+  } finally {
+    running = false;
+  }
+}
+
+/** Keep synchronous log scans off the request event loop, with one bounded worker per server. */
+export async function runSupportReportJob(
+  stateDir: string,
+  correlationId?: string,
+  signal?: AbortSignal,
+): Promise<DesktopSupportReportResponse> {
+  if (running) throw new SupportReportJobError("busy");
+  if (signal?.aborted === true) throw new SupportReportJobError("cancelled");
+  running = true;
+  let worker: Worker | undefined;
+  try {
+    worker = new Worker(new URL("./support-report-worker.js", import.meta.url), {
+      workerData: { stateDir, correlationId },
+      resourceLimits: { maxOldGenerationSizeMb: 256 },
+    });
+    return await awaitReport(worker, stateDir, correlationId, signal);
+  } catch (error) {
+    if (error instanceof SupportReportJobError) throw error;
+    throw new SupportReportJobError("unavailable", error);
+  } finally {
+    await releaseWorker(worker);
+  }
+}

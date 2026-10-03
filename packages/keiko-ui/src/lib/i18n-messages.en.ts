@@ -38,6 +38,13 @@ export const EN_MESSAGES = {
   "editor.runtime.watchInterrupted": "File watching interrupted.",
   "editor.runtime.refresh": "Refresh",
   "editor.runtime.details": "Details",
+  "supportReport.create": "Create error report",
+  "supportReport.creating": "Creating report…",
+  "supportReport.saved": "Downloaded.",
+  "supportReport.failed": "Report unavailable. Try again.",
+  "editor.runtime.loadFailed": "File could not be opened.",
+  "editor.runtime.retry": "Retry",
+
   "editor.localHistoryProtection.savedBrief": "Saved. File history unavailable.",
   "editor.localHistoryProtection.suppressedBrief": "Saved without a history entry.",
   "editor.outline.title": "Outline",
@@ -289,7 +296,7 @@ export const EN_MESSAGES = {
   "shell.error.resetFailed":
     "The saved shortcuts could not be reset. Reload to try again, or edit the saved settings outside Keiko.",
   "window.error.title": "This window hit an error",
-  "window.error.body": "Window content crashed. Other windows are unaffected; retry or close it.",
+  "window.error.body": "Please try again.",
   "window.tooSmall.title": "Too small to show {label}",
   "window.tooSmall.body": "Enlarge the window or zoom its content out",
   "window.connectPort.title": "Click to connect to another window",
