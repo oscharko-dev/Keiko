@@ -26,7 +26,11 @@ import {
   fetchEditorLocalHistoryEntry,
   setEditorLocalHistoryPinned,
 } from "../../../../../lib/api";
-import { useLocale, useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
+import { useLocale, useTranslate } from "../../../../../lib/i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { Icons } from "../../Icons";
 
@@ -183,7 +187,7 @@ export function buildEditorHistoryDiffModel(
   });
 }
 
-function originLabel(origin: EditorLocalHistoryOrigin, t: I18nTranslate): string {
+function originLabel(origin: EditorLocalHistoryOrigin, t: OptionalWidgetTranslate): string {
   switch (origin) {
     case "user-save":
       return t("editor.fileHistory.origin.userSave");
@@ -263,7 +267,7 @@ function HistoryHeader({
   readonly file: string;
   readonly onClose: () => void;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   return (
     <header className={styles.header}>
       <div className={styles.headingGroup}>
@@ -291,7 +295,7 @@ function HistoryEmptyState({
   readonly snapshot: HistorySnapshot;
   readonly reload: () => void;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   if (snapshot.status === "loading") {
     return <p className={styles.state}>{t("editor.fileHistory.loading")}</p>;
   }
@@ -327,7 +331,7 @@ interface HistoryRowProps {
 }
 
 function HistoryRow(props: HistoryRowProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const locale = useLocale();
   const origin = originLabel(props.entry.origin, t);
   const timestamp = new Intl.DateTimeFormat(locale, {
@@ -399,7 +403,7 @@ interface HistoryListProps extends Omit<
 }
 
 function HistoryList(props: HistoryListProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const viewportRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
   // A traversal target outside the mounted window has no element to focus yet; remember it so the
@@ -490,7 +494,7 @@ function ConfirmAction({
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   // `aria-modal="true"` is a promise that focus stays inside; honour it with the shared containment
@@ -552,7 +556,7 @@ function HistoryComparisonView({
   readonly onClose: () => void;
   readonly onError: () => void;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   return (
     <div className={styles.comparison}>
       <div className={styles.comparisonHeader}>
@@ -578,7 +582,8 @@ function HistoryComparisonView({
 // or the read-only diff surface and are never written to localStorage, IndexedDB, telemetry, or logs.
 // eslint-disable-next-line max-lines-per-function -- orchestration stays here so content cannot escape into a durable store.
 export function EditorFileHistoryPanel(props: EditorFileHistoryPanelProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
+  const commonT = useTranslate();
   const { snapshot, reload, replaceEntry, removeEntry } = useHistorySnapshot(
     props.root,
     props.file,
@@ -663,13 +668,13 @@ export function EditorFileHistoryPanel(props: EditorFileHistoryPanelProps): Reac
   const requestRestore = useCallback(
     async (entry: EditorLocalHistoryEntry): Promise<void> => {
       if (props.dirty) {
-        setNotice(t("editor.fileHistory.dirtyConflict"));
+        setNotice(commonT("editor.fileHistory.dirtyConflict"));
         return;
       }
       const checkpoint = await readEntry(entry);
       if (checkpoint !== null) setPending({ kind: "restore", checkpoint });
     },
-    [props.dirty, readEntry, t],
+    [props.dirty, readEntry, commonT],
   );
 
   const togglePin = useCallback(
@@ -745,7 +750,11 @@ export function EditorFileHistoryPanel(props: EditorFileHistoryPanelProps): Reac
       {notice !== null ? (
         <div className={styles.notice} role="alert">
           <span>{notice}</span>
-          <button type="button" aria-label={t("common.dismiss")} onClick={() => setNotice(null)}>
+          <button
+            type="button"
+            aria-label={commonT("common.dismiss")}
+            onClick={() => setNotice(null)}
+          >
             <CloseIcon size={13} />
           </button>
         </div>

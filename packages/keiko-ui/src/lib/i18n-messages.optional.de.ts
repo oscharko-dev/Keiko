@@ -1,6 +1,43 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "editor.fileHistory.title": "Dateiverlauf",
+  "editor.fileHistory.close": "Dateiverlauf schließen",
+  "editor.fileHistory.listLabel": "Wiederherstellungspunkte der Datei",
+  "editor.fileHistory.loading": "Dateiverlauf wird geladen…",
+  "editor.fileHistory.empty": "Für diese Datei sind noch keine Wiederherstellungspunkte vorhanden.",
+  "editor.fileHistory.unpaired":
+    "Koppeln Sie die lokale App-Sitzung, um den Dateiverlauf zu lesen.",
+  "editor.fileHistory.loadFailed": "Der Dateiverlauf konnte nicht geladen werden.",
+  "editor.fileHistory.retry": "Erneut versuchen",
+  "editor.fileHistory.pruned": "Dieser Wiederherstellungspunkt ist nicht mehr verfügbar.",
+  "editor.fileHistory.origin.userSave": "Benutzerspeicherung",
+  "editor.fileHistory.origin.agentApply": "Agentenänderung",
+  "editor.fileHistory.origin.restore": "Wiederherstellung",
+  "editor.fileHistory.pinned": "Angeheftet",
+  "editor.fileHistory.pin": "Wiederherstellungspunkt anheften",
+  "editor.fileHistory.unpin": "Wiederherstellungspunkt lösen",
+  "editor.fileHistory.compareCurrent": "Mit aktueller Version vergleichen",
+  "editor.fileHistory.selectCompare": "Für Vergleich auswählen",
+  "editor.fileHistory.compareSelected": "Mit Auswahl vergleichen",
+  "editor.fileHistory.compareTitle": "Dateiverlauf vergleichen",
+  "editor.fileHistory.closeCompare": "Zurück zum Dateiverlauf",
+  "editor.fileHistory.restore": "Wiederherstellen",
+  "editor.fileHistory.delete": "Löschen",
+  "editor.fileHistory.restoreTitle": "Diese Version wiederherstellen?",
+  "editor.fileHistory.restoreBody":
+    "Die aktuelle Datei wird als Wiederherstellungspunkt gesichert, bevor diese Version mit den normalen Konfliktprüfungen gespeichert wird.",
+  "editor.fileHistory.deleteTitle": "Diesen Wiederherstellungspunkt löschen?",
+  "editor.fileHistory.deleteBody":
+    "Dieser verschlüsselte Wiederherstellungspunkt kann nach dem Löschen nicht wiederhergestellt werden.",
+  "editor.fileHistory.confirmRestore": "Version wiederherstellen",
+  "editor.fileHistory.confirmDelete": "Wiederherstellungspunkt löschen",
+  "editor.fileHistory.cancel": "Abbrechen",
+  "editor.fileHistory.restoreFailed": "Die Version wurde nicht wiederhergestellt.",
+  "editor.fileHistory.pinFailed": "Der Anheftungsstatus konnte nicht geändert werden.",
+  "editor.fileHistory.deleteFailed": "Der Wiederherstellungspunkt konnte nicht gelöscht werden.",
+  "editor.fileHistory.sizeDelta": "Größenänderung: {delta}",
+  "editor.fileHistory.entryLabel": "Wiederherstellungspunkt {sequence}, {origin}, {timestamp}",
   "agentLauncher.autonomy": "Autonomiemodus",
   "agentLauncher.mode.governedAssist.label": "Um Genehmigung bitten",
   "agentLauncher.mode.governedAssist.description":
