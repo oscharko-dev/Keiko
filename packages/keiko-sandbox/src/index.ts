@@ -24,6 +24,7 @@ export {
   type DebugCapsuleImmutableMount,
 } from "./debug-capsule.js";
 export { probeBackends, currentPlatform, isExecutableOnPath } from "./probe.js";
+export { resolveLocalDockerEndpoint, type LocalDockerEndpoint } from "./local-docker-endpoint.js";
 export {
   attestDarwinGitExecutable,
   resolveDarwinGitExecutable,

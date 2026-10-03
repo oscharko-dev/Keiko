@@ -6,12 +6,17 @@
 // keiko-verification orchestrator with the keiko-sandbox network-isolation probe, exactly as the
 // post-apply phase did before the extraction.
 //
-// Egress is enforced fail-closed: the host is probed for a network-isolating sandbox backend and the
+// Network and execution-root writes are enforced fail-closed: the host is probed for a backend and the
 // orchestrator runs with "enforce-or-fail-closed". On a host with a backend the run executes with
-// network:"none" (attested); on a host without one, untrusted code is NOT executed and steps are
+// network:"none" and filesystem:"execution-root" (attested); without one, code is not executed and steps are
 // reported `denied`.
 
-import { currentPlatform, planIsolatedRun, probeBackends } from "@oscharko-dev/keiko-sandbox";
+import {
+  currentPlatform,
+  planIsolatedRun,
+  probeBackends,
+  resolveLocalDockerEndpoint,
+} from "@oscharko-dev/keiko-sandbox";
 import { createHash } from "node:crypto";
 import {
   activityLogEvent,
@@ -80,16 +85,21 @@ export interface NetworkIsolationProbe {
 }
 
 // Probes whether THIS host can enforce a deny-by-default network-egress boundary for a run rooted at
-// `cwd` (filesystem inherited — the run executes against the real workspace). No untrusted command is
+// `cwd`, with writes confined to that execution root. No untrusted command is
 // spawned during the probe.
 export function probeNetworkIsolation(cwd: string): NetworkIsolationProbe {
   const decision = planIsolatedRun(
-    { command: "node", args: [], cwd, network: "none" },
+    { command: "node", args: [], cwd, network: "none", filesystem: "execution-root" },
     probeBackends(),
     currentPlatform(),
   );
   return {
-    available: decision.kind === "wrapped" && decision.attestation.networkEnforced,
+    available:
+      decision.kind === "wrapped" &&
+      decision.attestation.networkEnforced &&
+      decision.attestation.filesystemEnforced &&
+      (decision.attestation.backend !== "container-docker" ||
+        resolveLocalDockerEndpoint(process.env, cwd).kind === "available"),
     backend: decision.attestation.backend,
   };
 }

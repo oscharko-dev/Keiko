@@ -14,6 +14,7 @@ import {
 // keep importing these from "./db.js" unchanged while the single hardening implementation lives in
 // keiko-security.
 import {
+  assertSqliteStatePath,
   chmodIfPresent,
   ensureDirHardened,
   FILE_MODE,
@@ -61,6 +62,7 @@ export { chmodIfPresent, ensureDirHardened };
 const MEMORY_VAULT_BUSY_TIMEOUT_MS = 5_000;
 
 export function preparedDatabase(target: string): DatabaseSync {
+  if (target !== ":memory:") assertSqliteStatePath(target);
   const db = new DatabaseSync(target);
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(`PRAGMA busy_timeout = ${String(MEMORY_VAULT_BUSY_TIMEOUT_MS)}`);
@@ -163,7 +165,9 @@ export function openMemoryDatabase(
   cipher: MemoryContentCipher,
   sink?: MemoryVaultLogSink,
 ): DatabaseSync {
+  assertSqliteStatePath(dbPath, { store: "memory-vault", sink });
   ensureDirHardened(dirname(dbPath));
+  assertSqliteStatePath(dbPath, { store: "memory-vault", sink });
   let db = preparedDatabase(dbPath);
   try {
     configureWalDatabase(db);

@@ -57,6 +57,7 @@ import {
   type ClientDiagnosticWorkspaceTrustBinding,
   type ClientDiagnosticCodingHistoryScope,
   type ClientStageId,
+  type ClientNavigationOutcome,
   type ClientComposerActivity,
   type ClientComposerCodeStage,
   type ClientChatHistoryDeletionCounts,
@@ -76,6 +77,7 @@ export type ClientDiagnosticStageReport = (
       readonly phase: "settled";
       readonly ordinal: number;
       readonly durationMs: number;
+      readonly navigationOutcome?: ClientNavigationOutcome | undefined;
     }
 ) & { readonly deletion?: ClientChatHistoryDeletionCounts | undefined };
 
@@ -131,6 +133,7 @@ export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly kind?: ClientDiagnosticKind | undefined;
+  readonly renderFailure?: "shell" | "window-body" | undefined;
   // The closed class of the failure, when the caller classified it (`bffRequestErrorKind`).
   readonly errorKind?: ActivityLogErrorKind | undefined;
   readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;

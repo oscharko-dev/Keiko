@@ -1,4 +1,4 @@
-import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts";
+import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { bffFetchJson } from "./http";
 

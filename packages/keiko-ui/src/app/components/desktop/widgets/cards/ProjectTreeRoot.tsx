@@ -26,6 +26,7 @@ export function ProjectTreeRoot({
       <button
         type="button"
         role="treeitem"
+        aria-selected={false}
         aria-level={1}
         aria-expanded={expanded}
         aria-label={t("tree.projectRoot", { name })}

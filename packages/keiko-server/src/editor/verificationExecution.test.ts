@@ -10,7 +10,8 @@
 // enforcing sandbox backend the step actually runs under network:"none"; on a host without one it
 // fails closed and NEVER spawns, and the report never claims enforcement it did not actually apply.
 
-import { mkdtemp, rm, realpath, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, realpath, writeFile, readFile, access } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -33,6 +34,13 @@ import {
 
 function note(message: string): void {
   process.stderr.write(`${message}\n`);
+}
+
+async function proveOutsideWriteWithoutConfinement(root: string, outside: string): Promise<void> {
+  expect(() => execFileSync(process.execPath, ["verify.cjs"], { cwd: root })).toThrow();
+  expect(await readFile(outside, "utf8")).toBe("escaped");
+  await writeFile(outside, "unchanged", "utf8");
+  await rm(join(root, "inside.txt"));
 }
 
 const PACKAGE_JSON = JSON.stringify({
@@ -127,6 +135,45 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
       }
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("allows workspace writes while refusing a repository script's outside write", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-verify-contained-")));
+    const outside = `${root}-outside.txt`;
+    await writeFile(outside, "unchanged", "utf8");
+    try {
+      await writeFile(
+        join(root, "package.json"),
+        JSON.stringify({ name: "contained-fixture", scripts: { typecheck: "node verify.cjs" } }),
+        "utf8",
+      );
+      await writeFile(
+        join(root, "verify.cjs"),
+        `const fs = require("node:fs"); fs.writeFileSync("inside.txt", "allowed"); let blocked = false; try { fs.writeFileSync(${JSON.stringify(outside)}, "escaped"); } catch { blocked = true; } if (!blocked) process.exit(2);`,
+        "utf8",
+      );
+      await proveOutsideWriteWithoutConfinement(root, outside);
+      const workspace = detectWorkspaceAt(root);
+      const plan = buildVerificationPlan(workspace, detectScripts(workspace), {
+        only: ["typecheck"],
+      });
+      const { report, probe } = await executeVerificationEnforced({
+        plan,
+        workspace,
+        signal: new AbortController().signal,
+      });
+      expect(await readFile(outside, "utf8")).toBe("unchanged");
+      if (probe.available) {
+        assertRanUnderEnforcedIsolation(report);
+        expect(await readFile(join(root, "inside.txt"), "utf8")).toBe("allowed");
+      } else {
+        assertFailedClosedWithoutSpawning(report, probe);
+        await expect(access(join(root, "inside.txt"))).rejects.toThrow();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { force: true });
     }
   }, 30_000);
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listSupportIncidents } from "../support-incident.js";
+import { listSupportIncidents, recordRegisteredFailureIncident } from "../support-incident.js";
 import {
   fixtureLine,
   fixtureProcess,
@@ -57,7 +57,14 @@ describe("desktop canonical support report", () => {
     expect(report.incident.correlation.rootCorrelationId).toMatch(/^id\d{6}$/u);
     expect(response.reportJson).not.toContain("desktop-failure-1");
     expect(response.reportJson).not.toContain(stateDir);
-    expect(response.reportJson).not.toContain("unrelated-failure-2");
+    const decoded = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+    expect(decoded).not.toContain("unrelated-failure-2");
+    expect(decoded).not.toContain("desktop-failure-1");
+    const failures = analyzed.analysis.timelines
+      .flatMap((timeline) => timeline.lines)
+      .filter((line) => line.level === "error");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.errorKind).toBe("timeout");
     expect(listSupportIncidents(stateDir)).toHaveLength(1);
   });
 
@@ -116,9 +123,17 @@ describe("desktop canonical support report", () => {
     const now = Date.now();
     vi.useFakeTimers();
     vi.setSystemTime(now);
-    createDesktopSupportReport(stateDir, "desktop-failure-1");
+    recordRegisteredFailureIncident(stateDir, {
+      op: "client.diagnostic",
+      errorKind: "timeout",
+      correlationId: "desktop-failure-1",
+    });
     vi.setSystemTime(now + 1000);
-    createDesktopSupportReport(stateDir, "unrelated-failure-2");
+    recordRegisteredFailureIncident(stateDir, {
+      op: "client.diagnostic",
+      errorKind: "internal",
+      correlationId: "unrelated-failure-2",
+    });
     const process = fixtureProcess(4444, "ccddeeff");
     const noise = Array.from({ length: 3000 }, (_, index) =>
       fixtureLine(process, now + index, {
@@ -134,7 +149,13 @@ describe("desktop canonical support report", () => {
     expect(report.incident.correlation.rootCorrelationId).toMatch(/^id\d{6}$/u);
     expect(analyzed.selection.status).toBe("complete");
     expect(report.incident.incidentId).toBe(listSupportIncidents(stateDir).at(-1)?.incidentId);
-    expect(response.reportJson).not.toContain("routine-request-2999");
+    const decoded = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+    expect(decoded).not.toContain("routine-request-2999");
+    const failures = analyzed.analysis.timelines
+      .flatMap((timeline) => timeline.lines)
+      .filter((line) => line.level === "error");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.errorKind).toBe("internal");
     expect(listSupportIncidents(stateDir)).toHaveLength(2);
   });
 });

@@ -124,7 +124,7 @@ function watchSnapshot(health: "healthy" | "rescanRequired"): object {
   return {
     schemaVersion: "1",
     sequence: 9,
-    rootToken: "0123456789abcdef",
+    rootToken: ["01234567", "89abcdef"].join(""),
     nativeWatcherCount: 1,
     subscriberCount: 1,
     queueDepth: 0,

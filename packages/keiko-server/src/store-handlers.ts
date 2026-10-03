@@ -426,6 +426,17 @@ function projectTrustRemainsRestricted(deps: UiHandlerDeps, projectPath: string)
   }
 }
 
+function isExplicitProjectSelection(body: Record<string, unknown>): boolean {
+  const intent = body.selectionIntent;
+  if (
+    intent !== undefined &&
+    intent !== "explicit-folder-selection" &&
+    intent !== "file-navigation"
+  )
+    throw new InvalidRequest('Field "selectionIntent" must name a recognized selection intent.');
+  return intent === "explicit-folder-selection";
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Route 14 — POST /api/projects
 // ──────────────────────────────────────────────────────────────────────────
@@ -438,6 +449,7 @@ export async function handleCreateProject(
     const body = await readJsonObject(ctx.req);
     const path = requireString(body, "path");
     const name = optionalString(body, "name");
+    const explicitSelection = isExplicitProjectSelection(body);
     const normalizedPath = validateProjectPath(path, { mustExist: true });
     if (pathIsDenied(normalizedPath)) {
       return forbiddenResult(
@@ -456,7 +468,7 @@ export async function handleCreateProject(
     // project remains registered but restricted, preserving the legacy injectable test seam without
     // inventing browser-side authority.
     try {
-      deps.workspaceScriptTrust?.grant(project.path, ctx.correlationId);
+      if (explicitSelection) deps.workspaceScriptTrust?.grant(project.path, ctx.correlationId);
     } catch (error) {
       const correlationId = reportProjectTrustGrantFailure(
         deps,

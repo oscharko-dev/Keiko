@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "008c9d66eeb21982fb995d4d1e840e648568468e746d618b47738ef14fbc074c" as const;
+  "87d0dfdd9d06a12600004ae9bc308cdc8a7ec475d854488c0b64f1058bbec3b4" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2842,6 +2842,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["git-sync", "git-history"],
       },
+      renderFailure: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["shell", "window-body"],
+      },
       clientNoteDigest: {
         type: "string",
         dataClass: "digest",
@@ -3611,6 +3617,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      navigationOutcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["applied", "unavailable", "failed", "dropped", "stale", "cancelled", "deferred"],
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -3743,7 +3755,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
-    op: "coding-app-session.local-session.issued",
+    op: "coding-app-session.local-session.confirmed",
     category: "http",
     owner: "keiko-server",
     emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionLocalSession",
@@ -3763,7 +3775,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     lifecycle: "end",
     analyzerProjection: "timeline",
     failureClasses: ["coding-app-session-pairing"],
-    proofIds: ["coding-app-session.local-session.issued.request"],
+    proofIds: ["coding-app-session.local-session.confirmed.request"],
     releaseImpact: "patch",
   },
   {
@@ -26868,6 +26880,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "sqlite.state-path.refused",
+    category: "diagnostic",
+    owner: "keiko-security",
+    emitter: "fs-hardening.sqliteStatePathRefusedEvent",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      store: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["ui", "memory-vault"],
+      },
+      failureKind: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["unsafe-target", "unsafe-ancestor", "open-failed"],
+      },
+    },
+    causal: "none",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["sqlite-state-path"],
+    proofIds: ["sqlite.state-path.refused.authority"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "sse.run-events.resume",
     category: "http",
     owner: "keiko-server",
@@ -28083,6 +28133,64 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      recordCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      reportDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      incidentId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 32,
+      },
+      manifestUnreadableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      manifestReusedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      sufficiency: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["complete", "degraded", "insufficient"],
+      },
+      reasons: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: true,
+        maxItems: 32,
+        values: [
+          "no-registered-evidence",
+          "no-registered-failure",
+          "corrupt-evidence",
+          "parent-correlation-missing",
+          "lifecycle-start-missing",
+          "report-budget-exceeded",
+          "evidence-not-retained",
+          "segment-unreadable",
+          "truncated-evidence",
+          "unsupported-evidence",
+          "incomplete-evidence",
+          "sequence-anomaly",
+          "activity-log-loss",
+          "events-dropped",
+          "correlation-unknown",
+          "evidence-partial",
+          "context-truncated",
+        ],
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -28125,6 +28233,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "timeout",
           "unavailable",
           "cancelled",
+          "quota-exhausted",
+          "store-unavailable",
+          "record-too-large",
+          "evaluation-rate-limited",
         ],
       },
       failureKind: {
@@ -30398,8 +30510,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 333,
-  completeClassCount: 333,
+  supportedClassCount: 334,
+  completeClassCount: 334,
   completeness: "complete",
   classes: [
     {
@@ -33930,6 +34042,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "renderFailure",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "repositoryId",
               type: "string",
               dataClass: "opaque-id",
@@ -34686,6 +34804,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "navigationOutcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "ordinal",
               type: "integer",
               dataClass: "count",
@@ -34844,13 +34968,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleOperations: {
         start: [],
         state: [],
-        end: ["coding-app-session.local-session.issued", "coding-app-session.paired"],
+        end: ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
-          op: "coding-app-session.local-session.issued",
+          op: "coding-app-session.local-session.confirmed",
           mode: "correlation",
         },
         {
@@ -34859,11 +34983,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-app-session.local-session.issued", "coding-app-session.paired"],
+      resourceSignals: ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
       replayReferences: [],
       operations: [
         {
-          op: "coding-app-session.local-session.issued",
+          op: "coding-app-session.local-session.confirmed",
           owner: "keiko-server",
           category: "http",
           lifecycle: "end",
@@ -34875,7 +34999,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             frames: false,
             causeChain: false,
           },
-          proofIds: ["coding-app-session.local-session.issued.request"],
+          proofIds: ["coding-app-session.local-session.confirmed.request"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -61681,6 +61805,62 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "sqlite-state-path",
+      requirementContract: "sqlite-state-path",
+      productSurfaces: ["keiko-security"],
+      lifecycleTransitions: ["failure"],
+      lifecycleOperations: {
+        start: [],
+        state: [],
+        end: [],
+        failure: ["sqlite.state-path.refused"],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "sqlite.state-path.refused",
+          mode: "none",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: [],
+      replayReferences: [],
+      operations: [
+        {
+          op: "sqlite.state-path.refused",
+          owner: "keiko-security",
+          category: "diagnostic",
+          lifecycle: "failure",
+          causal: "none",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "failureKind",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "store",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["sqlite.state-path.refused.authority"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "sse-resume-decision",
       requirementContract: "sse-resume-decision",
       productSurfaces: ["keiko-server"],
@@ -63018,13 +63198,62 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "capability",
           safeContextFields: [
             {
+              name: "incidentId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "manifestReusedCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "manifestUnreadableCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "recordCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "reportBytes",
               type: "integer",
               dataClass: "count",
               required: true,
             },
+            {
+              name: "reportDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "sufficiency",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
           ],
-          evidenceClasses: ["completeness-state", "count", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -66883,7 +67112,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.stage.started": "client-diagnostics",
     "coding-app-session.channel.closed": "tools-workflows",
     "coding-app-session.channel.opened": "tools-workflows",
-    "coding-app-session.local-session.issued": "tools-workflows",
+    "coding-app-session.local-session.confirmed": "tools-workflows",
     "coding-app-session.paired": "tools-workflows",
     "coding-app-session.rotated": "tools-workflows",
     "coding-app-session.signed-out": "tools-workflows",
@@ -67266,6 +67495,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "speech.tts.request.completed": "model-gateway",
     "speech.tts.request.dispatch": "model-gateway",
     "speech.tts.stream.peek.failed": "model-gateway",
+    "sqlite.state-path.refused": "runtime-packages",
     "sse.run-events.resume": "bff",
     "sse.stream.closed": "bff",
     "store.encryption-checkpoint-degraded": "memory-knowledge",

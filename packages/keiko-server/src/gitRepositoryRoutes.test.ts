@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitProcessResult } from "@oscharko-dev/keiko-git";
 import {
   classifyCloneOutcome,
-  createCloneRepositoryHandler,
+  createCloneRepositoryHandler as createCloneHandler,
   type CloneRepositoryRunner,
 } from "./gitRepositoryRoutes.js";
 import type { RouteContext } from "./routes.js";
@@ -16,10 +16,22 @@ import { createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, UiStoreError, type UiStore } from "./store/index.js";
 import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
 
+function createCloneRepositoryHandler(
+  ...args: Parameters<typeof createCloneHandler>
+): ReturnType<typeof createCloneHandler> {
+  return createCloneHandler(
+    args[0],
+    args[1],
+    args[2] ??
+      ((): Promise<readonly { readonly address: string }[]> =>
+        Promise.resolve([{ address: "203.0.113.4" }])),
+  );
+}
+
 let tmp: string;
 let store: UiStore;
 
-function deps(): UiHandlerDeps {
+function deps(paired = true): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
@@ -29,13 +41,28 @@ function deps(): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    ...(paired
+      ? {
+          codingAppSessionChannel: {
+            verifySession: () => ({
+              sessionId: "test-session",
+              principalLabel: "local",
+              issuedAtMs: 1,
+              lastSeenAtMs: 1,
+              rotationCount: 0,
+            }),
+          } as UiHandlerDeps["codingAppSessionChannel"],
+        }
+      : {}),
   };
 }
 
 function ctx(body: unknown): RouteContext {
+  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage;
+  req.headers = {};
   return {
     correlationId: undefined,
-    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
+    req,
     res: {} as ServerResponse,
     params: {},
     url: new URL("http://127.0.0.1/api/repositories/clone"),
@@ -43,9 +70,11 @@ function ctx(body: unknown): RouteContext {
 }
 
 function ctxRaw(rawBody: string): RouteContext {
+  const req = Readable.from([Buffer.from(rawBody, "utf8")]) as IncomingMessage;
+  req.headers = {};
   return {
     correlationId: undefined,
-    req: Readable.from([Buffer.from(rawBody, "utf8")]) as IncomingMessage,
+    req,
     res: {} as ServerResponse,
     params: {},
     url: new URL("http://127.0.0.1/api/repositories/clone"),
@@ -62,6 +91,63 @@ afterEach(() => {
 });
 
 describe("git repository routes", () => {
+  it("denies an unpaired clone before reading a hostile body, touching paths or starting Git", async () => {
+    const cloneRunner = vi.fn<CloneRepositoryRunner>();
+    const handler = createCloneRepositoryHandler(cloneRunner);
+    const request = ctxRaw("invalid private body");
+    const result = await handler(request, deps(false));
+    expect(result.status).toBe(403);
+    expect(request.req.readableFlowing).toBeNull();
+    expect(cloneRunner).not.toHaveBeenCalled();
+    expect(store.listProjects()).toEqual([]);
+  });
+
+  it.each([
+    "127.0.0.1",
+    "169.254.169.254",
+    "169.254.10.1",
+    "::1",
+    "::ffff:7f00:1",
+    "0:0:0:0:0:ffff:7f00:1",
+    "::ffff:a9fe:a9fe",
+    "0.0.0.0",
+    "::",
+  ])("refuses a DNS alias to forbidden clone address %s", async (address) => {
+    const cloneRunner = vi.fn<CloneRepositoryRunner>();
+    const handler = createCloneRepositoryHandler(cloneRunner, undefined, () =>
+      Promise.resolve([{ address }]),
+    );
+    expect(
+      (
+        await handler(
+          ctx({
+            repositoryUrl: "https://alias.example.invalid/repo.git",
+            destinationPath: join(tmp, "app"),
+          }),
+          deps(),
+        )
+      ).status,
+    ).toBe(403);
+    expect(cloneRunner).not.toHaveBeenCalled();
+  });
+  it("preserves an authorized enterprise DNS host on a private address", async () => {
+    const cloneRunner = vi.fn<CloneRepositoryRunner>().mockResolvedValue({ status: 202, body: {} });
+    const handler = createCloneRepositoryHandler(cloneRunner, undefined, () =>
+      Promise.resolve([{ address: "10.20.30.40" }]),
+    );
+    expect(
+      (
+        await handler(
+          ctx({
+            repositoryUrl: "https://git.corporate.invalid/repo.git",
+            destinationPath: join(tmp, "app"),
+          }),
+          deps(),
+        )
+      ).status,
+    ).toBe(202);
+    expect(cloneRunner).toHaveBeenCalledOnce();
+  });
   it("clones a repository into a destination folder and registers it", async () => {
     const destination = join(tmp, "app");
     const cloneRunner = vi.fn((_repositoryUrl: string, destinationPath: string) => {

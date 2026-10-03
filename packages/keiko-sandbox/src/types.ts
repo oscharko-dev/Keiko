@@ -33,7 +33,7 @@ export interface BackendAvailability {
 
 // A command to run under isolation. `cwd` must already be a real, workspace-contained directory:
 // keiko-tools' exec.ts owns containment, env name-allowlisting, and HOME scrubbing — keiko-sandbox
-// only prepends the egress wrapper.
+// owns the requested network/filesystem wrapper and local container endpoint validation.
 export interface IsolatedRunPlan {
   readonly command: string;
   readonly args: readonly string[];
@@ -45,11 +45,12 @@ export interface IsolatedRunPlan {
 }
 
 // The decision for a single run:
-//   - passthrough: network "inherit" — run as-is, no isolation, networkEnforced false.
-//   - wrapped: network "none" with an enforcing backend, OR a valid gateway policy with a backend
+//   - passthrough: network and filesystem "inherit" — run as-is, neither boundary enforced.
+//   - wrapped: network "none" or filesystem "execution-root" with a compatible enforcing backend,
+//     OR a valid gateway policy with a backend
 //     that can bind the child to exactly that loopback destination (macOS Seatbelt or the Linux
 //     namespace bridge) — run the wrapped command.
-//   - fail-closed: network "none" with no enforcing backend, OR a gateway policy on a platform
+//   - fail-closed: a requested network/filesystem boundary with no compatible backend, OR a gateway policy on a platform
 //     with no qualifying backend — the caller MUST NOT run the command.
 export type IsolatedRunDecision =
   | {

@@ -7,7 +7,7 @@ import EditorSurfaceLoading from "./EditorSurfaceLoading";
 const diagnostic = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: diagnostic }));
 vi.mock("../../SupportReportButton", () => ({
-  SupportReportButton: () => <button type="button">Create error report</button>,
+  SupportReportButton: (): React.JSX.Element => <button type="button">Create error report</button>,
 }));
 
 afterEach(() => {

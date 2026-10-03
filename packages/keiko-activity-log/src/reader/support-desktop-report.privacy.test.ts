@@ -18,6 +18,9 @@ import {
   configureActivityLogRouteRedactor,
   resetActivityLogRouteRedactor,
 } from "../log-redaction.js";
+import { createInitialToolCatalog } from "../../../keiko-tool-catalog/src/legacy.js";
+import { emitToolLifecycleEvent } from "../../../keiko-server/src/tool-catalog/catalogToolLifecycle.js";
+import { recordRegisteredFailureIncident } from "../support-incident.js";
 import { createDesktopSupportReport } from "./support-desktop-report.js";
 import { analyzeSupportReport, parseSupportReport } from "./support-report.js";
 import { logTaskWorkspaceManifestReconnected } from "../../../keiko-server/src/deps-activity.js";
@@ -206,6 +209,34 @@ function emitUnsafeTechnicalLabels(): void {
   sink.close?.();
 }
 
+function emitCodeOwnedTool(): string {
+  const catalog = createInitialToolCatalog();
+  const descriptor = catalog.descriptors.find(
+    (entry) => entry.toolRef.canonicalId === "keiko.file.read",
+  );
+  const profile = catalog.profiles[0]?.profile;
+  if (descriptor === undefined || profile === undefined)
+    throw new TypeError("missing native catalog fixture");
+  const sink = createFileServerLogSink(stateDir, { level: "debug" });
+  emitToolLifecycleEvent(
+    { primary: sink, diagnostics: defaultServerDiagnosticSink },
+    {
+      op: "tool-catalog.invocation-started",
+      correlationId: ROOT_ID,
+      catalogRevision: catalog.catalogRevision,
+      profile,
+      projectionDigest: "a".repeat(64),
+      invocationId: "CustomerToolInvocation",
+      toolRef: descriptor.toolRef,
+      state: "started",
+      reason: "none",
+      reservationId: "CustomerToolReservation",
+    },
+  );
+  sink.close?.();
+  return descriptor.toolRef.canonicalId;
+}
+
 function expectPersistedPrivateRedaction(): void {
   const persisted = readPersistedActivityLog(stateDir);
   expect(persisted).toContain(WORKSPACE_ID);
@@ -276,7 +307,58 @@ describe("desktop report privacy through real producers and compressed evidence"
       PRIVATE_VERSION,
       ClientAcmePayrollError.name,
     ]);
-    expect(analyzeSupportReport(response.reportJson).selection.status).toBe("insufficient");
+    expect(analyzeSupportReport(response.reportJson).selection.status).toBe("degraded");
+    expect(report.selection.reasons).toContain("evidence-partial");
+    expect(report.selection.reasons).not.toContain("unsupported-evidence");
+  });
+  it("marks an immutable registered failure lost when its private frame cannot be exported", () => {
+    emitUnsafeTechnicalLabels();
+    const incident = recordRegisteredFailureIncident(stateDir, {
+      op: "server.diagnostic.failure",
+      errorKind: "internal",
+      correlationId: ROOT_ID,
+      frames: [PRIVATE_FRAME],
+    });
+    expect(incident?.status).toBe("created");
+    const response = createDesktopSupportReport(stateDir, ROOT_ID);
+    const report = parseSupportReport(response.reportJson);
+    expect(inflateEvidence(report)).not.toContain(PRIVATE_FRAME);
+    expect(report.selection.status).toBe("insufficient");
     expect(report.selection.reasons).toContain("evidence-not-retained");
+    expect(report.selection.reasons).not.toContain("unsupported-evidence");
+  });
+  it("keeps native tool identities but hides invocation labels and preserves writer redaction markers", async () => {
+    const canonicalId = emitCodeOwnedTool();
+    await emitPrivateFailure();
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    const operation = ACTIVITY_LOG_OPERATION_REGISTRY.find(
+      (entry) => entry.op === "gateway.chat.started",
+    );
+    if (operation === undefined) throw new TypeError("missing model lifecycle operation");
+    for (const modelId of ["[redacted:path]", "[redacted:secret]"])
+      sink.write(
+        activityLogEvent(
+          operation,
+          { correlationId: ROOT_ID },
+          {
+            modelId,
+            streaming: false,
+            costClass: "low",
+            timeoutMs: 100,
+            maxRetries: 0,
+            requestBudgetMs: 100,
+            upstreamStreaming: false,
+          },
+        ),
+      );
+    sink.close?.();
+    const report = parseSupportReport(createDesktopSupportReport(stateDir, ROOT_ID).reportJson);
+    const decoded = inflateEvidence(report);
+    expect(decoded).toContain(JSON.stringify(canonicalId));
+    expect(decoded).toContain('"profileId":"legacy-native"');
+    expect(decoded).not.toContain("CustomerToolInvocation");
+    expect(decoded).not.toContain("CustomerToolReservation");
+    expect(decoded).toContain('"modelId":"[redacted:path]"');
+    expect(decoded).toContain('"modelId":"[redacted:secret]"');
   });
 });

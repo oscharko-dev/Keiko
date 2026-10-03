@@ -2,6 +2,7 @@
 
 import EditorSurfaceLoading from "./EditorSurfaceLoading";
 
+import { useTranslate } from "@/lib/i18n";
 import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
 import dynamic from "next/dynamic";
 import {
@@ -16,6 +17,7 @@ import {
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 import type {
@@ -35,6 +37,7 @@ import {
   serializeEditorLayoutStateV2,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
 import { createEditorDirtyCloseIntent } from "@oscharko-dev/keiko-contracts/runtime/editor-dirty-close";
+import type { ClientNavigationOutcome } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { selectWorkspaceFileTarget } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
@@ -150,6 +153,10 @@ export interface EditorWidgetProps extends EditorRuntimeWidgetProps {
   readonly onWorkspaceChange?: ((patch: EditorWidgetWorkspacePatch) => void) | undefined;
   readonly onOpenProblems?: ((projectPath: string) => void) | undefined;
   readonly workspaceTrustUiAvailable?: boolean | undefined;
+  readonly initialWorkspaceNotice?:
+    | { readonly code: "trust-grant-failed"; readonly correlationId?: string | undefined }
+    | undefined;
+  readonly onWorkspaceNoticeConsumed?: (() => void) | undefined;
 }
 
 interface PendingDirtyClose {
@@ -276,6 +283,20 @@ function dispatchCommands(trigger: EditorShellActions | null): boolean {
   if (trigger === null) return false;
   trigger.openCommands();
   return true;
+}
+
+function requestOrDeferRootSelection(
+  pending: PendingDirtyClose | null,
+  deferred: RefObject<(() => void) | null>,
+  requestSelection: () => boolean,
+  correlationId?: string,
+): ClientNavigationOutcome {
+  if (pending === null) return requestSelection() ? "applied" : "deferred";
+  deferred.current = (): void => {
+    const settle = startFilesNavigationEvidence("editor project selection", correlationId);
+    settle(undefined, requestSelection() ? "applied" : "deferred");
+  };
+  return "deferred";
 }
 
 function DirtyCloseDialog(props: {
@@ -578,11 +599,14 @@ export function EditorWidget({
   onWorkspaceChange,
   onOpenProblems,
   workspaceTrustUiAvailable = true,
+  initialWorkspaceNotice,
+  onWorkspaceNoticeConsumed,
   onOpenDebugPanel,
   sessionActive = true,
   windowId,
   ...props
 }: EditorWidgetProps): ReactNode {
+  const t = useTranslate();
   const initialRoot = root?.trim() ?? "";
   const initialConfiguredFile = normalizeEditorFile(initialRoot, file);
   const initialOpenFiles = normalizeEditorOpenFiles(
@@ -611,6 +635,16 @@ export function EditorWidget({
     onNotice: setConnectionNotice,
     onBusy: setConnectingProject,
   });
+  useEffect(() => {
+    if (initialWorkspaceNotice === undefined) return;
+    const id = initialWorkspaceNotice.correlationId;
+    const message =
+      id === undefined
+        ? t("editor.projectRestricted")
+        : `${t("editor.projectRestricted")} ${t("workspaceTrust.supportId", { correlationId: id })}`;
+    setWorkspaceRegistrationNotice({ root: workspaceRoot, message });
+    onWorkspaceNoticeConsumed?.();
+  }, [initialWorkspaceNotice, onWorkspaceNoticeConsumed, workspaceRoot, t]);
   const editorSettings = useEditorSettings(nonEmptyRoot(workspaceRoot));
   const editorShortcutRegistry = useMemo(
     () => resolveEffectiveKeyboardShortcuts(editorSettings.applied.keybindingOverrides),
@@ -944,31 +978,56 @@ export function EditorWidget({
   const dirtyRootCloseRef = useRef({ requestDirtyClose, dirtyFiles: dirtyFileList });
   dirtyRootCloseRef.current = { requestDirtyClose, dirtyFiles: dirtyFileList };
 
+  const deferredRootSelectionRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (pendingClose !== null) return;
+    const apply = deferredRootSelectionRef.current;
+    deferredRootSelectionRef.current = null;
+    apply?.();
+  }, [pendingClose]);
+
   const openRoot = useCallback(
     (nextRoot: string, alreadyConnected = false): void => {
       const selectedRoot = nextRoot.trim();
       if (selectedRoot.length === 0) return;
-      const selectConnectedRoot = (normalizedRoot: string): void => {
+      const selectConnectedRoot = (
+        normalizedRoot: string,
+        correlationId?: string,
+        warning?: string,
+      ): ClientNavigationOutcome => {
         const apply = (): void => {
           const nextLayout = editorLayoutReducer(layoutRef.current, {
             type: "replace-root",
             root: normalizedRoot,
             sidebarWidth: layoutRef.current.sidebarWidth,
           });
-          const settle = startFilesNavigationEvidence("editor project selection");
           setWorkspaceRoot(normalizedRoot);
+          setWorkspaceRegistrationNotice((current) =>
+            warning === undefined
+              ? current?.root === normalizedRoot
+                ? current
+                : null
+              : { root: normalizedRoot, message: warning },
+          );
           setDirtyByPane({});
           commitLayout(nextLayout, normalizedRoot, true);
-          settle();
         };
-        const firstPaneId =
-          editorLayoutPaneIds(layoutRef.current)[0] ?? layoutRef.current.activePaneId;
-        dirtyRootCloseRef.current.requestDirtyClose({
-          paneId: firstPaneId,
-          files: dirtyRootCloseRef.current.dirtyFiles,
-          reason: "root-change",
-          apply,
-        });
+        const requestSelection = (): boolean => {
+          const firstPaneId =
+            editorLayoutPaneIds(layoutRef.current)[0] ?? layoutRef.current.activePaneId;
+          return dirtyRootCloseRef.current.requestDirtyClose({
+            paneId: firstPaneId,
+            files: dirtyRootCloseRef.current.dirtyFiles,
+            reason: "root-change",
+            apply,
+          });
+        };
+        return requestOrDeferRootSelection(
+          pendingCloseRef.current,
+          deferredRootSelectionRef,
+          requestSelection,
+          correlationId,
+        );
       };
       if (alreadyConnected) selectConnectedRoot(selectedRoot);
       else void connectProjectRoot(selectedRoot, selectConnectedRoot);
@@ -983,8 +1042,9 @@ export function EditorWidget({
       // (AC3). An unresolvable candidate is dropped so the editor stays on its current usable state.
       const target = selectWorkspaceFileTarget(nextRoot, nextFile);
       if (target === null || target.file.length === 0) return;
-      const changesRoot = target.root !== workspaceRoot;
-      const apply = (connectedRoot = target.root): void => {
+      const currentRoot = selectWorkspaceFileTarget(workspaceRoot, "__root_identity__")?.root;
+      const changesRoot = target.root !== currentRoot;
+      const apply = (connectedRoot = changesRoot ? target.root : workspaceRoot): void => {
         const current = layoutRef.current;
         const base = changesRoot
           ? editorLayoutReducer(current, {
@@ -998,21 +1058,35 @@ export function EditorWidget({
           paneId: activeEditorPane(base).id,
           file: target.file,
         });
-        const settle = startFilesNavigationEvidence("editor project selection");
         setWorkspaceRoot(connectedRoot);
         if (changesRoot) setDirtyByPane({});
         commitLayout(nextLayout, connectedRoot, changesRoot);
-        settle();
       };
       if (!changesRoot) return apply();
-      void connectProjectRoot(target.root, (connectedRoot) => {
-        dirtyRootCloseRef.current.requestDirtyClose({
-          paneId: layoutRef.current.activePaneId,
-          files: dirtyRootCloseRef.current.dirtyFiles,
-          reason: "root-change",
-          apply: () => apply(connectedRoot),
-        });
-      });
+      void connectProjectRoot(
+        target.root,
+        (connectedRoot, correlationId, warning) => {
+          const requestSelection = (): boolean =>
+            dirtyRootCloseRef.current.requestDirtyClose({
+              paneId: layoutRef.current.activePaneId,
+              files: dirtyRootCloseRef.current.dirtyFiles,
+              reason: "root-change",
+              apply: (): void => {
+                apply(connectedRoot);
+                setWorkspaceRegistrationNotice(
+                  warning === undefined ? null : { root: connectedRoot, message: warning },
+                );
+              },
+            });
+          return requestOrDeferRootSelection(
+            pendingCloseRef.current,
+            deferredRootSelectionRef,
+            requestSelection,
+            correlationId,
+          );
+        },
+        "file-navigation",
+      );
     },
     [commitLayout, connectProjectRoot, workspaceRoot],
   );
@@ -1764,8 +1838,14 @@ export function EditorWidget({
       runFileTests: verification.runFileTests,
       runWorkspaceVerification: verification.runWorkspaceVerification,
       cancelVerification: verification.cancelVerification,
-      trustWorkspaceScripts: () => setTrustDecision({ action: "grant", root: workspaceRoot }),
-      revokeWorkspaceScriptTrust: () => setTrustDecision({ action: "revoke", root: workspaceRoot }),
+      trustWorkspaceScripts: (): void => {
+        setTrustMutationIssue(undefined);
+        setTrustDecision({ action: "grant", root: workspaceRoot });
+      },
+      revokeWorkspaceScriptTrust: (): void => {
+        setTrustMutationIssue(undefined);
+        setTrustDecision({ action: "revoke", root: workspaceRoot });
+      },
       openProblems: () => onOpenProblems?.(workspaceRoot),
       openFileHistory: openActiveFileHistory,
       openDebugPanel: () => onOpenDebugPanel?.(),
@@ -2181,7 +2261,10 @@ export function EditorWidget({
           action={trustDecision.action}
           failed={trustMutationIssue !== undefined}
           mutating={trustMutationPending}
-          onCancel={() => setTrustDecision(null)}
+          onCancel={(): void => {
+            setTrustDecision(null);
+            setTrustMutationIssue(undefined);
+          }}
           onConfirm={confirmTrustDecision}
         />
       ) : null}

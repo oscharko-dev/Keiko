@@ -154,7 +154,7 @@ describe("canonical body-free offline report", () => {
   );
 
   it("reduces evidence above the record cap to an explicitly insufficient report", () => {
-    const { report, query, incident } = fixture();
+    const { query, incident } = fixture();
     const event = query.events[0];
     if (event === undefined) throw new TypeError("missing fixture evidence");
     const oversized = {
@@ -171,7 +171,7 @@ describe("canonical body-free offline report", () => {
   });
 
   it("exports honest insufficiency and rejects resealed graph amplification without a caller override", () => {
-    const { report, query, incident } = fixture(300, {}, (index) => `parent-${String(index)}`);
+    const { report, query } = fixture(300, {}, (index) => `parent-${String(index)}`);
     expect(report.evidence.recordCount).toBe(0);
     expect(report.selection).toMatchObject({ status: "insufficient" });
     expect(report.selection.reasons).toContain("report-budget-exceeded");
@@ -199,7 +199,7 @@ describe("canonical body-free offline report", () => {
 
   it("retains reduced browser frames while refusing raw chunk names in received evidence", () => {
     const frame = "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345";
-    const { report, query, incident } = fixture(1, { frames: [frame] });
+    const { report, query } = fixture(1, { frames: [frame] });
     const retained = eventsOf(report);
     const persisted = JSON.parse(query.events[0]?.text ?? "null") as Record<string, unknown>;
     expect(retained[0]?.record.frames).toEqual(persisted.frames);
@@ -537,7 +537,7 @@ describe("hostile report admission", () => {
     }
   });
   it("enforces the producer ceiling even when an operator requests a larger budget", () => {
-    const { report, query, incident } = fixture();
+    const { query, incident } = fixture();
     for (const max of [MAX_SUPPORT_REPORT_BYTES + 1, NaN, Infinity, 0, -1, 1.5]) {
       expect(() => buildSupportReport(incident, query, max)).toThrow(
         expect.objectContaining({ reason: "report-budget-exceeded" }),
@@ -1073,10 +1073,9 @@ describe("received-report audit hardening (#3534)", () => {
   it("refuses a declared child whose own failing line no longer names its parent", () => {
     const parent = "support-report-parent-0002";
     const { report } = failureFixture(parent);
-    expect(report.incident.correlation).toEqual({
-      rootCorrelationId: expect.stringMatching(/^id\d{6}$/u),
-      childCorrelationIds: [expect.stringMatching(/^id\d{6}$/u)],
-    });
+    expect(report.incident.correlation.rootCorrelationId).toMatch(/^id\d{6}$/u);
+    expect(report.incident.correlation.childCorrelationIds).toHaveLength(1);
+    expect(report.incident.correlation.childCorrelationIds[0]).toMatch(/^id\d{6}$/u);
     expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe("complete");
     const detached = resealed(report, (events) =>
       events.map((event) =>
@@ -1117,7 +1116,7 @@ describe("received-report audit hardening (#3534)", () => {
                 ...event,
                 record: {
                   ...withoutKey(event.record, "parentCorrelationId"),
-                  correlationId: parent,
+                  correlationId: report.incident.correlation.rootCorrelationId,
                 },
               }
             : event,

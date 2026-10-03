@@ -2,8 +2,9 @@
 // explicit option → KEIKO_UI_DATA_DIR/keiko-ui.db → homedir()/.keiko/keiko-ui.db.
 
 import { homedir } from "node:os";
-import { existsSync, lstatSync, type Stats } from "node:fs";
+import { existsSync, lstatSync, realpathSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
+import { assertSqliteStatePath } from "@oscharko-dev/keiko-security/fs-hardening";
 import { invalidRequest } from "./errors.js";
 
 export const UI_DB_FILENAME = "keiko-ui.db";
@@ -89,13 +90,32 @@ export function resolveUiDbPath(
   env: Readonly<Record<string, string | undefined>>,
 ): string {
   if (explicit !== undefined && explicit.length > 0) {
-    return resolveConfiguredPath(explicit, "UI database path");
+    return checkedUiDbPath(resolveConfiguredPath(explicit, "UI database path"));
   }
   const dir = env.KEIKO_UI_DATA_DIR;
   if (dir !== undefined && dir.length > 0) {
-    return join(resolveConfiguredPath(dir, "KEIKO_UI_DATA_DIR"), UI_DB_FILENAME);
+    return checkedUiDbPath(join(resolveConfiguredPath(dir, "KEIKO_UI_DATA_DIR"), UI_DB_FILENAME));
   }
-  return join(homedir(), UI_DB_DIRNAME, UI_DB_FILENAME);
+  return checkedUiDbPath(resolveConfiguredPath(defaultUiDbPath(), "Default UI database path"));
+}
+
+function defaultUiDbPath(): string {
+  let home = homedir();
+  try {
+    home = realpathSync(home);
+  } catch {
+    /* The configured-path guard refuses unverifiable ancestors. */
+  }
+  return join(home, UI_DB_DIRNAME, UI_DB_FILENAME);
+}
+
+function checkedUiDbPath(path: string): string {
+  try {
+    assertSqliteStatePath(path);
+  } catch {
+    throw invalidRequest("UI database state path is unsafe or unavailable.");
+  }
+  return path;
 }
 
 export function assertUiDbOutsideProject(uiDbPath: string | undefined, projectPath: string): void {

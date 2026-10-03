@@ -27,6 +27,8 @@ import type {
 import {
   planIsolatedRun,
   probeBackends,
+  resolveLocalDockerEndpoint,
+  selectEnforcingBackend,
   type BackendAvailability,
 } from "@oscharko-dev/keiko-sandbox";
 import {
@@ -844,7 +846,7 @@ function resolveWrapperExecutable(name: string, deps: RunCommandDeps): string {
   });
 }
 
-// Decides what to spawn. Inherited network → run the executable directly. network:"none" → ask
+// Decides what to spawn. Inherited network/filesystem run directly; either isolation request asks
 // keiko-sandbox for an enforcing wrapper; a fail-closed decision throws (the command never spawns),
 // so untrusted code is never executed without an enforced egress boundary.
 //
@@ -859,6 +861,10 @@ function resolveWrapperExecutable(name: string, deps: RunCommandDeps): string {
 // hole: a value TypeScript never assigns to `NetworkPolicy` still cannot silently pass through as
 // "inherit" at runtime, and any FUTURE widening of `NetworkPolicy` fails to compile here until
 // this boundary explicitly decides what the new variant means for a general command run.
+function inheritedFilesystemPolicy(value: unknown): boolean {
+  return value === undefined || value === "inherit";
+}
+
 function resolveSpawnTarget(
   input: RunCommandInput,
   deps: RunCommandDeps,
@@ -867,6 +873,12 @@ function resolveSpawnTarget(
 ): SpawnTarget {
   switch (deps.policy.network) {
     case "inherit":
+      if (deps.policy.filesystem === "execution-root") {
+        return resolveIsolatedSpawnTarget(input, deps, executable, cwd);
+      }
+      if (!inheritedFilesystemPolicy(deps.policy.filesystem)) {
+        throw new CommandDeniedError("unsupported sandbox filesystem policy", input.command);
+      }
       return resolveInheritedSpawnTarget(executable, input.args, deps);
     case "none":
       return resolveIsolatedSpawnTarget(input, deps, executable, cwd);
@@ -888,10 +900,10 @@ function resolveIsolatedSpawnTarget(
   const availability = deps.sandboxAvailability ?? probeBackends(deps.processEnv, platform);
   const decision = planIsolatedRun(
     {
-      command: executable,
+      command: isolatedInnerExecutable(input.command, executable, deps, availability, platform),
       args: input.args,
       cwd,
-      network: "none",
+      network: deps.policy.network,
       filesystem: deps.policy.filesystem ?? "inherit",
     },
     availability,
@@ -905,9 +917,42 @@ function resolveIsolatedSpawnTarget(
   }
   return {
     command: resolveWrapperExecutable(decision.command, deps),
-    args: decision.args,
+    args: isolatedWrapperArgs(decision, deps, cwd, input.command),
     attestation: decision.attestation,
   };
+}
+
+function isolatedInnerExecutable(
+  command: string,
+  executable: string,
+  deps: RunCommandDeps,
+  availability: BackendAvailability,
+  platform: NodeJS.Platform,
+): string {
+  const backend = selectEnforcingBackend(
+    platform,
+    availability,
+    deps.policy.filesystem ?? "inherit",
+  );
+  // Host symlinks (npm -> npm-cli.js, npm.CMD) are not executable names in the container image.
+  // The already-allowlisted bare request is resolved from that image's own trusted PATH instead.
+  return backend === "container-docker" || backend === "container-podman" ? command : executable;
+}
+
+function isolatedWrapperArgs(
+  decision: Extract<ReturnType<typeof planIsolatedRun>, { kind: "wrapped" }>,
+  deps: RunCommandDeps,
+  cwd: string,
+  command: string,
+): readonly string[] {
+  if (decision.attestation.backend !== "container-docker") return decision.args;
+  const endpoint = resolveLocalDockerEndpoint(
+    deps.processEnv,
+    cwd,
+    deps.platform ?? process.platform,
+  );
+  if (endpoint.kind === "unavailable") throw new CommandDeniedError(endpoint.reason, command);
+  return ["--host", endpoint.host, ...decision.args];
 }
 
 function appendCapped(buffers: Buffers, sink: Buffer[], chunk: Buffer, max: number): boolean {

@@ -21,6 +21,12 @@ import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/ru
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { FilesMutationEvent } from "./FilesWidget";
 import { EditorWidget } from "./EditorWidget";
+import type { EditorPaletteHost } from "./editorCommands";
+import {
+  setClientDiagnosticWriter,
+  resetClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import editorWidgetStyles from "./EditorWidget.module.css";
 import { resetEditorVerificationRunStateForTests } from "./useEditorVerificationRun";
 import { WORKSPACE_TRUST_CHANGED_EVENT } from "../../../../../lib/workspace-trust-api";
@@ -42,11 +48,18 @@ function editorWidgetCssClass(name: keyof typeof editorWidgetStyles): string {
 
 const probeState = vi.hoisted(() => ({
   runtimeProps: null as EditorRuntimeWidgetProps | null,
+  commandHost: null as EditorPaletteHost | null,
   dragModeStarts: [] as Array<{ readonly paneId: string; readonly path: string }>,
   // GEN-PERF-EDITOR-003 — the latest props each pane received, keyed by paneId, so a test
   // can compare a non-dragged pane's prop bundle (esp. renderTabHandle identity) across a
   // hold-state change on a different pane and prove React.memo would bail it out.
   propsByPane: new Map<string, EditorRuntimeWidgetProps>(),
+}));
+
+vi.mock("../../EditorPaletteHostRegistryContext", () => ({
+  useRegisterEditorPaletteHost: (_id: string | undefined, host: EditorPaletteHost): void => {
+    probeState.commandHost = host;
+  },
 }));
 
 vi.mock("next/dynamic", () => ({
@@ -210,6 +223,9 @@ vi.mock("./FilesWidget", () => ({
         <button type="button" onClick={() => onOpenFile("/repo", "package.json")}>
           Open package
         </button>
+        <button type="button" onClick={() => onOpenFile(root ?? "", "src/b.ts")}>
+          Open same-root b
+        </button>
         <button type="button" onClick={() => onOpenFile("/repo", "")}>
           Open empty file
         </button>
@@ -315,6 +331,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetClientDiagnosticWriter();
   probeState.runtimeProps = null;
   probeState.dragModeStarts = [];
   probeState.propsByPane.clear();
@@ -337,6 +354,43 @@ async function flushPreflight(): Promise<void> {
 }
 
 describe("EditorWidget workspace session", () => {
+  it("applies an explicit folder selection with a joined stage lifecycle", async () => {
+    const records: ClientDiagnosticMeta[] = [];
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) records.push(meta);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    await waitFor(() => expect(screen.getByTestId("runtime-root").textContent).toBe("/next"));
+    const stages = records.filter(
+      (record) => record.stageReport?.stage === "editor project selection",
+    );
+    expect(stages).toHaveLength(2);
+    expect(stages[0]?.stageReport?.phase).toBe("started");
+    expect(stages[1]?.stageReport).toMatchObject({
+      phase: "settled",
+      navigationOutcome: "applied",
+    });
+    expect(stages[1]?.correlationId).toBe(stages[0]?.correlationId);
+    expect(createProjectMock).toHaveBeenCalledWith(
+      { path: "/next", selectionIntent: "explicit-folder-selection" },
+      stages[0]?.correlationId,
+    );
+  });
+
+  it("consumes a restricted registration notice after displaying it once", () => {
+    const consumed = vi.fn();
+    render(
+      <EditorWidget
+        root="/repo"
+        initialWorkspaceNotice={{ code: "trust-grant-failed", correlationId: "warning-id" }}
+        onWorkspaceNoticeConsumed={consumed}
+      />,
+    );
+    expect(screen.getByText(/Workspace scripts are unavailable/)).toHaveTextContent("warning-id");
+    expect(consumed).toHaveBeenCalledTimes(1);
+  });
+
   it("shows the project picker (not the runtime widget) while no workspace root is selected", () => {
     render(<EditorWidget />);
 
@@ -977,7 +1031,10 @@ describe("EditorWidget workspace session", () => {
     );
     render(<EditorWidget root="/repo" file="src/a.ts" />);
     fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
-    expect(createProjectMock).toHaveBeenCalledWith({ path: "/next" }, expect.any(String));
+    expect(createProjectMock).toHaveBeenCalledWith(
+      { path: "/next", selectionIntent: "explicit-folder-selection" },
+      expect.any(String),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
     expect(createProjectMock).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
@@ -1202,7 +1259,55 @@ describe("EditorWidget workspace session", () => {
       expect(screen.getByTestId("runtime-root")).toHaveTextContent("/other/project"),
     );
     expect(screen.getByTestId("runtime-file")).toHaveTextContent("main.py");
-    expect(screen.queryByRole("button", { name: "Select src/a.ts" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Tab handle pane-1 src/a.ts" })).toBeNull();
+    expect(screen.getByTestId("runtime-open-files").textContent).toBe("main.py");
+  });
+
+  it.each(["/repo/", "C:\\Users\\me\\repo"])(
+    "preserves dirty tabs when opening within normalized root %s",
+    (root) => {
+      const records: ClientDiagnosticMeta[] = [];
+      setClientDiagnosticWriter((_message, meta) => {
+        if (meta !== undefined) records.push(meta);
+      });
+      try {
+        render(<EditorWidget root={root} file="src/a.ts" openFiles={["src/a.ts", "src/c.ts"]} />);
+        fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+        records.length = 0;
+        fireEvent.click(screen.getByRole("button", { name: "Open same-root b" }));
+        expect(screen.queryByRole("dialog", { name: "Unsaved editor changes" })).toBeNull();
+        expect(screen.getByTestId("runtime-open-files").textContent).toBe(
+          "src/a.ts|src/c.ts|src/b.ts",
+        );
+        expect(createProjectMock).not.toHaveBeenCalled();
+        expect(
+          records.filter((meta) => meta.stageReport?.stage === "editor project selection"),
+        ).toEqual([]);
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("queues a connected root behind an existing dirty-tab save", async () => {
+    let resolveProject: (value: unknown) => void = () => undefined;
+    createProjectMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveProject = resolve;
+      }),
+    );
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close a" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await act(async () => {
+      resolveProject({ project: { path: "/next", workspaceAvailable: true } });
+    });
+    expect(screen.getByRole("button", { name: "Saving..." })).toBeDisabled();
+    fireEvent.click(await screen.findByRole("button", { name: "Complete save src/a.ts" }));
+    await waitFor(() => expect(screen.getByTestId("runtime-root").textContent).toBe("/next"));
+    expect(screen.queryByRole("dialog", { name: "Unsaved editor changes" })).toBeNull();
   });
 
   it("discards dirty files before changing the editor root", async () => {
@@ -2847,6 +2952,59 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
         await Promise.resolve();
       });
       expect(screen.queryByRole("alertdialog")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
+  it("discards an explicitly opened trust decision when managed presentation takes over", async () => {
+    stubVerificationFetch("restricted");
+    try {
+      const view = render(<EditorWidget root="/repo" file="src/a.ts" />);
+      act(() => probeState.commandHost?.trustWorkspaceScripts?.());
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+      view.rerender(
+        <EditorWidget root="/repo" file="src/a.ts" workspaceTrustUiAvailable={false} />,
+      );
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      view.rerender(<EditorWidget root="/repo" file="src/a.ts" workspaceTrustUiAvailable />);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
+  it("discards an explicitly opened trust decision when the selected root changes", async () => {
+    stubVerificationFetch("restricted");
+    try {
+      const view = render(<EditorWidget root="/repo-a" file="src/a.ts" />);
+      act(() => probeState.commandHost?.trustWorkspaceScripts?.());
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+      view.rerender(<EditorWidget root="/repo-b" file="src/a.ts" />);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      view.rerender(<EditorWidget root="/repo-a" file="src/a.ts" />);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
+  it("clears a failed trust attempt before the next explicit decision", async () => {
+    stubVerificationFetch("restricted");
+    try {
+      render(<EditorWidget root="/repo" file="src/a.ts" />);
+      act(() => probeState.commandHost?.trustWorkspaceScripts?.());
+      fireEvent.click(screen.getByRole("button", { name: "Trust workspace" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "This workspace remains restricted.",
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      act(() => probeState.commandHost?.revokeWorkspaceScriptTrust?.());
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).toBeNull();
     } finally {
       vi.unstubAllGlobals();
       resetEditorVerificationRunStateForTests();

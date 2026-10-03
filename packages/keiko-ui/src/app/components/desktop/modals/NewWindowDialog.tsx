@@ -396,6 +396,44 @@ export function resolveFieldValue(raw: CfgValue): string {
   return String(raw);
 }
 
+function renderDirectoryField(
+  f: LocalizedConfigField,
+  value: string,
+  set: (key: string, value: CfgValue) => void,
+  firstRef: ((node: HTMLElement | null) => void) | null,
+  browse: DirectoryBrowseControl,
+  t: I18nTranslate,
+): ReactNode {
+  const nativeNoteId = `dlg-native-note-${f.key}`;
+  return (
+    <>
+      <span className="dlg-dirwrap">
+        <input
+          ref={firstRef ?? undefined}
+          className="dlg-input mono"
+          placeholder={f.placeholder ?? f.label}
+          value={value}
+          onChange={(e) => set(f.key, e.target.value)}
+        />
+        <button
+          type="button"
+          className="dlg-btn dlg-dirbtn"
+          disabled={!browse.supported}
+          aria-describedby={browse.supported ? undefined : nativeNoteId}
+          onClick={() => browse.open(f.key, value)}
+        >
+          {t("common.browse")}
+        </button>
+      </span>
+      {!browse.supported ? (
+        <span id={nativeNoteId} className="dlg-note">
+          {t("nativeDialog.unsupported")}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 function renderField(
   f: LocalizedConfigField,
   cfg: Cfg,
@@ -444,36 +482,7 @@ function renderField(
       />
     );
   }
-  if (f.type === "directory") {
-    const nativeNoteId = `dlg-native-note-${f.key}`;
-    return (
-      <>
-        <span className="dlg-dirwrap">
-          <input
-            ref={firstRef ?? undefined}
-            className="dlg-input mono"
-            placeholder={f.placeholder ?? f.label}
-            value={value}
-            onChange={(e) => set(f.key, e.target.value)}
-          />
-          <button
-            type="button"
-            className="dlg-btn dlg-dirbtn"
-            disabled={!browse.supported}
-            aria-describedby={browse.supported ? undefined : nativeNoteId}
-            onClick={() => browse.open(f.key, value)}
-          >
-            {t("common.browse")}
-          </button>
-        </span>
-        {!browse.supported ? (
-          <span id={nativeNoteId} className="dlg-note">
-            {t("nativeDialog.unsupported")}
-          </span>
-        ) : null}
-      </>
-    );
-  }
+  if (f.type === "directory") return renderDirectoryField(f, value, set, firstRef, browse, t);
   return (
     <input
       ref={firstRef ?? undefined}
@@ -875,7 +884,10 @@ function AgentLauncher({
     setRegistering(true);
     setDialogError(null);
     try {
-      const response = await createProject({ path: workspace });
+      const response = await createProject({
+        path: workspace,
+        selectionIntent: "explicit-folder-selection",
+      });
       await refreshProjects();
       setDialogError(projectResponseWarningMessage(response) ?? null);
     } catch (error: unknown) {
@@ -1085,6 +1097,21 @@ function AgentLauncher({
   );
 }
 
+function trapDialogTab(e: KeyboardEvent<HTMLDialogElement>): void {
+  if (e.key !== "Tab") return;
+  const f = focusableInside(e.currentTarget);
+  if (f.length === 0) return;
+  const first = f[0] as HTMLElement;
+  const last = f.at(-1) as HTMLElement;
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
 export function NewWindowDialog({
   type,
   types,
@@ -1189,26 +1216,36 @@ export function NewWindowDialog({
       cfg.root.trim().length > 0
         ? { ...cfg, rootBinding: "coding-repository" }
         : cfg;
-    const settle =
-      type === "files" || type === "editor"
-        ? startFilesNavigationEvidence(
-            type === "files" ? "files project selection" : "editor project selection",
-          )
-        : undefined;
     if (
       type === "editor" &&
       typeof selectedCfg.root === "string" &&
       selectedCfg.root.trim().length > 0
     ) {
       if (connectingEditor) return;
-      void connectEditorRoot(selectedCfg.root.trim(), (root) => {
-        onConfirm({ ...selectedCfg, root });
-        settle?.();
-      });
+      void connectEditorRoot(
+        selectedCfg.root.trim(),
+        (root, _correlationId, warning, warningCorrelationId) => {
+          onConfirm({
+            ...selectedCfg,
+            root,
+            ...(warning === undefined
+              ? {}
+              : {
+                  workspaceNoticeCode: "trust-grant-failed",
+                  workspaceNoticeCorrelationId: warningCorrelationId,
+                }),
+          });
+        },
+      );
       return;
     }
-    onConfirm(withChatUntitledMarker(type, fields, selectedCfg));
-    settle?.();
+    const settle =
+      type === "files" ? startFilesNavigationEvidence("files project selection") : undefined;
+    try {
+      onConfirm(withChatUntitledMarker(type, fields, selectedCfg));
+    } finally {
+      settle?.(undefined, "applied");
+    }
   };
 
   const onKey = (e: KeyboardEvent<HTMLDialogElement>): void => {
@@ -1231,18 +1268,7 @@ export function NewWindowDialog({
       }
       return;
     }
-    if (e.key !== "Tab") return;
-    const f = focusableInside(e.currentTarget);
-    if (f.length === 0) return;
-    const first = f[0] as HTMLElement;
-    const last = f.at(-1) as HTMLElement;
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
+    trapDialogTab(e);
   };
 
   const Icon = Icons[def.icon];

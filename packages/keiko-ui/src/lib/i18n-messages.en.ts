@@ -42,6 +42,7 @@ export const EN_MESSAGES = {
   "supportReport.creating": "Creating report…",
   "supportReport.saved": "Downloaded.",
   "supportReport.failed": "Report unavailable. Try again.",
+  "editor.projectRestricted": "Workspace scripts are unavailable.",
   "editor.runtime.loadFailed": "File could not be opened.",
   "editor.runtime.retry": "Retry",
 

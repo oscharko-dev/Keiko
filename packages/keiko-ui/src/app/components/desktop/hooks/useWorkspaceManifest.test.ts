@@ -98,6 +98,74 @@ describe("useWorkspaceManifest", () => {
     expect(view.result.current.pathReadAuthority).toBe("checking");
   });
 
+  it("preserves the manifest and host availability across roots in one workspace", async () => {
+    const current = manifest("ws-a", ["alpha", "beta"]);
+    fetchManifestAccess.mockResolvedValueOnce({ session: "paired", manifests: [current] });
+    const observations: Array<{ manifest: WorkspaceManifest | null; loading: boolean }> = [];
+    const view = renderHook(
+      ({ root }) => {
+        const state = useWorkspaceManifest(root);
+        observations.push({ manifest: state.manifest, loading: state.loading });
+        return state;
+      },
+      { initialProps: { root: "/ws/alpha" } },
+    );
+    await waitFor(() => expect(view.result.current.manifest).toBe(current));
+    fetchManifestAccess.mockReturnValueOnce(new Promise(() => undefined));
+    observations.length = 0;
+    view.rerender({ root: "/ws/beta" });
+    expect(observations.every((state) => state.manifest === current)).toBe(true);
+    expect(view.result.current.pathReadAuthority).toBe("available");
+  });
+
+  it("never exposes absent availability on the first render of an unresolved root", async () => {
+    fetchManifestAccess.mockResolvedValueOnce({ session: "paired", manifests: [] });
+    const observations: boolean[] = [];
+    const view = renderHook(
+      ({ root }) => {
+        const state = useWorkspaceManifest(root);
+        observations.push(state.loading);
+        return state;
+      },
+      { initialProps: { root: "/ws/alpha" } },
+    );
+    await waitFor(() => expect(view.result.current.loading).toBe(false));
+    fetchManifestAccess.mockReturnValueOnce(new Promise(() => undefined));
+    observations.length = 0;
+    view.rerender({ root: "/plain/notes" });
+    expect(observations.every(Boolean)).toBe(true);
+  });
+
+  it("discards a mutation result after a different workspace becomes current", async () => {
+    const alpha = manifest("ws-a", ["alpha"]);
+    const beta = manifest("ws-b", ["beta"]);
+    fetchManifestAccess.mockResolvedValueOnce({ session: "paired", manifests: [alpha] });
+    const view = renderHook(({ root }) => useWorkspaceManifest(root), {
+      initialProps: { root: "/ws/alpha" },
+    });
+    await waitFor(() => expect(view.result.current.manifest).toBe(alpha));
+    let resolveMutation: (next: WorkspaceManifest) => void = () => undefined;
+    addRoot.mockReturnValueOnce(
+      new Promise<WorkspaceManifest>((resolve) => {
+        resolveMutation = resolve;
+      }),
+    );
+    let mutation: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      mutation = view.result.current.addRoot(rootRefFor("alpha") as never, "/ws/gamma");
+    });
+    fetchManifestAccess.mockResolvedValueOnce({ session: "paired", manifests: [beta] });
+    view.rerender({ root: "/ws/beta" });
+    await waitFor(() => expect(view.result.current.manifest).toBe(beta));
+    await act(async () => {
+      resolveMutation({ ...alpha, revision: 2 });
+      await expect(mutation).resolves.toBe(false);
+    });
+    expect(view.result.current.manifest).toBe(beta);
+    expect(view.result.current.issue).toBeNull();
+    expect(view.result.current.mutating).toBe(false);
+  });
+
   it("loads the manifest containing the tracked root and clears on miss", async () => {
     const alpha = manifest("ws-a", ["alpha"]);
     fetchManifestAccess.mockResolvedValue({

@@ -1299,9 +1299,12 @@ describe("files API helpers", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await fetchFilesTree("/repo space", "src/app.ts");
+    await fetchFilesTree("/repo space", "src/app.ts", "ui-directory-0001");
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      "X-Keiko-Correlation-Id": "ui-directory-0001",
+    });
     await fetchFilesPreview("/repo space", "src/app.ts");
-    await fetchFilesContent("/repo space", "src/app.ts");
+    await fetchFilesContent("/repo space", "src/app.ts", "ui-content-0001");
     await saveFilesContent({
       root: "/repo space",
       path: "src/app.ts",
@@ -1327,7 +1330,10 @@ describe("files API helpers", () => {
       3,
       "/api/files/content?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
-        headers: expect.objectContaining({ Accept: "application/json" }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "X-Keiko-Correlation-Id": "ui-content-0001",
+        }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(

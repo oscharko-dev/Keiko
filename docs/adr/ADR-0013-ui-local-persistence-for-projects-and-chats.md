@@ -237,9 +237,17 @@ factory built alongside the real adapter) and never touches the filesystem.
    evidence, which is workspace-relative for co-location reasons — projects/chats are user-global,
    not per-repo).
 
-Explicit `--ui-db` values and `KEIKO_UI_DATA_DIR` must be absolute, must not resolve inside the
-current workspace, and must not point at a symlinked database file or symlinked data directory.
-The default app-data path remains `~/.keiko/keiko-ui.db`.
+Explicit `--ui-db` values and `KEIKO_UI_DATA_DIR` must be absolute, must stay outside the
+current workspace except for its `.keiko` runtime state root, and must not point at a symlinked
+database file or symlinked data directory.
+The default app-data path remains `~/.keiko/keiko-ui.db`. All precedence branches validate the
+joined database filename and SQLite's `-wal`, `-shm`, and `-journal` siblings. The shared
+`keiko-security/fs-hardening` preflight rejects symlinks, non-regular or multiply linked leaves,
+and symlinked ancestors before directory creation, SQLite open, or permission tightening. Both UI
+and memory database factories recheck before each open, including corruption recovery, and emit a
+body-free `sqlite.state-path.refused` event when a configured sink is available. This prevents
+pre-existing repository-planted redirects; Node's pathname-only SQLite API does not provide an
+atomic guarantee against concurrent replacement by the same operating-system user.
 
 ### D5 — Schema, PRAGMA user_version, and migration runner
 

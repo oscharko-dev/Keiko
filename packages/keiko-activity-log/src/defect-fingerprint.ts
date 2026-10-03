@@ -3,11 +3,13 @@ import {
   ACTIVITY_LOG_OPERATION_SURFACES,
   MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS,
   activityLogErrorKindOr,
+  clientDefectContext,
   defectFingerprintPreimage,
   isActivityLogCorrelationId,
   type DefectFingerprintInput,
   type SupportIncidentCorrelation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { isPersistedClientDiagnosticFrame } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { isRedactedLogLabel } from "./log-redaction.js";
 import { FRAME_SHAPE_PATTERN } from "./stack-frames.js";
 
@@ -27,6 +29,10 @@ export interface RegisteredFailureFacts {
   readonly frames?: unknown;
   readonly correlationId?: unknown;
   readonly parentCorrelationId?: unknown;
+  readonly clientKind?: unknown;
+  readonly renderFailure?: unknown;
+  readonly moduleLoadFailure?: unknown;
+  readonly stage?: unknown;
 }
 
 /**
@@ -36,14 +42,19 @@ export interface RegisteredFailureFacts {
  */
 export function registeredFailureFingerprintInput(
   failure: RegisteredFailureFacts,
+  algorithm?: 1 | 2,
 ): DefectFingerprintInput {
   const frames = Array.isArray(failure.frames) ? (failure.frames as readonly unknown[]) : [];
+  const client = (algorithm ?? (failure.op === "client.diagnostic" ? 2 : 1)) === 2;
   return {
+    ...(client ? { algorithm: 2 as const, clientContext: clientDefectContext(failure) } : {}),
     surface: ACTIVITY_LOG_OPERATION_SURFACES[failure.op] ?? "unattributed",
     op: failure.op,
     errorKind: activityLogErrorKindOr(failure.errorKind, "unknown"),
     frames: frames.filter(
-      (frame): frame is string => typeof frame === "string" && FRAME_SHAPE_PATTERN.test(frame),
+      (frame): frame is string =>
+        typeof frame === "string" &&
+        (FRAME_SHAPE_PATTERN.test(frame) || (client && isPersistedClientDiagnosticFrame(frame))),
     ),
   };
 }
@@ -70,4 +81,18 @@ export function registeredFailureCorrelation(
     ...(root === undefined ? {} : { rootCorrelationId: root }),
     childCorrelationIds: children.slice(0, MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS),
   };
+}
+
+/** Coarse browser defects retain each request's window; their exported defect identity stays body-free. */
+export function registeredFailureDeduplicationKey(
+  op: string,
+  algorithm: 1 | 2,
+  fingerprint: string,
+  correlation: SupportIncidentCorrelation,
+): string {
+  const own = correlation.childCorrelationIds[0] ?? correlation.rootCorrelationId;
+  if (op !== "client.diagnostic" || algorithm !== 2 || own === undefined) return fingerprint;
+  return createHash("sha256")
+    .update(JSON.stringify(["keiko-client-incident-claim", fingerprint, own]), "utf8")
+    .digest("hex");
 }

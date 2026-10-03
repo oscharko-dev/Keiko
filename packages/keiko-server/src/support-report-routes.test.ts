@@ -1,3 +1,4 @@
+import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -101,7 +102,19 @@ describe("desktop support report transport", () => {
   it("returns the exact canonical report bytes and records only counts", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
-    const report = { fileName: "report.json", reportJson: '{"private":"report-canary"}' };
+    const report: DesktopSupportReportResponse = {
+      fileName: "report.json",
+      reportJson: '{"private":"report-canary"}',
+      summary: {
+        status: "complete",
+        reasons: [],
+        recordCount: 4,
+        reportDigest: "a".repeat(64),
+        incidentId: "a".repeat(32),
+        manifestUnreadableCount: 0,
+        manifestReusedCount: 2,
+      },
+    };
     vi.mocked(runSupportReportJob).mockResolvedValue(report);
     const result = await handleCreateSupportReport(
       context('{"correlationId":"selected-correlation"}'),
@@ -112,6 +125,7 @@ describe("desktop support report transport", () => {
       "/server-private-report-state",
       "selected-correlation",
       expect.any(AbortSignal),
+      "report-route-test",
     );
     const started = sink.events.findIndex((event) => event.op === "support.report.ui.started");
     const completed = sink.events.findIndex((event) => event.op === "support.report.ui.completed");
@@ -146,6 +160,54 @@ describe("desktop support report transport", () => {
     );
     expect(line).toMatchObject({ reason: "unavailable", correlationId: "report-route-test" });
     expect(sink.lines().join("\n")).not.toContain("secret failure path");
+  });
+
+  it("records incomplete report sufficiency and technical coverage without claiming complete evidence", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const report: DesktopSupportReportResponse = {
+      fileName: "report.json",
+      reportJson: "{}",
+      summary: {
+        status: "insufficient",
+        reasons: ["evidence-not-retained"],
+        recordCount: 2,
+        reportDigest: "a".repeat(64),
+        incidentId: "b".repeat(32),
+        manifestUnreadableCount: 1,
+        manifestReusedCount: 3,
+      },
+    };
+    vi.mocked(runSupportReportJob).mockResolvedValue(report);
+    await handleCreateSupportReport(context("{}"), deps());
+    const completed = sink.events.find((event) => event.op === "support.report.ui.completed");
+    expect(completed?.level).toBe("warn");
+    expect(completed?.extra).toMatchObject({
+      sufficiency: "insufficient",
+      reasons: ["evidence-not-retained"],
+      completeness: "partial",
+      recordCount: 2,
+      manifestUnreadableCount: 1,
+      manifestReusedCount: 3,
+      incidentId: report.summary?.incidentId,
+      reportDigest: report.summary?.reportDigest,
+    });
+  });
+  it.each([
+    "busy",
+    "selection-unavailable",
+    "cancelled",
+    "quota-exhausted",
+    "evaluation-rate-limited",
+    "record-too-large",
+  ] as const)("keeps expected report refusal %s out of internal failures", async (reason) => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    vi.mocked(runSupportReportJob).mockRejectedValue(new SupportReportJobError(reason));
+    await handleCreateSupportReport(context("{}"), deps());
+    const failed = sink.events.find((event) => event.op === "support.report.ui.failed");
+    expect(failed?.level).toBe("warn");
+    expect(failed?.errorKind).not.toBe("internal");
   });
 
   it("bounds repeated downloads without queueing scans", async () => {

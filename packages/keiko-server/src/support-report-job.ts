@@ -8,12 +8,18 @@ import {
 import {
   prepareDesktopSupportReport,
   SupportReportError,
+  DesktopSupportReportPreparationError,
 } from "@oscharko-dev/keiko-activity-log/reader";
 import { isValidCorrelationId } from "./correlation.js";
 import { causeChain, keikoStackFrames, errorKindOf } from "./observability/index.js";
 
 export type SupportReportJobReason =
-  SupportReportFailure | "busy" | "timeout" | "unavailable" | "cancelled";
+  | SupportReportFailure
+  | DesktopSupportReportPreparationError["reason"]
+  | "busy"
+  | "timeout"
+  | "unavailable"
+  | "cancelled";
 export interface SupportReportWorkerFailure {
   readonly ok: false;
   readonly reason: SupportReportJobReason;
@@ -47,13 +53,20 @@ export class SupportReportJobError extends Error {
   }
 }
 
-function prepareReport(worker: Worker, stateDir: string, correlationId: string | undefined): void {
+function prepareReport(
+  worker: Worker,
+  stateDir: string,
+  correlationId: string | undefined,
+  requestCorrelationId: string | undefined,
+): void {
   try {
-    const record = prepareDesktopSupportReport(stateDir, correlationId);
+    const record = prepareDesktopSupportReport(stateDir, correlationId, requestCorrelationId);
     worker.postMessage({ kind: "prepared", record } satisfies SupportReportPreparedMessage);
   } catch (error) {
     throw new SupportReportJobError(
-      error instanceof SupportReportError ? error.reason : "unavailable",
+      error instanceof SupportReportError || error instanceof DesktopSupportReportPreparationError
+        ? error.reason
+        : "unavailable",
       error,
     );
   }
@@ -65,6 +78,7 @@ function reportMessageHandler(
   correlationId: string | undefined,
   resolve: (report: DesktopSupportReportResponse) => void,
   reject: (error: unknown) => void,
+  requestCorrelationId: string | undefined,
 ): (value: SupportReportWorkerMessage) => void {
   let prepareStarted = false;
   return (value): void => {
@@ -82,7 +96,7 @@ function reportMessageHandler(
         return;
       }
       try {
-        prepareReport(worker, stateDir, value.correlationId);
+        prepareReport(worker, stateDir, value.correlationId, requestCorrelationId);
       } catch (error) {
         reject(error);
       }
@@ -100,23 +114,37 @@ async function awaitReport(
   stateDir: string,
   correlationId: string | undefined,
   signal?: AbortSignal,
+  requestCorrelationId?: string,
 ): Promise<DesktopSupportReportResponse> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cancel: (() => void) | undefined;
   let accepting = true;
   try {
     return await new Promise<DesktopSupportReportResponse>((resolve, reject) => {
-      cancel = (): void => reject(new SupportReportJobError("cancelled"));
-      timer = setTimeout(() => reject(new SupportReportJobError("timeout")), 30_000);
+      cancel = (): void => {
+        reject(new SupportReportJobError("cancelled"));
+      };
+      timer = setTimeout(() => {
+        reject(new SupportReportJobError("timeout"));
+      }, 30_000);
       signal?.addEventListener("abort", cancel, { once: true });
-      const onMessage = reportMessageHandler(worker, stateDir, correlationId, resolve, reject);
+      const onMessage = reportMessageHandler(
+        worker,
+        stateDir,
+        correlationId,
+        resolve,
+        reject,
+        requestCorrelationId,
+      );
       worker.on("message", (value: SupportReportWorkerMessage) => {
         if (accepting) onMessage(value);
       });
-      worker.once("error", (error: Error) =>
-        reject(new SupportReportJobError("unavailable", error)),
-      );
-      worker.once("exit", () => reject(new SupportReportJobError("unavailable")));
+      worker.once("error", (error: Error) => {
+        reject(new SupportReportJobError("unavailable", error));
+      });
+      worker.once("exit", () => {
+        reject(new SupportReportJobError("unavailable"));
+      });
       if (signal?.aborted === true) cancel();
     });
   } finally {
@@ -141,6 +169,7 @@ export async function runSupportReportJob(
   stateDir: string,
   correlationId?: string,
   signal?: AbortSignal,
+  requestCorrelationId?: string,
 ): Promise<DesktopSupportReportResponse> {
   if (running) throw new SupportReportJobError("busy");
   if (signal?.aborted === true) throw new SupportReportJobError("cancelled");
@@ -151,7 +180,7 @@ export async function runSupportReportJob(
       workerData: { stateDir, correlationId },
       resourceLimits: { maxOldGenerationSizeMb: 256 },
     });
-    return await awaitReport(worker, stateDir, correlationId, signal);
+    return await awaitReport(worker, stateDir, correlationId, signal, requestCorrelationId);
   } catch (error) {
     if (error instanceof SupportReportJobError) throw error;
     throw new SupportReportJobError("unavailable", error);

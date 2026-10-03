@@ -307,6 +307,7 @@ import {
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { SupportReportButton } from "../../SupportReportButton";
 import EditorSurfaceLoading from "./EditorSurfaceLoading";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
@@ -989,6 +990,8 @@ interface EditorFileSessionSnapshot {
   readonly version: EditorDocumentVersion | null;
   readonly maxBytes: number | null;
   readonly loadState: KeikoEditorLoadState;
+  readonly loadCorrelationId?: string | undefined;
+  readonly loadRetryable?: boolean | undefined;
   readonly saveStatus: EditorSaveStatus;
   readonly saveError: string | undefined;
   readonly cursor: EditorPosition | null;
@@ -1891,6 +1894,33 @@ function enabledValueOrNull<T>(enabled: boolean, value: T | null): T | null {
   return enabled ? value : null;
 }
 
+function retryableEditorLoadError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true;
+  return error.status < 400 || error.status >= 500 || error.status === 408 || error.status === 429;
+}
+
+function failedEditorSessionSnapshot(
+  state: KeikoEditorLoadState,
+  correlationId: string,
+  retryable: boolean,
+): EditorFileSessionSnapshot {
+  return {
+    content: "",
+    fileModel: null,
+    modifiedAt: null,
+    version: null,
+    maxBytes: null,
+    loadState: state,
+    loadCorrelationId: correlationId,
+    loadRetryable: retryable,
+    saveStatus: "idle",
+    saveError: undefined,
+    cursor: null,
+    currentSelection: null,
+    diagnosticsSummary: null,
+  };
+}
+
 function editorLoadErrorMessage(hasTarget: boolean, state: KeikoEditorLoadState): string | null {
   return hasTarget && state.status === "error" ? state.message : null;
 }
@@ -2173,6 +2203,7 @@ function EditorRuntimeWidget({
     initialEditorLoadState(hasTarget),
   );
   const [loadCorrelationId, setLoadCorrelationId] = useState<string | undefined>(undefined);
+  const [loadRetryable, setLoadRetryable] = useState(true);
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [localHistoryProtection, setLocalHistoryProtection] = useState<
@@ -2676,6 +2707,8 @@ function EditorRuntimeWidget({
       version,
       maxBytes,
       loadState,
+      loadCorrelationId,
+      loadRetryable,
       saveStatus,
       saveError,
       cursor,
@@ -2693,6 +2726,8 @@ function EditorRuntimeWidget({
     fileModelMatchesTarget,
     hasTarget,
     loadState,
+    loadCorrelationId,
+    loadRetryable,
     localHistoryProtection,
     maxBytes,
     modifiedAt,
@@ -2713,6 +2748,8 @@ function EditorRuntimeWidget({
     setVersion(null);
     setMaxBytes(null);
     setLoadState({ status: "ready" });
+    setLoadCorrelationId(undefined);
+    setLoadRetryable(true);
     setSaveStatus("idle");
     setSaveError(undefined);
     setLocalHistoryProtection(undefined);
@@ -2725,6 +2762,8 @@ function EditorRuntimeWidget({
     setVersion(cached.version);
     setMaxBytes(cached.maxBytes);
     setLoadState(cached.loadState);
+    setLoadCorrelationId(cached.loadCorrelationId);
+    setLoadRetryable(cached.loadRetryable ?? true);
     setSaveStatus(cached.saveStatus);
     setSaveError(cached.saveError);
     setLocalHistoryProtection(cached.localHistoryProtection);
@@ -2735,6 +2774,8 @@ function EditorRuntimeWidget({
 
   const beginLoad = useCallback((): void => {
     setLoadState({ status: "loading" });
+    setLoadCorrelationId(undefined);
+    setLoadRetryable(true);
     setSaveStatus("idle");
     setSaveError(undefined);
     setLocalHistoryProtection(undefined);
@@ -2812,8 +2853,9 @@ function EditorRuntimeWidget({
       if (options.preserveDirty !== true || !dirtyRef.current) {
         beginLoad();
       }
+      const requestCorrelationId = newClientCorrelationId();
       try {
-        const response = await fetchFilesContent(root, file);
+        const response = await fetchFilesContent(root, file, requestCorrelationId);
         if (signal.cancelled) return;
         const snapshot = await readEditorHotExitSnapshot(root, file);
         if (signal.cancelled) return;
@@ -2824,12 +2866,20 @@ function EditorRuntimeWidget({
         finishLoad(root, file, response, snapshot);
       } catch (err: unknown) {
         if (signal.cancelled) return;
-        const correlationId = correlationIdOf(err) ?? newClientCorrelationId();
+        const correlationId = correlationIdOf(err) ?? requestCorrelationId;
+        const failureState: KeikoEditorLoadState = { status: "error", message: errorMessage(err) };
+        const retryable = retryableEditorLoadError(err);
         setLoadCorrelationId(correlationId);
-        setLoadState({ status: "error", message: errorMessage(err) });
+        setLoadRetryable(retryable);
+        setLoadState(failureState);
+        sessionCacheRef.current.set(
+          sessionKey,
+          failedEditorSessionSnapshot(failureState, correlationId, retryable),
+        );
         reportClientDiagnostic(`[keiko] editor file load failed: ${clientErrorSummary(err)}`, {
           correlationId,
           errorKind: bffRequestErrorKind(err),
+          errorEvidence: clientErrorEvidence(err),
         });
         throw err;
       }
@@ -6261,11 +6311,15 @@ function EditorRuntimeWidget({
     if (editorLoadError !== null) {
       panel = (
         <div className="ed-host-loading" role="alert">
-          <span>{commonT("editor.runtime.loadFailed")}</span>
-          <button type="button" className="ed-reload" onClick={reload}>
-            {commonT("editor.runtime.retry")}
-          </button>
-          <SupportReportButton correlationId={loadCorrelationId} />
+          <span>{editorLoadError}</span>
+          {loadRetryable ? (
+            <>
+              <button type="button" className="ed-reload" onClick={reload}>
+                {commonT("editor.runtime.retry")}
+              </button>
+              <SupportReportButton correlationId={loadCorrelationId} />
+            </>
+          ) : null}
         </div>
       );
     } else if (hasTarget && buffer !== null && fileModel !== null) {

@@ -52,7 +52,8 @@ class InnerAppShellBoundary extends Component<InnerAppShellBoundaryProps, AppShe
     this.setState({ correlationId });
     reportClientDiagnostic(`[keiko] app shell crashed: ${clientErrorSummary(error)}`, {
       correlationId,
-      kind: "window-error",
+      kind: "boundary",
+      renderFailure: "shell",
       errorKind: "internal",
       errorEvidence: clientErrorEvidence(error),
     });

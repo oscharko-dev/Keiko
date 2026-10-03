@@ -583,6 +583,46 @@ describe("fanOutClientDiagnostic stage evidence", () => {
     });
   });
 
+  it("preserves the closed navigation outcome without the user message", () => {
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    fanOutClientDiagnostic("customer repository details must not be transported", {
+      correlationId: "navigation-123",
+      stageReport: {
+        stage: "editor project selection",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 5,
+        navigationOutcome: "deferred",
+      },
+    });
+    const body = lastPostedBody(fetchMock);
+    expect(body).toEqual({
+      kind: "stage",
+      stage: "editor project selection",
+      phase: "settled",
+      ordinal: 1,
+      durationMs: 5,
+      navigationOutcome: "deferred",
+      correlationId: "navigation-123",
+    });
+    expect(isClientStageIngestRequest(body)).toBe(true);
+  });
+
+  it("preserves the closed caught-render marker through the message transport", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    fanOutClientDiagnostic("Workspace window render failed", {
+      kind: "boundary",
+      renderFailure: "window-body",
+    });
+    const body = lastPostedBody(fetchMock);
+    expect(body).toMatchObject({ kind: "boundary", renderFailure: "window-body" });
+    expect(isClientDiagnosticIngestRequest(body)).toBe(true);
+  });
+
   it("preserves correlated body-free bulk-deletion counts through the stage transport", () => {
     const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());

@@ -506,7 +506,11 @@ system that exists, never beside it:
   and retention changes preserve ordering, compatibility classification, explicit truncation/loss,
   and support-export reconstruction.
 - **Saved reports remain under human control.** A support export or replay fixture is written only
-  to the local destination the user selected. Keiko does not upload it, attach it to GitHub, open an
+  through a user-initiated local export. CLI exports enforce owner-private directories and files;
+  desktop exports use the browser's download destination and filesystem permissions, including its
+  configured Downloads folder. A browser download does not promise CLI permission enforcement or
+  a destination picker. This desktop behavior is the owner's accepted local export workflow.
+  Keiko does not upload it, attach it to GitHub, open an
   issue, or otherwise disclose it automatically. Content-bearing optional sections require their
   existing explicit consent; adding a new destination or disclosure path is a separate authority
   and privacy decision, never an implied extension of logging.
@@ -601,8 +605,12 @@ already recorded:
    analyzed projection, never unvalidated report bytes. Human views, clusters, deterministic
    seeds and explicitly selected replay fixtures derive from the same validated evidence.
 3. **Investigate from the validated timeline.**
-   `keiko support analyze report.json --correlation-id <id> --json > timeline.json` emits that
-   validated timeline; `keiko investigate --from-timeline timeline.json` consumes it.
+   New exports replace local identifiers with artifact-local ordinal references. The UI Support ID
+   selects local evidence on the originating installation; it cannot select a received report.
+   Read the unfiltered analysis first, then use its `incident.correlation.rootCorrelationId` or a
+   validated timeline's exported reference as `<exported-ref>` in
+   `keiko support analyze report.json --correlation-id <exported-ref> --json > timeline.json`.
+   This emits that validated timeline; `keiko investigate --from-timeline timeline.json` consumes it.
 4. **Read sufficiency and integrity before trusting a seed.** Closed reasons, coverage and loss
    expose missing causal evidence, lifecycle transitions and unsupported identities. Authenticity
    stays unknown. The seed warnings name unavailable evidence classes; never replace them with

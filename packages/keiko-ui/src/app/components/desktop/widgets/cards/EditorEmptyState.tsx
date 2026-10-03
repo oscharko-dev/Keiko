@@ -35,7 +35,10 @@ export function EditorEmptyState({
       setNotice(null);
       setConnecting(true);
       try {
-        const response = await createProject({ path: selectedPath });
+        const response = await createProject({
+          path: selectedPath,
+          selectionIntent: "explicit-folder-selection",
+        });
         const warning = projectResponseWarningMessage(response);
         if (warning !== undefined) {
           setNotice(warning);

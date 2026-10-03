@@ -102,17 +102,20 @@ export function parseSupportIncidentArgs(args: readonly string[]): ParsedSupport
 
 // ─── Resolution: record + pinned window → the canonical descriptor ─────────────────────────────
 
+import {
+  MAX_SUPPORT_INCIDENT_WINDOW_BYTES,
+  SupportIncidentWindowError,
+  resolveSupportIncidentEvidence,
+  unresolvedSupportIncident,
+  resolveSupportIncident,
+} from "@oscharko-dev/keiko-activity-log/reader";
 export {
   MAX_SUPPORT_INCIDENT_WINDOW_BYTES,
   SupportIncidentWindowError,
   resolveSupportIncidentEvidence,
   unresolvedSupportIncident,
-} from "@oscharko-dev/keiko-activity-log/reader";
-import {
   resolveSupportIncident,
-  SupportIncidentWindowError,
-} from "@oscharko-dev/keiko-activity-log/reader";
-export { resolveSupportIncident };
+};
 
 // ─── Rendering (the human forms are derived from the machine projections) ──────────────────────
 

@@ -17,10 +17,14 @@ records why the underlying fields exist and what each one does and does not prom
    and `analysis.sufficiency` first. Its `analysis.timelines` identify the ordered events and
    failure-site frames; `seed` carries deterministic replay preparation for the incident
    correlation. Authenticity remains unknown even with valid integrity. Do not give the unvalidated
-   file to an agent. With `--correlation-id <id>`, `--json` emits only that validated timeline, the
+   file to an agent. New exports use artifact-local ordinal references. The UI Support ID selects
+   the local Activity Log only. Read the unfiltered report analysis, then use
+   `incident.correlation.rootCorrelationId` or one of its exported timeline references as
+   `<exported-ref>`; no original identifier mapping is shipped. With `--correlation-id <exported-ref>`,
+   `--json` emits only that validated timeline, the
    form `keiko investigate --from-timeline` reads.
 3. **Build a reproduction seed.**
-   `keiko support analyze report.json --correlation-id <id> --seed --json`
+   `keiko support analyze report.json --correlation-id <exported-ref> --seed --json`
    (or `prepareSupportReportSeed` on the validated view, from
    `@oscharko-dev/keiko-activity-log/reader`) assembles everything reconstructable for that
    correlation id into one `ReproductionSeed`: the ordered `timeline`, a `gatewayScript` when the
@@ -109,9 +113,9 @@ instead of `Gateway`, seeded with those fields.
 
 **Current scope, stated plainly.** `buildReproductionSeed` and `renderGatewayReplayScriptFixture`
 are implemented, tested, and exported from `packages/keiko-activity-log/src/reader/support-analyze.ts`, and are
-also wired directly onto `support analyze` itself: `keiko support analyze FILE --correlation-id ID
---seed` prints the `ReproductionSeed` for that id (as text, or as JSON alongside `--json`), and
-`keiko support analyze FILE --correlation-id ID --emit-fixture PATH` writes the pasteable
+also wired directly onto `support analyze` itself: `keiko support analyze FILE --correlation-id EXPORTED_REF
+--seed` prints the `ReproductionSeed` for that exported reference (as text, or as JSON alongside `--json`), and
+`keiko support analyze FILE --correlation-id EXPORTED_REF --emit-fixture PATH` writes the pasteable
 gateway-replay-script fixture straight to `PATH` instead of requiring a manual copy-paste — it
 refuses to overwrite a file already at `PATH`, creates missing parent directories owner-only, and
 reports the written path. `--clusters` (no `--correlation-id` required) renders the whole-report

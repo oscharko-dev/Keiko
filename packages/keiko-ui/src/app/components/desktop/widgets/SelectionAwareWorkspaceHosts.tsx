@@ -1970,6 +1970,23 @@ function routeEditorSelectionToChat(
   return false;
 }
 
+function editorWorkspaceNoticeProps(
+  targetRoot: string | undefined,
+  cfg: Record<string, unknown>,
+  ctx: WindowRenderContext,
+): Pick<EditorWidgetProps, "initialWorkspaceNotice" | "onWorkspaceNoticeConsumed"> {
+  if (str(cfg, "root") !== targetRoot || cfg["workspaceNoticeCode"] !== "trust-grant-failed")
+    return {};
+  return {
+    initialWorkspaceNotice: {
+      code: "trust-grant-failed",
+      correlationId: str(cfg, "workspaceNoticeCorrelationId"),
+    },
+    onWorkspaceNoticeConsumed: (): void =>
+      ctx.updateCfg({ workspaceNoticeCode: undefined, workspaceNoticeCorrelationId: undefined }),
+  };
+}
+
 function editorSessionBaseProps(
   targetRoot: string | undefined,
   cfg: Record<string, unknown>,
@@ -1977,6 +1994,7 @@ function editorSessionBaseProps(
 ): EditorSessionBaseProps {
   const file = str(cfg, "file");
   return {
+    ...editorWorkspaceNoticeProps(targetRoot, cfg, ctx),
     linkedRoot: ctx.linkedRoot,
     linkedFilePath: ctx.linkedFilePath,
     linkedCapsuleIds: ctx.linkedCapsuleIds,

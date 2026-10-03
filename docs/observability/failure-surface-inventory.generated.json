@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "008c9d66eeb21982fb995d4d1e840e648568468e746d618b47738ef14fbc074c"
+    "catalogDigest": "87d0dfdd9d06a12600004ae9bc308cdc8a7ec475d854488c0b64f1058bbec3b4"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 500,
-    "proofCount": 507,
-    "resolvedProofCount": 507,
-    "failureClassCount": 333,
+    "operationCount": 501,
+    "proofCount": 508,
+    "resolvedProofCount": 508,
+    "failureClassCount": 334,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -259,7 +259,7 @@
       "operations": [
         "coding-app-session.channel.closed",
         "coding-app-session.channel.opened",
-        "coding-app-session.local-session.issued",
+        "coding-app-session.local-session.confirmed",
         "coding-app-session.paired",
         "coding-app-session.rotated",
         "coding-app-session.signed-out",
@@ -645,6 +645,7 @@
         "security.windows-portable-legacy-launcher.system-root-refused",
         "security.windows-shortcut.system-binary-missing",
         "security.windows-shortcut.system-root-refused",
+        "sqlite.state-path.refused",
         "support.manifest.rebuilt",
         "support.query.completed",
         "support.query.failed",
@@ -976,6 +977,7 @@
     "ui-process-stop-escalation": ["ui.crash"],
     "ui-process-stop-request": ["ui.crash"],
     "ui-store-migration": ["bff.dependency-failure"],
+    "sqlite-state-path": ["runtime-packages.rejection"],
     "ui-store-open": ["bff.dependency-failure"],
     "update-candidate-authority": ["runtime-packages.rejection"],
     "update-runtime": ["runtime-packages.dependency-failure"],
@@ -1162,7 +1164,7 @@
     "coding-app-session.channel.opened.live": [
       "packages/keiko-server/src/coding-app-session/sessionStreamLifecycle.test.ts"
     ],
-    "coding-app-session.local-session.issued.request": [
+    "coding-app-session.local-session.confirmed.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
     ],
     "coding-app-session.paired.request": [
@@ -2213,6 +2215,9 @@
     ],
     "speech.tts.stream.peek.failed.emitted-line": [
       "packages/keiko-model-gateway/src/text-to-speech-adapter.test.ts"
+    ],
+    "sqlite.state-path.refused.authority": [
+      "packages/keiko-security/src/sqlite-state-path.test.ts"
     ],
     "sse.run-events.resume.line": ["packages/keiko-server/src/run-handlers-sse-resume.test.ts"],
     "sse.stream.closed.line": ["packages/keiko-server/src/sse-write.test.ts"],

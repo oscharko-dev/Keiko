@@ -35,7 +35,7 @@ export async function handleCreateSupportReport(
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
     return {
       status: 403,
-      body: errorBody("APP_SESSION_REQUIRED", "Local session unavailable.", ctx.correlationId),
+      body: errorBody("DENIED", "Local session unavailable.", ctx.correlationId),
     };
   }
   const parsed = await readJsonRequestBody(ctx.req, 1024, ctx.correlationId);
@@ -66,7 +66,9 @@ async function createReportResponse(
   request: DesktopSupportReportRequest,
 ): Promise<RouteResult> {
   const controller = new AbortController();
-  const cancel = (): void => controller.abort();
+  const cancel = (): void => {
+    controller.abort();
+  };
   ctx.res.once("close", cancel);
   if (ctx.res.destroyed) cancel();
   emitSupportReportStarted(ctx.correlationId, request.correlationId !== undefined);
@@ -75,6 +77,7 @@ async function createReportResponse(
       resolveRuntimeStateDir(deps.env),
       request.correlationId,
       controller.signal,
+      ctx.correlationId,
     );
     emitSupportReportCompleted(ctx.correlationId, report);
     return { status: 200, body: report, headers: { "Cache-Control": "no-store" } };

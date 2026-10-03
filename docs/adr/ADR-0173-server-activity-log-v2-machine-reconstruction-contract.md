@@ -708,6 +708,15 @@ the next export into the directory names how many `.keiko-publish-<24 hex>-<n>.s
 found, and the runtime-state contract classifies them, with the closed report names, as Keiko-owned
 in `support-reports/`. The strict reader rejects incomplete bytes and invalid digests.
 
+**Desktop local export (owner decision, 2026-10-03):** an explicit report action downloads the same
+validated, content-free report through the browser. Its configured download destination and
+filesystem permissions apply, including a default Downloads directory without a save dialog.
+The browser API cannot enforce the CLI's 0700/0600 modes, exclusive no-follow publication, or
+owner-private receiving-file check. Those guarantees above apply to CLI exports, not browser
+downloads. Keiko performs no automatic upload or disclosure. A downloaded report must still pass
+the canonical offline validator before it is analyzed; operators who use the owner-private CLI
+reader first place it in a private directory and file according to the receiving-file contract.
+
 `keiko support analyze FILE [--correlation-id ID] [--json] [--clusters] [--seed] [--emit-fixture PATH]`
 reads only the explicitly chosen owner-private, single-link regular file. It reads bounded chunks,
 checks UTF-8, canonical JSON, nesting, every section and record, identity and provenance, all
@@ -1049,8 +1058,8 @@ request":
     incident trigger retains their window; other client warnings remain at `warn`;
   - a window or folder-navigation stage: `client.stage.started` / `client.stage.settled` at `info`.
     Folder stages use `files-directory-load`, `files-directory-navigation`,
-    `files-project-selection`, and `editor-project-selection`. Successful directory loads
-    join their HTTP response correlation as a parent; failed reads emit a correlated body-free
+    `files-project-selection`, and `editor-project-selection`. Directory loads send their
+    stage correlation id with the HTTP request; failed reads emit a correlated body-free
     diagnostic and settle. Paths and document bodies are never recorded. One
     client-minted correlation id per mount joins both phases, and the duration is monotonic and
     bounded to the contract's ceiling. A window chunk that has not arrived 10 seconds after its
@@ -1180,11 +1189,17 @@ claim tool calling, never while a subscription source is selected, and only the 
 Workbench would elect is awaited. A profile read that
 finds nothing to prove writes no automatic record, and its absence is then not a lost call.
 
+For received reports, first analyze the artifact without a correlation selector. New exports
+replace local labels with artifact-local ordinal references. Select the exported root from
+`incident.correlation.rootCorrelationId` or a validated timeline reference when using
+`support analyze FILE --correlation-id <exported-ref>`. The UI Support ID and original run/request
+IDs below select only the originating installation's Activity Log; no reverse mapping is exported.
+
 The Coding Workbench gateway connects each authenticated request to its run with
 `parentCorrelationId: runId`. An upstream chat or stream failure keeps the request correlation on
 its redacted diagnostic and names the run as parent, so concurrent failed requests remain
-distinguishable. `keiko support analyze --correlation-id <requestId>` retrieves the diagnostic;
-`keiko support analyze --correlation-id <runId>` retrieves the run's closed turn-failure projection
+distinguishable. `keiko support query --correlation-id <requestId> --json` retrieves the diagnostic;
+`keiko support query --correlation-id <runId> --json` retrieves the run's closed turn-failure projection
 and its linked request timeline. The analyzer follows an explicit `parentCorrelationId` edge for
 one hop and includes every line with that child request correlation, including provider dispatch
 and diagnostics that do not repeat the parent field. Direct request lookup remains available;
@@ -1474,7 +1489,20 @@ Two identifiers serve two purposes. `incidentId` is random and names one occurre
 `defectFingerprint` is deterministic and versioned over allowlisted stable inputs (owning surface,
 operation, closed `errorKind`, normalized Keiko frame signature) and carries no time, process,
 instance, host, user or path value; it groups recurrences for deduplication and fix linkage. A change
-to its inputs or algorithm bumps the algorithm version; a golden-value test enforces that.
+to its inputs or algorithm bumps the algorithm version; a golden-value test enforces that. Version 1
+preimages remain unchanged and historical records remain readable. Client diagnostics use version 2:
+closed diagnostic/render/module context and reduced shipped browser-chunk digests distinguish known
+failure shapes without retaining messages, paths or customer identifiers. Line and column do not
+enter either version. Shipped chunk digests may change across releases, so version-two browser
+fingerprints do not promise cross-release grouping.
+
+Browser diagnostics can still be indistinguishable when they carry no usable product frame or
+closed feature context. Their retention claim is therefore scoped to the occurrence's validated
+causal reference as well as its defect fingerprint. Replaying the same request deduplicates; a later
+request retains its own window instead of discarding it under a fourteen-day coarse defect claim.
+The local claim key is a hash and is never exported as a customer reference. Existing automatic
+slot quotas and evaluation rate limits apply; full quotas surface explicit loss. Server failures
+and historical version-one browser records keep their fingerprint-scoped deduplication.
 
 The descriptor has a strict public projection and a richer, still body-free private projection from
 the same record; both expose the sufficiency status, and only the private one carries reasons and
@@ -1483,7 +1511,7 @@ reserved for explicit reports, 4 KiB each), and candidates expire after 14 days.
 
 Both the defectFingerprint dedup rule and the count quotas hold atomically across every process
 sharing the state directory (#3533 review 4050606506), not from a directory-listing count two
-processes could each read as "still free": a registered failure claims its fingerprint's own
+processes could each read as "still free": a registered failure claims its deduplication key's own
 `fingerprint-<64 hex>.claim` file by exclusive-create before it decides duplicate-or-new, and every
 candidate claims one of a bounded pool of `slot-<NN>.claim` files (automatics from slot 0 up, user
 reports from the top down, so the reserve holds without a shared counter) before its record is
@@ -1492,7 +1520,7 @@ repair/uninstall ownership predicate already calls, so state-paths.ts needed no 
 A claim releases with its record on dismissal or expiry. Between a claim and its record, and between
 a record's exclusive create and its bytes, another process can see a claim without a record or an
 unreadable record at any moment, so such a file is treated as in flight until it is older than a
-one-minute grace by its own mtime: a second occurrence of the same defect deduplicates onto the id
+one-minute grace by its own mtime: a repeat of the same retention key deduplicates onto the id
 the claim names instead of taking the claim over, and neither the orphan sweep nor torn-record
 recovery removes it. Only an older file has lost its writer (a crash in that gap) and is swept,
 against a fresh, per-claim read taken at sweep time, never a snapshot taken earlier in the same

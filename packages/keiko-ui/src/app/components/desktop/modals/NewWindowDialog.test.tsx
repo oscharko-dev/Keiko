@@ -1,6 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import type { ModelCapability } from "@/lib/types";
 import { isAgentWorkflowModel, NewWindowDialog, resolveFieldValue } from "./NewWindowDialog";
 import {
@@ -65,6 +70,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetClientDiagnosticWriter();
   vi.clearAllMocks();
 });
 
@@ -791,7 +797,12 @@ describe("NewWindowDialog agents: start-run contract", () => {
     await screen.findByText("Repository is not registered.");
     fireEvent.click(screen.getByRole("button", { name: "Register repository" }));
 
-    await waitFor(() => expect(createProject).toHaveBeenCalledWith({ path: "/external" }));
+    await waitFor(() =>
+      expect(createProject).toHaveBeenCalledWith({
+        path: "/external",
+        selectionIntent: "explicit-folder-selection",
+      }),
+    );
     expect(await screen.findByText(/new-window-trust-correlation/u)).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.queryByText("Repository is not registered.")).not.toBeInTheDocument(),
@@ -851,6 +862,67 @@ describe("NewWindowDialog agents: start-run contract", () => {
   });
 });
 
+describe("NewWindowDialog editor connection evidence", () => {
+  async function openEditor(onConfirm = vi.fn()): Promise<void> {
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project()] });
+    render(
+      <NewWindowDialog type="editor" types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />,
+    );
+    await screen.findByDisplayValue("/repo");
+  }
+
+  it("settles a failed submit and does not start a phantom stage on repeated Enter", async () => {
+    const records: ClientDiagnosticMeta[] = [];
+    let reject: (error: Error) => void = () => undefined;
+    vi.mocked(createProject).mockReturnValueOnce(
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      }),
+    );
+    await openEditor();
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) records.push(meta);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open Editor" }));
+    fireEvent.keyDown(document, { key: "Enter" });
+    await act(async () => {
+      reject(new Error("customer detail must not enter evidence"));
+    });
+    const stages = records.filter(
+      (record) => record.stageReport?.stage === "editor project selection",
+    );
+    expect(stages).toHaveLength(2);
+    expect(stages[0]?.stageReport?.phase).toBe("started");
+    expect(stages[1]?.stageReport).toMatchObject({ phase: "settled", navigationOutcome: "failed" });
+    expect(stages[1]?.correlationId).toBe(stages[0]?.correlationId);
+    expect(createProject).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Open Editor" })).toBeEnabled();
+  });
+
+  it("hands a restricted registration to the editor through a closed notice code", async () => {
+    const onConfirm = vi.fn();
+    vi.mocked(createProject).mockResolvedValueOnce({
+      project: { ...project(), workspaceAvailable: true },
+      warning: {
+        code: "PROJECT_TRUST_GRANT_FAILED",
+        message: "Safe failure",
+        correlationId: "warning-id",
+      },
+    });
+    await openEditor(onConfirm);
+    fireEvent.click(screen.getByRole("button", { name: "Open Editor" }));
+    await waitFor(() =>
+      expect(onConfirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceNoticeCode: "trust-grant-failed",
+          workspaceNoticeCorrelationId: "warning-id",
+        }),
+      ),
+    );
+    expect(JSON.stringify(onConfirm.mock.calls)).not.toContain("Safe failure");
+  });
+});
+
 describe("NewWindowDialog native directory browse", () => {
   it.each(["files", "editor"] as const)(
     "pins an explicitly opened %s project to the selected repository",
@@ -875,7 +947,7 @@ describe("NewWindowDialog native directory browse", () => {
       );
       if (type === "editor")
         expect(createProject).toHaveBeenCalledWith(
-          { path: "/selected/project" },
+          { path: "/selected/project", selectionIntent: "explicit-folder-selection" },
           expect.any(String),
         );
     },

@@ -399,21 +399,29 @@ function confirmsAbsence(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
+type MetadataFileSystem = WatchEffectFileSystem | (() => Promise<WatchEffectFileSystem | null>);
+
+async function metadataFileSystem(source: MetadataFileSystem): Promise<WatchEffectFileSystem> {
+  const fileSystem = typeof source === "function" ? await source() : source;
+  if (fileSystem === null) throw new TypeError("Workspace watch authority unavailable");
+  return fileSystem;
+}
+
 async function metadataFor(
   root: string,
   relativePath: string,
   additional: WatchExclusions,
-  fileSystem: WatchEffectFileSystem,
+  fileSystem: MetadataFileSystem,
 ): Promise<MetadataResult> {
   if (!eventPathAllowed(relativePath, additional)) return { kind: "unsafe" };
   const candidate = relativePath.length === 0 ? root : resolve(root, ...relativePath.split("/"));
   try {
-    const linkStats = await fileSystem.lstat(candidate);
-    const real = await fileSystem.realpath(candidate);
+    const linkStats = await (await metadataFileSystem(fileSystem)).lstat(candidate);
+    const real = await (await metadataFileSystem(fileSystem)).realpath(candidate);
     if (!containsPath(root, real)) return { kind: "unsafe" };
     const realRelativePath = relativePathFromNative(root, real);
     if (!eventPathAllowed(realRelativePath, additional)) return { kind: "unsafe" };
-    const targetStats = await fileSystem.stat(real);
+    const targetStats = await (await metadataFileSystem(fileSystem)).stat(real);
     const kind = entryKind(linkStats, targetStats);
     return {
       kind: "present",
@@ -679,6 +687,10 @@ class WorkspaceWatchSession {
       this.revokeRoot();
       return;
     }
+    this.handleAuthorizedEvent(event);
+  }
+
+  private handleAuthorizedEvent(event: WorkspaceWatchRawEvent): void {
     if (event.eventType === "overflow") {
       this.emitRescan("event-overflow", "overflow");
       return;
@@ -842,10 +854,25 @@ class WorkspaceWatchSession {
       }
       this.known.clear();
       for (const metadata of next.entries.values()) this.known.set(metadata.relativePath, metadata);
+      if (this.health === "rescanRequired") this.announceBaselineGap();
     } finally {
       this.scanning = false;
     }
     if (this.health === "rescanRequired") void this.scanAndEmitDiff();
+  }
+
+  private announceBaselineGap(): void {
+    // The first seed has no complete pre-change baseline. Tell consumers to refresh instead of
+    // fabricating created/changed classifications for metadata absorbed while the lease paused.
+    this.emit({
+      schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+      sequence: this.nextSequence(),
+      kind: "rescan",
+      relativePath: "",
+      entryKind: "unknown",
+      health: "rescanRequired",
+      reason: "ambiguous-event",
+    });
   }
 
   private async scanAndEmitDiff(): Promise<void> {
@@ -897,9 +924,8 @@ class WorkspaceWatchSession {
   private async scanDirectory(start: string): Promise<ScanResult> {
     const found = new Map<string, FileMetadata>();
     const queue = [start];
-    for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    for (const current of queue) {
       if (!(await this.awaitScanSubscriber())) return { entries: found, complete: false };
-      const current = queue[cursor] ?? "";
       const result = await this.scanOneDirectory(current, found, queue);
       if (result === "complete") continue;
       this.emitRescan(
@@ -950,15 +976,17 @@ class WorkspaceWatchSession {
     const relativePath = relativeDirectory.length === 0 ? name : `${relativeDirectory}/${name}`;
     if (!eventPathAllowed(relativePath, this.additionalExclusions)) return "continue";
     if (found.size >= this.config.maxScanEntries) return "overflow";
-    const fileSystem = this.effectFileSystem();
-    if (fileSystem === null) return "unavailable";
     const result = await metadataFor(
       this.root,
       relativePath,
       this.additionalExclusions,
-      fileSystem,
+      async (): Promise<WatchEffectFileSystem | null> => {
+        if (!(await this.awaitScanSubscriber())) return null;
+        return this.effectFileSystem();
+      },
     );
-    if (!this.ensureLiveRootAuthority()) return "unavailable";
+    if (!(await this.awaitScanSubscriber()) || !this.ensureLiveRootAuthority())
+      return "unavailable";
     if (result.kind === "unavailable") return "unavailable";
     if (result.kind !== "present") return "continue";
     found.set(relativePath, result.metadata);
@@ -1143,7 +1171,7 @@ class WorkspaceWatchSession {
         this.scanSubscriberWaiters.add(resolve);
       });
     }
-    return !this.disposed && this.subscribers.size > 0;
+    return this.subscribers.size > 0 && !this.isDisposed();
   }
 
   private resumeScan(): void {
@@ -1169,7 +1197,8 @@ class WorkspaceWatchSession {
   }
 
   private snapshotRequired(lastSequence: number | undefined): boolean {
-    if (lastSequence === undefined || this.replay.length === 0) return false;
+    if (lastSequence === undefined) return this.health === "rescanRequired";
+    if (lastSequence > this.sequence || this.replay.length === 0) return true;
     return lastSequence < (this.replay[0]?.sequence ?? 0) - 1;
   }
 

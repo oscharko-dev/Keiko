@@ -1367,3 +1367,58 @@ it.each([undefined, null, { unknown: 1 }, { postsFailed: -1 }, { postsFailed: 1_
     ).toBe(false);
   },
 );
+
+describe("closed diagnostic navigation and render context", () => {
+  it.each(["applied", "unavailable", "failed", "dropped", "stale", "cancelled", "deferred"])(
+    "accepts settled navigation outcome %s only on a navigation stage",
+    (navigationOutcome) => {
+      const base = {
+        kind: "stage",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 2,
+        navigationOutcome,
+      };
+      expect(isClientStageIngestRequest({ ...base, stage: "editor project selection" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "files directory load" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "chat bind" })).toBe(false);
+      expect(
+        isClientStageIngestRequest({
+          ...base,
+          stage: "editor project selection",
+          phase: "started",
+        }),
+      ).toBe(false);
+    },
+  );
+  it("rejects unknown outcomes and confines render failure to a caught render boundary", () => {
+    expect(
+      isClientStageIngestRequest({
+        kind: "stage",
+        stage: "editor project selection",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 2,
+        navigationOutcome: "CustomerFile",
+      }),
+    ).toBe(false);
+    for (const renderFailure of ["shell", "window-body"])
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), kind: "boundary", renderFailure }),
+      ).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        kind: "window-error",
+        renderFailure: "shell",
+      }),
+    ).toBe(false);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        kind: "boundary",
+        renderFailure: "CustomerFile",
+      }),
+    ).toBe(false);
+  });
+});

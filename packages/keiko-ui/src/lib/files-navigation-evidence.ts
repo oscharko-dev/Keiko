@@ -1,31 +1,56 @@
-import type { ClientStageId } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type {
+  ClientStageId,
+  ClientNavigationOutcome,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { CLIENT_STAGE_DURATION_MS_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { newClientCorrelationId, responseCorrelationIdOf } from "./bff-correlation";
+import { newClientCorrelationId } from "./bff-correlation";
 import { clientErrorEvidence } from "./client-error-evidence";
-import { reportClientDiagnostic } from "./client-diagnostics";
+import { reportClientDiagnostic, recordClientDiagnosticLoss } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
 
 let nextOrdinal = 0;
+let readWindowStartedAt = 0;
+let readStages = 0;
+const MAX_READ_STAGES_PER_MINUTE = 8;
+
+function readStageAvailable(): boolean {
+  const now = Date.now();
+  if (now - readWindowStartedAt >= 60_000) {
+    readWindowStartedAt = now;
+    readStages = 0;
+  }
+  if (readStages++ < MAX_READ_STAGES_PER_MINUTE) return true;
+  recordClientDiagnosticLoss("postsThrottled", 2);
+  return false;
+}
+
+export function resetFilesNavigationEvidenceForTests(): void {
+  readWindowStartedAt = 0;
+  readStages = 0;
+}
 
 /** Records one browser selection/read on the existing stage lifecycle, without paths or content. */
 export function startFilesNavigationEvidence(
   stage: ClientStageId,
   correlationId = newClientCorrelationId(),
-): (response?: unknown) => void {
+): (response?: unknown, navigationOutcome?: ClientNavigationOutcome) => void {
   const ordinal = ++nextOrdinal;
   const startedAt = performance.now();
   reportClientDiagnostic("Workspace navigation started", {
     correlationId,
     stageReport: { stage, phase: "started", ordinal },
   });
-  return (response?: unknown): void => {
+  let settled = false;
+  return (_response?: unknown, navigationOutcome?: ClientNavigationOutcome): void => {
+    if (settled) return;
+    settled = true;
     reportClientDiagnostic("Workspace navigation settled", {
       correlationId,
-      parentCorrelationId: responseCorrelationIdOf(response),
       stageReport: {
         stage,
         phase: "settled",
         ordinal,
+        ...(navigationOutcome === undefined ? {} : { navigationOutcome }),
         durationMs: Math.min(
           CLIENT_STAGE_DURATION_MS_MAX,
           Math.max(0, Math.round(performance.now() - startedAt)),
@@ -35,12 +60,16 @@ export function startFilesNavigationEvidence(
   };
 }
 
-export async function observeFilesDirectoryRead<T>(read: () => Promise<T>): Promise<T> {
+export async function observeFilesDirectoryRead<T>(
+  read: (correlationId: string) => Promise<T>,
+): Promise<T> {
   const correlationId = newClientCorrelationId();
-  const settle = startFilesNavigationEvidence("files directory load", correlationId);
+  const settle = readStageAvailable()
+    ? startFilesNavigationEvidence("files directory load", correlationId)
+    : (): void => undefined;
   let response: T | undefined;
   try {
-    response = await read();
+    response = await read(correlationId);
     return response;
   } catch (error: unknown) {
     reportClientDiagnostic("Workspace directory read failed", {
@@ -48,7 +77,9 @@ export async function observeFilesDirectoryRead<T>(read: () => Promise<T>): Prom
       errorKind: bffRequestErrorKind(error),
       errorEvidence: clientErrorEvidence(error),
     });
-    throw error;
+    throw Object.assign(new Error("Workspace directory read failed", { cause: error }), {
+      correlationId,
+    });
   } finally {
     settle(response);
   }

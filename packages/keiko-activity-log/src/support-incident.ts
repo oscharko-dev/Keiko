@@ -13,9 +13,11 @@
 // an expected refusal, not a defect). Eligibility is therefore derived from the registry alone —
 // there is no UI- or caller-side list. This module's own operations are never candidates.
 //
-// DEDUPLICATION. At most one open registered-failure candidate exists per defectFingerprint,
+// DEDUPLICATION. Server failures retain one open candidate per defectFingerprint. Version-two
+// browser diagnostics retain one per validated causal occurrence, because coarse browser evidence
+// can otherwise collapse unrelated failures and discard their windows. The same bounded quota is
 // enforced atomically across every process sharing stateDir by an exclusive-create claim file keyed
-// by the fingerprint (#3533 review 4050606506): a recurrence of the same defect is evidenced as
+// by the retention key (#3533 review 4050606506): a repeat of the same key is evidenced as
 // `support.incident.deduplicated` on the existing incident instead of pinning a second window. A
 // process additionally suppresses re-evaluating a fingerprint for SUPPORT_INCIDENT_SUPPRESSION_MS
 // so a failure storm costs no filesystem work. User reports are never merged: each explicit "Report
@@ -44,7 +46,7 @@ import {
   activityLogEvent,
   activityLogOperationSchema,
   defineActivityLogOperation,
-  normalizeKeikoFrameSignature,
+  normalizeDefectFrameSignature,
   recordActivityLogLoss,
   supportIncidentBuild,
   type DefectFingerprintInput,
@@ -77,6 +79,7 @@ import {
   incidentCorrelationId,
   registeredFailureCorrelation,
   registeredFailureFingerprintInput,
+  registeredFailureDeduplicationKey,
 } from "./defect-fingerprint.js";
 import { activityLogTestWriterInstalled } from "./server-logger.js";
 import {
@@ -400,6 +403,7 @@ interface RejectionFacts {
   readonly defectFingerprint: string | undefined;
   readonly correlationId: string;
   readonly openIncidentCount: number;
+  readonly fingerprintAlgorithm?: 1 | 2;
 }
 
 function rejectedEvidence(stateDir: string, facts: RejectionFacts): void {
@@ -417,7 +421,7 @@ function rejectedEvidence(stateDir: string, facts: RejectionFacts): void {
         ...(facts.defectFingerprint === undefined
           ? {}
           : { defectFingerprint: facts.defectFingerprint }),
-        fingerprintAlgorithm: DEFECT_FINGERPRINT_ALGORITHM_VERSION,
+        fingerprintAlgorithm: facts.fingerprintAlgorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
         trigger: facts.trigger,
         openIncidentCount: facts.openIncidentCount,
         completeness: "partial",
@@ -526,6 +530,10 @@ export interface SupportIncidentFailureEvidence {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly frames?: readonly unknown[] | undefined;
+  readonly clientKind?: unknown;
+  readonly renderFailure?: unknown;
+  readonly moduleLoadFailure?: unknown;
+  readonly stage?: unknown;
 }
 
 // ─── Candidate creation ────────────────────────────────────────────────────────────────────────
@@ -653,12 +661,12 @@ function buildRecord(
     trigger: draft.trigger,
     state: "candidate",
     fingerprint: {
-      algorithm: DEFECT_FINGERPRINT_ALGORITHM_VERSION,
+      algorithm: draft.input.algorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
       defectFingerprint: context.defectFingerprint,
       surface: draft.input.surface,
       op: draft.input.op,
       errorKind: draft.input.errorKind,
-      frameCount: normalizeKeikoFrameSignature(draft.input.frames).length,
+      frameCount: normalizeDefectFrameSignature(draft.input).length,
     },
     correlation: draft.correlation,
     build: supportIncidentBuild(identity.productVersion, identity.platformClass),
@@ -726,6 +734,7 @@ function reject(
     reason,
     trigger: draft.trigger,
     defectFingerprint: context.defectFingerprint,
+    fingerprintAlgorithm: draft.input.algorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
     correlationId: draft.evidenceCorrelationId,
     openIncidentCount,
   });
@@ -919,7 +928,7 @@ function deduplicationTarget(
     ? {
         incidentId,
         defectFingerprint: context.defectFingerprint,
-        fingerprintAlgorithm: DEFECT_FINGERPRINT_ALGORITHM_VERSION,
+        fingerprintAlgorithm: draft.input.algorithm ?? DEFECT_FINGERPRINT_ALGORITHM_VERSION,
         trigger: draft.trigger,
       }
     : {
@@ -965,6 +974,17 @@ function handleDedup(
   return { done: false };
 }
 
+function draftDeduplicationKey(draft: CandidateDraft, fingerprint: string): string | undefined {
+  return draft.trigger === "registered-failure"
+    ? registeredFailureDeduplicationKey(
+        draft.input.op,
+        draft.input.algorithm ?? 1,
+        fingerprint,
+        draft.correlation,
+      )
+    : undefined;
+}
+
 function createCandidate(
   stateDir: string,
   draft: CandidateDraft,
@@ -982,8 +1002,7 @@ function createCandidate(
   const entries = swept.entries;
 
   const incidentId = randomBytes(16).toString("hex");
-  const dedupFingerprint =
-    draft.trigger === "registered-failure" ? context.defectFingerprint : undefined;
+  const dedupFingerprint = draftDeduplicationKey(draft, context.defectFingerprint);
   if (dedupFingerprint !== undefined) {
     const handled = handleDedup(
       stateDir,
@@ -1087,7 +1106,14 @@ function releaseClaims(
 function releaseRecordClaims(stateDir: string, record: SupportIncidentRecord): void {
   releaseClaims(
     stateDir,
-    record.trigger === "registered-failure" ? record.fingerprint.defectFingerprint : undefined,
+    record.trigger === "registered-failure"
+      ? registeredFailureDeduplicationKey(
+          record.fingerprint.op,
+          record.fingerprint.algorithm,
+          record.fingerprint.defectFingerprint,
+          record.correlation,
+        )
+      : undefined,
     record.slotIndex,
   );
 }
@@ -1356,7 +1382,11 @@ type AdmissionOutcome =
   | { readonly status: "ineligible" }
   | { readonly status: "admitted"; readonly evidence: SupportIncidentFailureEvidence }
   | { readonly status: "suppressed" }
-  | { readonly status: "rate-limited"; readonly defectFingerprint: string };
+  | {
+      readonly status: "rate-limited";
+      readonly defectFingerprint: string;
+      readonly fingerprintAlgorithm: 1 | 2;
+    };
 
 function admittedEvidence(event: ServerLogEvent): AdmissionOutcome {
   if (!supportIncidentEligibleOperation(event.op)) return { status: "ineligible" };
@@ -1366,12 +1396,23 @@ function admittedEvidence(event: ServerLogEvent): AdmissionOutcome {
     correlationId: event.correlationId,
     parentCorrelationId: event.parentCorrelationId,
     frames: eventFrames(event),
+    clientKind: event.extra?.clientKind,
+    renderFailure: event.extra?.renderFailure,
+    moduleLoadFailure: event.extra?.moduleLoadFailure,
+    stage: event.extra?.stage,
   };
-  const defectFingerprint = computeDefectFingerprint(registeredFailureFingerprintInput(evidence));
-  const admission = admitEvaluation(defectFingerprint, Date.now());
+  const input = registeredFailureFingerprintInput(evidence);
+  const defectFingerprint = computeDefectFingerprint(input);
+  const key = registeredFailureDeduplicationKey(
+    input.op,
+    input.algorithm ?? 1,
+    defectFingerprint,
+    registeredFailureCorrelation(evidence),
+  );
+  const admission = admitEvaluation(key, Date.now());
   if (admission === "admitted") return { status: "admitted", evidence };
   return admission === "rate-limited"
-    ? { status: "rate-limited", defectFingerprint }
+    ? { status: "rate-limited", defectFingerprint, fingerprintAlgorithm: input.algorithm ?? 1 }
     : { status: "suppressed" };
 }
 
@@ -1383,6 +1424,7 @@ function reportRateLimitedEvaluation(
   stateDir: string,
   defectFingerprint: string,
   correlationId: string | undefined,
+  fingerprintAlgorithm: 1 | 2,
 ): void {
   const nowMs = Date.now();
   if (
@@ -1396,6 +1438,7 @@ function reportRateLimitedEvaluation(
     reason: "evaluation-rate-limited",
     trigger: "registered-failure",
     defectFingerprint,
+    fingerprintAlgorithm,
     correlationId: correlationId ?? randomUUID(),
     openIncidentCount: listSupportIncidentEntries(stateDir).length,
   });
@@ -1449,7 +1492,12 @@ export function observeSupportIncidentTrigger(stateDir: string, event: ServerLog
   try {
     const admission = admittedEvidence(event);
     if (admission.status === "rate-limited") {
-      reportRateLimitedEvaluation(stateDir, admission.defectFingerprint, event.correlationId);
+      reportRateLimitedEvaluation(
+        stateDir,
+        admission.defectFingerprint,
+        event.correlationId,
+        admission.fingerprintAlgorithm,
+      );
       return;
     }
     if (admission.status !== "admitted") return;

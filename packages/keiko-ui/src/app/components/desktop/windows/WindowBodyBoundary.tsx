@@ -55,7 +55,8 @@ class InnerWindowBodyBoundary extends Component<
       `[keiko] window body crashed: ${this.props.windowType}: ${clientErrorSummary(error)}`,
       {
         correlationId,
-        kind: "window-error",
+        kind: "boundary",
+        renderFailure: "window-body",
         errorKind: "internal",
         errorEvidence: clientErrorEvidence(error),
       },

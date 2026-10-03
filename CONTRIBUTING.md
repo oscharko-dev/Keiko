@@ -130,7 +130,11 @@ Keep this contract converged in one change. The writer, segmented store, and rea
 compose it while domain packages continue to use injected ports (ADR-0179). A runtime change that
 affects Activity Log behavior updates the owning implementation, its failure-first regression,
 emitted-line and analyzer/replay proof, ADR-0173, ADR-0179, AGENTS.md, this contributor contract,
-and directly affected operator documentation as applicable. Saved support reports remain local artifacts written to a user-selected destination;
+and directly affected operator documentation as applicable. Saved support reports remain local artifacts
+created by an explicit user action. CLI exports enforce owner-private file permissions. Desktop
+exports use the browser's configured download destination and filesystem permissions; the browser
+may save directly to Downloads without showing a destination picker. This owner-approved desktop
+workflow does not claim the CLI's permission guarantees.
 publishing or attaching one to GitHub or another external system requires separate explicit user
 authority and is never part of logging or export.
 
@@ -248,7 +252,10 @@ The canonical owner-private report has embedded integrity, a 10 MiB hard ceiling
 may only lower it) and explicit sufficiency. `--out` names a private directory, never a file; the
 filename always uses the fixed product/schema/incident/date class. Inclusion flags and raw-log or
 legacy bundle input are refused. Validate a manually received file offline with
-`keiko support analyze FILE --json` before agents use its machine view, and follow
+`keiko support analyze FILE --json` before agents use its machine view. New reports use artifact-local
+ordinal references: the UI Support ID is only a local export/query selector. For a received report,
+select `incident.correlation.rootCorrelationId` or an exported timeline reference from the unfiltered
+analysis before using `--correlation-id`; no original-to-exported mapping is included. Follow
 [the support workspace guide](docs/observability/support-workspace.md). Nothing is sent by these
 commands. `npm run set-version` regenerates the historical registry snapshots the analyzer selects
 from, so a release needs no extra step.

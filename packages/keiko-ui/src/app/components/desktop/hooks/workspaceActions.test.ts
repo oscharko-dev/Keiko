@@ -2046,6 +2046,16 @@ describe("makeMutations.openEditorFile", () => {
     expect(typeof editors[0]?.cfg["revealRequestId"]).toBe("string");
   });
 
+  it.each([false, true])("keeps managed task root binding when reuse=%s", (reuse) => {
+    const root = "/repo/.keiko/dev/ui/task-workspaces/repo/ws-1";
+    const h = harness(reuse ? [win("editor", { root, file: "old.ts" }, "task-editor")] : []);
+    expect(h.openEditorFile({ root, path: "next.ts" }).ok).toBe(true);
+    const editor = h.wins().find((w) => w.type === "editor");
+    expect(editor?.cfg["rootBinding"]).toBeUndefined();
+    expect(editor?.cfg["root"]).toBe(root);
+    expect(editor?.cfg["file"]).toBe("next.ts");
+  });
+
   it("updates a reused editor's persisted layout so a stale active tab cannot override the target", () => {
     const staleFile = "packages/keiko-harness/src/context.test.ts";
     const targetFile = "packages/keiko-harness/src/context.ts";

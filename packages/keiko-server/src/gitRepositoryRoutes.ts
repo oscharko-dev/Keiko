@@ -1,3 +1,4 @@
+import { lookup as lookupHost } from "node:dns/promises";
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
@@ -7,6 +8,7 @@ import type { IncomingMessage } from "node:http";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody } from "./routes.js";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import { pathIsDenied } from "./files-deny.js";
 import { assertUiDbOutsideProject, UiStoreError, validateProjectPath } from "./store/index.js";
 import { projectWithWorkspaceAvailability } from "./workspace-root-membership.js";
@@ -141,7 +143,8 @@ function reportCloneFailure(ctx: RouteContext, deps: UiHandlerDeps, error: unkno
   return correlationId;
 }
 
-type RepositoryHostClass = "public" | "loopback" | "private" | "link-local" | "metadata";
+type RepositoryHostClass =
+  "public" | "loopback" | "private" | "link-local" | "metadata" | "unroutable";
 type Ipv4Parts = readonly [number, number, number, number];
 type Ipv4Rule = readonly [RepositoryHostClass, (parts: Ipv4Parts) => boolean];
 
@@ -165,19 +168,27 @@ const REPOSITORY_IPV4_RULES: readonly Ipv4Rule[] = [
   ["private", ([a, b]): boolean => a === 172 && b >= 16 && b <= 31],
   ["private", ([a, b]): boolean => a === 192 && b === 168],
   ["private", ([a, b]): boolean => a === 100 && b >= 64 && b <= 127],
-  ["private", ([a]): boolean => a === 0 || a >= 224],
-  ["private", ([a, b, c]): boolean => a === 192 && b === 0 && c === 0],
-  ["private", ([a, b]): boolean => a === 198 && (b === 18 || b === 19)],
+  ["unroutable", ([a]): boolean => a === 0 || a >= 224],
+  ["unroutable", ([a, b, c]): boolean => a === 192 && b === 0 && c === 0],
+  ["unroutable", ([a, b]): boolean => a === 198 && (b === 18 || b === 19)],
 ];
 
 function classifyRepositoryIpv4(parts: Ipv4Parts): RepositoryHostClass {
   return REPOSITORY_IPV4_RULES.find(([, matches]) => matches(parts))?.[0] ?? "public";
 }
 
+function parseMappedIpv6Words(hostname: string): Ipv4Parts | undefined {
+  const match = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u.exec(hostname);
+  if (match?.[1] === undefined || match[2] === undefined) return undefined;
+  const high = Number.parseInt(match[1], 16);
+  const low = Number.parseInt(match[2], 16);
+  return [high >>> 8, high & 255, low >>> 8, low & 255];
+}
+
 function classifyMappedIpv6(hostname: string): RepositoryHostClass | undefined {
   if (!hostname.startsWith("::ffff:")) return undefined;
-  const ipv4 = parseIpv4(hostname.slice("::ffff:".length));
-  return ipv4 === undefined ? "private" : classifyRepositoryIpv4(ipv4);
+  const ipv4 = parseIpv4(hostname.slice("::ffff:".length)) ?? parseMappedIpv6Words(hostname);
+  return ipv4 === undefined ? "unroutable" : classifyRepositoryIpv4(ipv4);
 }
 
 function classifyIpv6FirstSegment(hostname: string): RepositoryHostClass | undefined {
@@ -191,7 +202,7 @@ function classifyIpv6FirstSegment(hostname: string): RepositoryHostClass | undef
 
 function classifyRepositoryIpv6(hostname: string): RepositoryHostClass {
   if (hostname === "::1") return "loopback";
-  if (hostname === "::") return "private";
+  if (hostname === "::" || hostname.startsWith("ff")) return "unroutable";
   return classifyMappedIpv6(hostname) ?? classifyIpv6FirstSegment(hostname) ?? "public";
 }
 
@@ -200,7 +211,10 @@ function classifyRepositoryHost(hostname: string): RepositoryHostClass | undefin
   if (normalized === "localhost") return "loopback";
   const ipv4 = parseIpv4(normalized);
   if (ipv4 !== undefined) return classifyRepositoryIpv4(ipv4);
-  if (isIP(normalized) === 6) return classifyRepositoryIpv6(normalized);
+  if (isIP(normalized) === 6) {
+    const canonical = new URL(`https://[${normalized}]/`).hostname.slice(1, -1);
+    return classifyRepositoryIpv6(canonical);
+  }
   return undefined;
 }
 
@@ -227,6 +241,35 @@ function repositoryUrlAllowed(input: string): boolean {
   if (typeof host !== "string" || host.length === 0) return false;
   const hostClass = classifyRepositoryHost(host);
   return hostClass === undefined || hostClass === "public";
+}
+
+type RepositoryDnsLookup = (host: string) => Promise<readonly { readonly address: string }[]>;
+const defaultRepositoryDnsLookup: RepositoryDnsLookup = async (host) =>
+  lookupHost(host, { all: true, verbatim: true });
+
+async function repositoryDnsAllowed(input: string, lookup: RepositoryDnsLookup): Promise<boolean> {
+  const host = repositoryHost(input);
+  if (host === undefined) return false;
+  if (classifyRepositoryHost(host) !== undefined) return repositoryUrlAllowed(input);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new TypeError("Repository host resolution unavailable"));
+    }, 2_000);
+    timer.unref();
+  });
+  try {
+    const addresses = await Promise.race([lookup(host), deadline]);
+    return (
+      addresses.length > 0 &&
+      addresses.every(({ address }) => {
+        const kind = classifyRepositoryHost(address);
+        return kind === "public" || kind === "private";
+      })
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function containsControlCharacter(input: string): boolean {
@@ -428,8 +471,11 @@ function handleCloneError(ctx: RouteContext, deps: UiHandlerDeps, error: unknown
 export function createCloneRepositoryHandler(
   cloneRunner: CloneRepositoryRunner = cloneRepository,
   activityLog: ServerLogSink = processServerLogSink(),
+  lookup: RepositoryDnsLookup = defaultRepositoryDnsLookup,
 ): (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult> {
   return async (ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> => {
+    if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined)
+      return forbidden("A paired app session is required.");
     try {
       const body = await readJsonObject(ctx.req);
       const repositoryUrl = requireString(body, "repositoryUrl");
@@ -440,6 +486,8 @@ export function createCloneRepositoryHandler(
           "Repository URL must be HTTPS, SSH, or git@host:path without embedded secrets.",
         );
       }
+      if (!(await repositoryDnsAllowed(repositoryUrl, lookup)))
+        return forbidden("The repository host is unavailable for clone.");
       const destination = await assertDestination(destinationInput);
       if (typeof destination !== "string") return destination;
       assertUiDbOutsideProject(deps.uiDbPath, destination);

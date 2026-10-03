@@ -24,7 +24,7 @@ import {
   isActivityLogInstanceId,
   isActivityLogProcessId,
   isActivityLogProductVersion,
-  normalizeKeikoFrameSignature,
+  normalizeDefectFrameSignature,
   parseActivityLogSegmentId,
   parseSupportIncidentPrivateProjection,
   type SupportIncidentPrivateProjection,
@@ -269,7 +269,9 @@ function selectedEvidence(
     ...query.diagnosticSufficiency.reasons,
     ...incident.sufficiencyReasons,
     ...privacy.reasons(),
-    ...(events.length < selected.length ? (["unsupported-evidence"] as const) : []),
+    ...(selected.some((event) => !isSupportReportEvent(event.record, registry))
+      ? (["unsupported-evidence"] as const)
+      : []),
   ]);
   const lifetimes = reportLifetimes(query, events);
   try {
@@ -594,14 +596,13 @@ function failureIdentityMatches(
   incident: SupportIncidentPrivateProjection,
   event: SupportReportEvent,
 ): boolean {
-  const input = registeredFailureFingerprintInput({
-    op: incident.op,
-    errorKind: event.record.errorKind,
-    frames: event.record.frames,
-  });
+  const input = registeredFailureFingerprintInput(
+    { ...event.record, op: incident.op },
+    incident.fingerprintAlgorithm,
+  );
   return (
     input.errorKind === incident.errorKind &&
-    normalizeKeikoFrameSignature(input.frames).length === incident.frameCount &&
+    normalizeDefectFrameSignature(input).length === incident.frameCount &&
     computeDefectFingerprint(input) === incident.defectFingerprint &&
     canonicalSupportJson(registeredFailureCorrelation(event.record)) ===
       canonicalSupportJson(incident.correlation)

@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import {
   MAX_SUPPORT_REPORT_EVENT_BYTES,
-  activityLogOperationSchema,
   supportIncidentPrivateProjection,
   supportReportFileName,
   type DesktopSupportReportResponse,
@@ -14,6 +13,7 @@ import {
   SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   recordUserReportedIncident,
   supportIncidentSegmentFiles,
+  type SupportIncidentRejection,
 } from "../support-incident.js";
 import { listSupportIncidentEntries } from "../support-incident-store.js";
 import { DEFAULT_SUPPORT_QUERY_LIMITS, type SupportQuerySelection } from "./support-query.js";
@@ -34,6 +34,13 @@ const REPORT_QUERY_LIMITS = {
   maxResultBytes: MAX_SUPPORT_REPORT_EVENT_BYTES,
 };
 
+export class DesktopSupportReportPreparationError extends Error {
+  public constructor(public readonly reason: SupportIncidentRejection) {
+    super("Support report incident unavailable");
+    this.name = "DesktopSupportReportPreparationError";
+  }
+}
+
 function correlationSelection(correlationId: string): SupportQuerySelection {
   return {
     kind: "closure",
@@ -47,8 +54,8 @@ function correlationSelection(correlationId: string): SupportQuerySelection {
 
 function createReportIncident(stateDir: string, correlationId: string): SupportIncidentRecord {
   const created = recordUserReportedIncident(stateDir, { correlationId });
-  if (created.status === "rejected" || created.record === undefined)
-    throw new SupportReportError("selection-unavailable");
+  if (created.status === "rejected") throw new DesktopSupportReportPreparationError(created.reason);
+  if (created.record === undefined) throw new SupportReportError("selection-unavailable");
   return created.record;
 }
 
@@ -85,6 +92,7 @@ function incidentSelection(stateDir: string, record: SupportIncidentRecord): Sup
 export function prepareDesktopSupportReport(
   stateDir: string,
   correlationId?: string,
+  requestCorrelationId?: string,
 ): SupportIncidentRecord {
   const existing =
     correlationId === undefined
@@ -92,7 +100,10 @@ export function prepareDesktopSupportReport(
       : listSupportIncidents(stateDir).find(
           (record) => record.correlation.rootCorrelationId === correlationId,
         );
-  return existing ?? createReportIncident(stateDir, correlationId ?? randomUUID());
+  return (
+    existing ??
+    createReportIncident(stateDir, correlationId ?? requestCorrelationId ?? randomUUID())
+  );
 }
 
 function recentFailureCorrelation(stateDir: string): string | undefined {
@@ -100,35 +111,36 @@ function recentFailureCorrelation(stateDir: string): string | undefined {
   const records = listSupportIncidentEntries(stateDir)
     .flatMap((entry) => {
       const record = entry.record;
-      return record !== undefined &&
+      return record?.trigger === "registered-failure" &&
+        !record.fingerprint.op.startsWith("support.report.") &&
         record.expiresAtMs > now &&
         record.createdAtMs >= now - SUPPORT_INCIDENT_WINDOW_BEFORE_MS
         ? [record]
         : [];
     })
-    .reverse();
-  for (const record of records) {
-    const correlationId = record.correlation.rootCorrelationId;
-    if (correlationId === undefined) continue;
-    const query = executeLocalSupportQuery(
-      stateDir,
-      correlationSelection(correlationId),
-      REPORT_QUERY_LIMITS,
-      {
-        trigger: "export",
-        persist: false,
-      },
-    );
-    if (
-      query.result.events.some(
-        (event) =>
-          event.role === "closure" &&
-          activityLogOperationSchema(event.parsed.view.op)?.lifecycle === "failure",
-      )
-    )
-      return correlationId;
-  }
-  return undefined;
+    .sort((left, right) => right.createdAtMs - left.createdAtMs);
+  return records[0]?.correlation.rootCorrelationId;
+}
+
+export interface DesktopSupportReportSelection {
+  readonly correlationId: string | undefined;
+  readonly evidence?: ReturnType<typeof executeLocalSupportQuery> | undefined;
+}
+
+export function readDesktopSupportReportSelection(
+  stateDir: string,
+  correlationId?: string,
+): DesktopSupportReportSelection {
+  const selected = correlationId ?? recentFailureCorrelation(stateDir);
+  if (selected === undefined) return { correlationId: undefined };
+  const evidence = executeLocalSupportQuery(
+    stateDir,
+    correlationSelection(selected),
+    REPORT_QUERY_LIMITS,
+    { trigger: "export", persist: false },
+  );
+  if (evidence.result.events.length === 0) throw new SupportReportError("selection-unavailable");
+  return { correlationId: selected, evidence };
 }
 
 /** Read-only selection: validate a requested error or reuse the most recent retained failure. */
@@ -136,15 +148,7 @@ export function validateDesktopSupportReportSelection(
   stateDir: string,
   correlationId?: string,
 ): string | undefined {
-  if (correlationId === undefined) return recentFailureCorrelation(stateDir);
-  const query = executeLocalSupportQuery(
-    stateDir,
-    correlationSelection(correlationId),
-    REPORT_QUERY_LIMITS,
-    { trigger: "export", persist: false },
-  );
-  if (query.result.events.length === 0) throw new SupportReportError("selection-unavailable");
-  return correlationId;
+  return readDesktopSupportReportSelection(stateDir, correlationId).correlationId;
 }
 
 /** Read-only composition: safe to run off the server request event loop. */
@@ -152,15 +156,18 @@ export function createPreparedDesktopSupportReport(
   stateDir: string,
   record: SupportIncidentRecord,
   correlationId?: string,
+  selectedEvidence?: ReturnType<typeof executeLocalSupportQuery>,
 ): DesktopSupportReportResponse {
   const selection =
     correlationId === undefined
       ? incidentSelection(stateDir, record)
       : correlationSelection(correlationId);
-  const evidence = executeLocalSupportQuery(stateDir, selection, REPORT_QUERY_LIMITS, {
-    trigger: "export",
-    persist: false,
-  });
+  const evidence =
+    selectedEvidence ??
+    executeLocalSupportQuery(stateDir, selection, REPORT_QUERY_LIMITS, {
+      trigger: "export",
+      persist: false,
+    });
   const report = buildSupportReport(incidentDescriptor(stateDir, record), evidence.result);
   return {
     fileName: supportReportFileName(
@@ -169,6 +176,15 @@ export function createPreparedDesktopSupportReport(
       report.incident.createdAtMs,
     ),
     reportJson: serializeSupportReport(report),
+    summary: {
+      status: report.selection.status,
+      reasons: report.selection.reasons,
+      recordCount: report.evidence.recordCount,
+      reportDigest: report.integrity.reportDigest,
+      incidentId: report.incident.incidentId,
+      manifestUnreadableCount: evidence.manifestStats.unreadableCount,
+      manifestReusedCount: evidence.manifestStats.reusedCount,
+    },
   };
 }
 
@@ -176,10 +192,11 @@ export function createDesktopSupportReport(
   stateDir: string,
   correlationId?: string,
 ): DesktopSupportReportResponse {
-  const selectedCorrelation = validateDesktopSupportReportSelection(stateDir, correlationId);
+  const selected = readDesktopSupportReportSelection(stateDir, correlationId);
   return createPreparedDesktopSupportReport(
     stateDir,
-    prepareDesktopSupportReport(stateDir, selectedCorrelation),
-    selectedCorrelation,
+    prepareDesktopSupportReport(stateDir, selected.correlationId),
+    selected.correlationId,
+    selected.evidence,
   );
 }

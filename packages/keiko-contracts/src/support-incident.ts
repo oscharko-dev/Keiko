@@ -19,12 +19,15 @@
 // `incidentId` is random and opaque (128 bits, minted by the store). It names one occurrence and
 // links one public finding to one private report; it carries no time, process, host, user, or
 // path information. `defectFingerprint` is deterministic: a SHA-256 over the canonical preimage
-// built by `defectFingerprintPreimage` from four allowlisted, release-stable inputs — the owning
+// built by `defectFingerprintPreimage` from allowlisted inputs. Version one uses release-stable
+// inputs — the owning
 // product surface, the registered operation, the closed errorKind, and the normalized Keiko frame
 // signature (module identities only; no line, column, build, time, process, instance, host, user,
 // or absolute path). Equal inputs yield equal fingerprints across builds and releases within one
 // algorithm version, so the same defect groups together for deduplication, regression, and fix
-// linkage.
+// linkage. Version two client diagnostics additionally carry closed product context and shipped
+// chunk digests. Chunk signatures can change across releases; customer labels never enter either
+// version. Browser retention claims preserve distinct causal occurrences despite coarse signatures.
 //
 // COLLISIONS. The fingerprint is a grouping key, not a proof of identity. Two different defects
 // that fail in the same operation, with the same errorKind, through the same Keiko modules share a
@@ -40,6 +43,8 @@
 // algorithm change: it only extends the input domain.
 
 import { parseActivityLogSegmentId, ACTIVITY_LOG_PIN_ID_PATTERN } from "./activity-log-files.js";
+import { isClientDefectContext, normalizeClientDefectFrames } from "./client-defect-signature.js";
+export { clientDefectContext } from "./client-defect-signature.js";
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_FAILURE_SURFACES,
@@ -195,6 +200,8 @@ export function isSupportIncidentSurface(value: unknown): value is SupportIncide
 // ─── Fingerprint inputs ─────────────────────────────────────────────────────────────────────────
 
 export interface DefectFingerprintInput {
+  readonly algorithm?: 1 | 2;
+  readonly clientContext?: readonly string[];
   readonly surface: SupportIncidentSurface;
   // A registered operation name, or SUPPORT_INCIDENT_UNATTRIBUTED for a user report.
   readonly op: string;
@@ -234,6 +241,15 @@ export function normalizeKeikoFrameSignature(frames: readonly unknown[]): readon
   return signature;
 }
 
+export function normalizeDefectFrameSignature(input: DefectFingerprintInput): readonly string[] {
+  const server = normalizeKeikoFrameSignature(input.frames);
+  if (input.algorithm !== 2) return server;
+  return [...server, ...normalizeClientDefectFrames(input.frames)].slice(
+    0,
+    MAX_DEFECT_FINGERPRINT_FRAMES,
+  );
+}
+
 function validOperation(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -248,17 +264,27 @@ function validOperation(value: unknown): value is string {
  * first, so only allowlisted stable values ever reach the hash. Throws for an input outside the
  * closed domain instead of fingerprinting it.
  */
+function fingerprintAlgorithm(value: unknown): 1 | 2 {
+  if (value === undefined) return DEFECT_FINGERPRINT_ALGORITHM_VERSION;
+  if (value === 1 || value === 2) return value;
+  throw new RangeError("invalid fingerprint algorithm");
+}
+
 export function defectFingerprintPreimage(input: DefectFingerprintInput): string {
   if (!isSupportIncidentSurface(input.surface)) throw new RangeError("invalid surface");
   if (!validOperation(input.op)) throw new RangeError("invalid operation");
   if (!isActivityLogErrorKind(input.errorKind)) throw new RangeError("invalid errorKind");
+  const algorithm = fingerprintAlgorithm(input.algorithm);
+  if (!isClientDefectContext(input.clientContext ?? []))
+    throw new RangeError("invalid client context");
   return JSON.stringify([
     "keiko-defect-fingerprint",
-    DEFECT_FINGERPRINT_ALGORITHM_VERSION,
+    algorithm,
     input.surface,
     input.op,
     input.errorKind,
-    ...normalizeKeikoFrameSignature(input.frames),
+    ...normalizeDefectFrameSignature(input),
+    ...(algorithm === 2 ? [input.clientContext ?? []] : []),
   ]);
 }
 
@@ -273,7 +299,7 @@ export const UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT: DefectFingerprintInput = {
 // ─── The persisted record ───────────────────────────────────────────────────────────────────────
 
 export interface SupportIncidentFingerprint {
-  readonly algorithm: typeof DEFECT_FINGERPRINT_ALGORITHM_VERSION;
+  readonly algorithm: 1 | 2;
   readonly defectFingerprint: string;
   readonly surface: SupportIncidentSurface;
   readonly op: string;
@@ -401,7 +427,7 @@ function validFingerprint(value: unknown): value is SupportIncidentFingerprint {
       "errorKind",
       "frameCount",
     ]) &&
-    value.algorithm === DEFECT_FINGERPRINT_ALGORITHM_VERSION &&
+    (value.algorithm === DEFECT_FINGERPRINT_ALGORITHM_VERSION || value.algorithm === 2) &&
     isDefectFingerprint(value.defectFingerprint) &&
     isSupportIncidentSurface(value.surface) &&
     validOperation(value.op) &&
@@ -587,7 +613,7 @@ export interface SupportIncidentPublicProjection {
   readonly schemaVersion: typeof SUPPORT_INCIDENT_SCHEMA_VERSION;
   readonly incidentId: string;
   readonly defectFingerprint: string;
-  readonly fingerprintAlgorithm: typeof DEFECT_FINGERPRINT_ALGORITHM_VERSION;
+  readonly fingerprintAlgorithm: 1 | 2;
   readonly trigger: SupportIncidentTrigger;
   readonly productVersion: string;
   readonly platformClass: string;

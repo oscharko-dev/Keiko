@@ -1,5 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import { useFilesNavigation } from "./useFilesNavigation";
 
 describe("folder navigation", () => {
@@ -58,4 +59,34 @@ describe("folder navigation", () => {
     fallback.rerender({ root: "/documents" });
     expect(fallback.result.current.canGoBack).toBe(false);
   });
+});
+
+it("records product navigation lifecycle pairs for visit, Back and Forward", () => {
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  try {
+    const { result } = renderHook(() => useFilesNavigation("/documents"));
+    act(() => result.current.visit("notes"));
+    act(() => result.current.back());
+    act(() => result.current.forward());
+    expect(writer).toHaveBeenCalledTimes(6);
+    for (let index = 0; index < 6; index += 2) {
+      const started = writer.mock.calls[index]?.[1];
+      const settled = writer.mock.calls[index + 1]?.[1];
+      expect(started?.stageReport).toMatchObject({
+        stage: "files directory navigation",
+        phase: "started",
+      });
+      expect(settled).toMatchObject({
+        correlationId: started?.correlationId,
+        stageReport: {
+          stage: "files directory navigation",
+          phase: "settled",
+          ordinal: started?.stageReport.ordinal,
+        },
+      });
+    }
+  } finally {
+    resetClientDiagnosticWriter();
+  }
 });

@@ -1,5 +1,11 @@
 # Coding Workbench Run Blocked Inside a Task Workspace
 
+For a received report, first run `keiko support analyze <report.json> --json` without a selector.
+Use `incident.correlation.rootCorrelationId` or the exported run/chat reference from its validated
+timelines in the examples below. New exports use artifact-local ordinals; a local UI Support ID or
+run ID cannot select that artifact. Local `support query` examples retain the original identifiers
+on the originating installation. The report never includes an original-to-exported mapping.
+
 Operator guidance for a governed coding run that binds and starts but cannot edit or verify inside
 its managed task workspace. The entry follows the [troubleshooting entry template](./_template.md).
 
@@ -38,7 +44,7 @@ needed the process supervisor's own console, which a customer does not have.
    (the orchestrator declined), `faulted` (the shutdown call itself failed) or `not-applicable` (there
    was no coding runtime to stop). It reports the resolved outcome, never merely that the call
    returned.
-2. On the run's own timeline (`keiko support analyze --correlation-id <runId>`), look for
+2. On the run's own timeline (`keiko support query --correlation-id <runId> --json`), look for
    `op: "coding-runtime.run.shutdown"` with `reason: "server-shutdown"`. It is written after the
    attempt and reports what the attempt achieved: `outcome: "ended"` means the shutdown ended this
    run and a `coding-runtime.run.settled` line accompanies it; `outcome: "refused"` with a
@@ -246,7 +252,7 @@ port for the worktree, but only the `WorkspaceInfo` projection reached the lanes
    in `errorClass` and its Keiko frames; then `op: "coding-runtime.start"` with
    `code: "stage=start:reason=launch-resolution"`. Since the repair the class is the boundary's own
    (`PathDeniedError`, `CommandDeniedError`), never a relabelled guard verdict.
-3. `keiko support analyze --correlation-id <run id> --json` reconstructs the sequence; the request
+3. `keiko support query --correlation-id <run id> --json` reconstructs the sequence; the request
    correlation alone reconstructs only the refusal.
 
 **Resolution**
@@ -332,7 +338,7 @@ the log.
 
 **Diagnostic Steps**
 
-1. `keiko support analyze <report.json> --correlation-id <run id> --json`; locate the first
+1. `keiko support analyze <report.json> --correlation-id <exported-run-ref> --json`; locate the first
    `OpenCodeHistoryFailure`. Since 2026-09-10 its `code` names the refused row body-free:
    `:part=<type>:tool=<alias>:status=<pending|running|completed|error>:partBytes=<n>:gate=<gate>`.
    `gate=argument-bound` means the arguments exceeded the catalog ceilings (`TOOL_CATALOG_LIMITS`:
@@ -385,7 +391,7 @@ through the plain node port, which re-admits the root under the user-workspace r
 
 **Diagnostic Steps**
 
-1. `keiko support analyze <report.json> --correlation-id <run id>`; the first
+1. `keiko support analyze <report.json> --correlation-id <exported-run-ref>`; the first
    `coding-runtime.verification` failure names the gate in its `frames`
    (`git-index-stat.js` → `indexStatMatches`, or `gitIndexTransaction.js` → `readGitStageFile`).
 2. Confirm the worktree root lies below a `.keiko` segment (`task-workspace.lifecycle` lines carry the
@@ -430,7 +436,7 @@ edited or staged by Keiko — so its presence says nothing about the snapshot's 
 
 **Diagnostic Steps**
 
-1. `keiko support analyze <report.json> --correlation-id <run id>`; the first
+1. `keiko support analyze <report.json> --correlation-id <exported-run-ref>`; the first
    `coding-runtime.verification` failure names `code: "git-raw-snapshot-incomplete"` (a real content
    or path-count budget overrun) or another closed code of the reader.
 2. On a build with the repair, a `git.raw-status.denied-paths-excluded` line with
@@ -477,7 +483,7 @@ property had failed either.
 
 **Diagnostic Steps**
 
-1. `keiko support analyze <report.json> --correlation-id <chat correlation id>`. Since 2026-09-10 the
+1. `keiko support analyze <report.json> --correlation-id <exported-chat-ref>`. Since 2026-09-10 the
    `gateway.tool-catalog.rejected` line carries the schema's own account: `missingRequired` (schema
    property paths), `invalidPaths`, `missingRequiredCount`, `invalidPathCount` and
    `unexpectedPropertyCount` — declared names and counts only, never the arguments. The
@@ -531,7 +537,7 @@ delivering. Ad-hoc runs are exempt, because one legitimately ends with no commit
 1. Reconstruct the run's timeline and read it from the beginning, not from the end.
 
    ```bash
-   keiko support analyze <report.json> --correlation-id <runId> --json
+   keiko support analyze <report.json> --correlation-id <exported-run-ref> --json
    ```
 
 2. Look for the last blocking refusal before the run stopped. The two that end a run this way are a
@@ -667,7 +673,7 @@ service does not hold (never proposed, already redeemed, or expired after five m
 1. Reconstruct the run's timeline and find the `stage-propose` line(s):
 
    ```bash
-   keiko support analyze <report.json> --correlation-id <runId> --json
+   keiko support analyze <report.json> --correlation-id <exported-run-ref> --json
    ```
 
 2. `state: "blocked"`: read the `reason`. For `selection-unreviewed`, compare the request's

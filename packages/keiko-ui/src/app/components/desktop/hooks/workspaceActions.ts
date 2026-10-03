@@ -552,7 +552,9 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
             cfg: {
               ...w.cfg,
               root: normalizedRoot,
-              rootBinding: "coding-repository",
+              ...(isManagedTaskWorkspaceRoot(normalizedRoot)
+                ? {}
+                : { rootBinding: "coding-repository" }),
               ...layoutPatch,
               ...reveal,
             },
@@ -586,7 +588,9 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
           z: ++zc.current,
           cfg: {
             root: normalizedRoot,
-            rootBinding: "coding-repository",
+            ...(isManagedTaskWorkspaceRoot(normalizedRoot)
+              ? {}
+              : { rootBinding: "coding-repository" }),
             file: normalizedPath,
             openFiles: [normalizedPath],
             layoutJson: serializeEditorLayoutStateV2(

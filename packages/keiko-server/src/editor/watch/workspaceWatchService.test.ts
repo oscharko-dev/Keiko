@@ -203,13 +203,66 @@ async function drainInitialBaseline(
 }
 
 describe("workspace watch service", () => {
+  it("requires a snapshot for a cursor from a restarted watch session", () => {
+    const manager = service(new FakeAdapter());
+    try {
+      expect(manager.subscribe({ root, lastSequence: 700, onEvent: vi.fn() })).toMatchObject({
+        kind: "ok",
+        snapshotRequired: true,
+        snapshot: { requiresSnapshot: true },
+      });
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
+  it("retains one seed across a metadata lease pause and announces absorbed unattended changes", async () => {
+    await writeFile(join(root, "existing.txt"), "one");
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fileSystem.lstat.mockImplementationOnce(async (path): Promise<Stats> => {
+      await held;
+      return lstat(path);
+    });
+    const manager = createWorkspaceWatchService({ adapter, fileSystem, coalesceMs: 0 });
+    try {
+      const first = manager.subscribe({ root, onEvent: vi.fn() });
+      await waitForCondition(() => fileSystem.lstat.mock.calls.length === 1);
+      if (first.kind !== "ok") throw new Error("Expected subscription");
+      const statReads = fileSystem.stat.mock.calls.length;
+      first.unsubscribe();
+      await writeFile(join(root, "unattended.txt"), "two");
+      adapter.emit({ eventType: "rename", filename: "unattended.txt" });
+      release?.();
+      for (let turn = 0; turn < 5; turn += 1) await yieldToEventLoop();
+      expect(fileSystem.realpath).not.toHaveBeenCalled();
+      expect(fileSystem.stat).toHaveBeenCalledTimes(statReads);
+      const onEvent = vi.fn();
+      manager.subscribe({ root, onEvent });
+      await drainInitialBaseline(manager, adapter);
+      await waitForCondition(() => manager.snapshot(root).health === "healthy");
+      expect(onEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "rescan", relativePath: "" }),
+      );
+      expect(fileSystem.readdir).toHaveBeenCalledTimes(2);
+      expect(onEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "created", relativePath: "existing.txt" }),
+      );
+    } finally {
+      manager.disposeAll();
+    }
+  });
   it("reconciles unattended changes when an authorized subscriber resumes", async () => {
     const adapter = new FakeAdapter();
     const manager = createWorkspaceWatchService({ adapter, coalesceMs: 0, idleTearDownMs: 30_000 });
     const args = {
       root,
       onEvent: vi.fn(),
-      reproveRoot: () => createOrdinaryWorkspaceRootAccess(root),
+      reproveRoot: (): WorkspaceRootAccess => createOrdinaryWorkspaceRootAccess(root),
     };
     const first = manager.subscribe(args);
     await drainInitialBaseline(manager, adapter);

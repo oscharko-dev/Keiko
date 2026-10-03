@@ -45,8 +45,8 @@ describe("support report browser download", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = objectUrl;
-        static revokeObjectURL = revoke;
+        static override createObjectURL = objectUrl;
+        static override revokeObjectURL = revoke;
       },
     );
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (

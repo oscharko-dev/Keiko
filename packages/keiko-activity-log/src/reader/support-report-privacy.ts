@@ -13,7 +13,14 @@ import {
   CLIENT_ERROR_CLASSES,
   isPersistedClientDiagnosticFrame,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { REDACTED_SHAPE } from "../log-redaction.js";
+import {
+  REDACTED_SHAPE,
+  REDACTED_KEY,
+  REDACTED_LENGTH,
+  REDACTED_SECRET,
+  REDACTED_PATH,
+  REDACTED_PERSONAL,
+} from "../log-redaction.js";
 import {
   SUPPORT_CODE_MODULES,
   SUPPORT_CODE_ERROR_CLASSES,
@@ -22,6 +29,14 @@ import {
 import type { SupportReaderRegistry } from "./support-registry.js";
 
 const MODULES = new Set(SUPPORT_CODE_MODULES);
+const REDACTION_MARKERS = new Set([
+  REDACTED_SHAPE,
+  REDACTED_KEY,
+  REDACTED_LENGTH,
+  REDACTED_SECRET,
+  REDACTED_PATH,
+  REDACTED_PERSONAL,
+]);
 const ERROR_CLASSES = new Set([...SUPPORT_CODE_ERROR_CLASSES, ...CLIENT_ERROR_CLASSES]);
 const TECHNICAL_TOKENS = new Set([
   ...SUPPORT_CODE_TOKENS,
@@ -41,6 +56,8 @@ const HTTP_METHODS = new Set([
   "TRACE",
 ]);
 const SYMBOL_FIELDS = new Set([
+  "toolCanonicalId",
+  "profileId",
   "failedOp",
   "droppedOp",
   "diagnosticOperation",
@@ -69,7 +86,7 @@ interface PrivacyContext {
 function referenceAllocator(): (value: string) => string {
   const labels = new Map<string, string>();
   return (value): string => {
-    if (value === ACTIVITY_LOG_UNKNOWN_CORRELATION_ID) return value;
+    if (value === ACTIVITY_LOG_UNKNOWN_CORRELATION_ID || REDACTION_MARKERS.has(value)) return value;
     const existing = labels.get(value);
     if (existing !== undefined) return existing;
     const opaque = `id${String(labels.size + 1).padStart(6, "0")}`;
@@ -215,7 +232,6 @@ export function supportReportPrivacyProjection(
       },
     },
     event: (event): SupportReportEvent | undefined => projectEvent(event, context),
-    reasons: (): readonly DiagnosticSufficiencyReason[] =>
-      detailLost ? ["evidence-not-retained"] : [],
+    reasons: (): readonly DiagnosticSufficiencyReason[] => (detailLost ? ["evidence-partial"] : []),
   };
 }

@@ -243,7 +243,7 @@ describe("the closed record schema", () => {
     ["an unknown schema version", { ...record(), schemaVersion: 2 }],
     [
       "an unknown fingerprint algorithm",
-      { ...record(), fingerprint: { ...record().fingerprint, algorithm: 2 } },
+      { ...record(), fingerprint: { ...record().fingerprint, algorithm: 3 } },
     ],
     ["an unknown trigger", { ...record(), trigger: "telemetry" }],
     ["an unknown state", { ...record(), state: "sent" }],

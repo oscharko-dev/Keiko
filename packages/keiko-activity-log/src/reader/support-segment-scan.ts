@@ -31,6 +31,7 @@ import { classifyLine, type LineClassification } from "./support-analyze.js";
 import {
   SegmentManifestBuilder,
   ensureSegmentManifestDirectory,
+  segmentManifestDirectory,
   listStoredSegmentManifests,
   loadSegmentManifest,
   manifestMatchesCatalog,
@@ -315,7 +316,7 @@ function removeOrphanManifests(
 
 export interface SegmentManifestPassOptions {
   readonly trigger: SegmentManifestTrigger;
-  // False keeps every manifest in memory (a read-only analysis); true maintains the store.
+  // False reuses stored manifests without writing; true maintains the store.
   readonly persist: boolean;
   // True ignores every stored manifest and derives each one again from its segment.
   readonly rebuild: boolean;
@@ -338,7 +339,7 @@ function sealedManifest(
     stats.unreadableCount += 1;
     return undefined;
   }
-  persistManifest(directory, built, stored.existed, stats);
+  persistManifest(options.persist ? directory : undefined, built, stored.existed, stats);
   return built;
 }
 
@@ -353,8 +354,10 @@ export function ensureSegmentManifests(
   scanner: ActivityLogScanner,
   options: SegmentManifestPassOptions,
 ): SegmentManifestPass {
-  const directory = options.persist ? ensureSegmentManifestDirectory(stateDir) : undefined;
-  const stats = emptyStats(options.trigger, directory !== undefined);
+  const directory = options.persist
+    ? ensureSegmentManifestDirectory(stateDir)
+    : segmentManifestDirectory(stateDir);
+  const stats = emptyStats(options.trigger, options.persist && directory !== undefined);
   const manifests = new Map<string, LoadedSegmentManifest>();
   const sealedIds = new Set<string>();
   for (const file of files) {
@@ -369,7 +372,7 @@ export function ensureSegmentManifests(
     }
     if (manifest !== undefined) manifests.set(file.name, loadSegmentManifest(manifest));
   }
-  removeOrphanManifests(directory, sealedIds, stats);
+  if (options.persist) removeOrphanManifests(directory, sealedIds, stats);
   return { manifests, stats };
 }
 

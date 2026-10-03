@@ -634,7 +634,7 @@
   },
   "src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 5
+      "count": 4
     },
     "complexity": {
       "count": 2
@@ -890,7 +890,7 @@
       "count": 8
     },
     "complexity": {
-      "count": 8
+      "count": 3
     },
     "max-lines-per-function": {
       "count": 8
@@ -1148,9 +1148,6 @@
   "src/app/components/desktop/widgets/cards/sharedEventSource.ts": {
     "@typescript-eslint/explicit-function-return-type": {
       "count": 2
-    },
-    "complexity": {
-      "count": 1
     }
   },
   "src/app/components/desktop/widgets/cards/useDebugSession.test.tsx": {

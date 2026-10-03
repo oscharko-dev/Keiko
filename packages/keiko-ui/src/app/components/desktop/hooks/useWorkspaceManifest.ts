@@ -78,9 +78,13 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
   const [mutating, setMutating] = useState(false);
   const [issue, setIssue] = useState<"load" | "mutation" | null>(null);
   const requestRef = useRef(0);
-  // A manifest can legitimately omit a removed root. Scope it to the requested root rather
-  // than membership, so navigation never looks like a removal in the previous workspace.
-  const resolvedManifest = manifestRoot === rootPath ? manifest : null;
+  // Membership keeps multi-root hosts mounted during an in-workspace selection. The requested
+  // root also keeps a removal snapshot visible so the host can dispose the removed member.
+  const containsRoot = manifest?.roots.some((entry) => entry.canonicalRoot === rootPath) === true;
+  const resolvedManifest = manifestRoot === rootPath || containsRoot ? manifest : null;
+  const resolvedLoading = tracksRoot && manifestRoot !== rootPath && !containsRoot ? true : loading;
+  const rootRef = useRef(rootPath);
+  rootRef.current = rootPath;
   const manifestRef = useRef(resolvedManifest);
   manifestRef.current = resolvedManifest;
 
@@ -97,7 +101,7 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
     }
     setLoading(true);
     setAuthorityRoot(rootPath);
-    setPathReadAuthority("checking");
+    if (manifestRef.current === null) setPathReadAuthority("checking");
     try {
       const access = await fetchWorkspaceManifestAccess();
       if (request === requestRef.current) {
@@ -168,10 +172,12 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
       setIssue(null);
       try {
         const next = await action(current, actor);
+        if (manifestRef.current?.workspaceId !== current.workspaceId) return false;
         setManifest(next);
+        setManifestRoot(rootRef.current);
         return true;
       } catch {
-        setIssue("mutation");
+        if (manifestRef.current?.workspaceId === current.workspaceId) setIssue("mutation");
         return false;
       } finally {
         setMutating(false);
@@ -189,7 +195,7 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
     () => ({
       manifest: resolvedManifest,
       pathReadAuthority: resolvedPathReadAuthority,
-      loading,
+      loading: resolvedLoading,
       mutating,
       issue,
       refresh,
@@ -208,6 +214,14 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
           focusWorkspaceRoot(current, actor, targetRootRef),
         ),
     }),
-    [issue, loading, resolvedManifest, mutate, mutating, refresh, resolvedPathReadAuthority],
+    [
+      issue,
+      resolvedLoading,
+      resolvedManifest,
+      mutate,
+      mutating,
+      refresh,
+      resolvedPathReadAuthority,
+    ],
   );
 }

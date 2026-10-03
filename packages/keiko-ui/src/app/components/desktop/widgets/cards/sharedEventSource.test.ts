@@ -5,6 +5,8 @@ import {
   type ClientDiagnosticMeta,
 } from "../../../../../lib/client-diagnostics";
 import {
+  withSharedEventSourceOpen,
+  awaitSharedEventSourceOpen,
   resetSharedEventSourcesForTests,
   refreshSharedEventSource,
   sharedEventSourceGeneration,
@@ -612,3 +614,108 @@ it.each(["editor-watch:snapshot", "editor-watch:snapshot-required"])(
     }
   },
 );
+
+it("opens an essential terminal immediately ahead of background metadata and retains it", () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("EventSource", FakeEventSource);
+  const stopSettings = subscribeSharedEventSource("/api/settings/events", ["change"], vi.fn(), {
+    priority: "background",
+  });
+  const stopSnippets = subscribeSharedEventSource("/api/snippets/events", ["change"], vi.fn(), {
+    priority: "background",
+  });
+  const stopWatch = subscribeSharedEventSource(
+    "/api/editor/workspace-watch/events?root=a",
+    ["change"],
+    vi.fn(),
+  );
+  const watch = FakeEventSource.instances.at(-1);
+  const stopTerminal = subscribeSharedEventSource(
+    "/api/terminal/events",
+    ["execution-started"],
+    vi.fn(),
+  );
+  const terminal = FakeEventSource.instances.find(
+    (source) => source.url === "/api/terminal/events",
+  );
+  expect(terminal).toBeDefined();
+  expect(watch?.closed).toBe(false);
+  vi.advanceTimersByTime(20_000);
+  expect(terminal?.closed).toBe(false);
+  stopSettings();
+  stopSnippets();
+  stopWatch();
+  stopTerminal();
+  vi.useRealTimers();
+});
+
+it("keeps healthy essential leases when an unrelated connection enters backoff", () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("EventSource", FakeEventSource);
+  const stops = Array.from({ length: 5 }, (_, index) =>
+    subscribeSharedEventSource(
+      `/api/editor/workspace-watch/events?root=${String(index)}`,
+      ["change"],
+      vi.fn(),
+    ),
+  );
+  vi.advanceTimersByTime(5_000);
+  const healthy = FakeEventSource.instances.find(
+    (source) => source.url.includes("root=3") && !source.closed,
+  );
+  expect(healthy).toBeDefined();
+  FakeEventSource.instances[0]?.onerror?.();
+  expect(healthy?.closed).toBe(false);
+  stops.forEach((stop) => stop());
+  vi.useRealTimers();
+});
+
+it("waits for the native open handshake and holds execution listeners throughout the POST", async () => {
+  vi.stubGlobal("EventSource", FakeEventSource);
+  const received = vi.fn();
+  const run = vi.fn(async () => {
+    const source = FakeEventSource.instances[0];
+    source?.listeners
+      .get("execution-started")
+      ?.forEach((listener) => listener(new MessageEvent("execution-started", { data: "started" })));
+    return "done";
+  });
+  const pending = withSharedEventSourceOpen(
+    "/api/terminal/events",
+    ["execution-started"],
+    received,
+    run,
+  );
+  expect(run).not.toHaveBeenCalled();
+  FakeEventSource.instances[0]?.listeners
+    .get("open")
+    ?.forEach((listener) => listener(new MessageEvent("open")));
+  expect(await pending).toBe("done");
+  expect(received).toHaveBeenCalledOnce();
+  expect(FakeEventSource.instances[0]?.closed).toBe(true);
+});
+
+it("releases an execution subscription when readiness is aborted or times out", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("EventSource", FakeEventSource);
+  const abort = new AbortController();
+  const run = vi.fn(async () => undefined);
+  const pending = withSharedEventSourceOpen(
+    "/api/terminal/events",
+    ["execution-started"],
+    vi.fn(),
+    run,
+    abort.signal,
+  );
+  const assertion = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  abort.abort();
+  await assertion;
+  expect(run).not.toHaveBeenCalled();
+  expect(FakeEventSource.instances.every((source) => source.closed)).toBe(true);
+  const timeout = awaitSharedEventSourceOpen("/api/commands/events");
+  const timeoutAssertion = expect(timeout).rejects.toMatchObject({ name: "TimeoutError" });
+  await vi.advanceTimersByTimeAsync(15_000);
+  await timeoutAssertion;
+  expect(FakeEventSource.instances.every((source) => source.closed)).toBe(true);
+  vi.useRealTimers();
+});

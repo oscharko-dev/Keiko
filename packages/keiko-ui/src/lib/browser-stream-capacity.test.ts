@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createOriginLocksFixture } from "../test-utils/origin-locks-fixture";
 
 import {
   acquirePersistentBrowserStreamCapacity,
@@ -36,59 +37,10 @@ describe("browser stream capacity", () => {
   });
 });
 
-interface QueuedLock {
-  readonly signal: AbortSignal;
-  readonly grant: () => void;
-}
-
-function fakeOriginLocks(): {
-  request: (
-    name: string,
-    options: { signal: AbortSignal },
-    callback: () => Promise<void>,
-  ) => Promise<void>;
-} {
-  const busy = new Set<string>();
-  const queues = new Map<string, QueuedLock[]>();
-  const drain = (name: string): void => {
-    if (busy.has(name)) return;
-    const next = queues.get(name)?.shift();
-    if (next === undefined) return;
-    if (next.signal.aborted) drain(name);
-    else next.grant();
-  };
-  return {
-    request: (name, options, callback): Promise<void> =>
-      new Promise((resolve, reject) => {
-        const grant = (): void => {
-          busy.add(name);
-          void callback()
-            .then(resolve, reject)
-            .finally(() => {
-              busy.delete(name);
-              drain(name);
-            });
-        };
-        options.signal.addEventListener(
-          "abort",
-          () => {
-            if (!busy.has(name)) drain(name);
-            reject(new DOMException("Cancelled", "AbortError"));
-          },
-          { once: true },
-        );
-        const queue = queues.get(name) ?? [];
-        queue.push({ signal: options.signal, grant });
-        queues.set(name, queue);
-        drain(name);
-      }),
-  };
-}
-
 describe("origin-wide persistent stream capacity", () => {
   it("limits independent consumers to three origin slots and yields every five seconds", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal("navigator", { locks: fakeOriginLocks() });
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
     const active = new Set<number>();
     const granted = new Set<number>();
     let peak = 0;
@@ -102,6 +54,7 @@ describe("origin-wide persistent stream capacity", () => {
         () => active.delete(index),
       ),
     );
+    await vi.advanceTimersByTimeAsync(0);
     expect(active.size).toBe(3);
     await vi.advanceTimersByTimeAsync(5_000);
     expect(peak).toBe(3);
@@ -113,13 +66,14 @@ describe("origin-wide persistent stream capacity", () => {
 
   it("cancels queued and held leases without opening stale consumers", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal("navigator", { locks: fakeOriginLocks() });
+    vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
     const held = Array.from({ length: 3 }, () =>
       acquirePersistentBrowserStreamCapacity(vi.fn(), vi.fn()),
     );
     const grant = vi.fn();
     const release = vi.fn();
     const cancel = acquirePersistentBrowserStreamCapacity(grant, release);
+    await vi.advanceTimersByTimeAsync(0);
     cancel();
     cancel();
     held.forEach((stop) => stop());
@@ -142,4 +96,51 @@ describe("origin-wide persistent stream capacity", () => {
     acquirePersistentBrowserStreamCapacity(grant, vi.fn())();
     expect(grant).not.toHaveBeenCalled();
   });
+});
+
+it("retains an uncontended lease and probes another free slot across independent tabs", async () => {
+  vi.useFakeTimers();
+  const locks = createOriginLocksFixture();
+  vi.stubGlobal("navigator", { locks });
+  const first = vi.fn();
+  const released = vi.fn();
+  const stop = acquirePersistentBrowserStreamCapacity(first, released);
+  await vi.advanceTimersByTimeAsync(0);
+  resetBrowserStreamCapacityForTests(); // A second independent page starts its own slot counter at zero.
+  const second = vi.fn();
+  const stopSecond = acquirePersistentBrowserStreamCapacity(second, vi.fn());
+  await vi.advanceTimersByTimeAsync(0);
+  expect(first).toHaveBeenCalledOnce();
+  expect(second).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(released).not.toHaveBeenCalled();
+  stop();
+  stopSecond();
+});
+
+it("never interrupts an active non-replayable connection for a queued consumer", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+  const releases = Array.from({ length: 3 }, () => vi.fn());
+  const held = releases.map((released) =>
+    acquirePersistentBrowserStreamCapacity(vi.fn(), released, { yieldable: false }),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  const grant = vi.fn();
+  const cancel = acquirePersistentBrowserStreamCapacity(grant, vi.fn());
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(grant).not.toHaveBeenCalled();
+  expect(releases.every((released) => released.mock.calls.length === 0)).toBe(true);
+  cancel();
+  held.forEach((stop) => stop());
+});
+
+it("never cycles the only healthy connection without an origin waiter", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("navigator", { locks: createOriginLocksFixture() });
+  const released = vi.fn();
+  const stop = acquirePersistentBrowserStreamCapacity(vi.fn(), released);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(released).not.toHaveBeenCalled();
+  stop();
 });

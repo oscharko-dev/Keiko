@@ -45,6 +45,7 @@ export const DE_MESSAGES = {
   "supportReport.creating": "Bericht wird erstellt…",
   "supportReport.saved": "Heruntergeladen.",
   "supportReport.failed": "Bericht nicht verfügbar. Erneut versuchen.",
+  "editor.projectRestricted": "Arbeitsbereichsskripte sind nicht verfügbar.",
   "editor.runtime.loadFailed": "Datei konnte nicht geöffnet werden.",
   "editor.runtime.retry": "Erneut versuchen",
 
@@ -312,8 +313,7 @@ export const DE_MESSAGES = {
   "shell.error.resetFailed":
     "Die gespeicherten Tastenkürzel konnten nicht zurückgesetzt werden. Lade neu, um es erneut zu versuchen, oder bearbeite die gespeicherten Einstellungen außerhalb von Keiko.",
   "window.error.title": "Fenster konnte nicht geladen werden.",
-  "window.error.body":
-    "Bitte erneut versuchen.",
+  "window.error.body": "Bitte erneut versuchen.",
   "window.tooSmall.title": "Zu klein für {label}",
   "window.tooSmall.body": "Vergrößere das Fenster oder zoome den Inhalt heraus",
   "window.connectPort.title": "Mit einem anderen Fenster verbinden",

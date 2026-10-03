@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +16,7 @@ import {
 import * as lazyModules from "../../../keiko-cli/src/lazy-modules.js";
 import { runSupportCli } from "../../../keiko-cli/src/support.js";
 import { fixtureLine, fixtureProcess } from "../../../../tests/support/activity-log-segments.js";
+import { parseSupportReport } from "./support-report.js";
 import type { ToolCatalogLogEvidence } from "./support-tool-catalog.js";
 import { defaultServerDiagnosticSink } from "@oscharko-dev/keiko-server/diagnostics-log";
 import { createCatalogToolBinder } from "@oscharko-dev/keiko-server/tool-catalog/catalogToolDispatch";
@@ -340,6 +341,15 @@ describe("tool lifecycle sink and corrupted artifact reconstruction", () => {
   });
 });
 
+function exportedAnalysisArgs(path: string, args: readonly string[]): readonly string[] {
+  const position = args.indexOf("--correlation-id");
+  if (position === -1) return args;
+  const report = parseSupportReport(readFileSync(path, "utf8"));
+  const root = report.incident.correlation.rootCorrelationId;
+  if (root === undefined) throw new TypeError("missing exported root reference");
+  return args.map((arg, index) => (index === position + 1 ? root : arg));
+}
+
 async function analyzeThroughCli(
   text: string,
   args: readonly string[],
@@ -375,7 +385,11 @@ async function analyzeThroughCli(
     const filename = readdirSync(directory).find((name) => name.startsWith("keiko-support-v1-"));
     if (filename === undefined) throw new TypeError("missing canonical report");
     const code = await runSupportCli(
-      ["analyze", join(directory, filename), ...args],
+      [
+        "analyze",
+        join(directory, filename),
+        ...exportedAnalysisArgs(join(directory, filename), args),
+      ],
       {
         out: (line): void => {
           output.push(line);

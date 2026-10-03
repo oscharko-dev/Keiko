@@ -13,6 +13,7 @@
 import { homedir } from "node:os";
 import { existsSync, lstatSync, realpathSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
+import { assertSqliteStatePath } from "@oscharko-dev/keiko-security/fs-hardening";
 import { MemoryStorageError } from "./errors.js";
 
 export const MEMORY_DB_FILENAME = "keiko-memory.db";
@@ -139,5 +140,11 @@ export function resolveMemoryDbPath(
   explicit: string | undefined,
   env: Readonly<Record<string, string | undefined>>,
 ): string {
-  return join(resolveMemoryDir(explicit, env), MEMORY_DB_FILENAME);
+  const path = join(resolveMemoryDir(explicit, env), MEMORY_DB_FILENAME);
+  try {
+    assertSqliteStatePath(path);
+  } catch {
+    throw invalidPath("Memory database state path is unsafe or unavailable.");
+  }
+  return path;
 }

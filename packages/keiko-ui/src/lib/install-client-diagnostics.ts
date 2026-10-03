@@ -146,6 +146,9 @@ function clientStagePostBody(
         phase: "settled",
         ordinal: report.ordinal,
         durationMs: report.durationMs,
+        ...(report.navigationOutcome === undefined
+          ? {}
+          : { navigationOutcome: report.navigationOutcome }),
         correlationId: id,
         deletion: report.deletion,
       };
@@ -264,6 +267,7 @@ function clientMessagePostBody(
     correlationId: validCorrelationId(meta.correlationId),
     parentCorrelationId: validCorrelationId(meta.parentCorrelationId),
     errorKind: meta.errorKind,
+    renderFailure: meta.renderFailure,
     voiceDialogueStage: meta.voiceDialogueStage,
     voiceCaptureReason: meta.voiceCaptureReason,
     voiceCaptureError: meta.voiceCaptureError,

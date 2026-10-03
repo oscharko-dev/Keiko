@@ -9,7 +9,7 @@ import { selectEnforcingBackend, selectGatewayBackend } from "./select.js";
 import type { BackendAvailability, IsolatedRunDecision, IsolatedRunPlan } from "./types.js";
 
 const FAIL_CLOSED_REASON =
-  'deny-by-default isolation was requested (network: "none") but no compatible sandbox backend ' +
+  'execution isolation was requested (network: "none" or filesystem: "execution-root") but no compatible sandbox backend ' +
   "is available on this host. Network-only runs need bubblewrap or unshare on Linux, sandbox-exec " +
   "on macOS, or docker/podman; execution-root runs need strict bubblewrap or docker/podman. " +
   "Untrusted code is not executed.";
@@ -34,13 +34,25 @@ function noneEnforcedAttestation(platform: NodeJS.Platform): IsolatedRunDecision
   return { backend: "none", networkEnforced: false, filesystemEnforced: false, platform };
 }
 
+function validFilesystemPolicy(value: unknown): boolean {
+  return value === "inherit" || value === "execution-root";
+}
+
 export function planIsolatedRun(
   plan: IsolatedRunPlan,
   availability: BackendAvailability,
   platform: NodeJS.Platform,
 ): IsolatedRunDecision {
   const network = plan.network;
-  if (network === "inherit") {
+  const filesystem = plan.filesystem ?? "inherit";
+  if (!validFilesystemPolicy(filesystem)) {
+    return {
+      kind: "fail-closed",
+      reason: "invalid-filesystem-policy",
+      attestation: noneEnforcedAttestation(platform),
+    };
+  }
+  if (network === "inherit" && filesystem === "inherit") {
     return {
       kind: "passthrough",
       command: plan.command,
@@ -50,15 +62,30 @@ export function planIsolatedRun(
   }
   const gateway = copyNetworkGatewayPolicy(network);
   if (gateway !== undefined) {
+    if (filesystem === "execution-root") {
+      return {
+        kind: "fail-closed",
+        reason: "gateway-filesystem-isolation-unsupported",
+        attestation: noneEnforcedAttestation(platform),
+      };
+    }
     return planGatewayRun({ ...plan, network: gateway }, availability, platform);
   }
-  if (network !== "none") {
+  if (network !== "none" && network !== "inherit") {
     return {
       kind: "fail-closed",
       reason: INVALID_NETWORK_POLICY_REASON,
       attestation: noneEnforcedAttestation(platform),
     };
   }
+  return planEnforcedRun(plan, availability, platform);
+}
+
+function planEnforcedRun(
+  plan: IsolatedRunPlan,
+  availability: BackendAvailability,
+  platform: NodeJS.Platform,
+): IsolatedRunDecision {
   const filesystem = plan.filesystem ?? "inherit";
   const backend = selectEnforcingBackend(platform, availability, filesystem);
   const wrapped = buildWrappedCommand(backend, plan);
@@ -75,7 +102,7 @@ export function planIsolatedRun(
     args: wrapped.args,
     attestation: {
       backend,
-      networkEnforced: true,
+      networkEnforced: plan.network === "none",
       filesystemEnforced: filesystem === "execution-root",
       platform,
     },

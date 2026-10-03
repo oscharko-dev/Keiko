@@ -64,7 +64,6 @@ const MAX_SHARED_CONNECTIONS = 3;
 const STREAM_LEASE_MS = 5_000;
 let budgetTimer: number | undefined;
 let budgetCursor = 0;
-let budgetReported = false;
 
 export interface SharedEventSourceOptions {
   readonly priority?: "essential" | "background";
@@ -230,6 +229,10 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
       if (reason === "unavailable") scheduleReconnect(entry);
       queueMicrotask(() => refreshStreamBudget());
     },
+    {
+      yieldable: replayableEntry(entry),
+      correlationId: (entry.failureStreakCorrelationId ??= newClientCorrelationId()),
+    },
   );
 }
 
@@ -273,34 +276,60 @@ function eligibleEntries(): SharedEventSourceEntry[] {
   );
 }
 
-// Shared subscriptions retain their listeners and replay cursor while waiting for a connection.
-// Rotate bounded leases fairly: one root must not hold every HTTP/1.1 slot forever, and queued
-// roots must eventually reconnect through their normal snapshot/replay recovery path.
+function replayableEntry(entry: SharedEventSourceEntry): boolean {
+  const path = entry.url.split("?")[0] ?? "";
+  return (
+    entry.essentialRefCount === 0 ||
+    path.startsWith("/api/editor/workspace-watch/") ||
+    path.startsWith("/api/editor/watch/") ||
+    path.startsWith("/api/editor/debug/")
+  );
+}
+
+function hasLease(entry: SharedEventSourceEntry): boolean {
+  return entry.source !== null || entry.capacityLease !== undefined;
+}
+
+function rotateEntries(
+  entries: readonly SharedEventSourceEntry[],
+  rotate: boolean,
+): SharedEventSourceEntry[] {
+  if (entries.length === 0) return [];
+  if (rotate) budgetCursor = (budgetCursor + MAX_SHARED_CONNECTIONS) % entries.length;
+  const offset = budgetCursor % entries.length;
+  return [...entries.slice(offset), ...entries.slice(0, offset)];
+}
+
+function selectBudgetEntries(
+  entries: readonly SharedEventSourceEntry[],
+  rotate: boolean,
+): Set<SharedEventSourceEntry> {
+  const pinned = entries.filter((entry) => !replayableEntry(entry) && hasLease(entry));
+  const essential = entries.filter(
+    (entry) => entry.essentialRefCount > 0 && !pinned.includes(entry),
+  );
+  const background = entries.filter((entry) => entry.essentialRefCount === 0);
+  const order = (group: SharedEventSourceEntry[]): SharedEventSourceEntry[] =>
+    rotate
+      ? rotateEntries(group, true)
+      : group.sort((left, right) => Number(hasLease(right)) - Number(hasLease(left)));
+  return new Set(
+    [...pinned, ...order(essential), ...order(background)].slice(0, MAX_SHARED_CONNECTIONS),
+  );
+}
+
+// Keep healthy leases stable between contention ticks. Essential streams precede recoverable
+// background metadata; active streams without replay retain their connection until completion.
 function refreshStreamBudget(rotate = false): void {
   const entries = eligibleEntries();
-  const overBudget = entries.length > MAX_SHARED_CONNECTIONS;
-  if (overBudget && rotate) budgetCursor = (budgetCursor + MAX_SHARED_CONNECTIONS) % entries.length;
-  if (!overBudget) budgetCursor = 0;
-  const selected = new Set(
-    Array.from(
-      { length: Math.min(entries.length, MAX_SHARED_CONNECTIONS) },
-      (_, index) => entries[(budgetCursor + index) % entries.length],
-    ),
-  );
+  const selected = selectBudgetEntries(entries, rotate);
   for (const entry of sourcesByUrl.values()) {
-    if (!selected.has(entry) && (entry.source !== null || entry.capacityLease !== undefined))
-      suspendEntry(entry);
+    if (!selected.has(entry) && hasLease(entry)) suspendEntry(entry);
   }
-  for (const entry of selected) if (entry !== undefined) openEntrySource(entry);
-  if (!overBudget) {
+  for (const entry of selected) openEntrySource(entry);
+  if (entries.length <= MAX_SHARED_CONNECTIONS) {
     clearBudgetTimer();
-    budgetReported = false;
     return;
-  }
-  if (!budgetReported) {
-    budgetReported = true;
-    // i18n-exempt: body-free activity diagnostic, never user-facing copy
-    reportClientDiagnostic("[keiko] shared-event-source connection budget reached (limit=3)");
   }
   budgetTimer ??= window.setInterval(() => refreshStreamBudget(true), STREAM_LEASE_MS);
 }
@@ -360,6 +389,21 @@ function entryForUrl(url: string): SharedEventSourceEntry {
   return entry;
 }
 
+function reconcileUnsubscription(entry: SharedEventSourceEntry, url: string): void {
+  if (entry.refCount > 0 && entry.essentialRefCount === 0 && backgroundBrowserStreamsSuspended()) {
+    suspendEntry(entry);
+  }
+  if (entry.refCount > 0) {
+    refreshStreamBudget();
+    return;
+  }
+  clearReconnectTimer(entry);
+  closeEntrySource(entry);
+  sourcesByUrl.delete(url);
+  refreshStreamBudget();
+  removeVisibilityListenerIfIdle();
+}
+
 export function subscribeSharedEventSource(
   url: string,
   eventTypes: readonly string[],
@@ -396,23 +440,57 @@ export function subscribeSharedEventSource(
     }
     entry.refCount -= 1;
     if (essential) entry.essentialRefCount -= 1;
-    if (
-      entry.refCount > 0 &&
-      entry.essentialRefCount === 0 &&
-      backgroundBrowserStreamsSuspended()
-    ) {
-      suspendEntry(entry);
-    }
-    if (entry.refCount > 0) {
-      refreshStreamBudget();
-      return;
-    }
-    clearReconnectTimer(entry);
-    closeEntrySource(entry);
-    sourcesByUrl.delete(url);
-    refreshStreamBudget();
-    removeVisibilityListenerIfIdle();
+    reconcileUnsubscription(entry, url);
   };
+}
+
+/** Wait for an actual open handshake on the shared source, with bounded cancellable cleanup. */
+export function awaitSharedEventSourceOpen(url: string, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) return Promise.reject(new DOMException("Cancelled", "AbortError"));
+  if (sourcesByUrl.get(url)?.source?.readyState === 1) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let ended = false;
+    let unsubscribe = (): void => undefined;
+    const finish = (error?: Error): void => {
+      if (ended) return;
+      ended = true;
+      window.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      unsubscribe();
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const onAbort = (): void => finish(new DOMException("Cancelled", "AbortError"));
+    const timer = window.setTimeout(
+      () => finish(new DOMException("Stream unavailable", "TimeoutError")),
+      15_000,
+    );
+    signal?.addEventListener("abort", onAbort, { once: true });
+    unsubscribe = subscribeSharedEventSource(url, ["open", "error"], (event) => {
+      queueMicrotask(() =>
+        finish(event.type === "open" ? undefined : new TypeError("Stream unavailable")),
+      );
+    });
+  });
+}
+
+/** Keep the execution callback subscribed before its POST and throughout its completion. */
+export async function withSharedEventSourceOpen<T>(
+  url: string,
+  eventTypes: readonly string[],
+  onMessage: SharedEventListener,
+  run: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const unsubscribe = subscribeSharedEventSource(url, eventTypes, onMessage);
+  signal?.addEventListener("abort", unsubscribe, { once: true });
+  try {
+    await awaitSharedEventSourceOpen(url, signal);
+    return await run();
+  } finally {
+    signal?.removeEventListener("abort", unsubscribe);
+    unsubscribe();
+  }
 }
 
 /** Reopen one existing subscription so every consumer receives its fresh server snapshot. */
@@ -435,7 +513,6 @@ export function resetSharedEventSourcesForTests(): void {
   sourcesByUrl.clear();
   clearBudgetTimer();
   budgetCursor = 0;
-  budgetReported = false;
   nextSourceGeneration = 0;
   removeVisibilityListenerIfIdle();
 }

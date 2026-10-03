@@ -117,4 +117,15 @@ export interface DesktopSupportReportRequest {
 export interface DesktopSupportReportResponse {
   readonly fileName: string;
   readonly reportJson: string;
+  readonly summary?:
+    | {
+        readonly status: DiagnosticSufficiencyStatus;
+        readonly reasons: readonly DiagnosticSufficiencyReason[];
+        readonly recordCount: number;
+        readonly reportDigest: string;
+        readonly incidentId: string;
+        readonly manifestUnreadableCount: number;
+        readonly manifestReusedCount: number;
+      }
+    | undefined;
 }

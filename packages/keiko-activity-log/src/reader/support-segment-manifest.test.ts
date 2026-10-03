@@ -159,6 +159,21 @@ describe("segment manifests (#3531)", () => {
     expect(scanner.opened.size).toBe(0);
   });
 
+  it("reuses persisted manifests read-only without scanning bodies or modifying the store", () => {
+    writeHistory();
+    ensure();
+    const before = manifestTexts();
+    const scanner = new ActivityLogScanner(stateDir);
+    const pass = ensureSegmentManifests(stateDir, listActivityLogStoreFiles(stateDir), scanner, {
+      trigger: "export",
+      persist: false,
+      rebuild: false,
+    });
+    expect(pass.stats).toMatchObject({ reusedCount: 2, builtCount: 0, persisted: false });
+    expect(scanner.opened.size).toBe(0);
+    expect(manifestTexts()).toEqual(before);
+  });
+
   it("records a direct drain read failure without retaining a partial manifest", () => {
     writeHistory();
     const [file] = listActivityLogStoreFiles(stateDir);

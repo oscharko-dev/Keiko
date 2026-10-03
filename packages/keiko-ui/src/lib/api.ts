@@ -1080,6 +1080,7 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
 
 export interface CreateProjectInput {
   path: string;
+  selectionIntent?: "explicit-folder-selection" | "file-navigation";
   name?: string;
 }
 
@@ -1738,11 +1739,15 @@ export async function openNativeFileDialog(
 // Desktop files — selected-root browser, preview, and editor control plane
 // ---------------------------------------------------------------------------
 
-export async function fetchFilesTree(root: string, path = ""): Promise<FilesTreeResponse> {
+export async function fetchFilesTree(
+  root: string,
+  path = "",
+  correlationId?: string,
+): Promise<FilesTreeResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   if (path.length > 0) params.set("path", path);
-  return fetchJson(`/api/files/tree?${params.toString()}`);
+  return fetchJson(`/api/files/tree?${params.toString()}`, undefined, undefined, correlationId);
 }
 
 export async function fetchFilesSearch(
@@ -1807,11 +1812,15 @@ export async function fetchFilesPreview(root: string, path: string): Promise<Fil
   return fetchJson(`/api/files/preview?${params.toString()}`);
 }
 
-export async function fetchFilesContent(root: string, path: string): Promise<FilesContentResponse> {
+export async function fetchFilesContent(
+  root: string,
+  path: string,
+  correlationId?: string,
+): Promise<FilesContentResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   params.set("path", path);
-  return fetchJson(`/api/files/content?${params.toString()}`);
+  return fetchJson(`/api/files/content?${params.toString()}`, undefined, undefined, correlationId);
 }
 
 export async function saveFilesContent(input: {

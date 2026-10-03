@@ -6,9 +6,8 @@
  * URL fragment; on boot the desktop shell redeems it against the pair endpoint — which answers with
  * a content-free acknowledgement and, on approval, sets the HttpOnly session cookie — and strips the
  * fragment from the address bar and history entry immediately, whether or not it was well-formed.
- * A launcher-authorized local BFF can also ensure that cookie for normal reloads and reused tabs,
- * so the Workbench does not depend on a fragile one-shot fragment after the desktop app is already
- * running.
+ * Normal reloads and reused tabs confirm an existing valid cookie. A missing, revoked or
+ * restart-invalidated session needs a fresh launcher attestation; confirmation never issues one.
  *
  * Redemption success is deliberately unobservable here (the acknowledgement never distinguishes
  * approval from denial, and page script cannot read the HttpOnly cookie); the questions surface
@@ -93,16 +92,16 @@ export async function redeemCodingAppSessionPairingFragment(
 }
 
 /**
- * Ask a launcher-authorized local BFF to ensure this browser has an app-session cookie. The endpoint
- * intentionally acknowledges without revealing whether a cookie was issued; subsequent channel reads
- * report the honest paired/unpaired state.
+ * Confirm this browser's existing app-session cookie without issuing or replacing it. The endpoint
+ * intentionally acknowledges without revealing whether the cookie is valid; subsequent channel
+ * reads report the honest paired/unpaired state.
  */
 type LocalSessionOutcome =
   | { readonly repaired: true }
   | { readonly repaired: false; readonly errorKind: ActivityLogErrorKind };
 
 // The ensure request's outcome with the closed class of a failure, for the repair's evidence. The
-// endpoint acknowledges whether or not it issued a cookie, so a thrown error is a real failure
+// endpoint acknowledges whether or not the existing cookie is valid, so a thrown error is a real failure
 // (transport, 5xx), recorded rather than swallowed: under the ensure request's own correlation id
 // and with its closed failure class, also when `fetch` rejected before any response (#3557 review).
 async function localSessionOutcome(
@@ -144,8 +143,8 @@ export interface LocalCodingAppSessionRepair {
 let localSessionRepair: Promise<LocalCodingAppSessionRepair> | undefined;
 
 /**
- * Re-establishes the local app session a restarted BFF dropped (ADR-0141 D5). A restart denies every
- * open surface at once; they all join the one attempt in flight instead of each posting its own, and
+ * Confirms the current app session once for concurrent denied surfaces (ADR-0141 D5). An invalid
+ * session stays unpaired; surfaces join the one attempt in flight instead of each posting its own, and
  * the next denial after it settled starts a fresh one. Every joiner learns the repair request's
  * correlation id, so its own evidence can name the repair it waited for.
  */

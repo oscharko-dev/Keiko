@@ -28,6 +28,7 @@ import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
+  assertSqliteStatePath,
   chmodIfPresent,
   ensureDirHardened,
   FILE_MODE,
@@ -940,6 +941,7 @@ function emitUiStoreOpenedEvent(sink: ServerLogSink | undefined, event: ServerLo
 export const UI_DB_BUSY_TIMEOUT_MS = 5_000;
 
 function preparedDatabase(target: string): DatabaseSync {
+  if (target !== ":memory:") assertSqliteStatePath(target);
   const db = new DatabaseSync(target);
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(`PRAGMA busy_timeout = ${String(UI_DB_BUSY_TIMEOUT_MS)}`);
@@ -972,7 +974,9 @@ export function createInMemoryUiStore(opts?: UiStoreFactoryOptions): UiStore {
 // sink at all.
 export function openNodeUiDatabase(dbPath: string, sink?: ServerLogSink): DatabaseSync {
   const elapsed = startUiStoreOpenTimer();
+  assertSqliteStatePath(dbPath, { store: "ui", sink });
   ensureDirHardened(dirname(dbPath));
+  assertSqliteStatePath(dbPath, { store: "ui", sink });
   let db = preparedDatabase(dbPath);
   try {
     db.exec("PRAGMA journal_mode = WAL");

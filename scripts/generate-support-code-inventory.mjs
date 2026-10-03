@@ -10,7 +10,18 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const target = "packages/keiko-activity-log/src/reader/support-code-inventory.generated.ts";
 const excluded =
   /(?:^|\/)(?:__tests__|test-support|fixtures|__fixtures__)(?:\/|$)|\.(?:test|spec|generated)\.|\.d\.ts$/u;
-const tokenFields = new Set(["code", "errorKind", "source", "signal", "subcommand"]);
+const tokenFields = new Set([
+  "code",
+  "errorKind",
+  "source",
+  "signal",
+  "subcommand",
+  "operation",
+  "diagnosticOperation",
+  "canonicalId",
+  "toolCanonicalId",
+  "profileId",
+]);
 const builtinClasses = [
   "Error",
   "TypeError",
@@ -20,14 +31,24 @@ const builtinClasses = [
   "URIError",
   "EvalError",
   "AggregateError",
+  // Node's bundled fetch implementation exposes this closed Undici transport vocabulary.
+  "ConnectTimeoutError",
+  "HeadersTimeoutError",
+  "BodyTimeoutError",
+  "SocketError",
+  "RequestAbortedError",
+  "ResponseStatusCodeError",
+  "ClientClosedError",
+  "ClientDestroyedError",
 ];
 
-function sourceFiles(directory) {
+function sourceFiles(directory, root) {
   const files = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
-    if (excluded.test(path) || entry.isSymbolicLink()) continue;
-    if (entry.isDirectory()) files.push(...sourceFiles(path));
+    if (excluded.test(relative(root, path).replaceAll("\\", "/")) || entry.isSymbolicLink())
+      continue;
+    if (entry.isDirectory()) files.push(...sourceFiles(path, root));
     else if (entry.isFile() && /\.tsx?$/u.test(entry.name)) files.push(path);
   }
   return files.sort();
@@ -37,8 +58,8 @@ function productFiles(root) {
   const packages = readdirSync(join(root, "packages"), { withFileTypes: true });
   const files = packages
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("keiko-"))
-    .flatMap((entry) => sourceFiles(join(root, "packages", entry.name, "src")));
-  return [...files, ...sourceFiles(join(root, "src", "cli"))].sort();
+    .flatMap((entry) => sourceFiles(join(root, "packages", entry.name, "src"), root));
+  return [...files, ...sourceFiles(join(root, "src", "cli"), root)].sort();
 }
 
 function collectClass(node, classes) {
@@ -50,13 +71,85 @@ function collectClass(node, classes) {
   }
 }
 
+function addTechnicalToken(value, tokens) {
+  if (/^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u.test(value)) tokens.add(value);
+}
+
+function collectClosedGitKinds(node, tokens) {
+  if (!ts.isVariableDeclaration(node) || !ts.isIdentifier(node.name)) return;
+  if (node.name.text !== "CLOSED_GIT_ERROR_KINDS" || !node.initializer) return;
+  if (!ts.isObjectLiteralExpression(node.initializer)) return;
+  for (const property of node.initializer.properties) {
+    if (ts.isPropertyAssignment(property) && ts.isStringLiteral(property.name))
+      addTechnicalToken(property.name.text, tokens);
+  }
+}
+
+function collectGitCall(node, tokens) {
+  if (!ts.isCallExpression(node) || !node.arguments[0]) return;
+  if (!ts.isArrayLiteralExpression(node.arguments[0])) return;
+  const first = node.arguments[0].elements[0];
+  if (!first || !ts.isStringLiteral(first)) return;
+  if (/(?:observed|git|Git)/u.test(node.expression.getText()))
+    addTechnicalToken(first.text, tokens);
+}
+
+function collectProfile(node, tokens) {
+  if (!ts.isPropertyAssignment(node) || !ts.isIdentifier(node.name)) return;
+  if (node.name.text !== "profile" || !ts.isObjectLiteralExpression(node.initializer)) return;
+  for (const property of node.initializer.properties) {
+    if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) continue;
+    if (property.name.text === "id" && ts.isStringLiteral(property.initializer))
+      addTechnicalToken(property.initializer.text, tokens);
+  }
+}
+
+function collectCatalogIdentity(node, tokens, source) {
+  if (!source.startsWith("packages/keiko-tool-catalog/src/")) return;
+  if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return;
+  if (!new Set(["registration", "createToolRef"]).has(node.expression.text)) return;
+  const id = node.arguments[0];
+  if (id && ts.isStringLiteral(id)) addTechnicalToken(id.text, tokens);
+}
+
+function collectGitConfigSubcommand(node, tokens, source) {
+  if (source !== "packages/keiko-git/src/runner.ts" || !ts.isStringLiteral(node)) return;
+  const match = /^(?:alias|pager)\.([a-z][a-z0-9-]{0,31})=/u.exec(node.text);
+  if (match?.[1]) addTechnicalToken(match[1], tokens);
+}
+
+function collectIndexingFailureKinds(node, tokens, source) {
+  if (source !== "packages/keiko-local-knowledge/src/indexing/orchestrator-activity-log.ts") return;
+  if (!ts.isVariableDeclaration(node) || !ts.isIdentifier(node.name)) return;
+  if (node.name.text !== "EXACT_FAILURE_ERROR_KINDS" || !node.initializer) return;
+  if (!ts.isObjectLiteralExpression(node.initializer)) return;
+  for (const property of node.initializer.properties) {
+    if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) continue;
+    addTechnicalToken(property.name.text, tokens);
+    addTechnicalToken(`DISCOVERY_FAILED.${property.name.text}`, tokens);
+  }
+}
+
+function collectOwnedVocabulary(node, tokens, source) {
+  collectClosedGitKinds(node, tokens);
+  collectGitCall(node, tokens);
+  collectProfile(node, tokens);
+  collectCatalogIdentity(node, tokens, source);
+  collectGitConfigSubcommand(node, tokens, source);
+  collectIndexingFailureKinds(node, tokens, source);
+  if (!source.includes("packages/keiko-git/src/")) return;
+  if (ts.isReturnStatement(node) && node.expression && ts.isStringLiteral(node.expression))
+    addTechnicalToken(node.expression.text, tokens);
+}
+
 function collectToken(node, tokens) {
   if (
-    ts.isPropertyAssignment(node) &&
+    (ts.isPropertyAssignment(node) || ts.isPropertyDeclaration(node)) &&
     ts.isIdentifier(node.name) &&
     tokenFields.has(node.name.text)
   ) {
     if (
+      node.initializer &&
       ts.isStringLiteral(node.initializer) &&
       /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u.test(node.initializer.text)
     )
@@ -64,10 +157,11 @@ function collectToken(node, tokens) {
   }
 }
 
-function collectNode(node, classes, tokens) {
+function collectNode(node, classes, tokens, source) {
   collectClass(node, classes);
   collectToken(node, tokens);
-  ts.forEachChild(node, (child) => collectNode(child, classes, tokens));
+  collectOwnedVocabulary(node, tokens, source);
+  ts.forEachChild(node, (child) => collectNode(child, classes, tokens, source));
 }
 
 function errorClasses(classes) {
@@ -95,7 +189,7 @@ export async function generateSupportCodeInventory(root = repoRoot) {
       ts.ScriptTarget.Latest,
       true,
     );
-    collectNode(tree, classes, tokens);
+    collectNode(tree, classes, tokens, source);
   }
   const declaration = (name, values) =>
     `export const ${name}: readonly string[] = ${JSON.stringify(values)};\n`;

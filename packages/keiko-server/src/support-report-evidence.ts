@@ -2,6 +2,8 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
   SUPPORT_REPORT_FAILURES,
+  DIAGNOSTIC_SUFFICIENCY_REASONS,
+  type ActivityLogErrorKind,
   type DesktopSupportReportResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { getServerLogger } from "./observability/index.js";
@@ -46,6 +48,24 @@ const COMPLETED = defineActivityLogOperation({
   analyzerProjection: "capability",
   fields: {
     reportBytes: { type: "integer", dataClass: "count", required: true },
+    recordCount: { type: "integer", dataClass: "count", required: false },
+    reportDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    incidentId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 32 },
+    manifestUnreadableCount: { type: "integer", dataClass: "count", required: false },
+    manifestReusedCount: { type: "integer", dataClass: "count", required: false },
+    sufficiency: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "degraded", "insufficient"],
+    },
+    reasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 32,
+      values: DIAGNOSTIC_SUFFICIENCY_REASONS,
+    },
     ...COMPLETE,
   },
   proofIds: ["support.report.ui.completed.lifecycle"],
@@ -61,7 +81,17 @@ const FAILED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: [...SUPPORT_REPORT_FAILURES, "busy", "timeout", "unavailable", "cancelled"],
+      values: [
+        ...SUPPORT_REPORT_FAILURES,
+        "busy",
+        "timeout",
+        "unavailable",
+        "cancelled",
+        "quota-exhausted",
+        "store-unavailable",
+        "record-too-large",
+        "evaluation-rate-limited",
+      ],
     },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
     frames: {
@@ -103,14 +133,27 @@ export function emitSupportReportCompleted(
   correlationId: string | undefined,
   report: DesktopSupportReportResponse,
 ): void {
-  getServerLogger().info(
+  const summary = report.summary;
+  const status = summary?.status ?? "degraded";
+  getServerLogger()[status === "complete" ? "info" : "warn"](
     activityLogEvent(
       COMPLETED,
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         reportBytes: Buffer.byteLength(report.reportJson),
-        completeness: "complete",
-        loss: "none",
+        ...(summary === undefined
+          ? {}
+          : {
+              recordCount: summary.recordCount,
+              reportDigest: summary.reportDigest,
+              incidentId: summary.incidentId,
+              manifestUnreadableCount: summary.manifestUnreadableCount,
+              manifestReusedCount: summary.manifestReusedCount,
+            }),
+        sufficiency: status,
+        reasons: summary?.reasons ?? ["evidence-partial"],
+        completeness: status === "complete" ? "complete" : "partial",
+        loss: status === "complete" ? "none" : "event-location-unknown",
       },
     ),
   );
@@ -123,7 +166,7 @@ export function emitSupportReportFailed(
     FAILED,
     {
       correlationId: correlationIdOrUnknown(correlationId),
-      errorKind: error.reason === "timeout" ? "timeout" : "internal",
+      errorKind: supportReportJobErrorKind(error),
     },
     {
       reason: error.reason,
@@ -134,6 +177,29 @@ export function emitSupportReportFailed(
       loss: "none",
     },
   );
-  if (error.reason === "busy" || error.reason === "cancelled") getServerLogger().warn(event);
+  if (EXPECTED_REFUSALS.has(error.reason)) getServerLogger().warn(event);
   else getServerLogger().error(event);
+}
+
+const EXPECTED_REFUSALS = new Set([
+  "busy",
+  "cancelled",
+  "selection-unavailable",
+  "quota-exhausted",
+  "evaluation-rate-limited",
+  "record-too-large",
+]);
+
+function supportReportJobErrorKind(error: SupportReportJobError): ActivityLogErrorKind {
+  if (
+    error.reason === "busy" ||
+    error.reason === "quota-exhausted" ||
+    error.reason === "evaluation-rate-limited"
+  )
+    return "rate-limited";
+  if (error.reason === "cancelled") return "cancelled";
+  if (error.reason === "selection-unavailable") return "invalid-request";
+  if (error.reason === "record-too-large") return "validation-failed";
+  if (error.reason === "store-unavailable" || error.reason === "unavailable") return "unavailable";
+  return error.reason === "timeout" ? "timeout" : "internal";
 }

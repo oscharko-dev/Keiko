@@ -1,7 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { Profiler, type ReactElement } from "react";
+import { Profiler, useState, type ReactElement } from "react";
+import * as supportReportApi from "@/lib/support-report-api";
+import { resetFilesNavigationEvidenceForTests } from "@/lib/files-navigation-evidence";
+import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
@@ -18,6 +21,7 @@ import {
 } from "../../../../../lib/api";
 import type {
   Chat,
+  FilesTreeEntry,
   FilesMutationResponse,
   GitChangedFile,
   GitRepositoryStatusResponse,
@@ -36,6 +40,14 @@ function selectableTextClass(name: keyof typeof selectableTextStyles): string {
   if (value === undefined) throw new Error(`missing selectableText CSS module class ${name}`);
   return value;
 }
+
+vi.mock("@/lib/browser-stream-capacity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/browser-stream-capacity")>()),
+  acquirePersistentBrowserStreamCapacity: vi.fn((onGranted: () => void): (() => void) => {
+    onGranted();
+    return (): void => undefined;
+  }),
+}));
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -119,15 +131,10 @@ function mockProjectVersioningTree(): void {
     entries:
       path === ""
         ? [".github", ".gitignore", ".coderabbit.yaml", "ignored", "new", "loose.md", "mixed"].map(
-            (name) => ({
-              ...treeEntryBase,
-              name,
-              path: name,
-              kind:
-                name === ".gitignore" || name === ".coderabbit.yaml" || name === "loose.md"
-                  ? "file"
-                  : "directory",
-            }),
+            (name): FilesTreeEntry =>
+              name.endsWith(".yaml") || name.endsWith(".md") || name === ".gitignore"
+                ? { ...treeEntryBase, name, path: name, kind: "file" }
+                : { name, path: name, extension: null, readable: true, kind: "directory" },
           )
         : [{ ...treeEntryBase, name: "inside.md", path: "new/inside.md", kind: "file" }],
   }));
@@ -285,6 +292,7 @@ function caretButton(folderName: string): HTMLButtonElement {
 
 describe("FilesWidget", () => {
   beforeEach(() => {
+    resetFilesNavigationEvidenceForTests();
     vi.mocked(fetchGitStatus).mockResolvedValue({
       schemaVersion: "1",
       root: "/repo",
@@ -350,7 +358,7 @@ describe("FilesWidget", () => {
     render(<FilesWidget root="/repo space" onActiveFileChange={onActiveFileChange} />);
 
     expect(await screen.findByText("package.json")).toBeInTheDocument();
-    expect(fetchFilesTree).toHaveBeenCalledWith("/repo space", "");
+    expect(fetchFilesTree).toHaveBeenCalledWith("/repo space", "", expect.any(String));
     expect(onActiveFileChange).toHaveBeenCalledWith(null, "/repo space", null);
 
     // tree rows expose ARIA tree semantics (role=treeitem) since audit C143
@@ -444,7 +452,7 @@ describe("FilesWidget", () => {
 
     expect(await screen.findAllByRole("treeitem", { name: /package\.json/i })).toHaveLength(3);
     expect(fetchFilesTree).toHaveBeenCalledTimes(1);
-    expect(fetchFilesTree).toHaveBeenCalledWith("/repo", "");
+    expect(fetchFilesTree).toHaveBeenCalledWith("/repo", "", expect.any(String));
     expect(fetchGitStatus).toHaveBeenCalledTimes(1);
     expect(fetchGitStatus).toHaveBeenCalledWith("/repo", { includeIgnored: true });
 
@@ -557,7 +565,7 @@ describe("FilesWidget", () => {
 
     expect(await screen.findByRole("treeitem", { name: /new\.ts/i })).toBeInTheDocument();
     expect(screen.getByRole("treeitem", { name: /src/i })).toHaveAttribute("aria-expanded", "true");
-    expect(fetchFilesTree).not.toHaveBeenLastCalledWith("/repo", "");
+    expect(fetchFilesTree).not.toHaveBeenLastCalledWith("/repo", "", expect.any(String));
   });
 
   it("settles Git status after the root tree resolves to the same root", async () => {
@@ -595,7 +603,8 @@ describe("FilesWidget", () => {
       await gitStatus.promise;
     });
 
-    expect(await screen.findByText("Git unavailable")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Git status loading")).toBeNull());
+    expect(screen.queryByText("Git unavailable")).toBeNull();
     expect(screen.queryByText("Git status loading")).toBeNull();
   });
 
@@ -936,7 +945,7 @@ describe("FilesWidget", () => {
 
     render(<FilesWidget root="/repo" openFilesDirectly onOpenFile={onOpenFile} />);
 
-    const row = await screen.findByRole("treeitem", { name: "ignored.log, Ignored by Git" });
+    const row = await screen.findByRole("treeitem", { name: /ignored\.log, Ignored by Git/u });
     expect(row).toHaveAttribute("data-git-ignored", "true");
     expect(screen.queryByLabelText(/Git changed: ignored\.log/iu)).toBeNull();
     await userEvent.click(row);
@@ -1219,7 +1228,7 @@ describe("FilesWidget", () => {
     await userEvent.click(srcRow);
 
     await waitFor(() => {
-      expect(fetchFilesTree).toHaveBeenCalledWith("/configured-repo", "src");
+      expect(fetchFilesTree).toHaveBeenCalledWith("/configured-repo", "src", expect.any(String));
     });
     expect(await screen.findByRole("treeitem", { name: /inside\.ts/i })).toBeInTheDocument();
     expect(screen.queryByRole("treeitem", { name: /package\.json/i })).toBeNull();
@@ -1229,6 +1238,174 @@ describe("FilesWidget", () => {
     expect(onActiveFileChange).toHaveBeenCalledWith(null, "/resolved-repo", "src");
     expect(updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(session.replaceChat).not.toHaveBeenCalled();
+  });
+
+  it("joins product tree-read evidence and contextual transport reports to the request", async () => {
+    const writer = vi.fn();
+    const report = vi
+      .spyOn(supportReportApi, "createSupportReport")
+      .mockRejectedValue(new Error("fixture report refusal"));
+    vi.mocked(fetchFilesTree).mockRejectedValueOnce(new TypeError("private customer body"));
+    setClientDiagnosticWriter(writer);
+    try {
+      render(<FilesWidget root="/repo" />);
+      await screen.findByText("Unable to read this folder.");
+      const correlationId = vi.mocked(fetchFilesTree).mock.calls[0]?.[2];
+      expect(correlationId).toEqual(expect.any(String));
+      expect(writer.mock.calls[0]?.[1]).toMatchObject({
+        correlationId,
+        stageReport: { stage: "files directory load", phase: "started" },
+      });
+      expect(writer.mock.calls[1]?.[1]).toMatchObject({
+        correlationId,
+        errorEvidence: { errorClass: "TypeError" },
+      });
+      expect(writer.mock.calls[2]?.[1]).toMatchObject({
+        correlationId,
+        stageReport: { stage: "files directory load", phase: "settled" },
+      });
+      await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+      expect(report).toHaveBeenCalledWith(correlationId, expect.any(AbortSignal));
+      expect(JSON.stringify(writer.mock.calls)).not.toContain("private customer body");
+    } finally {
+      resetClientDiagnosticWriter();
+      report.mockRestore();
+    }
+  });
+
+  it("refreshes the visible directory when a restarted watch requests a snapshot", async () => {
+    installFakeEventSource();
+    vi.mocked(fetchFilesTree)
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "",
+        truncated: false,
+        entries: [{ ...treeEntryBase, name: "old.md", path: "old.md", kind: "file" }],
+      })
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "",
+        truncated: false,
+        entries: [{ ...treeEntryBase, name: "new.md", path: "new.md", kind: "file" }],
+      });
+    render(<FilesWidget root="/repo" />);
+    await screen.findByText("old.md");
+    act(() =>
+      workspaceWatchEventSources()[0]?.emit("editor-watch:snapshot-required", {
+        schemaVersion: "1",
+        sequence: 0,
+        rootToken: "0123456789abcdef",
+        nativeWatcherCount: 1,
+        subscriberCount: 1,
+        queueDepth: 0,
+        replayCapacity: 100,
+        replayOldestSequence: 0,
+        eventCount: 0,
+        requiresSnapshot: true,
+        health: "rescanRequired",
+        degradedReasons: ["sequence-gap"],
+      }),
+    );
+    expect(await screen.findByText("new.md")).toBeInTheDocument();
+    expect(screen.queryByText("old.md")).toBeNull();
+  });
+
+  it("loads the restored folder from its own root when Back crosses roots in one commit", async () => {
+    vi.mocked(fetchFilesTree).mockImplementation(async (root, path = "") => ({
+      root,
+      path,
+      truncated: false,
+      entries:
+        path === ""
+          ? [
+              {
+                ...treeEntryBase,
+                name: "src",
+                path: "src",
+                kind: "directory",
+                sizeBytes: undefined,
+                modifiedAt: undefined,
+              },
+            ]
+          : [
+              {
+                ...treeEntryBase,
+                name: root === "/a" ? "a.ts" : "b.ts",
+                path: `src/${root === "/a" ? "a.ts" : "b.ts"}`,
+                kind: "file",
+              },
+            ],
+    }));
+    const active = vi.fn();
+    function Host(): ReactElement {
+      const [root, setRoot] = useState("/a");
+      return <FilesWidget root={root} onRootChange={setRoot} onActiveFileChange={active} />;
+    }
+    render(<Host />);
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^src$/i }));
+    await screen.findByText("a.ts");
+    await userEvent.clear(screen.getByLabelText("Folder path — open any folder on this machine"));
+    await userEvent.type(
+      screen.getByLabelText("Folder path — open any folder on this machine"),
+      "/b",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^src$/i }));
+    await screen.findByText("b.ts");
+    await userEvent.click(screen.getByRole("button", { name: "Back to previous folder" }));
+    await screen.findByRole("treeitem", { name: /^src$/i });
+    active.mockClear();
+    await userEvent.click(screen.getByRole("button", { name: "Back to previous folder" }));
+    expect(await screen.findByText("a.ts")).toBeInTheDocument();
+    expect(active.mock.calls.some((call) => call[1] === "/b")).toBe(false);
+  });
+
+  it("preserves hidden rows' Git state and metadata in their accessible names", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus([
+        gitChange(".gitignore", "M"),
+        gitChange(".github/workflows/ci.yml", "M"),
+      ]),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValue({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        { ...treeEntryBase, name: ".gitignore", path: ".gitignore", kind: "file", sizeBytes: 1024 },
+        {
+          ...treeEntryBase,
+          name: ".github",
+          path: ".github",
+          kind: "directory",
+          sizeBytes: undefined,
+          modifiedAt: undefined,
+        },
+      ],
+    });
+    render(<FilesWidget root="/repo" presentation="project" />);
+    const file = await screen.findByRole("treeitem", { name: /\.gitignore.*Hidden/u });
+    await waitFor(() => expect(file).toHaveAccessibleName(/Git modified.*1\.00 KB/u));
+    expect(screen.getByRole("treeitem", { name: /\.github.*Hidden/u })).toHaveAccessibleName(
+      /Git changes/u,
+    );
+  });
+
+  it("reveals a root-level new entry and hides trailers while the project root is collapsed", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValue({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [],
+    });
+    render(<FilesWidget root="/repo" presentation="project" />);
+    const project = await screen.findByRole("treeitem", { name: "Project: repo" });
+    await screen.findByText("Empty folder.");
+    await userEvent.click(project);
+    expect(screen.queryByText("Empty folder.")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    expect(project).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("textbox", { name: "New folder name" })).toBeVisible();
   });
 
   it("keeps the project root and siblings visible when an editor folder opens", async () => {
@@ -1294,17 +1471,17 @@ describe("FilesWidget", () => {
     render(
       <FilesWidget root="/repo" presentation="project" openFilesDirectly onOpenFile={onOpenFile} />,
     );
-    const hidden = await screen.findByRole("treeitem", { name: ".github, Hidden" });
+    const hidden = await screen.findByRole("treeitem", { name: /\.github, Hidden/u });
     expect(hidden).toHaveAttribute("data-hidden", "true");
     expect(hidden).not.toHaveAttribute("data-git-ignored");
-    const ignored = await screen.findByRole("treeitem", { name: "generated, Ignored by Git" });
+    const ignored = await screen.findByRole("treeitem", { name: /generated, Ignored by Git/u });
     expect(ignored).toHaveAttribute("data-git-ignored", "true");
     expect(ignored).not.toHaveAttribute("data-hidden");
     const blocked = screen.getByRole("treeitem", { name: "blocked, Unavailable" });
     expect(blocked).toHaveAttribute("aria-disabled", "true");
     expect(blocked).toHaveTextContent(/^blocked$/u);
     await userEvent.click(ignored);
-    const child = await screen.findByRole("treeitem", { name: "inside.ts, Ignored by Git" });
+    const child = await screen.findByRole("treeitem", { name: /inside\.ts, Ignored by Git/u });
     expect(child).toHaveAttribute("data-git-ignored", "true");
     await userEvent.click(child);
     expect(onOpenFile).toHaveBeenCalledWith("/repo", "generated/inside.ts");
@@ -1318,14 +1495,14 @@ describe("FilesWidget", () => {
       entries: [{ ...treeEntryBase, name: ".notes.md", path: ".notes.md", kind: "file" }],
     });
     const files = render(<FilesWidget root="/notes" />);
-    const row = await screen.findByRole("treeitem", { name: ".notes.md, Hidden" });
+    const row = await screen.findByRole("treeitem", { name: /\.notes\.md, Hidden/u });
     expect(row).not.toHaveAttribute("data-git-ignored");
     expect(row).toHaveAttribute("data-muted", "true");
     expect(screen.queryByText("Git unavailable")).toBeNull();
     expect(screen.queryByText("This link can't be opened from this folder.")).toBeNull();
     files.unmount();
     render(<FilesWidget root="/notes" presentation="project" />);
-    expect(await screen.findByRole("treeitem", { name: ".notes.md, Hidden" })).toHaveAttribute(
+    expect(await screen.findByRole("treeitem", { name: /\.notes\.md, Hidden/u })).toHaveAttribute(
       "data-muted",
       "false",
     );
@@ -1334,11 +1511,13 @@ describe("FilesWidget", () => {
   it("uses Git versioning for project dimming while directory views dim hidden names", async () => {
     mockProjectVersioningTree();
     const project = render(<FilesWidget root="/repo" presentation="project" />);
-    const trackedHidden = await screen.findByRole("treeitem", { name: ".coderabbit.yaml, Hidden" });
+    const trackedHidden = await screen.findByRole("treeitem", {
+      name: /\.coderabbit\.yaml, Hidden/u,
+    });
     expect(trackedHidden).toHaveAttribute("data-hidden", "true");
     expect(trackedHidden).toHaveAttribute("data-muted", "false");
     expect(trackedHidden.querySelector("img.fi-img")).not.toBeNull();
-    expect(screen.getByRole("treeitem", { name: ".github, Hidden" })).toHaveAttribute(
+    expect(screen.getByRole("treeitem", { name: /\.github, Hidden/u })).toHaveAttribute(
       "data-muted",
       "false",
     );
@@ -1355,7 +1534,7 @@ describe("FilesWidget", () => {
     expect((await screen.findByText("inside.md")).closest("[data-muted='true']")).not.toBeNull();
     project.unmount();
     render(<FilesWidget root="/repo" />);
-    expect(await screen.findByRole("treeitem", { name: ".gitignore, Hidden" })).toHaveAttribute(
+    expect(await screen.findByRole("treeitem", { name: /\.gitignore, Hidden/u })).toHaveAttribute(
       "data-muted",
       "true",
     );
@@ -1444,7 +1623,11 @@ describe("FilesWidget", () => {
     await userEvent.click(screen.getByRole("button", { name: "Refresh folder" }));
 
     await waitFor(() => {
-      expect(fetchFilesTree).toHaveBeenLastCalledWith("/configured-repo", "src");
+      expect(fetchFilesTree).toHaveBeenLastCalledWith(
+        "/configured-repo",
+        "src",
+        expect.any(String),
+      );
     });
     expect(await screen.findByRole("treeitem", { name: /new\.ts/i })).toBeInTheDocument();
     expect(screen.queryByRole("treeitem", { name: /package\.json/i })).toBeNull();
@@ -1550,7 +1733,7 @@ describe("FilesWidget", () => {
     render(<FilesWidget root="/old-keiko" onRootChange={onRootChange} />);
 
     await waitFor(() => {
-      expect(fetchFilesTree).toHaveBeenCalledWith("/old-keiko", "");
+      expect(fetchFilesTree).toHaveBeenCalledWith("/old-keiko", "", expect.any(String));
     });
     expect(onRootChange).not.toHaveBeenCalled();
   });
@@ -1697,7 +1880,16 @@ describe("FilesWidget", () => {
       truncated: false,
       entries:
         path === ""
-          ? [{ ...treeEntryBase, name: "src", path: "src", kind: "directory" }]
+          ? [
+              {
+                ...treeEntryBase,
+                name: "src",
+                path: "src",
+                kind: "directory",
+                sizeBytes: undefined,
+                modifiedAt: undefined,
+              },
+            ]
           : [
               {
                 ...treeEntryBase,
@@ -1759,7 +1951,7 @@ describe("FilesWidget", () => {
 
     expect(await screen.findByRole("treeitem", { name: /app\.ts/i })).toBeInTheDocument();
     expect(row).toHaveAttribute("aria-expanded", "true");
-    expect(fetchFilesTree).toHaveBeenLastCalledWith("/repo", "linked-src");
+    expect(fetchFilesTree).toHaveBeenLastCalledWith("/repo", "linked-src", expect.any(String));
   });
 
   it("removes native browser titles from project-tree rows", async () => {

@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
+  readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import {
   clientBindingDigest,
@@ -486,14 +487,13 @@ describe("POST /api/diagnostics/client", () => {
         ),
       );
       drainSupportIncidentCandidates();
-      expect(listSupportIncidents(stateDir)).toEqual([
-        expect.objectContaining({
-          trigger: "registered-failure",
-          fingerprint: expect.objectContaining({ op: "client.diagnostic", errorKind: "timeout" }),
-          correlation: expect.objectContaining({ rootCorrelationId: "ui_retained-timeout-0001" }),
-          pin: expect.objectContaining({ status: "pinned" }),
-        }),
-      ]);
+      const incidents = listSupportIncidents(stateDir);
+      expect(incidents).toHaveLength(1);
+      expect(incidents[0]?.trigger).toBe("registered-failure");
+      expect(incidents[0]?.fingerprint.op).toBe("client.diagnostic");
+      expect(incidents[0]?.fingerprint.errorKind).toBe("timeout");
+      expect(incidents[0]?.correlation.rootCorrelationId).toBe("ui_retained-timeout-0001");
+      expect(incidents[0]?.pin.status).toBe("pinned");
     } finally {
       setSupportIncidentTriggerForTests(undefined);
       resetServerLogger();
@@ -2424,4 +2424,93 @@ it("admits a final loss flush after both ordinary budgets are exhausted", async 
     now.mockRestore();
     resetClientDiagnosticsIngestStateForTests();
   }
+});
+
+describe("reviewed navigation and render evidence", () => {
+  it.each(["applied", "unavailable", "failed", "dropped", "stale", "cancelled", "deferred"])(
+    "persists closed navigation outcome %s with the lifecycle join",
+    async (navigationOutcome) => {
+      const sink = captureServerLog();
+      const base = {
+        kind: "stage",
+        stage: "editor project selection",
+        ordinal: 1,
+        correlationId: "ui_navigation-0001",
+      };
+      await handleClientDiagnosticIngest(context(JSON.stringify({ ...base, phase: "started" })));
+      await handleClientDiagnosticIngest(
+        context(JSON.stringify({ ...base, phase: "settled", durationMs: 2, navigationOutcome })),
+      );
+      const events = sink.events.filter((event) => event.op.startsWith("client.stage."));
+      expect(events).toHaveLength(2);
+      expect(events.map((event) => event.correlationId)).toEqual([
+        base.correlationId,
+        base.correlationId,
+      ]);
+      expect(events[1]?.extra?.navigationOutcome).toBe(navigationOutcome);
+      const encoded = sink.lines().join("");
+      expect(encoded).toContain(`"navigationOutcome":"${navigationOutcome}"`);
+      expect(analyzeLogText(encoded).sufficiency.status).toBe("complete");
+    },
+  );
+  it("persists file-read transport and stage lifecycle under one minted correlation", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "keiko-navigation-stage-"));
+    const sink = createActivityLogSink(stateDir, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const correlationId = "ui_files-read-0001";
+    const base = { kind: "stage", stage: "files directory load", ordinal: 1, correlationId };
+    try {
+      for (const body of [
+        { ...base, phase: "started" },
+        { ...base, phase: "settled", durationMs: 3, navigationOutcome: "applied" },
+      ])
+        await handleClientDiagnosticIngest(context(JSON.stringify(body), correlationId));
+      sink.close?.();
+      const analyzed = analyzeLogText(readPersistedActivityLog(stateDir));
+      const timeline = analyzed.timelines.find((entry) => entry.correlationId === correlationId);
+      expect(
+        timeline?.lines.filter((line) => line.op === "http.request.body.received"),
+      ).toHaveLength(2);
+      expect(
+        timeline?.lines
+          .filter((line) => line.op.startsWith("client.stage."))
+          .map((line) => line.op),
+      ).toEqual(["client.stage.started", "client.stage.settled"]);
+      expect(analyzed.sufficiency.status).toBe("complete");
+    } finally {
+      resetServerLogger();
+      sink.close?.();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+  it.each(["shell", "window-body"])(
+    "records a real %s render failure at error while plain internal boundaries remain warn",
+    async (renderFailure) => {
+      const sink = captureServerLog();
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "caught render",
+            clientTs: CLIENT_TS,
+            kind: "boundary",
+            renderFailure,
+            errorKind: "internal",
+          }),
+        ),
+      );
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "ordinary boundary",
+            clientTs: CLIENT_TS,
+            kind: "boundary",
+            errorKind: "internal",
+          }),
+        ),
+      );
+      const events = clientDiagnosticEvents(sink);
+      expect(events.map((event) => event.level)).toEqual(["error", "warn"]);
+      expect(events[0]?.extra?.renderFailure).toBe(renderFailure);
+    },
+  );
 });

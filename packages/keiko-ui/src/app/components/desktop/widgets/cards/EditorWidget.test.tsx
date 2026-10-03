@@ -64,6 +64,11 @@ import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
+import {
+  setClientDiagnosticWriter,
+  resetClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import { editorShortcutCommandId } from "./EditorWidget";
 import {
   dispatchableWorkspaceShortcutsForContext,
@@ -84,6 +89,14 @@ import {
   writeEditorHotExitSnapshot,
 } from "./editorHotExitStore";
 
+vi.mock("../../SupportReportButton", () => ({
+  SupportReportButton: ({ correlationId }: { readonly correlationId?: string }): ReactElement => (
+    <button type="button" data-testid="load-report-correlation">
+      {correlationId}
+    </button>
+  ),
+}));
+
 const disposeAllUnattachedEditorModels = vi.hoisted(() => vi.fn());
 const disposeEditorModelRegistryRoot = vi.hoisted(() => vi.fn());
 
@@ -91,6 +104,14 @@ vi.mock("@oscharko-dev/keiko-editor", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   disposeAllUnattachedEditorModels,
   disposeEditorModelRegistryRoot,
+}));
+
+vi.mock("@/lib/browser-stream-capacity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/browser-stream-capacity")>()),
+  acquirePersistentBrowserStreamCapacity: vi.fn((onGranted: () => void): (() => void) => {
+    onGranted();
+    return (): void => undefined;
+  }),
 }));
 
 vi.mock("../../../../../lib/api", async () => {
@@ -567,7 +588,9 @@ async function beginDeferredWatchReconciliation(): Promise<DeferredWatchReconcil
       metadataHash: "0011223344556677",
     });
   });
-  await waitFor(() => expect(fetchFilesContent).toHaveBeenLastCalledWith("/repo", "src/app.ts"));
+  await waitFor(() =>
+    expect(fetchFilesContent).toHaveBeenLastCalledWith("/repo", "src/app.ts", expect.any(String)),
+  );
   return { pendingRead, saved, view };
 }
 
@@ -643,7 +666,7 @@ describe("probe counter isolation", () => {
 describe("EditorWidget — load", () => {
   it("loads the file and drives the editor surface with a ready buffer", async () => {
     await renderLoaded();
-    expect(fetchFilesContent).toHaveBeenCalledWith("/repo", "src/app.ts");
+    expect(fetchFilesContent).toHaveBeenCalledWith("/repo", "src/app.ts", expect.any(String));
     expect(surface.props?.fileLoadState.status).toBe("ready");
     expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
     expect(surface.props?.buffer.content.relativePath).toBe("src/app.ts");
@@ -679,7 +702,58 @@ describe("EditorWidget — load", () => {
     expect(loadedUris[0]).toMatch(/^keiko-editor:\/\/workspace\/editor-a\//);
     expect(loadedUris[1]).toMatch(/^keiko-editor:\/\/workspace\/editor-b\//);
     expect(loadedUris[0]).not.toBe(loadedUris[1]);
-    expect(fetchFilesContent).toHaveBeenCalledWith("/repo", "src/app.ts");
+    expect(fetchFilesContent).toHaveBeenCalledWith("/repo", "src/app.ts", expect.any(String));
+  });
+
+  it("joins a response-free load failure to the request and keeps structured evidence", async () => {
+    const records: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) records.push(meta);
+    });
+    try {
+      vi.mocked(fetchFilesContent).mockRejectedValueOnce(
+        new DOMException("Load timeout", "TimeoutError"),
+      );
+      render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
+      await screen.findByRole("button", { name: "Retry" });
+      const correlation = vi.mocked(fetchFilesContent).mock.calls[0]?.[2];
+      expect(correlation).toEqual(expect.any(String));
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          correlationId: correlation,
+          errorKind: "timeout",
+          errorEvidence: expect.objectContaining({ errorClass: "TimeoutError" }),
+        }),
+      );
+      expect(screen.getByTestId("load-report-correlation").textContent).toBe(correlation);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("restores each failed document's own report correlation from its session", async () => {
+    const failureA = Object.assign(new ApiError("READ_FAILED", "Read failed A", 503), {
+      correlationId: "failed-document-a",
+    });
+    const failureB = Object.assign(new ApiError("READ_FAILED", "Read failed B", 503), {
+      correlationId: "failed-document-b",
+    });
+    vi.mocked(fetchFilesContent).mockRejectedValueOnce(failureA).mockRejectedValueOnce(failureB);
+    const view = render(
+      <EditorRuntimeWidget root="/repo" file="a.ts" openFiles={["a.ts", "b.ts"]} />,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("load-report-correlation").textContent).toBe("failed-document-a"),
+    );
+    view.rerender(<EditorRuntimeWidget root="/repo" file="b.ts" openFiles={["a.ts", "b.ts"]} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("load-report-correlation").textContent).toBe("failed-document-b"),
+    );
+    view.rerender(<EditorRuntimeWidget root="/repo" file="a.ts" openFiles={["a.ts", "b.ts"]} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("load-report-correlation").textContent).toBe("failed-document-a"),
+    );
+    expect(fetchFilesContent).toHaveBeenCalledTimes(2);
   });
 
   it("surfaces a load failure in the card", async () => {
@@ -689,6 +763,8 @@ describe("EditorWidget — load", () => {
     render(<EditorRuntimeWidget root="/repo" file="big.bin" />);
     expect(await screen.findByText(/this file is too large to edit here/i)).toBeInTheDocument();
     expect(screen.queryByTestId("editor-surface")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByTestId("load-report-correlation")).toBeNull();
   });
 
   it.each([
@@ -2082,7 +2158,7 @@ describe("EditorWidget — concurrent save safety", () => {
 describe("EditorWidget — load-error recovery", () => {
   it("offers Retry on a load error and recovers when the file becomes readable", async () => {
     vi.mocked(fetchFilesContent).mockRejectedValueOnce(
-      new ApiError("UNSUPPORTED_FILE", "This file cannot be edited.", 400),
+      new ApiError("UNAVAILABLE", "The server is temporarily unavailable.", 503),
     );
     render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
     const retry = await screen.findByRole("button", { name: "Retry" });

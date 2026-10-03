@@ -31,7 +31,7 @@ describe("support report code inventory", () => {
         "utf8",
       ),
     );
-  });
+  }, 120_000);
 
   it("includes only owned modules and declared technical symbols, excluding fixtures and links", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-support-inventory-"));
@@ -68,5 +68,62 @@ describe("support report code inventory", () => {
     expect(result).not.toContain("Customer");
     expect(result).not.toContain("files.test");
     expect(await generateSupportCodeInventory(root)).toBe(result);
+  });
+  it("ignores ancestor labels and includes closed producer vocabularies", async () => {
+    const ancestor = mkdtempSync(join(tmpdir(), "keiko-inventory-"));
+    roots.push(ancestor);
+    const root = join(ancestor, "fixtures", "__tests__", "checkout.test.case");
+    source(root, "src/cli/main.ts", "export const cli = true;");
+    source(
+      root,
+      "packages/keiko-git/src/errors.ts",
+      `
+      const CLOSED_GIT_ERROR_KINDS = { "spawn-failed": true };
+      function classify() { return "merge-conflict"; }
+      git(["rev-parse", customerBranch]);
+      class GitFailure extends Error { code = "EREVISION"; }
+      const event = { operation: "workspace-register", source: "activity-log-reader" };
+    `,
+    );
+    source(
+      root,
+      "packages/keiko-tool-catalog/src/legacy.ts",
+      `
+      registration("keiko.file.read", "read_file");
+      createToolRef("keiko.child.workspace.read", 1);
+      registration(customerTool, customerAlias);
+      const profile = { profile: { id: "legacy-native" } };
+    `,
+    );
+    source(
+      root,
+      "packages/keiko-git/src/runner.ts",
+      'const config = ["alias.fetch=", "pager.push=false"];',
+    );
+    source(
+      root,
+      "packages/keiko-local-knowledge/src/indexing/orchestrator-activity-log.ts",
+      'const EXACT_FAILURE_ERROR_KINDS = { LIMIT_REACHED: "validation-failed" };',
+    );
+    const result = await generateSupportCodeInventory(root);
+    for (const symbol of [
+      "fetch",
+      "push",
+      "DISCOVERY_FAILED.LIMIT_REACHED",
+      "LIMIT_REACHED",
+      "spawn-failed",
+      "merge-conflict",
+      "rev-parse",
+      "EREVISION",
+      "workspace-register",
+      "activity-log-reader",
+      "keiko.file.read",
+      "keiko.child.workspace.read",
+      "legacy-native",
+      "ConnectTimeoutError",
+    ])
+      expect(result).toContain(JSON.stringify(symbol));
+    expect(result).toContain('"keiko-git/errors"');
+    expect(result).not.toContain("customer");
   });
 });

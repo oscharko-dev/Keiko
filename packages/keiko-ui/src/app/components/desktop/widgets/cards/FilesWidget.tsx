@@ -419,24 +419,35 @@ function focusParentRow(rows: readonly HTMLElement[], index: number): void {
   }
 }
 
-function handleTreeNavKey(rows: readonly HTMLElement[], index: number, key: string): void {
+function treeAdjacentIndex(index: number, length: number, key: string): number | undefined {
+  return new Map([
+    ["ArrowDown", index + 1],
+    ["ArrowUp", index - 1],
+    ["Home", 0],
+    ["End", length - 1],
+  ]).get(key);
+}
+
+function handleTreeExpansionKey(rows: readonly HTMLElement[], index: number, key: string): void {
   const row = rows[index];
   if (row === undefined) return;
   const toggle = row
     .closest(".tr-row-wrap")
     ?.querySelector<HTMLButtonElement>("button.tr-caret-btn");
-  if (key === "ArrowDown") rows[index + 1]?.focus();
-  else if (key === "ArrowUp") rows[index - 1]?.focus();
-  else if (key === "Home") rows[0]?.focus();
-  else if (key === "End") rows[rows.length - 1]?.focus();
-  else if (key === "ArrowRight") {
-    const expandedState = row.getAttribute("aria-expanded");
-    if (expandedState === "false") toggle?.click();
-    else if (expandedState === "true") rows[index + 1]?.focus();
+  const expanded = row.getAttribute("aria-expanded");
+  if (key === "ArrowRight") {
+    if (expanded === "false") toggle?.click();
+    else if (expanded === "true") rows[index + 1]?.focus();
   } else if (key === "ArrowLeft") {
-    if (row.getAttribute("aria-expanded") === "true") toggle?.click();
+    if (expanded === "true") toggle?.click();
     else focusParentRow(rows, index);
   }
+}
+
+function handleTreeNavKey(rows: readonly HTMLElement[], index: number, key: string): void {
+  const next = treeAdjacentIndex(index, rows.length, key);
+  if (next !== undefined) rows[next]?.focus();
+  else handleTreeExpansionKey(rows, index, key);
 }
 
 // GEN-UI-KEYBOARD-003 — arrow/Home/End roving among role="menuitem" buttons in the context menu
@@ -450,10 +461,14 @@ function handleMenuNavKey(container: HTMLElement, event: ReactKeyboardEvent): vo
   if (items.length === 0) return;
   const index = items.indexOf(document.activeElement as HTMLButtonElement);
   event.preventDefault();
-  if (event.key === "ArrowDown") items[(index + 1 + items.length) % items.length]?.focus();
-  else if (event.key === "ArrowUp") items[(index - 1 + items.length) % items.length]?.focus();
-  else if (event.key === "Home") items[0]?.focus();
-  else if (event.key === "End") items[items.length - 1]?.focus();
+  const positions = new Map([
+    ["ArrowDown", (index + 1 + items.length) % items.length],
+    ["ArrowUp", (index - 1 + items.length) % items.length],
+    ["Home", 0],
+    ["End", items.length - 1],
+  ]);
+  const next = positions.get(event.key);
+  if (next !== undefined) items[next]?.focus();
 }
 
 function gitStatusSummary(state: GitStatusState, t: I18nTranslate): string | null {
@@ -467,6 +482,10 @@ function gitStatusSummary(state: GitStatusState, t: I18nTranslate): string | nul
       ? t("filesWidget.gitStatus.unsafe")
       : t("filesWidget.gitStatus.repoUnavailable");
   }
+  return availableGitSummary(status, t);
+}
+
+function availableGitSummary(status: GitRepositoryStatusResponse, t: I18nTranslate): string {
   const branch = status.detached
     ? t("filesWidget.gitStatus.detachedHead")
     : (status.branch ?? t("filesWidget.gitStatus.unknownBranch"));
@@ -559,7 +578,9 @@ function readSharedFilesTree(root: string, path: string): Promise<FilesTreeRespo
   const key = `${root}\u0000${path}`;
   const existing = filesTreeRequests.get(key);
   if (existing !== undefined) return existing;
-  const request = observeFilesDirectoryRead(() => fetchFilesTree(root, path)).finally(() => {
+  const request = observeFilesDirectoryRead((correlationId) =>
+    fetchFilesTree(root, path, correlationId),
+  ).finally(() => {
     filesTreeRequests.delete(key);
   });
   filesTreeRequests.set(key, request);
@@ -609,6 +630,96 @@ function handleTreeMutationKey(
   return true;
 }
 
+function configuredFilesRoot(root: string | undefined): string | null {
+  const trimmed = root?.trim();
+  return trimmed !== undefined && trimmed.length > 0 ? trimmed : null;
+}
+function fallbackString(primary: string | null, secondary?: string | null): string {
+  return primary ?? secondary ?? "";
+}
+function rootForCache(cacheRoot: string, apiRoot: string, resolved: string | null): string | null {
+  return cacheRoot === apiRoot ? resolved : null;
+}
+function nonemptyRoot(root: string): string | null {
+  return root.length > 0 ? root : null;
+}
+function activeWatchRoot(active: boolean, root: string): string | undefined {
+  return active ? (nonemptyRoot(root) ?? undefined) : undefined;
+}
+function deliveryRoot(state: GitStatusState): string {
+  return state.status?.available === true ? (state.status.repositoryRoot ?? state.status.root) : "";
+}
+function deliveryAvailable(callback: unknown, state: GitStatusState, root: string): boolean {
+  return callback !== undefined && state.status?.available === true && root.length > 0;
+}
+function visibleFilePath(selected: string | null, active?: string | null): string | null {
+  return selected ?? active ?? null;
+}
+function canMoveEntry(source: string, target: string | null, next: string): boolean {
+  return (
+    next !== source &&
+    entryParent(source) !== target &&
+    target !== source &&
+    target?.startsWith(`${source}/`) !== true
+  );
+}
+function directoryPath(path: string | null): string {
+  return path ?? "";
+}
+function directoryEntryLabel(
+  visibility: EntryVisibility,
+  aggregate: GitDirectoryAggregate | undefined,
+  t: FilesWidgetTranslate,
+): string | undefined {
+  if (visibility.label === undefined) return undefined;
+  return [visibility.label, aggregate === undefined ? undefined : gitDirectoryLabel(aggregate, t)]
+    .filter(Boolean)
+    .join(" ");
+}
+function unreadableDescription(entry: FilesTreeEntry, id: string): string | undefined {
+  return entry.readable || entry.kind === "directory" ? undefined : id;
+}
+function fileVisibilityLabel(
+  visibility: EntryVisibility,
+  entry: FilesTreeEntry,
+  decoration: ReturnType<typeof gitChangeDecoration> | null,
+  t: I18nTranslate,
+  tGit: FilesWidgetTranslate,
+): string | undefined {
+  if (visibility.label === undefined) return undefined;
+  return [
+    visibility.label,
+    entry.kind === "symlink" ? t("filesWidget.tree.symlinkBadge") : undefined,
+    decoration === null ? undefined : tGit(decoration.labelKey, { path: entry.path }),
+    formatBytes(entry.sizeBytes ?? 0),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+function deleteDialogCopy(
+  entry: FilesTreeEntry,
+  t: I18nTranslate,
+): { title: string; body: string } {
+  return entry.kind === "directory"
+    ? {
+        title: t("filesWidget.deleteDialog.titleFolder"),
+        body: t("filesWidget.deleteDialog.bodyFolder", { name: entry.name }),
+      }
+    : {
+        title: t("filesWidget.deleteDialog.titleFile"),
+        body: t("filesWidget.deleteDialog.bodyFile", { name: entry.name }),
+      };
+}
+function emptyDirectory(state: DirectoryState | undefined): boolean {
+  return (
+    state !== undefined &&
+    !state.loading &&
+    state.error === null &&
+    state.notice === null &&
+    state.entries.length === 0
+  );
+}
+
 export function FilesWidget({
   root,
   presentation = "directory",
@@ -625,11 +736,15 @@ export function FilesWidget({
 }: FilesWidgetProps): ReactNode {
   const t = useTranslate();
   const tGit = useFilesWidgetTranslate();
-  const trimmedRoot = root?.trim();
-  const configuredRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : null;
+  const configuredRoot = configuredFilesRoot(root);
   const [fallbackRoot, setFallbackRoot] = useState<string | null>(null);
-  const apiRoot = configuredRoot ?? fallbackRoot ?? "";
-  const [resolvedRoot, setResolvedRoot] = useState<string | null>(null);
+  const apiRoot = fallbackString(configuredRoot, fallbackRoot);
+  const apiRootRef = useRef(apiRoot);
+  apiRootRef.current = apiRoot;
+  const [resolvedRootValue, setResolvedRoot] = useState<string | null>(null);
+  const [directoryRoot, setDirectoryRoot] = useState(apiRoot);
+  const resolvedRoot = rootForCache(directoryRoot, apiRoot, resolvedRootValue);
+  const effectiveRoot = fallbackString(resolvedRoot, apiRoot);
   // Root bar draft: what the user is typing as the next folder to open. Synced to the resolved
   // (real) root whenever the widget loads a folder, so it always shows where we are.
   const [rootDraft, setRootDraft] = useState<string>("");
@@ -805,7 +920,7 @@ export function FilesWidget({
       const requestSeq = directoryLoadSeqRef.current;
       const requestRoot = apiRoot;
       const isStale = (): boolean =>
-        requestSeq !== directoryLoadSeqRef.current || requestRoot !== apiRoot;
+        requestSeq !== directoryLoadSeqRef.current || requestRoot !== apiRootRef.current;
       if (apiRoot.length === 0) {
         setDirectories((current) => ({
           ...current,
@@ -877,6 +992,7 @@ export function FilesWidget({
 
   useEffect(() => {
     directoryLoadSeqRef.current += 1;
+    setDirectoryRoot(apiRoot);
     setSelectedPath(null);
     setGitDiffState(null);
     previousDirectoryRef.current = null;
@@ -889,9 +1005,9 @@ export function FilesWidget({
     void loadDirectory("");
   }, [apiRoot, loadDirectory]);
 
-  const visibleBaseRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : "");
+  const visibleBaseRoot = effectiveRoot;
   const visibleRootPath = displayPath(visibleBaseRoot, currentDirectoryPath);
-  const gitStatusTargetRoot = visibleRootPath.length > 0 ? visibleRootPath : null;
+  const gitStatusTargetRoot = nonemptyRoot(visibleRootPath);
 
   useEffect(() => {
     if (gitStatusTargetRoot === null) {
@@ -990,13 +1106,21 @@ export function FilesWidget({
 
   const goToDirectory = navigation.visit;
   useEffect((): void => {
-    if (previousDirectoryRef.current === currentDirectoryPath) return;
+    if (directoryRoot !== apiRoot || previousDirectoryRef.current === currentDirectoryPath) return;
     previousDirectoryRef.current = currentDirectoryPath;
     setSelectedPath(null);
-    activeFileChangeRef.current?.(null, resolvedRoot ?? apiRoot, currentDirectoryPath);
+    activeFileChangeRef.current?.(null, effectiveRoot, currentDirectoryPath);
     const path = currentDirectoryPath ?? "";
     if (directories[path] === undefined) void loadDirectory(path);
-  }, [apiRoot, currentDirectoryPath, directories, loadDirectory, resolvedRoot]);
+  }, [
+    apiRoot,
+    currentDirectoryPath,
+    directories,
+    directoryRoot,
+    effectiveRoot,
+    loadDirectory,
+    resolvedRoot,
+  ]);
 
   const refreshCurrentDirectory = useCallback((): void => {
     setSelectedPath(null);
@@ -1004,9 +1128,9 @@ export function FilesWidget({
     void loadDirectory(currentDirectoryPath ?? "");
   }, [currentDirectoryPath, invalidateGitStatus, loadDirectory]);
 
-  const watchRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : undefined);
-  useWorkspaceWatch(
-    watchActive ? watchRoot : undefined,
+  const watchRoot = activeWatchRoot(watchActive, effectiveRoot);
+  const workspaceWatch = useWorkspaceWatch(
+    watchRoot,
     useCallback(
       (event): void => {
         invalidateGitStatus();
@@ -1021,8 +1145,15 @@ export function FilesWidget({
     ),
   );
 
+  useEffect(() => {
+    if (!workspaceWatch.snapshotRequired) return;
+    setDirectories({});
+    invalidateGitStatus();
+    void loadDirectory(currentDirectoryPath ?? "");
+  }, [workspaceWatch.snapshotRequired, currentDirectoryPath, invalidateGitStatus, loadDirectory]);
+
   // The root every mutation targets — the resolved real root, or the configured one before it loads.
-  const mutationRoot = resolvedRoot ?? apiRoot;
+  const mutationRoot = effectiveRoot;
   const mutationsEnabled = mutationRoot.length > 0;
 
   const startNewEntry = useCallback(
@@ -1032,12 +1163,9 @@ export function FilesWidget({
       setEntryDraft("");
       setPendingEntry({ kind, parentPath });
       // Make sure the folder the new entry lands in is expanded so the inline editor is visible.
-      if (parentPath !== null) {
-        setExpanded((current) =>
-          current.has(parentPath) ? current : new Set(current).add(parentPath),
-        );
-        if (directories[parentPath] === undefined) void loadDirectory(parentPath);
-      }
+      const path = parentPath ?? "";
+      setExpanded((current) => (current.has(path) ? current : new Set(current).add(path)));
+      if (directories[path] === undefined) void loadDirectory(path);
     },
     [directories, loadDirectory],
   );
@@ -1194,16 +1322,15 @@ export function FilesWidget({
       const name = sourcePath.slice(sourcePath.lastIndexOf("/") + 1);
       const newPath = joinRelative(targetDir, name);
       // No-op when dropped onto its own current directory, onto itself, or into its own subtree.
-      if (newPath === sourcePath || entryParent(sourcePath) === targetDir) return;
-      if (targetDir === sourcePath || targetDir?.startsWith(`${sourcePath}/`) === true) return;
+      if (!canMoveEntry(sourcePath, targetDir, newPath)) return;
       setOpBusy(true);
       setOpError(null);
       try {
         // A move is a rename, so it orphans an unsaved buffer exactly the same way: ask first.
         if (!(await mayMutateEntry(sourcePath))) return;
         const result = await renameFilesEntry({ root: mutationRoot, path: sourcePath, newPath });
-        await loadDirectory(entryParent(sourcePath) ?? "");
-        await loadDirectory(targetDir ?? "");
+        await loadDirectory(directoryPath(entryParent(sourcePath)));
+        await loadDirectory(directoryPath(targetDir));
         invalidateGitStatus();
         onFilesMutatedRef.current?.({ op: "rename", mutation: result });
       } catch (error: unknown) {
@@ -1311,9 +1438,9 @@ export function FilesWidget({
       goToDirectory(parentRelativePath(currentDirectoryPath));
       return;
     }
-    const parent = parentDir(resolvedRoot ?? apiRoot);
+    const parent = parentDir(effectiveRoot);
     if (parent !== null) openRoot(parent);
-  }, [apiRoot, currentDirectoryPath, goToDirectory, openRoot, resolvedRoot]);
+  }, [currentDirectoryPath, effectiveRoot, goToDirectory, openRoot]);
 
   const toggleDirectory = (entry: FilesTreeEntry): void => {
     if (!entry.readable) return;
@@ -1468,15 +1595,9 @@ export function FilesWidget({
     );
   }, [currentDirectoryPath, gitChanges]);
   const gitSummary = gitStatusSummary(gitStatusState, t);
-  const gitDeliveryRoot =
-    gitStatusState.status?.available === true
-      ? (gitStatusState.status.repositoryRoot ?? gitStatusState.status.root)
-      : "";
-  const canOpenGitDelivery =
-    onOpenGitDelivery !== undefined &&
-    gitStatusState.status?.available === true &&
-    gitDeliveryRoot.length > 0;
-  const activeTreePath = selectedPath ?? activeFilePath ?? null;
+  const gitDeliveryRoot = deliveryRoot(gitStatusState);
+  const canOpenGitDelivery = deliveryAvailable(onOpenGitDelivery, gitStatusState, gitDeliveryRoot);
+  const activeTreePath = visibleFilePath(selectedPath, activeFilePath);
 
   // GEN-PERF-WIDGET-004 — a path->row-index lookup per loaded directory, memoized on
   // [directories], so renderLimitForDirectory does O(1) Map lookups instead of up to two
@@ -1558,7 +1679,7 @@ export function FilesWidget({
 
   const openFileEntry = (entry: FilesTreeEntry): void => {
     if (!entry.readable) return;
-    const fileRoot = resolvedRoot ?? apiRoot;
+    const fileRoot = effectiveRoot;
     if (openFilesDirectly && onOpenFile !== undefined) {
       activeFileChangeRef.current?.(entry.path, fileRoot);
       onOpenFile(fileRoot, entry.path);
@@ -1583,6 +1704,23 @@ export function FilesWidget({
       tooltip: labels.length > 0 ? labels.join(", ") : undefined,
     };
   };
+
+  const renderDirectoryBadge = (gitAggregate: GitDirectoryAggregate | undefined): ReactNode =>
+    gitAggregate !== undefined ? (
+      <span
+        className="tr-badge tr-git"
+        data-git-state={gitAggregate.conflicted ? "conflicted" : "aggregate"}
+        aria-label={gitDirectoryLabel(gitAggregate, tGit)}
+        title={gitDirectoryLabel(gitAggregate, tGit)}
+        style={
+          gitAggregate.conflicted
+            ? { outline: "1px solid currentColor", fontWeight: 700 }
+            : undefined
+        }
+      >
+        {gitAggregate.conflicted ? "U" : "Δ"}
+      </span>
+    ) : null;
 
   const renderDirectoryEntry = (
     entry: FilesTreeEntry,
@@ -1622,7 +1760,7 @@ export function FilesWidget({
             className={`tr-row tr-dir-enter ${presentationStyles.cmpEntry}`}
             role="treeitem"
             aria-level={depth + 1}
-            aria-label={visibility.label}
+            aria-label={directoryEntryLabel(visibility, gitAggregate, tGit)}
             data-hidden={visibility.hidden || undefined}
             data-git-ignored={visibility.ignored || undefined}
             data-unversioned={visibility.unversioned || undefined}
@@ -1634,9 +1772,7 @@ export function FilesWidget({
             type="button"
             draggable={mutationsEnabled && entry.readable}
             aria-disabled={entry.readable ? undefined : true}
-            aria-describedby={
-              entry.readable || entry.kind === "directory" ? undefined : unreadableReasonId
-            }
+            aria-describedby={unreadableDescription(entry, unreadableReasonId)}
             aria-expanded={open}
             onPointerEnter={(event) => scheduleTreeTooltip(event, entryTip)}
             onPointerMove={moveTreeTooltip}
@@ -1663,25 +1799,13 @@ export function FilesWidget({
               if (source !== null) void moveEntry(source, entry.path);
             }}
           >
-            <span className={`fi-fallback ${presentationStyles.cmpFolderIcon}`}>
+            <span
+              className={`fi-fallback ${presentationStyles.cmpFolderIcon} ${presentationStyles.cmpIcon}`}
+            >
               <FolderIcon size={14} />
             </span>
-            <span className="tr-name tr-folder">{entry.name}</span>
-            {gitAggregate !== undefined ? (
-              <span
-                className="tr-badge tr-git"
-                data-git-state={gitAggregate.conflicted ? "conflicted" : "aggregate"}
-                aria-label={gitDirectoryLabel(gitAggregate, tGit)}
-                title={gitDirectoryLabel(gitAggregate, tGit)}
-                style={
-                  gitAggregate.conflicted
-                    ? { outline: "1px solid currentColor", fontWeight: 700 }
-                    : undefined
-                }
-              >
-                {gitAggregate.conflicted ? "U" : "Δ"}
-              </span>
-            ) : null}
+            <span className={`tr-name tr-folder ${presentationStyles.cmpName}`}>{entry.name}</span>
+            {renderDirectoryBadge(gitAggregate)}
           </button>
         </div>
         {open ? renderDirectory(entry.path, depth + 1, state) : null}
@@ -1689,11 +1813,16 @@ export function FilesWidget({
     );
   };
 
-  const renderFileEntry = (entry: FilesTreeEntry, depth: number, entryTip: string): ReactNode => {
-    const change = gitChangeByPath.get(entry.path);
-    const visibility = visibilityOf(entry);
-    const ignored = visibility.ignored;
-    const decoration = change === undefined ? null : gitChangeDecoration(change);
+  const fileEntryIds = (
+    entry: FilesTreeEntry,
+    decoration: ReturnType<typeof gitChangeDecoration> | null,
+  ): {
+    nameId: string;
+    symlinkId: string;
+    gitBadgeId: string;
+    metaId: string;
+    labelledBy: string;
+  } => {
     const labelIdBase = fileTreeItemLabelId(fileTreeItemLabelPrefix, entry.path);
     const nameId = `${labelIdBase}-name`;
     const symlinkId = `${labelIdBase}-symlink`;
@@ -1705,6 +1834,15 @@ export function FilesWidget({
       ...(decoration === null ? [] : [gitBadgeId]),
       metaId,
     ].join(" ");
+    return { nameId, symlinkId, gitBadgeId, metaId, labelledBy };
+  };
+
+  const renderFileEntry = (entry: FilesTreeEntry, depth: number, entryTip: string): ReactNode => {
+    const change = gitChangeByPath.get(entry.path);
+    const visibility = visibilityOf(entry);
+    const ignored = visibility.ignored;
+    const decoration = change === undefined ? null : gitChangeDecoration(change);
+    const { nameId, symlinkId, gitBadgeId, metaId, labelledBy } = fileEntryIds(entry, decoration);
     return (
       <div
         className={`tr-row tr-file ${presentationStyles.cmpEntry}`}
@@ -1712,7 +1850,7 @@ export function FilesWidget({
         role="treeitem"
         aria-level={depth + 1}
         aria-selected={activeTreePath === entry.path}
-        aria-label={visibility.label}
+        aria-label={fileVisibilityLabel(visibility, entry, decoration, t, tGit)}
         aria-labelledby={visibility.label === undefined ? labelledBy : undefined}
         aria-disabled={entry.readable ? undefined : true}
         aria-describedby={entry.readable ? undefined : unreadableReasonId}
@@ -1749,13 +1887,13 @@ export function FilesWidget({
           <ChevronRIcon size={11} />
         </span>
         {visibility.muted ? (
-          <span className="fi-fallback">
+          <span className={`fi-fallback ${presentationStyles.cmpIcon}`}>
             <FileGlyphIcon size={14} />
           </span>
         ) : (
           <FileIcon name={entry.name} />
         )}
-        <span className="tr-name" id={nameId}>
+        <span className={`tr-name ${presentationStyles.cmpName}`} id={nameId}>
           {entry.name}
         </span>
         {entry.kind === "symlink" ? (
@@ -1799,6 +1937,21 @@ export function FilesWidget({
     );
   };
 
+  const entryTooltip = (entry: FilesTreeEntry): string => {
+    const unreadableTitle = t("filesWidget.tree.unreadableLinkReason");
+    const baseTip = entry.readable
+      ? entry.path
+      : entry.kind === "directory"
+        ? tGit("tree.unavailable")
+        : unreadableTitle;
+    const visibility = visibilityOf(entry);
+    const entryTip =
+      !entry.readable && entry.kind === "directory"
+        ? (visibility.tooltip ?? baseTip)
+        : [baseTip, visibility.tooltip].filter(Boolean).join(" — ");
+    return entryTip;
+  };
+
   const renderEntry = (entry: FilesTreeEntry, depth: number): ReactNode => {
     if (pendingEntry?.kind === "rename" && pendingEntry.path === entry.path) {
       const icon = isExpandableDirectory(entry) ? (
@@ -1814,17 +1967,7 @@ export function FilesWidget({
         t("filesWidget.tree.renameAriaLabel", { name: entry.name }),
       );
     }
-    const unreadableTitle = t("filesWidget.tree.unreadableLinkReason");
-    const baseTip = entry.readable
-      ? entry.path
-      : entry.kind === "directory"
-        ? tGit("tree.unavailable")
-        : unreadableTitle;
-    const visibility = visibilityOf(entry);
-    const entryTip =
-      !entry.readable && entry.kind === "directory"
-        ? (visibility.tooltip ?? baseTip)
-        : [baseTip, visibility.tooltip].filter(Boolean).join(" — ");
+    const entryTip = entryTooltip(entry);
     // #2906 review (comment 3865167721): a readable symlink-to-directory (kind: "symlink",
     // symlinkTargetKind: "directory") is server-listable exactly like a real directory, so it must
     // route through renderDirectoryEntry -- which is already written generically against `entry`
@@ -1840,16 +1983,12 @@ export function FilesWidget({
   // fails axe's aria-required-children (#2605). Splitting a directory into its chrome and its rows
   // lets the ROOT level put only rows inside role="tree" and keep the chrome outside it. Nested
   // levels are unaffected: they render into role="group", which has no required children.
-  const directorySections = (
+  const directoryNotices = (
     path: string,
     depth: number,
-    state = directories[path],
-  ): { readonly notices: ReactNode; readonly rows: ReactNode; readonly trailer: ReactNode } => {
-    const entries = state?.entries ?? [];
-    const visibleCount = renderLimitForDirectory(path, entries);
-    const hiddenCount = entries.length - visibleCount;
-    const visibleEntries = hiddenCount > 0 ? entries.slice(0, visibleCount) : entries;
-    const notices = (
+    state: DirectoryState | undefined,
+  ): ReactNode => {
+    return (
       <>
         {state?.loading === true ? (
           <output
@@ -1901,7 +2040,15 @@ export function FilesWidget({
           : null}
       </>
     );
-    const trailer = (
+  };
+  const directoryTrailer = (
+    path: string,
+    depth: number,
+    state: DirectoryState | undefined,
+    entries: readonly FilesTreeEntry[],
+    hiddenCount: number,
+  ): ReactNode => {
+    return (
       <>
         {hiddenCount > 0 ? (
           <button
@@ -1915,11 +2062,7 @@ export function FilesWidget({
             })}
           </button>
         ) : null}
-        {state !== undefined &&
-        !state.loading &&
-        state.error === null &&
-        state.notice === null &&
-        state.entries.length === 0 ? (
+        {emptyDirectory(state) ? (
           <output
             className="files-note"
             style={{ ...NATIVE_BLOCK_STYLE, paddingLeft: treeIndent(depth) + 18 }}
@@ -1929,6 +2072,19 @@ export function FilesWidget({
         ) : null}
       </>
     );
+  };
+
+  const directorySections = (
+    path: string,
+    depth: number,
+    state = directories[path],
+  ): { readonly notices: ReactNode; readonly rows: ReactNode; readonly trailer: ReactNode } => {
+    const entries = state?.entries ?? [];
+    const visibleCount = renderLimitForDirectory(path, entries);
+    const hiddenCount = entries.length - visibleCount;
+    const visibleEntries = hiddenCount > 0 ? entries.slice(0, visibleCount) : entries;
+    const notices = directoryNotices(path, depth, state);
+    const trailer = directoryTrailer(path, depth, state, entries, hiddenCount);
     return {
       notices,
       rows: <>{visibleEntries.map((entry) => renderEntry(entry, depth))}</>,
@@ -2045,13 +2201,13 @@ export function FilesWidget({
   if (selectedPath !== null) {
     return (
       <FilePreview
-        root={resolvedRoot ?? apiRoot}
+        root={effectiveRoot}
         path={selectedPath}
         onOpenInEditor={onOpenFile}
         onClose={() => {
           restoreFocusPathRef.current = selectedPath;
           setSelectedPath(null);
-          activeFileChangeRef.current?.(null, resolvedRoot ?? apiRoot);
+          activeFileChangeRef.current?.(null, effectiveRoot);
         }}
       />
     );
@@ -2066,7 +2222,7 @@ export function FilesWidget({
       editable={onRootChange !== undefined}
       canGoUp={
         currentDirectoryPath !== null ||
-        (onRootChange !== undefined && parentDir(resolvedRoot ?? apiRoot) !== null)
+        (onRootChange !== undefined && parentDir(effectiveRoot) !== null)
       }
       onDraftChange={setRootDraft}
       onOpen={openRoot}
@@ -2088,7 +2244,7 @@ export function FilesWidget({
             className="files-root-up"
             style={{ width: 24, height: 24, marginLeft: "auto" }}
             type="button"
-            onClick={() => onOpenGitDelivery(gitDeliveryRoot)}
+            onClick={() => onOpenGitDelivery?.(gitDeliveryRoot)}
             title={t("filesWidget.gitDelivery.open")}
             aria-label={t("filesWidget.gitDelivery.open")}
           >
@@ -2144,7 +2300,7 @@ export function FilesWidget({
     // so the class pair has to stay where the rule expects it.
     return (
       <div className="tr files-tree">
-        {notices}
+        {presentation !== "project" || expanded.has("") ? notices : null}
         {/* Only the rows carry role="tree" — a tree may own nothing but treeitem and group, and the
             root level's notices, error block, inline editor and load-more button are none of those
             (#2605). The keyboard host moves with the role: arrow traversal is a tree behaviour and
@@ -2157,7 +2313,7 @@ export function FilesWidget({
         >
           {presentation === "project" ? (
             <ProjectTreeRoot
-              root={resolvedRoot ?? apiRoot}
+              root={effectiveRoot}
               expanded={expanded.has("")}
               onToggle={() =>
                 setExpanded((current) => {
@@ -2174,10 +2330,169 @@ export function FilesWidget({
             rows
           )}
         </div>
-        {trailer}
+        {presentation !== "project" || expanded.has("") ? trailer : null}
       </div>
     );
   };
+
+  const renderContextMenu = (): ReactNode =>
+    menu !== null ? (
+      <div
+        ref={menuRef}
+        role="menu"
+        aria-label={t("filesWidget.menu.label")}
+        // tabIndex -1: the menu is a programmatic focus container; the menuitems are the tab
+        // stops. Satisfies role="menu" focusability without adding a Tab stop.
+        tabIndex={-1}
+        // Positioned at the cursor and themed with the same popover tokens as `.edm-menu`, so the
+        // context menu needs no globals.css rule. Stopping pointerdown keeps the window-level
+        // outside-close listener from dismissing it before a menu item's click fires.
+        onPointerDown={(event) => event.stopPropagation()}
+        // GEN-UI-KEYBOARD-003 — Arrow/Home/End roving among the menuitems (Enter/Space activate
+        // the focused button natively).
+        onKeyDown={(event) => handleMenuNavKey(event.currentTarget, event)}
+        style={{
+          position: "fixed",
+          top: menu.y,
+          left: menu.x,
+          zIndex: 9700,
+          minWidth: 176,
+          padding: 6,
+          background: "var(--popover-surface)",
+          border: "1px solid var(--popover-border)",
+          borderRadius: "var(--radius)",
+          boxShadow: "var(--popover-shadow)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+        }}
+      >
+        {(() => {
+          const target = menu.entry?.readable === true ? menu.entry : null;
+          const parent = contextMenuParentPath(menu.entry, currentDirectoryPath);
+          return (
+            <>
+              {target !== null ? (
+                <>
+                  <button
+                    type="button"
+                    className="edm-item"
+                    role="menuitem"
+                    onClick={() => startRename(target)}
+                  >
+                    <EditIcon size={14} />
+                    <span>{t("filesWidget.menu.rename")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="edm-item"
+                    role="menuitem"
+                    onClick={() => void duplicateEntry(target)}
+                  >
+                    <CopyIcon size={14} />
+                    <span>{t("filesWidget.menu.duplicate")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="edm-item"
+                    role="menuitem"
+                    onClick={() => {
+                      // Hand the menu's originating row to the delete dialog so focus lands
+                      // back on the row (not lost) once the whole chain closes (WCAG 2.4.3).
+                      confirmDeleteReturnFocusRef.current = menuReturnFocusRef.current;
+                      setMenu(null);
+                      setOpError(null);
+                      setConfirmDelete(target);
+                    }}
+                  >
+                    <TrashIcon size={14} />
+                    <span>{t("filesWidget.menu.delete")}</span>
+                  </button>
+                </>
+              ) : null}
+              <button
+                type="button"
+                className="edm-item"
+                role="menuitem"
+                onClick={() => startNewEntry("new-file", parent)}
+              >
+                <FileGlyphIcon size={14} />
+                <span>{t("filesWidget.menu.newFile")}</span>
+              </button>
+              <button
+                type="button"
+                className="edm-item"
+                role="menuitem"
+                onClick={() => startNewEntry("new-folder", parent)}
+              >
+                <FolderIcon size={14} />
+                <span>{t("filesWidget.menu.newFolder")}</span>
+              </button>
+            </>
+          );
+        })()}
+      </div>
+    ) : null;
+
+  const renderDeleteDialog = (): ReactNode =>
+    confirmDelete !== null ? (
+      <div className="ed-dialog-backdrop" role="presentation">
+        {/* GEN-UI-FOCUS-002 — Escape cancels and Tab/Shift+Tab stay inside the dialog (WCAG
+              2.1.2). Both live in document-level effects above, not on this element, so they still
+              work while every control is disabled and focus has dropped to <body>. */}
+        <div
+          ref={deleteDialogRef}
+          className="ed-dirty-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="files-delete-title"
+          aria-describedby="files-delete-body"
+          tabIndex={-1}
+        >
+          <h2 id="files-delete-title">{deleteDialogCopy(confirmDelete, t).title}</h2>
+          <p id="files-delete-body">{deleteDialogCopy(confirmDelete, t).body}</p>
+          {opError !== null ? <p role="alert">{opError}</p> : null}
+          <div className="ed-dialog-actions">
+            <button
+              type="button"
+              className="ed-reload"
+              onClick={() => void performDelete(confirmDelete)}
+              disabled={opBusy}
+            >
+              {opBusy
+                ? t("filesWidget.deleteDialog.deleting")
+                : t("filesWidget.deleteDialog.delete")}
+            </button>
+            <button
+              type="button"
+              className="ed-icon-action"
+              onClick={() => {
+                setConfirmDelete(null);
+                setOpError(null);
+              }}
+              disabled={opBusy}
+            >
+              {t("filesWidget.deleteDialog.cancel")}
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null;
+
+  const renderTreeTooltip = (): ReactNode =>
+    treeTooltip !== null && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            ref={treeTooltipElRef}
+            className="files-tree-tooltip mono"
+            role="tooltip"
+            style={{ left: treeTooltip.x, top: treeTooltip.y }}
+          >
+            {treeTooltip.text}
+          </div>,
+          document.body,
+        )
+      : null;
 
   const renderTreeView = (): ReactNode => (
     // tabIndex -1: programmatic focus target only — the fallback for the focus restore above
@@ -2207,167 +2522,9 @@ export function FilesWidget({
         </span>
       ) : null}
       {renderRootTree()}
-      {menu !== null ? (
-        <div
-          ref={menuRef}
-          role="menu"
-          aria-label={t("filesWidget.menu.label")}
-          // tabIndex -1: the menu is a programmatic focus container; the menuitems are the tab
-          // stops. Satisfies role="menu" focusability without adding a Tab stop.
-          tabIndex={-1}
-          // Positioned at the cursor and themed with the same popover tokens as `.edm-menu`, so the
-          // context menu needs no globals.css rule. Stopping pointerdown keeps the window-level
-          // outside-close listener from dismissing it before a menu item's click fires.
-          onPointerDown={(event) => event.stopPropagation()}
-          // GEN-UI-KEYBOARD-003 — Arrow/Home/End roving among the menuitems (Enter/Space activate
-          // the focused button natively).
-          onKeyDown={(event) => handleMenuNavKey(event.currentTarget, event)}
-          style={{
-            position: "fixed",
-            top: menu.y,
-            left: menu.x,
-            zIndex: 9700,
-            minWidth: 176,
-            padding: 6,
-            background: "var(--popover-surface)",
-            border: "1px solid var(--popover-border)",
-            borderRadius: "var(--radius)",
-            boxShadow: "var(--popover-shadow)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 2,
-          }}
-        >
-          {(() => {
-            const target = menu.entry?.readable === true ? menu.entry : null;
-            const parent = contextMenuParentPath(menu.entry, currentDirectoryPath);
-            return (
-              <>
-                {target !== null ? (
-                  <>
-                    <button
-                      type="button"
-                      className="edm-item"
-                      role="menuitem"
-                      onClick={() => startRename(target)}
-                    >
-                      <EditIcon size={14} />
-                      <span>{t("filesWidget.menu.rename")}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="edm-item"
-                      role="menuitem"
-                      onClick={() => void duplicateEntry(target)}
-                    >
-                      <CopyIcon size={14} />
-                      <span>{t("filesWidget.menu.duplicate")}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="edm-item"
-                      role="menuitem"
-                      onClick={() => {
-                        // Hand the menu's originating row to the delete dialog so focus lands
-                        // back on the row (not lost) once the whole chain closes (WCAG 2.4.3).
-                        confirmDeleteReturnFocusRef.current = menuReturnFocusRef.current;
-                        setMenu(null);
-                        setOpError(null);
-                        setConfirmDelete(target);
-                      }}
-                    >
-                      <TrashIcon size={14} />
-                      <span>{t("filesWidget.menu.delete")}</span>
-                    </button>
-                  </>
-                ) : null}
-                <button
-                  type="button"
-                  className="edm-item"
-                  role="menuitem"
-                  onClick={() => startNewEntry("new-file", parent)}
-                >
-                  <FileGlyphIcon size={14} />
-                  <span>{t("filesWidget.menu.newFile")}</span>
-                </button>
-                <button
-                  type="button"
-                  className="edm-item"
-                  role="menuitem"
-                  onClick={() => startNewEntry("new-folder", parent)}
-                >
-                  <FolderIcon size={14} />
-                  <span>{t("filesWidget.menu.newFolder")}</span>
-                </button>
-              </>
-            );
-          })()}
-        </div>
-      ) : null}
-      {confirmDelete !== null ? (
-        <div className="ed-dialog-backdrop" role="presentation">
-          {/* GEN-UI-FOCUS-002 — Escape cancels and Tab/Shift+Tab stay inside the dialog (WCAG
-              2.1.2). Both live in document-level effects above, not on this element, so they still
-              work while every control is disabled and focus has dropped to <body>. */}
-          <div
-            ref={deleteDialogRef}
-            className="ed-dirty-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="files-delete-title"
-            aria-describedby="files-delete-body"
-            tabIndex={-1}
-          >
-            <h2 id="files-delete-title">
-              {confirmDelete.kind === "directory"
-                ? t("filesWidget.deleteDialog.titleFolder")
-                : t("filesWidget.deleteDialog.titleFile")}
-            </h2>
-            <p id="files-delete-body">
-              {confirmDelete.kind === "directory"
-                ? t("filesWidget.deleteDialog.bodyFolder", { name: confirmDelete.name })
-                : t("filesWidget.deleteDialog.bodyFile", { name: confirmDelete.name })}
-            </p>
-            {opError !== null ? <p role="alert">{opError}</p> : null}
-            <div className="ed-dialog-actions">
-              <button
-                type="button"
-                className="ed-reload"
-                onClick={() => void performDelete(confirmDelete)}
-                disabled={opBusy}
-              >
-                {opBusy
-                  ? t("filesWidget.deleteDialog.deleting")
-                  : t("filesWidget.deleteDialog.delete")}
-              </button>
-              <button
-                type="button"
-                className="ed-icon-action"
-                onClick={() => {
-                  setConfirmDelete(null);
-                  setOpError(null);
-                }}
-                disabled={opBusy}
-              >
-                {t("filesWidget.deleteDialog.cancel")}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {treeTooltip !== null && typeof document !== "undefined"
-        ? createPortal(
-            <div
-              ref={treeTooltipElRef}
-              className="files-tree-tooltip mono"
-              role="tooltip"
-              style={{ left: treeTooltip.x, top: treeTooltip.y }}
-            >
-              {treeTooltip.text}
-            </div>,
-            document.body,
-          )
-        : null}
+      {renderContextMenu()}
+      {renderDeleteDialog()}
+      {renderTreeTooltip()}
     </div>
   );
 

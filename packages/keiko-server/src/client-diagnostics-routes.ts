@@ -366,6 +366,12 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["git-sync", "git-history"],
     },
+    renderFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["shell", "window-body"],
+    },
     clientNoteDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     readyState: { type: "integer", dataClass: "count", required: false },
     clientKind: {
@@ -608,7 +614,15 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
   category: "diagnostic",
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientStageSettled",
-  fields: CLIENT_STAGE_FIELDS,
+  fields: {
+    ...CLIENT_STAGE_FIELDS,
+    navigationOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["applied", "unavailable", "failed", "dropped", "stale", "cancelled", "deferred"],
+    },
+  },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -1438,6 +1452,7 @@ function projectClientFailure(
   extra: Record<string, unknown>,
 ): void {
   if (request.moduleLoadFailure !== undefined) extra.moduleLoadFailure = request.moduleLoadFailure;
+  if (request.renderFailure !== undefined) extra.renderFailure = request.renderFailure;
   if (request.errorEvidence !== undefined) {
     extra.errorClass = request.errorEvidence.errorClass;
     extra.frames = request.errorEvidence.frames;
@@ -1689,7 +1704,8 @@ function logClientDiagnostic(
 function clientDiagnosticLevel(request: ClientDiagnosticIngestRequest): "warn" | "error" {
   const errorKind = requestDiagnosticErrorKind(request);
   return errorKind === "timeout" ||
-    errorKind === "internal" ||
+    request.renderFailure !== undefined ||
+    request.moduleLoadFailure !== undefined ||
     request.kind === "window-error" ||
     request.kind === "unhandled-rejection"
     ? "error"
@@ -1749,6 +1765,9 @@ function logClientStageSettled(
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
         ...request.deletion,
+        ...(request.navigationOutcome === undefined
+          ? {}
+          : { navigationOutcome: request.navigationOutcome }),
         completeness: "complete",
         loss: "none",
       },

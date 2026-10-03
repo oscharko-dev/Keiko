@@ -83,7 +83,7 @@ interface ReportRequestRef {
 function useReportCancellation(key: string): ReportRequestRef {
   const request = useRef<ReportRequestRef["current"]>(null);
   useEffect(
-    () => () => {
+    () => (): void => {
       const pending = request.current;
       if (pending === null) return;
       pending.controller.abort();
@@ -169,11 +169,11 @@ export function SupportReportButton(props: SupportReportButtonProps): ReactNode 
   const { status, create } = useSupportReportAction(props);
   if (status === "hidden") return null;
   return (
-    <span className={styles.control}>
+    <span className={styles.cmpControl}>
       {status !== "saved" ? (
         <button
           type="button"
-          className={`${props.compact === true ? "ft-seg" : "lk-btn"} ${styles.action}`}
+          className={`${props.compact === true ? "ft-seg" : "lk-btn"} ${styles.cmpAction}`}
           disabled={status === "busy"}
           onClick={() => void create()}
         >
@@ -181,7 +181,7 @@ export function SupportReportButton(props: SupportReportButtonProps): ReactNode 
         </button>
       ) : null}
       {status === "saved" || status === "error" ? (
-        <span role="status" className={styles.feedback}>
+        <span role="status" className={styles.cmpFeedback}>
           {t(status === "saved" ? "supportReport.saved" : "supportReport.failed")}
         </span>
       ) : null}
@@ -202,7 +202,7 @@ export function GlobalSupportReportAction(): ReactNode {
   }, [ordinal]);
   if (failure === null) return null;
   return (
-    <span className={styles.control} role="group" aria-label={t("supportReport.create")}>
+    <span className={styles.cmpControl} role="group" aria-label={t("supportReport.create")}>
       <SupportReportButton
         compact
         correlationId={failure.correlationId}
@@ -210,7 +210,7 @@ export function GlobalSupportReportAction(): ReactNode {
         onFulfilled={dismiss}
       />
       <button
-        className={`ft-seg ${styles.action}`}
+        className={`ft-seg ${styles.cmpAction}`}
         type="button"
         aria-label={t("common.close")}
         onClick={dismiss}

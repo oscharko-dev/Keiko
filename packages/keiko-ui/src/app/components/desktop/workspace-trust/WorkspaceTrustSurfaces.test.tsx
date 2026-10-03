@@ -152,6 +152,39 @@ describe("Workspace Trust governance surfaces", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 
+  it.each([
+    ["grant", "This workspace remains restricted."],
+    ["revoke", "This workspace remains trusted."],
+  ] as const)("shows the failed %s attempt alert", (action, text) => {
+    render(
+      <I18nProvider>
+        <WorkspaceTrustDecisionDialog
+          action={action}
+          failed
+          mutating={false}
+          onCancel={vi.fn()}
+          onConfirm={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(text);
+  });
+
+  it("shows no failure alert before a trust attempt", () => {
+    render(
+      <I18nProvider>
+        <WorkspaceTrustDecisionDialog
+          action="grant"
+          failed={false}
+          mutating={false}
+          onCancel={vi.fn()}
+          onConfirm={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("keeps Enter on the safe choice and traps keyboard focus in the prompt", async () => {
     const onCancel = vi.fn();
     const onConfirm = vi.fn(async () => true);
