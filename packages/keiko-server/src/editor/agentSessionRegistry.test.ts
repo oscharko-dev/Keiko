@@ -581,6 +581,22 @@ describe("editor agent session registry", () => {
 });
 
 describe("passive editor buffer protection", () => {
+  it("rejects late clean publications while accepting identical retries and newer settlements", () => {
+    const registry = createEditorAgentRegistry();
+    const dirty = { ...safetySnapshot(), dirtyFiles: ["src/a.ts"], updatedAt: 2 };
+    expect(registry.registerBufferSnapshot(dirty, CAPABILITY_DIGEST)).toBe(true);
+    expect(registry.refreshBufferSnapshot(safetySnapshot(), CAPABILITY_DIGEST)).toBe(false);
+    expect(
+      registry.refreshBufferSnapshot({ ...safetySnapshot(), updatedAt: 2 }, CAPABILITY_DIGEST),
+    ).toBe(false);
+    expect(registry.refreshBufferSnapshot({ ...dirty }, CAPABILITY_DIGEST)).toBe(true);
+    expect(registry.listSessions()).toEqual([dirty]);
+    expect(registry.releaseBufferSnapshot(dirty.sessionId, CAPABILITY_DIGEST)).toBe(false);
+    expect(
+      registry.refreshBufferSnapshot({ ...safetySnapshot(), updatedAt: 3 }, CAPABILITY_DIGEST),
+    ).toBe(true);
+    expect(registry.releaseBufferSnapshot(dirty.sessionId, CAPABILITY_DIGEST)).toBe(true);
+  });
   it("retains dirty snapshots without giving action or bridge authority", () => {
     const registry = createEditorAgentRegistry();
     const dirty = { ...safetySnapshot(), dirtyFiles: ["src/a.ts"] };
@@ -608,7 +624,9 @@ describe("passive editor buffer protection", () => {
     );
     expect(registry.refreshBufferSnapshot(safetySnapshot(), WRONG_CAPABILITY_DIGEST)).toBe(false);
     expect(registry.releaseBufferSnapshot("session-1", WRONG_CAPABILITY_DIGEST)).toBe(false);
-    expect(registry.refreshBufferSnapshot(safetySnapshot(), CAPABILITY_DIGEST)).toBe(true);
+    expect(
+      registry.refreshBufferSnapshot({ ...safetySnapshot(), updatedAt: 2 }, CAPABILITY_DIGEST),
+    ).toBe(true);
     expect(registry.releaseBufferSnapshot("session-1", CAPABILITY_DIGEST)).toBe(true);
     expect(registry.listSessions()).toEqual([]);
   });

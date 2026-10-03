@@ -21,6 +21,7 @@
 // state record plus module-level operations, so each operation stays short and explicitly typed.
 
 import { timingSafeEqual } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
   EditorAgentAction,
   EditorAgentActionResult,
@@ -579,8 +580,17 @@ function refreshBufferSnapshotImpl(
   const current = state.sessions.get(snapshot.sessionId);
   if (current?.workspaceRoot !== snapshot.workspaceRoot || current.windowId !== snapshot.windowId)
     return false;
+  if (!isMonotonicBufferSnapshot(current, snapshot)) return false;
   state.sessions.set(snapshot.sessionId, snapshot);
   return true;
+}
+
+function isMonotonicBufferSnapshot(
+  current: EditorAgentSessionSnapshot,
+  snapshot: EditorAgentSessionSnapshot,
+): boolean {
+  if (snapshot.updatedAt > current.updatedAt) return true;
+  return snapshot.updatedAt === current.updatedAt && isDeepStrictEqual(current, snapshot);
 }
 
 function releaseBufferSnapshotImpl(

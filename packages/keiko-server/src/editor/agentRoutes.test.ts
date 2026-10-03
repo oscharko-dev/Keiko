@@ -5510,6 +5510,34 @@ describe("ordinary Editor passive safety route", () => {
     expect(handleEditorAgentSessions().body).toEqual({ sessions: [] });
     expect(editorAgentRegistry.hasLiveBridge("session-safety")).toBe(false);
   });
+  it("logs refusal of a delayed clean snapshot without clearing newer dirty protection", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const bufferSnapshotCapability = await registerSafety();
+      const request = {
+        schemaVersion: "1",
+        kind: "buffer-snapshot",
+        bufferSnapshotCapability,
+        snapshot: { ...safetySnapshot(["src/a.ts"]), updatedAt: 2 },
+      };
+      expect((await handleEditorAgentSnapshot(safetyRequest(request))).status).toBe(200);
+      const late = { ...request, snapshot: safetySnapshot() };
+      expect((await handleEditorAgentSnapshot(safetyRequest(late))).status).toBe(409);
+      expect(editorAgentRegistry.bufferSnapshotFor("session-safety")?.dirtyFiles).toEqual([
+        "src/a.ts",
+      ]);
+      const evidence = sink.events.filter((event) => event.op === "editor.buffer-safety.state");
+      const refused = evidence.at(-1);
+      if (refused === undefined) throw new Error("expected safety refusal evidence");
+      const line = formatActivityLogProofLine(refused);
+      expect(JSON.parse(line)).toMatchObject({ outcome: "refused", dirtyFileCount: 0 });
+      expect(line).not.toContain("src/a.ts");
+      expect(line).not.toContain(bufferSnapshotCapability);
+    } finally {
+      resetServerLogger();
+    }
+  });
   it("keeps a second publisher's dirty buffers protected when the first publisher settles", async () => {
     const first = {
       schemaVersion: "1",
@@ -5531,8 +5559,11 @@ describe("ordinary Editor passive safety route", () => {
     };
     expect((await handleEditorAgentSnapshot(safetyRequest(takeover))).status).toBe(409);
     expect(
-      (await handleEditorAgentSnapshot(safetyRequest({ ...first, snapshot: safetySnapshot() })))
-        .status,
+      (
+        await handleEditorAgentSnapshot(
+          safetyRequest({ ...first, snapshot: { ...safetySnapshot(), updatedAt: 2 } }),
+        )
+      ).status,
     ).toBe(200);
     expect(
       (
@@ -5583,7 +5614,7 @@ describe("ordinary Editor passive safety route", () => {
         safetyRequest({
           schemaVersion: "1",
           kind: "buffer-snapshot",
-          snapshot: safetySnapshot(),
+          snapshot: { ...safetySnapshot(), updatedAt: 2 },
           bufferSnapshotCapability: owner,
         }),
       );
@@ -5635,7 +5666,7 @@ describe("ordinary Editor passive safety route", () => {
     const clean = {
       schemaVersion: "1",
       kind: "buffer-snapshot",
-      snapshot: safetySnapshot(),
+      snapshot: { ...safetySnapshot(), updatedAt: 3 },
       bufferSnapshotCapability: owner,
     };
     const unowned = await handleEditorAgentSnapshot(
