@@ -238,7 +238,7 @@ function inspectionCoverageMetrics(
       t("grounded.inspection.recursive"),
       inspectionCount(
         t,
-        "grounded.inspection.fileCount",
+        "grounded.inspection.scopeFileCount",
         coverage.filesScanned,
         coverage.filesDiscovered,
       ),
@@ -347,6 +347,9 @@ function ContextPackSummary({
           <MetricRow key={label} label={label} value={value} />
         ))}
       </dl>
+      {contextPack.coverage === undefined ? null : (
+        <p className="grounded-meta">{t("grounded.inspection.scopeCountHint")}</p>
+      )}
       <p className="grounded-meta">
         {t("grounded.inspection.readHint", { max: formatCap(contextPack.budget.filesReadMax) })}
       </p>

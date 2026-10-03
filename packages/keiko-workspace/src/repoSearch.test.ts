@@ -1807,6 +1807,82 @@ describe("readExcerpt (memFs)", () => {
     expect(result.atom.redactionState).toBe("redacted");
   });
 
+  it.each([128, 256])(
+    "shares the total byte budget across disjoint anchors with per-window cap %i",
+    async (maxBytes) => {
+      const content = "StartAnchor=17 " + "é🙂".repeat(15_000) + " EndAnchor=43";
+      const { scope, fs } = memScope({ "src/manual.html": content });
+      const single = measuredExcerptFs(fs);
+      await readExcerpt(
+        scope,
+        {
+          scopePath: "src/manual.html",
+          startLine: 1,
+          endLine: 1,
+          maxBytes,
+          anchors: ["StartAnchor"],
+        },
+        { fs: single.fs, nowMs: FIXED_NOW },
+      );
+      const multiple = measuredExcerptFs(fs);
+      const result = await readExcerpt(
+        scope,
+        {
+          scopePath: "src/manual.html",
+          startLine: 1,
+          endLine: 1,
+          maxBytes,
+          maxTotalBytes: 256,
+          maxWindows: 8,
+          anchors: ["StartAnchor", "EndAnchor", "missing-anchor", "StartAnchor"],
+        },
+        { fs: multiple.fs, nowMs: FIXED_NOW },
+      );
+      expect(multiple.touchCount()).toBe(single.touchCount());
+      const windows = result.windows ?? [result];
+      expect(windows).toHaveLength(2);
+      expect(windows[0]?.content.includes("StartAnchor=17")).toBe(true);
+      expect(windows[1]?.content.includes("EndAnchor=43")).toBe(true);
+      expect(
+        windows.every((window) => new TextEncoder().encode(window.content).length <= 128),
+      ).toBe(true);
+      expect(
+        windows.reduce((sum, window) => sum + new TextEncoder().encode(window.content).length, 0),
+      ).toBeLessThanOrEqual(256);
+      expect(windows.every((window) => !window.content.includes("\uFFFD"))).toBe(true);
+      expect(new Set(windows.map((window) => window.atom.stableId)).size).toBe(2);
+      expect(
+        windows.every(
+          (window) => window.atom.lineRange?.startLine === 1 && window.atom.lineRange.endLine === 1,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each([
+    { maxWindows: 0 },
+    { maxWindows: Number.POSITIVE_INFINITY },
+    { maxTotalBytes: -1 },
+    { maxTotalBytes: Number.POSITIVE_INFINITY },
+  ])("rejects invalid additional window limits before any filesystem read: %j", async (limits) => {
+    const { scope, fs } = memScope({ "src/manual.html": "StartAnchor=17" });
+    const measured = measuredExcerptFs(fs);
+    await expect(
+      readExcerpt(
+        scope,
+        {
+          scopePath: "src/manual.html",
+          startLine: 1,
+          endLine: 1,
+          maxBytes: 128,
+          ...limits,
+        },
+        { fs: measured.fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidRangeError);
+    expect(measured.touchCount()).toBe(0);
+  });
+
   it("starts no filesystem operation after an inherited deadline has expired", async () => {
     const { scope, fs: base } = memScope({ "src/a.ts": "L1\n" });
     const measured = measuredExcerptFs(base);

@@ -1,3 +1,4 @@
+import { extractAnchors } from "@oscharko-dev/keiko-workflows";
 import { rehydrateChatHistory } from "./chat-history-rehydration.js";
 import type { ContextCompactionRecord, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
@@ -238,6 +239,15 @@ function isAnaphoricTestRequest(content: string): boolean {
   );
 }
 
+function hasIndependentQueryTarget(query: string): boolean {
+  return extractAnchors({ text: query, maxAnchors: 8 }).anchors.some(
+    (anchor) =>
+      anchor.kind === "path" ||
+      anchor.kind === "quoted" ||
+      (anchor.kind === "identifier" && (anchor.weight >= 0.9 || /[_.]/u.test(anchor.term))),
+  );
+}
+
 function resolvedRetrievalContent(
   content: string,
   query: string,
@@ -245,6 +255,12 @@ function resolvedRetrievalContent(
 ): string {
   // The existing anchor planner accepts at most 4096 characters. Never shorten the current query.
   const remaining = Math.min(1500, 4096 - content.length - 1);
-  if (remaining <= 0 || previous === undefined || !needsReferentResolution(query)) return content;
+  if (
+    remaining <= 0 ||
+    previous === undefined ||
+    hasIndependentQueryTarget(query) ||
+    !needsReferentResolution(query)
+  )
+    return content;
   return `${content}\n${previous.slice(0, remaining)}`;
 }

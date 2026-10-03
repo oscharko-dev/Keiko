@@ -1307,6 +1307,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "{max} is the read budget for this answer, not the number of files in the folder. Recursive checks and answer excerpts are counted separately.",
   "grounded.inspection.searchCount": "{used} / {max} searches",
   "grounded.inspection.fileCount": "{used} / {max} files",
+  "grounded.inspection.scopeFileCount": "{used} / {max} files across search scopes",
+  "grounded.inspection.scopeCountHint":
+    "These are totals per search scope. Overlapping scopes can count the same file more than once.",
   "grounded.inspection.tokenCount": "{used} / {max} tokens",
   "grounded.inspection.callCount": "{used} / {max} calls",
   "grounded.inspection.recursive": "Recursively checked",

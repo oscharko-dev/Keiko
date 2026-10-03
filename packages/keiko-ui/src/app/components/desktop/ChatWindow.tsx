@@ -2588,7 +2588,7 @@ export function sendStatusLabel(status: SendStatus): string {
     case "queued":
       return "Submitting your message…";
     case "contacting":
-      return "Contacting model…";
+      return "Preparing response…";
     case "streaming":
       return "Receiving response…";
     case "completed":

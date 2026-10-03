@@ -51,6 +51,7 @@ import {
 } from "./repoSearchCachedLexical.js";
 import { validateSearchScopeRelativePaths } from "./repoSearchEntries.js";
 import {
+  MAX_RECURSIVE_TEXT_FILE_BYTES,
   buildAtom,
   buildCandidate,
   candidateDiscoveryFileLimit,
@@ -88,7 +89,10 @@ import {
 } from "./repoSearchPolicy.js";
 import type { WorkspaceInfo } from "./types.js";
 import { decodeTextFileBytes } from "./binaryDetect.js";
-import { anchoredExcerptByteWindow } from "./repoSearchExcerptWindow.js";
+import {
+  anchoredExcerptByteWindow,
+  anchoredExcerptByteWindows,
+} from "./repoSearchExcerptWindow.js";
 import { collectStreamedSearchText, type StreamedSearchCollection } from "./repoSearchStream.js";
 import {
   assertStructuralExecutionActive,
@@ -136,7 +140,7 @@ export interface SearchLimits {
 export const DEFAULT_SEARCH_LIMITS: SearchLimits = {
   maxFilesScanned: null,
   maxMatchesReturned: 200,
-  maxBytesPerFileScanned: 2_097_152,
+  maxBytesPerFileScanned: MAX_RECURSIVE_TEXT_FILE_BYTES,
   elapsedMsMax: null,
 } as const;
 
@@ -147,7 +151,7 @@ export const DEFAULT_SEARCH_LIMITS: SearchLimits = {
 // and crashed the grounded request — Epic #177). Kept in step with the planner's 2 MiB scan cap so
 // any file the search can match can also be excerpted. Files larger than this raise
 // FileTooLargeError, which callers handle as a graceful omission.
-const MAX_EXCERPT_FILE_BYTES = 2_097_152;
+const MAX_EXCERPT_FILE_BYTES = MAX_RECURSIVE_TEXT_FILE_BYTES;
 
 export interface SearchResult {
   readonly atoms: readonly EvidenceAtom[];
@@ -164,17 +168,23 @@ export interface SearchResult {
 export interface ReadExcerptRequest {
   // Trusted query anchors reposition a clipped view without widening the returned byte cap.
   readonly anchors?: readonly string[] | undefined;
+  readonly maxWindows?: number | undefined;
+  readonly maxTotalBytes?: number | undefined;
   readonly scopePath: string;
   readonly startLine: number;
   readonly endLine: number;
   readonly maxBytes: number;
 }
 
-export interface ReadExcerptResult {
+interface ReadExcerptWindowResult {
   readonly anchoredWindowApplied?: boolean | undefined;
   readonly atom: EvidenceAtom;
   readonly content: string;
   readonly truncated: boolean;
+}
+
+export interface ReadExcerptResult extends ReadExcerptWindowResult {
+  readonly windows?: readonly ReadExcerptWindowResult[] | undefined;
 }
 
 interface FacadeDeps {
@@ -3472,8 +3482,22 @@ function assertExcerptAnchors(request: ReadExcerptRequest): void {
   }
 }
 
+function assertExcerptWindowLimits(request: ReadExcerptRequest): void {
+  const { maxWindows = 1, maxTotalBytes = request.maxBytes } = request;
+  if (
+    !Number.isInteger(maxWindows) ||
+    maxWindows < 1 ||
+    !Number.isFinite(maxTotalBytes) ||
+    !Number.isInteger(maxTotalBytes) ||
+    maxTotalBytes < 0
+  ) {
+    throw new RepoSearchInvalidRangeError("invalid excerpt window limits");
+  }
+}
+
 function assertExcerptRange(request: ReadExcerptRequest): void {
   assertExcerptAnchors(request);
+  assertExcerptWindowLimits(request);
   if (
     !Number.isInteger(request.startLine) ||
     !Number.isInteger(request.endLine) ||
@@ -3652,8 +3676,57 @@ function excerptWindow(
   };
 }
 
+function excerptWindows(
+  request: ReadExcerptRequest,
+  allLines: readonly string[],
+): readonly ReturnType<typeof excerptWindow>[] {
+  const maxBytes = Math.min(request.maxBytes, request.maxTotalBytes ?? request.maxBytes);
+  const baseRequest = { ...request, maxBytes };
+  if ((request.maxWindows ?? 1) <= 1 || request.anchors === undefined)
+    return [excerptWindow(baseRequest, allLines)];
+  const slice = allLines.slice(request.startLine - 1, request.endLine).join("\n");
+  const windows = anchoredExcerptByteWindows(
+    slice,
+    request.anchors,
+    {
+      maxBytes,
+      maxWindows: request.maxWindows ?? 1,
+      maxTotalBytes: request.maxTotalBytes ?? request.maxBytes,
+    },
+    request.startLine,
+  );
+  if (windows === undefined) return [excerptWindow(baseRequest, allLines)];
+  return windows.map((window) => ({
+    ...window,
+    truncated: window.content !== slice,
+    anchoredWindowApplied: window.anchoredWindowApplied ?? false,
+  }));
+}
+
 function excerptExecutionError(reason: "aborted" | "timeout"): RepoSearchUnsupportedFileError {
   return new RepoSearchUnsupportedFileError(`repo-search operation ${reason}`, reason);
+}
+
+function excerptWindowFingerprint(
+  request: ReadExcerptRequest,
+  window: ReturnType<typeof excerptWindow>,
+): string {
+  const base = buildExcerptFingerprint(request);
+  if (!window.truncated) return base;
+  const content = fingerprintFor({
+    kind: "natural-language",
+    text: window.content,
+    caseSensitive: true,
+    maxResults: 1,
+    emittedAtMs: 0,
+  });
+  return fingerprintFor({
+    kind: "natural-language",
+    text: `${base}:${content}`,
+    caseSensitive: true,
+    maxResults: 1,
+    emittedAtMs: 0,
+  });
 }
 
 function excerptResultForWindow(
@@ -3668,7 +3741,7 @@ function excerptResultForWindow(
     lineRange: { startLine: window.startLine, endLine: window.endLine },
     provenanceKind: "excerpt-read",
     tool: "repo.readExcerpt",
-    queryFingerprint: buildExcerptFingerprint(request),
+    queryFingerprint: excerptWindowFingerprint(request, window),
     score: 1,
     emittedAtMs: nowMs(),
   });
@@ -3721,8 +3794,13 @@ async function readExcerptWithControl(
   }
   assertStructuralExecutionActive(control);
   assertExcerptStartWithinLines(request, allLines);
-  const window = excerptWindow(request, allLines);
-  return excerptResultForWindow(scope, request, window, nowMs);
+  const results = excerptWindows(request, allLines).map((window) =>
+    excerptResultForWindow(scope, request, window, nowMs),
+  );
+  assertStructuralExecutionActive(control);
+  const first = results[0];
+  if (first === undefined) throw excerptUnreadable(request.scopePath);
+  return results.length === 1 ? first : { ...first, windows: results };
 }
 
 export async function readExcerpt(

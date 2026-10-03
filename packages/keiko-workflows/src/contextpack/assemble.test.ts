@@ -89,6 +89,64 @@ function baseInput(): AssembleInput {
 }
 
 describe("assembleContextPack", () => {
+  it("preserves separately identified partial windows on the same real source line", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [atom("a.ts", "atom-a", { startLine: 1, endLine: 1 })],
+      ranked: [candidate("a.ts", 1)],
+      excerpts: new Map([
+        [
+          "a.ts",
+          [
+            { startLine: 1, endLine: 1, content: "StartAnchor=17", identity: "start-window" },
+            { startLine: 1, endLine: 1, content: "EndAnchor=43", identity: "end-window" },
+          ],
+        ],
+      ]),
+    };
+    const result = await assembleContextPack(input, {
+      includeSurroundingContext: true,
+      nowMs: fixedNow,
+    });
+    const excerpts = result.pack.files[0]?.excerpts ?? [];
+    expect(excerpts.map((excerpt) => excerpt.content)).toEqual(["StartAnchor=17", "EndAnchor=43"]);
+    expect(new Set(excerpts.map((excerpt) => excerpt.atom.stableId)).size).toBe(2);
+    expect(
+      excerpts.every(
+        (excerpt) =>
+          excerpt.atom.lineRange?.startLine === 1 && excerpt.atom.lineRange.endLine === 1,
+      ),
+    ).toBe(true);
+    expect(result.pack.usage.filesRead).toBe(1);
+    expect(result.pack.usage.excerptBytes).toBe(
+      excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0),
+    );
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+
+  it("preserves legacy first-window selection when same-line windows have no identities", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [atom("a.ts", "atom-a", { startLine: 1, endLine: 1 })],
+      ranked: [candidate("a.ts", 1)],
+      excerpts: new Map([
+        [
+          "a.ts",
+          [
+            { startLine: 1, endLine: 1, content: "first legacy window" },
+            { startLine: 1, endLine: 1, content: "second legacy window" },
+          ],
+        ],
+      ]),
+    };
+    const result = await assembleContextPack(input, {
+      includeSurroundingContext: true,
+      nowMs: fixedNow,
+    });
+    expect(result.pack.files[0]?.excerpts.map((excerpt) => excerpt.content)).toEqual([
+      "first legacy window",
+    ]);
+  });
   it("produces a deterministic stable ID for the same input", async () => {
     const r1 = await assembleContextPack(baseInput(), { nowMs: fixedNow });
     const r2 = await assembleContextPack(baseInput(), { nowMs: fixedNow });

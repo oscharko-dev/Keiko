@@ -184,6 +184,7 @@ const DEFINITION_TARGET_AFTER_NOUN_RE =
 // would both satisfy the clarification gate for a vague question and seed symbol-file retrieval
 // with a non-symbol — see planner/plan.ts decideClarification and grounded symbolFileAnchorTerms.
 const CAMEL_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9_$]*[a-z0-9][A-Z][A-Za-z0-9_$]*)\b/g;
+const SNAKE_IDENTIFIER_RE = /\b([A-Za-z_$][A-Za-z0-9$]*_[A-Za-z0-9_$]+)\b/g;
 const TOKEN_SPLIT_RE = /[^\p{L}\p{N}_.]+/u;
 const TECHNICAL_TERM_PATTERNS: readonly {
   readonly pattern: RegExp;
@@ -406,6 +407,7 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
     isDefinitionTarget,
   );
   remaining = collectMatches(remaining, CAMEL_IDENTIFIER_RE, "identifier", 0.85, collected);
+  remaining = collectMatches(remaining, SNAKE_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectTechnicalTerms(remaining, collected);
   const tokensConsidered = tokenizeRemaining(remaining, collected);
   const merged = sortAnchors(dedup(collected));

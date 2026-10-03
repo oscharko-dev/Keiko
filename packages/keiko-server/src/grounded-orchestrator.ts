@@ -48,6 +48,7 @@ import {
   contextPackIndexKey,
   planAndGovern,
   rankCandidates,
+  requiresRelationshipOrHistoryRings,
   type ClarificationPrompt,
   type ClarificationReason,
   type ExcerptWindow,
@@ -244,6 +245,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
     usageFilesRead: { type: "integer", dataClass: "count", required: false },
     usageExcerptBytes: { type: "integer", dataClass: "count", required: false },
     excerptAnchoredWindowCount: { type: "integer", dataClass: "count", required: false },
+    excerptReadWindowCount: { type: "integer", dataClass: "count", required: false },
     usageModelInputTokens: { type: "integer", dataClass: "count", required: false },
     usageModelOutputTokens: { type: "integer", dataClass: "count", required: false },
     usageElapsedMs: { type: "integer", dataClass: "duration", required: false },
@@ -648,6 +650,7 @@ export function clarificationUserMessage(error: ClarificationNeededError): strin
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 interface SearchInputs {
+  readonly hasGitMetadata: boolean;
   readonly searchScope: SearchScope;
   readonly query: RetrievalQuery;
   readonly anchors: readonly SearchAnchor[];
@@ -1486,6 +1489,18 @@ type NonLexicalRing = Omit<RetrievalRing, "kind"> & {
   readonly kind: "structural" | "git-history";
 };
 
+function anchoredLexicalQuery(inputs: SearchInputs): RetrievalQuery {
+  if (inputs.query.kind !== "natural-language") return inputs.query;
+  const terms = inputs.anchors
+    .filter(
+      (anchor) =>
+        anchor.kind === "quoted" ||
+        (anchor.kind === "identifier" && anchor.weight >= 0.85 && anchor.term.includes("_")),
+    )
+    .map((anchor) => anchor.term);
+  return terms.length === 0 ? inputs.query : { ...inputs.query, text: terms.join(" ") };
+}
+
 async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Promise<SearchResult> {
   const options = {
     fs: inputs.fs,
@@ -1509,7 +1524,7 @@ async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Pro
   const definitionSymbol = directDefinitionSymbol(inputs.query, inputs.anchors);
   const query =
     definitionSymbol === undefined
-      ? inputs.query
+      ? anchoredLexicalQuery(inputs)
       : { ...inputs.query, kind: "exact-symbol" as const, text: definitionSymbol };
   return searchText(inputs.searchScope, query, ring.searchLimits, {
     ...options,
@@ -1821,6 +1836,65 @@ function elapsedDeadlineStop(
   };
 }
 
+const DOCUMENT_EVIDENCE_PATH_RE = /\.(?:html?|txt|rst|adoc|xml)$/iu;
+
+function isOrdinaryDocumentLookup(
+  query: RetrievalQuery,
+  hasGitMetadata: boolean,
+  diagnostics: ContextPackDiagnostics | undefined,
+): boolean {
+  const candidates = diagnostics?.rankedCandidates ?? [];
+  return (
+    !hasGitMetadata &&
+    !requiresRelationshipOrHistoryRings(query) &&
+    candidates.length > 0 &&
+    candidates.every((candidate) => DOCUMENT_EVIDENCE_PATH_RE.test(candidate.scopePath))
+  );
+}
+
+function isOrdinaryLiteralAbsence(
+  query: RetrievalQuery,
+  hasGitMetadata: boolean,
+  anchors: readonly SearchAnchor[],
+  diagnostics: ContextPackDiagnostics | undefined,
+): boolean {
+  const coverage = diagnostics?.coverage;
+  const literalTarget = anchors.some(
+    (anchor) =>
+      anchor.kind === "quoted" || (anchor.kind === "identifier" && anchor.term.includes("_")),
+  );
+  return (
+    !hasGitMetadata &&
+    literalTarget &&
+    coverage?.incomplete === false &&
+    coverage.matchesReturned === 0 &&
+    !requiresRelationshipOrHistoryRings(query) &&
+    directDefinitionSymbol(query, anchors) === undefined
+  );
+}
+
+function optionalRingIsUnneeded(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  diagnostics: ContextPackDiagnostics | undefined,
+): boolean {
+  if (requiresRelationshipOrHistoryRings(inputs.query)) return false;
+  if (ring.kind === "git-history") return !inputs.hasGitMetadata;
+  return (
+    ring.kind === "structural" &&
+    (isOrdinaryDocumentLookup(inputs.query, inputs.hasGitMetadata, diagnostics) ||
+      isOrdinaryLiteralAbsence(inputs.query, inputs.hasGitMetadata, inputs.anchors, diagnostics))
+  );
+}
+
+function reserveAvailableRing(
+  governor: GovernorState,
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+): RingReservation {
+  return elapsedDeadlineStop(governor, inputs) ?? reserveRingSearchCalls(governor, ring, inputs);
+}
+
 async function runAllRings(
   rings: readonly RetrievalRing[],
   inputs: SearchInputs,
@@ -1837,16 +1911,14 @@ async function runAllRings(
   let governor = initialGovernor;
   for (const ring of rings) {
     throwIfCancelled(inputs.signal);
+    if (optionalRingIsUnneeded(ring, inputs, diagnostics)) {
+      governor = advanceRing(governor);
+      continue;
+    }
     if (!canContinue(governor)) {
       break;
     }
-    const deadlineStop = elapsedDeadlineStop(governor, inputs);
-    if (deadlineStop !== undefined) {
-      governor = deadlineStop.governor;
-      uncertainty.push(deadlineStop.marker);
-      break;
-    }
-    const reservation = reserveRingSearchCalls(governor, ring, inputs);
+    const reservation = reserveAvailableRing(governor, ring, inputs);
     governor = reservation.governor;
     if (reservation.marker !== undefined) {
       uncertainty.push(reservation.marker);
@@ -1886,6 +1958,7 @@ export interface ExcerptInputs {
 }
 
 export interface ExcerptReadSummary {
+  readonly readWindowCount?: number | undefined;
   readonly anchoredWindowCount?: number | undefined;
   readonly excerpts: ReadonlyMap<string, readonly ExcerptWindow[]>;
   readonly uncertainty: readonly UncertaintyMarker[];
@@ -3861,9 +3934,7 @@ function refineCandidateOrdering(
     });
   }
   nextOmitted.sort(compareByScopePath);
-  const useSearchOrder =
-    queryTargetsRouteImplementation(queryText) ||
-    directDefinitionSymbol(query, anchors) !== undefined;
+  const useSearchOrder = candidateOrderingUsesSearchOrder(query, anchors, diagnostics);
   const orderedPreferred = useSearchOrder
     ? orderPreferredCandidates(preferred, diagnostics)
     : preferred;
@@ -3871,6 +3942,22 @@ function refineCandidateOrdering(
     kept: [...orderedPreferred, ...lockfiles],
     omitted: nextOmitted,
   };
+}
+
+function candidateOrderingUsesSearchOrder(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  diagnostics: ContextPackDiagnostics | undefined,
+): boolean {
+  return (
+    queryTargetsRouteImplementation(query.text) ||
+    directDefinitionSymbol(query, anchors) !== undefined ||
+    (isOrdinaryDocumentLookup(query, false, diagnostics) &&
+      anchors.some(
+        (anchor) =>
+          (anchor.kind === "identifier" || anchor.kind === "quoted") && anchor.weight >= 0.85,
+      ))
+  );
 }
 
 const ROUTE_METHOD_QUERY_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
@@ -4079,6 +4166,8 @@ function readExcerptWindow(
   scopePath: string,
   window: LineWindow,
   maxBytes: number,
+  maxTotalBytes: number,
+  maxWindows: number,
   inputs: ExcerptInputs,
 ): Promise<ReadExcerptResult> {
   return readExcerpt(
@@ -4089,6 +4178,8 @@ function readExcerptWindow(
       endLine: window.endLine,
       maxBytes,
       anchors: inputs.anchors,
+      maxTotalBytes,
+      maxWindows,
     },
     {
       fs: inputs.fs,
@@ -4097,6 +4188,44 @@ function readExcerptWindow(
       ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
     },
   );
+}
+
+function appendReadExcerptWindows(
+  result: ReadExcerptResult,
+  windows: ExcerptWindow[],
+): { readonly bytes: number; readonly truncated: number; readonly anchored: number } {
+  let bytes = 0;
+  let truncated = 0;
+  let anchored = 0;
+  for (const read of result.windows ?? [result]) {
+    const range = read.atom.lineRange;
+    if (range === undefined) continue;
+    const identity = read.truncated
+      ? connectedContextActivityDigest("keiko.excerpt-window.v1", [
+          String(range.startLine),
+          String(range.endLine),
+          read.content,
+        ])
+      : undefined;
+    if (
+      windows.some(
+        (window) =>
+          window.startLine === range.startLine &&
+          window.endLine === range.endLine &&
+          window.identity === identity,
+      )
+    )
+      continue;
+    windows.push({
+      ...range,
+      content: read.content,
+      ...(identity === undefined ? {} : { identity }),
+    });
+    bytes += utf8ByteLength(read.content);
+    truncated += Number(read.truncated);
+    anchored += Number(read.anchoredWindowApplied === true);
+  }
+  return { bytes, truncated, anchored };
 }
 
 async function readPathExcerptWindows(
@@ -4117,11 +4246,16 @@ async function readPathExcerptWindows(
       break;
     }
     const availableBytes = remainingBytes - bytesConsumed;
-    if (availableBytes <= 0) {
-      break;
-    }
+    if (availableBytes <= 0 || windows.length >= MAX_EXCERPT_WINDOWS_PER_FILE) break;
     const maxBytes = Math.min(8192, availableBytes);
-    const result = await readExcerptWindow(scopePath, window, maxBytes, inputs);
+    const result = await readExcerptWindow(
+      scopePath,
+      window,
+      maxBytes,
+      availableBytes,
+      MAX_EXCERPT_WINDOWS_PER_FILE - windows.length,
+      inputs,
+    );
     throwIfCancelled(inputs.signal);
     if (inputs.nowMs() >= inputs.deadlineAtMs) {
       // The absolute deadline is authoritative (#3347 P1). A read that only came back after it is
@@ -4131,15 +4265,10 @@ async function readPathExcerptWindows(
       deadlineReached = true;
       break;
     }
-    if (result.truncated) {
-      truncatedWindowCount += 1;
-    }
-    anchoredWindowCount += Number(result.anchoredWindowApplied === true);
-    const actualRange = result.atom.lineRange;
-    if (actualRange !== undefined) {
-      windows.push({ ...actualRange, content: result.content });
-    }
-    bytesConsumed += utf8ByteLength(result.content);
+    const appended = appendReadExcerptWindows(result, windows);
+    truncatedWindowCount += appended.truncated;
+    anchoredWindowCount += appended.anchored;
+    bytesConsumed += appended.bytes;
   }
   return {
     windows,
@@ -4306,6 +4435,7 @@ async function readKeptExcerpts(
     excerpts,
     uncertainty,
     elapsedBudgetBlocked,
+    readWindowCount: [...excerpts.values()].reduce((count, windows) => count + windows.length, 0),
     anchoredWindowCount: results.reduce(
       (count, task) => count + (task.result?.anchoredWindowCount ?? 0),
       0,
@@ -4449,6 +4579,7 @@ interface AssembleGroundedPackInputs {
   readonly structuralContexts: StructuralRequestContextPool;
   readonly workspaceIndex: WorkspaceIndex | undefined;
   readonly deadlineAtMs: number;
+  readonly hasGitMetadata: boolean;
 }
 
 interface EmptyGroundedPackInputs {
@@ -4670,6 +4801,7 @@ function preparePackAssembly(
   plan: ExplorationPlan,
   rings: RingRunSummary,
   nowMs: () => number,
+  hasGitMetadata: boolean,
 ): PreparedPackAssembly {
   const atoms = rings.atoms;
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
@@ -4677,7 +4809,12 @@ function preparePackAssembly(
   // (canonical-metadata, structural-edge). Non-boosted intents (e.g. clarification) and the
   // no-context default are byte-identical — see weightsForIntent / isIntentBoosted.
   const ranking = rankCandidates(
-    { atoms, anchors: plan.anchors, context: { retrievalIntent: plan.retrievalIntent } },
+    {
+      atoms,
+      anchors: plan.anchors,
+      context: { retrievalIntent: plan.retrievalIntent },
+      ...(hasGitMetadata ? {} : { hints: { generatedPathPatterns: [] } }),
+    },
     { nowMs },
   );
   const refined = refineCandidateOrdering(
@@ -4809,6 +4946,21 @@ async function discoveredTraceForAugmentation(
   });
 }
 
+function ordinaryLookupNeedsNoAugmentation(
+  args: AssembleGroundedPackInputs,
+  rings: RingRunSummary,
+): boolean {
+  return (
+    isOrdinaryDocumentLookup(args.input.query, args.hasGitMetadata, rings.diagnostics) ||
+    isOrdinaryLiteralAbsence(
+      args.input.query,
+      args.hasGitMetadata,
+      args.plan.anchors,
+      rings.diagnostics,
+    )
+  );
+}
+
 async function augmentRingsWithDeterministicAtoms(
   args: AssembleGroundedPackInputs,
 ): Promise<RingRunSummary> {
@@ -4832,7 +4984,8 @@ async function augmentRingsWithDeterministicAtoms(
     nowMs() < deadlineAtMs
       ? withExplicitScopeAtoms(rings, input, searchScope, fs, nowMs, deadlineAtMs, deps.signal)
       : rings;
-  if (!budget.canContinue()) return finishAugmentationBudget(scopedRings, budget);
+  if (!budget.canContinue() || ordinaryLookupNeedsNoAugmentation(args, scopedRings))
+    return finishAugmentationBudget(scopedRings, budget);
   const deterministicRings = await withDeterministicContextAtoms(scopedRings, {
     input,
     plan,
@@ -4864,6 +5017,7 @@ interface GroundedAssemblyContext {
 }
 
 interface GroundedPackAssembly {
+  readonly readWindowCount?: number | undefined;
   readonly anchoredWindowCount?: number | undefined;
   readonly pack: ConnectedContextPack;
   readonly elapsedBudgetBlocked: boolean;
@@ -4967,7 +5121,7 @@ async function assembleGroundedPack(
 ): Promise<GroundedPackAssembly> {
   const { input, deps, plan, searchScope, fs, nowMs, deadlineAtMs } = args;
   const augmentedRings = await augmentRingsWithDeterministicAtoms(args);
-  const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs);
+  const prepared = preparePackAssembly(input, plan, augmentedRings, nowMs, args.hasGitMetadata);
   const ctx = await prepareGroundedAssembly(args, augmentedRings, prepared);
   if (ctx.cached !== undefined) {
     return {
@@ -5000,12 +5154,14 @@ async function assembleGroundedPack(
     pack: withGroundedContextDiagnostics(pack, deps),
     elapsedBudgetBlocked: excerptReads.elapsedBudgetBlocked,
     anchoredWindowCount: excerptReads.anchoredWindowCount,
+    readWindowCount: excerptReads.readWindowCount,
   };
 }
 
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly excerptReadWindowCount?: number | undefined;
   readonly anchoredExcerptWindowCount?: number | undefined;
   readonly readBudgetBlocked: boolean;
   readonly elapsedBudgetBlocked: boolean;
@@ -5081,9 +5237,11 @@ function liveRetrievalCompletion(
   workspaceIndexAvailable: boolean,
   elapsedBudgetBlocked: boolean,
   anchoredExcerptWindowCount: number | undefined,
+  excerptReadWindowCount: number | undefined,
 ): ConnectedContextCompletionStatus {
   return {
     anchoredExcerptWindowCount,
+    excerptReadWindowCount,
     readBudgetBlocked: false,
     elapsedBudgetBlocked,
     workspaceIndexProviderStatus: workspaceIndexAvailable ? "available" : "unavailable",
@@ -5513,6 +5671,7 @@ function completionActivityExtra(
     usageFilesRead: pack.usage.filesRead,
     usageExcerptBytes: pack.usage.excerptBytes,
     excerptAnchoredWindowCount: execution.status.anchoredExcerptWindowCount ?? 0,
+    excerptReadWindowCount: execution.status.excerptReadWindowCount ?? 0,
     usageModelInputTokens: pack.usage.modelInputTokens,
     usageModelOutputTokens: pack.usage.modelOutputTokens,
     usageElapsedMs: pack.usage.elapsedMs,
@@ -5818,6 +5977,7 @@ function connectedContextSearchInputs(
 ): SearchInputs {
   const { workspaceIndex } = context;
   return {
+    hasGitMetadata: context.hasGitMetadata,
     searchScope: context.searchScope,
     query: input.query,
     anchors: plan.anchors,
@@ -6264,6 +6424,7 @@ function liveStructuralContexts(
 }
 
 interface LiveRetrievalContext {
+  readonly hasGitMetadata: boolean;
   readonly deadlineAtMs: number;
   readonly searchScope: SearchScope;
   readonly ringFs: WorkspaceFs;
@@ -6324,6 +6485,9 @@ function prepareLiveRetrievalContext(
     runtime.workspaceRoot,
     detectionGuardedFs(runtime.fs, detectionControl),
   );
+  const hasGitMetadata = detectionGuardedFs(runtime.fs, detectionControl).exists(
+    resolve(workspace.root, ".git"),
+  );
   const searchScope = buildSearchScope(input.scope, workspace);
   const workspaceIndexSource =
     runtime.nowMs() < deadlineAtMs ? deps.workspaceIndexForRoot?.(workspace.root) : undefined;
@@ -6340,6 +6504,7 @@ function prepareLiveRetrievalContext(
   );
   runtime.progress.structuralContexts = structuralContexts;
   return {
+    hasGitMetadata,
     deadlineAtMs,
     searchScope,
     ringFs,
@@ -6370,6 +6535,7 @@ function liveGroundedPackInputs(
     structuralContexts: context.structuralContexts,
     workspaceIndex: context.workspaceIndex,
     deadlineAtMs: context.deadlineAtMs,
+    hasGitMetadata: context.hasGitMetadata,
   };
 }
 
@@ -6401,6 +6567,7 @@ async function retrieveLiveConnectedContext(
       context.workspaceIndexSource !== undefined,
       assembled.elapsedBudgetBlocked,
       assembled.anchoredWindowCount,
+      assembled.readWindowCount,
     ),
     context.structuralContexts.diagnostics(),
     context.workspaceIndexActivity.diagnostics(),

@@ -614,7 +614,7 @@ export const DE_MESSAGES = {
   "chat.send.connecting": "Gateway wird verbunden",
   "chat.send.cancel": "Antwort abbrechen",
   "chat.send.statusQueued": "Nachricht wird gesendet…",
-  "chat.send.statusContacting": "Modell wird kontaktiert…",
+  "chat.send.statusContacting": "Antwort wird vorbereitet…",
   "chat.send.statusStreaming": "Antwort wird empfangen…",
   "chat.send.statusCancelled": "Antwort abgebrochen.",
   "chat.voice": "Spracheingabe",

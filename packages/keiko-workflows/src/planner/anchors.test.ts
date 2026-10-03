@@ -167,6 +167,18 @@ describe("extractAnchors", () => {
     });
   });
 
+  it("preserves an explicit unquoted snake-case manual identifier among natural-language instructions", () => {
+    expect(
+      run(
+        "Suche im verbundenen HTML-Handbuchordner rekursiv nach LAB_MANUAL_SERVICE_INTERVAL. Welches Wartungsintervall steht dort? Nenne die belegte Datei und die Zeile.",
+      ).anchors,
+    ).toContainEqual({
+      term: "lab_manual_service_interval",
+      weight: 0.85,
+      kind: "identifier",
+    });
+  });
+
   it("does not mistake all-caps acronyms or SHOUTING words for camel identifiers", () => {
     const result = run("WHY IS IT BROKEN");
     const camel = result.anchors.filter((a) => a.kind === "identifier" && a.weight === 0.85);

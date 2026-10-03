@@ -284,7 +284,7 @@ function isDirectRouteLookup(query: RetrievalQuery): boolean {
   );
 }
 
-function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boolean {
+export function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boolean {
   return (
     hasHistoryQuery(query.text) ||
     hasSymbolRelation(query.text) ||

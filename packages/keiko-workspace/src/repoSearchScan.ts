@@ -85,6 +85,8 @@ import {
   workspaceIndexFileMetadata,
 } from "./workspaceIndex.js";
 
+export const MAX_RECURSIVE_TEXT_FILE_BYTES = 2_097_152;
+
 const BINARY_PROBE_BYTES = DEFAULT_BINARY_PROBE.maxProbeBytes;
 const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".avif",
@@ -1022,6 +1024,14 @@ async function readRawTextForScan(
   }
 }
 
+function markSizeExclusion(runner: SearchTextRunner, state: RunState, sizeBytes: number): void {
+  if (
+    runner.limits.maxBytesPerFileScanned < MAX_RECURSIVE_TEXT_FILE_BYTES ||
+    sizeBytes <= MAX_RECURSIVE_TEXT_FILE_BYTES
+  )
+    markTruncated(state, "file-cap");
+}
+
 async function readBoundedRawText(
   runner: SearchTextRunner,
   relativePath: string,
@@ -1035,8 +1045,9 @@ async function readBoundedRawText(
     runner.fs,
   );
   if (!read.complete) {
-    markTruncated(state, "file-cap");
-    return recordSizeExceeded(relativePath, candidates);
+    markSizeExclusion(runner, state, read.stat.size);
+    recordSizeExceeded(relativePath, candidates);
+    return undefined;
   }
   const decoded = decodeTextFileBytes(read.bytes, { scopePath: relativePath });
   if (decoded === undefined) {
@@ -1090,7 +1101,7 @@ function readUtf8TextForScan(
     return laneText(runner, read.content);
   } catch (err) {
     if (err instanceof FileTooLargeError) {
-      return readOversizedUtf8Text(relativePath, state, candidates);
+      return readOversizedUtf8Text(runner, relativePath, state, candidates, err.sizeBytes);
     }
     // TOCTOU: permissions or availability may change between discovery and read.
     // A single unreadable file must degrade to a skip, not crash the whole scan.
@@ -1103,11 +1114,13 @@ function readUtf8TextForScan(
 }
 
 function readOversizedUtf8Text(
+  runner: SearchTextRunner,
   relativePath: string,
   state: RunState,
   candidates: CandidateFile[],
+  sizeBytes: number,
 ): string | undefined {
-  markTruncated(state, "file-cap");
+  markSizeExclusion(runner, state, sizeBytes);
   recordSizeExceeded(relativePath, candidates);
   return undefined;
 }
@@ -1344,7 +1357,7 @@ export async function fileListingTextIsReadable(
   const policy = filePolicyOmission(runner, file);
   if (policy.omitted !== undefined) {
     recordCandidateOmission(candidates, file.relativePath, policy.omitted);
-    if (policy.omitted === "size-exceeded") markTruncated(state, "file-cap");
+    if (policy.omitted === "size-exceeded") markSizeExclusion(runner, state, file.sizeBytes);
     return false;
   }
   state.filesScanned += 1;
@@ -1376,7 +1389,7 @@ export async function collectFileMatches(
   }
   const pathOmission = filePathPolicyOmission(runner, file);
   if (pathOmission !== undefined) {
-    if (pathOmission === "size-exceeded") markTruncated(state, "file-cap");
+    if (pathOmission === "size-exceeded") markSizeExclusion(runner, state, file.sizeBytes);
     recordCandidateOmission(candidates, file.relativePath, pathOmission);
     return undefined;
   }

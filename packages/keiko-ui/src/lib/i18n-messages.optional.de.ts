@@ -1359,6 +1359,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "{max} ist das Lesebudget für diese Antwort, nicht die Anzahl der Dateien im Ordner. Rekursive Prüfung und Antwortauszüge werden getrennt gezählt.",
   "grounded.inspection.searchCount": "{used} / {max} Suchvorgänge",
   "grounded.inspection.fileCount": "{used} / {max} Dateien",
+  "grounded.inspection.scopeFileCount": "{used} / {max} Dateien je Suchbereich",
+  "grounded.inspection.scopeCountHint":
+    "Dies sind Summen je Suchbereich. Überlappende Suchbereiche können dieselbe Datei mehrfach zählen.",
   "grounded.inspection.tokenCount": "{used} / {max} Tokens",
   "grounded.inspection.callCount": "{used} / {max} Aufrufe",
   "grounded.inspection.recursive": "Rekursiv geprüft",

@@ -1169,6 +1169,103 @@ describe("scanFirstSymbolLine", () => {
 });
 
 describe("runGroundedExploration", () => {
+  it.each(["chapters/35/page-3599.html", "build/service.html", "dist/service.html"])(
+    "prioritizes an independently named HTML marker in %s over query prose",
+    async (path) => {
+      for (let index = 0; index < 60; index += 1) {
+        const directory = join(ROOT, "chapters/00");
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(
+          join(directory, `page-${String(index).padStart(4, "0")}.html`),
+          "<p>HTML-Handbuchordner Wartungsintervall Datei Zeile</p>\n",
+        );
+      }
+      mkdirSync(join(ROOT, path.slice(0, path.lastIndexOf("/"))), { recursive: true });
+      writeFileSync(
+        join(ROOT, path),
+        "<h1>Wartung</h1>\n<p>LAB_MANUAL_SERVICE_INTERVAL: Ölwechsel alle 750 Betriebsstunden.</p>\n",
+      );
+      writeFileSync(
+        join(ROOT, "index.html"),
+        "<h1>HTML-Handbuchordner</h1>\n<p>Handbuch Datei Zeile Wartungsintervall.</p>\n",
+      );
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({
+            text: "Suche im verbundenen HTML-Handbuchordner rekursiv nach LAB_MANUAL_SERVICE_INTERVAL. Welches Wartungsintervall steht dort? Nenne die belegte Datei und die Zeile.",
+          }),
+        }),
+        {
+          answerer: echoAnswerer,
+          fs: nodeWorkspaceFs,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+      const target = out.pack.files.find((file) => file.scopePath === path);
+      expect(target).toBeDefined();
+      expect(target?.excerpts.map((excerpt) => excerpt.content).join("\n")).toContain(
+        "750 Betriebsstunden",
+      );
+      expect(
+        target?.excerpts.some((excerpt) => {
+          const range = excerpt.atom.lineRange;
+          return range !== undefined && range.startLine <= 2 && range.endLine >= 2;
+        }),
+      ).toBe(true);
+      expect(out.pack.omitted.some((entry) => entry.scopePath === path)).toBe(false);
+      expect(out.pack.usage.searchCalls).toBe(1);
+      expect(out.pack.uncertainty.some((marker) => marker.claim.includes("git-history"))).toBe(
+        false,
+      );
+    },
+  );
+
+  it("keeps a complete ordinary-folder literal absence free of unrelated code scan warnings", async () => {
+    writeFileSync(join(ROOT, "manual.html"), "<p>Service interval: 750 hours</p>\n");
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: 'Finde rekursiv "LAB_MANUAL_MISSING". Ist dieser Marker im HTML-Handbuch vorhanden?',
+        }),
+      }),
+      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+    );
+    expect(out.pack.diagnostics?.coverage?.incomplete).toBe(false);
+    expect(out.pack.diagnostics?.coverage?.matchesReturned).toBe(0);
+    expect(out.pack.files).toEqual([]);
+    expect(out.pack.usage.searchCalls).toBe(1);
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(false);
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(true);
+  });
+
+  it("preserves requested Git history diagnostics for an ordinary HTML folder", async () => {
+    writeFileSync(join(ROOT, "manual.html"), "<p>LAB_MANUAL_SERVICE_INTERVAL: 750 hours</p>\n");
+    const provider = vi.fn<GitFileHistoryEvidenceProvider>(() => Promise.resolve([]));
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Show recent git history for LAB_MANUAL_SERVICE_INTERVAL in manual.html",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        gitFileHistoryEvidence: provider,
+      },
+    );
+    expect(provider).toHaveBeenCalled();
+    expect(out.pack.uncertainty.some((marker) => marker.claim.includes("git-history"))).toBe(true);
+  });
+
   it.each([
     ["MinifiedStartProbe", "START-VALUE-17"],
     ["MinifiedMiddleProbe", "MIDDLE-VALUE-29"],
@@ -1226,6 +1323,71 @@ describe("runGroundedExploration", () => {
       });
       expect(JSON.stringify(completed?.extra).includes(marker)).toBe(false);
       expect(JSON.stringify(completed?.extra).includes(value)).toBe(false);
+    },
+  );
+
+  it.each([DEFAULT_EXPLORATION_BUDGET.excerptBytesMax, 8192])(
+    "keeps disjoint minified values as separate evidence within %i total bytes",
+    async (excerptBytesMax) => {
+      const start = "<html><body><p>MinifiedStartProbe=START-VALUE-17</p><div>";
+      const end = "</div><p>MinifiedEndProbe=END-VALUE-43</p></body></html>";
+      writeFileSync(
+        join(ROOT, "manual.html"),
+        start + "x".repeat(2_097_120 - Buffer.byteLength(start + end)) + end,
+      );
+      const activityLog = createBufferedServerLogSink();
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({
+            text: "Vergleiche MinifiedStartProbe und MinifiedEndProbe in manual.html. Welche Werte haben beide?",
+          }),
+          budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax },
+        }),
+        {
+          correlationId: undefined,
+          activityLog,
+          contextProfile: DEFAULT_CONTEXT_PROFILE,
+          answerer: echoAnswerer,
+          fs: nodeWorkspaceFs,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+      const excerpts =
+        out.pack.files.find((file) => file.scopePath === "manual.html")?.excerpts ?? [];
+      expect(excerpts.some((excerpt) => excerpt.content.includes("START-VALUE-17"))).toBe(true);
+      expect(excerpts.some((excerpt) => excerpt.content.includes("END-VALUE-43"))).toBe(true);
+      expect(excerpts).toHaveLength(2);
+      expect(new Set(excerpts.map((excerpt) => excerpt.atom.stableId)).size).toBe(2);
+      expect(
+        excerpts.every(
+          (excerpt) =>
+            excerpt.atom.lineRange?.startLine === 1 && excerpt.atom.lineRange.endLine === 1,
+        ),
+      ).toBe(true);
+      expect(out.pack.usage.filesRead).toBe(1);
+      expect(out.pack.usage.excerptBytes).toBe(
+        excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0),
+      );
+      expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+      const completed = activityLog.events.find(
+        (event) => event.op === "search.connected-context.completed",
+      );
+      expect(completed?.extra).toMatchObject({
+        excerptReadWindowCount: 2,
+        excerptAnchoredWindowCount: 1,
+        contextSelectedExcerptCount: 2,
+        usageFilesRead: 1,
+      });
+      expect(JSON.stringify(completed?.extra).includes("MinifiedStartProbe")).toBe(false);
+      expect(JSON.stringify(completed?.extra).includes("END-VALUE-43")).toBe(false);
+      expect(JSON.stringify(completed?.extra).includes(ROOT)).toBe(false);
     },
   );
 

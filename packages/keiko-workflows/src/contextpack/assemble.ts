@@ -47,6 +47,8 @@ export interface AssembleInput {
 }
 
 export interface ExcerptWindow {
+  // Partial views can share source lines; this opaque identity keeps disjoint views separate.
+  readonly identity?: string | undefined;
   readonly startLine: number;
   readonly endLine: number;
   readonly content: string;
@@ -84,13 +86,14 @@ interface ResolvedOptions {
 }
 
 function resolveOptions(options: AssembleOptions | undefined): ResolvedOptions {
+  const supplied = options ?? {};
   return {
-    includeSurroundingContext: options?.includeSurroundingContext ?? false,
-    maxBytesPerExcerpt: options?.maxBytesPerExcerpt ?? DEFAULT_MAX_BYTES_PER_EXCERPT,
-    editablePaths: options?.editablePaths ?? new Set<string>(),
-    reranker: options?.reranker ?? disabledReranker,
-    microIndex: options?.microIndex,
-    nowMs: options?.nowMs ?? Date.now,
+    includeSurroundingContext: supplied.includeSurroundingContext ?? false,
+    maxBytesPerExcerpt: supplied.maxBytesPerExcerpt ?? DEFAULT_MAX_BYTES_PER_EXCERPT,
+    editablePaths: supplied.editablePaths ?? new Set<string>(),
+    reranker: supplied.reranker ?? disabledReranker,
+    microIndex: supplied.microIndex,
+    nowMs: supplied.nowMs ?? Date.now,
   };
 }
 
@@ -193,20 +196,15 @@ function compactAtomsForCandidate(
 ): { readonly excerpts: ContextExcerpt[]; readonly totalBytes: number } {
   const excerpts: ContextExcerpt[] = [];
   let totalBytes = 0;
-  const seenWindows = new Set<string>();
+  if (context.includeSurroundingContext) {
+    return compactIdentifiedContextWindows(
+      atomsForPath,
+      source,
+      maxBytesPerExcerpt,
+      context.scopeId,
+    );
+  }
   for (const atom of atomsForPath) {
-    if (context.includeSurroundingContext) {
-      const window = normalizeExcerptWindows(source).find((entry) => coversAtom(entry, atom));
-      if (window === undefined) continue;
-      const key = `${String(window.startLine)}-${String(window.endLine)}`;
-      if (seenWindows.has(key)) continue;
-      seenWindows.add(key);
-      const excerpt = compactContextWindow(atom, window, maxBytesPerExcerpt, context.scopeId);
-      if (excerpt.contentBytes === 0) continue;
-      excerpts.push(excerpt);
-      totalBytes += excerpt.contentBytes;
-      continue;
-    }
     const rawContent = contentForAtom(atom, source);
     if (rawContent === undefined) {
       continue;
@@ -218,6 +216,35 @@ function compactAtomsForCandidate(
   return { excerpts, totalBytes };
 }
 
+function contextWindowsForAtom(
+  source: ExcerptSource,
+  atom: EvidenceAtom,
+): readonly ExcerptWindow[] {
+  const matching = normalizeExcerptWindows(source).filter((window) => coversAtom(window, atom));
+  const legacy = matching.find((window) => window.identity === undefined);
+  return matching.filter((window) => window.identity !== undefined || window === legacy);
+}
+
+function compactIdentifiedContextWindows(
+  atoms: readonly EvidenceAtom[],
+  source: ExcerptSource,
+  maxBytes: number,
+  scopeId: string,
+): { readonly excerpts: ContextExcerpt[]; readonly totalBytes: number } {
+  const excerpts: ContextExcerpt[] = [];
+  const seen = new Set<string>();
+  for (const atom of atoms) {
+    for (const window of contextWindowsForAtom(source, atom)) {
+      const identity = `${window.startLine.toString()}-${window.endLine.toString()}:${window.identity ?? ""}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      const excerpt = compactContextWindow(atom, window, maxBytes, scopeId);
+      if (excerpt.contentBytes > 0) excerpts.push(excerpt);
+    }
+  }
+  return { excerpts, totalBytes: excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0) };
+}
+
 function compactContextWindow(
   atom: EvidenceAtom,
   window: ExcerptWindow,
@@ -225,6 +252,10 @@ function compactContextWindow(
   scopeId: string,
 ): ContextExcerpt {
   const result = compactExcerpt({ atom, rawContent: window.content, maxBytes });
+  const queryFingerprint =
+    window.identity === undefined
+      ? atom.provenance.queryFingerprint
+      : sha256Hex(JSON.stringify([atom.provenance.queryFingerprint, window.identity]));
   const lineRange = {
     startLine: window.startLine,
     endLine: Math.min(
@@ -237,13 +268,14 @@ function compactContextWindow(
     atom: {
       ...atom,
       lineRange,
+      provenance: { ...atom.provenance, queryFingerprint },
       stableId: evidenceAtomStableId({
         scopeId,
         scopePath: atom.scopePath,
         lineRange,
         provenanceKind: atom.provenance.kind,
         provenanceTool: atom.provenance.tool,
-        queryFingerprint: atom.provenance.queryFingerprint,
+        queryFingerprint,
       }),
     },
   };
@@ -363,6 +395,22 @@ function recordPreMarkedOmission(
   return true;
 }
 
+function appendAssembledCandidate(
+  plan: BuildPlan,
+  candidate: CandidateFile,
+  ctx: ProcessContext,
+  excerpts: readonly ContextExcerpt[],
+  totalBytes: number,
+): void {
+  plan.files.push({
+    scopePath: candidate.scopePath,
+    role: resolveRole(candidate.scopePath, ctx.editablePaths),
+    selectionReason: deriveSelectionReason(candidate),
+    excerpts,
+  });
+  plan.usage = appendUsage(plan.usage, totalBytes);
+}
+
 function processCandidate(
   plan: BuildPlan,
   candidate: CandidateFile,
@@ -409,13 +457,7 @@ function processCandidate(
     recordBudgetClip(plan, candidate, ctx.nowMs);
     return "budget-clipped";
   }
-  plan.files.push({
-    scopePath: candidate.scopePath,
-    role: resolveRole(candidate.scopePath, ctx.editablePaths),
-    selectionReason: deriveSelectionReason(candidate),
-    excerpts,
-  });
-  plan.usage = appendUsage(plan.usage, totalBytes);
+  appendAssembledCandidate(plan, candidate, ctx, excerpts, totalBytes);
   return "continue";
 }
 
@@ -623,6 +665,7 @@ function cacheExcerptWindow(window: ExcerptWindow): object {
     startLine: window.startLine,
     endLine: window.endLine,
     contentHash: sha256Hex(window.content),
+    ...(window.identity === undefined ? {} : { identity: window.identity }),
   };
 }
 

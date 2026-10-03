@@ -1523,7 +1523,10 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     renderInLocale("de", answer({ contextPack: pack, citations: [citation({ score: 1 })] }));
     const region = await screen.findByRole("region", { name: "Prüfung verbundener Dateien" });
     expect(within(region).getByText("Rekursiv geprüft")).toBeInTheDocument();
-    expect(region).toHaveTextContent("200,002 / 200,002 Dateien");
+    expect(region).toHaveTextContent("200,002 / 200,002 Dateien je Suchbereich");
+    expect(region).toHaveTextContent(
+      "Überlappende Suchbereiche können dieselbe Datei mehrfach zählen",
+    );
     expect(within(region).getByText("Für die Antwort gelesen")).toBeInTheDocument();
     expect(region).toHaveTextContent("5 / 32 Dateien");
     expect(region).toHaveTextContent("32 ist das Lesebudget für diese Antwort");

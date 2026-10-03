@@ -531,6 +531,9 @@ describe("composer context status and manual maintenance", () => {
     "Write Vitest tests for normalizeEmail in src/email.ts.",
     "Schreibe Vitest-Testfälle für normalizeEmail in src/email.ts.",
     "Add tests for the normalizeEmail function.",
+    "Suche im verbundenen HTML-Handbuchordner rekursiv nach LAB_MANUAL_SERVICE_INTERVAL. Welches Wartungsintervall steht dort? Nenne die belegte Datei und die Zeile.",
+    "Suche dort nach `LAB_MANUAL_SERVICE_INTERVAL`.",
+    "Find LAB_MANUAL_SERVICE_INTERVAL there and cite the source line.",
   ])("does not add an unrelated old question to the explicit retrieval query: %s", (query) => {
     const { deps, chatId } = fixture(1, "Unrelated old payroll policy.");
     const continuity = groundedConversationContinuity(

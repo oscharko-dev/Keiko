@@ -306,6 +306,12 @@ describe("recursive text search in ordinary folders", () => {
     expect(result.candidates).toContainEqual(
       expect.objectContaining({ scopePath: "too-large.html", omitted: "size-exceeded" }),
     );
+    expect(result.coverage.incomplete).toBe(false);
+    expect(result.coverage.reasons).toEqual([]);
+    expect(result.coverage.filesSkipped).toBe(1);
+    const listing = await findFiles(selected, { ...query("**/*"), kind: "file-pattern" });
+    expect(listing.coverage.incomplete).toBe(false);
+    expect(listing.atoms).toEqual([]);
     await expect(
       readExcerpt(selected, {
         scopePath: "too-large.html",

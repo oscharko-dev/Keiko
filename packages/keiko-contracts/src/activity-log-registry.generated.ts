@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "0e3fe424cd3b446309a6bdd8c4a3f72cb5a1ff0bcbbac36abe7bb39cc5b0b344" as const;
+  "8d46f9f1df98d7b58f0f1cced9dc77c209ca18fee7eed75591e40a05a9d0da9b" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -24190,6 +24190,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      excerptReadWindowCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       usageModelInputTokens: {
         type: "integer",
         dataClass: "count",
@@ -40930,6 +40935,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "excerptAnchoredWindowCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "excerptReadWindowCount",
               type: "integer",
               dataClass: "count",
               required: false,

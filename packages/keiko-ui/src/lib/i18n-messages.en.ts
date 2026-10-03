@@ -595,7 +595,7 @@ export const EN_MESSAGES = {
   "chat.send.connecting": "Connecting to gateway",
   "chat.send.cancel": "Cancel response",
   "chat.send.statusQueued": "Submitting your message…",
-  "chat.send.statusContacting": "Contacting model…",
+  "chat.send.statusContacting": "Preparing response…",
   "chat.send.statusStreaming": "Receiving response…",
   "chat.send.statusCancelled": "Response cancelled.",
   "chat.voice": "Voice",

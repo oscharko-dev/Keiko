@@ -142,6 +142,17 @@ source bytes are processed with bounded concurrency, and only bounded best match
 summaries survive the scan. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
 Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
+Files above the 2 MiB eligibility ceiling remain visible as excluded candidates and skipped counts;
+they do not make an otherwise complete eligible-text scan incomplete. An explicitly narrower
+caller byte cap still reports incomplete coverage when it excludes otherwise eligible text.
+
+An explicit identifier or quoted target starts an independent retrieval question even when the
+question contains an anaphoric word such as "there". Literal lookup prioritizes actual lexical
+content matches ahead of incidental natural-language path overlap. Ordinary-folder factual
+HTML/text lookups and complete literal absences avoid unrelated code-graph augmentation;
+Git-history discovery is not attempted for a folder without Git unless the question requests
+history or relationships. Requested definition, relationship, and history evidence retains its
+existing retrieval path and reports genuine unavailability.
 Existing path denials, explicit ignore policy, output/model budgets and redaction remain enforced.
 Filesystem resource exhaustion remains a technical failure: for example, an installation's
 descriptor allowance can constrain deeply nested directory traversal. Directory iterators close on
