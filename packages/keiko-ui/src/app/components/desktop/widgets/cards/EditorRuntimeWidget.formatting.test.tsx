@@ -2,7 +2,7 @@
  * Registry-gated Format availability tests for EditorRuntimeWidget (Issue #1380, ADR-0068 D3/D4).
  *
  * Proves the single registry-derived `formattingAvailable` value drives, in agreement:
- *   - the Format button's `aria-disabled`, and
+ *   - the secondary Format action's availability, and
  *   - the status bar's `formatting` field ("Format ready" / "Format unavailable"),
  * for rich-worker languages now classified as `"none"` (json/css), a `keiko-language-service`
  * language (typescript), and other `"none"` languages (markdown/yaml) — and that large-file
@@ -11,15 +11,14 @@
  * The harness mirrors EditorWidget.test.tsx: the heavy browser-only surface and the IndexedDB-backed
  * hot-exit store are mocked, and the Monaco runtime never loads in jsdom.
  */
-import { render, screen } from "@testing-library/react";
-import { useEffect, type ReactElement } from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FilesContentResponse, LanguageServiceCapabilities } from "../../../../../lib/types";
 import {
   fetchEditorLanguageCapabilities,
   fetchFilesContent,
   fetchGitStatus,
-  postEditorAgentSessionSnapshot,
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
@@ -33,8 +32,6 @@ vi.mock("../../../../../lib/api", async () => {
     fetchEditorLanguageCapabilities: vi.fn(),
     fetchFilesContent: vi.fn(),
     fetchGitStatus: vi.fn(),
-    postEditorAgentActionResult: vi.fn(),
-    postEditorAgentSessionSnapshot: vi.fn(),
     saveFilesContent: vi.fn(),
     requestEditorCompletion: vi.fn(),
     requestEditorInlineCompletion: vi.fn(),
@@ -73,7 +70,6 @@ vi.mock("next/dynamic", () => {
         return EditorDiffSurfaceProbe;
       }
       function EditorSurfaceProbe(props: EditorSurfaceProps): ReactElement {
-        useEffect(() => {}, []);
         surface.props = props;
         return <div data-testid="editor-surface" />;
       }
@@ -115,8 +111,9 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
   };
 }
 
-function formatButton(): HTMLButtonElement {
-  return screen.getByRole("button", { name: "Format" });
+function formatAction(): HTMLButtonElement | null {
+  fireEvent.click(screen.getByRole("button", { name: "More file actions" }));
+  return screen.queryByRole("button", { name: "Format" });
 }
 
 function statusField(id: string): Element | null {
@@ -146,7 +143,6 @@ beforeEach(() => {
     truncated: false,
     maxChanges: 500,
   });
-  vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
 });
 
 afterEach(() => {
@@ -158,35 +154,38 @@ describe("EditorRuntimeWidget — registry-gated Format availability (ADR-0068 D
   it('marks Format unavailable for a "none" language (markdown)', async () => {
     await renderFile("notes.md", { path: "notes.md", name: "notes.md", extension: "md" });
 
-    expect(formatButton()).toHaveAttribute("aria-disabled", "true");
+    expect(formatAction()).not.toBeInTheDocument();
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
   it('marks Format unavailable for a "none" language (yaml)', async () => {
     await renderFile("conf.yaml", { path: "conf.yaml", name: "conf.yaml", extension: "yaml" });
 
-    expect(formatButton()).toHaveAttribute("aria-disabled", "true");
+    expect(formatAction()).not.toBeInTheDocument();
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
   it("marks Format unavailable for json without a server provider or Monaco worker", async () => {
     await renderFile("data.json", { path: "data.json", name: "data.json", extension: "json" });
 
-    expect(formatButton()).toHaveAttribute("aria-disabled", "true");
+    expect(formatAction()).not.toBeInTheDocument();
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
   it("marks Format unavailable for css without a server provider or Monaco worker", async () => {
     await renderFile("styles.css", { path: "styles.css", name: "styles.css", extension: "css" });
 
-    expect(formatButton()).toHaveAttribute("aria-disabled", "true");
+    expect(formatAction()).not.toBeInTheDocument();
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
   it("marks Format available for a keiko-language-service language (typescript) when the server is up", async () => {
     await renderFile("src/app.ts");
 
-    expect(formatButton()).toHaveAttribute("aria-disabled", "false");
+    expect(formatAction()).toBeEnabled();
+    const previousNonce = surface.props?.formatRequestNonce ?? 0;
+    fireEvent.click(screen.getByRole("button", { name: "Format" }));
+    expect(surface.props?.formatRequestNonce).toBe(previousNonce + 1);
     expect(statusField("formatting")).toHaveTextContent("Format ready");
   });
 
@@ -205,20 +204,20 @@ describe("EditorRuntimeWidget — registry-gated Format availability (ADR-0068 D
     });
     await renderFile("src/app.ts");
 
-    expect(formatButton()).toHaveAttribute("aria-disabled", "true");
+    expect(formatAction()).not.toBeInTheDocument();
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
-  it("disables the Format button in large-file degraded mode even for a formattable language (typescript)", async () => {
+  it("omits the Format action in large-file degraded mode even for a formattable language (typescript)", async () => {
     const oversizedTs = `${"const value = 1;\n".repeat(10_001)}const tail = 2;\n`;
     await renderFile("src/app.ts", {
       content: oversizedTs,
       sizeBytes: oversizedTs.length,
     });
 
-    // largeFileDegraded gates the button (canFormat) even though the language is provider-formattable;
+    // largeFileDegraded gates the action (canFormat) even though the language is provider-formattable;
     // the status field reads the same effective availability, so the two agree (ADR-0068 D4).
-    expect(formatButton()).toHaveAttribute("aria-disabled", "true");
+    expect(formatAction()).not.toBeInTheDocument();
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 });

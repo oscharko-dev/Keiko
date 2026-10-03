@@ -78,8 +78,11 @@ test("normal Editor keeps manual undo and redo without an agent channel", async 
   const modifier = await editorModifier(page);
   const input = workspace.locator(".monaco-editor .native-edit-context").first();
   await input.focus();
-  await page.keyboard.press(`${modifier}+KeyA`);
-  await page.keyboard.insertText(EDITED_CONTENT);
+  await page.keyboard.press(`${modifier}+Home`);
+  await page.keyboard.press("End");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("Shift+ArrowLeft");
+  await page.keyboard.type("2");
   await expect.poll(() => readEditorBuffer(workspace)).toBe(EDITED_CONTENT.trimEnd());
   await page.keyboard.press(`${modifier}+KeyZ`);
   await expect.poll(() => readEditorBuffer(workspace)).toBe(INITIAL_CONTENT.trimEnd());
