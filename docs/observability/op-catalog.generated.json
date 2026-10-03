@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f1179bc944a98f35f7fe60d8cac656ab211ecdbfdafc73f2d9738f1f8b5a6c52",
+    "catalogDigest": "0fee2c823218e3e624aa99b53cb3d0e6748a59974aa4c9a7e981ae5c718acc63",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -22155,8 +22155,8 @@
         "failureClasses": ["knowledge-store-encryption"],
         "proofIds": ["knowledge.store.encryption-rejected.mode"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-local-knowledge/src/store.ts:86",
-        "emitterSites": ["packages/keiko-local-knowledge/src/store.ts:565"]
+        "registrationSite": "packages/keiko-local-knowledge/src/store.ts:83",
+        "emitterSites": ["packages/keiko-local-knowledge/src/store.ts:562"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22195,8 +22195,8 @@
         "failureClasses": ["knowledge-store-corruption", "knowledge-store-reopen"],
         "proofIds": ["knowledge.store.quarantined.recovery"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-local-knowledge/src/store.ts:62",
-        "emitterSites": ["packages/keiko-local-knowledge/src/store.ts:526"]
+        "registrationSite": "packages/keiko-local-knowledge/src/store.ts:59",
+        "emitterSites": ["packages/keiko-local-knowledge/src/store.ts:523"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22757,8 +22757,8 @@
         "failureClasses": ["memory-vault-corruption", "memory-vault-reopen"],
         "proofIds": ["memory-vault.store.quarantined.recovery"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/db.ts:38",
-        "emitterSites": ["packages/keiko-memory-vault/src/db.ts:155"]
+        "registrationSite": "packages/keiko-memory-vault/src/db.ts:37",
+        "emitterSites": ["packages/keiko-memory-vault/src/db.ts:153"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -28325,8 +28325,8 @@
         "failureClasses": ["ui-store-open"],
         "proofIds": ["store.opened.identity"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store/db.ts:133",
-        "emitterSites": ["packages/keiko-server/src/store/db.ts:999"]
+        "registrationSite": "packages/keiko-server/src/store/db.ts:132",
+        "emitterSites": ["packages/keiko-server/src/store/db.ts:903"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -78436,13 +78436,13 @@
     {
       "op": "knowledge.store.encryption-rejected",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store.ts:89",
+      "site": "packages/keiko-local-knowledge/src/store.ts:86",
       "package": "keiko-local-knowledge"
     },
     {
       "op": "knowledge.store.quarantined",
       "category": "diagnostic",
-      "site": "packages/keiko-local-knowledge/src/store.ts:65",
+      "site": "packages/keiko-local-knowledge/src/store.ts:62",
       "package": "keiko-local-knowledge"
     },
     {
@@ -78514,7 +78514,7 @@
     {
       "op": "memory-vault.store.quarantined",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/db.ts:41",
+      "site": "packages/keiko-memory-vault/src/db.ts:40",
       "package": "keiko-memory-vault"
     },
     {
@@ -81849,7 +81849,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:136",
+      "site": "packages/keiko-server/src/store/db.ts:135",
       "package": "keiko-server"
     },
     {
