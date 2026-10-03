@@ -90,14 +90,21 @@ describe("git repository routes", () => {
   it.each(["ENOTFOUND", "EAI_AGAIN"])("denies unverifiable clone hosts with %s", async (code) => {
     const cloneRunner = vi.fn<CloneRepositoryRunner>();
     const lookup = vi.fn().mockRejectedValue(Object.assign(new Error("private-host"), { code }));
+    const record = vi.fn();
+    const correlationId = "9320a042-c015-4571-9147-289ed396016a";
+    const request = ctx({
+      repositoryUrl: "git@github-work:org/repo.git",
+      destinationPath: join(tmp, "app"),
+    });
     const result = await createCloneRepositoryHandler(
       cloneRunner,
       undefined,
       lookup,
-    )(
-      ctx({ repositoryUrl: "git@github-work:org/repo.git", destinationPath: join(tmp, "app") }),
-      deps(),
-    );
+    )({ ...request, correlationId }, { ...deps(), diagnostics: { record } });
+    expect(record).toHaveBeenCalledOnce();
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ correlationId }));
+    expect(JSON.stringify(record.mock.calls)).not.toContain("private-host");
+    expect(result.body).toMatchObject({ error: { correlationId } });
     expect(result).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
     expect(JSON.stringify(result)).not.toContain("private-host");
     expect(cloneRunner).not.toHaveBeenCalled();

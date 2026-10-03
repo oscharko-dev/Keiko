@@ -243,6 +243,13 @@ function repositoryUrlAllowed(input: string): boolean {
   return hostClass === undefined || hostClass === "public";
 }
 
+class RepositoryDnsError extends Error {
+  constructor(cause: unknown) {
+    super("Repository host resolution unavailable", { cause });
+    this.name = "RepositoryDnsError";
+  }
+}
+
 type RepositoryDnsLookup = (host: string) => Promise<readonly { readonly address: string }[]>;
 const defaultRepositoryDnsLookup: RepositoryDnsLookup = async (host) =>
   lookupHost(host, { all: true, verbatim: true });
@@ -267,10 +274,9 @@ async function repositoryDnsAllowed(input: string, lookup: RepositoryDnsLookup):
         return kind === "public" || kind === "private";
       })
     );
-  } catch {
-    // An unresolved SSH alias or proxy-only host cannot satisfy this preflight. Keep the
-    // denial explicit instead of reclassifying a valid repository URL as malformed input.
-    return false;
+  } catch (error) {
+    // Keep the refusal distinct from malformed input while preserving causal diagnostics.
+    throw new RepositoryDnsError(error);
   } finally {
     clearTimeout(timer);
   }
@@ -454,6 +460,16 @@ function bodyValidationErrorResponse(error: unknown): RouteResult | undefined {
 }
 
 function handleCloneError(ctx: RouteContext, deps: UiHandlerDeps, error: unknown): RouteResult {
+  if (error instanceof RepositoryDnsError) {
+    return {
+      status: 403,
+      body: errorBody(
+        "DENIED",
+        "The repository host could not be verified. Use a resolvable host.",
+        reportCloneFailure(ctx, deps, error),
+      ),
+    };
+  }
   if (error instanceof BodyTooLargeError) {
     return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body is too large.") };
   }
