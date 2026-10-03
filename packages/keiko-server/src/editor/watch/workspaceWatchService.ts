@@ -931,8 +931,19 @@ class WorkspaceWatchSession {
     );
   }
 
+  private canStartDiffScan(): boolean {
+    if (this.scanning || !this.ensureLiveRootAuthority()) return false;
+    // An aborted first seed is not a baseline. Retry it before any caller can infer creations
+    // from the empty known map; a complete seed already announces the required client refresh.
+    if (this.baselineReady === null) {
+      this.startBaselineSeed();
+      return false;
+    }
+    return true;
+  }
+
   private async scanAndEmitDiff(): Promise<void> {
-    if (this.scanning || !this.ensureLiveRootAuthority()) return;
+    if (!this.canStartDiffScan()) return;
     this.scanning = true;
     const revision = this.changeRevision;
     let stale = false;

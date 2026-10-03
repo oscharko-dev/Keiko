@@ -252,6 +252,51 @@ async function gapAndResume(
 }
 
 describe("workspace watch service", () => {
+  it("re-seeds an aborted initial baseline before polling without fabricating creations", async () => {
+    await mkdir(join(root, "nested"));
+    await writeFile(join(root, "existing.txt"), "original");
+    await writeFile(join(root, "nested", "existing.txt"), "original");
+    const adapter = new FakeAdapter();
+    const fileSystem = new InjectedFileSystem();
+    let failed = false;
+    let settled = 0;
+    fileSystem.readdir.mockImplementation(async (path): Promise<readonly Dirent[]> => {
+      if (path === join(root, "nested") && !failed) {
+        failed = true;
+        throw errno("ENOENT");
+      }
+      return readdir(path, { withFileTypes: true });
+    });
+    const events: EditorM7WatchEvent[] = [];
+    const manager = createWorkspaceWatchService({
+      adapter,
+      fileSystem,
+      fallbackPollMs: 5,
+      coalesceMs: 0,
+      onScanSettled: (): void => {
+        settled += 1;
+      },
+    });
+    try {
+      manager.subscribe({
+        root,
+        onEvent: (event): void => {
+          events.push(event);
+        },
+      });
+      await waitForCondition(() => settled >= 2 && manager.snapshot(root).health === "healthy");
+      expect(failed).toBe(true);
+      expect(events.filter((event) => event.kind === "created")).toEqual([]);
+      expect(events.some((event) => event.kind === "rescan")).toBe(true);
+      await writeFile(join(root, "existing.txt"), "changed contents");
+      adapter.emit({ eventType: "change", filename: "existing.txt" });
+      await waitForCondition(() => events.some((event) => event.kind === "changed"));
+      expect(events.filter((event) => event.kind === "created")).toEqual([]);
+    } finally {
+      manager.disposeAll();
+    }
+  });
+
   it("does not rescan permanent degradation on lease renewal", async () => {
     await writeFile(join(root, "keep.txt"), "one");
     const adapter = new FakeAdapter();
