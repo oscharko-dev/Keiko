@@ -9,6 +9,7 @@
 // suites mock sibling component files wholesale.
 
 import { useEffect } from "react";
+import { isBenignWindowNotification } from "@/lib/benign-browser-error";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { recordClientDiagnosticLoss, reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
@@ -19,6 +20,7 @@ export function useWindowErrorLog(): void {
   useEffect(() => {
     let logged = 0;
     const onError = (event: ErrorEvent): void => {
+      if (isBenignWindowNotification(event)) return;
       if (logged >= MAX_LOGGED_WINDOW_ERRORS) {
         recordClientDiagnosticLoss("errorsSuppressed");
         return;

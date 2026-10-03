@@ -33,6 +33,37 @@ afterEach(() => {
 });
 
 describe("useWindowErrorLog", () => {
+  it("ignores browser resize notifications before the real-error cap", () => {
+    const view = renderHook(() => {
+      useWindowErrorLog();
+    });
+    for (let index = 0; index < 8; index += 1) {
+      window.dispatchEvent(
+        new ErrorEvent("error", {
+          error: null,
+          message: "ResizeObserver loop completed with undelivered notifications.",
+        }),
+      );
+    }
+    expect(currentGlobalClientFailure()).toBeNull();
+    dispatchWindowError(new TypeError("real failure"));
+    view.unmount();
+    expect(received).toHaveLength(1);
+    expect(received[0]?.meta?.errorEvidence?.errorClass).toBe("TypeError");
+    expect(takeClientDiagnosticLoss()).toBeUndefined();
+  });
+
+  it("does not dismiss thrown errors that copy the resize notification text", () => {
+    const view = renderHook(() => {
+      useWindowErrorLog();
+    });
+    const message = "ResizeObserver loop completed with undelivered notifications.";
+    window.dispatchEvent(new ErrorEvent("error", { error: new Error(message), message }));
+    view.unmount();
+    expect(received).toHaveLength(1);
+    expect(currentGlobalClientFailure()).not.toBeNull();
+  });
+
   it("reports an uncaught error by its class only, with the closed kind", () => {
     const view = renderHook(() => {
       useWindowErrorLog();

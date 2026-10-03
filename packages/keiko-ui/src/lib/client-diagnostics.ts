@@ -170,6 +170,26 @@ export interface ClientDiagnosticMeta {
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;
 
+export type ClientDiagnosticDeliveryRetry = (
+  correlationId: string,
+  signal: AbortSignal,
+) => Promise<boolean | undefined>;
+
+let deliveryRetry: ClientDiagnosticDeliveryRetry | undefined;
+
+/** The installed transport owns delivery; the sink and report UI do not choose a transport. */
+export function setClientDiagnosticDeliveryRetry(retry: ClientDiagnosticDeliveryRetry): void {
+  deliveryRetry = retry;
+}
+
+/** Undefined means this selector is not a retained browser-only diagnostic. */
+export async function ensureClientDiagnosticDelivery(
+  correlationId: string,
+  signal: AbortSignal,
+): Promise<boolean | undefined> {
+  return deliveryRetry?.(correlationId, signal);
+}
+
 interface PendingDiagnostic {
   readonly message: string;
   readonly meta?: ClientDiagnosticMeta | undefined;

@@ -143,7 +143,9 @@ describe("EditorRuntimeWidget load failure", () => {
   it("localizes generic server failures and keeps retry and report actions available", async () => {
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");
     vi.mocked(fetchFilesContent).mockRejectedValueOnce(
-      new ApiError("INTERNAL", "An unexpected error occurred.", 500, "load-failure-correlation"),
+      Object.assign(new ApiError("INTERNAL", "An unexpected error occurred.", 500), {
+        correlationId: "load-failure-correlation",
+      }),
     );
     render(
       <I18nProvider>

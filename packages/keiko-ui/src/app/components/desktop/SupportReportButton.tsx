@@ -9,7 +9,11 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslate } from "@/lib/i18n";
-import { createSupportReport, downloadSupportReport } from "@/lib/support-report-api";
+import {
+  createSupportReport,
+  downloadSupportReport,
+  SupportReportEvidenceUnavailable,
+} from "@/lib/support-report-api";
 import {
   currentGlobalClientFailure,
   dismissGlobalClientFailure,
@@ -155,6 +159,9 @@ async function runReport(
     if (controller.signal.aborted || request.current !== pending) return;
     releaseReport(key, controller);
     setFeedback({ key, state: "error" });
+    // The transport already accounts for missing evidence. Do not create another incident for
+    // the same offline delivery or replace the selected original error with a reporting failure.
+    if (error instanceof SupportReportEvidenceUnavailable) return;
     reportClientDiagnostic(`[keiko] support report failed: ${clientErrorSummary(error)}`, {
       correlationId: correlationIdOf(error),
       errorKind: bffRequestErrorKind(error),

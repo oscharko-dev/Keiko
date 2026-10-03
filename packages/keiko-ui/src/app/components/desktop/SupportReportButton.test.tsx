@@ -2,10 +2,16 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
-import { createSupportReport, downloadSupportReport } from "@/lib/support-report-api";
+import {
+  createSupportReport,
+  downloadSupportReport,
+  SupportReportEvidenceUnavailable,
+} from "@/lib/support-report-api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { SupportReportButton, resetSupportReportOutcomesForTests } from "./SupportReportButton";
 
-vi.mock("@/lib/support-report-api", () => ({
+vi.mock("@/lib/support-report-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/support-report-api")>()),
   createSupportReport: vi.fn(),
   downloadSupportReport: vi.fn(),
 }));
@@ -21,6 +27,16 @@ afterEach(() => {
 });
 
 describe("SupportReportButton", () => {
+  it("keeps missing diagnostic delivery retryable without creating a reporting incident", async () => {
+    create.mockRejectedValueOnce(new SupportReportEvidenceUnavailable());
+    render(<SupportReportButton correlationId="offline-original-error" />);
+    await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
+    expect(reportClientDiagnostic).not.toHaveBeenCalled();
+    expect(download).not.toHaveBeenCalled();
+  });
+
   it("downloads exactly the clicked failure without a second confirmation", async () => {
     create.mockResolvedValue(report);
     render(<SupportReportButton correlationId="failure-1" />);

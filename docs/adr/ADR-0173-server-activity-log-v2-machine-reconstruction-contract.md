@@ -635,13 +635,23 @@ selected causal evidence rather than the later click-time incident window. Missi
 evidence remains insufficient under the ordinary query and report validators.
 
 The desktop exposes the same canonical report as a local JSON download at actionable failures.
-The healthy workspace footer has no report action. An uncaught browser error or rejected promise
+The healthy workspace footer has no report action. Exact browser resize notifications and Monaco
+cancellations are classified before failure caps; they do not create incidents or report actions.
+An uncaught browser error or rejected promise
 reveals a compact, dismissible footer action tied to that failure; handled contextual errors retain
 their own action. Each active failure permits one successful download, with a 1.5-second completion
 status, while failed creation remains retryable and unmounting cancels pending work. The selected
 incident and compressed event section travel together, so support can inspect the evidence without
 access to the customer's complete logs. Export uses the existing paired application session and a
 bounded worker; it never uploads externally by itself.
+
+Browser-only failures retain at most 100 projected diagnostics for report delivery. Export waits
+for ingest acknowledgement; if the original delivery failed or was throttled, a human report action
+may redeliver it under the same correlation, within a separate six-per-minute client budget and the
+server's unchanged admission limits. The 35-second export deadline includes that delivery. Missing
+delivery remains retryable without exporting an unrelated incident or filing another reporting
+incident. Successful saves deliberately excluded from history by secret protection have no report
+action; degraded history protection retains its contextual action.
 
 The fixed bounds are 10 MiB for the entire file, 1 MiB for the incident projection, 16 MiB for the
 decoded event section, 64 KiB per event, 20,000 records, 12 JSON nesting levels, 250,000

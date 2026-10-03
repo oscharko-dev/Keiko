@@ -6,6 +6,7 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resetClientDiagnosticWriter,
+  currentGlobalClientFailure,
   setClientDiagnosticWriter,
   takeClientDiagnosticLoss,
   type ClientDiagnosticMeta,
@@ -23,6 +24,28 @@ afterEach(() => {
 });
 
 describe("useUnhandledRejectionLog", () => {
+  it("ignores exact Monaco cancellation before the real-rejection cap", () => {
+    const received: (ClientDiagnosticMeta | undefined)[] = [];
+    resetClientDiagnosticWriter();
+    setClientDiagnosticWriter((_message, meta) => received.push(meta));
+    const view = renderHook(() => {
+      useUnhandledRejectionLog();
+    });
+    try {
+      for (let index = 0; index < 8; index += 1) {
+        dispatchRejection(Object.assign(new Error("Canceled"), { name: "Canceled" }));
+      }
+      expect(currentGlobalClientFailure()).toBeNull();
+      dispatchRejection(new TypeError("real failure"));
+      expect(received).toHaveLength(1);
+      expect(received[0]?.errorEvidence?.errorClass).toBe("TypeError");
+      expect(takeClientDiagnosticLoss()).toBeUndefined();
+    } finally {
+      view.unmount();
+      resetClientDiagnosticWriter();
+    }
+  });
+
   it("logs an escaped rejection with the shell's console idiom", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const view = renderHook(() => {

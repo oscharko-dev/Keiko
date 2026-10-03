@@ -4987,7 +4987,9 @@ function EditorRuntimeWidget({
               : "editor.localHistoryProtection.suppressedBrief",
           )}
         </span>
-        <SupportReportButton correlationId={localHistoryProtection.correlationId} />
+        {degraded ? (
+          <SupportReportButton correlationId={localHistoryProtection.correlationId} />
+        ) : null}
         <details>
           <summary>{commonT("editor.runtime.details")}</summary>
           <p>
