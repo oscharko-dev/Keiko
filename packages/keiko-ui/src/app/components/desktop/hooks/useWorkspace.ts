@@ -1858,6 +1858,7 @@ export interface UseWorkspaceOptions {
         chatWindowId: string,
         scope: ChatConnectedScope,
         target?: ChatUnbindTarget,
+        connectionId?: string,
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorBind?:
@@ -2001,11 +2002,7 @@ async function unbindClosedWindowConnection(
   closedWin: AppWindow,
   conn: Connection,
   winsById: ReadonlyMap<string, AppWindow>,
-  unbindScope: (
-    chatWindowId: string,
-    scope: ChatConnectedScope,
-    target?: ChatUnbindTarget,
-  ) => boolean | Promise<boolean>,
+  unbindScope: NonNullable<UseWorkspaceOptions["onScopeUnbind"]>,
   unbindConnectorScope: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
@@ -2028,7 +2025,8 @@ async function unbindClosedWindowConnection(
   if (chatWindowId === null) return true;
   try {
     const results: Promise<boolean>[] = [];
-    if (scope !== null) results.push(Promise.resolve(unbindScope(chatWindowId, scope, target)));
+    if (scope !== null)
+      results.push(Promise.resolve(unbindScope(chatWindowId, scope, target, conn.id)));
     if (connectorScope !== null) {
       results.push(Promise.resolve(unbindConnectorScope(chatWindowId, connectorScope, target)));
     }
@@ -2135,8 +2133,9 @@ export function useWorkspace(
       chatWindowId: string,
       scope: ChatConnectedScope,
       target?: ChatUnbindTarget,
+      connectionId?: string,
     ): boolean | Promise<boolean> =>
-      onScopeUnbindRef.current?.(chatWindowId, scope, target) ?? true,
+      onScopeUnbindRef.current?.(chatWindowId, scope, target, connectionId) ?? true,
     [],
   );
   const stableConnectorBind = useCallback(

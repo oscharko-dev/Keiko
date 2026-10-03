@@ -795,6 +795,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
       "chat-1",
       expect.objectContaining({ root: "/repo" }),
       undefined,
+      expect.any(String),
     );
     // The edge itself is swept by useConnectionPrune once the window is gone.
     await waitFor(() => expect(readConns()).toHaveLength(0));
@@ -960,6 +961,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
       "chat-1",
       expect.objectContaining({ root: "/repo" }),
       { conversationId: "chat-private", projectPath: "/private" },
+      expect.any(String),
     );
   });
 

@@ -1050,6 +1050,7 @@ interface ConnectArgs {
         chatWindowId: string,
         scope: ChatConnectedScope,
         target?: ChatUnbindTarget,
+        connectionId?: string,
       ) => boolean | Promise<boolean>)
     | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
@@ -1127,6 +1128,7 @@ interface BindAcceptanceInput {
 }
 
 interface ConnectionUnbindAcceptanceInput {
+  readonly connectionId: string;
   readonly chatWindowId: string;
   readonly boundScope: ChatConnectedScope | null;
   readonly connectorScope: ChatLocalKnowledgeScope | null;
@@ -1318,7 +1320,9 @@ async function connectionUnbindAccepted(input: ConnectionUnbindAcceptanceInput):
   try {
     const results: Promise<boolean>[] = [];
     if (boundScope !== null && onScopeUnbind !== undefined) {
-      results.push(Promise.resolve(onScopeUnbind(chatWindowId, boundScope, target)));
+      results.push(
+        Promise.resolve(onScopeUnbind(chatWindowId, boundScope, target, input.connectionId)),
+      );
     }
     if (connectorScope !== null && onConnectorUnbind !== undefined) {
       results.push(Promise.resolve(onConnectorUnbind(chatWindowId, connectorScope, target)));
@@ -1957,6 +1961,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     if (pendingConnectionRemovals.has(id)) return;
     pendingConnectionRemovals.add(id);
     void connectionUnbindAccepted({
+      connectionId: id,
       chatWindowId,
       boundScope,
       connectorScope,
@@ -2344,6 +2349,38 @@ export function isScopeConnected(
   scope: ChatConnectedScope,
 ): boolean {
   return current.some((candidate) => scopeMatches(candidate, scope));
+}
+
+export function hasOtherFilesScopeOwner(input: {
+  readonly windows: readonly AppWindow[];
+  readonly connections: readonly Connection[];
+  readonly scope: ChatConnectedScope;
+  readonly conversationId: string;
+  readonly excludedConnectionId: string | undefined;
+  readonly releasedConnections: ReadonlySet<string>;
+  readonly acknowledgedScopes: ReadonlyMap<string, ChatConnectedScope>;
+  readonly conversationForWindow: (windowId: string) => string | undefined;
+}): boolean {
+  return input.connections.some((connection) => {
+    if (
+      connection.id === input.excludedConnectionId ||
+      input.releasedConnections.has(connection.id)
+    )
+      return false;
+    const a = input.windows.find((window) => window.id === connection.a);
+    const b = input.windows.find((window) => window.id === connection.b);
+    if (a === undefined || b === undefined) return false;
+    const chatWindowId = chatWindowIdInPair(a, b);
+    if (chatWindowId === null || input.conversationForWindow(chatWindowId) !== input.conversationId)
+      return false;
+    const visible = filesChatBindScope(a, b, 0);
+    if (visible === null) return false;
+    const scope =
+      input.acknowledgedScopes.get(`${connection.id}\u0000${input.conversationId}`) ??
+      boundScopeOf(connection) ??
+      visible;
+    return scopeMatches(scope, input.scope);
+  });
 }
 
 /**

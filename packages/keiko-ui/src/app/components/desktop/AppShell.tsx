@@ -36,6 +36,7 @@ import {
   removeConnectedScope,
   boundScopeOf,
   filesChatBindScope,
+  hasOtherFilesScopeOwner,
   totalSourceCap,
   type GitChangeBindSelection,
 } from "./hooks/workspaceActions";
@@ -454,6 +455,14 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
   if (win?.type !== "chat") return undefined;
   const value = win.cfg["chatId"];
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function chatWindowConversationIds(windows: readonly AppWindow[]): Map<string, string | undefined> {
+  const conversations = new Map<string, string | undefined>();
+  for (const window of windows) {
+    if (window.type === "chat") conversations.set(window.id, chatIdFromWindow(window));
+  }
+  return conversations;
 }
 
 export function persistedChatProjectPath(win: AppWindow | undefined): string | undefined {
@@ -887,6 +896,25 @@ function AppShellInner(): ReactNode {
   const wsRef = useRef<HTMLDivElement>(null);
   const wsWinsForBindingRef = useRef<readonly AppWindow[] | null>(null);
   const wsConnectionsForBindingRef = useRef<readonly Connection[]>([]);
+  const acknowledgedFilesScopesRef = useRef(new Map<string, ChatConnectedScope>());
+  const releasedFilesConnectionsRef = useRef(new Set<string>());
+  const filesScopeOwnedElsewhere = useCallback(
+    (scope: ChatConnectedScope, conversationId: string, excludedConnectionId?: string): boolean =>
+      excludedConnectionId !== undefined &&
+      hasOtherFilesScopeOwner({
+        scope,
+        conversationId,
+        excludedConnectionId,
+        windows: wsWinsForBindingRef.current ?? [],
+        connections: wsConnectionsForBindingRef.current,
+        acknowledgedScopes: acknowledgedFilesScopesRef.current,
+        releasedConnections: releasedFilesConnectionsRef.current,
+        conversationForWindow: (windowId): string | undefined =>
+          chatIdFromWindow(wsWinsForBindingRef.current?.find((window) => window.id === windowId)) ??
+          chatWindowRuntimeTarget(windowId)?.conversationId,
+      }),
+    [],
+  );
   // Operator-configurable grounding caps — fetched once on mount, fall back to compile-time
   // defaults until /api/config resolves (or if an older server omits effectiveGroundingLimits).
   const [groundingLimits, setGroundingLimits] = useState<GroundingLimits>(DEFAULT_GROUNDING_LIMITS);
@@ -997,6 +1025,7 @@ function AppShellInner(): ReactNode {
       attempt: ChatMutationAttempt,
       previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
+      connectionId?: string,
     ): Promise<boolean> => {
       const chat = await resolveChatForWindow(chatWindowId, target);
       if (chat === undefined) {
@@ -1004,7 +1033,7 @@ function AppShellInner(): ReactNode {
       }
       if ((target?.conversationId ?? chat.id) !== chat.id) return false;
       const current =
-        previousScope === null
+        previousScope === null || filesScopeOwnedElsewhere(previousScope, chat.id, connectionId)
           ? effectiveScopes(chat)
           : removeConnectedScope(effectiveScopes(chat), previousScope);
       const lkScopes = effectiveLocalKnowledgeScopes(chat);
@@ -1075,12 +1104,12 @@ function AppShellInner(): ReactNode {
       rejectForLimit,
       rejectForConnectionFailure,
       rememberGroundingChat,
+      filesScopeOwnedElsewhere,
       t,
     ],
   );
   // A restored edge has no persisted path snapshot. Remember its acknowledged scope before
   // draining the next queued root change; enqueue-time snapshots may still be elided.
-  const acknowledgedFilesScopesRef = useRef(new Map<string, ChatConnectedScope>());
   const replaceFilesScope = useCallback(
     async (
       chatWindowId: string,
@@ -1104,6 +1133,7 @@ function AppShellInner(): ReactNode {
               attempt,
               confirmed ?? previousScope,
               target,
+              connectionId,
             );
             if (accepted && attempt.isCurrent() && edgeKey !== undefined) {
               acknowledgedFilesScopesRef.current.set(edgeKey, nextScope);
@@ -1132,6 +1162,7 @@ function AppShellInner(): ReactNode {
       chatWindowId: string,
       scope: ChatConnectedScope,
       target?: ChatUnbindTarget,
+      connectionId?: string,
     ): Promise<boolean> => {
       try {
         return await serializeChatMutation(
@@ -1143,7 +1174,10 @@ function AppShellInner(): ReactNode {
               return rejectForConnectionFailure(t("scope.disconnectError"));
             }
             const current = effectiveScopes(chat);
-            const next = removeConnectedScope(current, scope);
+            if (connectionId !== undefined) releasedFilesConnectionsRef.current.add(connectionId);
+            const next = filesScopeOwnedElsewhere(scope, chat.id, connectionId)
+              ? current
+              : removeConnectedScope(current, scope);
             const persisted = await persistCurrentChatScopes(
               target,
               attempt,
@@ -1153,13 +1187,18 @@ function AppShellInner(): ReactNode {
               updateChatConnectedScopes,
               rememberGroundingChat,
             );
-            if (persisted === undefined) return false;
+            if (persisted === undefined) {
+              if (connectionId !== undefined)
+                releasedFilesConnectionsRef.current.delete(connectionId);
+              return false;
+            }
             session.replaceChat(persisted);
             setSourceConnectionNotice(null);
             return true;
           },
         );
       } catch (error: unknown) {
+        if (connectionId !== undefined) releasedFilesConnectionsRef.current.delete(connectionId);
         return rejectForConnectionFailure(
           t(groundingMutationFailureKey(error, "scope.disconnectError")),
         );
@@ -1168,6 +1207,7 @@ function AppShellInner(): ReactNode {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
     [
       groundingMutationKey,
+      filesScopeOwnedElsewhere,
       rememberGroundingChat,
       rejectForConnectionFailure,
       resolveChatForWindow,
@@ -1446,10 +1486,7 @@ function AppShellInner(): ReactNode {
       changedChatWindowIdsRef.current = new Set();
       return;
     }
-    const current = new Map<string, string | undefined>();
-    for (const win of ws.wins) {
-      if (win.type === "chat") current.set(win.id, chatIdFromWindow(win));
-    }
+    const current = chatWindowConversationIds(ws.wins);
     const previous = chatConversationIdsRef.current;
     const changedWindowIds = new Set<string>();
     chatConversationIdsRef.current = current;
@@ -1473,6 +1510,9 @@ function AppShellInner(): ReactNode {
   useEffect(() => {
     if (ws.wins === null) return;
     const liveEdges = new Set(ws.conns.map((conn) => conn.id));
+    for (const id of releasedFilesConnectionsRef.current) {
+      if (!liveEdges.has(id)) releasedFilesConnectionsRef.current.delete(id);
+    }
     for (const key of acknowledgedFilesScopesRef.current.keys()) {
       if (!liveEdges.has(key.split("\u0000")[0] ?? ""))
         acknowledgedFilesScopesRef.current.delete(key);

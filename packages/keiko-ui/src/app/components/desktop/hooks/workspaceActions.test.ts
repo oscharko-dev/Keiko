@@ -3242,6 +3242,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
       "chat-1",
       expect.objectContaining({ root: "/data/docs" }),
       { conversationId: "chat-private", projectPath: "/private" },
+      edge.id,
     );
   });
 

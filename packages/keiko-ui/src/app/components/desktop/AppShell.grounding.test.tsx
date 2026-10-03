@@ -33,6 +33,7 @@ interface WorkspaceHookOptions {
     chatWindowId: string,
     scope: ChatConnectedScope,
     target?: ChatUnbindTarget,
+    connectionId?: string,
   ) => boolean | Promise<boolean>;
   readonly onConnectorBind?: (
     chatWindowId: string,
@@ -1685,6 +1686,109 @@ describe("AppShell grounding connections", () => {
       after: false,
       projectRoot: "/repo/git-bound",
     });
+  });
+
+  it("retains another Files edge's source when one shared folder binding moves", async (): Promise<void> => {
+    const oldScope = fileScope("/manual-shared");
+    const active = chat({ connectedScopes: [oldScope], updatedAt: 1 });
+    mocks.state.session = { ...mocks.state.session!, activeChat: active, chats: [active] };
+    let updatedAt = 1;
+    mocks.updateChatConnectedScopes.mockImplementation(
+      async (_id, scopes: ChatConnectedScope[] | null) => ({
+        chat: chat({
+          connectedScopes: scopes ?? [],
+          updatedAt: ++updatedAt,
+          groundingScopeIdentity: "gsi-v1:" + "c".repeat(64),
+        }),
+      }),
+    );
+    const edges: Connection[] = [
+      { id: "shared-first", a: "files-1", b: "chat-window", boundRoot: "/manual-shared" },
+      { id: "shared-second", a: "files-2", b: "chat-window", boundRoot: "/manual-shared" },
+    ];
+    const windows = [
+      win("files", { root: oldScope.root }, "files-1"),
+      win("files", { root: oldScope.root }, "files-2"),
+      win("chat", { chatId: active.id, projectPath: "/repo" }, "chat-window"),
+    ];
+    mocks.state.workspaceResult = workspaceResult(windows, edges);
+    const view = render(<AppShell />);
+    await screen.findByTestId("workspace");
+    const nextScope = fileScope("/manual-new");
+    mocks.state.workspaceResult = workspaceResult(
+      [{ ...windows[0]!, cfg: { root: nextScope.root } }, ...windows.slice(1)],
+      edges,
+    );
+    view.rerender(<AppShell />);
+    await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalled());
+    expect(mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[1]).toEqual([
+      oldScope,
+      expect.objectContaining({ root: nextScope.root }),
+    ]);
+    expect(mocks.state.session?.replaceChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        groundingScopeIdentity: "gsi-v1:" + "c".repeat(64),
+      }),
+    );
+    await act(async (): Promise<void> => {
+      await mocks.state.workspaceOptions?.onScopeUnbind?.(
+        "chat-window",
+        nextScope,
+        undefined,
+        "shared-first",
+      );
+    });
+    expect(mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[1]).toEqual([oldScope]);
+    await act(async (): Promise<void> => {
+      await mocks.state.workspaceOptions?.onScopeUnbind?.(
+        "chat-window",
+        oldScope,
+        undefined,
+        "shared-second",
+      );
+    });
+    expect(mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[1]).toBeNull();
+  });
+
+  it("releases a shared source only after both Files edges disconnect before React redraws", async (): Promise<void> => {
+    const scope = fileScope("/manual-shared");
+    const active = chat({ connectedScopes: [scope], updatedAt: 1 });
+    mocks.state.session = { ...mocks.state.session!, activeChat: active, chats: [active] };
+    let updatedAt = 1;
+    mocks.updateChatConnectedScopes.mockImplementation(
+      async (_id, scopes: ChatConnectedScope[] | null) => ({
+        chat: chat({ connectedScopes: scopes ?? [], updatedAt: ++updatedAt }),
+      }),
+    );
+    const edges: Connection[] = [
+      { id: "shared-first", a: "files-1", b: "chat-window", boundRoot: "/manual-shared" },
+      { id: "shared-second", a: "files-2", b: "chat-window", boundRoot: "/manual-shared" },
+    ];
+    mocks.state.workspaceResult = workspaceResult(
+      [
+        win("files", { root: scope.root }, "files-1"),
+        win("files", { root: scope.root }, "files-2"),
+        win("chat", { chatId: active.id, projectPath: "/repo" }, "chat-window"),
+      ],
+      edges,
+    );
+    await renderMounted();
+    await act(async (): Promise<void> => {
+      const unbind = mocks.state.workspaceOptions?.onScopeUnbind;
+      await Promise.all([
+        unbind?.("chat-window", scope, undefined, "shared-first"),
+        unbind?.("chat-window", scope, undefined, "shared-second"),
+      ]);
+    });
+    expect(mocks.updateChatConnectedScopes.mock.calls.map((call) => call[1])).toEqual([
+      [scope],
+      null,
+    ]);
+    await act(async (): Promise<void> => {
+      await mocks.state.workspaceOptions?.onScopeBind?.("chat-window", scope);
+      await mocks.state.workspaceOptions?.onScopeUnbind?.("chat-window", scope);
+    });
+    expect(mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[1]).toBeNull();
   });
 
   it("replaces a restored Files edge after an in-flight initial acknowledgement", async (): Promise<void> => {
