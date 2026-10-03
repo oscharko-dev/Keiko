@@ -63,7 +63,7 @@ let nextSourceGeneration = 0;
 const MAX_SHARED_CONNECTIONS = 3;
 const STREAM_LEASE_MS = 5_000;
 let budgetTimer: number | undefined;
-let budgetCursor = 0;
+const budgetCursors = { essential: 0, background: 0 };
 
 export interface SharedEventSourceOptions {
   readonly priority?: "essential" | "background";
@@ -293,12 +293,24 @@ function hasLease(entry: SharedEventSourceEntry): boolean {
 
 function rotateEntries(
   entries: readonly SharedEventSourceEntry[],
-  rotate: boolean,
+  slots: number,
+  priority: "essential" | "background",
 ): SharedEventSourceEntry[] {
   if (entries.length === 0) return [];
-  if (rotate) budgetCursor = (budgetCursor + MAX_SHARED_CONNECTIONS) % entries.length;
-  const offset = budgetCursor % entries.length;
+  budgetCursors[priority] = (budgetCursors[priority] + slots) % entries.length;
+  const offset = budgetCursors[priority];
   return [...entries.slice(offset), ...entries.slice(0, offset)];
+}
+
+function orderBudgetGroup(
+  entries: readonly SharedEventSourceEntry[],
+  slots: number,
+  priority: "essential" | "background",
+  rotate: boolean,
+): SharedEventSourceEntry[] {
+  return rotate
+    ? rotateEntries(entries, slots, priority)
+    : [...entries.filter(hasLease), ...entries.filter((entry) => !hasLease(entry))];
 }
 
 function selectBudgetEntries(
@@ -310,12 +322,14 @@ function selectBudgetEntries(
     (entry) => entry.essentialRefCount > 0 && !pinned.includes(entry),
   );
   const background = entries.filter((entry) => entry.essentialRefCount === 0);
-  const order = (group: SharedEventSourceEntry[]): SharedEventSourceEntry[] =>
-    rotate
-      ? rotateEntries(group, true)
-      : [...group.filter(hasLease), ...group.filter((entry) => !hasLease(entry))];
+  const essentialSlots = Math.min(MAX_SHARED_CONNECTIONS - pinned.length, essential.length);
+  const backgroundSlots = MAX_SHARED_CONNECTIONS - pinned.length - essentialSlots;
   return new Set(
-    [...pinned, ...order(essential), ...order(background)].slice(0, MAX_SHARED_CONNECTIONS),
+    [
+      ...pinned,
+      ...orderBudgetGroup(essential, essentialSlots, "essential", rotate),
+      ...orderBudgetGroup(background, backgroundSlots, "background", rotate),
+    ].slice(0, MAX_SHARED_CONNECTIONS),
   );
 }
 
@@ -336,7 +350,10 @@ function refreshStreamBudget(rotate = false): void {
 }
 
 function reconcileCapacity(backgroundStreamsSuspended: boolean): void {
-  if (backgroundStreamsSuspended) budgetCursor = 0;
+  if (backgroundStreamsSuspended) {
+    budgetCursors.essential = 0;
+    budgetCursors.background = 0;
+  }
   refreshStreamBudget();
 }
 
@@ -513,7 +530,8 @@ export function resetSharedEventSourcesForTests(): void {
   }
   sourcesByUrl.clear();
   clearBudgetTimer();
-  budgetCursor = 0;
+  budgetCursors.essential = 0;
+  budgetCursors.background = 0;
   nextSourceGeneration = 0;
   removeVisibilityListenerIfIdle();
 }

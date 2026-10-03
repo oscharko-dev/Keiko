@@ -92,6 +92,74 @@ afterEach(() => {
 });
 
 describe("subscribeSharedEventSource", () => {
+  it.each([4, 7])(
+    "keeps every one of %i roots rotating alongside background settings",
+    async (count) => {
+      vi.useFakeTimers();
+      vi.stubGlobal("EventSource", FakeEventSource);
+      try {
+        const releases = Array.from({ length: count }, (_, index) =>
+          subscribeSharedEventSource(
+            `/api/editor/watch/events?root=${String(index)}`,
+            ["change"],
+            vi.fn(),
+          ),
+        );
+        releases.push(
+          subscribeSharedEventSource("/api/editor/settings/events", ["settings"], vi.fn(), {
+            priority: "background",
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(100_000);
+        const halfway = FakeEventSource.instances.length;
+        await vi.advanceTimersByTimeAsync(100_000);
+        const reopened = new Set(
+          FakeEventSource.instances.slice(halfway).map((source) => source.url),
+        );
+        for (let index = 0; index < count; index += 1)
+          expect(reopened.has(`/api/editor/watch/events?root=${String(index)}`)).toBe(true);
+        expect(FakeEventSource.instances.filter((source) => !source.closed)).toHaveLength(3);
+        releases.forEach((release) => release());
+      } finally {
+        resetSharedEventSourcesForTests();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("admits a later execution handshake among six roots and background settings", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const releases = Array.from({ length: 6 }, (_, index) =>
+        subscribeSharedEventSource(
+          `/api/editor/watch/events?root=${String(index)}`,
+          ["change"],
+          vi.fn(),
+        ),
+      );
+      releases.push(
+        subscribeSharedEventSource("/api/editor/settings/events", ["settings"], vi.fn(), {
+          priority: "background",
+        }),
+      );
+      FakeEventSource.immediateEventType = "open";
+      const execute = vi.fn(() => Promise.resolve("completed"));
+      const pending = withSharedEventSourceOpen(
+        "/api/commands/events",
+        ["command:run"],
+        vi.fn(),
+        execute,
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(pending).resolves.toBe("completed");
+      expect(execute).toHaveBeenCalledOnce();
+      releases.forEach((release) => release());
+    } finally {
+      resetSharedEventSourcesForTests();
+      vi.useRealTimers();
+    }
+  });
   it("constructs a persistent connection only after its origin lease is granted", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     let grant = (): void => undefined;
