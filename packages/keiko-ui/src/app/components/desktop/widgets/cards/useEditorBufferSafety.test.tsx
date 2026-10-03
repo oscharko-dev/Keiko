@@ -347,6 +347,60 @@ describe("passive editor buffer protection", () => {
         .bufferSnapshotCapability,
     });
   });
+  it("serializes the latest coalesced snapshot before considering clean release", async () => {
+    const first = deferred<EditorAgentSnapshotResponse>();
+    const second = deferred<EditorAgentSnapshotResponse>();
+    vi.mocked(postEditorBufferSafetyRequest)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const hook = renderHook(({ value }) => useEditorBufferSafety(value), {
+      initialProps: { value: snapshot(false) },
+    });
+    await waitFor(() => expect(postEditorBufferSafetyRequest).toHaveBeenCalledOnce());
+    hook.rerender({ value: { ...snapshot(), dirtyFiles: ["src/b.ts"] } });
+    const latest = {
+      ...snapshot(),
+      activeFile: "src/c.ts",
+      dirtyFiles: ["src/b.ts", "src/c.ts"],
+      panes: [{ paneId: "main", activeFile: "src/c.ts", openFiles: ["src/b.ts", "src/c.ts"] }],
+    };
+    hook.rerender({ value: latest });
+    hook.unmount();
+    expect(postEditorBufferSafetyRequest).toHaveBeenCalledOnce();
+    first.resolve({ snapshot: snapshot(false) });
+    await waitFor(() => expect(postEditorBufferSafetyRequest).toHaveBeenCalledTimes(2));
+    const publication = vi.mocked(postEditorBufferSafetyRequest).mock.calls[1]?.[0];
+    if (publication?.kind !== "buffer-snapshot") throw new TypeError("Expected queued snapshot");
+    const initial = vi.mocked(postEditorBufferSafetyRequest).mock.calls[0]?.[0];
+    if (initial?.kind !== "buffer-snapshot") throw new TypeError("Expected initial snapshot");
+    expect(publication.snapshot.updatedAt).toBeGreaterThan(initial.snapshot.updatedAt);
+    expect(publication.snapshot).toEqual(
+      expect.objectContaining({ ...latest, updatedAt: expect.any(Number) }),
+    );
+    await act(async () => {
+      second.resolve({ snapshot: publication.snapshot });
+      await second.promise;
+    });
+    expect(postEditorBufferSafetyRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not publish a queued snapshot after disposal during an acknowledgement", async () => {
+    const pending = deferred<EditorAgentSnapshotResponse>();
+    vi.mocked(postEditorBufferSafetyRequest).mockReturnValueOnce(pending.promise);
+    const hook = renderHook(({ value }) => useEditorBufferSafety(value), {
+      initialProps: { value: snapshot() },
+    });
+    await waitFor(() => expect(postEditorBufferSafetyRequest).toHaveBeenCalledOnce());
+    hook.rerender({ value: { ...snapshot(), dirtyFiles: ["src/a.ts", "src/b.ts"] } });
+    resetEditorBufferSafetyForTests();
+    await act(async () => {
+      pending.resolve({ snapshot: snapshot() });
+      await pending.promise;
+    });
+    hook.unmount();
+    expect(postEditorBufferSafetyRequest).toHaveBeenCalledOnce();
+  });
+
   it("reports refusal without raw paths, body text or capability and never releases dirty state", async () => {
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);

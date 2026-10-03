@@ -200,12 +200,10 @@ async function flush(owner: BufferOwner): Promise<void> {
   if (owner.running || owner.disposed) return;
   owner.running = true;
   try {
-    while (owner.latest !== null && !owner.disposed) {
-      const snapshot = owner.latest;
-      owner.latest = null;
-      await acknowledge(owner, snapshot);
-    }
-    await releaseCleanOwner(owner);
+    const snapshot = owner.latest;
+    owner.latest = null;
+    if (snapshot !== null) await acknowledge(owner, snapshot);
+    if (owner.latest === null) await releaseCleanOwner(owner);
   } catch (error) {
     owner.failed = true;
     reportClientDiagnostic(...failureDiagnostic(error));
