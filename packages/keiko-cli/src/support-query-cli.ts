@@ -26,7 +26,7 @@ import {
   activityLogFailureClassesOf,
   DEFAULT_SUPPORT_QUERY_LIMITS,
   renderSupportQuery,
-  runSupportQuery,
+  executeLocalSupportQuery,
   supportQueryJson,
   type SupportClosureSelection,
   type SupportEventFilter,
@@ -414,22 +414,7 @@ export function executeSupportQuery(
   limits: SupportQueryLimits,
   options: { readonly trigger: "query" | "export"; readonly scanner?: ActivityLogScannerDeps },
 ): SupportQueryRun {
-  const files = listActivityLogStoreFiles(stateDir);
-  const scanner = new ActivityLogScanner(stateDir, options.scanner);
-  const pass = ensureSegmentManifests(stateDir, files, scanner, {
-    trigger: options.trigger,
-    persist: true,
-    rebuild: false,
-  });
-  const result = runSupportQuery({
-    files,
-    manifests: pass.manifests,
-    manifestStats: pass.stats,
-    scanner: new ActivityLogScanner(stateDir, options.scanner),
-    selection,
-    limits,
-  });
-  return { result, manifestStats: pass.stats };
+  return executeLocalSupportQuery(stateDir, selection, limits, options);
 }
 
 function activityErrorKind(error: unknown): ActivityLogErrorKind {
