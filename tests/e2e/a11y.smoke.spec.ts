@@ -292,12 +292,18 @@ const openDeleteConfirm: SurfaceOpener = async (page, request, theme) => {
   expect(await dialog.evaluate((element) => element.tagName)).toBe("DIALOG");
   const confirm = dialog.getByRole("button", { name: "Delete" });
   const cancel = dialog.getByRole("button", { name: "Cancel" });
+  // macOS WebKit follows Safari's default field-only Tab navigation; Option-Tab includes buttons.
+  // Linux WebKit and the other engines retain ordinary Tab navigation.
+  const tab =
+    process.platform === "darwin" && page.context().browser()?.browserType().name() === "webkit"
+      ? "Alt+Tab"
+      : "Tab";
   await expect(confirm).toBeFocused();
-  await page.keyboard.press("Tab");
+  await page.keyboard.press(tab);
   await expect(cancel).toBeFocused();
-  await page.keyboard.press("Tab");
+  await page.keyboard.press(tab);
   await expect(confirm).toBeFocused();
-  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press(`Shift+${tab}`);
   await expect(cancel).toBeFocused();
   return ".ed-dirty-dialog";
 };

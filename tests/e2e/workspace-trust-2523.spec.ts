@@ -40,9 +40,15 @@ async function runPaletteCommand(page: Page, title: string): Promise<void> {
   const query = page.getByRole("combobox", { name: "Command query" });
   await expect(query).toBeVisible();
   await query.fill(`>${title}`);
-  const option = page.getByRole("option").filter({ hasText: title }).first();
+  const option = page.getByRole("option").filter({ hasText: title });
+  await expect(option).toHaveCount(1);
   await expect(option).toBeVisible();
-  await option.click();
+  await expect(option).toHaveAttribute("aria-selected", "true");
+  await expect(query).toBeFocused();
+  // Native select options have no independent pointer box in WebKit; activate the selected
+  // command through the palette's normal keyboard path instead of clicking browser-owned chrome.
+  await query.press("Enter");
+  await expect(query).toBeHidden();
 }
 
 async function expectNoPaletteCommand(page: Page, title: string): Promise<void> {
