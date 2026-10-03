@@ -1,7 +1,11 @@
 "use client";
 
-import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import {
+  createSameOriginApiEventSource,
+  sameOriginApiEventSourceUrl,
+} from "../../../../../lib/safe-event-source";
+import {
+  acquirePersistentBrowserStreamCapacity,
   backgroundBrowserStreamsSuspended,
   subscribeBrowserStreamCapacity,
 } from "../../../../../lib/browser-stream-capacity";
@@ -21,6 +25,7 @@ type SharedEventListener = (event: MessageEvent<string>) => void;
 interface SharedEventSourceEntry {
   readonly url: string;
   source: EventSource | null;
+  capacityLease: (() => void) | undefined;
   readonly subscribersByType: Map<string, Set<SharedEventListener>>;
   readonly dispatchersByType: Map<string, EventListener>;
   refCount: number;
@@ -128,6 +133,9 @@ function dispatcherFor(entry: SharedEventSourceEntry, type: string): EventListen
 }
 
 function closeEntrySource(entry: SharedEventSourceEntry): void {
+  const release = entry.capacityLease;
+  entry.capacityLease = undefined;
+  release?.();
   if (entry.source === null) return;
   for (const [type, dispatcher] of entry.dispatchersByType) {
     removeSourceListener(entry.source, type, dispatcher);
@@ -201,12 +209,25 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   if (
     entry.refCount === 0 ||
     entry.source !== null ||
+    entry.capacityLease !== undefined ||
     (entry.essentialRefCount === 0 && backgroundBrowserStreamsSuspended()) ||
     documentHidden() ||
-    typeof EventSource === "undefined"
+    typeof EventSource === "undefined" ||
+    sameOriginApiEventSourceUrl(entry.url) === null
   ) {
     return;
   }
+  entry.capacityLease = acquirePersistentBrowserStreamCapacity(
+    () => connectEntrySource(entry),
+    (reason) => {
+      closeEntrySource(entry);
+      if (reason === "unavailable") scheduleReconnect(entry);
+      queueMicrotask(() => refreshStreamBudget());
+    },
+  );
+}
+
+function connectEntrySource(entry: SharedEventSourceEntry): void {
   const source = createSameOriginApiEventSource(resumeUrl(entry));
   if (source === null) return;
   nextSourceGeneration += 1;
@@ -261,7 +282,8 @@ function refreshStreamBudget(rotate = false): void {
     ),
   );
   for (const entry of sourcesByUrl.values()) {
-    if (!selected.has(entry) && entry.source !== null) suspendEntry(entry);
+    if (!selected.has(entry) && (entry.source !== null || entry.capacityLease !== undefined))
+      suspendEntry(entry);
   }
   for (const entry of selected) if (entry !== undefined) openEntrySource(entry);
   if (!overBudget) {
@@ -314,6 +336,7 @@ function entryForUrl(url: string): SharedEventSourceEntry {
   const entry: SharedEventSourceEntry = {
     url,
     source: null,
+    capacityLease: undefined,
     subscribersByType: new Map(),
     dispatchersByType: new Map(),
     refCount: 0,

@@ -10,6 +10,18 @@ import {
   subscribeSharedEventSource,
 } from "./sharedEventSource";
 
+const acquireCapacity = vi.hoisted(() =>
+  vi.fn((onGranted: () => void): (() => void) => {
+    onGranted();
+    return () => undefined;
+  }),
+);
+
+vi.mock("../../../../../lib/browser-stream-capacity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../../lib/browser-stream-capacity")>()),
+  acquirePersistentBrowserStreamCapacity: acquireCapacity,
+}));
+
 interface StreamRepair {
   readonly acknowledged: boolean;
   readonly repairCorrelationId: string;
@@ -73,9 +85,31 @@ afterEach(() => {
   resetClientDiagnosticWriter();
   ensureLocalSession.mockClear();
   reportRecovered.mockClear();
+  acquireCapacity.mockClear();
 });
 
 describe("subscribeSharedEventSource", () => {
+  it("constructs a persistent connection only after its origin lease is granted", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    let grant = (): void => undefined;
+    const releaseCapacity = vi.fn();
+    acquireCapacity.mockImplementationOnce((onGranted) => {
+      grant = onGranted;
+      return releaseCapacity;
+    });
+    const unsubscribe = subscribeSharedEventSource(
+      "/api/commands/events",
+      ["command:run"],
+      vi.fn(),
+    );
+    expect(FakeEventSource.instances).toHaveLength(0);
+    grant();
+    expect(FakeEventSource.instances).toHaveLength(1);
+    unsubscribe();
+    expect(releaseCapacity).toHaveBeenCalledOnce();
+    expect(FakeEventSource.instances[0]?.closed).toBe(true);
+  });
+
   it("bounds persistent connections and rotates queued roots without losing replay cursors", () => {
     vi.useFakeTimers();
     vi.stubGlobal("EventSource", FakeEventSource);
