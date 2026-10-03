@@ -21,6 +21,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
 import {
+  ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
   analyzeLogText,
   analyzeSupportReport,
   findTimeline,
@@ -39,8 +40,11 @@ import {
   ACTIVITY_LOG_LEGACY_CURRENT_FILE_NAME,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  SUPPORT_INCIDENT_DIRECTORY_NAME,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+import { MEMORY_DB_FILENAME, MEMORY_DIR_NAME } from "@oscharko-dev/keiko-memory-vault";
+import { UI_DB_FILENAME } from "@oscharko-dev/keiko-server";
 import {
   fixtureLine,
   fixtureProcess,
@@ -64,6 +68,7 @@ import { runSupportCli } from "./support.js";
 import { publishSupportReportFile, readSupportReportFile } from "./support-export.js";
 import { SafeArtifactFileError } from "@oscharko-dev/keiko-security/fs-hardening";
 import { emitSupportReportFailed } from "./support-report-evidence.js";
+import { defaultUiDataDir } from "./state-paths.js";
 
 const CORRELATION = "support-report-cli-0001";
 let root: string;
@@ -635,6 +640,38 @@ describe("support report CLI and private publication", () => {
     );
     for (const marker of ["raw-customer-ui", "private-document", "private-credential", root])
       expect(report).not.toContain(marker);
+  });
+
+  // Relocated from the retired store-fingerprint collector's pins (#3239): export reads only the
+  // Activity Log and never opens a store. A corrupt store file therefore stays byte-for-byte as
+  // found (no quarantine, repair or WAL sidecar), no vault key is minted, no missing store is
+  // created, and no store bytes reach the report.
+  it("never opens, repairs, creates or keys a store while exporting", async () => {
+    const corrupt = "store-body-marker: not a sqlite header";
+    const stores = [
+      { directory: defaultUiDataDir(stateDir), file: UI_DB_FILENAME },
+      { directory: join(stateDir, MEMORY_DIR_NAME), file: MEMORY_DB_FILENAME },
+    ];
+    for (const { directory, file } of stores) {
+      mkdirSync(directory, { mode: 0o700 });
+      writeFileSync(join(directory, file), corrupt);
+    }
+    const before = new Set(readdirSync(stateDir));
+    await exportReport();
+    for (const { directory, file } of stores) {
+      expect(readdirSync(directory)).toEqual([file]);
+      expect(readFileSync(join(directory, file), "utf8")).toBe(corrupt);
+    }
+    // The only state export adds is the Activity Log's own; no store directory appears.
+    const activityLogState = new Set([
+      ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
+      SUPPORT_INCIDENT_DIRECTORY_NAME,
+    ]);
+    const created = readdirSync(stateDir).filter(
+      (name) => !before.has(name) && !activityLogState.has(name),
+    );
+    expect(created).toEqual([]);
+    expect(readFileSync(path, "utf8")).not.toContain("store-body-marker");
   });
 
   it("refuses every inclusion option before any output or diagnostic artifact", async () => {
