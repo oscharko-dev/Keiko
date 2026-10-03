@@ -64,7 +64,8 @@ permissions: {}
 concurrency:
   # Code-head and metadata events cannot displace one another before either starts. Each class
   # coalesces independently per PR; pushes supersede stale code evidence, while repeated metadata
-  # edits supersede stale metadata evidence. Non-PR integration runs remain groups of one.
+  # edits supersede stale metadata evidence. Non-PR integration runs remain groups of one. Both
+  # classes analyze the same SonarCloud pull request, so `coverage-sonar` serializes that per PR.
   group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -824,6 +825,19 @@ jobs:
       - coverage-scripts
       - coverage-ui
     runs-on: ubuntu-latest
+    # One SonarCloud analysis per pull request at a time (ADR-0157 D5). A title or body edit reruns
+    # the matrix on the unchanged head in the separate `metadata` group, and SonarCloud refuses a
+    # report whose analysis is older than one it has already processed for the pull request: on
+    # PR #3679 the push run's scan started first, finished last, was refused, and left the required
+    # `SonarCloud Code Analysis` check on the head `cancelled` with the quality gate OK. Serialized, a
+    # scan starts only after the previous one has submitted, so reports arrive in analysis order.
+    # Keyed on the pull request, not the head: a superseded run's scan files under the same pull
+    # request. Not cancelled: the waiting run still owes its own verdict. One pending slot suffices,
+    # because each workflow-level group holds one live run per pull request. Everything that is not
+    # a pull request keeps a group of one, for the reason the workflow-level `concurrency` records.
+    concurrency:
+      group: ci-sonar-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+      cancel-in-progress: false
     # One full hosted scan currently takes about 15 minutes. ADR-0139 D6 permits three attempts
     # with 30/60-second backoff, so 50 minutes bounds the designed worst case without killing the
     # final permitted attempt.
