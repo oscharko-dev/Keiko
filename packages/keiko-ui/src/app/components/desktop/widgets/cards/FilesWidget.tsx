@@ -156,6 +156,15 @@ function gitPathFromTreePath(visibleDirectoryPath: string | null, path: string):
   return path.startsWith(prefix) ? path.slice(prefix.length) : path;
 }
 
+function markedGitPath(path: string, markedPaths: ReadonlySet<string>): boolean {
+  let candidate: string | null = path;
+  while (candidate !== null) {
+    if (markedPaths.has(candidate) || markedPaths.has(`${candidate}/`)) return true;
+    candidate = entryParent(candidate);
+  }
+  return false;
+}
+
 interface DirectoryState {
   readonly correlationId?: string | undefined;
   readonly entries: readonly FilesTreeEntry[];
@@ -190,6 +199,28 @@ interface GitDecoration {
   readonly badge: string;
   readonly labelKey: FilesWidgetMessageKey;
   readonly state: "changed" | "conflicted";
+}
+
+interface EntryVisibility {
+  readonly hidden: boolean;
+  readonly ignored: boolean;
+  readonly unversioned: boolean;
+  readonly muted: boolean;
+  readonly label: string | undefined;
+  readonly tooltip: string | undefined;
+}
+
+function entryVisibilityLabels(
+  entry: FilesTreeEntry,
+  flags: Pick<EntryVisibility, "hidden" | "ignored" | "unversioned">,
+  t: FilesWidgetTranslate,
+): string[] {
+  return [
+    flags.hidden ? t("tree.hidden") : "",
+    flags.ignored ? t("git.ignored") : "",
+    flags.unversioned ? t("git.change.untracked", { path: entry.path }) : "",
+    !entry.readable && entry.kind === "directory" ? t("tree.unavailable") : "",
+  ].filter(Boolean);
 }
 
 // The inline editor reused for all three create/rename flows. `parentPath` is the root-relative
@@ -1403,6 +1434,18 @@ export function FilesWidget({
       ),
     [currentDirectoryPath, gitStatusState.status],
   );
+  const unversionedGitPaths = useMemo(
+    () =>
+      new Set(
+        gitChanges
+          .filter(
+            (change) =>
+              change.untracked || change.indexStatus === "?" || change.worktreeStatus === "?",
+          )
+          .map((change) => treePathFromGitPath(currentDirectoryPath, change.path)),
+      ),
+    [currentDirectoryPath, gitChanges],
+  );
   // GEN-PERF-WIDGET-004 — memoize the path->change Map on [gitChanges] so it is not rebuilt
   // over all (up to 500) git changes on every render (incl. every pointermove-driven one).
   const gitChangeByPath = useMemo(
@@ -1511,27 +1554,17 @@ export function FilesWidget({
     activeFileChangeRef.current?.(entry.path, fileRoot);
   };
 
-  const visibilityOf = (
-    entry: FilesTreeEntry,
-  ): {
-    hidden: boolean;
-    ignored: boolean;
-    label: string | undefined;
-    tooltip: string | undefined;
-  } => {
+  const visibilityOf = (entry: FilesTreeEntry): EntryVisibility => {
     const hidden = entry.name.startsWith(".");
-    const ignored = entry.path.split("/").some((_segment, index, segments) => {
-      const path = segments.slice(0, index + 1).join("/");
-      return ignoredGitPaths.has(path) || ignoredGitPaths.has(`${path}/`);
-    });
-    const labels = [
-      hidden ? tGit("tree.hidden") : "",
-      ignored ? tGit("git.ignored") : "",
-      !entry.readable && entry.kind === "directory" ? tGit("tree.unavailable") : "",
-    ].filter(Boolean);
+    const ignored = markedGitPath(entry.path, ignoredGitPaths);
+    const unversioned = markedGitPath(entry.path, unversionedGitPaths);
+    const muted = !entry.readable || ignored || (presentation === "project" ? unversioned : hidden);
+    const labels = entryVisibilityLabels(entry, { hidden, ignored, unversioned }, tGit);
     return {
       hidden,
       ignored,
+      unversioned,
+      muted,
       label: labels.length > 0 ? [entry.name, ...labels].join(", ") : undefined,
       tooltip: labels.length > 0 ? labels.join(", ") : undefined,
     };
@@ -1578,6 +1611,8 @@ export function FilesWidget({
             aria-label={visibility.label}
             data-hidden={visibility.hidden || undefined}
             data-git-ignored={visibility.ignored || undefined}
+            data-unversioned={visibility.unversioned || undefined}
+            data-muted={visibility.muted}
             aria-selected={currentDirectoryPath === entry.path}
             data-active={currentDirectoryPath === entry.path}
             data-readable={entry.readable}
@@ -1673,6 +1708,8 @@ export function FilesWidget({
         data-path={entry.path}
         data-hidden={visibility.hidden || undefined}
         data-git-ignored={ignored || undefined}
+        data-unversioned={visibility.unversioned || undefined}
+        data-muted={visibility.muted}
         draggable={mutationsEnabled && entry.readable}
         onContextMenu={(event) => openContextMenu(event, entry)}
         onPointerEnter={(event) => scheduleTreeTooltip(event, entryTip)}
@@ -1697,7 +1734,7 @@ export function FilesWidget({
         <span className="tr-caret tr-caret-ghost" aria-hidden="true">
           <ChevronRIcon size={11} />
         </span>
-        {visibility.hidden || ignored || !entry.readable ? (
+        {visibility.muted ? (
           <span className="fi-fallback">
             <FileGlyphIcon size={14} />
           </span>

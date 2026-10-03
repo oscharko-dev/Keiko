@@ -19,15 +19,12 @@
   color: var(--text-primary);
 }
 
-.cmpEntry:is([data-hidden="true"], [data-git-ignored="true"], [data-readable="false"])
-  :global(.tr-name) {
+.cmpEntry[data-muted="true"] :global(.tr-name) {
   font-weight: 300;
 }
 
-.cmpEntry:is([data-hidden="true"], [data-git-ignored="true"], [data-readable="false"])
-  :global(.tr-name),
-.cmpEntry:is([data-hidden="true"], [data-git-ignored="true"], [data-readable="false"])
-  :global(.fi-fallback) {
+.cmpEntry[data-muted="true"] :global(.tr-name),
+.cmpEntry[data-muted="true"] :global(.fi-fallback) {
   color: var(--fg-dim);
 }
 

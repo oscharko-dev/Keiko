@@ -103,6 +103,36 @@ function gitChange(
   };
 }
 
+function mockProjectVersioningTree(): void {
+  vi.mocked(fetchGitStatus).mockResolvedValue(
+    availableGitStatus([
+      gitChange("ignored/", "!"),
+      gitChange("new/", "?"),
+      gitChange("loose.md", "?"),
+      gitChange("mixed/new.md", "?"),
+    ]),
+  );
+  vi.mocked(fetchFilesTree).mockImplementation(async (_root, path = "") => ({
+    root: "/repo",
+    path,
+    truncated: false,
+    entries:
+      path === ""
+        ? [".github", ".gitignore", ".coderabbit.yaml", "ignored", "new", "loose.md", "mixed"].map(
+            (name) => ({
+              ...treeEntryBase,
+              name,
+              path: name,
+              kind:
+                name === ".gitignore" || name === ".coderabbit.yaml" || name === "loose.md"
+                  ? "file"
+                  : "directory",
+            }),
+          )
+        : [{ ...treeEntryBase, name: "inside.md", path: "new/inside.md", kind: "file" }],
+  }));
+}
+
 function deferred<T>(): {
   readonly promise: Promise<T>;
   readonly resolve: (value: T) => void;
@@ -1287,10 +1317,47 @@ describe("FilesWidget", () => {
       truncated: false,
       entries: [{ ...treeEntryBase, name: ".notes.md", path: ".notes.md", kind: "file" }],
     });
-    render(<FilesWidget root="/notes" />);
+    const files = render(<FilesWidget root="/notes" />);
     const row = await screen.findByRole("treeitem", { name: ".notes.md, Hidden" });
     expect(row).not.toHaveAttribute("data-git-ignored");
+    expect(row).toHaveAttribute("data-muted", "true");
     expect(screen.queryByText("Git unavailable")).toBeNull();
+    files.unmount();
+    render(<FilesWidget root="/notes" presentation="project" />);
+    expect(await screen.findByRole("treeitem", { name: ".notes.md, Hidden" })).toHaveAttribute(
+      "data-muted",
+      "false",
+    );
+  });
+
+  it("uses Git versioning for project dimming while directory views dim hidden names", async () => {
+    mockProjectVersioningTree();
+    const project = render(<FilesWidget root="/repo" presentation="project" />);
+    const trackedHidden = await screen.findByRole("treeitem", { name: ".coderabbit.yaml, Hidden" });
+    expect(trackedHidden).toHaveAttribute("data-hidden", "true");
+    expect(trackedHidden).toHaveAttribute("data-muted", "false");
+    expect(trackedHidden.querySelector("img.fi-img")).not.toBeNull();
+    expect(screen.getByRole("treeitem", { name: ".github, Hidden" })).toHaveAttribute(
+      "data-muted",
+      "false",
+    );
+    expect(screen.getByRole("treeitem", { name: /^mixed/u })).toHaveAttribute(
+      "data-muted",
+      "false",
+    );
+    for (const path of ["ignored", "new", "loose.md"])
+      expect(project.container.querySelector(`[data-path="${path}"]`)).toHaveAttribute(
+        "data-muted",
+        "true",
+      );
+    await userEvent.click(screen.getByRole("treeitem", { name: /^new/u }));
+    expect((await screen.findByText("inside.md")).closest("[data-muted='true']")).not.toBeNull();
+    project.unmount();
+    render(<FilesWidget root="/repo" />);
+    expect(await screen.findByRole("treeitem", { name: ".gitignore, Hidden" })).toHaveAttribute(
+      "data-muted",
+      "true",
+    );
   });
 
   it("navigates back, forward and up inside a bound project without changing its root", async () => {
