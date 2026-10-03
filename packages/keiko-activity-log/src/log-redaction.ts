@@ -632,7 +632,7 @@ function isConformingFrame(value: unknown): value is string {
 // Browser coordinates are untrusted even after wire validation. Digest the asset identity here,
 // at the persistence boundary, so a forged but shape-conforming basename cannot disclose content.
 // Operators can map the domain-separated digest back to an asset in the exact shipped build.
-function redactBrowserFrame(frame: string): string {
+export function redactBrowserFrame(frame: string): string {
   if (!isClientDiagnosticFrame(frame)) return frame;
   const coordinateOffset = frame.indexOf(":");
   const identity = sha256Hex(

@@ -13,6 +13,8 @@ import {
   recordRegisteredFailureIncident,
   listSupportIncidents,
   dismissSupportIncident,
+  drainSupportIncidentCandidates,
+  setSupportIncidentTriggerForTests,
 } from "./support-incident.js";
 import {
   computeDefectFingerprint,
@@ -44,6 +46,7 @@ beforeEach((): void => {
 });
 afterEach((): void => {
   race.hook = undefined;
+  setSupportIncidentTriggerForTests(undefined);
   closeFileServerLogSinks();
   rmSync(stateDir, { recursive: true, force: true });
 });
@@ -95,7 +98,7 @@ function writeStage(
     ),
   );
 }
-function writeFailure(): void {
+function writeFailure(frame = FRAME): void {
   const operation = ACTIVITY_LOG_OPERATION_REGISTRY.find(
     (entry) => entry.op === "client.diagnostic",
   );
@@ -115,7 +118,7 @@ function writeFailure(): void {
         clientNoteDigest: "b".repeat(64),
         clientKind: "boundary",
         renderFailure: "shell",
-        frames: [FRAME],
+        frames: [frame],
         errorClass: "Error",
         causeChain: ["TypeError"],
       },
@@ -137,6 +140,21 @@ function report(): ReturnType<typeof parseSupportReport> {
   return parsed;
 }
 describe("canonical client incident version compatibility and occurrence claims", (): void => {
+  it("exports a raw browser chunk failure through the real sink and automatic trigger", (): void => {
+    setSupportIncidentTriggerForTests(true);
+    const rawFrame = "dist/ui/static/_next/static/chunks/customerpayroll.js:4:2";
+    writeFailure(rawFrame);
+    drainSupportIncidentCandidates();
+    const [incident] = listSupportIncidents(stateDir);
+    expect(incident?.fingerprint.frameCount).toBe(1);
+    const response = createDesktopSupportReport(stateDir, "CustomerNotebook.docx");
+    const parsed = parseSupportReport(response.reportJson);
+    const extracted = inflateSync(Buffer.from(parsed.evidence.payload, "base64")).toString("utf8");
+    expect(parsed.incident.frameCount).toBe(1);
+    expect(analyzeSupportReport(response.reportJson).selection.status).toBe("complete");
+    expect(extracted).toMatch(/chunks\/sha256-[a-f0-9]{64}\.js:4:2/u);
+    expect(extracted).not.toContain("customerpayroll");
+  });
   it("exports and reparses actual compressed v2 evidence with context and private causal joins", (): void => {
     writeFailure();
     created("CustomerPayroll.xlsx");

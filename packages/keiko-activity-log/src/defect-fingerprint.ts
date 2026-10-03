@@ -11,7 +11,7 @@ import {
   type SupportIncidentCorrelation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isPersistedClientDiagnosticFrame } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import { isRedactedLogLabel } from "./log-redaction.js";
+import { isRedactedLogLabel, redactBrowserFrame } from "./log-redaction.js";
 import { FRAME_SHAPE_PATTERN } from "./stack-frames.js";
 
 /**
@@ -52,11 +52,13 @@ export function registeredFailureFingerprintInput(
     surface: ACTIVITY_LOG_OPERATION_SURFACES[failure.op] ?? "unattributed",
     op: failure.op,
     errorKind: activityLogErrorKindOr(failure.errorKind, "unknown"),
-    frames: frames.filter(
-      (frame): frame is string =>
-        typeof frame === "string" &&
-        (FRAME_SHAPE_PATTERN.test(frame) || (client && isPersistedClientDiagnosticFrame(frame))),
-    ),
+    frames: frames
+      .map((frame) => (client && typeof frame === "string" ? redactBrowserFrame(frame) : frame))
+      .filter(
+        (frame): frame is string =>
+          typeof frame === "string" &&
+          (FRAME_SHAPE_PATTERN.test(frame) || (client && isPersistedClientDiagnosticFrame(frame))),
+      ),
   };
 }
 
