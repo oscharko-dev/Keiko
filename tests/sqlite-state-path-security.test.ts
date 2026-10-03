@@ -94,6 +94,7 @@ describe("production SQLite startup refusal evidence", (): void => {
         if (store === "ui")
           buildUiHandlerDeps({
             configPath: undefined,
+            evidenceDir: undefined,
             env: { KEIKO_UI_DATA_DIR: state },
             activityLog: sink,
           });
