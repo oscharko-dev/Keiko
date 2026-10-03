@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { analyzeSupportReport } from "../../packages/keiko-activity-log/dist/reader/index.js";
+import { runSupportCli } from "../../packages/keiko-cli/dist/support.js";
+import {
+  fixtureLine,
+  fixtureProcess,
+  segmentIdentity,
+  writeFixtureSegment,
+} from "../../tests/support/activity-log-segments.ts";
 import {
   customerShapeSupportReportEvidence,
+  customerShapeSupportReportCorrelations,
   customerShapeSupportTimelineEvidence,
 } from "../lib/customer-shape-evidence.mjs";
 
@@ -9,12 +21,20 @@ const DIAGNOSTIC = {
   op: "server.diagnostic.failure",
   correlationId: "synthetic-request",
   parentCorrelationId: RUN,
+  ts: "2026-10-03T12:00:00.001Z",
+  seq: 2,
+  pid: 4242,
   errorKind: "internal",
   frames: ["packages/keiko-server/dist/route.js:1:1"],
 };
 const FAILURE = {
   op: "coding-sidecar.gateway.turn-failed",
   runId: RUN,
+  correlationId: DIAGNOSTIC.correlationId,
+  parentCorrelationId: RUN,
+  ts: "2026-10-03T12:00:00.000Z",
+  seq: 1,
+  pid: 4242,
   failureCode: "stream-incomplete",
 };
 const EVIDENCE = { diagnostic: DIAGNOSTIC, turnFailure: FAILURE };
@@ -22,7 +42,14 @@ const EVIDENCE = { diagnostic: DIAGNOSTIC, turnFailure: FAILURE };
 // This fixture tests the qualification assertion, not the analyzer or its sufficiency formula.
 // The installed journey supplies real report/seed output from the production CLI.
 function reportFixture() {
-  const failure = { op: FAILURE.op, extra: { runId: RUN, failureCode: FAILURE.failureCode } };
+  const failure = {
+    op: FAILURE.op,
+    ts: FAILURE.ts,
+    seq: FAILURE.seq,
+    pid: FAILURE.pid,
+    parentCorrelationId: RUN,
+    extra: { runId: RUN, failureCode: FAILURE.failureCode },
+  };
   const sufficiency = { status: "complete", reasons: [] };
   return {
     kind: "keiko.support.report-analysis",
@@ -30,12 +57,13 @@ function reportFixture() {
     authenticity: "unknown",
     reportDigest: "a".repeat(64),
     sourceArtifactDigest: "b".repeat(64),
+    incident: { correlation: { rootCorrelationId: RUN, childCorrelationIds: [] } },
     selection: sufficiency,
     analysis: {
       sufficiency,
       evidence: { supportedLineCount: 2 },
       timelines: [
-        { correlationId: DIAGNOSTIC.correlationId, lines: [structuredClone(DIAGNOSTIC)] },
+        { correlationId: DIAGNOSTIC.correlationId, lines: [structuredClone(DIAGNOSTIC), failure] },
         { correlationId: RUN, lines: [failure] },
       ],
     },
@@ -55,6 +83,89 @@ function qualify(report, evidence = EVIDENCE) {
 }
 
 describe("installed support-report diagnostic qualification", () => {
+  it("qualifies the actual compressed CLI export without raw customer correlation labels", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-customer-report-")));
+    try {
+      const stateDir = join(root, "state");
+      const process = fixtureProcess(4242, "aabbccdd");
+      const now = Date.now();
+      const correlationId = "CustomerPayrollTurn";
+      const runId = "CustomerPayrollRun";
+      const failure = fixtureLine(process, now, {
+        op: FAILURE.op,
+        correlationId,
+        parentCorrelationId: runId,
+        fields: {
+          runId,
+          revision: 1,
+          state: "running",
+          failureCode: FAILURE.failureCode,
+          published: true,
+          publicationReason: "published",
+          runtimeRetry: "refused",
+        },
+      });
+      const diagnostic = fixtureLine(process, now + 1, {
+        op: DIAGNOSTIC.op,
+        correlationId,
+        parentCorrelationId: runId,
+        errorKind: "internal",
+        level: "error",
+        fields: {
+          diagnosticOperation: "coding-sidecar.gateway",
+          diagnosticErrorClass: "Error",
+          source: "coding-sidecar.gateway",
+          frames: ["packages/keiko-server/dist/coding-sidecar-gateway.js:740:3"],
+          causeChain: ["Error"],
+        },
+      });
+      writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [failure, diagnostic]);
+      const errors = [];
+      const code = await runSupportCli(
+        ["export", "--state-dir", stateDir, "--correlation-id", runId, "--out", root],
+        { out: () => undefined, err: (line) => errors.push(line) },
+        {},
+        { cwd: root, controlActivityStateDir: join(root, "control") },
+      );
+      expect(code, errors.join("")).toBe(0);
+      const file = readdirSync(root).find((name) => name.startsWith("keiko-support-v1-"));
+      const content = readFileSync(join(root, file), "utf8");
+      const report = analyzeSupportReport(content);
+      expect(JSON.stringify(report)).not.toContain(runId);
+      expect(JSON.stringify(report)).not.toContain(correlationId);
+      const evidence = { diagnostic: JSON.parse(diagnostic), turnFailure: JSON.parse(failure) };
+      expect(
+        customerShapeSupportReportEvidence(report, evidence, runId, content.length, [runId]),
+      ).toMatchObject({ errorKind: "internal", failureCode: "stream-incomplete", frameCount: 1 });
+      const correlations = customerShapeSupportReportCorrelations(report, evidence, runId);
+      expect(correlations.runId).toBe(report.incident.correlation.rootCorrelationId);
+      const output = [];
+      expect(
+        await runSupportCli(
+          ["analyze", join(root, file), "--correlation-id", correlations.diagnosticId, "--json"],
+          { out: (line) => output.push(line), err: (line) => errors.push(line) },
+          {},
+          { cwd: root, controlActivityStateDir: join(root, "control") },
+        ),
+        errors.join(""),
+      ).toBe(0);
+      expect(
+        customerShapeSupportTimelineEvidence(
+          JSON.parse(output.join("")),
+          report,
+          correlations.diagnosticId,
+          DIAGNOSTIC.op,
+        ).lineCount,
+      ).toBe(2);
+      const unrelated = structuredClone(report);
+      unrelated.incident.correlation.rootCorrelationId = "unrelated-run";
+      expect(() =>
+        customerShapeSupportReportEvidence(unrelated, evidence, runId, content.length, [runId]),
+      ).toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("reports only closed failure values and reconstruction counts", () => {
     expect(qualify(reportFixture())).toEqual({
       selection: { status: "complete", reasons: [] },
@@ -89,7 +200,7 @@ describe("installed support-report diagnostic qualification", () => {
       report.selection.reasons = ["unreviewed-reason"];
     },
     (report) => {
-      report.analysis.timelines[0].correlationId = "other-request";
+      report.analysis.timelines[0].correlationId = RUN;
     },
     (report) => {
       report.analysis.timelines[0].lines[0].parentCorrelationId = "other-run";

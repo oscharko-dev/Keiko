@@ -271,20 +271,53 @@ function reportSufficiency(value) {
   return { status: value.status, reasons: value.reasons };
 }
 
-function reconstructedLine(report, correlationId, op) {
-  return report.analysis.timelines
-    .find((timeline) => timeline.correlationId === correlationId)
-    ?.lines.find((line) => line.op === op);
+function sameOccurrence(line, original) {
+  return (
+    typeof original.ts === "string" &&
+    Number.isSafeInteger(original.seq) &&
+    original.seq > 0 &&
+    line.ts === original.ts &&
+    line.seq === original.seq &&
+    line.pid === original.pid
+  );
 }
 
-function reconstructedDiagnostic(report, evidence, runId) {
-  const diagnostic = reconstructedLine(
-    report,
-    evidence.diagnostic.correlationId,
-    "server.diagnostic.failure",
-  );
+function reconstructedLine(report, correlationId, original) {
+  return report.analysis.timelines
+    .find((timeline) => timeline.correlationId === correlationId)
+    ?.lines.find((line) => line.op === original.op && sameOccurrence(line, original));
+}
+
+/** Resolve private IDs through the incident anchor and retained source occurrences, not labels. */
+export function customerShapeSupportReportCorrelations(report, evidence, runId) {
+  const root = report.incident?.correlation.rootCorrelationId;
   if (
-    diagnostic?.parentCorrelationId !== runId ||
+    typeof root !== "string" ||
+    root.length === 0 ||
+    evidence.diagnostic.parentCorrelationId !== runId ||
+    evidence.turnFailure.parentCorrelationId !== runId ||
+    evidence.turnFailure.correlationId !== evidence.diagnostic.correlationId
+  )
+    throw new Error("support report lacks the selected run's causal incident anchor");
+  const candidates = report.analysis.timelines.filter(
+    (timeline) =>
+      timeline.correlationId !== root &&
+      timeline.lines.some(
+        (line) => line.op === evidence.diagnostic.op && sameOccurrence(line, evidence.diagnostic),
+      ) &&
+      timeline.lines.some(
+        (line) => line.op === evidence.turnFailure.op && sameOccurrence(line, evidence.turnFailure),
+      ),
+  );
+  if (candidates.length !== 1)
+    throw new Error("support report lost the linked diagnostic occurrence");
+  return { runId: root, diagnosticId: candidates[0].correlationId };
+}
+
+function reconstructedDiagnostic(report, evidence, correlations) {
+  const diagnostic = reconstructedLine(report, correlations.diagnosticId, evidence.diagnostic);
+  if (
+    diagnostic?.parentCorrelationId !== correlations.runId ||
     diagnostic.errorKind !== evidence.diagnostic.errorKind ||
     !ERROR_KINDS.has(diagnostic.errorKind) ||
     !diagnostic.frames?.some((frame) => frame.includes("/dist/"))
@@ -298,12 +331,15 @@ function reconstructedDiagnostic(report, evidence, runId) {
   return diagnostic;
 }
 
-function reconstructedFailure(report, evidence, runId) {
-  const failure = reconstructedLine(report, runId, "coding-sidecar.gateway.turn-failed");
+function reconstructedFailure(report, evidence, correlations) {
+  const failure = reconstructedLine(report, correlations.runId, evidence.turnFailure);
+  const child = reconstructedLine(report, correlations.diagnosticId, evidence.turnFailure);
   if (
     failure?.extra?.failureCode !== evidence.turnFailure.failureCode ||
     !FAILURE_CODES.has(failure.extra.failureCode) ||
-    failure.extra.runId !== runId
+    failure.extra.runId !== correlations.runId ||
+    child?.parentCorrelationId !== correlations.runId ||
+    JSON.stringify(child) !== JSON.stringify(failure)
   )
     throw new Error("support report lost the typed run failure");
   return failure;
@@ -377,9 +413,10 @@ export function customerShapeSupportReportEvidence(report, evidence, runId, byte
     throw new Error("support report analysis retained prohibited synthetic content");
   const selection = reportSufficiency(report.selection);
   const sufficiency = reportSufficiency(report.analysis.sufficiency);
-  const diagnostic = reconstructedDiagnostic(report, evidence, runId);
-  const failure = reconstructedFailure(report, evidence, runId);
-  const seed = reconstructedSeed(report, runId);
+  const correlations = customerShapeSupportReportCorrelations(report, evidence, runId);
+  const diagnostic = reconstructedDiagnostic(report, evidence, correlations);
+  const failure = reconstructedFailure(report, evidence, correlations);
+  const seed = reconstructedSeed(report, correlations.runId);
   return {
     selection,
     sufficiency,
