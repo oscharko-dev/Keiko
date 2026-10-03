@@ -40,7 +40,7 @@ describe("support report code inventory", () => {
     source(
       root,
       "packages/keiko-server/src/files.ts",
-      'class ParentFailure extends Error {}\nclass FileFailure extends ParentFailure {}\nconst event = { code: "EACCES", source: "files", message: "CustomerPayroll" };',
+      'import { externalCodes } from "external-codes";\nclass ParentFailure extends Error {}\nclass FileFailure extends ParentFailure {}\nconst codes = { DENIED: "WORKSPACE_PATH_DENIED", UNUSED: "CustomerTableToken" } as const;\nclass DeniedFailure extends ParentFailure { readonly code = codes.DENIED; }\nlet mutableCodes = { DENIED: "CustomerMutableToken" };\nclass MutableFailure extends ParentFailure { code = mutableCodes.DENIED; }\nconst dynamicCodes = { DENIED: "CustomerDynamicToken" };\nclass DynamicFailure extends ParentFailure { code = dynamicCodes[selector]; }\nclass ImportedFailure extends ParentFailure { code = externalCodes.DENIED; }\nconst event = { code: "EACCES", source: "files", message: "CustomerPayroll" };',
     );
     source(root, "packages/keiko-ui/src/app/page.tsx", "export const page = <div />;");
     const fixture = source(
@@ -65,6 +65,7 @@ describe("support report code inventory", () => {
     expect(result).toContain('"cli/main"');
     expect(result).toContain('"FileFailure"');
     expect(result).toContain('"EACCES"');
+    expect(result).toContain('"WORKSPACE_PATH_DENIED"');
     expect(result).not.toContain("Customer");
     expect(result).not.toContain("files.test");
     expect(await generateSupportCodeInventory(root)).toBe(result);

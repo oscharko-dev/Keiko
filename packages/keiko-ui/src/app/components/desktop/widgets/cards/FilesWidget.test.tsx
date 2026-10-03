@@ -839,7 +839,7 @@ describe("FilesWidget", () => {
     expect(fileItem).toHaveAttribute("tabindex", "0");
     fileItem.focus();
     await userEvent.keyboard("{Enter}");
-    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json", expect.any(String));
+    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
 
     fileItem.focus();
     await userEvent.keyboard(" ");
@@ -1103,7 +1103,7 @@ describe("FilesWidget", () => {
     await screen.findByText('"keiko"');
     await userEvent.click(screen.getByRole("button", { name: "Open in editor" }));
 
-    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json", expect.any(String));
+    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
   });
 
   it("opens a file directly when embedded in the editor workspace", async () => {
@@ -1136,7 +1136,7 @@ describe("FilesWidget", () => {
     await userEvent.click(await screen.findByRole("treeitem", { name: /package\.json/i }));
 
     expect(fetchFilesPreview).not.toHaveBeenCalled();
-    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json", expect.any(String));
+    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
     expect(screen.queryByText('"keiko"')).toBeNull();
   });
 
@@ -2383,7 +2383,8 @@ describe("FilePreview", () => {
     await userEvent.click(screen.getByRole("button", { name: "Refresh preview" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("disk read failed");
+    expect(alert).toHaveTextContent("Unable to read this file.");
+    expect(alert).not.toHaveTextContent("disk read failed");
     expect(screen.getByText("Refresh failed")).toBeInTheDocument();
     expect(previewRegion).toHaveTextContent("old value");
     expect(fetchFilesPreview).toHaveBeenCalledTimes(2);

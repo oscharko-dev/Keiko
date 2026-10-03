@@ -168,18 +168,50 @@ function collectOwnedVocabulary(node, tokens, source) {
     addTechnicalToken(node.expression.text, tokens);
 }
 
+function sameFileConstant(expression) {
+  const declarations = expression
+    .getSourceFile()
+    .statements.flatMap((statement) =>
+      ts.isVariableStatement(statement) &&
+      (statement.declarationList.flags & ts.NodeFlags.Const) !== 0
+        ? [...statement.declarationList.declarations]
+        : [],
+    );
+  return declarations.find(
+    (declaration) =>
+      ts.isIdentifier(declaration.name) && declaration.name.text === expression.expression.text,
+  )?.initializer;
+}
+
+function referencedCodeToken(expression) {
+  if (!ts.isPropertyAccessExpression(expression) || !ts.isIdentifier(expression.expression))
+    return undefined;
+  const constant = sameFileConstant(expression);
+  if (constant === undefined) return undefined;
+  const value = ts.isAsExpression(constant) ? constant.expression : constant;
+  if (!ts.isObjectLiteralExpression(value)) return undefined;
+  const property = value.properties.find(
+    (entry) =>
+      ts.isPropertyAssignment(entry) &&
+      ts.isIdentifier(entry.name) &&
+      entry.name.text === expression.name.text,
+  );
+  return property !== undefined && ts.isStringLiteral(property.initializer)
+    ? property.initializer.text
+    : undefined;
+}
+
 function collectToken(node, tokens) {
-  if (
-    (ts.isPropertyAssignment(node) || ts.isPropertyDeclaration(node)) &&
-    ts.isIdentifier(node.name) &&
-    tokenFields.has(node.name.text)
-  ) {
-    if (
-      node.initializer &&
-      ts.isStringLiteral(node.initializer) &&
-      /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u.test(node.initializer.text)
-    )
-      tokens.add(node.initializer.text);
+  if (!ts.isPropertyAssignment(node) && !ts.isPropertyDeclaration(node)) return;
+  if (!ts.isIdentifier(node.name) || !tokenFields.has(node.name.text)) return;
+  if (node.initializer === undefined) return;
+  if (ts.isStringLiteral(node.initializer)) {
+    addTechnicalToken(node.initializer.text, tokens);
+  } else if (node.name.text === "code") {
+    // Resolve only the selected literal of a same-file const table referenced by a code producer.
+    // Unused table members, dynamic/imported values and arbitrary source strings stay excluded.
+    const value = referencedCodeToken(node.initializer);
+    if (value !== undefined) addTechnicalToken(value, tokens);
   }
 }
 

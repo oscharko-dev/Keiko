@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   ACTIVITY_LOG_OPERATION_SURFACES,
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS,
   activityLogErrorKindOr,
   clientDefectContext,
@@ -61,8 +62,13 @@ export function registeredFailureFingerprintInput(
 
 // A correlation id the writer would redact (a credential-shaped label) never enters an incident:
 // the persisted lines carry only its marker, so it could leak a secret but never join evidence.
+// The shared unknown sentinel is absence of identity, never a root shared by unrelated failures.
 export function incidentCorrelationId(value: unknown): string | undefined {
-  return isActivityLogCorrelationId(value) && isRedactedLogLabel(value) ? value : undefined;
+  return value !== ACTIVITY_LOG_UNKNOWN_CORRELATION_ID &&
+    isActivityLogCorrelationId(value) &&
+    isRedactedLogLabel(value)
+    ? value
+    : undefined;
 }
 
 /**

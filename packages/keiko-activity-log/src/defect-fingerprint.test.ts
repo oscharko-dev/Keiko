@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { ACTIVITY_LOG_UNKNOWN_CORRELATION_ID } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   computeDefectFingerprint,
   registeredFailureFingerprintInput,
+  registeredFailureCorrelation,
 } from "./defect-fingerprint.js";
 
 const frame = (digest: string, line = 1): string =>
@@ -60,5 +62,25 @@ describe("registered browser defect identity", () => {
         frames: [],
       }),
     );
+  });
+});
+
+describe("registered failure correlation selectors", () => {
+  it("treats the shared unknown sentinel as no request identity", () => {
+    expect(
+      registeredFailureCorrelation({ correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID }),
+    ).toEqual({ childCorrelationIds: [] });
+    expect(
+      registeredFailureCorrelation({
+        correlationId: "known-failure-request",
+        parentCorrelationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      }),
+    ).toEqual({ rootCorrelationId: "known-failure-request", childCorrelationIds: [] });
+    expect(
+      registeredFailureCorrelation({
+        correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        parentCorrelationId: "known-parent-request",
+      }),
+    ).toEqual({ rootCorrelationId: "known-parent-request", childCorrelationIds: [] });
   });
 });
