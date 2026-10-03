@@ -5,6 +5,10 @@
   padding-right: 2px;
 }
 
+.cmpRootBar[data-navigation="false"] {
+  padding-top: 32px;
+}
+
 .cmpControls {
   display: flex;
   gap: 5px;

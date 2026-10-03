@@ -124,6 +124,7 @@ export function FilesRootBar(props: FilesRootBarProps): ReactNode {
   return (
     <form
       className={`files-root-bar ${styles.cmpRootBar}`}
+      data-navigation={props.showNavigation !== false}
       aria-label={t("filesWidget.rootBar.label")}
       aria-busy={props.opening === true}
       onSubmit={(event): void => {

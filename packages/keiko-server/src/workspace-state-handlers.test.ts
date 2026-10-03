@@ -57,6 +57,27 @@ afterEach(() => {
 });
 
 describe("workspace state persistence", () => {
+  it("uses the injected UI directory across restart without changing process.env", async () => {
+    delete process.env.KEIKO_UI_DATA_DIR;
+    const dataDir = tempDir();
+    const deps = { env: { KEIKO_UI_DATA_DIR: dataDir } };
+    const windows = [{ id: "files-1", type: "files", cfg: { root: "/workspace" } }];
+    const put = await handlePutWorkspaceState(
+      context("PUT", { windows, connections: [] }, { "if-match": '"workspace-state-0"' }),
+      deps,
+    );
+    expect(put.status).toBe(200);
+    expect(process.env.KEIKO_UI_DATA_DIR).toBeUndefined();
+    const persisted: unknown = JSON.parse(
+      readFileSync(join(dataDir, "workspace-state.json"), "utf8"),
+    );
+    expect(persisted).toMatchObject({ workspace: { revision: 1, windows } });
+    resetWorkspaceStateForTests();
+    expect(handleGetWorkspaceState(context("GET"), deps).body).toMatchObject({
+      workspace: { revision: 1, windows },
+    });
+  });
+
   it("persists a versioned envelope and reloads it after in-memory reset", async () => {
     const dataDir = tempDir();
     process.env.KEIKO_UI_DATA_DIR = dataDir;

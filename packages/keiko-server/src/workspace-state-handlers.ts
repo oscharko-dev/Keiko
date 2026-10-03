@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { isAbsolute, join, resolve } from "node:path";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import type { RouteContext, RouteResult } from "./routes.js";
+import type { UiHandlerDeps } from "./deps.js";
 import { errorBody } from "./routes.js";
 import { savePrivateJson } from "./private-json.js";
 
@@ -106,8 +107,8 @@ function emptyWorkspaceState(): WorkspaceStateSnapshot {
   return { revision: 0, windows: [], connections: [], updatedAtMs: 0 };
 }
 
-function workspaceStatePathFromEnv(): string | null {
-  const dir = process.env.KEIKO_UI_DATA_DIR;
+function workspaceStatePathFromEnv(env: UiHandlerDeps["env"]): string | null {
+  const dir = env.KEIKO_UI_DATA_DIR;
   if (dir === undefined || dir.trim().length === 0 || dir.includes("\0")) return null;
   if (!isAbsolute(dir)) return null;
   return join(resolve(dir), WORKSPACE_STATE_FILENAME);
@@ -178,8 +179,8 @@ function loadWorkspaceStateFromDisk(path: string): WorkspaceStateSnapshot {
   }
 }
 
-function ensureWorkspaceStateLoaded(): string | null {
-  const path = workspaceStatePathFromEnv();
+function ensureWorkspaceStateLoaded(env: UiHandlerDeps["env"]): string | null {
+  const path = workspaceStatePathFromEnv(env);
   if (path !== loadedWorkspaceStatePath) {
     loadedWorkspaceStatePath = path;
     workspaceState = path === null ? emptyWorkspaceState() : loadWorkspaceStateFromDisk(path);
@@ -229,8 +230,11 @@ function workspacePayloadMatches(
   );
 }
 
-export function handleGetWorkspaceState(ctx: RouteContext): RouteResult {
-  ensureWorkspaceStateLoaded();
+export function handleGetWorkspaceState(
+  ctx: RouteContext,
+  deps?: Pick<UiHandlerDeps, "env">,
+): RouteResult {
+  ensureWorkspaceStateLoaded(deps?.env ?? process.env);
   const etag = workspaceStateEtag(workspaceState.revision);
   const headers = { ETag: etag, "Cache-Control": "no-store" };
   if (requestMatchesWorkspaceState(ctx.req)) {
@@ -273,9 +277,12 @@ function workspaceWritePreconditionResult(
   return undefined;
 }
 
-export async function handlePutWorkspaceState(ctx: RouteContext): Promise<RouteResult> {
+export async function handlePutWorkspaceState(
+  ctx: RouteContext,
+  deps?: Pick<UiHandlerDeps, "env">,
+): Promise<RouteResult> {
   try {
-    const statePath = ensureWorkspaceStateLoaded();
+    const statePath = ensureWorkspaceStateLoaded(deps?.env ?? process.env);
     const body = await readJsonObject(ctx.req);
     const windows = requireArray(body, "windows", MAX_WORKSPACE_WINDOWS);
     const connections = requireArray(body, "connections", MAX_WORKSPACE_CONNECTIONS);
