@@ -1500,6 +1500,20 @@ export function FilesWidget({
     return Math.min(entries.length, Math.max(configuredLimit, activeIndex + 1, pendingIndex + 1));
   };
 
+  const hasUnreadableVisibleLink = (path: string): boolean => {
+    const entries = directories[path]?.entries ?? [];
+    const limit = renderLimitForDirectory(path, entries);
+    return entries.slice(0, limit).some((entry) => {
+      if (!entry.readable && entry.kind !== "directory") return true;
+      return (
+        entry.readable &&
+        isExpandableDirectory(entry) &&
+        expanded.has(entry.path) &&
+        hasUnreadableVisibleLink(entry.path)
+      );
+    });
+  };
+
   // One inline input reused for new file / new folder / rename, styled with the existing root-bar
   // input class so no globals.css change is needed (keeps the #1300 proof gate untouched).
   const renderInlineEditor = (depth: number, icon: ReactNode, ariaLabel: string): ReactNode => (
@@ -2186,9 +2200,12 @@ export function FilesWidget({
         <ResetIcon size={13} />
       </button>
       {renderMutationButtons()}
-      <span id={unreadableReasonId} className={presentationStyles.cmpScreenReaderOnly}>
-        {t("filesWidget.tree.unreadableLinkReason")}
-      </span>
+      {(presentation !== "project" || expanded.has("")) &&
+      hasUnreadableVisibleLink(currentDirectoryPath ?? "") ? (
+        <span id={unreadableReasonId} className={presentationStyles.cmpScreenReaderOnly}>
+          {t("filesWidget.tree.unreadableLinkReason")}
+        </span>
+      ) : null}
       {renderRootTree()}
       {menu !== null ? (
         <div

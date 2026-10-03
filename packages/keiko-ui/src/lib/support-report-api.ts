@@ -4,13 +4,17 @@ import { bffFetchJson } from "./http";
 
 export async function createSupportReport(
   correlationId?: string,
+  signal?: AbortSignal,
 ): Promise<DesktopSupportReportResponse> {
   return bffFetchJson<DesktopSupportReportResponse>(
     "/api/diagnostics/report",
     {
       method: "POST",
       body: JSON.stringify(correlationId === undefined ? {} : { correlationId }),
-      signal: AbortSignal.timeout(35_000),
+      signal:
+        signal === undefined
+          ? AbortSignal.timeout(35_000)
+          : AbortSignal.any([signal, AbortSignal.timeout(35_000)]),
     },
     {
       validator: (_path, value): DesktopSupportReportResponse =>

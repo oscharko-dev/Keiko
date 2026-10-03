@@ -123,6 +123,8 @@ export interface ClientDiagnosticGitRetryAttemptReport {
 }
 
 export interface ClientDiagnosticMeta {
+  // UI-only provenance: emitted solely by the browser's uncaught-error listeners.
+  readonly globalFailure?: boolean | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
@@ -219,6 +221,39 @@ function bufferUntilTransportArrives(message: string, meta?: ClientDiagnosticMet
 
 let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
 
+export interface GlobalClientFailure {
+  readonly ordinal: number;
+  readonly correlationId: string | undefined;
+}
+
+let globalFailure: GlobalClientFailure | null = null;
+let globalFailureOrdinal = 0;
+const globalFailureListeners = new Set<() => void>();
+
+export function subscribeGlobalClientFailure(listener: () => void): () => void {
+  globalFailureListeners.add(listener);
+  return (): void => {
+    globalFailureListeners.delete(listener);
+  };
+}
+
+export function currentGlobalClientFailure(): GlobalClientFailure | null {
+  return globalFailure;
+}
+
+export function dismissGlobalClientFailure(ordinal: number): void {
+  if (globalFailure?.ordinal !== ordinal) return;
+  globalFailure = null;
+  for (const listener of globalFailureListeners) listener();
+}
+
+function publishGlobalClientFailure(meta: ClientDiagnosticMeta | undefined): void {
+  if (meta?.globalFailure !== true) return;
+  if (meta.kind !== "window-error" && meta.kind !== "unhandled-rejection") return;
+  globalFailure = { ordinal: ++globalFailureOrdinal, correlationId: meta.correlationId };
+  for (const listener of globalFailureListeners) listener();
+}
+
 /**
  * Report a bounded, already-redacted operator diagnostic.
  *
@@ -233,6 +268,7 @@ let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
  * `message` to the console unchanged (`useWindowStageEvidence`).
  */
 export function reportClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): void {
+  publishGlobalClientFailure(meta);
   writer(message, meta);
 }
 
@@ -254,6 +290,7 @@ export function resetClientDiagnosticWriter(): void {
   writer = bufferUntilTransportArrives;
   pending.length = 0;
   lossCounts.clear();
+  if (globalFailure !== null) dismissGlobalClientFailure(globalFailure.ordinal);
 }
 
 type SseStreamCloseReason = "connecting" | "closed" | "unknown";

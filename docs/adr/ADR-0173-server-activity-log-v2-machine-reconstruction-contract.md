@@ -627,10 +627,14 @@ or a closed runtime vocabulary; merely looking like a technical identifier does 
 string. Unknown diagnostic details are omitted or marked, with insufficient evidence reported when
 immutable failure provenance cannot be preserved. Historical schema-1 reports remain readable.
 
-The desktop exposes the same canonical report as a local JSON download in the workspace footer and
-at actionable failures. The selected incident and compressed event section travel together, so
-support can inspect the evidence without access to the customer's complete logs. Export uses the
-existing paired application session and a bounded worker; it never uploads externally by itself.
+The desktop exposes the same canonical report as a local JSON download at actionable failures.
+The healthy workspace footer has no report action. An uncaught browser error or rejected promise
+reveals a compact, dismissible footer action tied to that failure; handled contextual errors retain
+their own action. Each active failure permits one successful download, with a 1.5-second completion
+status, while failed creation remains retryable and unmounting cancels pending work. The selected
+incident and compressed event section travel together, so support can inspect the evidence without
+access to the customer's complete logs. Export uses the existing paired application session and a
+bounded worker; it never uploads externally by itself.
 
 The fixed bounds are 10 MiB for the entire file, 1 MiB for the incident projection, 16 MiB for the
 decoded event section, 64 KiB per event, 20,000 records, 12 JSON nesting levels, 250,000

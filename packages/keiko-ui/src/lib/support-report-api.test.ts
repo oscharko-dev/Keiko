@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSupportReport, downloadSupportReport } from "./support-report-api";
+import { bffFetchJson } from "./http";
 
 const response = vi.hoisted(() => ({ value: {} as unknown }));
 vi.mock("./http", () => ({
@@ -25,6 +26,16 @@ describe("support report browser download", () => {
     await expect(createSupportReport()).rejects.toThrow(TypeError);
     response.value = { fileName };
     await expect(createSupportReport()).rejects.toThrow(TypeError);
+  });
+
+  it("propagates cancellation through the bounded report request", async () => {
+    response.value = { fileName, reportJson: "{}" };
+    const controller = new AbortController();
+    await createSupportReport("failure-cancelled", controller.signal);
+    const signal = vi.mocked(bffFetchJson).mock.calls.at(-1)?.[1]?.signal;
+    expect(signal?.aborted).toBe(false);
+    controller.abort();
+    expect(signal?.aborted).toBe(true);
   });
 
   it("starts a local download and releases its temporary object URL", () => {

@@ -1322,6 +1322,7 @@ describe("FilesWidget", () => {
     expect(row).not.toHaveAttribute("data-git-ignored");
     expect(row).toHaveAttribute("data-muted", "true");
     expect(screen.queryByText("Git unavailable")).toBeNull();
+    expect(screen.queryByText("This link can't be opened from this folder.")).toBeNull();
     files.unmount();
     render(<FilesWidget root="/notes" presentation="project" />);
     expect(await screen.findByRole("treeitem", { name: ".notes.md, Hidden" })).toHaveAttribute(
@@ -1689,6 +1690,43 @@ describe("FilesWidget", () => {
   // though the server can still list through it. This pins that it renders with the SAME
   // expand/navigate affordances as a real directory: a caret button, `aria-expanded`, and a
   // successful expansion that fetches and shows its children.
+  it("removes the unreadable-link description when its cached project branch closes", async () => {
+    vi.mocked(fetchFilesTree).mockImplementation(async (_root, path = "") => ({
+      root: "/repo",
+      path,
+      truncated: false,
+      entries:
+        path === ""
+          ? [{ ...treeEntryBase, name: "src", path: "src", kind: "directory" }]
+          : [
+              {
+                ...treeEntryBase,
+                name: "broken",
+                path: "src/broken",
+                kind: "symlink",
+                symlinkTargetKind: "unknown",
+                readable: false,
+              },
+            ],
+    }));
+    render(<FilesWidget root="/repo" presentation="project" />);
+    const folder = await screen.findByRole("treeitem", { name: /^src$/i });
+    const description = "This link can't be opened from this folder.";
+    expect(screen.queryByText(description)).toBeNull();
+    await userEvent.click(folder);
+    expect(await screen.findByRole("treeitem", { name: /broken/i })).toHaveAccessibleDescription(
+      description,
+    );
+    await userEvent.click(folder);
+    expect(screen.queryByText(description)).toBeNull();
+    await userEvent.click(folder);
+    expect(await screen.findByRole("treeitem", { name: /broken/i })).toHaveAccessibleDescription(
+      description,
+    );
+    await userEvent.click(screen.getByRole("treeitem", { name: "Project: repo" }));
+    expect(screen.queryByText(description)).toBeNull();
+  });
+
   it("treats a readable symlink-to-directory as expandable, matching a real directory", async () => {
     vi.mocked(fetchFilesTree)
       .mockResolvedValueOnce({

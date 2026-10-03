@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import { createSupportReport, downloadSupportReport } from "@/lib/support-report-api";
-import { SupportReportButton } from "./SupportReportButton";
+import { SupportReportButton, resetSupportReportOutcomesForTests } from "./SupportReportButton";
 
 vi.mock("@/lib/support-report-api", () => ({
   createSupportReport: vi.fn(),
@@ -15,6 +15,8 @@ const download = vi.mocked(downloadSupportReport);
 const report = { fileName: "report.json", reportJson: "{}" };
 afterEach(() => {
   vi.clearAllMocks();
+  resetSupportReportOutcomesForTests();
+  vi.useRealTimers();
   window.localStorage.removeItem("keiko.locale");
 });
 
@@ -24,8 +26,44 @@ describe("SupportReportButton", () => {
     render(<SupportReportButton correlationId="failure-1" />);
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
     await waitFor(() => expect(download).toHaveBeenCalledWith(report));
-    expect(create).toHaveBeenCalledExactlyOnceWith("failure-1");
+    expect(create).toHaveBeenCalledExactlyOnceWith("failure-1", expect.any(AbortSignal));
     expect(screen.getByRole("status")).toHaveTextContent("Downloaded.");
+    expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
+  });
+
+  it("remembers fulfilled errors across remounts and expires the short confirmation", async () => {
+    vi.useFakeTimers();
+    create.mockResolvedValue(report);
+    const view = render(<SupportReportButton correlationId="completed-error" />);
+    await act(async () => {
+      screen.getByRole("button", { name: "Create error report" }).click();
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Downloaded.");
+    await act(async () => vi.advanceTimersByTimeAsync(1500));
+    expect(view.container).toBeEmptyDOMElement();
+    view.unmount();
+    const sameError = render(<SupportReportButton correlationId="completed-error" />);
+    expect(sameError.container).toBeEmptyDOMElement();
+    expect(download).toHaveBeenCalledOnce();
+  });
+
+  it("aborts an unmounted report and rejects late completion without a download", async () => {
+    let resolve: (value: typeof report) => void = () => undefined;
+    create.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    const view = render(<SupportReportButton correlationId="cancelled-error" />);
+    await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    const signal = create.mock.calls[0]?.[1];
+    view.unmount();
+    expect(signal?.aborted).toBe(true);
+    await act(async () => resolve(report));
+    expect(download).not.toHaveBeenCalled();
+    render(<SupportReportButton correlationId="cancelled-error" />);
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
   });
 
   it("blocks duplicate clicks while creating and allows retry after failure", async () => {
@@ -63,5 +101,31 @@ describe("SupportReportButton", () => {
       </I18nProvider>,
     );
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Fehlerbericht erstellen" }));
+    expect(create).toHaveBeenLastCalledWith("two", expect.any(AbortSignal));
+    expect(download).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares one pending download between duplicate contextual actions", async () => {
+    let resolve: (value: typeof report) => void = () => undefined;
+    create.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    render(
+      <>
+        <SupportReportButton correlationId="duplicate-error" />
+        <SupportReportButton correlationId="duplicate-error" />
+      </>,
+    );
+    await userEvent.click(screen.getAllByRole("button", { name: "Create error report" })[0]!);
+    for (const button of screen.getAllByRole("button", { name: "Creating report…" }))
+      expect(button).toBeDisabled();
+    await act(async () => resolve(report));
+    expect(create).toHaveBeenCalledOnce();
+    expect(download).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
   });
 });

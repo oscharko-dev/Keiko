@@ -9,3 +9,12 @@
   color: var(--text-secondary);
   font-size: var(--text-sm, 12px);
 }
+
+.action {
+  flex: none;
+  width: auto;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: var(--text-sm, 12px);
+  font-weight: 400;
+}
