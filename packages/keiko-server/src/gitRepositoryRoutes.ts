@@ -267,6 +267,10 @@ async function repositoryDnsAllowed(input: string, lookup: RepositoryDnsLookup):
         return kind === "public" || kind === "private";
       })
     );
+  } catch {
+    // An unresolved SSH alias or proxy-only host cannot satisfy this preflight. Keep the
+    // denial explicit instead of reclassifying a valid repository URL as malformed input.
+    return false;
   } finally {
     clearTimeout(timer);
   }
@@ -487,7 +491,7 @@ export function createCloneRepositoryHandler(
         );
       }
       if (!(await repositoryDnsAllowed(repositoryUrl, lookup)))
-        return forbidden("The repository host is unavailable for clone.");
+        return forbidden("The repository host could not be verified. Use a resolvable host.");
       const destination = await assertDestination(destinationInput);
       if (typeof destination !== "string") return destination;
       assertUiDbOutsideProject(deps.uiDbPath, destination);

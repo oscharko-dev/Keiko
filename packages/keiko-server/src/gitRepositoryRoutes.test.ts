@@ -87,6 +87,46 @@ afterEach(() => {
 });
 
 describe("git repository routes", () => {
+  it.each(["ENOTFOUND", "EAI_AGAIN"])("denies unverifiable clone hosts with %s", async (code) => {
+    const cloneRunner = vi.fn<CloneRepositoryRunner>();
+    const lookup = vi.fn().mockRejectedValue(Object.assign(new Error("private-host"), { code }));
+    const result = await createCloneRepositoryHandler(
+      cloneRunner,
+      undefined,
+      lookup,
+    )(
+      ctx({ repositoryUrl: "git@github-work:org/repo.git", destinationPath: join(tmp, "app") }),
+      deps(),
+    );
+    expect(result).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
+    expect(JSON.stringify(result)).not.toContain("private-host");
+    expect(cloneRunner).not.toHaveBeenCalled();
+  });
+
+  it("denies a clone whose DNS preflight times out without starting git", async () => {
+    vi.useFakeTimers();
+    try {
+      const cloneRunner = vi.fn<CloneRepositoryRunner>();
+      const lookup = (): Promise<readonly { readonly address: string }[]> =>
+        new Promise(() => undefined);
+      const result = createCloneRepositoryHandler(
+        cloneRunner,
+        undefined,
+        lookup,
+      )(
+        ctx({
+          repositoryUrl: "https://enterprise.invalid/repo.git",
+          destinationPath: join(tmp, "app"),
+        }),
+        deps(),
+      );
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(await result).toMatchObject({ status: 403 });
+      expect(cloneRunner).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("denies an unpaired clone before reading a hostile body, touching paths or starting Git", async () => {
     const cloneRunner = vi.fn<CloneRepositoryRunner>();
     const handler = createCloneRepositoryHandler(cloneRunner);
