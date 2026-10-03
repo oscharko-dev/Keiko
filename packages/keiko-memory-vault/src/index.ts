@@ -29,7 +29,9 @@ export { memoryBodySuppressionHash } from "./body-fingerprint.js";
 // Keeping the write-capable primitives internal to this package (still available to
 // `vault.ts`/`db.ts` via a direct `./cipher.js` / `./db.js` import) means a future external caller
 // cannot reach past `createMemoryVault`'s validated construction by importing a lower-level
-// primitive from the public barrel.
+// primitive from the public barrel. The content cipher stays public: it is the type and factory of
+// `createMemoryVault`'s `cipher` option.
+export { createMemoryContentCipher, type MemoryContentCipher } from "./cipher.js";
 export type {
   DeleteMemoryOptions,
   ListMemoriesOptions,
