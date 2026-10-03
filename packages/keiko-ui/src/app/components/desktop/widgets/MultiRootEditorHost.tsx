@@ -18,7 +18,7 @@ import type {
   WorkspaceRootDescriptor,
   WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
-import { useTranslate } from "@/lib/i18n";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import {
   EDITOR_ROOT_SESSIONS_SCHEMA_VERSION,
   parseEditorRootSessions,
@@ -210,7 +210,7 @@ export function MultiRootEditorHost({
   buildBaseProps,
   updateCfg,
 }: MultiRootEditorHostProps): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const sessionsJson = stringValue(cfg, "rootSessionsJson");
   const legacyLayoutJson = stringValue(cfg, "layoutJson");
   const parsedSessions = useMemo(

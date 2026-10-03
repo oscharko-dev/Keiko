@@ -2871,7 +2871,7 @@ function EditorRuntimeWidget({
       if (dirtyRef.current) {
         setEditorConflict({
           code: "DIRTY",
-          message: commonT("editor.fileHistory.dirtyConflict"),
+          message: optionalT("editor.fileHistory.dirtyConflict"),
         });
         return false;
       }
@@ -2912,7 +2912,7 @@ function EditorRuntimeWidget({
       }
       return restored;
     },
-    [commonT, file, persist, revertRestoredBuffer, root],
+    [optionalT, file, persist, revertRestoredBuffer, root],
   );
 
   const onContentChange = useCallback(
@@ -4644,7 +4644,7 @@ function EditorRuntimeWidget({
     } else {
       panel = (
         <div className="ed-empty" role="note">
-          {commonT("editor.runtime.chooseFile")}
+          {optionalT("editor.runtime.chooseFile")}
         </div>
       );
     }
@@ -4902,18 +4902,18 @@ function EditorRuntimeWidget({
     });
   }
   documentActions.push({
-    label: commonT("editor.fileHistory.open"),
+    label: optionalT("editor.fileHistory.open"),
     run: () => setFileHistoryOpen((open) => !open),
   });
   if (canFormat)
-    documentActions.push({ label: commonT("editor.actions.format"), run: handleFormatClick });
+    documentActions.push({ label: optionalT("editor.actions.format"), run: handleFormatClick });
 
   const renderEditorToolbar = (): ReactNode => (
     <div className={`ed-toolbar-actions ${runtimeStyles.cmpToolbar}`}>
       {toolbarExtras}
       {hasTarget && saveStatus === "conflict" ? (
         <button type="button" className={runtimeStyles.cmpPrimaryAction} onClick={requestReload}>
-          {commonT("editor.actions.reload")}
+          {optionalT("editor.actions.reload")}
         </button>
       ) : null}
       {hasTarget ? (
@@ -4926,7 +4926,10 @@ function EditorRuntimeWidget({
           >
             {saveButtonLabel}
           </button>
-          <EditorDocumentActions label={commonT("editor.actions.more")} actions={documentActions} />
+          <EditorDocumentActions
+            label={optionalT("editor.actions.more")}
+            actions={documentActions}
+          />
         </>
       ) : null}
     </div>
@@ -4938,8 +4941,8 @@ function EditorRuntimeWidget({
         <output className="ed-recovery" data-testid="editor-workspace-watch-status">
           <span>
             {workspaceWatch.snapshotRequired
-              ? commonT("editor.runtime.watchRefresh")
-              : commonT("editor.runtime.watchInterrupted")}
+              ? optionalT("editor.runtime.watchRefresh")
+              : optionalT("editor.runtime.watchInterrupted")}
           </span>
           <span className="spacer" />
           <button
@@ -4950,7 +4953,7 @@ function EditorRuntimeWidget({
               requestReload();
             }}
           >
-            {commonT("editor.runtime.refresh")}
+            {optionalT("editor.runtime.refresh")}
           </button>
         </output>
       ) : null}
@@ -4993,7 +4996,7 @@ function EditorRuntimeWidget({
           <SupportReportButton correlationId={localHistoryProtection.correlationId} />
         ) : null}
         <details>
-          <summary>{commonT("editor.runtime.details")}</summary>
+          <summary>{optionalT("editor.runtime.details")}</summary>
           <p>
             {degraded
               ? localHistoryProtectionGuidance(localHistoryProtection.reason)

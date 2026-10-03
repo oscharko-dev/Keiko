@@ -668,13 +668,13 @@ export function EditorFileHistoryPanel(props: EditorFileHistoryPanelProps): Reac
   const requestRestore = useCallback(
     async (entry: EditorLocalHistoryEntry): Promise<void> => {
       if (props.dirty) {
-        setNotice(commonT("editor.fileHistory.dirtyConflict"));
+        setNotice(t("editor.fileHistory.dirtyConflict"));
         return;
       }
       const checkpoint = await readEntry(entry);
       if (checkpoint !== null) setPending({ kind: "restore", checkpoint });
     },
-    [props.dirty, readEntry, commonT],
+    [props.dirty, readEntry, t],
   );
 
   const togglePin = useCallback(

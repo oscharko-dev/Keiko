@@ -20,30 +20,7 @@ export const DE_MESSAGES = {
   "rail.coding": "Coding Workbench",
   "rail.localKnowledge": "Lokales Wissen",
   "rail.editor": "Editor",
-  "editor.empty.title": "Projekt öffnen",
-  "editor.empty.description":
-    "Wählen Sie einen Projektordner aus, um mit der Bearbeitung zu beginnen. Der Editor arbeitet innerhalb des ausgewählten Workspace-Stammverzeichnisses.",
-  "editor.empty.selectFolder": "Ordner auswählen…",
   "editor.empty.opening": "Wird geöffnet…",
-  "editor.empty.open": "Öffnen",
-  "editor.empty.pathLabel": "Pfad zum Projektordner",
-  "editor.empty.pickerTitle": "Projektordner auswählen",
-  "editor.empty.dialogBusy": "Ein nativer Dialog ist bereits geöffnet. Schließen Sie ihn zuerst.",
-  "editor.empty.pickerUnsupported":
-    "Die native Ordnerauswahl ist auf dieser Plattform nicht verfügbar. Geben Sie unten einen Pfad ein.",
-  "editor.empty.connectionFailed":
-    "Das Projekt konnte nicht verbunden werden. Prüfen Sie den Ordner und versuchen Sie es erneut.",
-  "editor.empty.workspaceUnavailable":
-    "Die gespeicherte Workspace-Identität ist nicht mehr aktuell. Entfernen Sie den veralteten Projekteintrag, bevor Sie diesen Ordner erneut verbinden.",
-  "editor.runtime.chooseFile":
-    "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
-  "editor.runtime.watchRefresh": "Dateiliste aktualisieren.",
-  "editor.runtime.watchInterrupted": "Dateiüberwachung unterbrochen.",
-  "editor.runtime.refresh": "Aktualisieren",
-  "editor.runtime.details": "Details",
-  "editor.actions.more": "Weitere Dateiaktionen",
-  "editor.actions.format": "Formatieren",
-  "editor.actions.reload": "Neu laden",
   "supportReport.create": "Fehlerbericht erstellen",
   "supportReport.creating": "Bericht wird erstellt…",
   "supportReport.saved": "Heruntergeladen.",
@@ -54,9 +31,6 @@ export const DE_MESSAGES = {
 
   "editor.command.openProblems": "Probleme öffnen",
   "editor.command.openFileHistory": "Dateiverlauf öffnen",
-  "editor.fileHistory.open": "Dateiverlauf öffnen",
-  "editor.fileHistory.dirtyConflict":
-    "Nicht gespeicherte Änderungen verhindern die Wiederherstellung. Speichern oder verwerfen Sie den aktuellen Puffer zuerst.",
   "editor.command.runFileTests": "Tests für Datei ausführen",
   "editor.command.runTypecheck": "Typprüfung ausführen",
   "editor.command.runLint": "Lint-Prüfung ausführen",
@@ -1588,17 +1562,6 @@ export const DE_MESSAGES = {
   "workspaceContext.manual.label": "Oder lokalen Pfad eingeben",
   "workspaceContext.manual.placeholder": "/pfad/zum/ordner",
   "workspaceContext.open": "Öffnen",
-  "editor.taskWorkspaceAccess.checking": "Verbindung zum Aufgabenarbeitsbereich wird hergestellt…",
-  "editor.taskWorkspaceAccess.checkingDescription":
-    "Keiko prüft, ob dieser Browser auf den lokalen Arbeitsbereich zugreifen kann.",
-  "editor.taskWorkspaceAccess.unpairedTitle": "Browsersitzung nicht gekoppelt",
-  "editor.taskWorkspaceAccess.unpairedDescription":
-    "Das ausgewählte Projekt ist verfügbar, aber dieser Browser hat keine Launcher-Berechtigung für private Task-Workspace-Inhalte. Starte Keiko über den Launcher neu.",
-  "editor.taskWorkspaceAccess.title":
-    "Der Aufgabenarbeitsbereich ist in diesem Browser nicht verfügbar",
-  "editor.taskWorkspaceAccess.description":
-    "Starte Keiko über das Startprogramm neu. Alternativ kannst du oben im Arbeitskontext einen Ordner oder ein Repository auswählen.",
-  "editor.taskWorkspaceAccess.retry": "Erneut prüfen",
   "relationships.health.toggleAria": "Graph-Health-Ansicht umschalten",
   "relationships.health.hide": "Health ausblenden",
   "relationships.health.show": "Graph Health",
@@ -2123,10 +2086,6 @@ export const DE_MESSAGES = {
   "filesWidget.multiRoot.remove": "Wurzel entfernen: {name}",
   "filesWidget.multiRoot.error":
     "Arbeitsbereichswurzeln konnten nicht aktualisiert werden. Bitte aktualisieren und erneut versuchen.",
-  "editor.multiRoot.label": "Mehrwurzel-Editor",
-  "editor.multiRoot.switcher": "Editor-Arbeitsbereichswurzeln",
-  "editor.multiRoot.error":
-    "Die fokussierte Arbeitsbereichswurzel konnte nicht aktualisiert werden.",
   "pdfCitationPreviewWindow.anchorQuality.approximate": "In der Nähe der zitierten Textstelle",
   "pdfCitationPreviewWindow.anchorQuality.unavailable": "Verifizierte Seite nicht verfügbar",
   "pdfCitationPreviewWindow.anchorQuality.pageOnly": "Nur verifizierte Seite",

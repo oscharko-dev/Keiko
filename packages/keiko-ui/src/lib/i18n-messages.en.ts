@@ -18,29 +18,7 @@ export const EN_MESSAGES = {
   "rail.coding": "Coding Workbench",
   "rail.localKnowledge": "Local Knowledge",
   "rail.editor": "Editor",
-  "editor.empty.title": "Open a project",
-  "editor.empty.description":
-    "Choose a project folder to start editing. The editor works inside the selected workspace root.",
-  "editor.empty.selectFolder": "Select folder…",
   "editor.empty.opening": "Opening…",
-  "editor.empty.open": "Open",
-  "editor.empty.pathLabel": "Project folder path",
-  "editor.empty.pickerTitle": "Select project folder",
-  "editor.empty.dialogBusy": "A native dialog is already open. Close it first.",
-  "editor.empty.pickerUnsupported":
-    "The native folder picker is unavailable on this platform. Enter a path below.",
-  "editor.empty.connectionFailed":
-    "The project could not be connected. Check the folder and try again.",
-  "editor.empty.workspaceUnavailable":
-    "The saved workspace identity is no longer current. Remove the stale project entry before reconnecting this folder.",
-  "editor.runtime.chooseFile": "Choose a file from the project tree to start editing.",
-  "editor.runtime.watchRefresh": "File list needs updating.",
-  "editor.runtime.watchInterrupted": "File watching interrupted.",
-  "editor.runtime.refresh": "Refresh",
-  "editor.runtime.details": "Details",
-  "editor.actions.more": "More file actions",
-  "editor.actions.format": "Format",
-  "editor.actions.reload": "Reload",
   "supportReport.create": "Create error report",
   "supportReport.creating": "Creating report…",
   "supportReport.saved": "Downloaded.",
@@ -51,9 +29,6 @@ export const EN_MESSAGES = {
 
   "editor.command.openProblems": "Open Problems",
   "editor.command.openFileHistory": "Open File History",
-  "editor.fileHistory.open": "Open file history",
-  "editor.fileHistory.dirtyConflict":
-    "Unsaved edits prevent restore. Save or discard the current buffer before restoring.",
   "editor.command.runFileTests": "Run Tests for File",
   "editor.command.runTypecheck": "Run Typecheck",
   "editor.command.runLint": "Run Lint",
@@ -1541,16 +1516,6 @@ export const EN_MESSAGES = {
   "workspaceContext.manual.label": "Or enter a local path",
   "workspaceContext.manual.placeholder": "/path/to/folder",
   "workspaceContext.open": "Open",
-  "editor.taskWorkspaceAccess.checking": "Connecting to the task workspace…",
-  "editor.taskWorkspaceAccess.checkingDescription":
-    "Keiko is checking this browser's local workspace access.",
-  "editor.taskWorkspaceAccess.unpairedTitle": "Browser session not paired",
-  "editor.taskWorkspaceAccess.unpairedDescription":
-    "The selected project is available, but this browser has no launcher permission for private task-workspace content. Restart Keiko through its launcher.",
-  "editor.taskWorkspaceAccess.title": "Task workspace unavailable in this browser",
-  "editor.taskWorkspaceAccess.description":
-    "Restart Keiko through the launcher, or choose a folder or repository from the workspace context above.",
-  "editor.taskWorkspaceAccess.retry": "Check again",
   "relationships.health.toggleAria": "Toggle the graph health view",
   "relationships.health.hide": "Hide health",
   "relationships.health.show": "Graph health",
@@ -2059,9 +2024,6 @@ export const EN_MESSAGES = {
   "filesWidget.multiRoot.moveDown": "Move root down: {name}",
   "filesWidget.multiRoot.remove": "Remove root: {name}",
   "filesWidget.multiRoot.error": "Unable to update workspace roots. Refresh and try again.",
-  "editor.multiRoot.label": "Multi-root editor",
-  "editor.multiRoot.switcher": "Editor workspace roots",
-  "editor.multiRoot.error": "Unable to update the focused workspace root.",
   "pdfCitationPreviewWindow.anchorQuality.approximate": "Near cited passage",
   "pdfCitationPreviewWindow.anchorQuality.unavailable": "Verified page unavailable",
   "pdfCitationPreviewWindow.anchorQuality.pageOnly": "Verified page only",

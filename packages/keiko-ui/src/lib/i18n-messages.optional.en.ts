@@ -1,4 +1,42 @@
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  "editor.empty.title": "Open a project",
+  "editor.empty.description":
+    "Choose a project folder to start editing. The editor works inside the selected workspace root.",
+  "editor.empty.selectFolder": "Select folder…",
+  "editor.empty.open": "Open",
+  "editor.empty.pathLabel": "Project folder path",
+  "editor.empty.pickerTitle": "Select project folder",
+  "editor.empty.dialogBusy": "A native dialog is already open. Close it first.",
+  "editor.empty.pickerUnsupported":
+    "The native folder picker is unavailable on this platform. Enter a path below.",
+  "editor.empty.connectionFailed":
+    "The project could not be connected. Check the folder and try again.",
+  "editor.empty.workspaceUnavailable":
+    "The saved workspace identity is no longer current. Remove the stale project entry before reconnecting this folder.",
+  "editor.runtime.chooseFile": "Choose a file from the project tree to start editing.",
+  "editor.runtime.watchRefresh": "File list needs updating.",
+  "editor.runtime.watchInterrupted": "File watching interrupted.",
+  "editor.runtime.refresh": "Refresh",
+  "editor.runtime.details": "Details",
+  "editor.actions.more": "More file actions",
+  "editor.actions.format": "Format",
+  "editor.actions.reload": "Reload",
+  "editor.fileHistory.open": "Open file history",
+  "editor.fileHistory.dirtyConflict":
+    "Unsaved edits prevent restore. Save or discard the current buffer before restoring.",
+  "editor.taskWorkspaceAccess.checking": "Connecting to the task workspace…",
+  "editor.taskWorkspaceAccess.checkingDescription":
+    "Keiko is checking this browser's local workspace access.",
+  "editor.taskWorkspaceAccess.unpairedTitle": "Browser session not paired",
+  "editor.taskWorkspaceAccess.unpairedDescription":
+    "The selected project is available, but this browser has no launcher permission for private task-workspace content. Restart Keiko through its launcher.",
+  "editor.taskWorkspaceAccess.title": "Task workspace unavailable in this browser",
+  "editor.taskWorkspaceAccess.description":
+    "Restart Keiko through the launcher, or choose a folder or repository from the workspace context above.",
+  "editor.taskWorkspaceAccess.retry": "Check again",
+  "editor.multiRoot.label": "Multi-root editor",
+  "editor.multiRoot.switcher": "Editor workspace roots",
+  "editor.multiRoot.error": "Unable to update the focused workspace root.",
   "editor.localHistoryProtection.savedBrief": "Saved. File history unavailable.",
   "editor.localHistoryProtection.suppressedBrief": "Saved without a history entry.",
   "editor.outline.title": "Outline",

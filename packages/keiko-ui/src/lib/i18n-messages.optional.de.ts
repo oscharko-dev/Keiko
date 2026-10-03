@@ -1,6 +1,47 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "editor.empty.title": "Projekt öffnen",
+  "editor.empty.description":
+    "Wählen Sie einen Projektordner aus, um mit der Bearbeitung zu beginnen. Der Editor arbeitet innerhalb des ausgewählten Workspace-Stammverzeichnisses.",
+  "editor.empty.selectFolder": "Ordner auswählen…",
+  "editor.empty.open": "Öffnen",
+  "editor.empty.pathLabel": "Pfad zum Projektordner",
+  "editor.empty.pickerTitle": "Projektordner auswählen",
+  "editor.empty.dialogBusy": "Ein nativer Dialog ist bereits geöffnet. Schließen Sie ihn zuerst.",
+  "editor.empty.pickerUnsupported":
+    "Die native Ordnerauswahl ist auf dieser Plattform nicht verfügbar. Geben Sie unten einen Pfad ein.",
+  "editor.empty.connectionFailed":
+    "Das Projekt konnte nicht verbunden werden. Prüfen Sie den Ordner und versuchen Sie es erneut.",
+  "editor.empty.workspaceUnavailable":
+    "Die gespeicherte Workspace-Identität ist nicht mehr aktuell. Entfernen Sie den veralteten Projekteintrag, bevor Sie diesen Ordner erneut verbinden.",
+  "editor.runtime.chooseFile":
+    "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
+  "editor.runtime.watchRefresh": "Dateiliste aktualisieren.",
+  "editor.runtime.watchInterrupted": "Dateiüberwachung unterbrochen.",
+  "editor.runtime.refresh": "Aktualisieren",
+  "editor.runtime.details": "Details",
+  "editor.actions.more": "Weitere Dateiaktionen",
+  "editor.actions.format": "Formatieren",
+  "editor.actions.reload": "Neu laden",
+  "editor.fileHistory.open": "Dateiverlauf öffnen",
+  "editor.fileHistory.dirtyConflict":
+    "Nicht gespeicherte Änderungen verhindern die Wiederherstellung. Speichern oder verwerfen Sie den aktuellen Puffer zuerst.",
+  "editor.taskWorkspaceAccess.checking": "Verbindung zum Aufgabenarbeitsbereich wird hergestellt…",
+  "editor.taskWorkspaceAccess.checkingDescription":
+    "Keiko prüft, ob dieser Browser auf den lokalen Arbeitsbereich zugreifen kann.",
+  "editor.taskWorkspaceAccess.unpairedTitle": "Browsersitzung nicht gekoppelt",
+  "editor.taskWorkspaceAccess.unpairedDescription":
+    "Das ausgewählte Projekt ist verfügbar, aber dieser Browser hat keine Launcher-Berechtigung für private Task-Workspace-Inhalte. Starte Keiko über den Launcher neu.",
+  "editor.taskWorkspaceAccess.title":
+    "Der Aufgabenarbeitsbereich ist in diesem Browser nicht verfügbar",
+  "editor.taskWorkspaceAccess.description":
+    "Starte Keiko über das Startprogramm neu. Alternativ kannst du oben im Arbeitskontext einen Ordner oder ein Repository auswählen.",
+  "editor.taskWorkspaceAccess.retry": "Erneut prüfen",
+  "editor.multiRoot.label": "Mehrwurzel-Editor",
+  "editor.multiRoot.switcher": "Editor-Arbeitsbereichswurzeln",
+  "editor.multiRoot.error":
+    "Die fokussierte Arbeitsbereichswurzel konnte nicht aktualisiert werden.",
   "editor.localHistoryProtection.savedBrief": "Gespeichert. Dateiverlauf nicht verfügbar.",
   "editor.localHistoryProtection.suppressedBrief": "Ohne Eintrag im Dateiverlauf gespeichert.",
   "editor.outline.title": "Gliederung",
