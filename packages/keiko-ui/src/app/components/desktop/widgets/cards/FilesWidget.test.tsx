@@ -1250,6 +1250,13 @@ describe("FilesWidget", () => {
                 extension: null,
                 readable: true,
               },
+              {
+                name: "blocked",
+                path: "blocked",
+                kind: "directory",
+                extension: null,
+                readable: false,
+              },
             ]
           : [{ ...treeEntryBase, name: "inside.ts", path: "generated/inside.ts", kind: "file" }],
     }));
@@ -1263,6 +1270,9 @@ describe("FilesWidget", () => {
     const ignored = await screen.findByRole("treeitem", { name: "generated, Ignored by Git" });
     expect(ignored).toHaveAttribute("data-git-ignored", "true");
     expect(ignored).not.toHaveAttribute("data-hidden");
+    const blocked = screen.getByRole("treeitem", { name: "blocked, Unavailable" });
+    expect(blocked).toHaveAttribute("aria-disabled", "true");
+    expect(blocked).toHaveTextContent(/^blocked$/u);
     await userEvent.click(ignored);
     const child = await screen.findByRole("treeitem", { name: "inside.ts, Ignored by Git" });
     expect(child).toHaveAttribute("data-git-ignored", "true");

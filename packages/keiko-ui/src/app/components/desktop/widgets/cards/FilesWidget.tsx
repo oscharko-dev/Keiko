@@ -1513,7 +1513,12 @@ export function FilesWidget({
 
   const visibilityOf = (
     entry: FilesTreeEntry,
-  ): { hidden: boolean; ignored: boolean; label: string | undefined } => {
+  ): {
+    hidden: boolean;
+    ignored: boolean;
+    label: string | undefined;
+    tooltip: string | undefined;
+  } => {
     const hidden = entry.name.startsWith(".");
     const ignored = entry.path.split("/").some((_segment, index, segments) => {
       const path = segments.slice(0, index + 1).join("/");
@@ -1528,6 +1533,7 @@ export function FilesWidget({
       hidden,
       ignored,
       label: labels.length > 0 ? [entry.name, ...labels].join(", ") : undefined,
+      tooltip: labels.length > 0 ? labels.join(", ") : undefined,
     };
   };
 
@@ -1608,13 +1614,10 @@ export function FilesWidget({
               if (source !== null) void moveEntry(source, entry.path);
             }}
           >
-            <span className="fi-fallback" style={{ color: "var(--accent)" }}>
+            <span className={`fi-fallback ${presentationStyles.cmpFolderIcon}`}>
               <FolderIcon size={14} />
             </span>
             <span className="tr-name tr-folder">{entry.name}</span>
-            {!entry.readable && entry.kind === "directory" ? (
-              <span className={presentationStyles.cmpUnavailable}>{tGit("tree.unavailable")}</span>
-            ) : null}
             {gitAggregate !== undefined ? (
               <span
                 className="tr-badge tr-git"
@@ -1694,7 +1697,13 @@ export function FilesWidget({
         <span className="tr-caret tr-caret-ghost" aria-hidden="true">
           <ChevronRIcon size={11} />
         </span>
-        <FileIcon name={entry.name} />
+        {visibility.hidden || ignored || !entry.readable ? (
+          <span className="fi-fallback">
+            <FileGlyphIcon size={14} />
+          </span>
+        ) : (
+          <FileIcon name={entry.name} />
+        )}
         <span className="tr-name" id={nameId}>
           {entry.name}
         </span>
@@ -1755,11 +1764,16 @@ export function FilesWidget({
       );
     }
     const unreadableTitle = t("filesWidget.tree.unreadableLinkReason");
-    const entryTip = entry.readable
+    const baseTip = entry.readable
       ? entry.path
       : entry.kind === "directory"
         ? tGit("tree.unavailable")
         : unreadableTitle;
+    const visibility = visibilityOf(entry);
+    const entryTip =
+      !entry.readable && entry.kind === "directory"
+        ? (visibility.tooltip ?? baseTip)
+        : [baseTip, visibility.tooltip].filter(Boolean).join(" — ");
     // #2906 review (comment 3865167721): a readable symlink-to-directory (kind: "symlink",
     // symlinkTargetKind: "directory") is server-listable exactly like a real directory, so it must
     // route through renderDirectoryEntry -- which is already written generically against `entry`
@@ -2135,7 +2149,7 @@ export function FilesWidget({
         <ResetIcon size={13} />
       </button>
       {renderMutationButtons()}
-      <span id={unreadableReasonId} className="visually-hidden">
+      <span id={unreadableReasonId} className={presentationStyles.cmpScreenReaderOnly}>
         {t("filesWidget.tree.unreadableLinkReason")}
       </span>
       {renderRootTree()}
