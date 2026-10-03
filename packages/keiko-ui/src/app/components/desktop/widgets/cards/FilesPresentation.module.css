@@ -20,6 +20,11 @@
 }
 
 .cmpEntry:is([data-hidden="true"], [data-git-ignored="true"], [data-readable="false"])
+  :global(.tr-name) {
+  font-weight: 300;
+}
+
+.cmpEntry:is([data-hidden="true"], [data-git-ignored="true"], [data-readable="false"])
   :global(.tr-name),
 .cmpEntry:is([data-hidden="true"], [data-git-ignored="true"], [data-readable="false"])
   :global(.fi-fallback) {
