@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import { useTranslate } from "@/lib/i18n";
 import { Icons } from "../../Icons";
 import styles from "./ManagedTaskWorkspaceUnavailable.module.css";
 
@@ -13,7 +13,7 @@ export function ManagedTaskWorkspaceUnavailable(props: {
   readonly access: ManagedTaskWorkspaceAccess;
   readonly onRetry: () => void;
 }): ReactNode {
-  const t = useOptionalWidgetTranslate();
+  const t = useTranslate();
   const checking = props.access === "checking";
   const unpaired = props.access === "unpaired";
   const title = unpaired

@@ -39,7 +39,6 @@ import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
 import { useEditorProjectConnection } from "../widgets/cards/useEditorProjectConnection";
-import type { MessageKey } from "@/lib/i18n-messages.en";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
@@ -158,8 +157,8 @@ type ProductionAgentWorkflowId = Extract<
 // table, so a literal here reached the user untranslated in every locale.
 const AGENT_WORKFLOWS: readonly {
   readonly id: ProductionAgentWorkflowId;
-  readonly labelKey: MessageKey;
-  readonly scopeKey: MessageKey;
+  readonly labelKey: OptionalWidgetMessageKey;
+  readonly scopeKey: OptionalWidgetMessageKey;
 }[] = [
   {
     id: "unit-test-generation",
@@ -365,18 +364,18 @@ function validationMessage(
   workspaceRoot: string,
   modelId: string,
   fields: AgentLauncherFields,
-  t: I18nTranslate,
+  optionalT: OptionalWidgetTranslate,
 ): string | null {
-  if (workspaceRoot.length === 0) return t("agentLauncher.validation.repositoryRequired");
-  if (modelId.length === 0) return t("agentLauncher.validation.noModel");
+  if (workspaceRoot.length === 0) return optionalT("agentLauncher.validation.repositoryRequired");
+  if (modelId.length === 0) return optionalT("agentLauncher.validation.noModel");
   if (workflow === "unit-test-generation") {
     if (fields.unitFilePath.trim().length === 0) {
-      return t("agentLauncher.validation.unitSource");
+      return optionalT("agentLauncher.validation.unitSource");
     }
   }
   if (workflow === "bug-investigation") {
     if (fields.bugDescription.trim().length === 0) {
-      return t("agentLauncher.validation.bugDescription");
+      return optionalT("agentLauncher.validation.bugDescription");
     }
   }
   return null;
@@ -524,8 +523,13 @@ function findAgentWorkflow(workflow: ProductionAgentWorkflowId): (typeof AGENT_W
   return AGENT_WORKFLOWS.find((item) => item.id === workflow) ?? AGENT_WORKFLOWS[0]!;
 }
 
-function agentStartLabel(workflow: ProductionAgentWorkflowId, t: I18nTranslate): string {
-  return t("agentLauncher.start", { label: t(findAgentWorkflow(workflow).labelKey) });
+function agentStartLabel(
+  workflow: ProductionAgentWorkflowId,
+  optionalT: OptionalWidgetTranslate,
+): string {
+  return optionalT("agentLauncher.start", {
+    label: optionalT(findAgentWorkflow(workflow).labelKey),
+  });
 }
 
 // The native repository dialog opens at the OS default location when no seed is known; the seed
@@ -602,6 +606,7 @@ interface AgentTaskFieldsProps {
   readonly nativeDialogSupported: boolean;
   readonly sourceBrowseHelperId: string;
   readonly t: I18nTranslate;
+  readonly optionalT: OptionalWidgetTranslate;
   readonly updateField: (patch: Partial<AgentLauncherFields>) => void;
   readonly onBrowseSourceFile: () => void;
 }
@@ -614,16 +619,17 @@ function renderAgentSourceFileField(props: AgentTaskFieldsProps): ReactNode {
     nativeDialogSupported,
     sourceBrowseHelperId,
     t,
+    optionalT,
     updateField,
     onBrowseSourceFile,
   } = props;
   return (
     <label className="dlg-field">
-      <span className="dlg-label">{t("agentLauncher.scope.sourceFile")}</span>
+      <span className="dlg-label">{optionalT("agentLauncher.scope.sourceFile")}</span>
       <span className="dlg-dirwrap">
         <input
           className="dlg-input mono"
-          placeholder={t("agentLauncher.sourceFilePlaceholder")}
+          placeholder={optionalT("agentLauncher.sourceFilePlaceholder")}
           value={fields.unitFilePath}
           onChange={(event) => updateField({ unitFilePath: event.target.value })}
           onBlur={(event) =>
@@ -635,7 +641,7 @@ function renderAgentSourceFileField(props: AgentTaskFieldsProps): ReactNode {
         <button
           type="button"
           className="dlg-btn dlg-dirbtn"
-          aria-label={t("agentLauncher.browseSourceFile")}
+          aria-label={optionalT("agentLauncher.browseSourceFile")}
           disabled={!canBrowseSourceFile}
           aria-describedby={!canBrowseSourceFile ? sourceBrowseHelperId : undefined}
           onClick={onBrowseSourceFile}
@@ -646,7 +652,7 @@ function renderAgentSourceFileField(props: AgentTaskFieldsProps): ReactNode {
       {!canBrowseSourceFile ? (
         <span id={sourceBrowseHelperId} className="dlg-note">
           {nativeDialogSupported
-            ? t("agentLauncher.selectRepositoryFirst")
+            ? optionalT("agentLauncher.selectRepositoryFirst")
             : t("nativeDialog.unsupported")}
         </span>
       ) : null}
@@ -655,22 +661,23 @@ function renderAgentSourceFileField(props: AgentTaskFieldsProps): ReactNode {
 }
 
 function renderAgentBugFields(props: AgentTaskFieldsProps): ReactNode {
-  const { fields, workspace, t, updateField } = props;
+  const { fields, workspace, t, optionalT, updateField } = props;
   return (
     <>
       <label className="dlg-field">
-        <span className="dlg-label">{t("agentLauncher.observedBehavior")}</span>
+        <span className="dlg-label">{optionalT("agentLauncher.observedBehavior")}</span>
         <textarea
           className="dlg-input dlg-textarea"
           rows={2}
-          placeholder={t("agentLauncher.observedBehaviorPlaceholder")}
+          placeholder={optionalT("agentLauncher.observedBehaviorPlaceholder")}
           value={fields.bugDescription}
           onChange={(event) => updateField({ bugDescription: event.target.value })}
         />
       </label>
       <label className="dlg-field">
         <span className="dlg-label">
-          {t("agentLauncher.failingOutput")} <span className="dlg-opt">{t("common.optional")}</span>
+          {optionalT("agentLauncher.failingOutput")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
         </span>
         <textarea
           className="dlg-input dlg-textarea mono"
@@ -681,7 +688,8 @@ function renderAgentBugFields(props: AgentTaskFieldsProps): ReactNode {
       </label>
       <label className="dlg-field">
         <span className="dlg-label">
-          {t("agentLauncher.stackTrace")} <span className="dlg-opt">{t("common.optional")}</span>
+          {optionalT("agentLauncher.stackTrace")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
         </span>
         <textarea
           className="dlg-input dlg-textarea mono"
@@ -692,12 +700,13 @@ function renderAgentBugFields(props: AgentTaskFieldsProps): ReactNode {
       </label>
       <label className="dlg-field">
         <span className="dlg-label">
-          {t("agentLauncher.relatedFiles")} <span className="dlg-opt">{t("common.optional")}</span>
+          {optionalT("agentLauncher.relatedFiles")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
         </span>
         <textarea
           className="dlg-input dlg-textarea mono"
           rows={2}
-          placeholder={t("agentLauncher.relatedFilesPlaceholder")}
+          placeholder={optionalT("agentLauncher.relatedFilesPlaceholder")}
           value={fields.bugTargetFiles}
           onChange={(event) => updateField({ bugTargetFiles: event.target.value })}
           onBlur={(event) =>
@@ -720,14 +729,14 @@ function renderAgentRegistrationWarning(
   registered: boolean,
   registering: boolean,
   onRegister: () => void,
-  t: I18nTranslate,
+  optionalT: OptionalWidgetTranslate,
 ): ReactNode {
   if (workspace.length === 0 || registered) return null;
   return (
     <div className="dlg-agent-warning">
-      <span>{t("agentLauncher.notRegistered")}</span>
+      <span>{optionalT("agentLauncher.notRegistered")}</span>
       <button type="button" className="dlg-btn" disabled={registering} onClick={onRegister}>
-        {registering ? t("agentLauncher.registering") : t("agentLauncher.register")}
+        {registering ? optionalT("agentLauncher.registering") : optionalT("agentLauncher.register")}
       </button>
     </div>
   );
@@ -736,7 +745,7 @@ function renderAgentRegistrationWarning(
 function renderCurrentFileButton(
   currentFile: string | null,
   onUseCurrentFile: () => void,
-  t: I18nTranslate,
+  optionalT: OptionalWidgetTranslate,
 ): ReactNode {
   if (currentFile === null) return null;
   return (
@@ -746,7 +755,7 @@ function renderCurrentFileButton(
       onClick={onUseCurrentFile}
       title={currentFile}
     >
-      <FilesIcon size={13} /> {t("agentLauncher.useCurrentFile")}{" "}
+      <FilesIcon size={13} /> {optionalT("agentLauncher.useCurrentFile")}{" "}
       <span className="mono">{currentFile}</span>
     </button>
   );
@@ -756,11 +765,11 @@ function renderCurrentFileButton(
 // Start button's aria-describedby. <output> is the native status live region
 // (S6819); it is inline like the <span> it replaces, so `.dlg-note` keeps
 // rendering the same box.
-function renderAgentLoadingStatus(loading: boolean, t: I18nTranslate): ReactNode {
+function renderAgentLoadingStatus(loading: boolean, optionalT: OptionalWidgetTranslate): ReactNode {
   if (!loading) return null;
   return (
     <output id="agent-start-validation" className="dlg-note">
-      {t("agentLauncher.loading")}
+      {optionalT("agentLauncher.loading")}
     </output>
   );
 }
@@ -813,10 +822,10 @@ function AgentLauncher({
   const workspace = workspaceRoot.trim();
   const currentFile = resolveCurrentFile(filesContext, workspace);
   const registered = workspace.length > 0 && projects.includes(workspace);
-  const validation = validationMessage(workflow, workspace, modelId, fields, t);
+  const validation = validationMessage(workflow, workspace, modelId, fields, optionalT);
   const canStart = validation === null && registered && !starting && !loading;
   const selectedAgent = findAgentWorkflow(workflow);
-  const startLabel = agentStartLabel(workflow, t);
+  const startLabel = agentStartLabel(workflow, optionalT);
   const nativeDialogSupported = useNativeFileDialogCapability();
   const firstAvailableProjectRoot = projects[0] ?? "";
   const repositoryBrowseSeed = resolveRepositoryBrowseSeed(
@@ -899,7 +908,7 @@ function AgentLauncher({
 
   const startAgent = async (): Promise<void> => {
     if (!canStart) {
-      setDialogError(validation ?? t("agentLauncher.notRegistered"));
+      setDialogError(validation ?? optionalT("agentLauncher.notRegistered"));
       return;
     }
     setStarting(true);
@@ -930,7 +939,7 @@ function AgentLauncher({
     } catch (error: unknown) {
       if (isWorkspaceNotRegisteredError(error)) {
         await refreshProjects().catch(() => undefined);
-        setDialogError(t("agentLauncher.notRegistered"));
+        setDialogError(optionalT("agentLauncher.notRegistered"));
       } else {
         setDialogError(errorMessage(error, t));
       }
@@ -966,7 +975,7 @@ function AgentLauncher({
         return;
       }
       if (resolved.kind === "outside-workspace") {
-        setDialogError(t("agentLauncher.fileOutsideRepository"));
+        setDialogError(optionalT("agentLauncher.fileOutsideRepository"));
         return;
       }
       if (resolved.kind === "message") setDialogError(resolved.message);
@@ -977,21 +986,23 @@ function AgentLauncher({
     <>
       <div className="dlg-agent-grid">
         <div className="dlg-field">
-          <span className="dlg-label">{t("agentLauncher.agent")}</span>
+          <span className="dlg-label">{optionalT("agentLauncher.agent")}</span>
           <span className="dlg-selwrap">
             <KeikoSelect
               triggerClassName="dlg-input"
               value={workflow}
-              ariaLabel={t("agentLauncher.agent")}
+              ariaLabel={optionalT("agentLauncher.agent")}
               /* eslint-disable-next-line jsx-a11y/no-autofocus -- launcher dialog starts on workflow selection for keyboard users. */
               autoFocus
-              menuTitle={t("agentLauncher.agent")}
-              menuCountLabel={t("agentLauncher.agentCount", { count: AGENT_WORKFLOWS.length })}
+              menuTitle={optionalT("agentLauncher.agent")}
+              menuCountLabel={optionalT("agentLauncher.agentCount", {
+                count: AGENT_WORKFLOWS.length,
+              })}
               sections={[
                 {
                   options: AGENT_WORKFLOWS.map((item) => ({
                     value: item.id,
-                    label: t(item.labelKey),
+                    label: optionalT(item.labelKey),
                   })),
                 },
               ]}
@@ -1003,14 +1014,14 @@ function AgentLauncher({
           </span>
         </div>
         <div className="dlg-field">
-          <span className="dlg-label">{t("agentLauncher.model")}</span>
+          <span className="dlg-label">{optionalT("agentLauncher.model")}</span>
           <span className="dlg-selwrap">
             <KeikoSelect
               triggerClassName="dlg-input mono"
               value={modelId}
-              ariaLabel={t("agentLauncher.model")}
+              ariaLabel={optionalT("agentLauncher.model")}
               disabled={models.length === 0}
-              menuTitle={t("agentLauncher.model")}
+              menuTitle={optionalT("agentLauncher.model")}
               mono
               sections={[
                 {
@@ -1026,12 +1037,12 @@ function AgentLauncher({
         </div>
       </div>
       <label className="dlg-field">
-        <span className="dlg-label">{t("agentLauncher.repository")}</span>
+        <span className="dlg-label">{optionalT("agentLauncher.repository")}</span>
         <span className="dlg-dirwrap">
           <input
             className="dlg-input mono"
             value={workspaceRoot}
-            placeholder={t("agentLauncher.repositoryPlaceholder")}
+            placeholder={optionalT("agentLauncher.repositoryPlaceholder")}
             onChange={(event) => setWorkspaceRoot(event.target.value)}
           />
           <button
@@ -1051,18 +1062,18 @@ function AgentLauncher({
         registered,
         registering,
         () => void registerWorkspace(),
-        t,
+        optionalT,
       )}
       <AgentAutonomyModePicker
         value={requestedMode}
         onChange={setRequestedMode}
         optionalT={optionalT}
       />
-      {renderCurrentFileButton(currentFile, useCurrentFile, t)}
+      {renderCurrentFileButton(currentFile, useCurrentFile, optionalT)}
       <div className="dlg-agent-task">
         <div className="dlg-agent-task-head">
-          <span className="dlg-agent-task-title">{t(selectedAgent.labelKey)}</span>
-          <span className="dlg-agent-task-scope">{t(selectedAgent.scopeKey)}</span>
+          <span className="dlg-agent-task-title">{optionalT(selectedAgent.labelKey)}</span>
+          <span className="dlg-agent-task-scope">{optionalT(selectedAgent.scopeKey)}</span>
         </div>
         {renderAgentTaskFields({
           workflow,
@@ -1072,12 +1083,13 @@ function AgentLauncher({
           nativeDialogSupported,
           sourceBrowseHelperId,
           t,
+          optionalT,
           updateField,
           onBrowseSourceFile: openSourceFilePicker,
         })}
       </div>
       <div className="dlg-agent-actions">
-        {renderAgentLoadingStatus(loading, t)}
+        {renderAgentLoadingStatus(loading, optionalT)}
         {renderAgentValidationStatus(loading, validation)}
         <button type="button" className="dlg-btn" onClick={onClose}>
           {t("common.cancel")}
@@ -1090,7 +1102,7 @@ function AgentLauncher({
           aria-describedby={!canStart && !starting ? "agent-start-validation" : undefined}
           onClick={() => void startAgent()}
         >
-          {starting ? t("agentLauncher.starting") : startLabel}
+          {starting ? optionalT("agentLauncher.starting") : startLabel}
         </button>
       </div>
     </>

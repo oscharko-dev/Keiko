@@ -1,6 +1,21 @@
 import type { MessageCatalog } from "./i18n-messages.en";
-
 export const DE_MESSAGES = {
+  "editor.taskWorkspaceAccess.checking": "Verbindung zum Aufgabenarbeitsbereich wird hergestellt…",
+  "editor.taskWorkspaceAccess.checkingDescription":
+    "Keiko prüft, ob dieser Browser auf den lokalen Arbeitsbereich zugreifen kann.",
+  "editor.taskWorkspaceAccess.unpairedTitle": "Browsersitzung nicht gekoppelt",
+  "editor.taskWorkspaceAccess.unpairedDescription":
+    "Das ausgewählte Projekt ist verfügbar, aber dieser Browser hat keine Launcher-Berechtigung für private Task-Workspace-Inhalte. Starte Keiko über den Launcher neu.",
+  "editor.taskWorkspaceAccess.title":
+    "Der Aufgabenarbeitsbereich ist in diesem Browser nicht verfügbar",
+  "editor.taskWorkspaceAccess.description":
+    "Starte Keiko über das Startprogramm neu. Alternativ kannst du oben im Arbeitskontext einen Ordner oder ein Repository auswählen.",
+  "editor.taskWorkspaceAccess.retry": "Erneut prüfen",
+  "editor.multiRoot.label": "Mehrwurzel-Editor",
+  "editor.multiRoot.switcher": "Editor-Arbeitsbereichswurzeln",
+  "editor.multiRoot.error":
+    "Die fokussierte Arbeitsbereichswurzel konnte nicht aktualisiert werden.",
+
   "app.skipToContent": "Zum Inhalt springen",
   "app.workspaceHeading": "Keiko-Arbeitsbereich",
   "header.tileAll": "Alle Fenster kacheln",
@@ -439,39 +454,6 @@ export const DE_MESSAGES = {
   "nativeDialog.selectFolder": "Ordner auswählen",
   "nativeDialog.selectRepository": "Repository-Ordner auswählen",
   "nativeDialog.selectSourceFile": "Quelldatei auswählen",
-  "agentLauncher.agent": "Agent",
-  "agentLauncher.agentCount": "{count} Agenten",
-  "agentLauncher.model": "Modell",
-  "agentLauncher.repository": "Repository",
-  "agentLauncher.repositoryPlaceholder": "/absoluter/repository/pfad",
-  "agentLauncher.workflow.unitTest": "Unit Test Agent",
-  "agentLauncher.workflow.bugfix": "Bugfix Agent",
-  "agentLauncher.scope.sourceFile": "Quelldatei",
-  "agentLauncher.scope.bugReport": "Fehlerbericht",
-  "agentLauncher.sourceFilePlaceholder": "src/datei.ts",
-  "agentLauncher.browseSourceFile": "Quelldatei durchsuchen",
-  "agentLauncher.selectRepositoryFirst":
-    "Wähle ein Repository aus, bevor du Quelldateien durchsuchst.",
-  "agentLauncher.observedBehavior": "Beobachtetes Verhalten",
-  "agentLauncher.observedBehaviorPlaceholder": "Beschreibe den beobachteten Fehler.",
-  "agentLauncher.failingOutput": "Fehlerhafte Ausgabe",
-  "agentLauncher.stackTrace": "Stacktrace",
-  "agentLauncher.relatedFiles": "Zugehörige Dateien",
-  "agentLauncher.relatedFilesPlaceholder": "src/datei.ts, src/andere.ts",
-  "agentLauncher.notRegistered": "Das Repository ist nicht registriert.",
-  "agentLauncher.registering": "Wird registriert…",
-  "agentLauncher.register": "Repository registrieren",
-  "agentLauncher.useCurrentFile": "Aktuelle Datei verwenden",
-  "agentLauncher.loading": "Modelle und Projekte werden geladen…",
-  "agentLauncher.start": "{label} starten",
-  "agentLauncher.starting": "Wird gestartet…",
-  "agentLauncher.validation.repositoryRequired": "Ein Repository ist erforderlich.",
-  "agentLauncher.validation.noModel": "Kein kompatibles Modell verfügbar.",
-  "agentLauncher.validation.explainFile": "Der Erklärplan benötigt einen Dateipfad.",
-  "agentLauncher.validation.unitSource": "Der Unit Test Agent benötigt eine Quelldatei.",
-  "agentLauncher.validation.bugDescription":
-    "Der Bugfix Agent benötigt ein beobachtetes Verhalten.",
-  "agentLauncher.fileOutsideRepository": "Wähle eine Datei innerhalb des ausgewählten Repositorys.",
   "command.group.create": "Erstellen",
   "command.group.tools": "Werkzeuge",
   "command.group.layout": "Layout",

@@ -1,6 +1,39 @@
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
 
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  "agentLauncher.agent": "Agent",
+  "agentLauncher.agentCount": "{count} Agenten",
+  "agentLauncher.model": "Modell",
+  "agentLauncher.repository": "Repository",
+  "agentLauncher.repositoryPlaceholder": "/absoluter/repository/pfad",
+  "agentLauncher.workflow.unitTest": "Unit Test Agent",
+  "agentLauncher.workflow.bugfix": "Bugfix Agent",
+  "agentLauncher.scope.sourceFile": "Quelldatei",
+  "agentLauncher.scope.bugReport": "Fehlerbericht",
+  "agentLauncher.sourceFilePlaceholder": "src/datei.ts",
+  "agentLauncher.browseSourceFile": "Quelldatei durchsuchen",
+  "agentLauncher.selectRepositoryFirst":
+    "Wähle ein Repository aus, bevor du Quelldateien durchsuchst.",
+  "agentLauncher.observedBehavior": "Beobachtetes Verhalten",
+  "agentLauncher.observedBehaviorPlaceholder": "Beschreibe den beobachteten Fehler.",
+  "agentLauncher.failingOutput": "Fehlerhafte Ausgabe",
+  "agentLauncher.stackTrace": "Stacktrace",
+  "agentLauncher.relatedFiles": "Zugehörige Dateien",
+  "agentLauncher.relatedFilesPlaceholder": "src/datei.ts, src/andere.ts",
+  "agentLauncher.notRegistered": "Das Repository ist nicht registriert.",
+  "agentLauncher.registering": "Wird registriert…",
+  "agentLauncher.register": "Repository registrieren",
+  "agentLauncher.useCurrentFile": "Aktuelle Datei verwenden",
+  "agentLauncher.loading": "Modelle und Projekte werden geladen…",
+  "agentLauncher.start": "{label} starten",
+  "agentLauncher.starting": "Wird gestartet…",
+  "agentLauncher.validation.repositoryRequired": "Ein Repository ist erforderlich.",
+  "agentLauncher.validation.noModel": "Kein kompatibles Modell verfügbar.",
+  "agentLauncher.validation.explainFile": "Der Erklärplan benötigt einen Dateipfad.",
+  "agentLauncher.validation.unitSource": "Der Unit Test Agent benötigt eine Quelldatei.",
+  "agentLauncher.validation.bugDescription":
+    "Der Bugfix Agent benötigt ein beobachtetes Verhalten.",
+  "agentLauncher.fileOutsideRepository": "Wähle eine Datei innerhalb des ausgewählten Repositorys.",
   "editor.empty.title": "Projekt öffnen",
   "editor.empty.description":
     "Wählen Sie einen Projektordner aus, um mit der Bearbeitung zu beginnen. Der Editor arbeitet innerhalb des ausgewählten Workspace-Stammverzeichnisses.",
@@ -27,21 +60,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "editor.fileHistory.open": "Dateiverlauf öffnen",
   "editor.fileHistory.dirtyConflict":
     "Nicht gespeicherte Änderungen verhindern die Wiederherstellung. Speichern oder verwerfen Sie den aktuellen Puffer zuerst.",
-  "editor.taskWorkspaceAccess.checking": "Verbindung zum Aufgabenarbeitsbereich wird hergestellt…",
-  "editor.taskWorkspaceAccess.checkingDescription":
-    "Keiko prüft, ob dieser Browser auf den lokalen Arbeitsbereich zugreifen kann.",
-  "editor.taskWorkspaceAccess.unpairedTitle": "Browsersitzung nicht gekoppelt",
-  "editor.taskWorkspaceAccess.unpairedDescription":
-    "Das ausgewählte Projekt ist verfügbar, aber dieser Browser hat keine Launcher-Berechtigung für private Task-Workspace-Inhalte. Starte Keiko über den Launcher neu.",
-  "editor.taskWorkspaceAccess.title":
-    "Der Aufgabenarbeitsbereich ist in diesem Browser nicht verfügbar",
-  "editor.taskWorkspaceAccess.description":
-    "Starte Keiko über das Startprogramm neu. Alternativ kannst du oben im Arbeitskontext einen Ordner oder ein Repository auswählen.",
-  "editor.taskWorkspaceAccess.retry": "Erneut prüfen",
-  "editor.multiRoot.label": "Mehrwurzel-Editor",
-  "editor.multiRoot.switcher": "Editor-Arbeitsbereichswurzeln",
-  "editor.multiRoot.error":
-    "Die fokussierte Arbeitsbereichswurzel konnte nicht aktualisiert werden.",
   "editor.localHistoryProtection.savedBrief": "Gespeichert. Dateiverlauf nicht verfügbar.",
   "editor.localHistoryProtection.suppressedBrief": "Ohne Eintrag im Dateiverlauf gespeichert.",
   "editor.outline.title": "Gliederung",
