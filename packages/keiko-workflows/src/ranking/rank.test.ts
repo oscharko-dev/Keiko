@@ -157,7 +157,7 @@ describe("rankCandidates", () => {
     expect(reasons.includes("near-duplicate")).toBe(true);
   });
 
-  it("derives near-duplicate hints for larger same-filename clusters", () => {
+  it("keeps independently located evidence in larger same-filename clusters", () => {
     const result = rankCandidates(
       {
         atoms: [
@@ -173,7 +173,8 @@ describe("rankCandidates", () => {
     expect(result.kept.map((candidate) => candidate.scopePath)).toContain(
       "packages/b/src/client.ts",
     );
-    expect(result.diagnostics.omittedCounts["near-duplicate"]).toBe(3);
+    expect(result.kept).toHaveLength(4);
+    expect(result.diagnostics.omittedCounts["near-duplicate"]).toBe(0);
   });
 
   it("does not auto-collapse workspace package manifests as near-duplicates", () => {

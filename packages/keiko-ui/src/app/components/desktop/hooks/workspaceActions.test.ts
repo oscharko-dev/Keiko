@@ -43,7 +43,7 @@ import type { AppWindow, Connection, ConnectingState, View } from "../windows/ty
 import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
-import type { ChatBindingTarget, ChatUnbindTarget } from "./useWorkspace.types";
+import type { ChatBindingTarget, ChatUnbindTarget, ConnectionOutcome } from "./useWorkspace.types";
 import {
   EDITOR_SIDEBAR_DEFAULT_WIDTH,
   EDITOR_SIDEBAR_MIN_WIDTH,
@@ -556,6 +556,8 @@ function ref<T>(value: T): MutableRefObject<T> {
 }
 
 interface ConnectHarnessOverrides {
+  readonly connectionOutcomeVersionRef?: { current: number };
+  readonly onConnectionOutcome?: (outcome: ConnectionOutcome) => void;
   readonly connecting?: ConnectingState | null;
   readonly setConns?: Dispatch<SetStateAction<Connection[]>>;
   readonly onScopeBind?: (
@@ -632,6 +634,8 @@ function makeConnectHarness(
     focus: () => undefined,
     setConns,
     setConnecting: (() => undefined) as Dispatch<SetStateAction<ConnectingState | null>>,
+    connectionOutcomeVersionRef: overrides.connectionOutcomeVersionRef,
+    onConnectionOutcome: overrides.onConnectionOutcome,
     onScopeBind: overrides.onScopeBind,
     onScopeUnbind: overrides.onScopeUnbind,
     onConnectorBind: overrides.onConnectorBind,
@@ -2667,6 +2671,74 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
   async function flushAsyncBind(): Promise<void> {
     await Promise.resolve();
   }
+
+  it("reports pending then connected only after the scope bind acknowledges", async () => {
+    const acceptance = deferredValue<boolean>();
+    const outcomes: ConnectionOutcome[] = [];
+    const harness = makeConnectHarness(
+      [win("files", { resolvedRoot: "/data/docs" }, "files-1"), win("chat", {}, "chat-1")],
+      [],
+      {
+        connecting: { from: "files-1", x: 0, y: 0 },
+        onScopeBind: () => acceptance.promise,
+        onConnectionOutcome: (outcome) => outcomes.push(outcome),
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(outcomes.at(-1)?.kind).toBe("pending");
+    expect(outcomes.map((outcome) => outcome.kind)).not.toContain("cancelled");
+    acceptance.resolve(true);
+    await acceptance.promise;
+    await flushAsyncBind();
+    expect(outcomes.at(-1)).toEqual({ kind: "connected", fromId: "files-1", toId: "chat-1" });
+    expect(outcomes.map((outcome) => outcome.kind)).not.toContain("cancelled");
+  });
+
+  it("does not let an earlier acknowledgement overwrite a newer cancelled gesture", async () => {
+    const acceptance = deferredValue<boolean>();
+    const outcomes: ConnectionOutcome[] = [];
+    const connectionOutcomeVersionRef = { current: 0 };
+    const wins = [
+      win("files", { resolvedRoot: "/data/docs" }, "files-1"),
+      win("chat", {}, "chat-1"),
+    ];
+    const overrides: ConnectHarnessOverrides = {
+      connecting: { from: "files-1", x: 0, y: 0 },
+      connectionOutcomeVersionRef,
+      onScopeBind: () => acceptance.promise,
+      onConnectionOutcome: (outcome) => outcomes.push(outcome),
+    };
+    makeConnectHarness(wins, [], overrides).confirmConnect("chat-1", evt);
+    expect(outcomes.at(-1)?.kind).toBe("pending");
+    makeConnectHarness(wins, [], overrides).cancelConnect();
+    const cancelledCount = outcomes.length;
+    expect(outcomes.at(-1)?.kind).toBe("cancelled");
+    acceptance.resolve(true);
+    await acceptance.promise;
+    await flushAsyncBind();
+    expect(outcomes).toHaveLength(cancelledCount);
+    expect(outcomes.at(-1)?.kind).toBe("cancelled");
+  });
+
+  it("reports a rejected scope bind and preserves explicit cancellation", async () => {
+    const outcomes: ConnectionOutcome[] = [];
+    const overrides: ConnectHarnessOverrides = {
+      connecting: { from: "files-1", x: 0, y: 0 },
+      onScopeBind: () => false,
+      onConnectionOutcome: (outcome) => outcomes.push(outcome),
+    };
+    const wins = [
+      win("files", { resolvedRoot: "/data/docs" }, "files-1"),
+      win("chat", {}, "chat-1"),
+    ];
+    const rejected = makeConnectHarness(wins, [], overrides);
+    rejected.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
+    expect(outcomes.at(-1)?.kind).toBe("rejected");
+    const cancelled = makeConnectHarness(wins, [], overrides);
+    cancelled.cancelConnect();
+    expect(outcomes.at(-1)?.kind).toBe("cancelled");
+  });
 
   it("does not draw the edge when onScopeBind vetoes the bind", async () => {
     const store = { conns: [] as Connection[] };

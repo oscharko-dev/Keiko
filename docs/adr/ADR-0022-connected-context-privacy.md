@@ -148,7 +148,12 @@ caller byte cap still reports incomplete coverage when it excludes otherwise eli
 
 An explicit identifier or quoted target starts an independent retrieval question even when the
 question contains an anaphoric word such as "there". Literal lookup prioritizes actual lexical
-content matches ahead of incidental natural-language path overlap. Ordinary-folder factual
+content matches ahead of incidental natural-language path overlap. Files with the same basename
+remain independent evidence candidates: their names alone cannot establish duplicate content or
+facts. Explicit duplicate hints remain supported, and existing output/context budgets bound retained
+evidence. When distinct explicit anchors identify different candidate paths, bounded selection
+prioritizes coverage of those paths before additional alternatives for an already covered anchor.
+Ordinary-folder factual
 HTML/text lookups and complete literal absences avoid unrelated code-graph augmentation;
 Git-history discovery is not attempted for a folder without Git unless the question requests
 history or relationships. Requested definition, relationship, and history evidence retains its

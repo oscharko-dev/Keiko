@@ -1226,6 +1226,49 @@ describe("runGroundedExploration", () => {
     },
   );
 
+  it("retains both independently requested HTML facts in a same-filename cluster", async () => {
+    for (const [folder, marker, pressure] of [
+      ["build", "LAB_DIRECTORY_BUILD", 17],
+      ["dist", "LAB_DIRECTORY_DIST", 23],
+      ["out", "LAB_DIRECTORY_OUT", 41],
+      ["tmp", "LAB_DIRECTORY_TMP", 53],
+    ] as const) {
+      mkdirSync(join(ROOT, folder), { recursive: true });
+      writeFileSync(
+        join(ROOT, folder, "service.html"),
+        `<p>${marker} Der Prüfwert beträgt ${String(pressure)} bar.</p>\n`,
+      );
+    }
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Suche im verbundenen Handbuchordner nach LAB_DIRECTORY_BUILD und LAB_DIRECTORY_DIST. Welcher Druck ist jeweils dokumentiert? Nenne beide Dateien und belegte Zeilen.",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        fs: nodeWorkspaceFs,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    for (const [folder, marker, pressure] of [
+      ["build", "LAB_DIRECTORY_BUILD", 17],
+      ["dist", "LAB_DIRECTORY_DIST", 23],
+    ] as const) {
+      const path = `${folder}/service.html`;
+      const file = out.pack.files.find((entry) => entry.scopePath === path);
+      expect(file?.excerpts.map((entry) => entry.content).join("\n")).toContain(
+        `${marker} Der Prüfwert beträgt ${String(pressure)} bar.`,
+      );
+      expect(file?.excerpts[0]?.atom.lineRange?.startLine).toBe(1);
+      expect(out.pack.omitted.some((entry) => entry.scopePath === path)).toBe(false);
+    }
+    expect(out.pack.usage.searchCalls).toBe(1);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("keeps a complete ordinary-folder literal absence free of unrelated code scan warnings", async () => {
     writeFileSync(join(ROOT, "manual.html"), "<p>Service interval: 750 hours</p>\n");
     const out = await retrieveConnectedContextPack(

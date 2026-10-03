@@ -17,6 +17,7 @@ import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 import type {
+  ConnectionOutcome,
   ChatBindingTarget,
   ChatUnbindTarget,
   UseWorkspaceResult,
@@ -2085,6 +2086,7 @@ export function useWorkspace(
   const [palOpen, setPalOpen] = useState(false);
   const [conns, setConns] = useState<Connection[]>([]);
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
+  const [connectionOutcome, setConnectionOutcome] = useState<ConnectionOutcome>();
   const [view, setView] = useState<View>(readView);
   // Issue #1580 — destructure the optional scope-bind callbacks so the memoized
   // action factories below depend on their (stable) identities rather than on the
@@ -2251,6 +2253,7 @@ export function useWorkspace(
   // can tear it down from cancel/confirm without re-attaching effects.
   const connectingRef = useRef<ConnectingState | null>(null);
   connectingRef.current = connecting;
+  const connectionOutcomeVersionRef = useRef(0);
   const connectCleanupRef = useRef<(() => void) | null>(null);
   const cancelConnectRef = useRef<() => void>(() => undefined);
   // GEN-UI-KEYBOARD-009 — the keyboard snap chords drive the same setSnap/commitSnap
@@ -2455,6 +2458,8 @@ export function useWorkspace(
         focus: focusWindow,
         setConns,
         setConnecting,
+        connectionOutcomeVersionRef,
+        onConnectionOutcome: setConnectionOutcome,
         onScopeBind: stableScopeBind,
         onScopeUnbind: stableScopeUnbind,
         onConnectorBind: stableConnectorBind,
@@ -2897,6 +2902,7 @@ export function useWorkspace(
 
   return {
     layoutLocked,
+    connectionOutcome,
     wins,
     winsById,
     snapPrev,

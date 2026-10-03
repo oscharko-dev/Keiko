@@ -5,6 +5,7 @@ import {
   citationMarkerIndices,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import type {
   ConnectedContextPack,
   ContextExcerpt,
@@ -124,6 +125,54 @@ function packWith(
 }
 
 describe("parseInlineCitations", () => {
+  it("accepts a maximum portable path with qualified safe-integer line references", () => {
+    const path = `${"d/".repeat((WORKSPACE_PORTABLE_PATH_MAX_BYTES - 12) / 2)}manuals.html`;
+    const lastLine = Number.MAX_SAFE_INTEGER;
+    expect(
+      parseInlineCitations(`[source:1|${path}:${String(lastLine)}-${String(lastLine)}]`),
+    ).toMatchObject([
+      { sourceId: "1", scopePath: path, lineRange: { startLine: lastLine, endLine: lastLine } },
+    ]);
+  });
+
+  it("bounds hostile unterminated citation markers without suppressing a later valid source", () => {
+    const answer = `${"[".repeat(64_000)}\nSee [src/manual.html:1-2].`;
+    const startedAt = performance.now();
+    expect(parseInlineCitations(answer)).toMatchObject([{ scopePath: "src/manual.html" }]);
+    expect(performance.now() - startedAt).toBeLessThan(2000);
+  });
+
+  it("reconciles a deep manual citation through the same portable path contract as source reads", () => {
+    const path = `${Array.from({ length: 120 }, (_, i) => `d${String(i).padStart(3, "0")}`).join("/")}/manual.html`;
+    const answer = `DeepManualProbe is 1440 hours [${path}:1-2].`;
+    expect(parseInlineCitations(answer)).toMatchObject([
+      { scopePath: path, lineRange: { startLine: 1, endLine: 2 } },
+    ]);
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: path, excerpts: [excerpt(path, 1, 2)] }]),
+    ]);
+    const result = reconcileInlineCitations(answer, index);
+    expect([...result.citedScopePaths]).toEqual([path]);
+    expect(result.unsupported).toEqual([]);
+    expect(stripInlineCitations(answer)).toBe("DeepManualProbe is 1440 hours .");
+    expect(segmentCitedClaims(answer)).toMatchObject([
+      { claimText: "DeepManualProbe is 1440 hours .", citations: [{ scopePath: path }] },
+    ]);
+  });
+
+  it("keeps deep citation escape, control, and oversized path guards", () => {
+    const deep = "nested/".repeat(100);
+    for (const path of [
+      `/${deep}manual.html`,
+      `C:/${deep}manual.html`,
+      `../${deep}manual.html`,
+      `${deep}\0manual.html`,
+      `${"nested/".repeat(1000)}manual.html`,
+      `${"日本語/".repeat(500)}manual.html`,
+    ])
+      expect(parseInlineCitations(`[${path}:1-2]`)).toEqual([]);
+  });
+
   it("ignores proposed code arrays and example references inside Markdown code", () => {
     const answer = [
       "Example: `[missing.ts:2]`.",

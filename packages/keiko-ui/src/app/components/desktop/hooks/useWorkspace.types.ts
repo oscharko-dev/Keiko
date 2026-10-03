@@ -155,7 +155,14 @@ export interface WorkspaceApi {
   readonly rect: () => DOMRect | null;
 }
 
+export type ConnectionOutcome =
+  | { readonly kind: "connected"; readonly fromId: string; readonly toId: string }
+  | { readonly kind: "pending" }
+  | { readonly kind: "cancelled" }
+  | { readonly kind: "rejected" };
+
 export interface UseWorkspaceResult {
+  readonly connectionOutcome?: ConnectionOutcome | undefined;
   readonly layoutLocked: boolean;
   readonly wins: AppWindow[] | null;
   readonly winsById: ReadonlyMap<string, AppWindow>;

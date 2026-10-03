@@ -18,6 +18,7 @@ import {
   resolveWorkspaceFileIdentifier,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import type {
+  ConnectionOutcome,
   ChatBindingTarget,
   ChatUnbindTarget,
   FilesWindowContext,
@@ -1021,6 +1022,8 @@ export function makeSnapActions({
 }
 
 interface ConnectArgs {
+  readonly connectionOutcomeVersionRef?: { current: number } | undefined;
+  readonly onConnectionOutcome?: ((outcome: ConnectionOutcome) => void) | undefined;
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly viewRef: RefObject<View>;
   readonly winsRef: RefObject<AppWindow[]>;
@@ -1105,6 +1108,7 @@ interface ConnectionBindingSelection {
 }
 
 interface ConnectionAttempt {
+  readonly outcomeVersion: number;
   readonly fromId: string;
   readonly toId: string;
   readonly boundScope: ChatConnectedScope | null;
@@ -1603,7 +1607,22 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     onGitChangeBind,
     onGitChangeUnbind,
     onConnectionUnbindFailure,
+    onConnectionOutcome,
   } = args;
+  const outcomeVersionRef = args.connectionOutcomeVersionRef ?? { current: 0 };
+  const reportConnectionOutcome = (
+    outcome: ConnectionOutcome,
+    version = outcomeVersionRef.current,
+  ): void => {
+    if (version === outcomeVersionRef.current) onConnectionOutcome?.(outcome);
+  };
+  const reportAttemptOutcome = (attempt: ConnectionAttempt, accepted: boolean): void =>
+    reportConnectionOutcome(
+      accepted
+        ? { kind: "connected", fromId: attempt.fromId, toId: attempt.toId }
+        : { kind: "rejected" },
+      attempt.outcomeVersion,
+    );
 
   const winById = (id: string): AppWindow | undefined =>
     winsByIdRef?.current.get(id) ?? winsRef.current.find((w) => w.id === id);
@@ -1627,13 +1646,20 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     return otherId === null ? null : (winById(otherId) ?? null);
   };
 
-  const cancelConnect: WorkspaceApi["cancelConnect"] = () => {
+  const clearConnect = (): void => {
     if (connectCleanupRef.current !== null) {
       connectCleanupRef.current();
       connectCleanupRef.current = null;
     }
     connectingRef.current = null;
     setConnecting(null);
+  };
+  const cancelConnect: WorkspaceApi["cancelConnect"] = () => {
+    if (connectingRef.current !== null) {
+      outcomeVersionRef.current += 1;
+      reportConnectionOutcome({ kind: "cancelled" });
+    }
+    clearConnect();
   };
 
   // Applies a confirmed connect gesture once the bind veto has resolved: re-checks both endpoints
@@ -1783,6 +1809,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const chatConversationIdAtBind =
       chatWindowId === null ? undefined : chatConversationId(winById(chatWindowId));
     return {
+      outcomeVersion: outcomeVersionRef.current,
       fromId,
       toId,
       boundScope,
@@ -1798,6 +1825,15 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     };
   };
 
+  const attemptEndpointsCurrent = (attempt: ConnectionAttempt): boolean =>
+    endpointsStillCurrent(
+      attempt.fromId,
+      attempt.toId,
+      attempt.chatWindowId,
+      attempt.chatConversationIdAtBind,
+      winById,
+    );
+
   const applyAcceptedConnectionAttempt = (
     attempt: ConnectionAttempt,
     binding: BindAcceptance,
@@ -1812,6 +1848,16 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
         attempt.gitChangeSelection,
         !attempt.hadGitConnectionBeforeBind,
       );
+      reportAttemptOutcome(
+        attempt,
+        binding.accepted &&
+          attemptEndpointsCurrent(attempt) &&
+          isDuplicate(connsRef.current, attempt.fromId, attempt.toId),
+      );
+      return;
+    }
+    if (!binding.accepted || !attemptEndpointsCurrent(attempt)) {
+      reportAttemptOutcome(attempt, false);
       return;
     }
     applyConnection({
@@ -1824,9 +1870,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       connectorScope: attempt.connectorScope,
       gitChangeSelection: null,
     });
+    reportAttemptOutcome(attempt, true);
   };
 
   const rollbackRejectedConnectionAttempt = (attempt: ConnectionAttempt): void => {
+    reportAttemptOutcome(attempt, false);
     if (attempt.gitChangeSelection !== null && !attempt.hadGitConnectionBeforeBind) {
       removeStoredConnectionBetween(attempt.fromId, attempt.toId);
     }
@@ -1866,13 +1914,18 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     e.stopPropagation();
     const c = connectingRef.current;
     if (c === null) return;
+    outcomeVersionRef.current += 1;
+    reportConnectionOutcome({ kind: "rejected" });
     const from = winById(c.from);
     const to = winById(toId);
     if (from !== undefined && to !== undefined && canConnect(from.type, to.type)) {
       const attempt = connectionAttemptFor(c.from, toId, from, to);
-      if (attempt !== null) beginConnectionAttempt(attempt);
+      if (attempt !== null) {
+        reportConnectionOutcome({ kind: "pending" });
+        beginConnectionAttempt(attempt);
+      }
     }
-    cancelConnect();
+    clearConnect();
   };
 
   const startConnect: WorkspaceApi["startConnect"] = (fromId, e) => {
@@ -1885,6 +1938,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     }
     const el = wsRef.current;
     if (el === null) return;
+    outcomeVersionRef.current += 1;
     const r = el.getBoundingClientRect();
     const v = viewRef.current;
     const toWX = (cx: number): number => (cx - r.left - v.x) / v.zoom;

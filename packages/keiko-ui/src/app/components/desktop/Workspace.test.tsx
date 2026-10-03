@@ -924,6 +924,79 @@ describe("Workspace card connections", () => {
     expect(startConnect).toHaveBeenCalledWith("agents-2", expect.any(Object));
   });
 
+  it("announces async connection acknowledgement without calling success a cancellation", () => {
+    const wins = [
+      appWindow({ id: "files-1", type: "files" }),
+      appWindow({ id: "chat-1", type: "chat" }),
+    ];
+    const props = { wsRef: createRef<HTMLDivElement>(), openPalette: (): void => undefined };
+    const { container, rerender } = render(
+      <Workspace
+        {...props}
+        ws={workspace({ wins, connecting: { from: "files-1", x: 100, y: 100 } })}
+      />,
+    );
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({ wins, connecting: null, connectionOutcome: { kind: "pending" } })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe("Connecting…");
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({
+          wins,
+          connecting: null,
+          conns: [{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }],
+          connectionOutcome: { kind: "connected", fromId: "files-1", toId: "chat-1" },
+        })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toMatch(/^Connected/);
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).not.toContain("cancelled");
+    rerender(
+      <Workspace {...props} ws={workspace({ wins, connectionOutcome: { kind: "rejected" } })} />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(
+      "Unable to connect scope.",
+    );
+    rerender(
+      <Workspace {...props} ws={workspace({ wins, connectionOutcome: { kind: "cancelled" } })} />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(
+      "Connection cancelled",
+    );
+  });
+
+  it("keeps the acknowledged endpoint announcement when another edge changes", () => {
+    const wins = [
+      appWindow({ id: "files-1", type: "files" }),
+      appWindow({ id: "chat-1", type: "chat" }),
+      appWindow({ id: "agents-1", type: "agents" }),
+    ];
+    const connectionOutcome = { kind: "connected", fromId: "files-1", toId: "chat-1" } as const;
+    const conns = [{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }];
+    const props = { wsRef: createRef<HTMLDivElement>(), openPalette: (): void => undefined };
+    const { container, rerender } = render(
+      <Workspace {...props} ws={workspace({ wins, conns, connectionOutcome })} />,
+    );
+    const acknowledged = container.querySelector('[aria-live="polite"]')?.textContent;
+    expect(acknowledged).toMatch(/^Connected/);
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({
+          wins,
+          conns: [...conns, { id: "agents-1~files-1", a: "agents-1", b: "files-1" }],
+          connectionOutcome,
+        })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(acknowledged);
+  });
+
   it("announces the connect flow in a polite live region", () => {
     const wins = [
       appWindow({ id: "agents-1", type: "agents", z: 1 }),

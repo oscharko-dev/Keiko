@@ -34,6 +34,7 @@ import {
   markdownCodeRanges,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
 // Deterministic no-evidence answer used when the folder/multi-source path abstains BEFORE the
@@ -83,7 +84,9 @@ export interface ParsedInlineCitation {
 // repo path: it must contain a `/` or a filename extension, and be built from path-safe characters.
 // This is deliberately conservative so ordinary prose brackets (`[1]`, `[note]`, `[a, b]`) and
 // markdown links (`[text](url)`) are NOT misread as citations.
-const BRACKET_RE = /\[([^\]\n]{1,200})\]/g;
+// The shared path bound plus bounded source ordinal and safe-integer line suffixes.
+const CITATION_TOKEN_MAX_CHARS = WORKSPACE_PORTABLE_PATH_MAX_BYTES + 64;
+const BRACKET_RE = new RegExp(String.raw`\[([^\]\n]{1,${CITATION_TOKEN_MAX_CHARS}})\]`, "g");
 const LINE_RANGE_SUFFIX_RE = /:(\d+)(?:-(\d+))?$/;
 const SOURCE_QUALIFIER_RE = /^source:(\d+)\|/u;
 function hasControlCharacter(value: string): boolean {
@@ -97,7 +100,7 @@ function hasControlCharacter(value: string): boolean {
 function looksLikeRepoPath(candidate: string): boolean {
   if (
     candidate.length === 0 ||
-    candidate.length > 180 ||
+    candidate.length > WORKSPACE_PORTABLE_PATH_MAX_BYTES ||
     candidate.trim() !== candidate ||
     hasControlCharacter(candidate)
   ) {
@@ -606,7 +609,10 @@ export function splitClaimSpans(text: string): readonly string[] {
 }
 
 // Every bracketed span the claim stripper removes, a citation or not.
-const CLAIM_BRACKET_RE = /[[［【][^\]］】\n]{1,200}[\]］】]/g;
+const CLAIM_BRACKET_RE = new RegExp(
+  String.raw`[[［【][^\]］】\n]{1,${CITATION_TOKEN_MAX_CHARS}}[\]］】]`,
+  "g",
+);
 
 /** Remove inline `[...]` citation brackets from a claim span so the judge sees the prose claim. */
 export function stripInlineCitations(text: string): string {
