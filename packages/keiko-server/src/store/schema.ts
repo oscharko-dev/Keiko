@@ -764,8 +764,8 @@ CREATE TABLE git_journey_outcomes (
 //   4. Only now is `relationships_v27` unreferenced by any foreign key, so DROP TABLE is safe: no
 //      history row is cascaded away. `relationship_audit_entries.relationship_id` carries no
 //      REFERENCES clause (schema.ts V5), so it needs no rebuild.
-// restoreV13SchemaFixture, UI_STORE_FINGERPRINT_TABLES and the forbidden-fields pin are updated in
-// the same commit (epic correction 2, seam (a)).
+// restoreV13SchemaFixture and the forbidden-fields pin are updated in the same commit (epic
+// correction 2, seam (a)).
 const V28_SQL = `
 ALTER TABLE relationships RENAME TO relationships_v27;
 

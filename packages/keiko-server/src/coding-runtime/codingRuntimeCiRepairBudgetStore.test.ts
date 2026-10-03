@@ -3,7 +3,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { DraftDeliveryFixture } from "../gitDelivery/draftDeliveryServiceTestSupport.js";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
-import { computeStoreFingerprint } from "../store/db.js";
 import { runMigrations } from "../store/schema.js";
 import { rewindSchemaFixture } from "../store/legacySchemaTestFixture.js";
 import {
@@ -584,7 +583,9 @@ describe("CI repair durable bounds and migration", () => {
     expect(snapshots.get(context.runId)).toEqual(before);
     expect(budget.read(context)).toEqual({ status: "available", record: undefined });
     begin("attempt-1", null);
-    expect(computeStoreFingerprint(db).tableRowCounts.coding_runtime_ci_repair_budgets).toBe(1);
+    expect(
+      db.prepare("SELECT count(*) AS count FROM coding_runtime_ci_repair_budgets").get()?.count,
+    ).toBe(1);
     expect(() =>
       db.prepare("UPDATE coding_runtime_snapshots SET ci_observation_revision=1000001").run(),
     ).toThrow();

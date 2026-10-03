@@ -638,19 +638,6 @@ export function applyStoreContentEncryption(
   migrateToEncrypted(db, cipher, logSink);
 }
 
-export type StoreContentEncryptionMode = "plaintext" | "encrypted" | "migrating";
-
-// Read-only snapshot of the store's on-disk encryption state, independent of any resolved cipher
-// and never throwing — used by `computeStoreFingerprint` (store.ts) to report `encryptionMode`
-// in the support-bundle manifest (Wave 4a, epic #3233 §6.2) without re-deriving the marker/probe
-// schema_meta keys a second time. Mirrors the case matrix documented at the top of this file: a
-// malformed marker VALUE is still reported as "encrypted" here — validating it is
-// `applyStoreContentEncryption`'s job, not a read-only reporter's.
-export function readStoreEncryptionMode(db: DatabaseSync): StoreContentEncryptionMode {
-  if (readSchemaMeta(db, ENCRYPTION_MARKER_KEY) !== undefined) return "encrypted";
-  return readSchemaMeta(db, ENCRYPTION_PROBE_KEY) !== undefined ? "migrating" : "plaintext";
-}
-
 export const STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS = {
   markerKey: ENCRYPTION_MARKER_KEY,
   markerValue: ENCRYPTION_MARKER_VALUE,

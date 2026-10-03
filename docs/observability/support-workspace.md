@@ -122,10 +122,11 @@ The old CLI bundle/sidecar/config/evidence serializers are retired. Their securi
 run through the canonical CLI and file-I/O tests: no secret/environment/UI/file capture, exclusive
 private publication, unsafe link/permission refusal, zero hostile-data rendering, complete causal
 reconstruction, and honest insufficiency. Generic interruption, mutation races and exact-byte
-recovery remain pinned in `keiko-security/src/fs-hardening.test.ts`. The store-fingerprint corruption
-pin remains against the owning `collectStoreFingerprints` production entry point; reports do not
-open stores merely to add a diagnostic snapshot. Local raw-log analysis helpers remain developer
-facilities, not an admission boundary for received files.
+recovery remain pinned in `keiko-security/src/fs-hardening.test.ts`. Reports never open a store for
+a diagnostic snapshot, so the store-fingerprint producers were retired with the bundle; the export
+test pins that corrupt store files stay byte-for-byte untouched and that no store or vault key is
+created. Local raw-log analysis helpers remain developer facilities, not an admission boundary for
+received files.
 
 Operator scripts drop inclusion flags and the sidecar step, pass a private directory to `--out`
 instead of a filename, and read the versioned machine envelope (`analysis.timelines`,

@@ -1641,12 +1641,6 @@
     },
     {
       "path": "packages/keiko-local-knowledge/src/store.ts",
-      "owner": "quickCheckOkFor",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-local-knowledge/src/store.ts",
       "owner": "tryOpenAndMigrate",
       "kind": "unregistered-catch",
       "count": 3
@@ -1696,36 +1690,6 @@
     {
       "path": "packages/keiko-memory-vault/src/cipher.ts",
       "owner": "keyFromKeychain",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/cipher.ts",
-      "owner": "keyFromKeychainReadOnly",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/db.ts",
-      "owner": "computeStoreFingerprint",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/db.ts",
-      "owner": "safeQuickCheckOk",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/db.ts",
-      "owner": "safeTableRowCount",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/db.ts",
-      "owner": "safeUserVersion",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -6092,24 +6056,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/store-fingerprints.ts",
-      "owner": "localKnowledgeStoreFingerprintOutcome",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/store-fingerprints.ts",
-      "owner": "memoryVaultStoreFingerprintOutcome",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/store-fingerprints.ts",
-      "owner": "uiStoreFingerprintOutcome",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/store-handlers.ts",
       "owner": "projectTrustRemainsRestricted",
       "kind": "unregistered-catch",
@@ -6142,18 +6088,6 @@
     {
       "path": "packages/keiko-server/src/store/db.ts",
       "owner": "isProjectAvailable",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/store/db.ts",
-      "owner": "readOneTableRowCount",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/store/db.ts",
-      "owner": "readQuickCheckOk",
       "kind": "unregistered-catch",
       "count": 1
     },
