@@ -127,17 +127,30 @@ describe("createExplorationPlan", () => {
     expect(p.clarification).toBeUndefined();
   });
 
-  it("explicitConnection: workspace-root still asks for clarification on generic prompts", () => {
+  it("implicit workspace-root still asks for clarification on generic prompts", () => {
     const scope = happyScope({
       kind: "workspace-root",
       relativePaths: [],
-      explicitConnection: true,
+      explicitConnection: false,
     });
     const q = happyQuery({ text: "tell me everything" });
     const p = plan({ scope, query: q });
     expect(p.state).toBe("clarification-needed");
     expect(p.clarification?.reason).toBe("too-generic");
   });
+
+  it.each(["Was siehst du?", "Wie funktioniert die Anmeldung?", "Warum ist die Suche kaputt?"])(
+    "searches an explicitly connected repository without requiring a code anchor: %s",
+    (text) => {
+      const p = plan({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text }),
+      });
+      expect(p.state).toBe("ready");
+      expect(p.rings.length).toBeGreaterThan(0);
+      expect(p.budget).toEqual(DEFAULT_EXPLORATION_BUDGET);
+    },
+  );
 
   it("explicitConnection: workspace-root allows project metadata lookups", () => {
     const scope = happyScope({

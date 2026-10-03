@@ -69,6 +69,7 @@ import {
   WorkspaceNotFoundError,
   detectWorkspaceAt,
   endpointContractAdapter,
+  findFiles,
   gitHistoryAdapter,
   isCanonicalMetadataFile,
   isEcosystemSourceFile,
@@ -1471,23 +1472,36 @@ type NonLexicalRing = Omit<RetrievalRing, "kind"> & {
   readonly kind: "structural" | "git-history";
 };
 
-async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
-  const definitionSymbol = directDefinitionSymbol(inputs.query, inputs.anchors);
-  const query =
-    definitionSymbol === undefined
-      ? inputs.query
-      : { ...inputs.query, kind: "exact-symbol" as const, text: definitionSymbol };
-  const result = await searchText(inputs.searchScope, query, ring.searchLimits, {
+async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Promise<SearchResult> {
+  const options = {
     fs: inputs.fs,
     nowMs: inputs.nowMs,
     deadlineAtMs: inputs.deadlineAtMs,
     searchHints: { retrievalIntent: inputs.retrievalIntent },
     ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+  };
+  if (inputs.retrievalIntent === "repository-overview") {
+    return findFiles(inputs.searchScope, {
+      ...inputs.query,
+      kind: "file-pattern",
+      text: "**/*",
+    }, ring.searchLimits, options);
+  }
+  const definitionSymbol = directDefinitionSymbol(inputs.query, inputs.anchors);
+  const query = definitionSymbol === undefined
+    ? inputs.query
+    : { ...inputs.query, kind: "exact-symbol" as const, text: definitionSymbol };
+  return searchText(inputs.searchScope, query, ring.searchLimits, {
+    ...options,
     ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
     ...(definitionSymbol === undefined && inputs.repoSemanticSearchProvider !== undefined
       ? { semanticSearchProvider: inputs.repoSemanticSearchProvider }
       : {}),
   });
+}
+
+async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
+  const result = await lexicalRingSearch(ring, inputs);
   inputs.workspaceIndexActivity.recordSearchResult(result);
   // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
   // It does NOT consume the excerpt budget; excerpt reads are charged later by the assembler.

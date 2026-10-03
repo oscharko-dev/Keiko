@@ -19,6 +19,13 @@ describe("classifyRetrievalIntent", () => {
     expect(classifyRetrievalIntent(text).intent).toBe("repository-overview");
   });
 
+  it.each(["Was siehst du?", "Was kannst du sehen?", "What can you see?", "Tell me everything"])(
+    "recognizes connected-scope orientation without repository vocabulary: %s",
+    (text) => {
+      expect(classifyRetrievalIntent(text).intent).toBe("repository-overview");
+    },
+  );
+
   it("classifies stacktrace and HTTP failures as diagnostic search", () => {
     expect(classifyRetrievalIntent("Warum bekomme ich HTTP 503 im Chat?").intent).toBe(
       "diagnostic-search",

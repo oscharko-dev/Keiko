@@ -1727,6 +1727,36 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it.each(["Was siehst du?", "What can you see?", "Give me an overview of this codebase structure."])(
+    "explores a connected repository with no metadata or matching prose: %s",
+    async (text) => {
+      seedRepo();
+      const log = createBufferedServerLogSink();
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+          query: happyQuery({ text }),
+        }),
+        {
+          correlationId: "connected-orientation",
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+          activityLog: log,
+        },
+      );
+      expect(out.pack.files.map((file) => file.scopePath)).toContain("src/foo.ts");
+      expect(out.pack.files.flatMap((file) => file.excerpts).some((excerpt) =>
+        excerpt.content.includes("export function MyClass"),
+      )).toBe(true);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+      expect(log.events).toEqual(expect.arrayContaining([
+        expect.objectContaining({ op: "search.connected-context.completed", correlationId: "connected-orientation" }),
+      ]));
+      expect(log.lines().join("\n")).not.toContain("export function MyClass");
+    },
+  );
+
   it("grounds direct package.json metadata requests without leaking internal .keiko evidence", async () => {
     writeFileSync(join(ROOT, "package.json"), '{\n  "packageManager": "npm@11.16.0"\n}\n');
     mkdirSync(join(ROOT, ".keiko/evidence/qi"), { recursive: true });

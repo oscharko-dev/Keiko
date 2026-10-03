@@ -352,33 +352,21 @@ interface ClarificationDecision {
   readonly clarification: ClarificationPrompt | undefined;
 }
 
-function explicitConnectionIsReady(scope: SelectedScope, intent: RetrievalIntent): boolean {
-  if (scope.explicitConnection !== true) {
-    return false;
-  }
-  if (scope.kind !== "workspace-root") {
-    return true;
-  }
-  return intent === "project-metadata" || intent === "repository-overview";
-}
 
 function decideClarification(
   anchors: readonly SearchAnchor[],
   scope: SelectedScope,
   intent: RetrievalIntent,
-  query: RetrievalQuery,
 ): ClarificationDecision {
-  if (anchors.length === 0) {
+  if (anchors.length === 0 || intent === "clarification-needed") {
     return {
       state: "clarification-needed",
       clarification: buildClarification("no-anchors", NO_ANCHOR_QUESTIONS, 1),
     };
   }
-  // When the user EXPLICITLY connected a folder/files to the chat (a Files↔Chat edge or a scope
-  // pill), they have already narrowed the search to a bounded area. The "too-generic" and
-  // "scope-empty" gates exist to stop vague questions burning budget over the broad workspace;
-  // keep those gates for workspace-root connections even when they were explicitly selected.
-  if (explicitConnectionIsReady(scope, intent)) {
+  // An explicit connection is the human-selected search boundary, including a whole repository.
+  // Precision controls ranking, not permission to read. The governor still bounds every scan.
+  if (scope.explicitConnection === true) {
     return { state: "ready", clarification: undefined };
   }
   // Threshold is <= literal weight so a prompt yielding only `literal` anchors (weight 0.5,
@@ -390,9 +378,6 @@ function decideClarification(
     };
   }
   if (scope.relativePaths.length === 0 && anchors.length < 2) {
-    if (scope.explicitConnection === true && directDefinitionSymbol(query, anchors) !== undefined) {
-      return { state: "ready", clarification: undefined };
-    }
     return {
       state: "clarification-needed",
       clarification: buildClarification("scope-empty", SCOPE_EMPTY_QUESTIONS, 2),
@@ -492,7 +477,6 @@ export function createExplorationPlan(
     extraction.anchors,
     input.scope,
     classification.intent,
-    input.query,
   );
   const rings =
     decision.state === "ready"

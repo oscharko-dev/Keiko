@@ -108,6 +108,9 @@ const PROJECT_METADATA_PATTERNS: readonly IntentPattern[] = [
 ];
 
 const REPOSITORY_OVERVIEW_PATTERNS: readonly IntentPattern[] = [
+  { term: "orientation", pattern: /\bwas\s+(?:(?:kannst|konntest)\s+du\s+)?(?:siehst|sehen|erkennst|erkennen)\b/iu },
+  { term: "orientation", pattern: /\bwhat\s+(?:(?:can|do)\s+you\s+)?(?:see|notice|recognize)\b/iu },
+  { term: "overview", pattern: /\btell\s+me\s+everything\b|\b(?:zeig|zeige|erklaere|erkläre)\s+mir\s+alles\b/iu },
   { term: "architecture", pattern: /\barchitecture\b|\barchitektur\b/iu },
   { term: "overview", pattern: /\boverview\b|\bueberblick\b|\büberblick\b/iu },
   { term: "structure", pattern: /\bstructure\b|\bstruktur\b|\baufbau\b/iu },
