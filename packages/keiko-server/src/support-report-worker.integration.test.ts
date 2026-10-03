@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   listSupportIncidents,
   recordRegisteredFailureIncident,
+  createFileServerLogSink,
+  closeFileServerLogSinks,
 } from "@oscharko-dev/keiko-activity-log";
 import {
   analyzeSupportReport,
@@ -18,6 +20,10 @@ import {
   segmentIdentity,
   writeFixtureSegment,
 } from "../../../tests/support/activity-log-segments.js";
+import {
+  ACTIVITY_LOG_OPERATION_REGISTRY,
+  activityLogEvent,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { runSupportReportJob } from "../dist/support-report-job.js";
 
 let stateDir: string;
@@ -25,6 +31,7 @@ beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), "keiko-report-worker-"));
 });
 afterEach(() => {
+  closeFileServerLogSinks();
   rmSync(stateDir, { recursive: true, force: true });
 });
 
@@ -42,6 +49,49 @@ function failure(): void {
 }
 
 describe("real canonical support report worker", () => {
+  it("exports a retained raw browser chunk failure through the actual worker", async () => {
+    const operation = ACTIVITY_LOG_OPERATION_REGISTRY.find(
+      (entry) => entry.op === "client.diagnostic",
+    );
+    if (operation === undefined) throw new TypeError("Missing client diagnostic operation.");
+    const sink = createFileServerLogSink(stateDir);
+    sink.write(
+      activityLogEvent(
+        operation,
+        {
+          level: "error",
+          errorKind: "internal",
+          correlationId: "raw-chunk-worker-failure",
+        },
+        {
+          clientNoteDigest: "b".repeat(64),
+          clientKind: "boundary",
+          renderFailure: "window-body",
+          frames: ["dist/ui/static/_next/static/chunks/customerpayroll.js:4:2"],
+          errorClass: "Error",
+          causeChain: ["TypeError"],
+        },
+      ),
+    );
+    sink.close?.();
+    recordRegisteredFailureIncident(stateDir, {
+      op: "client.diagnostic",
+      errorKind: "internal",
+      correlationId: "raw-chunk-worker-failure",
+      clientKind: "boundary",
+      renderFailure: "window-body",
+      frames: ["dist/ui/static/_next/static/chunks/customerpayroll.js:4:2"],
+    });
+    const response = await runSupportReportJob(stateDir, "raw-chunk-worker-failure");
+    const report = parseSupportReport(response.reportJson);
+    expect(report.incident.fingerprintAlgorithm).toBe(2);
+    expect(report.incident.frameCount).toBe(1);
+    expect(analyzeSupportReport(response.reportJson).selection.status).toBe("complete");
+    const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+    expect(evidence).toMatch(/chunks\/sha256-[a-f0-9]{64}\.js:4:2/u);
+    expect(evidence).not.toContain("customerpayroll");
+    expect(evidence).not.toContain("raw-chunk-worker-failure");
+  });
   it("prepares the incident on the writer thread and analyzes in the real worker", async () => {
     failure();
     const response = await runSupportReportJob(stateDir, "desktop-worker-failure");
