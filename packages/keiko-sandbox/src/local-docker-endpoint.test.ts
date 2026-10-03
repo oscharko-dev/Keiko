@@ -4,7 +4,10 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveLocalDockerEndpoint } from "./local-docker-endpoint.js";
+import {
+  LocalDockerEndpointUnavailableError,
+  resolveLocalDockerEndpoint,
+} from "./local-docker-endpoint.js";
 
 let parent: string;
 let root: string;
@@ -97,16 +100,16 @@ describe.skipIf(process.platform === "win32")("resolveLocalDockerEndpoint Unix s
 
   it("rejects configuration rooted in the untrusted workspace, including symlinks", async () => {
     await symlink(root, join(parent, "configuration-link"));
-    expect(
+    expect(() =>
       resolveLocalDockerEndpoint({ DOCKER_CONFIG: join(parent, "configuration-link") }, root),
-    ).toEqual({ kind: "unavailable", reason: "docker-local-context-unavailable" });
+    ).toThrow(LocalDockerEndpointUnavailableError);
   });
 
   it("rejects a workspace socket alias and a regular file masquerading as a socket", async () => {
     await writeFile(join(parent, "regular-file"), "socket-sentinel");
-    expect(
+    expect(() =>
       resolveLocalDockerEndpoint({ DOCKER_HOST: `unix://${join(parent, "regular-file")}` }, root),
-    ).toEqual({ kind: "unavailable", reason: "docker-local-context-unavailable" });
+    ).toThrow(LocalDockerEndpointUnavailableError);
     // A socket actually inside the execution root is controlled by repository code.
     await new Promise<void>((resolve) => {
       server.close(() => {
@@ -116,20 +119,18 @@ describe.skipIf(process.platform === "win32")("resolveLocalDockerEndpoint Unix s
     socket = join(root, "engine.sock");
     server = createServer();
     await new Promise<void>((resolve) => server.listen(socket, resolve));
-    expect(resolveLocalDockerEndpoint({ DOCKER_HOST: `unix://${socket}` }, root)).toEqual({
-      kind: "unavailable",
-      reason: "docker-local-context-unavailable",
-    });
+    expect(() => resolveLocalDockerEndpoint({ DOCKER_HOST: `unix://${socket}` }, root)).toThrow(
+      LocalDockerEndpointUnavailableError,
+    );
   });
 
   it.each(["not-json", "null", "x".repeat(65_537)])(
     "fails closed on malformed or oversized context metadata",
     async (contents) => {
       await writeFile(join(directory, "config.json"), contents);
-      expect(resolveLocalDockerEndpoint({ DOCKER_CONFIG: directory }, root)).toEqual({
-        kind: "unavailable",
-        reason: "docker-local-context-unavailable",
-      });
+      expect(() => resolveLocalDockerEndpoint({ DOCKER_CONFIG: directory }, root)).toThrow(
+        new LocalDockerEndpointUnavailableError(),
+      );
     },
   );
 });

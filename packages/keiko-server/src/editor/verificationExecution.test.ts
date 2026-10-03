@@ -10,7 +10,7 @@
 // enforcing sandbox backend the step actually runs under network:"none"; on a host without one it
 // fails closed and NEVER spawns, and the report never claims enforcement it did not actually apply.
 
-import { mkdtemp, rm, realpath, writeFile, readFile, access } from "node:fs/promises";
+import { mkdtemp, rm, realpath, writeFile, readFile, access, mkdir } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,8 @@ import {
   planDirectTargetedTests,
 } from "@oscharko-dev/keiko-verification";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import * as sandbox from "@oscharko-dev/keiko-sandbox";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   executeVerificationEnforced,
@@ -176,6 +178,53 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
       await rm(outside, { force: true });
     }
   }, 30_000);
+
+  it("observes a malformed local Docker configuration without customer fields or spawning", async () => {
+    const parent = await realpath(await mkdtemp(join(tmpdir(), "keiko-docker-probe-")));
+    const root = join(parent, "workspace");
+    const directory = join(parent, "configuration");
+    const records: ServerDiagnosticRecord[] = [];
+    const availability = vi.spyOn(sandbox, "probeBackends").mockReturnValue({
+      bubblewrap: false,
+      unshare: false,
+      seatbelt: false,
+      docker: true,
+      podman: false,
+    });
+    try {
+      await mkdir(root);
+      await mkdir(directory);
+      await writeFile(
+        join(directory, "config.json"),
+        "customer-configuration-sentinel-invalid-json",
+      );
+      vi.stubEnv("DOCKER_CONFIG", directory);
+      vi.stubEnv("DOCKER_CONTEXT", "");
+      vi.stubEnv("DOCKER_HOST", "");
+      const probe = probeNetworkIsolation(
+        root,
+        {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        "docker-probe-correlation-1",
+      );
+      expect(probe).toEqual({ available: false, backend: "container-docker" });
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        operation: "verification.isolation-probe",
+        source: "verification.isolation-probe.local-docker",
+        correlationId: "docker-probe-correlation-1",
+      });
+      expect(JSON.stringify(records)).not.toContain("customer-configuration-sentinel");
+      expect(JSON.stringify(records)).not.toContain(parent);
+    } finally {
+      availability.mockRestore();
+      vi.unstubAllEnvs();
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
 
   it("probeNetworkIsolation reports a real backend label and availability for this host", () => {
     const probe = probeNetworkIsolation(process.cwd());

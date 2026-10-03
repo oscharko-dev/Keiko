@@ -176,6 +176,15 @@ interface WorkspaceRegistrationNoticeState {
   readonly message: string;
 }
 
+function nextWorkspaceRegistrationNotice(
+  current: WorkspaceRegistrationNoticeState | null,
+  root: string,
+  warning: string | undefined,
+): WorkspaceRegistrationNoticeState | null {
+  if (warning !== undefined) return { root, message: warning };
+  return current?.root === root ? current : null;
+}
+
 // Reasons whose file list spans every pane rather than one pane's tabs. A root change and a window
 // close act on the whole editor; a path mutation acts on the filesystem, so a second pane holding the
 // same dirty file — or any dirty file under a renamed directory — must be prompted for too (S7776:
@@ -986,53 +995,49 @@ export function EditorWidget({
     apply?.();
   }, [pendingClose]);
 
+  const selectConnectedRoot = useCallback(
+    (normalizedRoot: string, correlationId?: string, warning?: string): ClientNavigationOutcome => {
+      const apply = (): void => {
+        const nextLayout = editorLayoutReducer(layoutRef.current, {
+          type: "replace-root",
+          root: normalizedRoot,
+          sidebarWidth: layoutRef.current.sidebarWidth,
+        });
+        setWorkspaceRoot(normalizedRoot);
+        setWorkspaceRegistrationNotice((current) =>
+          nextWorkspaceRegistrationNotice(current, normalizedRoot, warning),
+        );
+        setDirtyByPane({});
+        commitLayout(nextLayout, normalizedRoot, true);
+      };
+      const requestSelection = (): boolean => {
+        const firstPaneId =
+          editorLayoutPaneIds(layoutRef.current)[0] ?? layoutRef.current.activePaneId;
+        return dirtyRootCloseRef.current.requestDirtyClose({
+          paneId: firstPaneId,
+          files: dirtyRootCloseRef.current.dirtyFiles,
+          reason: "root-change",
+          apply,
+        });
+      };
+      return requestOrDeferRootSelection(
+        pendingCloseRef.current,
+        deferredRootSelectionRef,
+        requestSelection,
+        correlationId,
+      );
+    },
+    [commitLayout],
+  );
+
   const openRoot = useCallback(
     (nextRoot: string, alreadyConnected = false): void => {
       const selectedRoot = nextRoot.trim();
       if (selectedRoot.length === 0) return;
-      const selectConnectedRoot = (
-        normalizedRoot: string,
-        correlationId?: string,
-        warning?: string,
-      ): ClientNavigationOutcome => {
-        const apply = (): void => {
-          const nextLayout = editorLayoutReducer(layoutRef.current, {
-            type: "replace-root",
-            root: normalizedRoot,
-            sidebarWidth: layoutRef.current.sidebarWidth,
-          });
-          setWorkspaceRoot(normalizedRoot);
-          setWorkspaceRegistrationNotice((current) =>
-            warning === undefined
-              ? current?.root === normalizedRoot
-                ? current
-                : null
-              : { root: normalizedRoot, message: warning },
-          );
-          setDirtyByPane({});
-          commitLayout(nextLayout, normalizedRoot, true);
-        };
-        const requestSelection = (): boolean => {
-          const firstPaneId =
-            editorLayoutPaneIds(layoutRef.current)[0] ?? layoutRef.current.activePaneId;
-          return dirtyRootCloseRef.current.requestDirtyClose({
-            paneId: firstPaneId,
-            files: dirtyRootCloseRef.current.dirtyFiles,
-            reason: "root-change",
-            apply,
-          });
-        };
-        return requestOrDeferRootSelection(
-          pendingCloseRef.current,
-          deferredRootSelectionRef,
-          requestSelection,
-          correlationId,
-        );
-      };
       if (alreadyConnected) selectConnectedRoot(selectedRoot);
       else void connectProjectRoot(selectedRoot, selectConnectedRoot);
     },
-    [commitLayout, connectProjectRoot],
+    [connectProjectRoot, selectConnectedRoot],
   );
 
   const openFile = useCallback(
@@ -1066,17 +1071,18 @@ export function EditorWidget({
       void connectProjectRoot(
         target.root,
         (connectedRoot, correlationId, warning) => {
+          const applyConnectedRoot = (): void => {
+            apply(connectedRoot);
+            setWorkspaceRegistrationNotice(
+              warning === undefined ? null : { root: connectedRoot, message: warning },
+            );
+          };
           const requestSelection = (): boolean =>
             dirtyRootCloseRef.current.requestDirtyClose({
               paneId: layoutRef.current.activePaneId,
               files: dirtyRootCloseRef.current.dirtyFiles,
               reason: "root-change",
-              apply: (): void => {
-                apply(connectedRoot);
-                setWorkspaceRegistrationNotice(
-                  warning === undefined ? null : { root: connectedRoot, message: warning },
-                );
-              },
+              apply: applyConnectedRoot,
             });
           return requestOrDeferRootSelection(
             pendingCloseRef.current,

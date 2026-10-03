@@ -427,6 +427,8 @@ describe("existing CLI lazy lifecycle analysis dispatch", () => {
       expect(result.code).toBe(0);
       expect(result.errors).toBe("");
       expect(result.output).toMatch(/"budgetDisposition":\s*"committed"/u);
+      expect(result.output).toMatch(/keiko\.private\.id\d{6}/u);
+      expect(result.output).not.toContain("keiko.fixture.read");
       expect(result.output).not.toMatch(/private-capability|fixture-result|unavailable/u);
     },
   );

@@ -203,7 +203,7 @@ async function deferred<T>(read: () => T): Promise<T> {
   try {
     return read();
   } catch (error) {
-    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    throw error instanceof Error ? error : new Error(String(error));
   }
 }
 

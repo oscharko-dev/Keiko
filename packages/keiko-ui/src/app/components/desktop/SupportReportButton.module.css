@@ -1,4 +1,8 @@
 .cmpControl {
+  border: 0;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;

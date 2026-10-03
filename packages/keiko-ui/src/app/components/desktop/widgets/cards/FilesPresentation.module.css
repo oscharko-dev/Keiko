@@ -85,3 +85,15 @@
     transition: none;
   }
 }
+
+.cmpProjectGroup {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
+.cmpDeleteDialog {
+  position: static;
+  margin: 0;
+}

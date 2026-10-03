@@ -50,7 +50,10 @@ describe("EditorEmptyState", () => {
     fireEvent.click(screen.getByTestId("editor-empty-browse"));
 
     await waitFor(() => expect(onOpenRoot).toHaveBeenCalledWith("/home/me/project"));
-    expect(createProjectMock).toHaveBeenCalledWith({ path: "/home/me/project" });
+    expect(createProjectMock).toHaveBeenCalledWith({
+      path: "/home/me/project",
+      selectionIntent: "explicit-folder-selection",
+    });
     expect(pickMock).toHaveBeenCalledWith(expect.objectContaining({ mode: "open-directory" }));
   });
 
@@ -64,7 +67,10 @@ describe("EditorEmptyState", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
 
     await waitFor(() => expect(onOpenRoot).toHaveBeenCalledWith("/abs/project"));
-    expect(createProjectMock).toHaveBeenCalledWith({ path: "/abs/project" });
+    expect(createProjectMock).toHaveBeenCalledWith({
+      path: "/abs/project",
+      selectionIntent: "explicit-folder-selection",
+    });
   });
 
   it("does not bind a root when the native picker is cancelled", async () => {

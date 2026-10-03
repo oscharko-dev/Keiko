@@ -1,7 +1,18 @@
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const workers = vi.hoisted(() => ({ instances: [] as EventEmitter[], terminate: vi.fn() }));
+const workers = vi.hoisted(() => ({
+  instances: [] as EventEmitter[],
+  terminate: vi.fn(),
+  prepare:
+    vi.fn<
+      (typeof import("@oscharko-dev/keiko-activity-log/reader"))["prepareDesktopSupportReport"]
+    >(),
+}));
+vi.mock("@oscharko-dev/keiko-activity-log/reader", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-activity-log/reader")>();
+  return { ...actual, prepareDesktopSupportReport: workers.prepare };
+});
 vi.mock("node:worker_threads", () => ({
   Worker: class extends EventEmitter {
     public constructor() {
@@ -23,6 +34,7 @@ afterEach(() => {
   vi.useRealTimers();
   workers.instances.length = 0;
   workers.terminate.mockReset();
+  workers.prepare.mockReset();
 });
 
 describe("bounded desktop support-report worker", () => {
@@ -51,6 +63,32 @@ describe("bounded desktop support-report worker", () => {
       frames: ["support-report.ts:10:5"],
       causeChain: ["TypeError"],
     });
+  });
+
+  it("propagates a writer-thread preparation failure to the awaiting route with bounded facts", async () => {
+    workers.prepare.mockImplementationOnce(() => {
+      throw new TypeError("private preparation payload", {
+        cause: new RangeError("private cause"),
+      });
+    });
+    const result = runSupportReportJob(
+      "/private-report-state",
+      "requested-failure",
+      undefined,
+      "report-http-request",
+    );
+    activeWorker().emit("message", { kind: "prepare", correlationId: "requested-failure" });
+    await expect(result).rejects.toMatchObject({
+      reason: "unavailable",
+      causeChain: ["RangeError"],
+    });
+    await expect(result).rejects.not.toHaveProperty("message", "private preparation payload");
+    expect(workers.prepare).toHaveBeenCalledExactlyOnceWith(
+      "/private-report-state",
+      "requested-failure",
+      "report-http-request",
+    );
+    expect(workers.terminate).toHaveBeenCalledOnce();
   });
 
   it("rejects a worker selection that retargets the explicitly requested error", async () => {

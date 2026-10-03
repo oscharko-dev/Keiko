@@ -612,9 +612,13 @@ describe("keiko support export with a selector (#3531)", () => {
       inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8"),
     ) as readonly { readonly record: unknown }[];
     const root = report.incident.correlation.rootCorrelationId;
-    const child = report.incident.correlation.childCorrelationIds[0];
+    const analysis = analyzeSupportReport(text).analysis;
+    const child = analysis.timelines.find(
+      (timeline) => timeline.correlationId !== root,
+    )?.correlationId;
     expect(root).toBeDefined();
     expect(child).toBeDefined();
+    expect(child).not.toBe(root);
     expect(decoded.map((event) => event.record)).toEqual(
       lines.slice(0, 2).map((line, index) => ({
         ...(JSON.parse(line) as Record<string, unknown>),
@@ -626,7 +630,6 @@ describe("keiko support export with a selector (#3531)", () => {
     expect(JSON.stringify(decoded)).not.toContain(CHILD_ID);
     expect(JSON.stringify(decoded)).not.toContain(OTHER_ID);
     expect(report.selection.status).toBe("complete");
-    const analysis = analyzeSupportReport(text).analysis;
     expect(analysis.evidence).toMatchObject({
       classification: "supported",
       supportedLineCount: 2,

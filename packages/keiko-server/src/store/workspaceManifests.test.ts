@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -42,7 +42,7 @@ function trustRootBinding(
 }
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), "keiko-manifest-migration-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-manifest-migration-"));
   project = join(tmp, "project");
   dbPath = join(tmp, "ui.db");
   mkdirSync(project);

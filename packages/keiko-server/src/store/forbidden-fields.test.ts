@@ -30,7 +30,7 @@
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNodeUiStore } from "./index.js";
@@ -270,7 +270,7 @@ let tmpDir: string;
 let projDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "keiko-forbidden-"));
+  tmpDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-forbidden-"));
   projDir = mkdtempSync(join(tmpDir, "proj-"));
 });
 

@@ -1,8 +1,12 @@
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
+import {
+  listSupportIncidents,
+  recordRegisteredFailureIncident,
+} from "@oscharko-dev/keiko-activity-log";
 import {
   analyzeSupportReport,
   parseSupportReport,
@@ -68,6 +72,12 @@ describe("real canonical support report worker", () => {
 
   it("keeps manual export focused on a retained failure under unrelated request traffic", async () => {
     failure();
+    // Footer selection reuses real automatic failure candidates, not unattributed user reports.
+    recordRegisteredFailureIncident(stateDir, {
+      op: "client.diagnostic",
+      correlationId: "desktop-worker-failure",
+      errorKind: "timeout",
+    });
     const retained = prepareDesktopSupportReport(stateDir, "desktop-worker-failure");
     const now = Date.now();
     const process = fixtureProcess(4444, "ccddeeff");
@@ -87,7 +97,12 @@ describe("real canonical support report worker", () => {
     expect(report.incident.incidentId).toBe(retained.incidentId);
     expect(report.incident.correlation.rootCorrelationId).toMatch(/^id\d{6}$/u);
     expect(analyzeSupportReport(response.reportJson).selection.status).toBe("complete");
-    expect(response.reportJson).not.toContain("routine-request-");
+    const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+    expect(evidence).toContain('"op":"client.diagnostic"');
+    expect(evidence).toContain('"errorKind":"timeout"');
+    expect(evidence).not.toContain('"op":"http.request.body.received"');
+    expect(evidence).not.toContain("desktop-worker-failure");
+    expect(evidence).not.toContain("routine-request-");
     expect(listSupportIncidents(stateDir)).toHaveLength(1);
     expect(existsSync(join(stateDir, "activity-log-manifests"))).toBe(false);
   });

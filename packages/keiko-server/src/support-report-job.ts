@@ -77,7 +77,7 @@ function reportMessageHandler(
   stateDir: string,
   correlationId: string | undefined,
   resolve: (report: DesktopSupportReportResponse) => void,
-  reject: (error: unknown) => void,
+  reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1],
   requestCorrelationId: string | undefined,
 ): (value: SupportReportWorkerMessage) => void {
   let prepareStarted = false;

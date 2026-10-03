@@ -104,7 +104,7 @@ function defaultUiDbPath(): string {
   try {
     home = realpathSync(home);
   } catch {
-    /* The configured-path guard refuses unverifiable ancestors. */
+    throw invalidRequest("Default UI database home is unavailable.");
   }
   return join(home, UI_DB_DIRNAME, UI_DB_FILENAME);
 }

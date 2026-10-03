@@ -630,6 +630,15 @@ function handleTreeMutationKey(
   return true;
 }
 
+function diffLineRecords(diff: string): readonly { readonly key: string; readonly line: string }[] {
+  const occurrences = new Map<string, number>();
+  return diff.split("\n").map((line) => {
+    const occurrence = (occurrences.get(line) ?? 0) + 1;
+    occurrences.set(line, occurrence);
+    return { line, key: `${line}:${occurrence}` };
+  });
+}
+
 function configuredFilesRoot(root: string | undefined): string | null {
   const trimmed = root?.trim();
   return trimmed !== undefined && trimmed.length > 0 ? trimmed : null;
@@ -642,9 +651,6 @@ function rootForCache(cacheRoot: string, apiRoot: string, resolved: string | nul
 }
 function nonemptyRoot(root: string): string | null {
   return root.length > 0 ? root : null;
-}
-function activeWatchRoot(active: boolean, root: string): string | undefined {
-  return active ? (nonemptyRoot(root) ?? undefined) : undefined;
 }
 function deliveryRoot(state: GitStatusState): string {
   return state.status?.available === true ? (state.status.repositoryRoot ?? state.status.root) : "";
@@ -741,7 +747,7 @@ export function FilesWidget({
   const apiRoot = fallbackString(configuredRoot, fallbackRoot);
   const apiRootRef = useRef(apiRoot);
   apiRootRef.current = apiRoot;
-  const [resolvedRootValue, setResolvedRoot] = useState<string | null>(null);
+  const [resolvedRootValue, setResolvedRootValue] = useState<string | null>(null);
   const [directoryRoot, setDirectoryRoot] = useState(apiRoot);
   const resolvedRoot = rootForCache(directoryRoot, apiRoot, resolvedRootValue);
   const effectiveRoot = fallbackString(resolvedRoot, apiRoot);
@@ -804,7 +810,7 @@ export function FilesWidget({
   // GEN-UI-FOCUS-002 / GEN-UI-KEYBOARD-003 — the overlay menu and delete dialog render inside the
   // still-mounted tree, so the row that opened them keeps existing; remember it and put focus back
   // there on close (WCAG 2.4.3). `deleteDialogRef` / `menuRef` scope the focus trap and roving.
-  const deleteDialogRef = useRef<HTMLDivElement | null>(null);
+  const deleteDialogRef = useRef<HTMLDialogElement | null>(null);
   // GEN-UI-FOCUS-002 — containment comes from the shared seam rather than a local copy of the wrap.
   // The dialog disables BOTH of its buttons while the delete is in flight, which drops focus to
   // <body>; a React onKeyDown on the dialog can no longer see the next Tab from there, so the old
@@ -948,7 +954,7 @@ export function FilesWidget({
         const response = await readSharedFilesTree(apiRoot, path);
         if (isStale()) return;
         if (path === "") {
-          setResolvedRoot(response.root);
+          setResolvedRootValue(response.root);
           activeFileChangeRef.current?.(null, response.root, currentDirectoryRef.current);
         }
         touchDirectoryAccess(path);
@@ -997,7 +1003,7 @@ export function FilesWidget({
     setGitDiffState(null);
     previousDirectoryRef.current = null;
     activeFileChangeRef.current?.(null, null, null);
-    setResolvedRoot(null);
+    setResolvedRootValue(null);
     setExpanded(new Set([""]));
     setDirectories({});
     setDirectoryRenderLimits({});
@@ -1128,7 +1134,7 @@ export function FilesWidget({
     void loadDirectory(currentDirectoryPath ?? "");
   }, [currentDirectoryPath, invalidateGitStatus, loadDirectory]);
 
-  const watchRoot = activeWatchRoot(watchActive, effectiveRoot);
+  const watchRoot = watchActive ? (nonemptyRoot(effectiveRoot) ?? undefined) : undefined;
   const workspaceWatch = useWorkspaceWatch(
     watchRoot,
     useCallback(
@@ -1939,11 +1945,10 @@ export function FilesWidget({
 
   const entryTooltip = (entry: FilesTreeEntry): string => {
     const unreadableTitle = t("filesWidget.tree.unreadableLinkReason");
-    const baseTip = entry.readable
-      ? entry.path
-      : entry.kind === "directory"
-        ? tGit("tree.unavailable")
-        : unreadableTitle;
+    let baseTip = entry.path;
+    if (!entry.readable) {
+      baseTip = entry.kind === "directory" ? tGit("tree.unavailable") : unreadableTitle;
+    }
     const visibility = visibilityOf(entry);
     const entryTip =
       !entry.readable && entry.kind === "directory"
@@ -2178,8 +2183,8 @@ export function FilesWidget({
             aria-label={t("filesWidget.diff.regionLabel", { path: state.path })}
           >
             {diff.length > 0 ? (
-              diff.split("\n").map((line: string, index: number) => (
-                <div className="fpv-line" key={index}>
+              diffLineRecords(diff).map(({ line, key }) => (
+                <div className="fpv-line" key={key}>
                   <span className="fpv-src">{line.length > 0 ? line : " "}</span>
                 </div>
               ))
@@ -2436,14 +2441,14 @@ export function FilesWidget({
 
   const renderDeleteDialog = (): ReactNode =>
     confirmDelete !== null ? (
-      <div className="ed-dialog-backdrop" role="presentation">
+      <div className="ed-dialog-backdrop">
         {/* GEN-UI-FOCUS-002 — Escape cancels and Tab/Shift+Tab stay inside the dialog (WCAG
               2.1.2). Both live in document-level effects above, not on this element, so they still
               work while every control is disabled and focus has dropped to <body>. */}
-        <div
+        <dialog
+          open
           ref={deleteDialogRef}
-          className="ed-dirty-dialog"
-          role="dialog"
+          className={`ed-dirty-dialog ${presentationStyles.cmpDeleteDialog}`}
           aria-modal="true"
           aria-labelledby="files-delete-title"
           aria-describedby="files-delete-body"
@@ -2475,7 +2480,7 @@ export function FilesWidget({
               {t("filesWidget.deleteDialog.cancel")}
             </button>
           </div>
-        </div>
+        </dialog>
       </div>
     ) : null;
 

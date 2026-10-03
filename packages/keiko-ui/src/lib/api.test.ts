@@ -1303,7 +1303,7 @@ describe("files API helpers", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
       "X-Keiko-Correlation-Id": "ui-directory-0001",
     });
-    await fetchFilesPreview("/repo space", "src/app.ts");
+    await fetchFilesPreview("/repo space", "src/app.ts", "ui-preview-0001");
     await fetchFilesContent("/repo space", "src/app.ts", "ui-content-0001");
     await saveFilesContent({
       root: "/repo space",
@@ -1323,7 +1323,10 @@ describe("files API helpers", () => {
       2,
       "/api/files/preview?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
-        headers: expect.objectContaining({ Accept: "application/json" }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "X-Keiko-Correlation-Id": "ui-preview-0001",
+        }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(

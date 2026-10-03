@@ -22,6 +22,17 @@ export type LocalDockerEndpoint =
 const MAX_CONFIG_BYTES = 65_536;
 const WINDOWS_LOCAL_ENDPOINT = "npipe:////./pipe/docker_engine";
 
+/** Contains only the closed refusal code; never the configuration error, path, or address. */
+export class LocalDockerEndpointUnavailableError extends TypeError {
+  readonly reason = "docker-local-context-unavailable" as const;
+  readonly code = this.reason;
+
+  constructor() {
+    super("docker-local-context-unavailable");
+    this.name = "LocalDockerEndpointUnavailableError";
+  }
+}
+
 function defaultHost(platform: NodeJS.Platform): string {
   return platform === "win32" ? WINDOWS_LOCAL_ENDPOINT : "unix:///var/run/docker.sock";
 }
@@ -138,6 +149,6 @@ export function resolveLocalDockerEndpoint(
     if (!statSync(socket).isSocket()) throw new TypeError("docker-context-invalid");
     return { kind: "available", host: `unix://${socket}` };
   } catch {
-    return { kind: "unavailable", reason: "docker-local-context-unavailable" };
+    throw new LocalDockerEndpointUnavailableError();
   }
 }

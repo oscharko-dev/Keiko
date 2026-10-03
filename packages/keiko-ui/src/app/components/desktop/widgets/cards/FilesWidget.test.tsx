@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { Profiler, useState, type ReactElement } from "react";
+import { I18nProvider } from "@/lib/i18n";
 import * as supportReportApi from "@/lib/support-report-api";
 import { resetFilesNavigationEvidenceForTests } from "@/lib/files-navigation-evidence";
 import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
@@ -365,7 +366,11 @@ describe("FilesWidget", () => {
     await userEvent.click(screen.getByRole("treeitem", { name: /package\.json/i }));
 
     await waitFor(() =>
-      expect(fetchFilesPreview).toHaveBeenCalledWith("/repo space", "package.json"),
+      expect(fetchFilesPreview).toHaveBeenCalledWith(
+        "/repo space",
+        "package.json",
+        expect.any(String),
+      ),
     );
     expect(onActiveFileChange).toHaveBeenCalledWith("package.json", "/repo space");
     expect(await screen.findByText('"keiko"')).toBeInTheDocument();
@@ -834,7 +839,7 @@ describe("FilesWidget", () => {
     expect(fileItem).toHaveAttribute("tabindex", "0");
     fileItem.focus();
     await userEvent.keyboard("{Enter}");
-    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
+    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json", expect.any(String));
 
     fileItem.focus();
     await userEvent.keyboard(" ");
@@ -1098,7 +1103,7 @@ describe("FilesWidget", () => {
     await screen.findByText('"keiko"');
     await userEvent.click(screen.getByRole("button", { name: "Open in editor" }));
 
-    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
+    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json", expect.any(String));
   });
 
   it("opens a file directly when embedded in the editor workspace", async () => {
@@ -1131,7 +1136,7 @@ describe("FilesWidget", () => {
     await userEvent.click(await screen.findByRole("treeitem", { name: /package\.json/i }));
 
     expect(fetchFilesPreview).not.toHaveBeenCalled();
-    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json");
+    expect(onOpenFile).toHaveBeenCalledWith("/repo space", "package.json", expect.any(String));
     expect(screen.queryByText('"keiko"')).toBeNull();
   });
 
@@ -1342,14 +1347,15 @@ describe("FilesWidget", () => {
       return <FilesWidget root={root} onRootChange={setRoot} onActiveFileChange={active} />;
     }
     render(<Host />);
+    expect(screen.getByRole("group", { name: "Folder root" })).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Folder root" })).toBeNull();
     await userEvent.click(await screen.findByRole("treeitem", { name: /^src$/i }));
     await screen.findByText("a.ts");
     await userEvent.clear(screen.getByLabelText("Folder path — open any folder on this machine"));
     await userEvent.type(
       screen.getByLabelText("Folder path — open any folder on this machine"),
-      "/b",
+      "/b{Enter}",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Open" }));
     await userEvent.click(await screen.findByRole("treeitem", { name: /^src$/i }));
     await screen.findByText("b.ts");
     await userEvent.click(screen.getByRole("button", { name: "Back to previous folder" }));
@@ -2246,13 +2252,56 @@ describe("FilePreview", () => {
     await screen.findByRole("alert");
   });
 
-  it("renders the raw error message for non-denied errors", async () => {
+  it.each(["transport", "server"] as const)(
+    "reports the originating %s preview failure with localized body-free text",
+    async (kind) => {
+      const error =
+        kind === "server"
+          ? new ApiError("INTERNAL", "private customer body", 500)
+          : new TypeError("private customer body");
+      if (error instanceof ApiError) error.correlationId = "preview-response-0001";
+      const writer = vi.fn();
+      const report = vi
+        .spyOn(supportReportApi, "createSupportReport")
+        .mockRejectedValue(new Error("fixture refusal"));
+      window.localStorage.setItem("keiko.locale", "de");
+      setClientDiagnosticWriter(writer);
+      vi.mocked(fetchFilesPreview).mockRejectedValue(error);
+      try {
+        render(
+          <I18nProvider>
+            <FilePreview root="/repo" path="hello.txt" onClose={() => undefined} />
+          </I18nProvider>,
+        );
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent("Diese Datei kann nicht gelesen werden.");
+        expect(alert).not.toHaveTextContent("private customer body");
+        const requestCorrelation = vi.mocked(fetchFilesPreview).mock.calls.at(-1)?.[2];
+        expect(requestCorrelation).toEqual(expect.any(String));
+        const correlationId = kind === "server" ? "preview-response-0001" : requestCorrelation;
+        expect(writer).toHaveBeenCalledWith(
+          "File preview read failed",
+          expect.objectContaining({ correlationId, errorEvidence: expect.any(Object) }),
+        );
+        await userEvent.click(screen.getByRole("button", { name: "Fehlerbericht erstellen" }));
+        expect(report).toHaveBeenCalledWith(correlationId, expect.any(AbortSignal));
+        expect(JSON.stringify(writer.mock.calls)).not.toContain("private customer body");
+      } finally {
+        resetClientDiagnosticWriter();
+        window.localStorage.removeItem("keiko.locale");
+        report.mockRestore();
+      }
+    },
+  );
+
+  it("renders localized generic text for non-denied errors", async () => {
     vi.mocked(fetchFilesPreview).mockRejectedValueOnce(new Error("boom"));
 
     render(<FilePreview root="/repo" path="hello.txt" onClose={() => undefined} />);
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("boom");
+    expect(alert).toHaveTextContent("Unable to read this file.");
+    expect(alert).not.toHaveTextContent("boom");
     expect(alert.textContent ?? "").not.toMatch(/excluded from the read surface for safety/i);
   });
 

@@ -20,7 +20,12 @@ export function ProjectTreeRoot({
   children,
 }: ProjectTreeRootProps): ReactNode {
   const t = useFilesWidgetTranslate();
-  const name = root.replaceAll("\\", "/").split("/").filter(Boolean).at(-1) ?? root;
+  const name =
+    root
+      .replaceAll("\\", "/")
+      .split("/")
+      .filter((part) => part.length > 0)
+      .at(-1) ?? root;
   return (
     <>
       <button
@@ -53,7 +58,7 @@ export function ProjectTreeRoot({
           {root}
         </span>
       </button>
-      {expanded ? <div role="group">{children}</div> : null}
+      {expanded ? <fieldset className={styles.cmpProjectGroup}>{children}</fieldset> : null}
     </>
   );
 }

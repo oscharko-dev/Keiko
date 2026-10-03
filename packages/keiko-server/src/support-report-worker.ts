@@ -8,6 +8,7 @@ import { causeChain, keikoStackFrames, errorKindOf } from "@oscharko-dev/keiko-a
 import { activityLogErrorKindOr } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   SupportReportWorkerMessage,
+  SupportReportWorkerFailure,
   SupportReportPreparedMessage,
 } from "./support-report-job.js";
 
@@ -44,11 +45,8 @@ async function createReport(): Promise<SupportReportWorkerMessage> {
   };
 }
 
-let result: SupportReportWorkerMessage;
-try {
-  result = await createReport();
-} catch (error) {
-  result = {
+function serializeSupportReportWorkerFailure(error: unknown): SupportReportWorkerFailure {
+  return {
     ok: false,
     reason: error instanceof SupportReportError ? error.reason : "unavailable",
     failureKind: activityLogErrorKindOr(errorKindOf(error), "internal"),
@@ -56,4 +54,10 @@ try {
     causeChain: causeChain(error),
   };
 }
-parentPort?.postMessage(result);
+
+try {
+  parentPort?.postMessage(await createReport());
+} catch (error) {
+  // The main route owns logging. Transport only closed reasons and bounded diagnostic facts.
+  parentPort?.postMessage(serializeSupportReportWorkerFailure(error));
+}

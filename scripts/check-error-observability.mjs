@@ -460,10 +460,252 @@ function isEvidenceCall(node) {
   );
 }
 
+function caughtErrorName(node) {
+  const name = node.variableDeclaration?.name;
+  return name !== undefined && ts.isIdentifier(name) ? name.text : undefined;
+}
+
+function receivesCaughtError(call, node) {
+  return (
+    call.arguments.length === 1 &&
+    ts.isIdentifier(call.arguments[0]) &&
+    call.arguments[0].text === caughtErrorName(node)
+  );
+}
+
+function referenceArgument(type, name) {
+  if (!ts.isTypeReferenceNode(type) || !ts.isIdentifier(type.typeName)) return undefined;
+  return type.typeName.text === name && type.typeArguments?.length === 1
+    ? type.typeArguments[0]
+    : undefined;
+}
+
+function indexedType(type, index) {
+  if (!ts.isIndexedAccessTypeNode(type) || !ts.isLiteralTypeNode(type.indexType)) return undefined;
+  const literal = type.indexType.literal;
+  return ts.isNumericLiteral(literal) && literal.text === index ? type.objectType : undefined;
+}
+
+function isPromiseRejectType(type) {
+  if (type === undefined) return false;
+  const parameters = indexedType(type, "1");
+  if (parameters === undefined) return false;
+  const constructor = referenceArgument(parameters, "Parameters");
+  if (constructor === undefined) return false;
+  const constructorParameters = indexedType(constructor, "0");
+  if (constructorParameters === undefined) return false;
+  const promise = referenceArgument(constructorParameters, "ConstructorParameters");
+  return (
+    promise !== undefined &&
+    ts.isTypeReferenceNode(promise) &&
+    ts.isIdentifier(promise.typeName) &&
+    promise.typeName.text === "PromiseConstructor"
+  );
+}
+
+function promiseRejectParameter(call) {
+  let owner = call.parent;
+  while (owner !== undefined) {
+    if (ts.isFunctionLike(owner)) {
+      const parameter = owner.parameters.find(
+        (entry) => ts.isIdentifier(entry.name) && entry.name.text === call.expression.text,
+      );
+      // Stop at the closest binding: a shadowed callback is not the Promise's rejection port.
+      if (parameter !== undefined) return isPromiseRejectType(parameter.type);
+    }
+    owner = owner.parent;
+  }
+  return false;
+}
+
+function isPromiseFailurePropagation(call, node) {
+  return (
+    ts.isCallExpression(call) &&
+    ts.isIdentifier(call.expression) &&
+    receivesCaughtError(call, node) &&
+    promiseRejectParameter(call)
+  );
+}
+
+function namedCall(expression, name, argument) {
+  return (
+    ts.isCallExpression(expression) &&
+    ts.isIdentifier(expression.expression) &&
+    expression.expression.text === name &&
+    expression.arguments.length === 1 &&
+    ts.isIdentifier(expression.arguments[0]) &&
+    expression.arguments[0].text === argument
+  );
+}
+
+function boundedFailureKind(expression, argument) {
+  if (!ts.isCallExpression(expression) || !ts.isIdentifier(expression.expression)) return false;
+  if (expression.expression.text !== "activityLogErrorKindOr") return false;
+  const [classified, fallback] = expression.arguments;
+  return (
+    classified !== undefined &&
+    namedCall(classified, "errorKindOf", argument) &&
+    fallback !== undefined &&
+    ts.isStringLiteral(fallback) &&
+    fallback.text === "internal" &&
+    expression.arguments.length === 2
+  );
+}
+
+function boundedReasonGuard(expression, argument) {
+  return (
+    ts.isBinaryExpression(expression) &&
+    expression.operatorToken.kind === ts.SyntaxKind.InstanceOfKeyword &&
+    ts.isIdentifier(expression.left) &&
+    expression.left.text === argument &&
+    ts.isIdentifier(expression.right) &&
+    expression.right.text === "SupportReportError"
+  );
+}
+
+function boundedFailureReason(expression, argument) {
+  if (!ts.isConditionalExpression(expression)) return false;
+  if (!boundedReasonGuard(expression.condition, argument)) return false;
+  const reason = expression.whenTrue;
+  return (
+    ts.isPropertyAccessExpression(reason) &&
+    ts.isIdentifier(reason.expression) &&
+    reason.expression.text === argument &&
+    reason.name.text === "reason" &&
+    ts.isStringLiteral(expression.whenFalse) &&
+    expression.whenFalse.text === "unavailable"
+  );
+}
+
+function boundedFailureField(property, argument) {
+  const value = property.initializer;
+  switch (property.name.text) {
+    case "ok":
+      return value.kind === ts.SyntaxKind.FalseKeyword;
+    case "reason":
+      return boundedFailureReason(value, argument);
+    case "failureKind":
+      return boundedFailureKind(value, argument);
+    case "frames":
+      return namedCall(value, "keikoStackFrames", argument);
+    case "causeChain":
+      return namedCall(value, "causeChain", argument);
+    default:
+      return false;
+  }
+}
+
+function unknownFailureArgument(factory) {
+  if (factory.parameters.length !== 1) return undefined;
+  const parameter = factory.parameters[0];
+  return ts.isIdentifier(parameter.name) && parameter.type?.kind === ts.SyntaxKind.UnknownKeyword
+    ? parameter.name.text
+    : undefined;
+}
+
+function importedTransportSymbol(source, symbol, module) {
+  return source.statements.some((statement) => {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
+      return false;
+    if (statement.moduleSpecifier.text !== module) return false;
+    const bindings = statement.importClause?.namedBindings;
+    return (
+      bindings !== undefined &&
+      ts.isNamedImports(bindings) &&
+      bindings.elements.some(
+        (entry) => entry.name.text === symbol && entry.propertyName === undefined,
+      )
+    );
+  });
+}
+
+function boundedWorkerImports(source) {
+  return (
+    importedTransportSymbol(source, "parentPort", "node:worker_threads") &&
+    importedTransportSymbol(
+      source,
+      "SupportReportError",
+      "@oscharko-dev/keiko-activity-log/reader",
+    ) &&
+    ["errorKindOf", "keikoStackFrames", "causeChain"].every((symbol) =>
+      importedTransportSymbol(source, symbol, "@oscharko-dev/keiko-activity-log"),
+    ) &&
+    importedTransportSymbol(
+      source,
+      "activityLogErrorKindOr",
+      "@oscharko-dev/keiko-contracts/runtime/observability",
+    )
+  );
+}
+
+function hasWorkerFailureReturnType(factory) {
+  return (
+    factory.type !== undefined &&
+    ts.isTypeReferenceNode(factory.type) &&
+    ts.isIdentifier(factory.type.typeName) &&
+    factory.type.typeName.text === "SupportReportWorkerFailure"
+  );
+}
+
+function typedWorkerFailureObject(factory) {
+  if (!hasWorkerFailureReturnType(factory)) return undefined;
+  const statements = factory.body?.statements;
+  if (statements?.length !== 1 || !ts.isReturnStatement(statements[0])) return undefined;
+  const expression = statements[0].expression;
+  return expression !== undefined && ts.isObjectLiteralExpression(expression)
+    ? expression
+    : undefined;
+}
+
+function typedWorkerFailureReturn(factory) {
+  const expression = typedWorkerFailureObject(factory);
+  const argument = unknownFailureArgument(factory);
+  if (expression === undefined || argument === undefined) return false;
+  const expected = new Set(["ok", "reason", "failureKind", "frames", "causeChain"]);
+  if (expression.properties.length !== expected.size) return false;
+  return expression.properties.every(
+    (property) =>
+      ts.isPropertyAssignment(property) &&
+      ts.isIdentifier(property.name) &&
+      expected.delete(property.name.text) &&
+      boundedFailureField(property, argument),
+  );
+}
+
+function workerFailureSerializer(call, node) {
+  if (!ts.isCallExpression(call) || !ts.isIdentifier(call.expression)) return false;
+  if (!receivesCaughtError(call, node)) return false;
+  const factory = node
+    .getSourceFile()
+    .statements.find(
+      (statement) =>
+        ts.isFunctionDeclaration(statement) && statement.name?.text === call.expression.text,
+    );
+  return (
+    factory !== undefined &&
+    boundedWorkerImports(node.getSourceFile()) &&
+    typedWorkerFailureReturn(factory)
+  );
+}
+
+function isWorkerFailurePropagation(call, node) {
+  if (!ts.isCallExpression(call) || !ts.isPropertyAccessExpression(call.expression)) return false;
+  if (call.expression.name.text !== "postMessage" || call.arguments.length !== 1) return false;
+  const receiver = call.expression.expression;
+  // The imported worker parent port transports to the main route; arbitrary message sinks do not.
+  if (!ts.isIdentifier(receiver) || receiver.text !== "parentPort") return false;
+  return workerFailureSerializer(call.arguments[0], node);
+}
+
 function hasEvidenceOrPropagation(node) {
   let found = false;
   const visit = (child) => {
-    if (ts.isThrowStatement(child) || isEvidenceCall(child)) {
+    if (
+      ts.isThrowStatement(child) ||
+      isEvidenceCall(child) ||
+      isPromiseFailurePropagation(child, node) ||
+      isWorkerFailurePropagation(child, node)
+    ) {
       found = true;
       return;
     }

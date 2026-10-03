@@ -44,7 +44,7 @@ function validateSupportReportResponse(value: unknown): DesktopSupportReportResp
     throw new TypeError("Invalid support report response");
   if (
     typeof value.fileName !== "string" ||
-    !/^keiko-support-v1-[a-f0-9]{12}-[0-9]{4}-[0-9]{2}-[0-9]{2}\.json$/u.test(value.fileName) ||
+    !/^keiko-support-v1-[a-f0-9]{12}-\d{4}-\d{2}-\d{2}\.json$/u.test(value.fileName) ||
     typeof value.reportJson !== "string" ||
     value.reportJson.length > MAX_SUPPORT_REPORT_BYTES
   )

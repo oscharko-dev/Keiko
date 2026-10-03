@@ -4365,12 +4365,6 @@
     },
     {
       "path": "packages/keiko-server/src/editor/watch/workspaceWatchService.ts",
-      "owner": "deferred",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/editor/watch/workspaceWatchService.ts",
       "owner": "metadataFor",
       "kind": "unregistered-catch",
       "count": 1

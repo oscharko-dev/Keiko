@@ -132,6 +132,16 @@ function projectPlatform(value: string, context: PrivacyContext): string {
   return REDACTED_SHAPE;
 }
 
+function projectOpaqueReference(name: string, value: string, context: PrivacyContext): string {
+  if (technicalOpaque(name, value, context)) return value;
+  const reference = context.reference(value);
+  // Report-private tool identity retains the existing qualified grammar for lifecycle analysis.
+  // This is an equality reference only: it never resolves a runtime handler or grants authority.
+  return name === "toolCanonicalId" && /^id\d{6}$/u.test(reference)
+    ? `keiko.private.${reference}`
+    : reference;
+}
+
 function projectString(
   name: string,
   value: string,
@@ -141,7 +151,7 @@ function projectString(
   if (contract.values !== undefined) return value;
   switch (contract.dataClass) {
     case "opaque-id":
-      return technicalOpaque(name, value, context) ? value : context.reference(value);
+      return projectOpaqueReference(name, value, context);
     case "error-kind":
       return projectErrorKind(name, value, context);
     case "safe-version":

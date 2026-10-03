@@ -222,6 +222,7 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   ) {
     return;
   }
+  entry.failureStreakCorrelationId ??= newClientCorrelationId();
   entry.capacityLease = acquirePersistentBrowserStreamCapacity(
     () => connectEntrySource(entry),
     (reason) => {
@@ -231,7 +232,7 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
     },
     {
       yieldable: replayableEntry(entry),
-      correlationId: (entry.failureStreakCorrelationId ??= newClientCorrelationId()),
+      correlationId: entry.failureStreakCorrelationId,
     },
   );
 }
@@ -312,7 +313,7 @@ function selectBudgetEntries(
   const order = (group: SharedEventSourceEntry[]): SharedEventSourceEntry[] =>
     rotate
       ? rotateEntries(group, true)
-      : group.sort((left, right) => Number(hasLease(right)) - Number(hasLease(left)));
+      : [...group.filter(hasLease), ...group.filter((entry) => !hasLease(entry))];
   return new Set(
     [...pinned, ...order(essential), ...order(background)].slice(0, MAX_SHARED_CONNECTIONS),
   );

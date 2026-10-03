@@ -28,6 +28,7 @@ import {
   planIsolatedRun,
   probeBackends,
   resolveLocalDockerEndpoint,
+  LocalDockerEndpointUnavailableError,
   selectEnforcingBackend,
   type BackendAvailability,
 } from "@oscharko-dev/keiko-sandbox";
@@ -946,13 +947,20 @@ function isolatedWrapperArgs(
   command: string,
 ): readonly string[] {
   if (decision.attestation.backend !== "container-docker") return decision.args;
-  const endpoint = resolveLocalDockerEndpoint(
-    deps.processEnv,
-    cwd,
-    deps.platform ?? process.platform,
-  );
-  if (endpoint.kind === "unavailable") throw new CommandDeniedError(endpoint.reason, command);
-  return ["--host", endpoint.host, ...decision.args];
+  try {
+    const endpoint = resolveLocalDockerEndpoint(
+      deps.processEnv,
+      cwd,
+      deps.platform ?? process.platform,
+    );
+    if (endpoint.kind === "unavailable") throw new CommandDeniedError(endpoint.reason, command);
+    return ["--host", endpoint.host, ...decision.args];
+  } catch (error) {
+    if (error instanceof LocalDockerEndpointUnavailableError) {
+      throw new CommandDeniedError(error.reason, command);
+    }
+    throw error;
+  }
 }
 
 function appendCapped(buffers: Buffers, sink: Buffer[], chunk: Buffer, max: number): boolean {

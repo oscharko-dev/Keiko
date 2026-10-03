@@ -164,6 +164,12 @@ function verifySqlitePath(path: string): void {
   }
 }
 
+function reportSqlitePathLogFailure(): void {
+  process.emitWarning("SQLite path refusal logging failed.", {
+    code: "KEIKO_LOG_SINK_FAILED",
+  });
+}
+
 /** Preflight SQLite-owned paths before mkdir/open/chmod. Node's pathname-only SQLite API cannot
  * exclude a same-UID replacement after this check; this does not claim atomic containment. */
 export function assertSqliteStatePath(path: string, options?: SqliteStatePathOptions): void {
@@ -176,9 +182,7 @@ export function assertSqliteStatePath(path: string, options?: SqliteStatePathOpt
       try {
         options.sink.write(sqliteStatePathRefusedEvent(options, refusal.kind));
       } catch {
-        process.emitWarning("SQLite path refusal logging failed.", {
-          code: "KEIKO_LOG_SINK_FAILED",
-        });
+        reportSqlitePathLogFailure();
       }
     }
     throw refusal;

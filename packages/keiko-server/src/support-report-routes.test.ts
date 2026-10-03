@@ -162,6 +162,30 @@ describe("desktop support report transport", () => {
     expect(sink.lines().join("\n")).not.toContain("secret failure path");
   });
 
+  it("logs a transported worker failure exactly once without transporting its private body", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const diagnostic = {
+      ok: false as const,
+      reason: "unavailable" as const,
+      failureKind: "internal" as const,
+      frames: ["keiko-server/support-report-worker:1:1"],
+      causeChain: ["TypeError", "RangeError"],
+    };
+    vi.mocked(runSupportReportJob).mockRejectedValue(
+      new SupportReportJobError("unavailable", undefined, diagnostic),
+    );
+    expect(await handleCreateSupportReport(context("{}"), deps())).toMatchObject({ status: 503 });
+    const failures = sink.events.filter((event) => event.op === "support.report.ui.failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.extra).toMatchObject({
+      frames: diagnostic.frames,
+      causeChain: diagnostic.causeChain,
+      reason: "unavailable",
+    });
+    expect(failures[0]?.correlationId).toBe("report-route-test");
+  });
+
   it("records incomplete report sufficiency and technical coverage without claiming complete evidence", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));

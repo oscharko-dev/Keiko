@@ -60,22 +60,22 @@ interface PersistentCapacityOptions {
   readonly correlationId?: string;
 }
 
+type PersistentReleaseReason = "expired" | "cancelled" | "unavailable";
+
 interface PersistentLease {
   readonly abort: AbortController;
   readonly onGranted: () => void;
-  readonly onReleased: (reason: "expired" | "cancelled" | "unavailable") => void;
+  readonly onReleased: (reason: PersistentReleaseReason) => void;
   readonly options: PersistentCapacityOptions;
   ended: boolean;
   granted: boolean;
+  waiterQueryFailed: boolean;
   acquisitionTimer: number;
   leaseTimer: number | undefined;
   finish: (() => void) | undefined;
 }
 
-function releaseLease(
-  lease: PersistentLease,
-  reason: "expired" | "cancelled" | "unavailable",
-): void {
+function releaseLease(lease: PersistentLease, reason: PersistentReleaseReason): void {
   if (lease.ended) return;
   lease.ended = true;
   lease.abort.abort();
@@ -99,9 +99,15 @@ async function checkLeaseWaiters(
   if (lease.ended || lease.options.yieldable === false) return;
   try {
     const snapshot = await locks.query();
+    lease.waiterQueryFailed = false;
     if (snapshot.pending?.some((pending) => pending.name === name)) releaseLease(lease, "expired");
   } catch {
-    // Keep the healthy connection if contention cannot be established.
+    if (lease.ended || lease.waiterQueryFailed) return;
+    lease.waiterQueryFailed = true;
+    reportClientDiagnostic("[keiko] persistent stream contention query unavailable", {
+      correlationId: lease.options.correlationId,
+      errorKind: "unavailable",
+    });
   }
 }
 
@@ -167,7 +173,7 @@ async function requestLease(locks: LockManager, lease: PersistentLease): Promise
 /** Hold any free origin slot; healthy non-replayable connections never yield for capacity. */
 export function acquirePersistentBrowserStreamCapacity(
   onGranted: () => void,
-  onReleased: (reason: "expired" | "cancelled" | "unavailable") => void,
+  onReleased: (reason: PersistentReleaseReason) => void,
   options: PersistentCapacityOptions = {},
 ): () => void {
   const locks = typeof navigator === "undefined" ? undefined : navigator.locks;
@@ -182,6 +188,7 @@ export function acquirePersistentBrowserStreamCapacity(
     options,
     ended: false,
     granted: false,
+    waiterQueryFailed: false,
     acquisitionTimer: 0,
     leaseTimer: undefined,
     finish: undefined,

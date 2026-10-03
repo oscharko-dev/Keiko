@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOriginLocksFixture } from "../test-utils/origin-locks-fixture";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 
 import {
   acquirePersistentBrowserStreamCapacity,
@@ -11,6 +12,7 @@ import {
 
 afterEach(() => {
   resetBrowserStreamCapacityForTests();
+  resetClientDiagnosticWriter();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -142,5 +144,29 @@ it("never cycles the only healthy connection without an origin waiter", async ()
   const stop = acquirePersistentBrowserStreamCapacity(vi.fn(), released);
   await vi.advanceTimersByTimeAsync(20_000);
   expect(released).not.toHaveBeenCalled();
+  stop();
+});
+
+it("records a failed contention query once without dropping a healthy connection or error prose", async () => {
+  vi.useFakeTimers();
+  const locks = createOriginLocksFixture();
+  const query = vi.fn().mockRejectedValue(new TypeError("private customer query failure"));
+  vi.stubGlobal("navigator", { locks: { request: locks.request, query } });
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  const grant = vi.fn();
+  const released = vi.fn();
+  const stop = acquirePersistentBrowserStreamCapacity(grant, released, {
+    correlationId: "capacity-failure-1",
+  });
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(grant).toHaveBeenCalledOnce();
+  expect(released).not.toHaveBeenCalled();
+  expect(writer).toHaveBeenCalledOnce();
+  expect(writer).toHaveBeenCalledWith(
+    "[keiko] persistent stream contention query unavailable",
+    expect.objectContaining({ correlationId: "capacity-failure-1", errorKind: "unavailable" }),
+  );
+  expect(JSON.stringify(writer.mock.calls)).not.toContain("private customer query failure");
   stop();
 });

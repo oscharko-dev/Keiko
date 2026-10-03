@@ -16,6 +16,7 @@ import {
   planIsolatedRun,
   probeBackends,
   resolveLocalDockerEndpoint,
+  LocalDockerEndpointUnavailableError,
 } from "@oscharko-dev/keiko-sandbox";
 import { createHash } from "node:crypto";
 import {
@@ -84,10 +85,37 @@ export interface NetworkIsolationProbe {
   readonly backend: string;
 }
 
+function localDockerAvailable(
+  cwd: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+): boolean {
+  try {
+    return resolveLocalDockerEndpoint(process.env, cwd).kind === "available";
+  } catch (error) {
+    if (!(error instanceof LocalDockerEndpointUnavailableError)) throw error;
+    emitServerDiagnostic(
+      diagnostics,
+      serverDiagnosticFromError({
+        correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+        operation: "verification.isolation-probe",
+        source: "verification.isolation-probe.local-docker",
+        error,
+        redact: () => "docker-local-context-unavailable",
+      }),
+    );
+    return false;
+  }
+}
+
 // Probes whether THIS host can enforce a deny-by-default network-egress boundary for a run rooted at
 // `cwd`, with writes confined to that execution root. No untrusted command is
 // spawned during the probe.
-export function probeNetworkIsolation(cwd: string): NetworkIsolationProbe {
+export function probeNetworkIsolation(
+  cwd: string,
+  diagnostics?: ServerDiagnosticSink,
+  correlationId?: string,
+): NetworkIsolationProbe {
   const decision = planIsolatedRun(
     { command: "node", args: [], cwd, network: "none", filesystem: "execution-root" },
     probeBackends(),
@@ -99,7 +127,7 @@ export function probeNetworkIsolation(cwd: string): NetworkIsolationProbe {
       decision.attestation.networkEnforced &&
       decision.attestation.filesystemEnforced &&
       (decision.attestation.backend !== "container-docker" ||
-        resolveLocalDockerEndpoint(process.env, cwd).kind === "available"),
+        localDockerAvailable(cwd, diagnostics, correlationId)),
     backend: decision.attestation.backend,
   };
 }
@@ -188,7 +216,11 @@ export async function executeVerificationEnforced(
 async function executeExclusiveVerification(
   args: ExecuteVerificationArgs,
 ): Promise<ExecuteVerificationResult> {
-  const probe = probeNetworkIsolation(args.probeCwd ?? args.workspace.root);
+  const probe = probeNetworkIsolation(
+    args.probeCwd ?? args.workspace.root,
+    args.diagnostics,
+    args.correlationId,
+  );
   const activityLog = args.activityLog ?? processServerLogSink();
   const report = await runVerification(args.plan, {
     workspace: args.workspace,

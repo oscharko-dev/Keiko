@@ -8,17 +8,21 @@ const BackIcon = Icons.back;
 const UpIcon = Icons.arrowUp;
 const FolderIcon = Icons.folder;
 
-interface FilesRootBarProps {
-  readonly showNavigation?: boolean;
-  readonly opening?: boolean;
+interface RootControlsProps {
   readonly navigation: FilesNavigation;
-  readonly draft: string;
-  readonly editable: boolean;
   readonly canGoUp: boolean;
-  readonly onDraftChange: (value: string) => void;
-  readonly onOpen: (value: string) => void;
   readonly onUp: () => void;
   readonly onRoot: () => void;
+}
+interface RootPathProps {
+  readonly opening?: boolean;
+  readonly draft: string;
+  readonly editable: boolean;
+  readonly onDraftChange: (value: string) => void;
+}
+interface FilesRootBarProps extends RootControlsProps, RootPathProps {
+  readonly showNavigation?: boolean;
+  readonly onOpen: (value: string) => void;
 }
 
 interface RootAction {
@@ -29,7 +33,7 @@ interface RootAction {
   readonly icon: ReactNode;
 }
 
-function rootActions(props: FilesRootBarProps, t: I18nTranslate): readonly RootAction[] {
+function rootActions(props: RootControlsProps, t: I18nTranslate): readonly RootAction[] {
   return [
     {
       key: "back",
@@ -66,11 +70,11 @@ function rootActions(props: FilesRootBarProps, t: I18nTranslate): readonly RootA
   ];
 }
 
-function RootControls(props: FilesRootBarProps): ReactNode {
+function RootControls({ navigation, canGoUp, onUp, onRoot }: RootControlsProps): ReactNode {
   const t = useTranslate();
   return (
     <div className={styles.cmpControls}>
-      {rootActions(props, t).map((action) => (
+      {rootActions({ navigation, canGoUp, onUp, onRoot }, t).map((action) => (
         <button
           key={action.key}
           type="button"
@@ -87,7 +91,7 @@ function RootControls(props: FilesRootBarProps): ReactNode {
   );
 }
 
-function RootPath(props: FilesRootBarProps): ReactNode {
+function RootPath({ opening, draft, editable, onDraftChange }: RootPathProps): ReactNode {
   const t = useTranslate();
   return (
     <div className={styles.cmpPath}>
@@ -95,45 +99,67 @@ function RootPath(props: FilesRootBarProps): ReactNode {
         type="text"
         className="files-root-input mono"
         aria-label={t(
-          props.editable ? "filesWidget.rootBar.pathLabel" : "filesWidget.navigation.currentPath",
+          editable ? "filesWidget.rootBar.pathLabel" : "filesWidget.navigation.currentPath",
         )}
         placeholder={t("filesWidget.rootBar.pathPlaceholder")}
-        title={props.draft}
+        title={draft}
         spellCheck={false}
-        value={props.draft}
-        readOnly={!props.editable}
-        disabled={props.opening}
-        onChange={(event): void => props.onDraftChange(event.target.value)}
+        value={draft}
+        readOnly={!editable}
+        disabled={opening}
+        onChange={(event): void => onDraftChange(event.target.value)}
       />
-      {props.editable ? (
+      {editable ? (
         <button
           type="submit"
-          disabled={props.opening}
+          disabled={opening}
           className="files-root-open"
           title={t("filesWidget.rootBar.openFolderTitle")}
         >
-          {t(props.opening ? "editor.empty.opening" : "filesWidget.rootBar.open")}
+          {t(opening ? "editor.empty.opening" : "filesWidget.rootBar.open")}
         </button>
       ) : null}
     </div>
   );
 }
 
-export function FilesRootBar(props: FilesRootBarProps): ReactNode {
+export function FilesRootBar({
+  showNavigation,
+  opening,
+  navigation,
+  draft,
+  editable,
+  canGoUp,
+  onDraftChange,
+  onOpen,
+  onUp,
+  onRoot,
+}: FilesRootBarProps): ReactNode {
   const t = useTranslate();
   return (
-    <form
-      className={`files-root-bar ${styles.cmpRootBar}`}
-      data-navigation={props.showNavigation !== false}
+    <fieldset
+      className={styles.cmpRootGroup}
       aria-label={t("filesWidget.rootBar.label")}
-      aria-busy={props.opening === true}
-      onSubmit={(event): void => {
-        event.preventDefault();
-        if (props.editable && props.opening !== true) props.onOpen(props.draft);
-      }}
+      aria-busy={opening === true}
     >
-      {props.showNavigation !== false ? <RootControls {...props} /> : null}
-      <RootPath {...props} />
-    </form>
+      <form
+        className={`files-root-bar ${styles.cmpRootBar}`}
+        data-navigation={showNavigation !== false}
+        onSubmit={(event): void => {
+          event.preventDefault();
+          if (editable && opening !== true) onOpen(draft);
+        }}
+      >
+        {showNavigation !== false ? (
+          <RootControls navigation={navigation} canGoUp={canGoUp} onUp={onUp} onRoot={onRoot} />
+        ) : null}
+        <RootPath
+          {...(opening === undefined ? {} : { opening })}
+          draft={draft}
+          editable={editable}
+          onDraftChange={onDraftChange}
+        />
+      </form>
+    </fieldset>
   );
 }

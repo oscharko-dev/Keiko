@@ -181,9 +181,9 @@ export function SupportReportButton(props: SupportReportButtonProps): ReactNode 
         </button>
       ) : null}
       {status === "saved" || status === "error" ? (
-        <span role="status" className={styles.cmpFeedback}>
+        <output className={styles.cmpFeedback}>
           {t(status === "saved" ? "supportReport.saved" : "supportReport.failed")}
-        </span>
+        </output>
       ) : null}
     </span>
   );
@@ -202,7 +202,7 @@ export function GlobalSupportReportAction(): ReactNode {
   }, [ordinal]);
   if (failure === null) return null;
   return (
-    <span className={styles.cmpControl} role="group" aria-label={t("supportReport.create")}>
+    <fieldset className={styles.cmpControl} aria-label={t("supportReport.create")}>
       <SupportReportButton
         compact
         correlationId={failure.correlationId}
@@ -217,6 +217,6 @@ export function GlobalSupportReportAction(): ReactNode {
       >
         ×
       </button>
-    </span>
+    </fieldset>
   );
 }

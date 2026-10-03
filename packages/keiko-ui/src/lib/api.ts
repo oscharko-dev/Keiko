@@ -1805,11 +1805,15 @@ export async function applyWorkspaceReplace(
   });
 }
 
-export async function fetchFilesPreview(root: string, path: string): Promise<FilesPreviewResponse> {
+export async function fetchFilesPreview(
+  root: string,
+  path: string,
+  correlationId?: string,
+): Promise<FilesPreviewResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   params.set("path", path);
-  return fetchJson(`/api/files/preview?${params.toString()}`);
+  return fetchJson(`/api/files/preview?${params.toString()}`, undefined, undefined, correlationId);
 }
 
 export async function fetchFilesContent(

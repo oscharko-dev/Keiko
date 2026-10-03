@@ -14,6 +14,9 @@ import {
 import type { RouteContext } from "./routes.js";
 import { createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, UiStoreError, type UiStore } from "./store/index.js";
+import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
 
 function createCloneRepositoryHandler(
@@ -30,6 +33,8 @@ function createCloneRepositoryHandler(
 
 let tmp: string;
 let store: UiStore;
+let sessionChannel: ReturnType<typeof createCodingAppSessionChannel>;
+let sessionToken: string;
 
 function deps(paired = true): UiHandlerDeps {
   return {
@@ -41,25 +46,13 @@ function deps(paired = true): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
-    ...(paired
-      ? {
-          codingAppSessionChannel: {
-            verifySession: () => ({
-              sessionId: "test-session",
-              principalLabel: "local",
-              issuedAtMs: 1,
-              lastSeenAtMs: 1,
-              rotationCount: 0,
-            }),
-          } as UiHandlerDeps["codingAppSessionChannel"],
-        }
-      : {}),
+    ...(paired ? { codingAppSessionChannel: sessionChannel } : {}),
   };
 }
 
 function ctx(body: unknown): RouteContext {
   const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage;
-  req.headers = {};
+  req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${sessionToken}` };
   return {
     correlationId: undefined,
     req,
@@ -71,7 +64,7 @@ function ctx(body: unknown): RouteContext {
 
 function ctxRaw(rawBody: string): RouteContext {
   const req = Readable.from([Buffer.from(rawBody, "utf8")]) as IncomingMessage;
-  req.headers = {};
+  req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${sessionToken}` };
   return {
     correlationId: undefined,
     req,
@@ -84,6 +77,9 @@ function ctxRaw(rawBody: string): RouteContext {
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "keiko-repo-route-"));
   store = createInMemoryUiStore();
+  const registry = createSessionRegistry();
+  sessionToken = registry.mint("local").cookieToken;
+  sessionChannel = createCodingAppSessionChannel({ registry });
 });
 
 afterEach(() => {

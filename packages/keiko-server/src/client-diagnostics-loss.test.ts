@@ -264,9 +264,27 @@ describe("client diagnostics loss evidence", () => {
     expect(counters["client-error-suppressed"]).toBe(2);
   });
 
-  it("retains failed client operations at incident-triggering severity", async () => {
+  it("retains a caught editor render failure at incident-triggering severity", async () => {
     const body = JSON.stringify({
-      message: "[keiko] editor file load failed: ApiError",
+      message: "[keiko] editor render failed: TypeError",
+      clientTs: CLIENT_TS,
+      kind: "boundary",
+      renderFailure: "window-body",
+      errorKind: "internal",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    const [line] = lines("client.diagnostic");
+    expect(expectActivityLogProof("client.diagnostic.line", line ?? "")).toMatchObject({
+      errorKind: "internal",
+      clientKind: "boundary",
+      renderFailure: "window-body",
+      level: "error",
+    });
+  });
+
+  it("keeps an unmarked operation failure below automatic incident severity", async () => {
+    const body = JSON.stringify({
+      message: "[keiko] optional file operation failed: ApiError",
       clientTs: CLIENT_TS,
       errorKind: "internal",
     });
@@ -274,7 +292,7 @@ describe("client diagnostics loss evidence", () => {
     const [line] = lines("client.diagnostic");
     expect(expectActivityLogProof("client.diagnostic.line", line ?? "")).toMatchObject({
       errorKind: "internal",
-      level: "error",
+      level: "warn",
     });
   });
 

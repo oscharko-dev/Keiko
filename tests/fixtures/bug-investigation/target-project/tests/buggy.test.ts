@@ -1,11 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { half } from "../src/buggy.js";
+import { describe, it } from "node:test";
+import { strictEqual } from "node:assert";
+import { half } from "../src/buggy.ts";
 
-// This regression test FAILS against the buggy source (half(10) === 3.33…) and PASSES once the
-// integration test applies the fix (n / 2). It is the verified evidence that the bug reproduces and
-// the fix resolves it.
+// The real workflow integration executes this regression before and after applying the fix.
 describe("half", () => {
   it("returns half of the input", () => {
-    expect(half(10)).toBe(5);
+    strictEqual(half(10), 5);
   });
 });

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  activityLogOperationSchema,
+  ACTIVITY_LOG_OPERATION_REGISTRY,
   activityLogEvent,
   supportIncidentFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -73,8 +73,19 @@ function incidentId(result: ReturnType<typeof recordRegisteredFailureIncident>):
     throw new TypeError("Expected retained incident.");
   return result.incidentId;
 }
-function writeStage(sink: ReturnType<typeof createFileServerLogSink>, op: string): void {
-  const stage = activityLogOperationSchema(op);
+type StageRegistration = Extract<
+  (typeof ACTIVITY_LOG_OPERATION_REGISTRY)[number],
+  { readonly op: "client.stage.started" | "client.stage.settled" }
+>;
+function writeStage(
+  sink: ReturnType<typeof createFileServerLogSink>,
+  op: "client.stage.started" | "client.stage.settled",
+): void {
+  const stage = ACTIVITY_LOG_OPERATION_REGISTRY.find(
+    (entry): entry is StageRegistration =>
+      (entry.op === "client.stage.started" || entry.op === "client.stage.settled") &&
+      entry.op === op,
+  );
   if (stage === undefined) throw new TypeError("Missing parent stage operation.");
   sink.write(
     activityLogEvent(
@@ -85,7 +96,9 @@ function writeStage(sink: ReturnType<typeof createFileServerLogSink>, op: string
   );
 }
 function writeFailure(): void {
-  const operation = activityLogOperationSchema("client.diagnostic");
+  const operation = ACTIVITY_LOG_OPERATION_REGISTRY.find(
+    (entry) => entry.op === "client.diagnostic",
+  );
   if (operation === undefined) throw new TypeError("Missing client diagnostic operation.");
   const sink = createFileServerLogSink(stateDir, { level: "debug" });
   writeStage(sink, "client.stage.started");

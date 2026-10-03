@@ -103,7 +103,7 @@ describe("support report code inventory", () => {
     source(
       root,
       "packages/keiko-local-knowledge/src/indexing/orchestrator-activity-log.ts",
-      'const EXACT_FAILURE_ERROR_KINDS = { LIMIT_REACHED: "validation-failed" };',
+      'const EXACT_FAILURE_ERROR_KINDS = { LIMIT_REACHED: "validation-failed" }; function activityFailureKind(kind) { return nested === undefined ? kind : `DISCOVERY_FAILED.${nested}`; }',
     );
     const result = await generateSupportCodeInventory(root);
     for (const symbol of [

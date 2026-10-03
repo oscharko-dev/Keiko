@@ -201,10 +201,12 @@ describe("TerminalWidget", () => {
     await userEvent.click(screen.getByRole("button", { name: /run/i }));
 
     const stdout = await screen.findByRole("region", { name: /command stdout/i });
-    expect(stdout.tagName).toBe("PRE");
+    expect(stdout.tagName).toBe("SECTION");
+    expect(stdout.querySelector("pre")).toHaveTextContent("o".repeat(4000));
     expect(stdout).toHaveAttribute("tabindex", "0");
     const stderr = screen.getByRole("region", { name: /command stderr/i });
-    expect(stderr.tagName).toBe("PRE");
+    expect(stderr.tagName).toBe("SECTION");
+    expect(stderr.querySelector("pre")).toHaveTextContent("e".repeat(4000));
     expect(stderr).toHaveAttribute("tabindex", "0");
   });
 

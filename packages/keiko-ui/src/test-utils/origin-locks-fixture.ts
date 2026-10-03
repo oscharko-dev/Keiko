@@ -1,3 +1,5 @@
+type FixtureLockCallback<R> = (lock: Lock | null) => R | PromiseLike<R>;
+
 interface QueuedRequest {
   readonly grant: () => void;
   readonly cancel: () => void;
@@ -31,11 +33,27 @@ function cancelPending(
   reject(new DOMException("Cancelled", "AbortError"));
   drain(state, name);
 }
+function runHeldCallback<R>(
+  state: LockState,
+  name: string,
+  callback: FixtureLockCallback<R>,
+  resolve: (value: R | PromiseLike<R>) => void,
+  reject: (reason: unknown) => void,
+): void {
+  const lock: Lock = { name, mode: "exclusive" };
+  state.held.set(name, lock);
+  Promise.resolve()
+    .then(() => callback(lock))
+    .then(
+      (value): void => complete(state, name, (): void => resolve(value)),
+      (error: unknown): void => complete(state, name, (): void => reject(error)),
+    );
+}
 function enqueue<R>(
   state: LockState,
   name: string,
   options: LockOptions,
-  callback: LockGrantedCallback<R>,
+  callback: FixtureLockCallback<R>,
 ): Promise<R> {
   if (options.signal?.aborted === true)
     return Promise.reject(new DOMException("Cancelled", "AbortError"));
@@ -53,22 +71,7 @@ function enqueue<R>(
       cancel,
       grant: (): void => {
         options.signal?.removeEventListener("abort", cancel);
-        const lock: Lock = { name, mode: "exclusive" };
-        state.held.set(name, lock);
-        Promise.resolve()
-          .then(() => callback(lock))
-          .then(
-            (value): void => {
-              complete(state, name, (): void => {
-                resolve(value);
-              });
-            },
-            (error: unknown): void => {
-              complete(state, name, (): void => {
-                reject(error);
-              });
-            },
-          );
+        runHeldCallback(state, name, callback, resolve, reject);
       },
     };
     options.signal?.addEventListener("abort", cancel, { once: true });
@@ -85,8 +88,8 @@ export function createOriginLocksFixture(): Pick<LockManager, "request" | "query
   const state: LockState = { held: new Map(), pending: new Map() };
   const request = <R>(
     name: string,
-    optionsOrCallback: LockOptions | LockGrantedCallback<R>,
-    callback?: LockGrantedCallback<R>,
+    optionsOrCallback: LockOptions | FixtureLockCallback<R>,
+    callback?: FixtureLockCallback<R>,
   ): Promise<R> => {
     const options = typeof optionsOrCallback === "function" ? {} : optionsOrCallback;
     const run = typeof optionsOrCallback === "function" ? optionsOrCallback : callback;

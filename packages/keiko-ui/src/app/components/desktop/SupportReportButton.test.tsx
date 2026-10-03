@@ -106,6 +106,42 @@ describe("SupportReportButton", () => {
     expect(download).toHaveBeenCalledTimes(2);
   });
 
+  it("cancels the old correlation and ignores its late report after a pending switch", async () => {
+    let finishOld: (value: typeof report) => void = () => undefined;
+    let finishNew: (value: typeof report) => void = () => undefined;
+    const oldReport = { fileName: "old.json", reportJson: "old" };
+    const newReport = { fileName: "new.json", reportJson: "new" };
+    create.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOld = resolve;
+        }),
+    );
+    create.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishNew = resolve;
+        }),
+    );
+    const view = render(<SupportReportButton correlationId="pending-old" />);
+    await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    const oldSignal = create.mock.calls[0]?.[1];
+    view.rerender(<SupportReportButton correlationId="pending-new" />);
+    expect(oldSignal?.aborted).toBe(true);
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    expect(create).toHaveBeenLastCalledWith("pending-new", expect.any(AbortSignal));
+    await act(async () => finishOld(oldReport));
+    expect(download).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Creating report…" })).toBeDisabled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await act(async () => finishNew(newReport));
+    expect(download).toHaveBeenCalledExactlyOnceWith(newReport);
+    view.rerender(<SupportReportButton correlationId="pending-old" />);
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
   it("shares one pending download between duplicate contextual actions", async () => {
     let resolve: (value: typeof report) => void = () => undefined;
     create.mockImplementationOnce(

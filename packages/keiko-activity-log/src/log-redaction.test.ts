@@ -42,6 +42,14 @@ const JSON_WEB_TOKEN = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "abcdef"].joi
 const AWS_ACCESS_KEY_ID = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
 
 describe("log field redaction", () => {
+  beforeEach(() => {
+    configureActivityLogRouteRedactor(ROUTE_TEMPLATE_REDACTOR_ID, redactRoutePath);
+  });
+
+  afterEach(() => {
+    resetActivityLogRouteRedactor();
+  });
+
   it.each([
     REDACTED_KEY,
     REDACTED_LENGTH,
@@ -56,14 +64,6 @@ describe("log field redaction", () => {
   it("does not preserve a customer-shaped redaction marker", () => {
     expect(redactLogString("[redacted:CustomerPayroll]")).toBe(REDACTED_SHAPE);
   });
-  beforeEach(() => {
-    configureActivityLogRouteRedactor(ROUTE_TEMPLATE_REDACTOR_ID, redactRoutePath);
-  });
-
-  afterEach(() => {
-    resetActivityLogRouteRedactor();
-  });
-
   it("keeps the evidence fields the instrumentation surface is built from", () => {
     const fields = redactLogFields({
       endpoint: "https://gateway.internal:8443",
