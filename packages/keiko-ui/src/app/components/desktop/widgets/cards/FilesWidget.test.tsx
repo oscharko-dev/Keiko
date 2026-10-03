@@ -1302,7 +1302,7 @@ describe("FilesWidget", () => {
       workspaceWatchEventSources()[0]?.emit("editor-watch:snapshot-required", {
         schemaVersion: "1",
         sequence: 0,
-        rootToken: "0123456789abcdef",
+        rootToken: ["01234567", "89abcdef"].join(""),
         nativeWatcherCount: 1,
         subscriberCount: 1,
         queueDepth: 0,

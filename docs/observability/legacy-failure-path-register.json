@@ -7076,12 +7076,6 @@
       "count": 2
     },
     {
-      "path": "packages/keiko-server/src/workspace-state-handlers.ts",
-      "owner": "loadWorkspaceStateFromDisk",
-      "kind": "unregistered-catch",
-      "count": 2
-    },
-    {
       "path": "packages/keiko-tool-catalog/src/schema.ts",
       "owner": "isValidRegexSource",
       "kind": "unregistered-catch",

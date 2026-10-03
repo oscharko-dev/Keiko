@@ -4712,7 +4712,7 @@ function EditorRuntimeWidget({
     if (onCloseOpenFile === undefined) return null;
     return (
       <span
-        className={`ed-tab-close ${runtimeStyles.tabClose}`}
+        className={`ed-tab-close ${runtimeStyles.cmpTabClose}`}
         // Decoration for the pointer: the tab owns the name and the keyboard path, and an exposed
         // control here would be an unallowed owned child of the tablist again.
         aria-hidden="true"
@@ -4907,10 +4907,10 @@ function EditorRuntimeWidget({
     documentActions.push({ label: commonT("editor.actions.format"), run: handleFormatClick });
 
   const renderEditorToolbar = (): ReactNode => (
-    <div className={`ed-toolbar-actions ${runtimeStyles.toolbar}`}>
+    <div className={`ed-toolbar-actions ${runtimeStyles.cmpToolbar}`}>
       {toolbarExtras}
       {hasTarget && saveStatus === "conflict" ? (
-        <button type="button" className={runtimeStyles.primaryAction} onClick={requestReload}>
+        <button type="button" className={runtimeStyles.cmpPrimaryAction} onClick={requestReload}>
           {commonT("editor.actions.reload")}
         </button>
       ) : null}
@@ -4918,7 +4918,7 @@ function EditorRuntimeWidget({
         <>
           <button
             type="button"
-            className={runtimeStyles.primaryAction}
+            className={runtimeStyles.cmpPrimaryAction}
             onClick={handleSaveClick}
             aria-disabled={saveUnavailable}
           >

@@ -146,7 +146,13 @@ expand and collapse without replacing the root. Files uses directory navigation 
 Back/Forward/Up. Both views retain safe hidden and Git-ignored entries with subtle gray typography;
 independent status remains available through accessible names and tooltips. Files dims
 filesystem-hidden entries; the Editor dims Git-ignored/untracked entries, while tracked
-dotfiles retain normal text. Ignored directory descendants inherit the decoration. Authorized parent listings may
+dotfiles retain normal text. Ignored directory descendants inherit the decoration, including
+when navigation selects the ignored directory itself as the displayed root. Fully untracked
+directories are classified only from complete bounded Git status and tracked-file results;
+incomplete results omit that classification instead of dimming tracked content. Canonical
+root aliases reuse the same registered project. Multi-root Editor windows keep their manifest
+members fixed so retargeting one root cannot discard another root's unsaved buffers.
+Authorized parent listings may
 show known non-secret runtime/dependency directory names as metadata-free, unavailable
 rows. Content, children, mutations, symlink targets, and secret paths retain the existing
 deny boundary; this presentation exception does not change connected-context discovery. Legacy

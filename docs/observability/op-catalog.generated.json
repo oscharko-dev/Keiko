@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "eb0e92975c7a3c89e49a6273393a2feb1f633321714fde161fb0afe91b842336",
+    "catalogDigest": "de2a3a6e697147f78a494f009cb5763be6fdde293e9ea5641c2a9d0f7f773ee0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -28515,8 +28515,8 @@
         "failureClasses": ["ui-store-open"],
         "proofIds": ["store.opened.identity"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store/db.ts:133",
-        "emitterSites": ["packages/keiko-server/src/store/db.ts:904"]
+        "registrationSite": "packages/keiko-server/src/store/db.ts:134",
+        "emitterSites": ["packages/keiko-server/src/store/db.ts:909"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -79974,7 +79974,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitRoutes.ts:1375",
+      "site": "packages/keiko-server/src/gitRoutes.ts:1451",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -82679,7 +82679,7 @@
     {
       "op": "store.opened",
       "category": "setup",
-      "site": "packages/keiko-server/src/store/db.ts:136",
+      "site": "packages/keiko-server/src/store/db.ts:137",
       "package": "keiko-server"
     },
     {

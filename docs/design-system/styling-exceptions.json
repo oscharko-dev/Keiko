@@ -307,13 +307,7 @@
     {
       "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.module.css",
       "globalSelectors": [],
-      "unprefixedLocalClasses": [
-        "ed-tablist",
-        "tabClose",
-        "tabHitClosable",
-        "tabRow",
-        "themeTokens"
-      ]
+      "unprefixedLocalClasses": ["ed-tablist", "tabHitClosable", "tabRow", "themeTokens"]
     },
     {
       "source": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorWidget.module.css",
