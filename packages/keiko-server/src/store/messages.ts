@@ -4,7 +4,7 @@
 //   - `task_type` column read/write so non-workflow runs (verify/explain-plan) can be labelled.
 //   - updateMessage(): partial PATCH on the row, re-using the existing redact+truncate path.
 
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { validateKnowledgePodRetrievalActivity } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
 import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
@@ -500,11 +500,6 @@ interface GatewayScanCursor {
 }
 
 interface GatewayScanState {
-  readonly eligibleUnits: GatewayMessageRow[][];
-  eligibleCount: number;
-  currentFound: boolean;
-  readonly canonicalUsers: Map<string, GatewayMessageRow>;
-  readonly canonicalAssistants: Map<string, GatewayMessageRow>;
   legacyAssistant: GatewayMessageRow | undefined;
 }
 
@@ -529,91 +524,59 @@ function listGatewayScanPage(
     ) as unknown as GatewayMessageRow[];
 }
 
-function appendGatewayUnit(
-  state: GatewayScanState,
-  rows: readonly GatewayMessageRow[],
+function canonicalGatewayUnit(
+  assistantStatement: StatementSync,
+  row: GatewayMessageRow,
   currentUserMessageId: string,
-): void {
-  state.eligibleUnits.push([...rows]);
-  state.eligibleCount += rows.length;
-  if (rows.some((row): boolean => row.id === currentUserMessageId)) state.currentFound = true;
+): readonly GatewayMessageRow[] {
+  if (row.role !== "user") return [];
+  if (row.client_turn_state !== "completed") return row.id === currentUserMessageId ? [row] : [];
+  const assistant = assistantStatement.get(row.chat_id, row.client_turn_id) as unknown as
+    GatewayMessageRow | undefined;
+  return assistant === undefined ? [] : [row, assistant];
 }
 
-function scanCanonicalGatewayRow(
+function legacyGatewayUnit(
   state: GatewayScanState,
   row: GatewayMessageRow,
   currentUserMessageId: string,
-): void {
-  const turnId = row.client_turn_id;
-  if (turnId === null) return;
-  if (row.role === "assistant") {
-    const user = state.canonicalUsers.get(turnId);
-    if (user !== undefined) {
-      state.canonicalUsers.delete(turnId);
-      appendGatewayUnit(state, [user, row], currentUserMessageId);
-      return;
-    }
-    state.canonicalAssistants.set(turnId, row);
-    return;
-  }
-  if (row.role !== "user") return;
-  const assistant = state.canonicalAssistants.get(turnId);
-  state.canonicalAssistants.delete(turnId);
-  if (row.client_turn_state === "completed" && assistant !== undefined) {
-    appendGatewayUnit(state, [row, assistant], currentUserMessageId);
-    return;
-  }
-  if (row.client_turn_state === "completed") {
-    state.canonicalUsers.set(turnId, row);
-  } else if (row.id === currentUserMessageId) {
-    appendGatewayUnit(state, [row], currentUserMessageId);
-  }
-}
-
-function scanLegacyGatewayRow(
-  state: GatewayScanState,
-  row: GatewayMessageRow,
-  currentUserMessageId: string,
-): void {
-  if (row.role === "system") return;
+): readonly GatewayMessageRow[] {
   if (row.role === "assistant") {
     state.legacyAssistant = row;
-    return;
+    return [];
   }
-  if (row.role !== "user") return;
+  if (row.role !== "user") return [];
   const assistant = state.legacyAssistant;
   state.legacyAssistant = undefined;
-  if (assistant !== undefined) {
-    appendGatewayUnit(state, [row, assistant], currentUserMessageId);
-  } else if (row.id === currentUserMessageId) {
-    appendGatewayUnit(state, [row], currentUserMessageId);
-  }
+  if (assistant !== undefined) return [row, assistant];
+  return row.id === currentUserMessageId ? [row] : [];
 }
 
-function gatewayScanCanStop(
-  state: GatewayScanState,
+// Visit by the user row's stable chronological anchor. Looking up canonical partners by their
+// indexed turn id avoids retaining unbounded orphan maps and handles regenerated/skewed timestamps.
+function visitGatewayRows(
+  db: DatabaseSync,
+  chatId: string,
   currentUserMessageId: string,
-  limit: number,
-): boolean {
-  const currentSatisfied = currentUserMessageId.length === 0 || state.currentFound;
-  return state.eligibleCount >= limit && state.canonicalUsers.size === 0 && currentSatisfied;
-}
-
-function scanGatewayPage(
-  state: GatewayScanState,
-  page: readonly GatewayMessageRow[],
-  currentUserMessageId: string,
-  limit: number,
-): boolean {
-  for (const row of page) {
-    if (row.client_turn_id === null) {
-      scanLegacyGatewayRow(state, row, currentUserMessageId);
-    } else {
-      scanCanonicalGatewayRow(state, row, currentUserMessageId);
+  visit: (unit: readonly GatewayMessageRow[]) => boolean | undefined,
+): void {
+  const state: GatewayScanState = { legacyAssistant: undefined };
+  const assistant = db.prepare(`SELECT ${COLUMNS}, rowid AS __rowid FROM chat_messages
+    WHERE chat_id = ? AND client_turn_id = ? AND role = 'assistant' LIMIT 1`);
+  let cursor: GatewayScanCursor | undefined;
+  for (;;) {
+    const page = listGatewayScanPage(db, chatId, cursor);
+    for (const row of page) {
+      const unit =
+        row.client_turn_id === null
+          ? legacyGatewayUnit(state, row, currentUserMessageId)
+          : canonicalGatewayUnit(assistant, row, currentUserMessageId);
+      if (unit.length > 0 && visit(unit) === false) return;
     }
-    if (gatewayScanCanStop(state, currentUserMessageId, limit)) return false;
+    const oldest = page.at(-1);
+    if (oldest === undefined || page.length < GATEWAY_SCAN_PAGE_SIZE) return;
+    cursor = { timestamp: oldest.timestamp, rowid: oldest.__rowid };
   }
-  return true;
 }
 
 function compareGatewayRows(left: GatewayMessageRow, right: GatewayMessageRow): number {
@@ -663,25 +626,17 @@ function collectGatewayRows(
   currentUserMessageId: string,
   limit: number,
 ): readonly GatewayMessageRow[] {
-  const state: GatewayScanState = {
-    eligibleUnits: [],
-    eligibleCount: 0,
-    currentFound: false,
-    canonicalUsers: new Map(),
-    canonicalAssistants: new Map(),
-    legacyAssistant: undefined,
-  };
-  let cursor: GatewayScanCursor | undefined;
-  while (!gatewayScanCanStop(state, currentUserMessageId, limit)) {
-    const page = listGatewayScanPage(db, chatId, cursor);
-    if (page.length === 0) break;
-    if (!scanGatewayPage(state, page, currentUserMessageId, limit)) break;
-    if (page.length < GATEWAY_SCAN_PAGE_SIZE) break;
-    const oldest = page.at(-1);
-    if (oldest === undefined) break;
-    cursor = { timestamp: oldest.timestamp, rowid: oldest.__rowid };
-  }
-  return selectGatewayUnits(state.eligibleUnits, limit, currentUserMessageId);
+  const units: (readonly GatewayMessageRow[])[] = [];
+  let count = 0;
+  let currentFound = currentUserMessageId.length === 0;
+  visitGatewayRows(db, chatId, currentUserMessageId, (unit) => {
+    const mandatory = unit.some((row) => row.id === currentUserMessageId);
+    if (count < limit || mandatory) units.push(unit);
+    count += unit.length;
+    currentFound ||= mandatory;
+    return count < limit || !currentFound;
+  });
+  return selectGatewayUnits(units, limit, currentUserMessageId);
 }
 
 export function listGatewayMessagesLimited(
@@ -694,6 +649,21 @@ export function listGatewayMessagesLimited(
     throw invalidRequest("limit must be a positive integer.");
   }
   return collectGatewayRows(db, chatId, currentUserMessageId, limit).map(rowToMessage);
+}
+
+export function visitGatewayMessageUnits(
+  db: DatabaseSync,
+  chatId: string,
+  currentUserMessageId: string,
+  visit: (messages: readonly ChatMessage[]) => boolean | undefined,
+): void {
+  visitGatewayRows(db, chatId, currentUserMessageId, (unit) => visit(unit.map(rowToMessage)));
+}
+
+export function chatHistoryRevision(db: DatabaseSync, chatId: string): number {
+  const row = db.prepare("SELECT history_revision FROM chats WHERE id = ?").get(chatId);
+  if (typeof row?.history_revision !== "number") throw notFound("Chat");
+  return row.history_revision;
 }
 
 export function recoverInterruptedClientTurns(db: DatabaseSync): void {

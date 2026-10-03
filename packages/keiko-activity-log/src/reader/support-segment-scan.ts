@@ -31,6 +31,7 @@ import { classifyLine, type LineClassification } from "./support-analyze.js";
 import {
   SegmentManifestBuilder,
   ensureSegmentManifestDirectory,
+  segmentManifestDirectory,
   listStoredSegmentManifests,
   loadSegmentManifest,
   manifestMatchesCatalog,
@@ -57,10 +58,13 @@ function errorCode(error: unknown): string | undefined {
   return typeof error.code === "string" ? error.code : undefined;
 }
 
-// A name retention removed after the listing reads as absent; any other failure propagates.
-function regularFileSize(path: string): number | undefined {
+// A name retention removed after the listing reads as absent; any other failure propagates. Any
+// other entry at an Activity Log name is listed: a symlink, directory or FIFO there then fails the
+// hardened open and is named unreadable, never silently missing from a selection's evidence.
+function storeEntrySize(path: string): number | undefined {
   const stat = lstatSync(path, { throwIfNoEntry: false });
-  return stat?.isFile() === true ? stat.size : undefined;
+  if (stat === undefined) return undefined;
+  return stat.isFile() ? stat.size : 0;
 }
 
 /** Every readable Activity Log file of `stateDir` in logical-log order; opens no file. */
@@ -76,7 +80,7 @@ export function listActivityLogStoreFiles(stateDir: string): readonly ActivityLo
   const files: ActivityLogStoreFile[] = [];
   for (const file of readableActivityLogFileNames(orderActivityLogFileNames(names))) {
     const path = join(directory, file.name);
-    const sizeBytes = regularFileSize(path);
+    const sizeBytes = storeEntrySize(path);
     if (sizeBytes === undefined) continue;
     files.push({
       name: file.name,
@@ -312,7 +316,7 @@ function removeOrphanManifests(
 
 export interface SegmentManifestPassOptions {
   readonly trigger: SegmentManifestTrigger;
-  // False keeps every manifest in memory (a read-only analysis); true maintains the store.
+  // False reuses stored manifests without writing; true maintains the store.
   readonly persist: boolean;
   // True ignores every stored manifest and derives each one again from its segment.
   readonly rebuild: boolean;
@@ -335,7 +339,7 @@ function sealedManifest(
     stats.unreadableCount += 1;
     return undefined;
   }
-  persistManifest(directory, built, stored.existed, stats);
+  persistManifest(options.persist ? directory : undefined, built, stored.existed, stats);
   return built;
 }
 
@@ -350,8 +354,10 @@ export function ensureSegmentManifests(
   scanner: ActivityLogScanner,
   options: SegmentManifestPassOptions,
 ): SegmentManifestPass {
-  const directory = options.persist ? ensureSegmentManifestDirectory(stateDir) : undefined;
-  const stats = emptyStats(options.trigger, directory !== undefined);
+  const directory = options.persist
+    ? ensureSegmentManifestDirectory(stateDir)
+    : segmentManifestDirectory(stateDir);
+  const stats = emptyStats(options.trigger, options.persist && directory !== undefined);
   const manifests = new Map<string, LoadedSegmentManifest>();
   const sealedIds = new Set<string>();
   for (const file of files) {
@@ -366,7 +372,7 @@ export function ensureSegmentManifests(
     }
     if (manifest !== undefined) manifests.set(file.name, loadSegmentManifest(manifest));
   }
-  removeOrphanManifests(directory, sealedIds, stats);
+  if (options.persist) removeOrphanManifests(directory, sealedIds, stats);
   return { manifests, stats };
 }
 

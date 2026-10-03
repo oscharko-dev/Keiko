@@ -30,6 +30,7 @@ import {
   type UncertaintyMarkerKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
+import type { GroundedPromptContextWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   activityLogErrorKindOr,
   activityLogEvent,
@@ -124,7 +125,7 @@ import {
   GROUNDED_NO_EVIDENCE_ANSWER,
   buildPackCitationIndex,
   incompleteAnswerMarker,
-  missingCitationMarker,
+  missingCitationMarkerFor,
   noEvidenceMarker,
   packHasUsableEvidence,
   reconcileInlineCitations,
@@ -582,6 +583,8 @@ export interface OrchestratorOutput {
   // answer-only context. Citation and entailment checks follow model invocation; evidence
   // persistence follows source availability.
   readonly modelInvoked?: boolean;
+  // The share the answer's sent prompt took, for the context meter. Counts only.
+  readonly promptContext?: GroundedPromptContextWire | undefined;
 }
 
 // Epic #532 — retrieval-only output. The multi-source (1+N) path runs retrieval per connected
@@ -5273,6 +5276,7 @@ function uncertaintyActivityExtra(
     "tool-unavailable": 0,
     "low-confidence": 0,
     "unsupported-citation": 0,
+    "uncited-answer": 0,
     "incomplete-answer": 0,
     "unsupported-claim": 0,
     "entailment-unavailable": 0,
@@ -6467,7 +6471,7 @@ function citationCoverageMarkerFor(
   const reconciliation = reconcileInlineCitations(answerContent, buildPackCitationIndex([pack]));
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   if (unsupported !== undefined || reconciliation.citedScopePaths.size > 0) return unsupported;
-  return missingCitationMarker(nowMs);
+  return missingCitationMarkerFor(answerContent, nowMs);
 }
 
 function exhaustedAnswerBudgetDimensions(
@@ -6521,6 +6525,7 @@ async function answerWithAvailableContext(
     assistantContent: answer.content,
     elapsedMs,
     modelInvoked: true,
+    ...(answer.promptContext === undefined ? {} : { promptContext: answer.promptContext }),
     ...(plan === undefined ? {} : { plan }),
     ...(!sourceEvidenceAvailable ? { noEvidence: true } : {}),
   };

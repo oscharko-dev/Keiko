@@ -571,6 +571,15 @@ describe("bounded PR narrative lifecycle", () => {
     ).toEqual({ status: "unavailable", reason: "invalid-snapshot" });
   });
 
+  // PR #3678 review: an assumed window's stored value is the setup placeholder, not a window. Read
+  // raw, it refused every PR narrative larger than the placeholder as budget-exhausted.
+  it("plans an assumed window with the default window, never the placeholder", async () => {
+    const setup = fixture({ flags: { contextWindow: 16, contextWindowAssumed: true } });
+    const result = await generatePrDescription(REQUEST, setup.deps);
+    expect(result.status === "generated" && result.artifact.reason).not.toBe("budget-exhausted");
+    expect(setup.calls.length).toBeGreaterThan(0);
+  });
+
   it("does not dispatch a model that declares no output capacity", async () => {
     const setup = fixture({ flags: { maxOutputTokens: 0 } });
     const result = await generatePrDescription(REQUEST, setup.deps);

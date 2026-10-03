@@ -27,11 +27,14 @@ import { Buffer } from "node:buffer";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import {
   SUPPORT_INCIDENT_DIRECTORY_NAME,
+  SUPPORT_REPORT_DIRECTORY_NAME,
+  isSupportReportFileName,
   isActivityLogOwnedFileName,
   parseSupportIncidentFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
+import { isSafeArtifactStageFileName } from "@oscharko-dev/keiko-security/fs-hardening";
 import { assertRealpathContained } from "./launcher-paths.js";
 import {
   ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
@@ -93,8 +96,8 @@ export function resolveStateDir(cwd: string, env: EnvSource, stateDirArg?: strin
 
 // Home-contained variant of `resolveStateDir` (#KEIKO-0330). When the state dir comes
 // from an explicit `--state-dir` argument or `KEIKO_STATE_DIR`, its resolved realpath
-// MUST live under the user's homedir; the default `<cwd>/.keiko` fallback is trusted
-// (the user owns their own cwd). Refusing violates a fail-closed contract with the
+// MUST live under the user's homedir. The default `<cwd>/.keiko` must remain inside
+// the canonical selected cwd, including existing ancestors. Refusing violates a fail-closed contract with the
 // operator: without this guard, an attacker who can plant the env var (wrapper script
 // in PATH, dev-container `.env`, exported in a parent shell) can steer the pid file
 // (fed to `process.kill`) and the append-mode log file to any user-writable path.
@@ -109,15 +112,15 @@ export function resolveContainedStateDir(
   stateDirArg?: string,
 ): string {
   const explicit = explicitStateDirSource(env, stateDirArg);
-  if (explicit === undefined) return resolve(cwd, DEFAULT_STATE_DIR_NAME);
-  const resolved = isAbsolute(explicit.value) ? explicit.value : resolve(cwd, explicit.value);
+  const selected = explicit ?? { source: "default state directory", value: DEFAULT_STATE_DIR_NAME };
+  const resolved = isAbsolute(selected.value) ? selected.value : resolve(cwd, selected.value);
   try {
-    assertRealpathContained(home, resolved);
+    assertRealpathContained(explicit === undefined ? cwd : home, resolved);
   } catch (e) {
     if (e instanceof LauncherError && e.code === "PATH_ESCAPE") {
       throw new LauncherError(
         "STATE_DIR_ESCAPE",
-        `keiko: ${explicit.source} ${explicit.value} resolves outside the user's home directory (${home}); refusing to proceed.`,
+        `keiko: ${selected.source} resolves outside ${explicit === undefined ? "the selected working directory" : "the user's home directory"}; refusing to proceed.`,
       );
     }
     throw e;
@@ -472,7 +475,8 @@ export type RuntimeStateCategory =
   | "quality-intelligence"
   | "update-recovery"
   | "activity-log"
-  | "support-incident";
+  | "support-incident"
+  | "support-report";
 
 // A SQLite store file plus its exact WAL/SHM sidecars and `.corrupt.<ts>` quarantine copies
 // — and ONLY those. Matching is exact-name or a known dotted suffix, never a bare `${base}-`
@@ -755,6 +759,17 @@ const supportIncidentsSubtree: OwnedSubtree = {
   childSubtree: NO_CHILD,
 };
 
+// `support-reports/` is the default destination of `keiko support export` (#3534). Only the closed
+// `keiko-support-v<schema>-<12 hex>-<UTC date>.json` names and the private stage copy of an
+// interrupted publication are Keiko's; an operator file placed there stays foreign, so
+// `uninstall` never removes what Keiko did not write.
+const supportReportsSubtree: OwnedSubtree = {
+  category: "support-report",
+  whole: false,
+  ownsFile: (name) => isSupportReportFileName(name) || isSafeArtifactStageFileName(name),
+  childSubtree: NO_CHILD,
+};
+
 const logsSubtree: OwnedSubtree = {
   category: "activity-log",
   whole: false,
@@ -798,6 +813,7 @@ const TOP_LEVEL_CHILD_SUBTREES: ReadonlyMap<string, OwnedSubtree> = new Map([
   [UPDATE_SUBDIR, updateSubtree],
   [LOGS_SUBDIR, logsSubtree],
   [SUPPORT_INCIDENT_DIRECTORY_NAME, supportIncidentsSubtree],
+  [SUPPORT_REPORT_DIRECTORY_NAME, supportReportsSubtree],
   [ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME, activityLogManifestsSubtree],
 ]);
 

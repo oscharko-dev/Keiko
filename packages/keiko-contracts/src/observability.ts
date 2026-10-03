@@ -91,9 +91,12 @@ export {
   isSupportIncidentSurface,
   normalizeKeikoFrame,
   normalizeKeikoFrameSignature,
+  normalizeDefectFrameSignature,
+  clientDefectContext,
   parseSupportIncidentFileName,
   parseSupportIncidentFingerprintClaimFileName,
   parseSupportIncidentRecord,
+  parseSupportIncidentPrivateProjection,
   parseSupportIncidentSlotClaimFileName,
   supportIncidentBuild,
   supportIncidentFileName,
@@ -334,8 +337,15 @@ export function isActivityLogPlatformClass(value: unknown): value is string {
   return typeof value === "string" && ACTIVITY_LOG_PLATFORM_CLASS_PATTERN.test(value);
 }
 
+// Bounded like the product-version comparison, so no identity field can carry an unbounded string.
+const MAX_ACTIVITY_LOG_PRODUCT_VERSION_LENGTH = 128;
+
 export function isActivityLogProductVersion(value: unknown): value is string {
-  return typeof value === "string" && ACTIVITY_LOG_PRODUCT_VERSION_PATTERN.test(value);
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_ACTIVITY_LOG_PRODUCT_VERSION_LENGTH &&
+    ACTIVITY_LOG_PRODUCT_VERSION_PATTERN.test(value)
+  );
 }
 
 export function isActivityLogProcessId(value: unknown): value is number {
@@ -937,6 +947,20 @@ export function validateActivityLogOperationRecord(
   return registration;
 }
 
+/** Validates a reader record against a trusted archived registration, using the owning validators. */
+export function validateArchivedActivityLogRecord(
+  registration: ActivityLogOperationRegistration,
+  category: string,
+  envelope: ActivityLogEventEnvelope,
+  fields: Readonly<Record<string, unknown>>,
+): void {
+  if (registration.category !== category) {
+    throw new ActivityLogEventValidationError("registration-mismatch");
+  }
+  validateActivityLogFields(registration, fields);
+  validateActivityLogEnvelope(registration, envelope);
+}
+
 export const ACTIVITY_LOG_EVENT_REGISTRATION = Symbol.for(
   "@oscharko-dev/keiko-contracts/activity-log-event-registration",
 );
@@ -984,10 +1008,30 @@ export function withActivityLogCorrelation<Event extends object>(
   event: Event,
   correlationId: string,
 ): Event & { readonly correlationId: string } {
-  const rebound = attachActivityLogEventRegistration(
-    { ...event, correlationId },
-    activityLogEventRegistration(event),
-  );
+  return reboundActivityLogEvent(event, { ...event, correlationId });
+}
+
+/**
+ * Copies an event with the parent correlation id of the operation that spawned it, unless the
+ * event already names its own parent. Like `withActivityLogCorrelation`, it keeps the markers a
+ * plain spread drops: a readiness probe's `{ parentCorrelationId, ...event }` once turned every
+ * startup probe line into an "unregistered operation" the sink discarded (PR #3678).
+ */
+export function withActivityLogParentCorrelation<Event extends object>(
+  event: Event,
+  parentCorrelationId: string,
+): Event {
+  const own: unknown = Reflect.get(event, "parentCorrelationId");
+  if (typeof own === "string") return event;
+  return reboundActivityLogEvent(event, { ...event, parentCorrelationId });
+}
+
+// Carries the registration and rejection markers of `event` over to its copy `rebound`.
+function reboundActivityLogEvent<Event extends object, Copy extends Event>(
+  event: Event,
+  rebound: Copy,
+): Copy {
+  attachActivityLogEventRegistration(rebound, activityLogEventRegistration(event));
   const rejection = activityLogEventRejection(event);
   if (rejection !== undefined) markActivityLogEventRejection(rebound, rejection);
   return rebound;
@@ -1306,3 +1350,5 @@ export function activityLogEvent<
     return rejectedActivityLogEvent<Registration>(error);
   }
 }
+
+export * from "./support-report.js";

@@ -1052,6 +1052,25 @@ describe("observability-stores: closed grammar and bounded size (#3533 audit)", 
     expect(classById(result, "observability-stores").status).toBe("pass");
   });
 
+  it("passes a closed-grammar support report and its stage, and fails a foreign file (#3534)", () => {
+    const stateDir = freshStateDir("observability-support-reports");
+    const dir = join(stateDir, "support-reports");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, `keiko-support-v1-${"b".repeat(12)}-2026-09-30.json`), "{}\n", {
+      mode: 0o600,
+    });
+    writeFileSync(join(dir, `.keiko-publish-${"0a1b2c3d".repeat(3)}-0.stage`), "{}\n", {
+      mode: 0o600,
+    });
+    expect(classById(auditLocalState(stateDir), "observability-stores").status).toBe("pass");
+    writeFileSync(join(dir, "report.json"), "{}\n", { mode: 0o600 });
+    const result = auditLocalState(stateDir);
+    expect(classById(result, "observability-stores").status).toBe("fail");
+    expect(classById(result, "observability-stores").findings.join(" ")).toContain(
+      "support-reports/report.json does not match the closed grammar",
+    );
+  });
+
   it("fails on a foreign or malformed file name under support-incidents/", () => {
     const stateDir = freshStateDir("observability-foreign-incident");
     const dir = join(stateDir, "support-incidents");

@@ -10,7 +10,7 @@ export const EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.en.ts";
 export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 
 // The optional-widget catalog pair, read through `useOptionalWidgetTranslate`. It is a real
-// English/German catalog — the quick-access palette, the browser/commands/terminal widgets and the
+// English/German catalog — the command palette, the browser/commands/terminal widgets and the
 // search panel take every string from it — but it predates the `-i18n.{en,de}.ts` naming this guard
 // recognises, so a component whose strings legitimately live here was told to update shared
 // catalogs it never reads (#2768). Recognised by exact path rather than by loosening a pattern, and
@@ -55,6 +55,10 @@ const I18N_USAGE_APIS = [
   // These follow the same shape as `useTranslate` / `useCodingWorkbenchTranslate` above:
   // a hook that returns `(key, values?) => string`, backed by a matching-key EN and DE map.
   { name: "useProblemsTranslate", pattern: /\buseProblemsTranslate\s*\(/ },
+  // Files and Editor share the existing feature-scoped EN/DE Files catalog.
+  { name: "useFilesWidgetTranslate", pattern: /\buseFilesWidgetTranslate\s*\(/ },
+  { name: "FilesWidgetTranslate-type", pattern: /\bFilesWidgetTranslate\b/ },
+  { name: "translateFilesWidget", pattern: /\btranslateFilesWidget\s*\(/ },
 ];
 const I18N_USAGE_PATTERNS = I18N_USAGE_APIS.map((api) => api.pattern);
 // Each quoted alternative used to open with an unbounded [^"]* that overlaps the required
@@ -122,7 +126,7 @@ function quotedValuesAfter(line, nameRe) {
   return values;
 }
 
-// The option/command registries. Keiko's launcher grid, quick-access command list, KeikoSelect
+// The option/command registries. Keiko's launcher grid, workspace command list, KeikoSelect
 // menus and agent picker are all driven by object literals whose `label`/`description`/`title`/
 // `scope`/`cta` fields render verbatim, which is how a whole German-locale surface can be English
 // without a single JSX literal in sight (issue: `AGENT_WORKFLOWS`, `WIN_TYPES`).
@@ -179,6 +183,14 @@ const FEATURE_CATALOG_DE_PATTERN = /-i18n\.de\.ts$/u;
 const FEATURE_CATALOG_SINGLE_SUFFIX = "-i18n.ts";
 const FEATURE_CATALOG_JSON_SUFFIX = "-i18n.messages.json";
 const CATALOG_LANGUAGE_MAP_PATTERN = /_(EN|DE)_MESSAGES\b/gu;
+const FILES_CATALOG_LANGUAGE_MAP_PATTERN = /\b(EN|DE)_FILES_WIDGET_MESSAGES\b/gu;
+
+function catalogLanguageMaps(source) {
+  return [
+    ...source.matchAll(CATALOG_LANGUAGE_MAP_PATTERN),
+    ...source.matchAll(FILES_CATALOG_LANGUAGE_MAP_PATTERN),
+  ].sort((left, right) => left.index - right.index);
+}
 
 function isSharedCatalogKeyHelper(repoRoot, file) {
   let source;
@@ -188,7 +200,7 @@ function isSharedCatalogKeyHelper(repoRoot, file) {
     // A deleted `-i18n.ts` cannot need local parity; classify it out of the catalog set.
     return true;
   }
-  const declaredMaps = [...source.matchAll(CATALOG_LANGUAGE_MAP_PATTERN)];
+  const declaredMaps = catalogLanguageMaps(source);
   return declaredMaps.length === 0 && source.includes("MessageKey");
 }
 
@@ -344,7 +356,7 @@ function singleFileCatalogParityProblems(repoRoot, singleFileCatalogs) {
   const problems = [];
   for (const file of singleFileCatalogs) {
     const source = readText(repoRoot, file);
-    const boundaries = [...source.matchAll(CATALOG_LANGUAGE_MAP_PATTERN)];
+    const boundaries = catalogLanguageMaps(source);
     const english = boundaries.find((match) => match[1] === "EN");
     const german = boundaries.find((match) => match[1] === "DE");
     if (english?.index === undefined || german?.index === undefined) {
@@ -583,7 +595,7 @@ export function hasUserFacingTextLine(line) {
 // question cannot fail on the case it exists to prevent: a component may route ten strings through
 // `useTranslate` and hardcode the eleventh and still pass, and a `.ts` file was not examined at all.
 // The whole window-type table — every window title, description, launcher-field label and CTA the
-// window launcher, the New Window dialog and the quick-access command list render — shipped as
+// window launcher, the New Window dialog and the workspace command list render — shipped as
 // English literals in a `.ts` registry while this gate reported OK on every change to it.
 //
 // The rule below is per LITERAL and per POSITION, in the three positions a string literal is read by

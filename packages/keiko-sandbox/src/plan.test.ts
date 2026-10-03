@@ -89,6 +89,46 @@ describe("planIsolatedRun", () => {
     });
   });
 
+  it("enforces execution-root writes even when network inheritance is allowed", () => {
+    const decision = planIsolatedRun(
+      { ...basePlan, network: "inherit", filesystem: "execution-root" },
+      { ...NONE, bubblewrap: true },
+      "linux",
+    );
+    expect(decision.kind).toBe("wrapped");
+    expect(decision.attestation).toMatchObject({
+      networkEnforced: false,
+      filesystemEnforced: true,
+    });
+    if (decision.kind !== "wrapped") throw new Error("expected filesystem wrapper");
+    expect(decision.args).toContain("--bind");
+    expect(decision.args).not.toContain("--unshare-net");
+    expect(decision.args).not.toContain("--dev-bind");
+  });
+
+  it("fails closed when inherited network has no filesystem-capable backend", () => {
+    const decision = planIsolatedRun(
+      { ...basePlan, network: "inherit", filesystem: "execution-root" },
+      { ...NONE, unshare: true, seatbelt: true },
+      "linux",
+    );
+    expect(decision.kind).toBe("fail-closed");
+    expect(decision.attestation.filesystemEnforced).toBe(false);
+  });
+
+  it("rejects a gateway request that also asks for unsupported filesystem confinement", () => {
+    const decision = planIsolatedRun(
+      {
+        ...basePlan,
+        network: { mode: "gateway", host: "127.0.0.1", port: 1983 },
+        filesystem: "execution-root",
+      },
+      { ...NONE, bubblewrap: true },
+      "linux",
+    );
+    expect(decision.kind).toBe("fail-closed");
+  });
+
   it("selects the container fallback on a platform without a native primitive", () => {
     const decision = planIsolatedRun(basePlan, { ...NONE, docker: true }, "win32");
     expect(decision.kind).toBe("wrapped");

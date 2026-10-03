@@ -255,8 +255,8 @@ Wrong/stale version, failed launch, persistence failure, and incomplete cleanup 
 Support operators should reconstruct the attempt from the canonical activity log:
 
 ```bash
-keiko support export --state-dir <state-root> --out <bundle.jsonl>
-keiko support analyze <bundle.jsonl>
+keiko support export --state-dir <state-root>
+keiko support analyze <report.json>
 ```
 
 Use explicit candidate/session and parent-correlation links to follow the attempt across relaunch.
@@ -300,8 +300,8 @@ Use the existing local UI entries for port and health failures:
 
 ```bash
 keiko status
-keiko support export --out keiko-support.jsonl
-keiko support analyze keiko-support.jsonl --clusters
+keiko support export   # prints the path of the private report it writes
+keiko support analyze <report.json> --clusters
 ```
 
 If `keiko ui` in the foreground reports `EADDRINUSE`, follow the port-conflict entry in

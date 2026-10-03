@@ -8,14 +8,16 @@ import type {
   EditorHostCapability,
 } from "./commands.js";
 
+it("keeps normal Editor commands free of retired AI test generation", (): void => {
+  expect(EDITOR_COMMANDS.map((command) => command.id)).not.toContain("editor.generateTests");
+});
+
 const ALL_CAPABILITIES: readonly EditorHostCapability[] = [
   "saveDocument",
   "provideCompletions",
   "provideInlineCompletions",
   "provideDiagnostics",
   "provideContext",
-  "askKeikoAboutSelection",
-  "generateTests",
   "previewPatch",
   "applyPatchReview",
   "formatDocument",
@@ -32,8 +34,6 @@ const EXPECTED_IDS: readonly EditorCommandId[] = [
   "editor.triggerInlineCompletion",
   "editor.acceptInlineCompletion",
   "editor.rejectInlineCompletion",
-  "editor.generateTests",
-  "editor.askKeikoAboutSelection",
   "editor.runVerification",
   "editor.runFileTests",
   "editor.runTypecheck",
@@ -220,25 +220,11 @@ describe("isCommandAvailable state gates", () => {
     ).toBe(true);
   });
 
-  it("read-only still allows reject, preview, Generate Tests, Ask Keiko, and context", () => {
+  it("read-only still allows reject, preview, and context", () => {
     const ctx = baseContext({ readOnly: true, hasSelection: true, pendingPatchId: "p" });
     expect(isCommandAvailable(command("editor.rejectPatch"), ctx)).toBe(true);
     expect(isCommandAvailable(command("editor.previewPatch"), ctx)).toBe(true);
-    expect(isCommandAvailable(command("editor.generateTests"), ctx)).toBe(true);
-    expect(isCommandAvailable(command("editor.askKeikoAboutSelection"), ctx)).toBe(true);
     expect(isCommandAvailable(command("editor.requestContext"), ctx)).toBe(true);
-  });
-
-  it("offers Ask Keiko only when the host capability and a non-empty selection are present", () => {
-    const askCommand = command("editor.askKeikoAboutSelection");
-    expect(isCommandAvailable(askCommand, baseContext())).toBe(false);
-    expect(isCommandAvailable(askCommand, baseContext({ hasSelection: true }))).toBe(true);
-    expect(
-      isCommandAvailable(
-        askCommand,
-        baseContext({ hasSelection: true, availableCapabilities: [] }),
-      ),
-    ).toBe(false);
   });
 
   it("gates the #1205 UX commands on capability and state", () => {

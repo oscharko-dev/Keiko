@@ -183,7 +183,7 @@ function buildFakes(): Fakes {
     monaco: {
       editor: { defineTheme: vi.fn() },
       KeyMod: { CtrlCmd: 2048, Alt: 512, Shift: 1024 },
-      KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60, F5: 62, F6: 63, F10: 67, F11: 68 },
+      KeyCode: { KeyS: 49, F2: 60, F5: 62, F6: 63, F10: 67, F11: 68 },
     },
     cursorListener: null,
     selectionListener: null,
@@ -245,55 +245,6 @@ describe("wireEditorOnMount", () => {
     expect(fakes.lastActionKeybindings()?.[0]).toBe(2048 | 49);
   });
 
-  it("registers the Generate Tests command action when the host wires it (#1205)", () => {
-    const fakes = buildFakes();
-    const generateTests = vi.fn();
-    wire(fakes, { commands: { generateTests } });
-    const action = fakes
-      .actionDescriptors()
-      .find((descriptor) => descriptor.id === "keiko.editor.generateTests");
-    expect(action).toBeDefined();
-    // Bound to Cmd/Ctrl+Alt+T and discoverable in the context menu (mouse) and palette (F1).
-    expect(action?.keybindings?.[0]).toBe(2048 | 512 | 53);
-    expect(action?.contextMenuGroupId).toBe("1_modification");
-    action?.run(fakes.editor);
-    expect(generateTests).toHaveBeenCalledTimes(1);
-  });
-
-  it("registers and invokes Ask Keiko with only the current selection (#2119)", () => {
-    const fakes = buildFakes();
-    const askKeikoAboutSelection = vi.fn();
-    wire(fakes, { commands: { askKeikoAboutSelection } });
-    const action = fakes
-      .actionDescriptors()
-      .find((descriptor) => descriptor.id === "keiko.editor.askKeikoAboutSelection");
-    expect(action).toMatchObject({
-      label: "Ask Keiko about this selection",
-      precondition: "editorHasSelection",
-      keybindings: [2048 | 512 | 41],
-      contextMenuGroupId: "1_modification",
-      contextMenuOrder: 3,
-    });
-    const selection = {
-      startLineNumber: 3,
-      startColumn: 2,
-      endLineNumber: 3,
-      endColumn: 8,
-      isEmpty: (): boolean => false,
-    };
-    const getValueInRange = vi.fn(() => "bounded");
-    action?.run({
-      getSelection: () => selection,
-      getModel: () => ({ getValueInRange }),
-    });
-    expect(getValueInRange).toHaveBeenCalledWith(selection);
-    expect(askKeikoAboutSelection).toHaveBeenCalledWith({
-      textMode: "selection",
-      range: { start: { line: 2, column: 1 }, end: { line: 2, column: 7 } },
-      text: "bounded",
-    });
-  });
-
   it("registers the Rename Symbol command action when the host wires it (#2105)", () => {
     const fakes = buildFakes();
     const renameSymbol = vi.fn();
@@ -321,7 +272,7 @@ describe("wireEditorOnMount", () => {
 
   it("disposes registered command actions on teardown (#1205)", () => {
     const fakes = buildFakes();
-    const dispose = wire(fakes, { commands: { generateTests: vi.fn() } });
+    const dispose = wire(fakes, { commands: { renameSymbol: vi.fn() } });
     dispose();
     // The shared fake disposable backs both the save action and the command action.
     expect(fakes.actionDisposable.dispose).toHaveBeenCalled();

@@ -9,7 +9,7 @@
 // the whole desktop on every load. Persisted overrides are hostile input (AGENTS.md §7), so a
 // rejected entry is IGNORED here and the command keeps its default binding — never thrown at render.
 //
-// Audit — the quick-access palette's chord hints came from a label map built over the SIX global
+// Audit — the command palette's chord hints came from a label map built over the global
 // commands only, so every editor command (`view.splitRight`, `tab.next`, `files.saveAll`, …) fell
 // back to the hardcoded display string in `editorCommands.ts`: rebinding one in Settings never
 // reached the palette, which kept advertising a chord that no longer did anything. Labels now cover

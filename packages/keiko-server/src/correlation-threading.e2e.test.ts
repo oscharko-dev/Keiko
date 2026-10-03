@@ -103,6 +103,10 @@ function gatewayProvider(overrides: Partial<ModelProviderConfig> = {}): ModelPro
 function gatewayLevelConfig(providers: readonly ModelProviderConfig[]): GatewayConfig {
   return {
     providers: [...providers],
+    // The injected gateway and BFF must use the same model window, as the production factory does.
+    capabilities: providers.flatMap(
+      (provider) => bffGatewayConfig(provider.modelId).capabilities ?? [],
+    ),
     circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
   };
 }

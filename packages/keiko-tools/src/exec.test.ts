@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1201,37 +1202,40 @@ describe("runCommand — enforced network egress (ADR-0043, network:'none')", ()
     });
   });
 
-  it("requests execution-root isolation when the policy requires filesystem containment", async () => {
-    const spawn = recordingSpawn();
-    const deps: RunCommandDeps = {
-      ...fakeDeps(spawn.fn),
-      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
-      resolveExecutable: absResolver,
-      sandboxAvailability: { ...NO_BACKENDS, bubblewrap: true },
-      platform: "linux",
-    };
-    const promise = runCommand(
-      {
-        command: "node",
-        args: ["-e", "1"],
-        cwd: undefined,
-        timeoutMs: undefined,
-        signal: controller().signal,
-      },
-      deps,
-    );
-    spawn.child.emit("close", 0, null);
-    const result = await promise;
-    const call = spawn.calls()[0];
-    expect(call?.args).toEqual(
-      expect.arrayContaining(["--bind", realpathSync(root), "/keiko-execution-root"]),
-    );
-    expect(call?.args).not.toEqual(expect.arrayContaining(["--dev-bind", "/", "/"]));
-    expect(result.attestation).toMatchObject({
-      networkEnforced: true,
-      filesystemEnforced: true,
-    });
-  });
+  it.each(["none", "inherit"] as const)(
+    "requests execution-root isolation with network=%s",
+    async (network) => {
+      const spawn = recordingSpawn();
+      const deps: RunCommandDeps = {
+        ...fakeDeps(spawn.fn),
+        policy: { ...DEFAULT_SANDBOX_POLICY, network, filesystem: "execution-root" },
+        resolveExecutable: absResolver,
+        sandboxAvailability: { ...NO_BACKENDS, bubblewrap: true },
+        platform: "linux",
+      };
+      const promise = runCommand(
+        {
+          command: "node",
+          args: ["-e", "1"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        deps,
+      );
+      spawn.child.emit("close", 0, null);
+      const result = await promise;
+      const call = spawn.calls()[0];
+      expect(call?.args).toEqual(
+        expect.arrayContaining(["--bind", realpathSync(root), "/keiko-execution-root"]),
+      );
+      expect(call?.args).not.toEqual(expect.arrayContaining(["--dev-bind", "/", "/"]));
+      expect(result.attestation).toMatchObject({
+        networkEnforced: network === "none",
+        filesystemEnforced: true,
+      });
+    },
+  );
 
   it("fails closed (never spawns) when no enforcing backend is available", async () => {
     const spawn = recordingSpawn();
@@ -1255,6 +1259,104 @@ describe("runCommand — enforced network egress (ADR-0043, network:'none')", ()
       ),
     ).rejects.toBeInstanceOf(CommandDeniedError);
     expect(spawn.calls()).toHaveLength(0);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "pins the Docker Unix socket without forwarding host HOME or Docker credentials",
+    async () => {
+      const directory = realpathSync(mkdtempSync(join(tmpdir(), "keiko-docker-socket-")));
+      const socket = join(directory, "engine.sock");
+      const server = createServer();
+      await new Promise<void>((resolve) => server.listen(socket, resolve));
+      try {
+        const spawn = recordingSpawn();
+        const deps: RunCommandDeps = {
+          ...fakeDeps(spawn.fn, {
+            DOCKER_HOST: `unix://${socket}`,
+            HOME: directory,
+            DOCKER_AUTH_CONFIG: "credential-sentinel",
+          }),
+          policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
+          resolveExecutable: absResolver,
+          sandboxAvailability: { ...NO_BACKENDS, docker: true },
+          platform: "darwin",
+        };
+        const pending = runCommand(
+          {
+            command: "node",
+            args: ["-e", "1"],
+            cwd: undefined,
+            timeoutMs: undefined,
+            signal: controller().signal,
+          },
+          deps,
+        );
+        spawn.child.emit("close", 0, null);
+        expect((await pending).attestation?.filesystemEnforced).toBe(true);
+        const call = spawn.calls()[0];
+        expect(call?.args.slice(0, 3)).toEqual(["--host", `unix://${socket}`, "run"]);
+        expect(call?.options.env.HOME).not.toBe(directory);
+        expect(call?.options.env.DOCKER_AUTH_CONFIG).toBeUndefined();
+        expect(call?.options.env.DOCKER_HOST).toBeUndefined();
+      } finally {
+        await new Promise<void>((resolve) => {
+          server.close(() => {
+            resolve();
+          });
+        });
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("refuses a remote Docker context before spawning or disclosing the endpoint", async () => {
+    const spawn = recordingSpawn();
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn, { DOCKER_HOST: "tcp://customer-private-host:2375" }),
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
+      resolveExecutable: absResolver,
+      sandboxAvailability: { ...NO_BACKENDS, docker: true },
+      platform: "darwin",
+    };
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: [],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        deps,
+      ),
+    ).rejects.toThrow("docker-context-unsupported");
+    expect(spawn.calls()).toHaveLength(0);
+  });
+
+  it("runs the image's npm instead of the host npm symlink target", async () => {
+    const spawn = recordingSpawn();
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      commandRules: [{ executable: "npm", allowedSubcommands: ["run"] }],
+      policy: { ...DEFAULT_SANDBOX_POLICY, network: "none", filesystem: "execution-root" },
+      resolveExecutable: (command) => (command === "npm" ? "/host/npm-cli.js" : `/abs/${command}`),
+      sandboxAvailability: { ...NO_BACKENDS, podman: true },
+      platform: "linux",
+    };
+    const pending = runCommand(
+      {
+        command: "npm",
+        args: ["run", "typecheck"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      deps,
+    );
+    spawn.child.emit("close", 0, null);
+    await pending;
+    expect(spawn.calls()[0]?.args.slice(-3)).toEqual(["npm", "run", "typecheck"]);
+    expect(spawn.calls()[0]?.args).not.toContain("npm-cli.js");
   });
 
   it("leaves an inherited-network run unwrapped and unattested", async () => {

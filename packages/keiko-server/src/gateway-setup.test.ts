@@ -21,13 +21,14 @@ import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runt
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
-import { buildUiHandlerDeps } from "./deps.js";
+import { buildUiHandlerDeps as createUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   ERROR_CODES,
+  assumedChatCapability,
   createDefaultChatCapability,
   parseGatewayConfig,
   resolveCodingSafeSidecarGatewayProfile,
@@ -62,7 +63,7 @@ import {
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
-import { runGatewayReadiness } from "./gateway-readiness.js";
+import { runGatewayReadiness, stopConfiguredConversationReadiness } from "./gateway-readiness.js";
 import { recommendQiModelPolicy } from "./qualityIntelligence/modelSelection.js";
 import type { RouteContext } from "./routes.js";
 import {
@@ -71,6 +72,15 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 
 const tmpDirs: string[] = [];
+const handlerDeps: UiHandlerDeps[] = [];
+
+function buildUiHandlerDeps(
+  options: Parameters<typeof createUiHandlerDeps>[0],
+): ReturnType<typeof createUiHandlerDeps> {
+  const deps = createUiHandlerDeps(options);
+  handlerDeps.push(deps);
+  return deps;
+}
 
 // Issue #1320: pin both local vaults (provider credentials + Figma PAT) to the explicit env-key tier
 // so tests never touch the real macOS keychain — deterministic, side-effect-free, and identical on
@@ -100,7 +110,8 @@ const INVALID_VOICE_STRING_CASES = VOICE_STRING_SETUP_FIELDS.flatMap((field) =>
   INVALID_VOICE_STRING_VALUES.map((value) => ({ field, value })),
 );
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(handlerDeps.splice(0).map(stopConfiguredConversationReadiness));
   for (const dir of tmpDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -669,7 +680,7 @@ describe("handleGatewaySetup", () => {
       modelId: provider.modelId,
       generation: gatewayConfig.generation(),
       checkedAt: proof.checkedAt,
-      fields: { toolCalling: true },
+      fields: { toolCalling: true, conversationReady: false },
     });
     deps.store.close();
   });
@@ -1380,6 +1391,47 @@ describe("handleGatewaySetup", () => {
     expect(contextWindow()).toBe(32_000);
     expect(await apply(8_000)).toBe(200);
     expect(contextWindow()).toBe(32_000);
+    deps.store.close();
+  });
+
+  // PR #3678 review: the long-context proof is a lower bound. On an undeclared window it raises the
+  // stored floor the Coding Workbench reads, but the window stays assumed, so conversations keep
+  // the default geometry and the provider's own statement can still replace it.
+  it("raises an assumed window's proven floor without ending the assumption", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-assumed-floor-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-assumed-floor-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "model-one", baseUrl: "https://gateway.example.com/v1", apiKey: "token" },
+        ],
+        capabilities: [assumedChatCapability("model-one")],
+      }),
+      true,
+    );
+    gatewayConfig.recordVerifiedCapability(
+      "model-one",
+      { contextWindow: 32_000 },
+      "2026-09-30T06:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { contextWindow: 32_000 } }), params: { modelId: "model-one" } },
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const capability = requiredGatewayConfig(deps).capabilities?.find(
+      (candidate) => candidate.id === "model-one",
+    );
+    expect(capability?.contextWindow).toBe(32_000);
+    expect(capability?.contextWindowAssumed).toBe(true);
     deps.store.close();
   });
 
@@ -5217,6 +5269,148 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  // 1.1.13 field report: a fresh setup against a gateway that declares no window must install the
+  // model as window-ASSUMED immediately — not only after a reload migrates the placeholder.
+  it("installs an undeclared chat window as assumed on fresh setup, without a restart", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-assumed-window-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-assumed-window-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["hosted-vllm-chat"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const live = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "hosted-vllm-chat",
+    );
+    expect(live?.contextWindowAssumed).toBe(true);
+    const saved = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+      readonly providers?: readonly {
+        readonly modelId: string;
+        readonly capability?: { readonly contextWindowAssumed?: boolean };
+      }[];
+    };
+    expect(
+      saved.providers?.find((item) => item.modelId === "hosted-vllm-chat")?.capability
+        ?.contextWindowAssumed,
+    ).toBe(true);
+    deps.store.close();
+  });
+
+  // A re-setup must keep what a stored window's provenance records: it is assumed only while nobody
+  // has stated it. A gateway's declaration ends the assumption (and replaces a reported window), but
+  // a rediscovery that declares nothing must neither invent an assumption for a window a provider
+  // reported or a probe measured, nor forget one for a window that was never stated.
+  it.each([
+    {
+      title: "an assumed window stays assumed while discovery declares nothing",
+      stored: { contextWindow: 4_096, contextWindowAssumed: true },
+      declared: undefined,
+      expected: {
+        contextWindow: 4_096,
+        contextWindowAssumed: true,
+        contextWindowReported: undefined,
+      },
+    },
+    {
+      title: "a declared window ends the assumption",
+      stored: { contextWindow: 4_096, contextWindowAssumed: true },
+      declared: 131_072,
+      expected: {
+        contextWindow: 131_072,
+        contextWindowAssumed: undefined,
+        contextWindowReported: undefined,
+      },
+    },
+    {
+      title: "a provider-reported window survives a rediscovery that declares nothing",
+      stored: { contextWindow: 200_000, contextWindowReported: true },
+      declared: undefined,
+      expected: {
+        contextWindow: 200_000,
+        contextWindowAssumed: undefined,
+        contextWindowReported: true,
+      },
+    },
+    {
+      title: "a declared window replaces a provider-reported one",
+      stored: { contextWindow: 200_000, contextWindowReported: true },
+      declared: 131_072,
+      expected: {
+        contextWindow: 131_072,
+        contextWindowAssumed: undefined,
+        contextWindowReported: undefined,
+      },
+    },
+    {
+      title: "a measured window (neither flag) stays measured",
+      stored: { contextWindow: 32_000 },
+      declared: undefined,
+      expected: {
+        contextWindow: 32_000,
+        contextWindowAssumed: undefined,
+        contextWindowReported: undefined,
+      },
+    },
+  ] as const)("keeps window provenance across a re-setup: $title", async (row) => {
+    const baseUrl = "https://llm-gateway.example.com/v1";
+    const deps = createUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-window-provenance-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-window-provenance-"), "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          row.declared === undefined
+            ? ["hosted-vllm-chat"]
+            : parseModelDiscovery({
+                data: [
+                  {
+                    model_name: "hosted-vllm-chat",
+                    model_info: { mode: "chat", max_input_tokens: row.declared },
+                  },
+                ],
+              }),
+        ),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "hosted-vllm-chat",
+            baseUrl,
+            apiKey: "old-token",
+            capability: { ...createDefaultChatCapability("hosted-vllm-chat"), ...row.stored },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(ctx({ baseUrl, apiKey: "example-secret-token" }), deps);
+
+    expect(result.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "hosted-vllm-chat",
+    );
+    expect({
+      contextWindow: capability?.contextWindow,
+      contextWindowAssumed: capability?.contextWindowAssumed,
+      contextWindowReported: capability?.contextWindowReported,
+    }).toEqual(row.expected);
+    deps.store.close();
+  });
+
   it("keeps a NEW image claim on the verified rebuild path", async () => {
     // Expanding image capability onto an id that never carried it still demands the vision
     // probe — only clears and shrinks are metadata edits.
@@ -5378,6 +5572,11 @@ describe("handleGatewaySetup", () => {
       gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
+    // The reranker candidate is probed before it may be wired; this fixture's engine does not
+    // answer, so it stays a reported, unconfigured model. Injected so the run never opens a socket.
+    Object.assign(deps, {
+      rerankRequest: () => Promise.resolve({ ok: false, kind: "transport" } as const),
+    });
 
     const result = await handleGatewaySetup(
       ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
@@ -5388,6 +5587,7 @@ describe("handleGatewaySetup", () => {
     expect(result.body).toMatchObject({
       unsupportedModels: [{ id: "house-reranker", reason: "rerank" }],
     });
+    expect(currentGatewayConfig(deps)?.reranker).toBeUndefined();
     deps.store.close();
   });
 
@@ -5540,6 +5740,37 @@ describe("handleGatewaySetup", () => {
       ],
     });
     expect(result.modelMetadata?.["shared-chat"]?.contextWindow).toBe(4_096);
+    // PR #3678 review: the fallback is not a declaration.
+    expect(result.modelMetadata?.["shared-chat"]?.contextWindowUndeclared).toBe(true);
+  });
+
+  it("installs a partly undeclared replica set as window-assumed", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-partly-undeclared-");
+    const discovered = parseModelDiscovery({
+      data: [
+        { model_name: "shared-chat", model_info: { mode: "chat", max_input_tokens: 131_072 } },
+        { model_name: "shared-chat", model_info: { mode: "chat" } },
+      ],
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-partly-undeclared-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(discovered),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "shared-chat",
+    );
+    expect(capability?.contextWindowAssumed).toBe(true);
+    deps.store.close();
   });
 
   it("keeps prompt capacity when an unknown context has a declared output ceiling", () => {
@@ -6244,6 +6475,46 @@ describe("handleGatewaySetup", () => {
     expect(
       requiredCapability(requiredGatewayConfig(deps), "Mistral-Large-3").knownLimitations,
     ).not.toContain(note);
+    deps.store.close();
+  });
+
+  // PR #3678: a setup rebuild produces providers and capabilities only; the operator's grounded-
+  // answer policy and PR branding must survive it verbatim, never fall back to the defaults.
+  it("keeps the grounded-answer policy and the branding through a preserve-mode rebuild", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-policy-blocks-");
+    const evidenceDir = await tempDir("keiko-gw-ev-policy-blocks-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "example-chat", baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        groundedAnswers: { ownAssessment: "disabled" },
+        branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.groundedAnswers).toEqual({ ownAssessment: "disabled" });
+    expect(currentGatewayConfig(deps)?.branding).toEqual({
+      logoUrl: "https://assets.example.invalid/keiko.svg",
+    });
     deps.store.close();
   });
 
@@ -10063,11 +10334,13 @@ describe("normalizeDiscoveryPayload", () => {
   );
 
   it("uses the canonical embedding model-id families", () => {
+    // Discovery orders the embedding lane declared-first, then by id (never by listing order), so
+    // this all-name-inferred list is written in id order: the assertion stays an exact match.
     const embeddingModelIds = [
       "bge-large-en-v1.5",
+      "hkunlp/instructor-xl",
       "intfloat/e5-large-v2",
       "thenlper/gte-large",
-      "hkunlp/instructor-xl",
     ];
     expect(
       normalizeDiscoveryPayloadForSetup({
@@ -10820,6 +11093,20 @@ describe("rawConfigFromCurrent — voice persona persistence round-trip", () => 
     const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
 
     expect(reloaded.reranker).toEqual(config.reranker);
+  });
+
+  // PR #3678: operator policy blocks no setup step produces survive a setup save verbatim.
+  it("preserves the grounded-answer policy and the PR branding on reload", () => {
+    const config = parseGatewayConfig({
+      ...voiceRaw,
+      groundedAnswers: { ownAssessment: "disabled" },
+      branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
+    });
+
+    const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
+
+    expect(reloaded.groundedAnswers).toEqual({ ownAssessment: "disabled" });
+    expect(reloaded.branding).toEqual({ logoUrl: "https://assets.example.invalid/keiko.svg" });
   });
 
   it("preserves an explicit output-token parameter override on reload", () => {

@@ -60,6 +60,15 @@ const EDITOR_HOT_EXIT_KEYFILE = "editor-hot-exit-vault.key";
 // only `incident-*.json` carries a stated byte bound (MAX_SUPPORT_INCIDENT_RECORD_BYTES) -- a
 // claim's whole content is one incidentId (32 hex characters), inherently small.
 const SUPPORT_INCIDENT_SUBDIR = "support-incidents";
+// Source of truth: packages/keiko-contracts/src/support-report.ts (#3534): the default export
+// directory, its closed report name grammar and hard size ceiling. An interrupted publication can
+// leave a private stage copy beside a report (isSafeArtifactStageFileName in
+// packages/keiko-security/src/fs-hardening.ts); it is Keiko's own, never a report.
+const SUPPORT_REPORT_SUBDIR = "support-reports";
+const SUPPORT_REPORT_FILE_PATTERN =
+  /^keiko-support-v[1-9]\d{0,3}-[a-f0-9]{12}-\d{4}-\d{2}-\d{2}\.json$/u;
+const SUPPORT_REPORT_STAGE_PATTERN = /^\.keiko-publish-[0-9a-f]{24}-(?:0|[1-9]\d?)\.stage$/u;
+const MAX_SUPPORT_REPORT_BYTES = 10 * 1024 * 1024;
 // Source of truth: packages/keiko-contracts/src/activity-log-files.ts (ACTIVITY_LOG_DIRECTORY_NAME,
 // #3530). Every file the Activity Log writes there is owner-only: active segments 0o600, sealed
 // ones read-only, legacy files tightened on first contact.
@@ -164,6 +173,7 @@ const SENSITIVE_TOP_DIRS = new Set([
   UPDATE_SUBDIR,
   EDITOR_HOT_EXIT_SUBDIR,
   SUPPORT_INCIDENT_SUBDIR,
+  SUPPORT_REPORT_SUBDIR,
   ACTIVITY_LOG_SUBDIR,
   ACTIVITY_LOG_MANIFESTS_SUBDIR,
 ]);
@@ -1560,16 +1570,21 @@ function auditRuntimeIntegrity(stateDir) {
   return pass(id, title, ["no unresolved DB or QI quarantine artifacts were found"]);
 }
 
-// ── Class 8: closed-grammar, bounded support-incidents/ and activity-log-manifests/ ──────────
-// Both stores are body-free control/derived-metadata artifacts over the Activity Log, never a copy
-// of raw event content, so — like the rest of this auditor, which never decrypts content — this
-// class checks SHAPE (closed file-name grammar) and BOUND (the contract's own stated byte ceiling)
-// rather than content. `rules` is tried in order; the first matching pattern's maxBytes applies
-// (undefined means the grammar states no bound for that file kind, e.g. a claim).
+// ── Class 8: closed-grammar, bounded support and Activity Log manifest stores ───────────────────
+// Every store is a body-free artifact over the Activity Log (control state, a canonical support
+// report, derived metadata), never a copy of raw event content, so — like the rest of this
+// auditor, which never decrypts content — this class checks SHAPE (closed file-name grammar) and
+// BOUND (the contract's own stated byte ceiling) rather than content. `rules` is tried in order;
+// the first matching pattern's maxBytes applies (undefined means the grammar states no bound for
+// that file kind, e.g. a claim).
 const SUPPORT_INCIDENT_RULES = [
   { pattern: SUPPORT_INCIDENT_FILE_PATTERN, maxBytes: MAX_SUPPORT_INCIDENT_RECORD_BYTES },
   { pattern: SUPPORT_INCIDENT_FINGERPRINT_CLAIM_PATTERN, maxBytes: undefined },
   { pattern: SUPPORT_INCIDENT_SLOT_CLAIM_PATTERN, maxBytes: undefined },
+];
+const SUPPORT_REPORT_RULES = [
+  { pattern: SUPPORT_REPORT_FILE_PATTERN, maxBytes: MAX_SUPPORT_REPORT_BYTES },
+  { pattern: SUPPORT_REPORT_STAGE_PATTERN, maxBytes: MAX_SUPPORT_REPORT_BYTES },
 ];
 const ACTIVITY_LOG_MANIFEST_RULES = [
   { pattern: ACTIVITY_LOG_MANIFEST_FILE_PATTERN, maxBytes: MAX_SEGMENT_MANIFEST_BYTES },
@@ -1612,14 +1627,14 @@ function auditClosedGrammarStore(stateDir, subdir, rules, findings) {
 
 function auditObservabilityStores(stateDir) {
   const id = "observability-stores";
-  const title = "Support incidents and Activity Log manifests";
-  const incidentsDir = join(stateDir, SUPPORT_INCIDENT_SUBDIR);
-  const manifestsDir = join(stateDir, ACTIVITY_LOG_MANIFESTS_SUBDIR);
-  if (!existsSync(incidentsDir) && !existsSync(manifestsDir)) {
-    return skip(id, title, "neither store is present");
+  const title = "Support incidents, support reports and Activity Log manifests";
+  const stores = [SUPPORT_INCIDENT_SUBDIR, SUPPORT_REPORT_SUBDIR, ACTIVITY_LOG_MANIFESTS_SUBDIR];
+  if (!stores.some((subdir) => existsSync(join(stateDir, subdir)))) {
+    return skip(id, title, "no store is present");
   }
   const findings = [];
   auditClosedGrammarStore(stateDir, SUPPORT_INCIDENT_SUBDIR, SUPPORT_INCIDENT_RULES, findings);
+  auditClosedGrammarStore(stateDir, SUPPORT_REPORT_SUBDIR, SUPPORT_REPORT_RULES, findings);
   auditClosedGrammarStore(
     stateDir,
     ACTIVITY_LOG_MANIFESTS_SUBDIR,

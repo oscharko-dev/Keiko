@@ -8,7 +8,7 @@ the durable CLI control-state boundary for commands that audit or remove runtime
 Drafted in Wave 1 alongside the envelope's ordering primitive (`seq`) and the minimal exporter/
 analyzer, and finalized here once all seven waves of the epic had landed: envelope v2 (D1–D2),
 stack frames and their redaction guards (D3–D4), correlation threading end-to-end (D5), the
-generated op catalog (D6), process lifecycle events (D7), the support-bundle format and its CLI
+generated op catalog (D6), process lifecycle events (D7), the canonical support-report format and its CLI
 (D8–D10), the `ERROR_KIND_PATTERN` relocation (D11), HTTP/SSE detail and the browser diagnostic
 ingest (D13), and the domain-package log-port wiring recorded in D12. The "Wave N" markers below
 are left in place as a record of when each decision became load-bearing, not as an indication that
@@ -53,13 +53,17 @@ or reports that it cannot (D6). Lost events are counted in one bounded, closed l
 as summaries. Diagnostic readiness is a closed state that `/api/health`, `keiko status`,
 `keiko support export` and the desktop footer report. Every exit leaves one `process.exiting` line,
 and a fatal crash leaves `process.fatal` (D7). The raw `ui.log` channel is retired, and the support
-bundle never carries it (D8, D9).
+report never carries it (D8, D9).
+
+Amended by #3534 on 2026-09-30: D8/D9 now define the closed one-file private report, offline
+validation and explicit legacy treatment. D16 query bounds remain authoritative; an insufficient
+selection may be described in a report but may never be presented as complete.
 
 Amended by #3531 on 2026-09-18: `keiko support query` and selective `keiko support export` read the
 segmented log in bounded memory through derived, rebuildable per-segment manifests, and select an
 operation's whole registered causal closure or report it `insufficient`; required evidence is never
-cut to fit a budget (D16). `keiko support analyze` reads its input through the same bounded line
-reader.
+cut to fit a budget (D16). The local developer reader retains bounded line iteration; received
+reports use the independently bounded private-file and decompression validator defined in D9.
 
 ## Context
 
@@ -232,7 +236,7 @@ state and package targets only by SHA-256, and completion records whether state 
 retained, or would be removed/retained plus body-free affected/retained counts.
 
 `keiko support export` keeps successful install-layout normalization in the selected runtime log so
-the resulting bundle contains that evidence. When a pending normalization meets a symlink or
+the selected canonical report can retain that evidence. When a pending normalization meets a symlink or
 non-directory state root, the export refuses before reading or exporting the target and emits
 `cli.support.export.failed` through the same fixed control-state log, provided canonical isolation
 from the selected target can be proved. If isolation itself cannot be proved, the same terminal-only
@@ -272,7 +276,7 @@ backslash to a forward slash before anchoring, and splits the trailing `:LINE:CO
 two successive `lastIndexOf(":")` calls rather than a whole-string regex — a drive-letter colon
 earlier in the string must never be mistaken for the line/column separator.
 
-The consequence for an agent reading a bundle is stated in the playbook this ADR forward-references
+The consequence for an agent reading a report is stated in the playbook this ADR forward-references
 (`docs/observability/reproduction-harness.md`, Wave 6): a frame names the `dist` output of the
 **exact tagged product version** the customer ran. The agent checks out that tag and lets `tsc`
 reproduce the same `dist/<file>.js:LINE` deterministically — this works because Keiko's builds are
@@ -334,7 +338,7 @@ generic path instead.
   breaks early, only `MAX_LOG_FIELD_COUNT - 1` accepted fields survive, plus one synthetic
   `_truncatedFieldCount: true` key. Either way the configured cap (`MAX_LOG_ARRAY_LENGTH`,
   `MAX_LOG_FIELD_COUNT`) holds EXACTLY — never one over. An input at or under the cap is untouched
-  and carries no marker. An agent reading a bundle can distinguish "nothing more happened" from "more
+  and carries no marker. An agent reading a record can distinguish "nothing more happened" from "more
   happened and was cut for size."
 - A closed-vocabulary helper, `closeReasonVocabulary`, gives any future bounded-string-array field
   (starting with `unsupportedReasons`) the same structural `Set`-plus-fallback closure categories
@@ -467,6 +471,14 @@ through it, and so does the Quality Intelligence capsule store. `cli.audit.*` is
 like every other operation. Before this, those lines were unregistered plain objects that the
 production sink refused.
 
+Adapters preserve the event's non-enumerable registration and rejection markers when adding
+correlation context. `withActivityLogCorrelation` and `withActivityLogParentCorrelation` share one
+copying implementation; producer-owned ids remain authoritative. A plain spread is not a valid
+forwarding operation. Readiness initialization forwards both its own lifecycle events and nested
+HTTP transport events through this path. Its regression validates the forwarded events with the
+real registered formatter, and the installed Workbench journey requires complete exported and
+analyzed failure evidence, including bound seed data and safe failure-site frames.
+
 **The port pattern for a new package (BYOA #482).** A package that performs work follows five rules:
 
 1. It declares its own `<Package>LogSink { write(event) }` port.
@@ -541,13 +553,13 @@ and demonstrated evidence. Each is derived from the registry, never maintained b
 - **Per-failure-class sufficiency.** `keiko support analyze` projects every observed class to
   `complete`, `degraded` or `insufficient`. The closed reasons are `DIAGNOSTIC_SUFFICIENCY_REASONS`
   in the contracts, and there is one status rule, `diagnosticSufficiencyStatus`. The projection is
-  derived generically from the class's lifecycle and causal declarations. Artifact integrity,
-  parent correlation, the class's causal start on a failure's correlation, an unknown failure
-  correlation, own-line partial evidence and Activity Log evidence loss all feed it. Loss is
-  attributed to the named dropped operation, to the reporting package's classes for a port sink
-  failure, or else to the reporting process lifetime. A product loss that its own loss line fully
-  evidences keeps the report complete. The projection is carried by `--json`, `--seed` and
-  `support.analyze.classified`.
+  derived generically from the class's lifecycle and causal declarations. Artifact integrity, parent
+  correlation, the class's causal start on a failure's correlation, an unknown failure correlation,
+  own-line partial evidence and Activity Log evidence loss all feed it. Loss, including a producer's
+  confirmed drop such as a segment seal's `droppedEventCount`, is attributed to the named dropped
+  operation, to the reporting package's classes for a port sink failure, or else to the reporting
+  process lifetime. A product loss that its own loss line fully evidences keeps the report complete.
+  The projection is carried by `--json`, `--seed` and `support.analyze.classified`.
 - **A curated end-to-end scenario matrix.** For each surface and each applicable mode,
   `tests/activity-log-scenarios` drives a production entry point through the real file writer. The
   support analyzer must then reach `complete` (`expectActivityLogScenario`). Every failure class
@@ -595,113 +607,208 @@ A server error takes the same path. Each other exit records its own closed reaso
 the only one, so the close that a crash causes is never relabelled. The lines carry the classified
 error kind and Keiko-code frames only.
 
-### D8 — The support artifact is one JSON-Lines file; the raw `ui.log` is never part of it
+### D8 — One canonical private support report (#3534)
 
-**Format.** One `.jsonl` file, not an archive. `server.log` is already valid JSONL and every line
-is already redacted at write time, so wrapping it in a zip or tar format would re-redact nothing
-while adding a transformation step that is itself a place a leak could be introduced — and no
-archive helper exists anywhere in this repository today, so adding one would be exactly the
-"parallel subsystem where an existing shape already fits" this repository's reuse discipline warns
-against. An agent parsing the artifact wants `readlines()` + `JSON.parse`, with no extraction step.
+The export is one canonical UTF-8 JSON file, kind `keiko.support.report`, schema version 1. It
+contains only the validated private SupportIncident projection, a closed selection verdict with each
+process lifetime's start account (`selected`, `absent` or `lost`), registered causal events, and
+integrity metadata. It does not copy raw log text. The event section is canonical structured JSON,
+losslessly compacted with deflate/base64; every decoded record is validated against its exact
+repository-owned registry. No sender-provided registration or self-asserted redaction flag is
+authority. The recorded product version identifies the bundled package versions, which the product's
+version-consistency gate keeps in lockstep; persisted events retain their exact
+build/release/platform classes and registry/schema/catalog digests.
 
-The artifact is not an undifferentiated concatenation: line 1 is always a manifest, a small number
-of subsequent lines are typed `$section`-tagged records, and every remaining line is a verbatim,
-byte-for-byte copy of a real `server*.log` line — oldest file first. Nothing already-safe is
-re-transformed, so a re-encoding bug cannot introduce a leak into lines that were already safe on
-disk.
+New exports replace correlation, parent and opaque customer identifiers with consistent ordinal
+references local to that report. The mapping is never exported; causal joins remain intact without
+revealing the original labels. Paths, routes and prose remain redaction markers. Diagnostic modules,
+declared Error classes and technical tokens must belong to the generated product-source inventory
+or a closed runtime vocabulary; merely looking like a technical identifier does not authorize a
+string. Unknown diagnostic details are omitted or marked, with insufficient evidence reported when
+immutable failure provenance cannot be preserved. Historical schema-1 reports remain readable.
+Archived releases use their producing release's pinned code-module inventory, paired with the
+archived registry identity. Module moves in a later release therefore do not discard an otherwise
+valid historical failure frame. These inventories are generated from trusted release commits,
+never from customer reports, and decoded within a fixed byte limit.
+For an explicitly selected desktop failure, sufficiency and segment references derive from the
+selected causal evidence rather than the later click-time incident window. Missing or truncated
+evidence remains insufficient under the ordinary query and report validators.
 
-**The raw `ui.log` is retired, and never part of a report (#3532).** Earlier versions of
-`keiko start` copied the detached UI process's raw stdout and stderr into `<stateDir>/ui.log`. That
-channel was free text, including raw error messages, so it could never meet the body-free contract.
-A customer-facing export that mixes it with the redacted structured stream would undermine the
-contract by construction.
+The desktop exposes the same canonical report as a local JSON download at actionable failures.
+The healthy workspace footer has no report action. Exact browser resize notifications and Monaco
+cancellations are classified before failure caps; they do not create incidents or report actions.
+An uncaught browser error or rejected promise
+reveals a compact, dismissible footer action tied to that failure; handled contextual errors retain
+their own action. Each active failure permits one successful download, with a 1.5-second completion
+status, while failed creation remains retryable and unmounting cancels pending work. The selected
+incident and compressed event section travel together, so support can inspect the evidence without
+access to the customer's complete logs. Export uses the existing paired application session and a
+bounded worker; it never uploads externally by itself.
 
-The UI process's stdio is now ignored. Every diagnostic it produces already reaches the Activity
-Log, and a crash that happens before the first log line is still recorded: `process.fatal` falls
-back to the resolved state directory (D7). When the UI does not become healthy, `keiko start` names
-a closed outcome (`process-exited` or `health-timeout`) instead of pointing at a raw log.
+Browser-only failures retain at most 100 projected diagnostics for report delivery. Export waits
+for ingest acknowledgement; if the original delivery failed or was throttled, a human report action
+may redeliver it under the same correlation, within a separate six-per-minute client budget and the
+server's unchanged admission limits. The 35-second export deadline includes that delivery. Missing
+delivery remains retryable without exporting an unrelated incident or filing another reporting
+incident. Successful saves deliberately excluded from history by secret protection have no report
+action; degraded history protection retains its contextual action.
 
-The former opt-in flags (`--include-ui-log --i-understand-this-is-unredacted`) are refused as a
-usage error rather than ignored. An existing `ui.log` from an earlier version is left in place,
-never read into a report, and removed with the rest of the runtime state by
-`keiko uninstall --state`. The manifest still names `ui-log` in
-`sectionsExcluded`, so a reader of an old or a new bundle sees the same, explicit exclusion.
+The fixed bounds are 10 MiB for the entire file, 1 MiB for the incident projection, 16 MiB for the
+decoded event section, 64 KiB per event, 20,000 records, 12 JSON nesting levels, 250,000
+containers, 3,000,000 values and 256 keys per object. The shape bounds are checked on the raw text
+before `JSON.parse` allocates anything, and every string is printable ASCII. Derived ordinary
+and update timelines share an additional ceiling of 80,000 record occurrences and 64 MiB of UTF-8
+record-view payloads; parent fan-out is charged before expansion. A producer that exceeds these
+limits emits explicitly insufficient evidence, while an incoming report is rejected before output.
+`--max-bytes`
+may lower the final-file ceiling but cannot raise it. These are separate limits: compression cannot
+hide unbounded decoded input. Every real #3532 fault-injection scenario also passes its incident
+and selected closure through the production report builder and offline analyzer. These traces fit
+below 128 KiB without losing any selected record, and sufficient inputs remain complete. The
+production-record calibration in `support-report.test.ts`
+retains 2,000 diagnostic failure events plus process context below 128 KiB, with exact event-count
+and complete-reconstruction assertions, including an offline run under a 128 MiB Node heap. The 10 MiB ceiling leaves substantial headroom for less
+repetitive safe signals while fitting attachment policies that permit 10 MiB. Operators with a
+narrower policy lower it explicitly. There is no universal attachment-size promise.
 
-**Size bounds.** Capped by an overall export byte ceiling; files are dropped oldest-first when the
-ceiling is exceeded, and every drop is recorded in
-the manifest's `truncatedLogFiles` — never silent. The current (never-dropped) file is not exempt
-from the ceiling: when it alone still exceeds the residual budget, only its tail is exported —
-the newest bytes, advanced to the next line boundary so the first exported line is always
-complete — read with a bounded reader rather than loading the whole oversized file, and recorded
-in the manifest's `currentFileTailTruncated` (name and dropped-byte count only, never a path).
+The existing selective query still owns causal closure and bounded process context (D16).
+Required evidence is never silently cut. When it cannot fit, the report contains an explicit
+`insufficient` verdict, closed reasons and the bytes a complete selection needs: the query's
+required event bytes when the event section is the limit, or the complete report's size when the
+final-file budget is; the evidence section is empty rather than falsely complete. If even the
+bounded incident/header cannot fit, no report is published. A selected record that the incident's
+exact registry cannot validate (for example one written by another release after an upgrade) is
+left out and named by `unsupported-evidence`; every other record is kept. Optional context loss
+remains explicit.
 
-### D9 — CLI surface: `keiko support export` and `keiko support analyze`
+Integrity uses SHA-256 section digests and one digest over the canonical report excluding only
+its own digest member. There is no sidecar. A seed additionally names the digest of the exact
+received file bytes. Neither digest authenticates a sender: analysis always says `authenticity:
+unknown`. Encryption, signatures and key distribution/rotation/recovery remain future hardening
+requiring a separately governed design, not this epic's privacy boundary.
 
-Two new commands under one `support` command family (not `bundle export` / `log:analyze` — a single
-coherent noun groups the artifact producer and its own consumer under one verb space):
+Raw `ui.log`, screenshots, free-text notes, arbitrary files, configuration snapshots and full
+EvidenceStore manifests are excluded structurally. All former inclusion flags are refused.
+An old `ui.log` remains untouched; UI diagnostics use the existing Activity Log. Producer-only
+prose/route hatches (`path`, `routeTemplate`, `clientNote`, `diagnosticSummary`) become explicit
+redaction markers in the report projection. They never import narratives or usable addresses.
+Frames and causes are reverified through the existing owning reducers, and every other received
+producer field must be a fixed point of the existing `redactLogFields` redaction: a value that
+redaction would still change (an endpoint, a secret shape, a home path) refuses the report. Envelope
+labels (`op`, `errorKind`, correlation ids) and the incident's correlation references must
+likewise be fixed points of the writer's label redaction, so a credential-shaped correlation id that
+the correlation grammar admits is refused; the incident producer never adopts such an id.
 
-- `keiko support export [--out PATH] [--state-dir PATH] [--max-bytes N]
-  [--include-evidence RUNID[,RUNID...]]` composes existing,
-  already-hardened pieces — the evidence index listing, the local-state audit summary, a redacted
-  config-snapshot of Keiko's own resolved `KEIKO_*` runtime configuration, and a concatenation of
-  every Activity Log file in logical-log order (legacy files, then sealed and active segments, D14),
-  selected oldest-first within the byte budget, each read
-  through a no-follow, private, single-link regular-file descriptor (a symlink, hard link, or
-  non-regular entry at a log name is skipped by name with its closed refusal kind, never read
-  through) — into one manifest-led
-  `.jsonl` bundle, plus a
-  `<output>.sha256` integrity sidecar (D12). No new redaction logic is written for the bulk of the
-  file — every log line copied in is a line that was already redacted at write time. A legacy raw
-  `ui.log` is never read into the bundle, and the retired flags that once attached it are refused
-  (D8). `--include-evidence` attaches the full `EvidenceStore` manifest for each named run id,
-  beyond the index-only summary, for deep replay. After a successful export, the command evaluates
-  the exported directory's diagnostic readiness (D6) and prints it. That readiness line is persisted
-  after the report is written, so the report stays exactly the evidence that existed when it was
-  taken.
-- `keiko support analyze FILE [--correlation-id ID] [--json]` reconstructs three complementary
-  views from the same parsed lines, because `correlationId` alone cannot carry everything an agent
-  needs to reconstruct: a **per-correlation timeline** for every line that carries a
-  `correlationId`, ordered within one process lifetime by `seq` and across lifetimes by first
-  file-position (D2), additionally carrying the union of every `frames[]` entry seen for that id;
-  a **per-process-lifetime summary** (`processes[]`, keyed by `(pid, instanceId)`) built from every
-  line carrying the full v2 identity triple regardless of `correlationId`, so the lifecycle events
-  D7 introduces (`process.started`/`process.heartbeat`/`process.exiting`, which carry no
-  `correlationId` and so belong to no timeline) are still reconstructable — first/last `seq`,
-  first/last `ts`, line count, and the `process.started`/`process.exiting` payloads when seen; and
-  whole-file `clusters` — every parsed line grouped by `(category, op, errorKind)` regardless of
-  correlationId. The analyzer also reports `legacyLineCount` — lines it parsed successfully but
-  that are missing the full identity triple — and a `warnings[]` entry naming that count when it is
-  nonzero, so the admission that some lines fell back to file-position ordering is machine-readable
-  rather than a silent omission. Separately, `malformedLineCount` counts lines that could not be
-  read as a log record at all (not valid JSON, or valid JSON missing `ts`/`category`/`op`) —
-  evidence of corruption, never conflated with a legacy line, which parses cleanly and is merely
-  missing the v2 identity triple. `--json` emits the timeline/process/cluster reconstruction above.
-  The fuller per-correlation output — a `ReproductionSeed` (`gatewayScript`/`httpRequest`/
-  `storeFingerprint`/`indexingJob`/`stackFrames`/`causeChain`, each with its own honest `warnings`
-  entry when it cannot be reconstructed) and a pasteable gateway-replay-script fixture — is
-  implemented and exported (`buildReproductionSeed`, `renderGatewayReplayScriptFixture` in
-  `packages/keiko-activity-log/src/reader/support-analyze.ts`), unit-tested directly, and wired to
-  `support analyze` itself: `--clusters` renders the whole-file `(category, op, errorKind)`
-  grouping, `--seed` builds the `ReproductionSeed` for the id named by `--correlation-id`, and
-  `--emit-fixture PATH` writes the pasteable gateway-replay-script fixture to `PATH`. Both
-  `--clusters` and `--seed` render as human-readable text by default and as the same JSON shape the
-  underlying builder produces when `--json` is also given. `--emit-fixture` is fail-closed: it
-  refuses to overwrite a file that already exists at `PATH`, creates any missing parent directories
-  before writing, and reports the written path on success rather than the fixture body. Among the
-  `ReproductionSeed`'s fields: a rate-limited call always carries `httpStatus` — the provider's
-  actual status (`429` is only the default for a standard rate-limit error, never a replacement for
-  a supplied `503`) — so a replay script's rate-limit attempt never has to infer its HTTP status
-  from the outcome discriminant alone; `retryAfterMs` rides along on the same line only when the
-  provider supplied one, with no synthesized fallback.
+### D9 — Export, offline validation and replay preparation (#3534)
 
-  The default and per-correlation analyzer reports also carry an `analysisContext` identifying the
-  resolved input file, an inferable state directory for raw `<state-dir>/logs/server*.log` inputs,
-  the newest valid event timestamp and newest observed process instance, plus explicit freshness
-  and process-activity states. A raw log older than five expected one-minute heartbeat intervals is
-  `stale`/`inactive` and contributes a warning; a fresh raw log is only `apparently-active` when the
-  newest process did not record an exit and its PID still exists. Bundles are historical artifacts
-  (`not-applicable` process activity), and missing or invalid data remains `unknown`. The analyzer
-  never replaces missing evidence with a file mtime, the current process, or a guessed state dir.
+`keiko support export [--out DIRECTORY] [--state-dir PATH] [--max-bytes N]` optionally selects
+`--incident ID`, `--correlation-id ID` or `--defect-fingerprint SHA256`. Without a selector it
+creates a user-reported incident. An explicit causal selection is evaluated before that creation, so
+recording a new incident cannot manufacture retained evidence for an absent correlation.
+
+The default location is `<stateDir>/support-reports/`. Its directory is owner-only (0700): it is
+created so, or it must already be a real directory of this user, and it is hardened through a
+descriptor that refuses a final symlink, so a redirected `support-reports` never has its target
+changed. The report `keiko-support-v1-<12 hex incident prefix>-<UTC date>.json` is owner-only
+(0600). The name contains no host, user, workspace or path name; its date is the incident's UTC
+creation date. Explicit `--out` selects a directory, never a file: a new one is created owner-only,
+an existing one must not be writable by group or others, and no directory inside the state or
+control-state Activity Log is accepted (compared by device and inode as well as by path, so a
+firmlink or bind-mount alias cannot pass). The closed filename class always applies. The directory
+never enters the report or Activity Log. An unknown `--incident` or `--defect-fingerprint` records
+nothing and exits 1. Publication reuses `publishSafeArtifactFileSet` with one entry and no fixed
+publication slot. It atomically and exclusively commits the fully prepared file, cleans intermediate
+stages on success, and never replaces an existing destination. A crash leaves private, recognizable
+staging/recovery state. Retrying the exact bytes may recover; changed bytes, a conflicting target or
+unsafe recovery state fail closed. No stage is treated as a valid report merely because it exists:
+the next export into the directory names how many `.keiko-publish-<24 hex>-<n>.stage` files it
+found, and the runtime-state contract classifies them, with the closed report names, as Keiko-owned
+in `support-reports/`. The strict reader rejects incomplete bytes and invalid digests.
+
+**Desktop local export (owner decision, 2026-10-03):** an explicit report action downloads the same
+validated, content-free report through the browser. Its configured download destination and
+filesystem permissions apply, including a default Downloads directory without a save dialog.
+The browser API cannot enforce the CLI's 0700/0600 modes, exclusive no-follow publication, or
+owner-private receiving-file check. Those guarantees above apply to CLI exports, not browser
+downloads. Keiko performs no automatic upload or disclosure. A downloaded report must still pass
+the canonical offline validator before it is analyzed; operators who use the owner-private CLI
+reader first place it in a private directory and file according to the receiving-file contract.
+
+`keiko support analyze FILE [--correlation-id ID] [--json] [--clusters] [--seed] [--emit-fixture PATH]`
+reads only the explicitly chosen owner-private, single-link regular file. It reads bounded chunks,
+checks UTF-8, canonical JSON, nesting, every section and record, identity and provenance, all
+digests, and failure-class sufficiency **before** any rendering. Duplicate keys, controls (including
+escaped terminal/bidi controls), unknown sections, unsafe fields, trailing compressed bytes and
+decompression bombs fail closed. Embedded segment identifiers are closed provenance values; analysis
+never resolves them against local files or the network and never executes report content or probes
+its recorded PIDs.
+
+The reader uses the report's exact registry/schema/catalog identity. Trusted immutable snapshots
+cover every stable release from 1.1.9 up to the current version, generated from the release tags
+into a data-only module; `npm run set-version` regenerates it, and a drift test fails when a shipped
+release is missing or differs from its release commit. The frozen pre-move production fixture
+(#3558) reconstructs against its recorded release registry. Only a matching snapshot is inflated, on
+demand. Unknown registries or schemas fail closed as `unsupported-report`; a report whose bounded
+declared minimum analyzer version is newer than the reader names that version. The current registry
+is never substituted for an older report. A local Activity Log line without an explicit registry is
+judged by the registry it records, so evidence written before an upgrade stays evidence.
+
+Analysis recomputes sufficiency from the decoded evidence and takes the union with the declared
+verdict: it can only downgrade a declared `complete`, never upgrade an `insufficient` one. The
+header's provenance must agree with the evidence: the declared integrity maps to its completeness
+and loss, the window is anchored at the incident's creation, a user report carries the unattributed
+constants, and a registered incident's surface follows from its operation. When its own failing line
+(its operation under the correlation that failure carried: the declared child, else the root) is
+retained, the incident's error kind, Keiko frame count, canonical fingerprint and correlation must
+be the ones the producer's rules derive from that line, so a declared child is connected to its root
+only through that line's parent edge; when it is not retained, the analysis is insufficient
+(`evidence-not-retained`). A child declared without its root, which no producer emits, is refused.
+Another request's failure of the same operation, the root's own included, neither completes the
+incident nor refuses it. A contradiction is `unsafe-report`. Every closure member, each incident
+correlation and every parent a retained line names, needs a directly recorded line: a timeline
+derived only through a child never proves its parent (`parent-correlation-missing`,
+`evidence-not-retained`). The selection accounts for exactly the process lifetimes the evidence
+shows, and the evidence must carry that account: a `selected` start missing from it, a start beside
+a `lost` or `absent` one, or a heartbeat (written only after a start) beside an `absent` one is
+`unsafe-report`, so dropping a start never reads as a lifetime that had none; a `lost` start, or an
+`absent` one whose first segment the report no longer shows, is `evidence-not-retained`. A sender
+who rewrites the account and the evidence together stays indistinguishable from an honest one, which
+is why authenticity is reported as unknown. Every narrowed view, the `--correlation-id` timeline and
+each seed, keeps the report's effective selection reasons, so a projection never reads more complete
+than the report it came from.
+
+`--json` streams a fully validated `keiko.support.report-analysis` in bounded chunks, schema version
+1: validated private incident, selection verdict, unknown authenticity, section/report and
+exact-file digests, the existing ordered timelines, process summaries, failure clusters and a
+deterministic ReproductionSeed when the incident correlation has evidence. With `--correlation-id`,
+`--json` emits only that validated timeline as `keiko.support.report-timeline`, schema version 1,
+which `keiko investigate --from-timeline` consumes. The seed uses the incident timestamp, not the
+receiver's clock. `--seed` uses that correlation by default or an explicit `--correlation-id`; safe
+gateway replay preparation reuses the existing builder and exclusive fixture writer. Missing replay
+capability remains explicit. Human output derives from this validated analysis. No output claims a
+recorded historical PID is currently running. Support execution emits correlated body-free
+`support.report.started`, `support.report.completed` or `support.report.failed`, alongside the
+existing query/manifest evidence; a failure names its closed reason and a completion that is
+`insufficient` is a warning. An analysis that proceeds without the lazily loaded tool-lifecycle
+validator records `support.report.degraded` (`lifecycle-validator-unavailable` with error kind
+`unavailable`, the error class, cause classes and Keiko frames) before its completion. An analysis
+completion names the view it produced (`analysis`, `clusters`, `timeline`, `seed`), whose
+correlation a seed used (`incident` or `selected`, never the id, but its SHA-256 digest) and a
+published replay fixture. A degraded line whose error carries no Keiko frame (a native loader
+rejection) names the catch site's own dist-anchored frames. Export writes them to the selected state
+directory's Activity Log, analysis and a refused destination to the CLI control state. After a
+successful export the CLI states the exported directory's diagnostic readiness (#3532), persisted
+after the report so the report stays the evidence that existed when it was taken. Logger failure
+uses its existing independent loss channel.
+
+**Compatibility:** legacy JSONL bundles and raw logs are not accepted as received support reports;
+they are refused by the closed reason `legacy-input`.
+They lack the closed format and embedded integrity. In particular, legacy manifest/config/evidence
+sections can contain prohibited data, so the receiver never imports or renders them. Regenerate
+on the originating installation. The existing raw-log reader/analyzer remains available to local
+queries and developer tests; it is not an untrusted-report admission boundary. Existing scripts
+must remove inclusion flags and use the new versioned machine envelope. Controlled manual handling
+is specified in [the support workspace guide](../observability/support-workspace.md).
 
 ### D10 — Why Wave 1 ships the exporter and analyzer alongside `seq`, not after it
 
@@ -720,10 +827,11 @@ worth using.
 **This is a claim about v2 lines only — it is not a claim that no fallback ordering exists at all.**
 An existing `server.log` can span the upgrade to this contract and still hold lines written before
 `seq`/`schemaVersion` shipped: valid, successfully
-parsed log records with no `pid`, `instanceId`, or `seq` field to order by. D9's exporter copies
-these verbatim (D8's "one JSON-Lines file" format applies uniformly; there is no schema-aware
-filtering at export time), so the analyzer must define what happens to them rather than silently
-dropping or misordering them. The compatibility rule: a retained pre-v2 line is never discarded and
+parsed log records with no `pid`, `instanceId`, or `seq` field to order by. The local raw-log
+reader must define what happens to them rather than silently dropping or misordering them.
+This compatibility path does not admit raw logs or legacy records into D8's received-report
+boundary: that report accepts only validated structured events. The local-reader compatibility
+rule: a retained pre-v2 line is never discarded and
 never treated as malformed — it is ordered by its own position in the file (the same signal used to
 rank process lifetimes against each other, D2), counted in `legacyLineCount`, and surfaced through
 exactly one `warnings[]` entry when that count is nonzero. This compatibility path remains required
@@ -963,11 +1071,16 @@ request":
   (#3557). A live dev log showed 416 of 449 `client.diagnostic` lines were a window's routine
   stage evidence, all at `warn` with `errorKind: unknown`, burying the real failures. The route
   now accepts four closed shapes, each with its own operations:
-  - a message: `client.diagnostic`, a failure at `warn`, as above;
-  - a window stage: `client.stage.started` / `client.stage.settled` at `info`. One
+  - a message: `client.diagnostic`, at `error` for operation timeouts so the existing automatic
+    incident trigger retains their window; other client warnings remain at `warn`;
+  - a window or folder-navigation stage: `client.stage.started` / `client.stage.settled` at `info`.
+    Folder stages use `files-directory-load`, `files-directory-navigation`,
+    `files-project-selection`, and `editor-project-selection`. Directory loads send their
+    stage correlation id with the HTTP request; failed reads emit a correlated body-free
+    diagnostic and settle. Paths and document bodies are never recorded. One
     client-minted correlation id per mount joins both phases, and the duration is monotonic and
     bounded to the contract's ceiling. A window chunk that has not arrived 10 seconds after its
-    stage started is reported as stalled, a `client.diagnostic` with `errorKind: timeout` under
+    stage started is reported as stalled, a `client.diagnostic` at `error` with `errorKind: timeout` under
     that stage's id, and the window offers the reload that requests it fresh: a chunk request the
     browser loses never settles, and the bundler keeps it pending, so nothing inside the page can
     request it again (dev CI run 35438847738, a WebKit network process crash);
@@ -1093,11 +1206,17 @@ claim tool calling, never while a subscription source is selected, and only the 
 Workbench would elect is awaited. A profile read that
 finds nothing to prove writes no automatic record, and its absence is then not a lost call.
 
+For received reports, first analyze the artifact without a correlation selector. New exports
+replace local labels with artifact-local ordinal references. Select the exported root from
+`incident.correlation.rootCorrelationId` or a validated timeline reference when using
+`support analyze FILE --correlation-id <exported-ref>`. The UI Support ID and original run/request
+IDs below select only the originating installation's Activity Log; no reverse mapping is exported.
+
 The Coding Workbench gateway connects each authenticated request to its run with
 `parentCorrelationId: runId`. An upstream chat or stream failure keeps the request correlation on
 its redacted diagnostic and names the run as parent, so concurrent failed requests remain
-distinguishable. `keiko support analyze --correlation-id <requestId>` retrieves the diagnostic;
-`keiko support analyze --correlation-id <runId>` retrieves the run's closed turn-failure projection
+distinguishable. `keiko support query --correlation-id <requestId> --json` retrieves the diagnostic;
+`keiko support query --correlation-id <runId> --json` retrieves the run's closed turn-failure projection
 and its linked request timeline. The analyzer follows an explicit `parentCorrelationId` edge for
 one hop and includes every line with that child request correlation, including provider dispatch
 and diagnostics that do not repeat the parent field. Direct request lookup remains available;
@@ -1304,7 +1423,7 @@ bound.
 | `KEIKO_LOG_RETENTION_DAYS`  | 14      | 1 to 3650                                                  |
 | `KEIKO_LOG_PIN_QUOTA_BYTES` | 64 MiB  | At least 1 byte                                            |
 
-Segments stay uncompressed. A sealed segment is directly readable by `keiko support analyze` and by
+Segments stay uncompressed. A sealed segment is directly readable by the local reader/query engine and by
 line tools, and the byte budget already bounds disk use.
 
 **Calibration (#3532).** The defaults were checked against the traces of the 29 failure scenarios,
@@ -1387,7 +1506,24 @@ Two identifiers serve two purposes. `incidentId` is random and names one occurre
 `defectFingerprint` is deterministic and versioned over allowlisted stable inputs (owning surface,
 operation, closed `errorKind`, normalized Keiko frame signature) and carries no time, process,
 instance, host, user or path value; it groups recurrences for deduplication and fix linkage. A change
-to its inputs or algorithm bumps the algorithm version; a golden-value test enforces that.
+to its inputs or algorithm bumps the algorithm version; a golden-value test enforces that. Version 1
+preimages remain unchanged and historical records remain readable. Client diagnostics use version 2:
+closed diagnostic/render/module context and reduced shipped browser-chunk digests distinguish known
+failure shapes without retaining messages, paths or customer identifiers. Line and column do not
+enter either version. Shipped chunk digests may change across releases, so version-two browser
+fingerprints do not promise cross-release grouping.
+
+Browser diagnostics can still be indistinguishable when they carry no usable product frame or
+closed feature context. Their retention claim is therefore scoped to the occurrence's validated
+causal reference as well as its defect fingerprint. Replaying the same request deduplicates; a later
+request retains its own window instead of discarding it under a fourteen-day coarse defect claim.
+The local claim key is a hash and is never exported as a customer reference. Existing automatic
+slot quotas and evaluation rate limits apply; full quotas surface explicit loss. Browser candidates
+may use only eight of the twenty-four automatic slots and at most two of the six evaluations per
+rolling minute. This reserves sixteen automatic slots and four evaluations for server failures
+without enlarging the shared bounds. The same atomic slot claims and closed rejection evidence
+apply to both classes. Server failures
+and historical version-one browser records keep their fingerprint-scoped deduplication.
 
 The descriptor has a strict public projection and a richer, still body-free private projection from
 the same record; both expose the sufficiency status, and only the private one carries reasons and
@@ -1396,7 +1532,7 @@ reserved for explicit reports, 4 KiB each), and candidates expire after 14 days.
 
 Both the defectFingerprint dedup rule and the count quotas hold atomically across every process
 sharing the state directory (#3533 review 4050606506), not from a directory-listing count two
-processes could each read as "still free": a registered failure claims its fingerprint's own
+processes could each read as "still free": a registered failure claims its deduplication key's own
 `fingerprint-<64 hex>.claim` file by exclusive-create before it decides duplicate-or-new, and every
 candidate claims one of a bounded pool of `slot-<NN>.claim` files (automatics from slot 0 up, user
 reports from the top down, so the reserve holds without a shared counter) before its record is
@@ -1405,7 +1541,7 @@ repair/uninstall ownership predicate already calls, so state-paths.ts needed no 
 A claim releases with its record on dismissal or expiry. Between a claim and its record, and between
 a record's exclusive create and its bytes, another process can see a claim without a record or an
 unreadable record at any moment, so such a file is treated as in flight until it is older than a
-one-minute grace by its own mtime: a second occurrence of the same defect deduplicates onto the id
+one-minute grace by its own mtime: a repeat of the same retention key deduplicates onto the id
 the claim names instead of taking the claim over, and neither the orphan sweep nor torn-record
 recovery removes it. Only an older file has lost its writer (a crash in that gap) and is swept,
 against a fresh, per-claim read taken at sweep time, never a snapshot taken earlier in the same
@@ -1423,14 +1559,16 @@ by line and retains only the selected events, up to a report budget.
 owner-private, closed-grammar store `<stateDir>/activity-log-manifests/`
 (`manifest-<segmentId>.json`, at most 256 KiB). It carries the schema and catalog versions, the safe
 time range, the process and sequence ranges, the registered categories, operations, error kinds and
-failure classes with counts, the loss and integrity state, a Bloom filter over the correlation keys
-(hash bits only) and a SHA-256 digest. An `incidentId` or `defectFingerprint` appears only when a
-registered operation that declares that field carries it; a sealed segment is never touched to add
-one. Every value is a pure function of the segment's bytes and the build's catalog, so deleting the
-store and rebuilding it reproduces every manifest byte for byte. A stored manifest is accepted only
-when it re-serializes to its own bytes and its digest matches; anything else is rebuilt. Only the
-query, export and rebuild commands write manifests, never the Activity Log writer, and each pass
-removes the manifests of segments that retention deleted, so the store follows the log's own bound.
+failure classes with counts, the loss and integrity state, the count of lines in which its process
+recorded losing its own evidence (a loss summary's process counters or a producer's confirmed drop,
+such as the seal's), a Bloom filter over the correlation keys (hash bits only) and a SHA-256 digest.
+An `incidentId` or `defectFingerprint` appears only when a registered operation that declares that
+field carries it; a sealed segment is never touched to add one. Every value is a pure function of
+the segment's bytes and the build's catalog, so deleting the store and rebuilding it reproduces
+every manifest byte for byte. A stored manifest is accepted only when it re-serializes to its own
+bytes and its digest matches; anything else is rebuilt. Only the query, export and rebuild commands
+write manifests, never the Activity Log writer, and each pass removes the manifests of segments that
+retention deleted, so the store follows the log's own bound.
 
 **Residual same-user manifest forging.** The trust boundary is the same OS user as D14's segments.
 A process already executing as that user could hand-edit a stored manifest — for example, to make
@@ -1448,12 +1586,29 @@ disable or defer manifests.
 **A closure is selected whole.** A correlation, an incident or a defect fingerprint selects the
 registered causal closure: the roots, every ancestor over `parentCorrelationId` and every
 descendant, and never an unrelated correlation. A narrow context adds only the uncorrelated process
-signals of the closure's own process lifetimes within a configured window (default 5 seconds). A
-user-reported incident also selects its pinned window and takes every correlation in it as a root.
+signals of the closure's own process lifetimes within a configured window (default 5 seconds), and
+each lifetime's own `process.started` (its runtime) wherever it lies, outside the context cap, so a
+long-running process keeps its Node version, platform and architecture (#3534). Only `keiko ui`
+writes a start; a one-shot command writes none (its fatal and exit lines come without one). The
+writer numbers a lifetime's segments from 1 and retention prunes the oldest first, so a lifetime
+without a start is complete only while its segments still run unbroken from its first, every one
+readable with only supported records (a torn tail may end only the last, where a crash stops it),
+and its process recorded losing none of its own evidence (no process counter in its loss summary,
+never the browser ones, and no seal's confirmed drop, which each manifest counts, so no body is read
+for it): then it never wrote one, and the first line of its first segment travels with the selection
+when no other line shows that beginning. Otherwise its start may have been pruned or damaged, before
+or after its first heartbeat; the selection is `evidence-not-retained` and carries the lifetime's
+first heartbeat, when one is retained, as the proof a receiver recomputes. Legacy files carry no
+segment index and prove no beginning. The result accounts for each selected lifetime's start as
+`selected`, `absent` or `lost`, and a report carries that account. A user-reported incident also
+selects its pinned window and takes every correlation in it as a root.
 
 **Nothing required is truncated.** A closure that does not fit the budget returns no events and is
-`insufficient` with `report-budget-exceeded`; evidence retention removed is
-`evidence-not-retained`; an unreadable candidate segment is `segment-unreadable`. Only optional
+`insufficient` with `report-budget-exceeded`. Its `requiredBytes` counts the closure with every
+start, beginning line and heartbeat proof it requires, measured even when the closure alone exceeds
+the budget, so the stated size is one that fits. The lifetimes measured are bounded like the
+closure's correlations; beyond that bound the requirement is unknown (0). Evidence retention removed
+is `evidence-not-retained`; an unreadable candidate segment is `segment-unreadable`. Only optional
 context may be dropped, declared as `context-truncated`. Every result carries its provenance,
 integrity, coverage, loss and truncation, and exactly one sufficiency status from the per-class
 projection `keiko support analyze` uses.
@@ -1466,10 +1621,9 @@ requires recorded measurements that manifests are insufficient and an explicit r
 ### D12 — Relation to prior decisions
 
 - **ADR-0010** (audit ledger and evidence manifests) established the precedent this contract
-  extends: redacted-by-construction, deep field-wise, before serialization. The support artifact's
-  manifest line follows the identical shape discipline — a typed record, never a raw dump — and the
-  evidence-index section it embeds is the same `listEvidence()` output ADR-0010's lineage already
-  produces, never re-derived.
+  extends: redacted-by-construction, deep field-wise, before serialization. The canonical support
+  report follows the identical shape discipline through closed typed incident, selection, event,
+  and integrity sections. It includes neither a legacy manifest nor an evidence-index dump.
 - **ADR-0019** (modular package architecture) governs every new dependency edge this contract adds.
   Domain packages (memory, local-knowledge, security, memory-consolidation) each declare their own
   narrow, structural log-sink port — the same `KnowledgeLogEvent`-shaped pattern already proven —
@@ -1505,22 +1659,10 @@ requires recorded measurements that manifests are insufficient and an explicit r
   via `deps.ts`), and the `conversation-attachment-store.ts`/`editor/localHistory/localHistoryStore.ts`
   sink options wired in the earlier bullet, which reached the sharded vault's shard reads but not
   this key-resolution layer until now.
-- **ADR-0048** (evidence artifact confidentiality) classified evidence artifacts into confidentiality
-  tiers and mandated write-time permission enforcement. The support bundle is a new artifact class in
-  that same spirit: every log line it carries was already redacted before this contract existed
-  (`redactLogFields`'s choke point, unchanged here), and the one field this contract adds outside
-  that pipeline — the manifest's `auditSummary`, built from the `AuditResult` `keiko audit
-local-state` already produces — is redacted by a dedicated projection in
-  `buildSupportBundleManifest` (`support-export.ts`) that drops `AuditResult.stateDir` before the
-  manifest is ever assembled, because that field echoes the absolute directory the audit ran
-  against and can embed the operator's OS username on a real machine. That projection is a
-  purpose-built field-level redaction colocated with the manifest builder, not a routing of
-  `auditSummary` through `redactLogFields` itself — `AuditResult` is a typed value, not a log line,
-  so the log envelope's choke point does not apply to it. The manifest's `stateDirSource`
-  closed-union label already carries everything an agent needs from that field (default vs.
-  override), so nothing is lost. Its integrity sidecar (a `sha256` file alongside the bundle, Wave 6) exists because the
-  bundle crosses a real trust boundary — customer machine → support ticket → agent — the same
-  boundary ADR-0048's confidentiality tiers were written to reason about.
+- **ADR-0048** (evidence artifact confidentiality) governs the same owner-private artifact class.
+  The canonical report carries only registered safe events and the closed private incident
+  projection. Legacy audit/config/evidence sections are retired, and the integrity metadata is
+  embedded in the one report (D8), never a separate `.sha256` file.
 
 ## How an agent reads the log
 
@@ -1545,7 +1687,7 @@ rather than left implicit across the Decision section:
    `processes[]` summaries instead — one entry per `(pid, instanceId)` lifetime (D9).
 6. **For an error**, read `errorKind` for the closed-vocabulary classification, and
    `extra.frames`/`extra.causeChain` for the dist-anchored Keiko-code stack (landed Wave 2), resolved
-   against the exact tagged product version named in the support bundle's manifest (D3, D12).
+   against the exact product version named in the validated report's incident and events (D3, D12).
 7. **For what could not be reconstructed**, read a `warnings` array rather than assuming silence
    means nothing happened — there are two, at two different scopes, and neither is silent about a
    gap. The whole-file `AnalyzeAllResult.warnings` carries exactly one entry naming
@@ -1585,7 +1727,7 @@ rather than left implicit across the Decision section:
   this contract shipped can still appear in a retained legacy `server.log` or
   `server-YYYY-MM-DD.log` file. The analyzer never drops or misorders such a line — it orders it by file position, counts
   it in `legacyLineCount`, and surfaces exactly one `warnings[]` entry naming that count (D9, D10).
-  An agent must read `warnings[]` before trusting that every line in a bundle came from an ordered
+  An agent must read `warnings[]` before trusting that every line it analyzed came from an ordered
   v2 process lifetime.
 - Bounded immutable segments are the disk bound (D14): total use is at most the byte budget plus
   the pin quota. No process appends to another process's segment, publication never replaces an
@@ -1645,12 +1787,12 @@ rather than left implicit across the Decision section:
 ## References
 
 - [ADR-0010](ADR-0010-audit-ledger-and-evidence-manifests.md) — redacted-by-construction evidence
-  manifests; the precedent this contract's support-bundle manifest extends.
+  manifests; the precedent this contract's canonical report extends.
 - [ADR-0019](ADR-0019-modular-package-architecture.md) and [ADR-0179](ADR-0179-activity-log-package-boundary.md) — dependency direction and the writer/store/reader package boundary; every new log-port
   edge in this contract points inward, and the server composition root is the only place a real sink
   is wired to a domain package's port.
 - [ADR-0048](ADR-0048-evidence-artifact-confidentiality.md) — confidentiality tiers and write-time
-  permission enforcement for evidence artifacts; the support bundle is a new artifact class in the
+  permission enforcement for evidence artifacts; the canonical support report is an artifact class in the
   same spirit.
 - Epic #3233 — the governing epic; its 12-reader audit is the source of the 36 gaps this contract
   and its later waves close.

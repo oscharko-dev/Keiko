@@ -1,13 +1,28 @@
 import type { MessageCatalog } from "./i18n-messages.en";
-
 export const DE_MESSAGES = {
+  "editor.taskWorkspaceAccess.checking": "Verbindung zum Aufgabenarbeitsbereich wird hergestellt…",
+  "editor.taskWorkspaceAccess.checkingDescription":
+    "Keiko prüft, ob dieser Browser auf den lokalen Arbeitsbereich zugreifen kann.",
+  "editor.taskWorkspaceAccess.unpairedTitle": "Browsersitzung nicht gekoppelt",
+  "editor.taskWorkspaceAccess.unpairedDescription":
+    "Das ausgewählte Projekt ist verfügbar, aber dieser Browser hat keine Launcher-Berechtigung für private Task-Workspace-Inhalte. Starte Keiko über den Launcher neu.",
+  "editor.taskWorkspaceAccess.title":
+    "Der Aufgabenarbeitsbereich ist in diesem Browser nicht verfügbar",
+  "editor.taskWorkspaceAccess.description":
+    "Starte Keiko über das Startprogramm neu. Alternativ kannst du oben im Arbeitskontext einen Ordner oder ein Repository auswählen.",
+  "editor.taskWorkspaceAccess.retry": "Erneut prüfen",
+  "editor.multiRoot.label": "Mehrwurzel-Editor",
+  "editor.multiRoot.switcher": "Editor-Arbeitsbereichswurzeln",
+  "editor.multiRoot.error":
+    "Die fokussierte Arbeitsbereichswurzel konnte nicht aktualisiert werden.",
+
   "app.skipToContent": "Zum Inhalt springen",
   "app.workspaceHeading": "Keiko-Arbeitsbereich",
   "header.tileAll": "Alle Fenster kacheln",
+  "header.lockLayout": "Anordnung sperren",
+  "header.unlockLayout": "Anordnung entsperren",
   "header.splitFront": "Vordere Fenster teilen",
   "header.cascade": "Fenster stapeln",
-  "header.quickAccess": "Schnellzugriff",
-  "header.openQuickAccess": "Schnellzugriff öffnen",
   "rail.primaryNavigation": "Primäre Arbeitsbereichsnavigation",
   "rail.newChat": "Neuer Chat",
   "rail.codingHistory": "Coding History",
@@ -20,92 +35,17 @@ export const DE_MESSAGES = {
   "rail.coding": "Coding Workbench",
   "rail.localKnowledge": "Lokales Wissen",
   "rail.editor": "Editor",
-  "editor.empty.title": "Projekt öffnen",
-  "editor.empty.description":
-    "Wählen Sie einen Projektordner aus, um mit der Bearbeitung zu beginnen. Der Editor arbeitet innerhalb des ausgewählten Workspace-Stammverzeichnisses.",
-  "editor.empty.selectFolder": "Ordner auswählen…",
   "editor.empty.opening": "Wird geöffnet…",
-  "editor.empty.open": "Öffnen",
-  "editor.empty.pathLabel": "Pfad zum Projektordner",
-  "editor.empty.pickerTitle": "Projektordner auswählen",
-  "editor.empty.dialogBusy": "Ein nativer Dialog ist bereits geöffnet. Schließen Sie ihn zuerst.",
-  "editor.empty.pickerUnsupported":
-    "Die native Ordnerauswahl ist auf dieser Plattform nicht verfügbar. Geben Sie unten einen Pfad ein.",
-  "editor.empty.connectionFailed":
-    "Das Projekt konnte nicht verbunden werden. Prüfen Sie den Ordner und versuchen Sie es erneut.",
-  "editor.empty.workspaceUnavailable":
-    "Die gespeicherte Workspace-Identität ist nicht mehr aktuell. Entfernen Sie den veralteten Projekteintrag, bevor Sie diesen Ordner erneut verbinden.",
-  "editor.runtime.chooseFile":
-    "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
-  "editor.outline.title": "Gliederung",
-  "editor.outline.workspaceLabel": "Arbeitsbereichsgliederung",
-  "editor.outline.hide": "Gliederungsbereich ausblenden",
-  "editor.outline.show": "Gliederungsbereich einblenden",
-  "editor.outline.loading": "Symbole werden geladen.",
-  "editor.outline.unavailable": "Für diese Datei ist keine Gliederung verfügbar.",
-  "editor.outline.empty": "In dieser Datei wurden keine Symbole gefunden.",
-  "editor.localHistoryProtection.savedUnprotected":
-    "Die Datei wurde gespeichert, aber der lokale Verlauf konnte diese Version nicht schützen.",
-  "editor.localHistoryProtection.workspaceUnavailable":
-    "Verbinden Sie dieses Projekt erneut. Bearbeiten und speichern Sie die Datei danach noch einmal.",
-  "editor.localHistoryProtection.filesystemIdentityUnsupported":
-    "Verschieben Sie dieses Projekt auf ein Dateisystem mit stabiler Dateiidentität, bevor Sie sich auf den lokalen Verlauf verlassen.",
-  "editor.localHistoryProtection.historyUnavailable":
-    "Speichern Sie erneut, sobald der lokale Verlauf verfügbar ist.",
-  "editor.localHistoryProtection.suppressedSecretDetected":
-    "Dieser Speichervorgang wurde nicht als Wiederherstellungspunkt gesichert: Der Inhalt scheint ein Secret zu enthalten. Die Wiederherstellung über den lokalen Verlauf ist für diesen Speichervorgang nicht verfügbar.",
-  "editor.localHistoryProtection.diagnosticReference": "Diagnosereferenz: {correlationId}",
-  "editor.callHierarchy.title": "Aufrufhierarchie",
-  "editor.callHierarchy.incoming": "Eingehende Aufrufe",
-  "editor.callHierarchy.outgoing": "Ausgehende Aufrufe",
-  "editor.callHierarchy.callSite": "Aufrufstelle",
-  "editor.callHierarchy.empty": "Für dieses Symbol wurden keine Aufrufe gefunden.",
-  "editor.callHierarchy.close": "Aufrufhierarchie schließen",
-  "editor.callHierarchy.command": "Aufrufhierarchie anzeigen",
-  "editor.verification.run": "Verifizierung ausführen",
-  "editor.verification.runReviewedChangeLabel": "Verifizierung für die geprüfte Änderung ausführen",
+  "supportReport.create": "Fehlerbericht erstellen",
+  "supportReport.creating": "Bericht wird erstellt…",
+  "supportReport.saved": "Heruntergeladen.",
+  "supportReport.failed": "Bericht nicht verfügbar. Erneut versuchen.",
+  "editor.projectRestricted": "Arbeitsbereichsskripte sind nicht verfügbar.",
+  "editor.runtime.loadFailed": "Datei konnte nicht geöffnet werden.",
+  "editor.runtime.retry": "Erneut versuchen",
+
   "editor.command.openProblems": "Probleme öffnen",
   "editor.command.openFileHistory": "Dateiverlauf öffnen",
-  "editor.fileHistory.title": "Dateiverlauf",
-  "editor.fileHistory.open": "Dateiverlauf öffnen",
-  "editor.fileHistory.close": "Dateiverlauf schließen",
-  "editor.fileHistory.listLabel": "Wiederherstellungspunkte der Datei",
-  "editor.fileHistory.loading": "Dateiverlauf wird geladen…",
-  "editor.fileHistory.empty": "Für diese Datei sind noch keine Wiederherstellungspunkte vorhanden.",
-  "editor.fileHistory.unpaired":
-    "Koppeln Sie die lokale App-Sitzung, um den Dateiverlauf zu lesen.",
-  "editor.fileHistory.loadFailed": "Der Dateiverlauf konnte nicht geladen werden.",
-  "editor.fileHistory.retry": "Erneut versuchen",
-  "editor.fileHistory.pruned": "Dieser Wiederherstellungspunkt ist nicht mehr verfügbar.",
-  "editor.fileHistory.origin.userSave": "Benutzerspeicherung",
-  "editor.fileHistory.origin.agentApply": "Agentenänderung",
-  "editor.fileHistory.origin.restore": "Wiederherstellung",
-  "editor.fileHistory.pinned": "Angeheftet",
-  "editor.fileHistory.pin": "Wiederherstellungspunkt anheften",
-  "editor.fileHistory.unpin": "Wiederherstellungspunkt lösen",
-  "editor.fileHistory.compareCurrent": "Mit aktueller Version vergleichen",
-  "editor.fileHistory.selectCompare": "Für Vergleich auswählen",
-  "editor.fileHistory.compareSelected": "Mit Auswahl vergleichen",
-  "editor.fileHistory.compareTitle": "Dateiverlauf vergleichen",
-  "editor.fileHistory.closeCompare": "Zurück zum Dateiverlauf",
-  "editor.fileHistory.restore": "Wiederherstellen",
-  "editor.fileHistory.delete": "Löschen",
-  "editor.fileHistory.restoreTitle": "Diese Version wiederherstellen?",
-  "editor.fileHistory.restoreBody":
-    "Die aktuelle Datei wird als Wiederherstellungspunkt gesichert, bevor diese Version mit den normalen Konfliktprüfungen gespeichert wird.",
-  "editor.fileHistory.deleteTitle": "Diesen Wiederherstellungspunkt löschen?",
-  "editor.fileHistory.deleteBody":
-    "Dieser verschlüsselte Wiederherstellungspunkt kann nach dem Löschen nicht wiederhergestellt werden.",
-  "editor.fileHistory.confirmRestore": "Version wiederherstellen",
-  "editor.fileHistory.confirmDelete": "Wiederherstellungspunkt löschen",
-  "editor.fileHistory.cancel": "Abbrechen",
-  "editor.fileHistory.dirtyConflict":
-    "Nicht gespeicherte Änderungen verhindern die Wiederherstellung. Speichern oder verwerfen Sie den aktuellen Puffer zuerst.",
-  "editor.fileHistory.restoreFailed": "Die Version wurde nicht wiederhergestellt.",
-  "editor.fileHistory.pinFailed": "Der Anheftungsstatus konnte nicht geändert werden.",
-  "editor.fileHistory.deleteFailed": "Der Wiederherstellungspunkt konnte nicht gelöscht werden.",
-  "editor.fileHistory.sizeDelta": "Größenänderung: {delta}",
-  "editor.fileHistory.entryLabel": "Wiederherstellungspunkt {sequence}, {origin}, {timestamp}",
   "editor.command.runFileTests": "Tests für Datei ausführen",
   "editor.command.runTypecheck": "Typprüfung ausführen",
   "editor.command.runLint": "Lint-Prüfung ausführen",
@@ -194,7 +134,6 @@ export const DE_MESSAGES = {
     "Der Widerruf stoppt oder deaktiviert Arbeitsbereichsskripte, Sprachserver und Agentenausführung für diese Wurzel.",
   "workspaceTrust.dialog.serverConfirmed":
     "Keiko ändert Funktionen erst, nachdem der Server die Entscheidung bestätigt hat.",
-  "workspaceTrust.dialog.stayRestricted": "Eingeschränkt bleiben",
   "workspaceTrust.dialog.cancel": "Abbrechen",
   "workspaceTrust.dialog.trust": "Arbeitsbereich vertrauen",
   "workspaceTrust.dialog.revoke": "Vertrauen widerrufen",
@@ -299,9 +238,8 @@ export const DE_MESSAGES = {
   "shell.error.reload": "Keiko neu laden",
   "shell.error.resetFailed":
     "Die gespeicherten Tastenkürzel konnten nicht zurückgesetzt werden. Lade neu, um es erneut zu versuchen, oder bearbeite die gespeicherten Einstellungen außerhalb von Keiko.",
-  "window.error.title": "Dieses Fenster hat einen Fehler ausgelöst",
-  "window.error.body":
-    "Der Fensterinhalt ist beim Rendern abgestürzt. Andere Fenster sind nicht betroffen - versuche es erneut oder schließe dieses Fenster.",
+  "window.error.title": "Fenster konnte nicht geladen werden.",
+  "window.error.body": "Bitte erneut versuchen.",
   "window.tooSmall.title": "Zu klein für {label}",
   "window.tooSmall.body": "Vergrößere das Fenster oder zoome den Inhalt heraus",
   "window.connectPort.title": "Mit einem anderen Fenster verbinden",
@@ -311,7 +249,7 @@ export const DE_MESSAGES = {
   "window.edge.bottom": "untere",
   "window.edge.left": "linke",
   // Issue: German locale coverage. Window-type display copy lives HERE, not as literals in
-  // WindowsRegistry.ts — the launcher grid, the New Window dialog, the quick-access command list
+  // WindowsRegistry.ts — the launcher grid, the New Window dialog, the workspace command list
   // and the window chrome all resolve it through `localizedWindowTitle`/`localizedWindowDesc`, so
   // one locale switch moves every surface instead of leaving an English name behind.
   "window.type.chat.title": "Chat",
@@ -421,12 +359,18 @@ export const DE_MESSAGES = {
   "chat.history.action.rename": "{title} umbenennen",
   "chat.history.action.delete": "{title} löschen",
   "chat.history.action.deletePermanent": "{title} endgültig löschen",
-  "chat.history.action.deleteConfirm": "Endgültiges Löschen von {title} bestätigen",
   "chat.history.action.save": "{title} speichern",
   "chat.history.action.cancel": "{title} abbrechen",
   "chat.history.action.restore": "{title} wiederherstellen",
   "chat.history.action.renameLabel": "Umbenennen",
   "chat.history.action.restoreLabel": "Wiederherstellen",
+  "chat.history.selection.all": "Alle auswählen",
+  "chat.history.selection.allDisplayed": "Alle angezeigten Chats auswählen",
+  "chat.history.selection.chat": "{title} auswählen",
+  "chat.history.selection.delete": "Auswahl löschen ({count})",
+  "chat.history.selection.deleting": "Wird gelöscht…",
+  "chat.history.selection.permanent":
+    "Löscht den Chat und seine gespeicherten Nachrichten endgültig.",
   "chat.history.tab.active": "Aktiv",
   "chat.history.tab.deleted": "Gelöscht",
   "window.type.resources.title": "Ressourcen",
@@ -510,39 +454,6 @@ export const DE_MESSAGES = {
   "nativeDialog.selectFolder": "Ordner auswählen",
   "nativeDialog.selectRepository": "Repository-Ordner auswählen",
   "nativeDialog.selectSourceFile": "Quelldatei auswählen",
-  "agentLauncher.agent": "Agent",
-  "agentLauncher.agentCount": "{count} Agenten",
-  "agentLauncher.model": "Modell",
-  "agentLauncher.repository": "Repository",
-  "agentLauncher.repositoryPlaceholder": "/absoluter/repository/pfad",
-  "agentLauncher.workflow.unitTest": "Unit Test Agent",
-  "agentLauncher.workflow.bugfix": "Bugfix Agent",
-  "agentLauncher.scope.sourceFile": "Quelldatei",
-  "agentLauncher.scope.bugReport": "Fehlerbericht",
-  "agentLauncher.sourceFilePlaceholder": "src/datei.ts",
-  "agentLauncher.browseSourceFile": "Quelldatei durchsuchen",
-  "agentLauncher.selectRepositoryFirst":
-    "Wähle ein Repository aus, bevor du Quelldateien durchsuchst.",
-  "agentLauncher.observedBehavior": "Beobachtetes Verhalten",
-  "agentLauncher.observedBehaviorPlaceholder": "Beschreibe den beobachteten Fehler.",
-  "agentLauncher.failingOutput": "Fehlerhafte Ausgabe",
-  "agentLauncher.stackTrace": "Stacktrace",
-  "agentLauncher.relatedFiles": "Zugehörige Dateien",
-  "agentLauncher.relatedFilesPlaceholder": "src/datei.ts, src/andere.ts",
-  "agentLauncher.notRegistered": "Das Repository ist nicht registriert.",
-  "agentLauncher.registering": "Wird registriert…",
-  "agentLauncher.register": "Repository registrieren",
-  "agentLauncher.useCurrentFile": "Aktuelle Datei verwenden",
-  "agentLauncher.loading": "Modelle und Projekte werden geladen…",
-  "agentLauncher.start": "{label} starten",
-  "agentLauncher.starting": "Wird gestartet…",
-  "agentLauncher.validation.repositoryRequired": "Ein Repository ist erforderlich.",
-  "agentLauncher.validation.noModel": "Kein kompatibles Modell verfügbar.",
-  "agentLauncher.validation.explainFile": "Der Erklärplan benötigt einen Dateipfad.",
-  "agentLauncher.validation.unitSource": "Der Unit Test Agent benötigt eine Quelldatei.",
-  "agentLauncher.validation.bugDescription":
-    "Der Bugfix Agent benötigt ein beobachtetes Verhalten.",
-  "agentLauncher.fileOutsideRepository": "Wähle eine Datei innerhalb des ausgewählten Repositorys.",
   "command.group.create": "Erstellen",
   "command.group.tools": "Werkzeuge",
   "command.group.layout": "Layout",
@@ -571,6 +482,18 @@ export const DE_MESSAGES = {
     "Das Modell hat sein gesamtes Ausgabebudget verbraucht, bevor eine Antwort entstand – meist durch Reasoning. Lass das Gateway ein größeres max_output_tokens für dieses Modell melden oder wähle ein Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
   "chat.error.gatewayOutputExhausted.remediation":
     "Erhöhe in den Einstellungen die maximalen Ausgabe-Tokens des Modells oder wechsle zu einem Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
+  "chat.error.streamStalled.title": "Verbindung zur Antwort unterbrochen",
+  "chat.error.streamStalled.message":
+    "Die Verbindung zu Keiko hat eine Minute lang nichts mehr geliefert. Die Antwort wurde abgebrochen.",
+  "chat.error.streamStalled.remediation":
+    "Sende die Nachricht erneut. Tritt es wiederholt auf, prüfe Netzwerk, Proxy oder ob Keiko neu gestartet wurde.",
+  "chat.error.contextOverflow.title": "Anfrage größer als das Kontextfenster",
+  "chat.error.contextOverflow.message":
+    "Die Anfrage überschreitet das Kontextfenster des Modells. Meldet der Anbieter sein Fenster, übernimmt Keiko es.",
+  "chat.error.contextOverflow.remediation":
+    "Kürze die Nachricht oder wähle ein Modell mit größerem Kontextfenster.",
+  "chat.error.attachmentOversized.message":
+    "Angehängte Inhalte sind zu groß. Kürze oder entferne sie.",
   "chat.keikoLogo": "Keiko-Logo",
   "chat.keikoResponding": "Keiko antwortet",
   "chat.copy.copiedStatus": "Antwort kopiert",
@@ -656,8 +579,20 @@ export const DE_MESSAGES = {
   "chat.hero.placeholder": "Beschreibe eine Aufgabe, füge einen Link ein oder frag etwas…",
   "chat.workLocally": "Lokal arbeiten",
   "chat.composer.placeholder": "Frag Keiko…",
+  "chat.composer.code": "Codeeingabe",
+  "chat.composer.plainText": "Klartext",
+  "chat.composer.codeLanguage": "Codesprache",
+  "chat.composer.continueText": "Darunter weiterschreiben ↵",
+  "chat.composer.codeLoading": "Syntaxhervorhebung wird geladen…",
+  "chat.composer.codeUnavailable":
+    "Syntaxhervorhebung nicht verfügbar. Du kannst hier weiterschreiben.",
+  "chat.composer.inputLimit":
+    "Die Nachricht ist zu lang. Kürze sie, bevor du weiteren Inhalt einfügst.",
+  "chat.composer.markdownHint": "Markdown · ``` + Umschalt+Enter für Code · Enter zum Senden",
   "chat.composer.loading": "Lädt…",
   "chat.model.menuTitle": "Modelle",
+  "chat.model.search": "Modelle suchen...",
+  "chat.model.searchEmpty": "Keine passenden Modelle.",
   "chat.model.title": "Modell",
   "chat.model.loading": "Modelle werden geladen…",
   "chat.model.noEligible": "Kein dialogfähiges Modell",
@@ -711,6 +646,13 @@ export const DE_MESSAGES = {
   "chat.grounding.unavailable": "{label} (nicht verfügbar)",
   "chat.grounding.catalogLoading": "Verfügbare Knowledge Pods werden aktualisiert…",
   "chat.grounding.catalogEmpty": "Keine bereiten Knowledge Pods oder Pod Sets sind verfügbar.",
+  "chat.grounding.catalogRetry": "Erneut versuchen",
+  "chat.grounding.withState": "{label} ({state})",
+  "chat.grounding.state.draft": "Entwurf",
+  "chat.grounding.state.indexing": "wird indexiert",
+  "chat.grounding.state.stale": "veraltet",
+  "chat.grounding.state.deleting": "wird gelöscht",
+  "chat.grounding.state.error": "fehlgeschlagen",
   "chat.grounding.sourceLimit":
     "Quellenlimit erreicht — dieser Chat hat bereits {connectedCount} von {cap} verbundenen Quellen. Trenne eine Quelle, bevor du eine weitere verbindest.",
   "chat.grounding.readyChatRequired":
@@ -1092,10 +1034,6 @@ export const DE_MESSAGES = {
   "attachment.notice.imageUndeliverable":
     "„{name}“ wird nicht gesendet — das Modell erhält in dieser Unterhaltung keine Bildanhänge. Beschreibe stattdessen in deiner Nachricht, worauf es ankommt.",
   "attachment.drop": "Dateien hier ablegen, um sie anzufügen",
-  "attachment.disabledDifferentModel":
-    "Das ausgewählte Modell unterstützt keine Bild- oder Dokumenteingabe. Wähle ein anderes Modell, um Dateien anzufügen.",
-  "attachment.disabledNoModel":
-    "Das ausgewählte Modell unterstützt keine Bild- oder Dokumenteingabe. Kein konfiguriertes Modell unterstützt aktuell Anhänge.",
   "attachment.attachFile": "Datei anfügen",
   "attachment.notSupported": "Anhänge nicht unterstützt",
   "attachment.docsContext": "Dokumente als Kontext einbezogen",
@@ -1132,7 +1070,6 @@ export const DE_MESSAGES = {
   "scope.pressure.moderate": "Moderat",
   "scope.pressure.high": "Hoch",
   "scope.pressure.exceeded": "Überschritten",
-  "scope.budgetSummary": "Letzter Grounding-Lauf: {tokens} Token, {files} Dateien",
   "scope.connectedFolder": "Verbundener Ordner",
   "scope.folder": "Ordner: {name}",
   "scope.repository": "Repository-Bereich",
@@ -1145,8 +1082,6 @@ export const DE_MESSAGES = {
     "Keiko darf nur den verbundenen Ordner prüfen; Safe-Read-Ausschlüsse und Kontextbudget-Limits gelten vor jeder Antwort.",
   "scope.boundary.file":
     "Keiko darf nur den verbundenen Dateibereich prüfen; Safe-Read-Ausschlüsse und Kontextbudget-Limits gelten vor jeder Antwort.",
-  "scope.disconnect": "{label} vom Chat trennen",
-  "scope.disconnectWithPath": "{label} vom Chat trennen ({path})",
   "scope.disconnectError": "Bereich konnte nicht getrennt werden.",
   "settings.title": "Einstellungen",
   "settings.language.compactLabel": "Sprache",
@@ -1609,17 +1544,6 @@ export const DE_MESSAGES = {
   "workspaceContext.manual.label": "Oder lokalen Pfad eingeben",
   "workspaceContext.manual.placeholder": "/pfad/zum/ordner",
   "workspaceContext.open": "Öffnen",
-  "editor.taskWorkspaceAccess.checking": "Verbindung zum Aufgabenarbeitsbereich wird hergestellt…",
-  "editor.taskWorkspaceAccess.checkingDescription":
-    "Keiko prüft, ob dieser Browser auf den lokalen Arbeitsbereich zugreifen kann.",
-  "editor.taskWorkspaceAccess.unpairedTitle": "Browsersitzung nicht gekoppelt",
-  "editor.taskWorkspaceAccess.unpairedDescription":
-    "Das ausgewählte Projekt ist verfügbar, aber dieser Browser hat keine Launcher-Berechtigung für private Task-Workspace-Inhalte. Starte Keiko über den Launcher neu.",
-  "editor.taskWorkspaceAccess.title":
-    "Der Aufgabenarbeitsbereich ist in diesem Browser nicht verfügbar",
-  "editor.taskWorkspaceAccess.description":
-    "Starte Keiko über das Startprogramm neu. Alternativ kannst du oben im Arbeitskontext einen Ordner oder ein Repository auswählen.",
-  "editor.taskWorkspaceAccess.retry": "Erneut prüfen",
   "relationships.health.toggleAria": "Graph-Health-Ansicht umschalten",
   "relationships.health.hide": "Health ausblenden",
   "relationships.health.show": "Graph Health",
@@ -2102,6 +2026,10 @@ export const DE_MESSAGES = {
   "filesWidget.diff.truncated": "Diff bei {size} abgeschnitten.",
   "filesWidget.diff.regionLabel": "Git-Diff: {path}",
   "filesWidget.diff.empty": "Kein Diff verfügbar.",
+  "filesWidget.navigation.back": "Zum vorherigen Ordner",
+  "filesWidget.navigation.forward": "Zum nächsten Ordner",
+  "filesWidget.navigation.root": "Zum Projektordner zurückkehren",
+  "filesWidget.navigation.currentPath": "Aktueller Ordnerpfad",
   "filesWidget.rootBar.label": "Stammordner",
   "filesWidget.rootBar.openParent": "Übergeordneten Ordner öffnen",
   "filesWidget.rootBar.pathLabel": "Ordnerpfad — beliebigen Ordner auf diesem Computer öffnen",
@@ -2140,10 +2068,6 @@ export const DE_MESSAGES = {
   "filesWidget.multiRoot.remove": "Wurzel entfernen: {name}",
   "filesWidget.multiRoot.error":
     "Arbeitsbereichswurzeln konnten nicht aktualisiert werden. Bitte aktualisieren und erneut versuchen.",
-  "editor.multiRoot.label": "Mehrwurzel-Editor",
-  "editor.multiRoot.switcher": "Editor-Arbeitsbereichswurzeln",
-  "editor.multiRoot.error":
-    "Die fokussierte Arbeitsbereichswurzel konnte nicht aktualisiert werden.",
   "pdfCitationPreviewWindow.anchorQuality.approximate": "In der Nähe der zitierten Textstelle",
   "pdfCitationPreviewWindow.anchorQuality.unavailable": "Verifizierte Seite nicht verfügbar",
   "pdfCitationPreviewWindow.anchorQuality.pageOnly": "Nur verifizierte Seite",

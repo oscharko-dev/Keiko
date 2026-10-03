@@ -1,7 +1,9 @@
 # Agent editor contracts (public API)
 
-The agent editor contract is the public, schema-first API that agents and the browser bridge use to
-inspect and operate the live editor safely. It is defined in
+The shared agent contract is the schema-first API used by its remaining execution consumers.
+The ordinary Editor's agent integration and Chat handoffs were retired by owner decision on
+2026-10-03 (ADR-0061); opening an Editor no longer exposes an executable agent session. Its owned,
+content-free dirty-buffer publication is safety-only. The shared contract is defined in
 [`packages/keiko-contracts/src/editor-agent.ts`](../packages/keiko-contracts/src/editor-agent.ts),
 re-exported from the `@oscharko-dev/keiko-contracts` barrel, and consumed by the BFF
 ([`agentRoutes.ts`](../packages/keiko-server/src/editor/agentRoutes.ts)) and the browser bridge. The
@@ -18,6 +20,10 @@ server queue, browser bridge, patch application, or orchestration UI is defined 
 `EDITOR_AGENT_SCHEMA_VERSION` is the literal `"1"`. Every shape carries it; consumers pin against the
 literal to detect skew. A future incompatible change is a new literal member, never a mutation of the
 `"1"` shapes. New fields and new conflict codes are additive and do not bump the version.
+
+The owner-requested retirement removes the ordinary Chat-only `kind: "bridge-action"` wrapper
+and its local authority producer. Requests using that retired wrapper are rejected. The shared
+governed action and result shapes used by independent execution consumers remain unchanged.
 
 ## Sessions
 
@@ -41,6 +47,12 @@ A read request (`EditorAgentSnapshotRequest`) asks the bridge for the current se
   and `textTruncated` entirely.
 
 The bridge also posts a `kind: "snapshot"` request to register or refresh a full snapshot.
+
+The ordinary Editor instead publishes `kind: "buffer-snapshot"` with open/dirty file state only.
+`isEditorBufferSafetySnapshot` rejects text and agent-context fields. Registration returns a
+separate `bufferSnapshotCapability`; it owns refresh and clean `kind: "buffer-release"` only and
+cannot authenticate a live bridge or authorize actions. This passive state remains visible to
+the existing dirty-buffer protection, including after disconnection.
 
 ## Actions
 

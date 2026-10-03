@@ -9,7 +9,13 @@ import { describe, expect, it } from "vitest";
 import { resolveStepNetwork, runVerification, type VerificationDeps } from "./orchestrator.js";
 import type { VerificationPlan, VerificationResourceLimits, VerificationStep } from "./types.js";
 import { DEFAULT_VERIFICATION_LIMITS } from "./types.js";
-import { fakeMonitor, makeWorkspace, recordingSpawn, scriptChildClose } from "./_support.js";
+import {
+  verificationSandboxDeps,
+  fakeMonitor,
+  makeWorkspace,
+  recordingSpawn,
+  scriptChildClose,
+} from "./_support.js";
 
 const NONE_LIMITS: VerificationResourceLimits = { ...DEFAULT_VERIFICATION_LIMITS, network: "none" };
 const INHERIT_LIMITS: VerificationResourceLimits = {
@@ -46,7 +52,14 @@ function depsWith(
   spawnFn: VerificationDeps["spawn"],
   extra: Partial<VerificationDeps> = {},
 ): VerificationDeps {
-  return { workspace: ws.info, spawn: spawnFn, monitor: fakeMonitor(), now: () => 1_000, ...extra };
+  return {
+    ...verificationSandboxDeps(),
+    workspace: ws.info,
+    spawn: spawnFn,
+    monitor: fakeMonitor(),
+    now: () => 1_000,
+    ...extra,
+  };
 }
 
 describe("resolveStepNetwork — pure decision", () => {
@@ -128,7 +141,7 @@ describe("runVerification — network enforcement modes", () => {
     expect(network?.enforced).toBe(true);
   });
 
-  it("enforce-or-degrade with no backend runs under inherit (honest enforced:false)", async () => {
+  it("network degradation still denies when no backend can confine filesystem writes", async () => {
     const ws = makeWorkspace();
     const rec = recordingSpawn();
     scriptChildClose(rec.child, { stdout: "ok\n", exitCode: 0 });
@@ -137,10 +150,11 @@ describe("runVerification — network enforcement modes", () => {
       depsWith(ws, rec.fn, {
         networkEnforcement: "enforce-or-degrade",
         enforcedNetworkAvailable: false,
+        sandboxAvailability: NO_BACKENDS,
       }),
     );
-    expect(report.results[0]?.status).toBe("passed");
-    expect(rec.calls()).toHaveLength(1);
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
     const network = report.results[0]?.appliedLimits.find((l) => l.dimension === "network");
     expect(network?.enforced).toBe(false);
   });
@@ -161,7 +175,7 @@ describe("runVerification — network enforcement modes", () => {
     expect(report.overallStatus).toBe("failed");
   });
 
-  it("a non-none step is never failed-closed even in fail-closed mode", async () => {
+  it("a non-none step still runs under a compatible filesystem wrapper", async () => {
     const ws = makeWorkspace();
     const rec = recordingSpawn();
     scriptChildClose(rec.child, { stdout: "ok\n", exitCode: 0 });

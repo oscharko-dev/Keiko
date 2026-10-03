@@ -30,25 +30,33 @@ import { expect } from "vitest";
 import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogOperationSchema,
+  supportIncidentPrivateProjection,
+  type SupportIncidentRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 // The default recorders: the source graph the scenario suites write and reset through
 // (`resetServerLogger`). See `ActivityLogScenarioRun.incidents`.
 import {
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
+  supportIncidentSegmentFiles,
+  type SupportIncidentFailureEvidence,
 } from "@oscharko-dev/keiko-activity-log";
 import {
   analyzeLogText,
   type AnalyzeAllResult,
   type OpCluster,
   DEFAULT_SUPPORT_QUERY_LIMITS,
+  analyzeSupportReport,
+  buildSupportReport,
+  serializeSupportReport,
   type SupportQueryResult,
 } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   executeSupportQuery,
   resolveSupportSelection,
 } from "../../packages/keiko-cli/src/support-query-cli.js";
-import { readPersistedActivityLog } from "./activity-log-proof.js";
+import { persistedActivityLogLines, readPersistedActivityLog } from "./activity-log-proof.js";
+import { resolveSupportIncident } from "../../packages/keiko-cli/src/support-incident.js";
 
 export interface ActivityLogScenarioRun {
   /** The temporary state directory the production writer persisted the scenario into. */
@@ -172,6 +180,28 @@ async function queryEvents(
   }).result;
 }
 
+// Production records a registered-failure incident from the failing event itself, so the harness
+// takes the error kind and frames of the persisted failing line, never the cluster's (an
+// unvalidated tool-catalog line's kind is withheld from its cluster).
+function persistedFailureEvidence(stateDir: string, op: string): SupportIncidentFailureEvidence {
+  const [line] = persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
+  if (line === undefined) return { op };
+  const record = JSON.parse(line) as Record<string, unknown>;
+  return {
+    op,
+    ...(typeof record.errorKind === "string" ? { errorKind: record.errorKind } : {}),
+    ...(typeof record.correlationId === "string" ? { correlationId: record.correlationId } : {}),
+    ...(typeof record.parentCorrelationId === "string"
+      ? { parentCorrelationId: record.parentCorrelationId }
+      : {}),
+    ...(Array.isArray(record.frames) ? { frames: record.frames as readonly unknown[] } : {}),
+    clientKind: record.clientKind,
+    renderFailure: record.renderFailure,
+    moduleLoadFailure: record.moduleLoadFailure,
+    stage: record.stage,
+  };
+}
+
 async function proveIncidentWindowCoversClosure(
   scenario: string,
   stateDir: string,
@@ -183,11 +213,10 @@ async function proveIncidentWindowCoversClosure(
   const creation =
     failure === undefined
       ? incidents.recordUserReportedIncident(stateDir, {})
-      : incidents.recordRegisteredFailureIncident(stateDir, {
-          op: failure.op,
-          errorKind: failure.errorKind ?? undefined,
-          correlationId,
-        });
+      : incidents.recordRegisteredFailureIncident(
+          stateDir,
+          persistedFailureEvidence(stateDir, failure.op),
+        );
   expect(creation, `scenario ${scenario}: records an incident candidate for its failure`).not.toBe(
     undefined,
   );
@@ -204,6 +233,8 @@ async function proveIncidentWindowCoversClosure(
     incidentResult.diagnosticSufficiency.reasons,
     `scenario ${scenario}: the incident's own selection is retained`,
   ).not.toContain("evidence-not-retained");
+  if (creation.record === undefined) expect.fail(`scenario ${scenario}: missing incident record`);
+  proveCanonicalScenarioReport(scenario, stateDir, creation.record, incidentResult);
 
   if (correlationId === undefined) {
     // A bare diagnostic op with no correlation of its own: there is no independent closure to
@@ -219,6 +250,49 @@ async function proveIncidentWindowCoversClosure(
     missing,
     `scenario ${scenario}: the pinned window contains every line of the failure's own registered causal closure`,
   ).toEqual([]);
+}
+
+// Calibrate #3534 against every real #3532 fault-injection trace, through the production incident
+// projection and selective query. Compaction must retain every selected event, including losses.
+function proveCanonicalScenarioReport(
+  scenario: string,
+  stateDir: string,
+  record: SupportIncidentRecord,
+  query: SupportQueryResult,
+): void {
+  const incident = supportIncidentPrivateProjection(
+    resolveSupportIncident(record, supportIncidentSegmentFiles(stateDir, record), stateDir),
+  );
+  const report = buildSupportReport(incident, query);
+  const text = serializeSupportReport(report);
+  const analyzed = analyzeSupportReport(text);
+  expect(report.evidence.recordCount, `scenario ${scenario}: lossless report closure`).toBe(
+    query.events.length,
+  );
+  expect(Buffer.byteLength(text), `scenario ${scenario}: calibrated report size`).toBeLessThan(
+    128 * 1024,
+  );
+  expect(analyzed.analysis.evidence.classification).toBe("supported");
+  expect(analyzed.selection.reasons).toEqual(report.selection.reasons);
+  // A registered failure must reconstruct completely. A scenario whose failure class registers no
+  // failure operation is reported by the user instead (#3533): its evidence stays complete, and its
+  // one honest gap is the missing registered failure, never any other reason.
+  const expected =
+    incident.trigger === "registered-failure"
+      ? { status: "complete", reasons: [] }
+      : { status: "insufficient", reasons: ["no-registered-failure"] };
+  expect(
+    [
+      { status: incident.sufficiencyStatus, reasons: incident.sufficiencyReasons },
+      query.diagnosticSufficiency,
+      analyzed.selection,
+    ].map(({ status, reasons }) => ({ status, reasons })),
+    `scenario ${scenario}: report reconstruction`,
+  ).toEqual([expected, expected, expected]);
+  const incompleteClasses = analyzed.analysis.sufficiency.classes.filter(
+    (entry) => entry.status !== "complete",
+  );
+  expect(incompleteClasses, `scenario ${scenario}: report evidence classes`).toEqual([]);
 }
 
 /**

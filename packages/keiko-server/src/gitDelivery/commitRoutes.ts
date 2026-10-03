@@ -50,6 +50,7 @@ import type {
   GitDeliveryPolicyDecision,
   GitDeliveryResolvedInputs,
 } from "@oscharko-dev/keiko-contracts";
+import { effectiveContextWindow } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { analyzeGitCommitIntent } from "@oscharko-dev/keiko-contracts/runtime/git-commit-intent";
 import {
   evaluateGitDeliveryEffectivePolicy,
@@ -826,8 +827,10 @@ function resolveCommitDraftModel(deps: UiHandlerDeps): ResolvedCommitDraftModel 
   };
 }
 
+// A quarter of the window the draft is planned with: an assumed window's stored value is the setup
+// placeholder, which capped every draft at 1,024 output tokens (the #3591 empty-answer class).
 function commitDraftWindowOutputLimit(capability: ModelCapability): number {
-  return Math.max(1, Math.floor((capability.contextWindow || 16_000) / 4));
+  return Math.max(1, Math.floor(effectiveContextWindow(capability) / 4));
 }
 
 // #3591 review: the raised draft budget must not exceed what the model declares. The spend-budget

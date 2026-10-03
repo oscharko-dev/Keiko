@@ -28,6 +28,7 @@ import type {
   ChatMessage,
   GroundedRerankerDiagnostics,
   GroundedAnswer,
+  GroundedPromptContextWire,
   GroundedUncertainty,
   HtmlManualCitationMetadata,
   HtmlManualCitationOpenEligibility,
@@ -36,6 +37,7 @@ import type {
   LocalKnowledgeGroundedAnswer,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
+  ContextProfile,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgePodRetrievalActivity,
@@ -45,7 +47,13 @@ import type {
   KnowledgePodRetrievalActivityState,
   KnowledgeSourceId,
   RetrievalReference,
+  UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts";
+import { citationMarkerIndices } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import {
+  composeOwnAssessment,
+  OWN_ASSESSMENT_PROMPT_RULE,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { classifyDocumentationTarget } from "@oscharko-dev/keiko-contracts/runtime/documentation-browser";
 import {
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
@@ -53,6 +61,10 @@ import {
   isKnowledgePodRetrievalActivitySafeText,
   validateKnowledgePodRetrievalActivity,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
+import {
+  NO_EVIDENCE_ANSWER_MAX_CHARS,
+  isNoEvidenceAnswerText,
+} from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import {
   CancelledError,
@@ -61,6 +73,7 @@ import {
   findConfiguredCapability,
   requestOpenAIEmbedding,
   type GatewayConfig,
+  type NormalizedResponse,
   type OpenAIEmbeddingAdapter,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
@@ -68,7 +81,16 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
+import {
+  currentContextProfileForModel,
+  currentGatewayConfig,
+  currentGroundingLimits,
+  currentOwnAssessmentPolicy,
+  currentRedactionSecrets,
+} from "./deps.js";
+import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
+import { fitKnowledgePrompt } from "./knowledge-prompt-window.js";
+import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -86,12 +108,20 @@ import {
 } from "./grounded-rerank-facade.js";
 import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 import {
-  missingCitationMarker,
+  entailmentUnavailableMarker,
+  missingCitationMarkerFor,
   reconcileNumericCitations,
+  segmentNumericCitedClaims,
   unsupportedNumericCitationMarker,
   type NumericEntailmentEvidence,
 } from "./grounded-faithfulness.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
+import {
+  logAnswerAssessment,
+  logCitationReconciliation,
+  logCitationSupport,
+  type CitationSupportCaveat,
+} from "./grounded-citation-log.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import {
   assertConversationReadinessAdmission,
@@ -135,6 +165,7 @@ interface CapsuleUsageSummary {
 interface AskInput {
   readonly chatId: string;
   readonly content: string;
+  readonly retrievalContent?: string | undefined;
   readonly answerContent?: string | undefined;
   readonly answerOnlyContextAvailable?: boolean | undefined;
   readonly modelId: string | undefined;
@@ -631,10 +662,17 @@ function renderConnectorEvidence(
   };
 }
 
+// The count of the references this prompt actually shows: a window-fitted prompt carries fewer than
+// retrieval found, and telling the model the retrieved total invites markers beyond the ones sent.
+function localKnowledgeRepairInstruction(assessmentAllowed: boolean): string {
+  const scope = assessmentAllowed ? "outside the <assessment> block " : "";
+  return `The previous answer was rejected because it did not use valid inline [n] citations. Rewrite the answer now. Every factual sentence ${scope}must include at least one matching [n] marker from the supplied citations. Do not invent citations.`;
+}
+
 function localKnowledgePromptSummary(input: AnswerGeneratorInput): string {
   return (
     `Indexed knowledge scope: ${String(input.pack.scope.capsuleCount)} capsule(s), ` +
-    `${String(input.pack.counts.totalReferences)} retrieved reference(s).`
+    `${String(input.references.length)} retrieved reference(s).`
   );
 }
 
@@ -649,17 +687,15 @@ function buildLocalKnowledgeMessages(
   readonly numericEvidence: readonly NumericEntailmentEvidence[];
 } {
   const rendered = buildReferenceLines(input, store, redactExcerpt, limits);
+  const assessmentAllowed = input.query.ownAssessment === "allowed";
   const repairInstruction =
-    input.citationRepair === true
-      ? [
-          "",
-          "The previous answer was rejected because it did not use valid inline [n] citations. Rewrite the answer now. Every factual sentence must include at least one matching [n] marker from the supplied citations. Do not invent citations.",
-        ]
-      : [];
+    input.citationRepair === true ? ["", localKnowledgeRepairInstruction(assessmentAllowed)] : [];
   const messages = [
     {
       role: "system",
-      content: LOCAL_KNOWLEDGE_SYSTEM_PROMPT,
+      content: assessmentAllowed
+        ? `${LOCAL_KNOWLEDGE_SYSTEM_PROMPT} ${OWN_ASSESSMENT_PROMPT_RULE}`
+        : LOCAL_KNOWLEDGE_SYSTEM_PROMPT,
     },
     {
       role: "user",
@@ -677,8 +713,21 @@ function buildLocalKnowledgeMessages(
   return { messages, numericEvidence: rendered.numericEvidence };
 }
 
+interface AnswerGeneratorContext {
+  readonly deps: UiHandlerDeps;
+  readonly correlationId: string | undefined;
+}
+
+interface SentKnowledgePrompt {
+  readonly prompt: SentGroundedPrompt;
+  readonly profile: ContextProfile | undefined;
+}
+
 class StoreBackedAnswerGenerator implements AnswerGenerator {
   private renderedNumericEvidence: readonly NumericEntailmentEvidence[] = [];
+  private sentReferences: readonly RetrievalReference[] = [];
+  private sent: SentKnowledgePrompt | undefined;
+  private measuredPromptTokens = 0;
 
   public constructor(
     private readonly model: ModelPort,
@@ -687,29 +736,19 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     private readonly auditSink: ReturnType<typeof createSqliteAuditSink>,
     private readonly redactExcerpt: (value: string) => string,
     private readonly limits: ReturnType<typeof currentGroundingLimits>,
-    private readonly correlationId: string | undefined,
+    private readonly context: AnswerGeneratorContext,
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
-    const rendered = buildLocalKnowledgeMessages(
-      input.query.answerQuestion ?? input.query.text,
-      input,
-      this.store,
-      this.redactExcerpt,
-      this.limits,
-    );
-    this.renderedNumericEvidence = rendered.numericEvidence;
-    const response = await this.model.call(
-      {
-        modelId: this.modelId,
-        messages: rendered.messages,
-        stream: false,
-        logContext: { correlationId: this.correlationId },
-      },
-      input.signal ?? new AbortController().signal,
+    // Re-planned per attempt: when the provider's overflow answer taught Keiko the model's real
+    // window, the retry fits the references into it (gateway-context-window.ts).
+    const response = await withAdoptedContextWindowRetry(
+      this.context.deps,
+      { modelId: this.modelId, surface: "grounded", correlationId: this.context.correlationId },
+      () => this.callWithinWindow(input),
     );
     const occurredAt = Date.now();
-    for (const usage of summariseReferenceUsage(input.references)) {
+    for (const usage of summariseReferenceUsage(this.sentReferences)) {
       if (!capsuleAllowsEvidencePersistence(getCapsule(this.store, usage.capsuleId))) continue;
       this.auditSink.emit({
         kind: "model-context-sent",
@@ -717,11 +756,12 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
         sourceIds: usage.sourceIds,
         chunkIds: usage.chunkIds,
         referenceCount: usage.referenceCount,
-        citationCount: input.references.length,
+        citationCount: this.sentReferences.length,
         modelId: this.modelId,
         occurredAt,
       });
     }
+    this.measuredPromptTokens = response.usage.promptTokens;
     const content = response.content.trim();
     assertUsableAssistantContent(content, this.modelId);
     return content;
@@ -729,6 +769,56 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
 
   public numericEntailmentEvidence(): readonly NumericEntailmentEvidence[] {
     return this.renderedNumericEvidence;
+  }
+
+  /** The references the last prompt carried; a window-fitted prompt may carry fewer. */
+  public promptReferences(): readonly RetrievalReference[] {
+    return this.sentReferences;
+  }
+
+  /** Counts of the last request this generator sent; undefined before the first call. */
+  public promptContext(): GroundedPromptContextWire | undefined {
+    const { sent } = this;
+    if (sent === undefined) return undefined;
+    return sentPromptContext(sent.prompt, this.measuredPromptTokens, sent.profile);
+  }
+
+  private callWithinWindow(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
+    const available = Math.min(input.references.length, this.limits.maxPromptReferences);
+    const render = (count: number): ReturnType<typeof buildLocalKnowledgeMessages> =>
+      buildLocalKnowledgeMessages(
+        input.query.answerQuestion ?? input.query.text,
+        { ...input, references: input.references.slice(0, count) },
+        this.store,
+        this.redactExcerpt,
+        this.limits,
+      );
+    const profile = currentContextProfileForModel(this.context.deps, this.modelId);
+    const fitted = fitKnowledgePrompt(available, render, profile, {
+      correlationId: this.context.correlationId,
+      diagnostics: this.context.deps.diagnostics,
+    });
+    this.renderedNumericEvidence = fitted.prompt.numericEvidence;
+    this.sentReferences = input.references.slice(0, fitted.referenceCount);
+    this.sent = {
+      prompt: {
+        messages: fitted.prompt.messages,
+        withoutSources: render(0).messages,
+        sentReferenceCount: fitted.referenceCount,
+        availableReferenceCount: available,
+      },
+      profile,
+    };
+    this.measuredPromptTokens = 0;
+    return this.model.call(
+      {
+        modelId: this.modelId,
+        messages: fitted.prompt.messages,
+        stream: false,
+        logContext: { correlationId: this.context.correlationId },
+      },
+      input.signal ?? new AbortController().signal,
+    );
   }
 }
 
@@ -986,11 +1076,12 @@ function localKnowledgeQuery(
 ): Parameters<typeof runGroundedAnswer>[1] {
   return {
     conversationId: chat.id,
-    text: input.content,
+    text: input.retrievalContent ?? input.content,
     ...(input.answerContent === undefined
       ? {}
       : { answerQuestion: redactText(deps, input.answerContent) }),
     ...(input.answerOnlyContextAvailable === true ? { answerOnlyContextAvailable: true } : {}),
+    ownAssessment: currentOwnAssessmentPolicy(deps),
     topK: LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES,
     ...(chat.localKnowledgeScope?.kind === "capsule"
       ? { capsuleId: chat.localKnowledgeScope.capsuleId }
@@ -1001,14 +1092,6 @@ function localKnowledgeQuery(
   };
 }
 
-const REFUSAL_PATTERNS: readonly RegExp[] = [
-  /\bno\s+evidence\s+(?:found|available|in|within)\b/iu,
-  /\binsufficient\s+evidence\b/iu,
-  /\bnot\s+enough\s+evidence\b/iu,
-  /\bkeine\s+evidenz\b/iu,
-  /\bkeine\s+(?:belege|hinweise)\b/iu,
-  /\bnicht\s+genug\s+(?:evidenz|belege|hinweise)\b/iu,
-];
 const GERMAN_QUERY_PATTERNS: readonly RegExp[] = [
   /[äöüß]/iu,
   /\b(?:bitte|was|wie|warum|welche|welcher|welches|wieviel|wieso)\b/iu,
@@ -1022,13 +1105,15 @@ function shouldUseGermanForSystemAnswer(question: string | undefined): boolean {
 
 function isNoEvidenceAnswer(answer: string): boolean {
   const compact = answer.replace(METADATA_WHITESPACE_PATTERN, " ").trim();
-  if (compact.length === 0 || compact.length > 240) return false;
+  if (compact.length === 0 || compact.length > NO_EVIDENCE_ANSWER_MAX_CHARS) return false;
   const lower = compact.toLowerCase();
   if (lower === LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER.toLowerCase()) return true;
   if (LEGACY_LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWERS.some((legacy) => lower === legacy.toLowerCase())) {
     return true;
   }
-  return REFUSAL_PATTERNS.some((pattern) => pattern.test(compact));
+  // One refusal detector for every grounded path (keiko-contracts): English and German, and never
+  // a text that carries a citation marker.
+  return isNoEvidenceAnswerText(compact);
 }
 
 function localKnowledgeSpecificNoEvidenceAnswer(
@@ -1090,7 +1175,9 @@ export function enforcedNoEvidenceReason(
   if (result.answerOnlyContextUsed === true) return undefined;
   if (result.noEvidence) return result.reason ?? "no-evidence";
   const answer = result.answer.trim();
-  if (answer.length === 0) return "empty-answer";
+  // Keiko's assessment alone backs nothing with the sources: no evidence, not an empty answer.
+  if (answer.length === 0)
+    return result.ownAssessment === undefined ? "empty-answer" : "no-evidence";
   return isNoEvidenceAnswer(answer) ? "no-evidence" : undefined;
 }
 
@@ -1104,15 +1191,17 @@ export function buildLocalKnowledgeCitations(
   if (noEvidenceReason !== undefined) return [];
   // When the model emitted [n] markers, honour exactly what it cited.
   if (result.citations.length > 0) {
-    return result.citations.map((entry) =>
-      projectLocalKnowledgeCitation(
+    return result.citations.map((entry) => ({
+      ...projectLocalKnowledgeCitation(
         entry.reference,
         entry.marker,
         sourceLookup,
         redactLabel,
         store,
       ),
-    );
+      // The attacher's weak-overlap signal reaches the reader (PR #3678 review).
+      ...(entry.lexicalSupport === "weak" ? { lexicalSupport: "weak" as const } : {}),
+    }));
   }
   return [];
 }
@@ -1149,7 +1238,7 @@ function citationReconciliationUncertainty(
   const unsupported = unsupportedNumericCitationMarker(numeric.unsupportedMarkers, nowMs);
   const missing =
     unsupported === undefined && result.citations.length === 0
-      ? missingCitationMarker(nowMs)
+      ? missingCitationMarkerFor(result.answer, nowMs)
       : undefined;
   const markers = [
     ...(unsupported === undefined ? [] : [unsupported]),
@@ -1199,7 +1288,8 @@ function buildLocalKnowledgeContextPack(
     sourceCount: result.pack.scope.sourceCount,
     citationCount: citations.length,
     referenceBudget: limits.maxPromptReferences,
-    referencesUsed: result.references.length,
+    // The references the answer prompt carried, not the retrieved total (a fitted prompt sends fewer).
+    referencesUsed: result.promptReferenceCount ?? result.references.length,
     indexLifecycle: buildLocalKnowledgeIndexLifecycle(selected.capsules),
     ...(result.reranker === undefined ? {} : { reranker: result.reranker }),
   };
@@ -1517,7 +1607,7 @@ export function retrievalActivityResultFromScoped(
   };
 }
 
-// A reranker that was never configured is the default, fully-supported install state — it must not
+// A reranker that was never configured is a fully-supported install state — it must not
 // surface as a degraded Knowledge Pod activity row on ANY grounding path (single-scope or hybrid).
 // Genuine failures keep a non-"disabled" status (unavailable / invalid-response) and still degrade.
 // Applied uniformly by both retrieval-activity projections above.
@@ -2181,7 +2271,17 @@ function attachGroundedAnswerWithPreviewCitations(
   deps.store.attachGroundedAnswer(assistantMessageId, answer, previewCitations);
 }
 
+// An answer with Keiko's own assessment keeps the model's words: its source-backed part (a short
+// "the documents do not say" included) and then the canonical assessment block. The generic notice
+// would only repeat what the answer already says; without retrieved evidence the block stands
+// alone. The source-backed part stays held to every citation rule; the UI labels the block.
 function scopedAssistantContent(result: ScopedGroundedResult, input: AskInput): string {
+  if (result.ownAssessment !== undefined) {
+    return composeOwnAssessment(
+      result.noEvidence ? "" : result.answer.trim(),
+      result.ownAssessment,
+    );
+  }
   const noEvidenceReason = enforcedNoEvidenceReason(result);
   return noEvidenceReason === undefined
     ? result.answer.trim()
@@ -2210,13 +2310,13 @@ async function appendLocalKnowledgeNumericEntailment(
   selected: SelectedLocalKnowledgeScope,
   context: ScopedGroundedAnswerContext & { readonly modelId: string },
   deps: UiHandlerDeps,
-): Promise<GroundedAnswer> {
+): Promise<SettledCitationSupport | undefined> {
   if (
     result.noEvidence ||
     result.answerOnlyContextUsed === true ||
     result.references.length === 0
   ) {
-    return answer;
+    return undefined;
   }
   const stage = createEntailmentStage(
     deps,
@@ -2228,18 +2328,149 @@ async function appendLocalKnowledgeNumericEntailment(
     },
     context.signal,
   );
-  if (stage === undefined) return answer;
+  if (stage === undefined) return settleWithoutJudge(answer, result);
   const markers = await stage.evaluateNumeric(result.answer, numericEvidence, Date.now());
   if (context.signal.aborted) {
     throw new CancelledError("grounded request cancelled");
   }
-  if (markers.length === 0) return answer;
+  const judged =
+    markers.length === 0
+      ? answer
+      : {
+          ...answer,
+          uncertainty: [
+            ...answer.uncertainty,
+            ...markers.map((marker) => ({
+              kind: marker.kind,
+              claim: redactText(deps, marker.claim),
+            })),
+          ],
+        };
+  return settleAfterJudge(judged, result, markers);
+}
+
+// The answer with its settled support caveat and the reason for it, recorded on
+// search.citations.support-settled once the caveat is decided (PR #3678 review).
+interface SettledCitationSupport {
+  readonly answer: GroundedAnswer;
+  readonly caveat: CitationSupportCaveat;
+}
+
+function settleWithoutJudge(
+  answer: GroundedAnswer,
+  result: ScopedGroundedResult,
+): SettledCitationSupport {
+  const caveated = withWeakCitationCaveat(answer, result);
+  return { answer: caveated, caveat: caveated === answer ? "none" : "no-judge" };
+}
+
+// A stage that ran is no verdict on a weak citation whose claim it could not read: the claim
+// stripper leaves no text for `[The repository enforces MFA] [1]`, so no judge call covers [1]
+// (PR #3678 review, P1). Such a citation keeps the fail-closed caveat.
+function settleAfterJudge(
+  judged: GroundedAnswer,
+  result: ScopedGroundedResult,
+  markers: readonly UncertaintyMarker[],
+): SettledCitationSupport {
+  if (markers.some((marker) => marker.kind === "entailment-unavailable")) {
+    return { answer: judged, caveat: "judge-undecided" };
+  }
+  if (weakCitationsJudged(result)) return { answer: judged, caveat: "none" };
+  const caveated = withWeakCitationCaveat(judged, result);
+  return { answer: caveated, caveat: caveated === judged ? "none" : "unjudged-citation" };
+}
+
+// Judges the answer's numeric citations and records the settled caveat once it is decided.
+async function settleScopedCitationSupport(
+  answer: GroundedAnswer,
+  result: ScopedGroundedResult,
+  numericEvidence: readonly NumericEntailmentEvidence[],
+  selected: SelectedLocalKnowledgeScope,
+  context: ScopedGroundedAnswerContext & { readonly modelId: string },
+  deps: UiHandlerDeps,
+): Promise<GroundedAnswer> {
+  const settled = await appendLocalKnowledgeNumericEntailment(
+    answer,
+    result,
+    numericEvidence,
+    selected,
+    context,
+    deps,
+  );
+  if (settled === undefined) return answer;
+  logScopedCitationSupport(result, settled.caveat, context.correlationId);
+  return settled.answer;
+}
+
+// The settled caveat of a Knowledge Pod answer, logged after the entailment decision.
+function logScopedCitationSupport(
+  result: ScopedGroundedResult,
+  caveat: CitationSupportCaveat,
+  correlationId: string | undefined,
+): void {
+  logCitationSupport(
+    {
+      supportCaveat: caveat,
+      weakCitationCount: result.weakCitationCount ?? 0,
+      hiddenProseClaimCount: segmentNumericCitedClaims(result.answer).filter(
+        (claim) => claim.hidesProse === true,
+      ).length,
+    },
+    correlationId,
+  );
+}
+
+function hidesCitedProse(result: ScopedGroundedResult): boolean {
+  return segmentNumericCitedClaims(result.answer).some((claim) => claim.hidesProse === true);
+}
+
+function countByIndex(indices: readonly number[]): ReadonlyMap<number, number> {
+  const counts = new Map<number, number>();
+  for (const index of indices) counts.set(index, (counts.get(index) ?? 0) + 1);
+  return counts;
+}
+
+// Every occurrence of a weakly supported marker belongs to a claim the numeric judge actually reads,
+// per occurrence, not per index: in `The API uses TLS [1]. [The repository enforces MFA] [1]` the
+// judge reads only the TLS claim, so the second [1] is unjudged although the index appears in a
+// judged claim (PR #3678 review, P1). An index is covered only when the claims the stage judges
+// (segmentNumericCitedClaims) name it at least as often as the answer uses it; anything less keeps
+// the caveat, failing closed. A claim whose span carried bracketed prose the stripper removed covers
+// nothing: in `The API uses TLS [The repository enforces MFA] [1]` the judge reads only
+// `The API uses TLS` (PR #3678 review, P1).
+function weakCitationsJudged(result: ScopedGroundedResult): boolean {
+  const weak = new Set(
+    result.citations
+      .filter((citation) => citation.lexicalSupport === "weak")
+      .map((citation) => citation.index),
+  );
+  if (weak.size === 0) return true;
+  const judged = countByIndex(
+    segmentNumericCitedClaims(result.answer)
+      .filter((claim) => claim.hidesProse !== true)
+      .flatMap((claim) => claim.markers),
+  );
+  const used = countByIndex(citationMarkerIndices(result.answer));
+  return [...weak].every((index) => (judged.get(index) ?? 0) >= (used.get(index) ?? 0));
+}
+
+// Weak lexical overlap is not a verdict. An in-range marker stays attached so the reader can open
+// its source. When no entailment judge read the claim, nothing confirmed that the source supports
+// it, so the answer carries the fail-closed "support could not be verified" caveat instead of
+// presenting the citation as confirmed support (PR #3678 review; the unrelated-evidence pins in
+// citation-attacher.test.ts). When the judge read every weak citation's claim, its verdict (or its
+// own unavailable marker) replaces the caveat. A cited claim whose bracketed prose the claim
+// stripper hides is unverified whatever its overlap, judge or not (PR #3678 review, P1).
+function withWeakCitationCaveat(
+  answer: GroundedAnswer,
+  result: ScopedGroundedResult,
+): GroundedAnswer {
+  if ((result.weakCitationCount ?? 0) === 0 && !hidesCitedProse(result)) return answer;
+  if (answer.uncertainty.some((marker) => marker.kind === "entailment-unavailable")) return answer;
+  const caveat = entailmentUnavailableMarker(Date.now());
   return {
     ...answer,
-    uncertainty: [
-      ...answer.uncertainty,
-      ...markers.map((marker) => ({ kind: marker.kind, claim: redactText(deps, marker.claim) })),
-    ],
+    uncertainty: [...answer.uncertainty, { kind: caveat.kind, claim: caveat.claim }],
   };
 }
 
@@ -2269,6 +2500,50 @@ function buildPersistedScopedAnswer(input: {
   });
 }
 
+// The answer's body-free evidence: how its markers reconciled, and whether it carried Keiko's own
+// assessment under the operator's policy (ADR-0144).
+function logScopedAnswerEvidence(
+  result: ScopedGroundedResult,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): void {
+  logScopedCitationReconciliation(result, correlationId);
+  logAnswerAssessment(
+    {
+      policy: currentOwnAssessmentPolicy(deps),
+      sourceBacked: result.noEvidence ? "" : result.answer,
+      assessment: result.ownAssessment,
+      neutralized: result.ownAssessmentNeutralized === true,
+    },
+    correlationId,
+  );
+}
+
+// Body-free counts of how this answer's inline markers reconciled against the retrieved references
+// (attached, grouped, dangling, weak-overlap), so a defect of that class can be rebuilt from the log.
+function logScopedCitationReconciliation(
+  result: ScopedGroundedResult,
+  correlationId: string | undefined,
+): void {
+  if (
+    result.noEvidence ||
+    result.answerOnlyContextUsed === true ||
+    result.references.length === 0
+  ) {
+    return;
+  }
+  logCitationReconciliation(
+    {
+      answer: result.answer,
+      referenceCount: result.promptReferenceCount ?? result.references.length,
+      attachedIndices: result.citations.map((entry) => entry.index),
+      weakOverlapCount: result.weakCitationCount ?? 0,
+      refusal: enforcedNoEvidenceReason(result) !== undefined,
+    },
+    correlationId,
+  );
+}
+
 interface PersistScopedGroundedAnswerInput {
   readonly chat: Chat;
   readonly input: AskInput;
@@ -2279,6 +2554,7 @@ interface PersistScopedGroundedAnswerInput {
   readonly startedAt: number;
   readonly context: ScopedGroundedAnswerContext & { readonly modelId: string };
   readonly numericEvidence: readonly NumericEntailmentEvidence[];
+  readonly promptContext?: GroundedPromptContextWire | undefined;
 }
 
 async function persistScopedGroundedAnswer(
@@ -2293,6 +2569,7 @@ async function persistScopedGroundedAnswer(
   if (result.references.length > 0)
     emitAnswerContextAudit(auditSink, env.store, result, occurredAt);
   const assistantContent = scopedAssistantContent(result, input);
+  logScopedAnswerEvidence(result, deps, context.correlationId);
   const persisted = persistRedactedGroundedExchange(deps, chat, input, assistantContent);
   const sourceLookup = buildSelectedScopeSourceLookup(env.store, selected);
   const limits = currentGroundingLimits(deps);
@@ -2307,7 +2584,7 @@ async function persistScopedGroundedAnswer(
     sourceLookup,
     deps,
   });
-  const finalAnswer = await appendLocalKnowledgeNumericEntailment(
+  const entailed = await settleScopedCitationSupport(
     answer,
     result,
     numericEvidence,
@@ -2315,6 +2592,8 @@ async function persistScopedGroundedAnswer(
     context,
     deps,
   );
+  const { promptContext } = persistedInput;
+  const finalAnswer = promptContext === undefined ? entailed : { ...entailed, promptContext };
   attachGroundedAnswerWithPreviewCitations(
     deps,
     env,
@@ -2341,7 +2620,7 @@ function createScopedAnswerGenerator(
     createSqliteAuditSink(env.store),
     (value: string): string => redactText(deps, value),
     limits,
-    correlationId,
+    { deps, correlationId },
   );
 }
 
@@ -2420,6 +2699,7 @@ async function runScopedGroundedAnswer(
     startedAt,
     context: { ...context, modelId },
     numericEvidence: generator.numericEntailmentEvidence(),
+    promptContext: generator.promptContext(),
   });
 }
 

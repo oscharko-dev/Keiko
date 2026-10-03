@@ -1,16 +1,24 @@
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  resetServerLogger,
+  setSupportIncidentTriggerForTests,
+  drainSupportIncidentCandidates,
+} from "../../../tests/support/activity-log-test-support.js";
 import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
+  readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import {
   clientBindingDigest,
@@ -25,6 +33,8 @@ import {
   redactLogFields,
   formatRegisteredServerLogLine,
   serverLogProcessIdentity,
+  createActivityLogSink,
+  listSupportIncidents,
 } from "@oscharko-dev/keiko-activity-log";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 
@@ -120,6 +130,93 @@ describe("POST /api/diagnostics/client", () => {
   afterEach(() => {
     resetServerLogger();
     resetClientDiagnosticsIngestStateForTests();
+  });
+
+  it("projects routine Composer evidence separately and keeps code failure stages reconstructible", async () => {
+    const sink = captureServerLog();
+    for (let index = 0; index < 30; index += 1) {
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "PRIVATE_PROMPT_CANARY",
+            clientTs: CLIENT_TS,
+            composerActivity: "initialized",
+            composerFocusIndicator: "keyboard",
+          }),
+        ),
+      );
+    }
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "PRIVATE_ERROR_CANARY",
+          clientTs: CLIENT_TS,
+          kind: "other",
+          composerCodeStage: "runtime",
+        }),
+      ),
+    );
+    const routine = sink.events.find((event) => event.op === "client.composer.activity");
+    expect(routine).toMatchObject({
+      level: "info",
+      extra: { activity: "initialized", focusIndicator: "keyboard" },
+    });
+    expect(routine?.errorKind).toBeUndefined();
+    expectActivityLogProof(
+      "client.composer.activity.line",
+      formatActivityLogProofLine(routine ?? {}),
+    );
+    expect(clientDiagnosticEvents(sink)).toHaveLength(1);
+    expect(clientDiagnosticEvents(sink)[0]?.extra?.composerCodeStage).toBe("runtime");
+    expectCompleteGitTimeline(sink.events);
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_PROMPT_CANARY");
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_ERROR_CANARY");
+  });
+  it.each([
+    { composerActivity: "unsafe-content" },
+    { composerActivity: "initialized", kind: "other" },
+    { composerActivity: "initialized", composerFocusIndicator: "hostile" },
+    { composerActivity: "text-copied", composerFocusIndicator: "keyboard" },
+    { composerFocusIndicator: "keyboard" },
+    { composerCodeStage: "unsafe-content" },
+  ])("rejects hostile or failure-masking Composer metadata: %j", async (metadata) => {
+    const sink = captureServerLog();
+    const result = await handleClientDiagnosticIngest(
+      context(JSON.stringify({ message: "canary", clientTs: CLIENT_TS, ...metadata })),
+    );
+    expect(result.status).toBe(400);
+    expect(sink.events.some((event) => event.op === "client.composer.activity")).toBe(false);
+  });
+
+  it("keeps routine voice stages out of the failure admission budget", async () => {
+    const sink = captureServerLog();
+    for (let index = 0; index < 30; index += 1) {
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "PRIVATE_VOICE_CANARY",
+            clientTs: CLIENT_TS,
+            kind: "voice-dialogue",
+            voiceDialogueStage: "turn-submitted",
+          }),
+        ),
+      );
+      expect(result.status).toBe(204);
+    }
+    const failure = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "PRIVATE_FAILURE_CANARY",
+          clientTs: CLIENT_TS,
+          kind: "voice-dialogue",
+          voiceDialogueStage: "delivery-failed",
+        }),
+      ),
+    );
+    expect(failure.status).toBe(204);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(1);
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_VOICE_CANARY");
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_FAILURE_CANARY");
   });
 
   // The FATAL-FLAW FIX (all three design-panel judges independently flagged it): the field is
@@ -349,6 +446,60 @@ describe("POST /api/diagnostics/client", () => {
     );
     expect(sink.lines().join("")).not.toContain("private issue content");
     expect(sink.lines().join("")).not.toContain("server-log.write-failed");
+  });
+
+  it("logs a client load timeout at error so the registered incident trigger can retain it", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "desktop editor widget chunk: stalled",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_editor-stall-0001",
+          errorKind: "timeout",
+        }),
+      ),
+    );
+    expect(clientDiagnosticEvents(sink)).toEqual([
+      expect.objectContaining({
+        level: "error",
+        op: "client.diagnostic",
+        correlationId: "ui_editor-stall-0001",
+        errorKind: "timeout",
+      }),
+    ]);
+  });
+
+  it("creates a retained local incident for a browser timeout through the production log sink", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "keiko-client-timeout-"));
+    setSupportIncidentTriggerForTests(true);
+    const sink = createActivityLogSink(stateDir, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "desktop editor widget chunk: stalled",
+            clientTs: CLIENT_TS,
+            correlationId: "ui_retained-timeout-0001",
+            errorKind: "timeout",
+          }),
+        ),
+      );
+      drainSupportIncidentCandidates();
+      const incidents = listSupportIncidents(stateDir);
+      expect(incidents).toHaveLength(1);
+      expect(incidents[0]?.trigger).toBe("registered-failure");
+      expect(incidents[0]?.fingerprint.op).toBe("client.diagnostic");
+      expect(incidents[0]?.fingerprint.errorKind).toBe("timeout");
+      expect(incidents[0]?.correlation.rootCorrelationId).toBe("ui_retained-timeout-0001");
+      expect(incidents[0]?.pin.status).toBe("pinned");
+    } finally {
+      setSupportIncidentTriggerForTests(undefined);
+      resetServerLogger();
+      sink.close?.();
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it.each(["voice-dialogue", "markdown-layout"])(
@@ -1068,6 +1219,133 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  // PR #3678 review: the catalog's availability counts used to ride only the message, which ingest
+  // reduces to a digest. They are now their own counted line, at warn, joined to the report.
+  it("persists the knowledge catalog counts as client.knowledge-catalog.unavailable", async () => {
+    const sink = captureServerLog();
+    const knowledgeCatalog = {
+      podCount: 1,
+      readyPodCount: 0,
+      setCount: 0,
+      boundCount: 1,
+      missingCount: 0,
+      notReadyCount: 1,
+    };
+    const body = JSON.stringify({
+      message: "Keiko knowledge catalog offers no usable pod.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_catalog-unavailable-0001",
+      knowledgeCatalog,
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.knowledge-catalog.unavailable",
+    );
+    expect(event?.level).toBe("warn");
+    const record = expectActivityLogProof(
+      "client.knowledge-catalog.unavailable.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_catalog-unavailable-0001",
+      ...knowledgeCatalog,
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  // PR #3678 review: the copy button's changed transformation must be reconstructable: one line per
+  // copy with its outcome and marker counts, and a failed copy with its error kind and frames.
+  it("persists a chat answer copy and its failure as client.answer.copied", async () => {
+    const sink = captureServerLog();
+    const answerCopy = { grounded: true, strippedGroupCount: 2, keptGroupCount: 1 };
+    const copied = JSON.stringify({
+      message: "Keiko chat answer copied.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_answer-copy-0001",
+      answerCopy: { outcome: "copied", ...answerCopy },
+    });
+    const failed = JSON.stringify({
+      message: "Keiko chat answer copy failed.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_answer-copy-0002",
+      errorKind: "unavailable",
+      errorEvidence: { errorClass: "Error", frames: [], causeChain: ["Error"] },
+      answerCopy: { outcome: "failed", ...answerCopy },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(copied))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(await handleClientDiagnosticIngest(context(failed))).toEqual({
+      status: 204,
+      body: null,
+    });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const lines = sink.events.filter((candidate) => candidate.op === "client.answer.copied");
+    expect(lines.map((line) => line.level)).toEqual(["info", "warn"]);
+    const record = expectActivityLogProof(
+      "client.answer.copied.line",
+      formatActivityLogProofLine(lines[0] ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_answer-copy-0001",
+      outcome: "copied",
+      ...answerCopy,
+    });
+    expect(lines[1]).toMatchObject({
+      correlationId: "ui_answer-copy-0002",
+      errorKind: "unavailable",
+      extra: { outcome: "failed", errorClass: "Error", causeChain: ["Error"] },
+    });
+  });
+
+  // PR #3678 review: the read-aloud preparation keeps a bracketed path and drops grounded markers;
+  // its counts land on their own line under the synthesis request's correlation.
+  it("persists a read-aloud preparation as client.answer.speech-prepared", async () => {
+    const sink = captureServerLog();
+    const answerSpeech = { grounded: true, strippedGroupCount: 1, keptGroupCount: 0 };
+    const body = JSON.stringify({
+      message: "Keiko chat answer prepared for speech.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_answer-speech-0001",
+      answerSpeech,
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find((candidate) => candidate.op === "client.answer.speech-prepared");
+    expect(event?.level).toBe("info");
+    const record = expectActivityLogProof(
+      "client.answer.speech-prepared.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_answer-speech-0001",
+      ...answerSpeech,
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  it("rejects a read-aloud report with an unknown field or an unbounded count", async () => {
+    for (const answerSpeech of [
+      { grounded: true, strippedGroupCount: 1, keptGroupCount: 0, text: "spoken" },
+      { grounded: true, strippedGroupCount: -1, keptGroupCount: 0 },
+    ]) {
+      const body = JSON.stringify({
+        message: "Keiko chat answer prepared for speech.",
+        clientTs: CLIENT_TS,
+        answerSpeech,
+      });
+      const result = await handleClientDiagnosticIngest(context(body));
+      expect(result.status).toBe(400);
+    }
+  });
+
   it("persists every closed focus location on its own client.select.dismissed line", async () => {
     for (const focus of ["trigger", "search", "option"] as const) {
       const sink = captureServerLog();
@@ -1732,19 +2010,22 @@ describe("POST /api/diagnostics/client", () => {
   });
 
   // #3557 review: both phases of one mounted stage carry the client-minted id, so they join.
-  it("logs both phases of a stage under the stage's own correlation id", async () => {
+  it.each([
+    ["chat bind", "chat-bind"],
+    ["command palette", "command-palette"],
+  ])("logs both phases of %s under the stage's own correlation id", async (stageId, logStage) => {
     const sink = captureServerLog();
     for (const body of [
       {
         kind: "stage",
-        stage: "chat bind",
+        stage: stageId,
         phase: "started",
         ordinal: 4,
         correlationId: "ui_stage-0004",
       },
       {
         kind: "stage",
-        stage: "chat bind",
+        stage: stageId,
         phase: "settled",
         ordinal: 4,
         durationMs: 12,
@@ -1759,6 +2040,45 @@ describe("POST /api/diagnostics/client", () => {
       ["client.stage.started", "ui_stage-0004"],
       ["client.stage.settled", "ui_stage-0004"],
     ]);
+    expect(stage.map((event) => event.extra?.stage)).toEqual([logStage, logStage]);
+  });
+
+  it("records the correlated deletion lifecycle with counts and no conversation content", async () => {
+    const sink = captureServerLog();
+    for (const report of [
+      { phase: "started", deletion: { requestedCount: 3, deletedCount: 0, failedCount: 0 } },
+      {
+        phase: "settled",
+        durationMs: 12,
+        deletion: { requestedCount: 3, deletedCount: 2, failedCount: 1 },
+      },
+    ]) {
+      const body = {
+        kind: "stage",
+        stage: "chat history deletion",
+        ordinal: 1,
+        correlationId: "ui_history-delete-0001",
+        ...report,
+      };
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    }
+    const events = sink.events.filter((event) => event.op.startsWith("client.stage."));
+    expect(events.map((event) => [event.op, event.correlationId, event.extra?.stage])).toEqual([
+      ["client.stage.started", "ui_history-delete-0001", "chat-history-deletion"],
+      ["client.stage.settled", "ui_history-delete-0001", "chat-history-deletion"],
+    ]);
+    expect(events.at(-1)?.extra).toEqual({
+      stage: "chat-history-deletion",
+      ordinal: 1,
+      requestedCount: 3,
+      deletedCount: 2,
+      failedCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(events.at(-1)?.durationMs).toBe(12);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expectCompleteGitTimeline(events);
   });
 
   // #3557 review: the stale-session repair outcome joins the denied request's timeline.
@@ -2104,4 +2424,93 @@ it("admits a final loss flush after both ordinary budgets are exhausted", async 
     now.mockRestore();
     resetClientDiagnosticsIngestStateForTests();
   }
+});
+
+describe("reviewed navigation and render evidence", () => {
+  it.each(["applied", "unavailable", "failed", "dropped", "stale", "cancelled", "deferred"])(
+    "persists closed navigation outcome %s with the lifecycle join",
+    async (navigationOutcome) => {
+      const sink = captureServerLog();
+      const base = {
+        kind: "stage",
+        stage: "editor project selection",
+        ordinal: 1,
+        correlationId: "ui_navigation-0001",
+      };
+      await handleClientDiagnosticIngest(context(JSON.stringify({ ...base, phase: "started" })));
+      await handleClientDiagnosticIngest(
+        context(JSON.stringify({ ...base, phase: "settled", durationMs: 2, navigationOutcome })),
+      );
+      const events = sink.events.filter((event) => event.op.startsWith("client.stage."));
+      expect(events).toHaveLength(2);
+      expect(events.map((event) => event.correlationId)).toEqual([
+        base.correlationId,
+        base.correlationId,
+      ]);
+      expect(events[1]?.extra?.navigationOutcome).toBe(navigationOutcome);
+      const encoded = sink.lines().join("");
+      expect(encoded).toContain(`"navigationOutcome":"${navigationOutcome}"`);
+      expect(analyzeLogText(encoded).sufficiency.status).toBe("complete");
+    },
+  );
+  it("persists file-read transport and stage lifecycle under one minted correlation", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "keiko-navigation-stage-"));
+    const sink = createActivityLogSink(stateDir, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const correlationId = "ui_files-read-0001";
+    const base = { kind: "stage", stage: "files directory load", ordinal: 1, correlationId };
+    try {
+      for (const body of [
+        { ...base, phase: "started" },
+        { ...base, phase: "settled", durationMs: 3, navigationOutcome: "applied" },
+      ])
+        await handleClientDiagnosticIngest(context(JSON.stringify(body), correlationId));
+      sink.close?.();
+      const analyzed = analyzeLogText(readPersistedActivityLog(stateDir));
+      const timeline = analyzed.timelines.find((entry) => entry.correlationId === correlationId);
+      expect(
+        timeline?.lines.filter((line) => line.op === "http.request.body.received"),
+      ).toHaveLength(2);
+      expect(
+        timeline?.lines
+          .filter((line) => line.op.startsWith("client.stage."))
+          .map((line) => line.op),
+      ).toEqual(["client.stage.started", "client.stage.settled"]);
+      expect(analyzed.sufficiency.status).toBe("complete");
+    } finally {
+      resetServerLogger();
+      sink.close?.();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+  it.each(["shell", "window-body"])(
+    "records a real %s render failure at error while plain internal boundaries remain warn",
+    async (renderFailure) => {
+      const sink = captureServerLog();
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "caught render",
+            clientTs: CLIENT_TS,
+            kind: "boundary",
+            renderFailure,
+            errorKind: "internal",
+          }),
+        ),
+      );
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "ordinary boundary",
+            clientTs: CLIENT_TS,
+            kind: "boundary",
+            errorKind: "internal",
+          }),
+        ),
+      );
+      const events = clientDiagnosticEvents(sink);
+      expect(events.map((event) => event.level)).toEqual(["error", "warn"]);
+      expect(events[0]?.extra?.renderFailure).toBe(renderFailure);
+    },
+  );
 });

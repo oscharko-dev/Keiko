@@ -1,0 +1,146 @@
+import { buildPaletteCommands } from "./paletteCommands";
+import { describe, expect, it, vi } from "vitest";
+import {
+  appCommandWindowTypes,
+  commandIdsForEvidence,
+  WINDOW_LAUNCHER_TYPES,
+  type Command,
+} from "./workspaceCommands";
+import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
+import { EDITOR_PALETTE_COMMANDS } from "./widgets/cards/editorCommands";
+import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
+import { translate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
+
+const enTranslate = (key: MessageKey): string => translate("en", key);
+
+function appCommand(id: string): Command {
+  return {
+    id,
+    label: `App ${id}`,
+    group: "App",
+    icon: "spark",
+    run: vi.fn(),
+  };
+}
+
+function host(): EditorPaletteHost {
+  return {
+    root: "/repo",
+    activePaneId: "pane-1",
+    paneCount: 2,
+    activeFile: "src/app.ts",
+    closedTabCount: 1,
+    dirtyCount: 1,
+    verificationRunning: false,
+    verifiableTarget: "src/app.test.ts",
+    workspaceTrustUiAvailable: true,
+    verificationCatalog: {
+      schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+      projectId: "/repo",
+      workspaceTrust: {
+        kind: "workspace-trust-status",
+        schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+        projectId: "/repo",
+        trust: "trusted",
+        decidedBy: "server",
+        reason: "human-grant",
+        revision: 1,
+      },
+      kinds: [{ kind: "targeted-test", available: true, trustState: "trusted" }],
+    },
+    splitActive: vi.fn(),
+    closeActiveSplit: vi.fn(),
+    closeActiveTab: vi.fn(),
+    nextTab: vi.fn(),
+    prevTab: vi.fn(),
+    reopenClosed: vi.fn(),
+    saveAll: vi.fn(),
+    runFileTests: vi.fn(),
+    runWorkspaceVerification: vi.fn(),
+    cancelVerification: vi.fn(),
+    trustWorkspaceScripts: vi.fn(),
+    revokeWorkspaceScriptTrust: vi.fn(),
+    openProblems: vi.fn(),
+    openFileHistory: vi.fn(),
+  };
+}
+
+describe("workspace command registry", () => {
+  it("combines app and editor command inventories without dropping ids", () => {
+    const appCommands = [appCommand("new-chat"), appCommand("theme")];
+    const commands = buildPaletteCommands(appCommands, host(), enTranslate);
+    const ids = commands.map((command) => command.id);
+
+    expect(ids).toContain("new-chat");
+    expect(ids).toContain("theme");
+    expect(ids).toContain("view.splitRight");
+    expect(ids).toContain("files.saveAll");
+    expect(commandIdsForEvidence(appCommands, EDITOR_PALETTE_COMMANDS)).toContain("tab.close");
+  });
+
+  it("localizes every verification editor command through the central catalog", () => {
+    const titleKeys = Object.fromEntries(
+      EDITOR_PALETTE_COMMANDS.filter(
+        (command) =>
+          command.id === "editor.openProblems" ||
+          command.id === "editor.openFileHistory" ||
+          command.id.startsWith("run.") ||
+          command.id.startsWith("verification."),
+      ).map((command) => [command.id, command.titleKey]),
+    );
+
+    expect(titleKeys).toEqual({
+      "editor.openFileHistory": "editor.command.openFileHistory",
+      "editor.openProblems": "editor.command.openProblems",
+      "run.build": "editor.command.runBuild",
+      "run.cancel": "editor.command.cancelVerification",
+      "run.fileTests": "editor.command.runFileTests",
+      "run.lint": "editor.command.runLint",
+      "run.typecheck": "editor.command.runTypecheck",
+      "verification.revokeWorkspaceScriptTrust": "editor.command.revokeWorkspaceScriptTrust",
+      "verification.trustWorkspaceScripts": "editor.command.trustWorkspaceScripts",
+    });
+    expect(
+      buildPaletteCommands([], host(), (key) => `translated:${key}`).find(
+        (command) => command.id === "run.fileTests",
+      )?.label,
+    ).toBe("translated:editor.command.runFileTests");
+  });
+
+  it("collapses an app command that collides with an editor command id, keeping the app definition", () => {
+    const commands = buildPaletteCommands([appCommand("tab.close")], host(), enTranslate);
+    const matches = commands.filter((command) => command.id === "tab.close");
+    const [surviving] = matches;
+
+    expect(matches).toHaveLength(1);
+    expect(surviving).toEqual(expect.objectContaining({ group: "App", label: "App tab.close" }));
+  });
+
+  it("keeps the launcher grid sourced from the window launcher order", () => {
+    expect(WINDOW_LAUNCHER_TYPES).toEqual([
+      "chat",
+      "connector",
+      "files",
+      "editor",
+      "agents",
+      "docbrowser",
+    ]);
+  });
+
+  it("exposes the Coding Workbench through the palette tool list, not the card grid (#2476)", () => {
+    // The Coding Workbench is a singleton tool, so it reaches the palette via the idempotent tool seam
+    // and must stay out of the card grid that mints a new-window flow.
+    const { cards, tools } = appCommandWindowTypes();
+    expect(tools).toContain("coding");
+    expect(cards).not.toContain("coding");
+  });
+
+  it("exposes server-owned connector management through the tool list (#3108)", () => {
+    const { cards, tools } = appCommandWindowTypes();
+
+    expect(tools).toContain("integ");
+    expect(cards).not.toContain("integ");
+  });
+});

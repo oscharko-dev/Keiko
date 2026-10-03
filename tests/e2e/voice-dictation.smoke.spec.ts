@@ -56,7 +56,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
   await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
-  await expect(composer).toHaveValue("plain typed message");
+  await expect(composer).toHaveText("plain typed message");
   await expect(page.getByRole("button", { name: "Dictate a message" })).toHaveCount(0);
 }
 
@@ -86,7 +86,7 @@ async function dictateInsertFlow(page: Page): Promise<void> {
   await transcript.fill("dictated hello, edited");
 
   await page.getByRole("button", { name: "Insert transcript into the message" }).click();
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toHaveValue(
+  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toHaveText(
     /dictated hello, edited/u,
   );
   await page.screenshot({
@@ -107,7 +107,7 @@ async function deniedPermissionFlow(page: Page): Promise<void> {
   await expect(page.getByText(/Microphone access was denied/u)).toBeVisible();
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("still typing fine");
-  await expect(composer).toHaveValue("still typing fine");
+  await expect(composer).toHaveText("still typing fine");
 }
 
 test("composer dictation @smoke — no-voice composer is usable with no mic (AC1)", async ({

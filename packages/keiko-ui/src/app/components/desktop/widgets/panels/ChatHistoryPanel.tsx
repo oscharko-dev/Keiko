@@ -10,13 +10,15 @@ import {
   type ReactNode,
 } from "react";
 import type { Chat } from "@/lib/types";
-import { deleteChat, updateChat } from "@/lib/api";
+import { updateChat } from "@/lib/api";
 import { useTranslate } from "@/lib/i18n";
 import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { Icons } from "../../Icons";
 import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
 import { effectiveLocalKnowledgeScopes, effectiveScopes } from "../../hooks/workspaceActions";
-import { notifyChatDeleted } from "../../hooks/useChatSession";
+import { ChatHistorySelectionToolbar } from "./ChatHistorySelectionToolbar";
+import { useChatHistoryDeletion, useChatHistorySelection } from "./useChatHistorySelection";
+import styles from "./ChatHistorySelection.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const RestoreIcon = Icons.restore;
@@ -89,13 +91,14 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   const [view, setView] = useState<HistoryView>("active");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const tablistRef = useRef<HTMLDivElement | null>(null);
-  const confirmDeleteRef = useRef<HTMLButtonElement | null>(null);
+  const selectionRef = useRef<HTMLInputElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const focusedDeletionRef = useRef(0);
   const activeProjectPathRef = useRef(session.activeProject?.path);
   activeProjectPathRef.current = session.activeProject?.path;
   const tabActiveId = useId();
@@ -123,18 +126,52 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     if (editingId !== null) renameInputRef.current?.focus({ preventScroll: true });
   }, [editingId]);
 
-  // GEN-UI-FOCUS-016: when a row enters inline delete-confirm mode, move focus onto
-  // the destructive Delete button so keyboard users land on the confirmation.
-  useEffect(() => {
-    if (deleteConfirmId !== null) confirmDeleteRef.current?.focus({ preventScroll: true });
-  }, [deleteConfirmId]);
+  const scope = JSON.stringify([session.activeProject?.path, view, query]);
+  const selection = useChatHistorySelection(scope, chats);
+  const deletion = useChatHistoryDeletion(scope);
+  const busy = deletion.busy || busyId !== null;
+  const selectedIds = new Set(selection.selectedChats.map((chat) => chat.id));
+  const deletionFailureKey =
+    deletion.failure?.requestedCount === 1
+      ? "chat.history.deleteFailed"
+      : "chat.history.bulkDeleteFailed";
+  const deletionError =
+    deletion.failure === null
+      ? null
+      : optionalT(deletionFailureKey, {
+          count: deletion.failure.failedIds.length,
+          detail: deletion.failure.detail ?? "Request failed.",
+        });
+
+  // GEN-UI-FOCUS-016: one-click deletion replaces the confirmation. Keep a stable keyboard
+  // destination after the row disappears, rather than leaving focus on the document body.
+  useEffect((): void => {
+    if (deletion.completed === 0) return;
+    const target = selectionRef.current;
+    const lastRowRemoved =
+      target?.disabled &&
+      (document.activeElement === target || document.activeElement === document.body);
+    if (focusedDeletionRef.current === deletion.completed && !lastRowRemoved) return;
+    focusedDeletionRef.current = deletion.completed;
+    if (target !== null && !target.disabled) target.focus({ preventScroll: true });
+    else searchRef.current?.focus({ preventScroll: true });
+  }, [chats.length, deletion.completed]);
+
+  const removeChats = async (targets: readonly Chat[]): Promise<void> => {
+    setEditingId(null);
+    setRenameError(null);
+    setError(null);
+    const result = await deletion.remove(targets);
+    if (result !== undefined) selection.retain(result.failedIds, scope);
+  };
 
   // GEN-UI-KEYBOARD-008: roving tablist keyboard nav (WAI-ARIA APG tabs pattern).
   // ArrowLeft/Right wrap between the two tabs; Home/End jump to first/last. Focus and
   // selection move together (automatic activation), mirroring ProjectPanel's roving nav.
   const handleTablistKey = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (busy) return;
     const key = event.key;
-    if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "Home" && key !== "End") return;
+    if (!HISTORY_TAB_KEYS.has(key)) return;
     const container = tablistRef.current;
     if (container === null) return;
     const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>("button[role='tab']"));
@@ -145,13 +182,9 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         : -1;
     const from = initialTabIndex(view, current);
     event.preventDefault();
-    let next = from;
-    if (key === "ArrowRight") next = (from + 1) % tabs.length;
-    else if (key === "ArrowLeft") next = (from - 1 + tabs.length) % tabs.length;
-    else if (key === "Home") next = 0;
-    else if (key === "End") next = tabs.length - 1;
+    const next = historyNextTab(key, from, tabs.length);
     setView(next === 0 ? "active" : "deleted");
-    setDeleteConfirmId(null);
+    selection.clear();
     tabs[next]?.focus();
   };
 
@@ -170,7 +203,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   const startRename = (chat: Chat): void => {
     setEditingId(chat.id);
     setEditingTitle(chat.title);
-    setDeleteConfirmId(null);
+    selection.clear();
     setError(null);
     setRenameError(null);
   };
@@ -203,28 +236,13 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     }
   };
 
-  const moveToTrash = async (chat: Chat): Promise<void> => {
-    setBusyId(chat.id);
-    setError(null);
-    try {
-      const response = await updateChat(chat.id, { status: "closed" });
-      actions.replaceChat(response.chat);
-      setDeleteConfirmId(null);
-    } catch (caughtError) {
-      const detail = caughtError instanceof Error ? caughtError.message : "Request failed.";
-      setError(optionalT("chat.history.deleteFailed", { detail }));
-    } finally {
-      setBusyId(null);
-    }
-  };
-
   const restoreChat = async (chat: Chat): Promise<void> => {
     setBusyId(chat.id);
     setError(null);
     try {
       const response = await updateChat(chat.id, { status: "open" });
       actions.replaceChat(response.chat);
-      setDeleteConfirmId(null);
+      selection.clear();
     } catch (caughtError) {
       const detail = caughtError instanceof Error ? caughtError.message : "Request failed.";
       setError(optionalT("chat.history.restoreFailed", { detail }));
@@ -233,27 +251,6 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     }
   };
 
-  const purgeChat = async (chat: Chat): Promise<void> => {
-    setBusyId(chat.id);
-    setError(null);
-    try {
-      await deleteChat(chat.id, chat.projectPath);
-      notifyChatDeleted(chat.id);
-      setDeleteConfirmId(null);
-    } catch (caughtError) {
-      const detail = caughtError instanceof Error ? caughtError.message : "Request failed.";
-      setError(optionalT("chat.history.purgeFailed", { detail }));
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  // #2723 (S3358): the row-actions block was a four-way nested ternary chain
-  // (editing ? … : confirmingDelete ? … : deleted ? … : …); first extracted to a single
-  // named render function with early returns, then split further (CodeRabbit #3655533401)
-  // into one small renderer per branch so each stays well under the 50-line limit. Each
-  // renderer closes over the row action handlers above (a closure over per-row state
-  // passed as params, not the whole component) so every call site stays flat.
   // KEIKO-0452: every row-scoped action button carries an accessible name that includes the
   // chat title, so no two rows' Rename/Delete/Save/Cancel/Restore/purge buttons share an
   // accessible name (which would leave a screen-reader user unable to distinguish which
@@ -285,51 +282,6 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     </>
   );
 
-  // GEN-UI-FOCUS-016: Escape on either confirm button cancels the
-  // destructive confirmation and returns to the row's default actions.
-  const renderConfirmingDeleteRowActions = (
-    chat: Chat,
-    busy: boolean,
-    deleted: boolean,
-  ): ReactNode => (
-    <>
-      {deleted ? (
-        <output className="chat-history-purge-warning">
-          {optionalT("chat.history.purgeWarning")}
-        </output>
-      ) : null}
-      <button
-        ref={confirmDeleteRef}
-        type="button"
-        className="lk-btn lk-btn-danger"
-        disabled={busy}
-        aria-label={
-          deleted
-            ? t("chat.history.action.deleteConfirm", { title: chat.title })
-            : t("chat.history.action.delete", { title: chat.title })
-        }
-        onClick={() => void (deleted ? purgeChat(chat) : moveToTrash(chat))}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") setDeleteConfirmId(null);
-        }}
-      >
-        {deleted ? optionalT("chat.history.purgeConfirm") : t("common.delete")}
-      </button>
-      <button
-        type="button"
-        className="lk-btn lk-btn-ghost"
-        disabled={busy}
-        aria-label={t("chat.history.action.cancel", { title: chat.title })}
-        onClick={() => setDeleteConfirmId(null)}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") setDeleteConfirmId(null);
-        }}
-      >
-        {t("common.cancel")}
-      </button>
-    </>
-  );
-
   const renderDeletedRowActions = (chat: Chat, busy: boolean): ReactNode => (
     <>
       <button
@@ -345,6 +297,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       <button
         type="button"
         className="lk-btn lk-btn-ghost"
+        disabled={busy}
         aria-label={t("chat.history.action.rename", { title: chat.title })}
         onClick={() => startRename(chat)}
       >
@@ -355,21 +308,20 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         className="lk-btn lk-btn-danger"
         disabled={busy}
         aria-label={t("chat.history.action.deletePermanent", { title: chat.title })}
-        onClick={() => {
-          setDeleteConfirmId(chat.id);
-          setEditingId(null);
-        }}
+        title={t("chat.history.selection.permanent")}
+        onClick={() => void removeChats([chat])}
       >
         {optionalT("chat.history.purge")}
       </button>
     </>
   );
 
-  const renderDefaultRowActions = (chat: Chat): ReactNode => (
+  const renderDefaultRowActions = (chat: Chat, rowBusy: boolean): ReactNode => (
     <>
       <button
         type="button"
         className="lk-btn lk-btn-ghost"
+        disabled={rowBusy}
         aria-label={t("chat.history.action.rename", { title: chat.title })}
         onClick={() => startRename(chat)}
       >
@@ -378,11 +330,10 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       <button
         type="button"
         className="lk-btn lk-btn-ghost"
+        disabled={rowBusy}
         aria-label={t("chat.history.action.delete", { title: chat.title })}
-        onClick={() => {
-          setDeleteConfirmId(chat.id);
-          setEditingId(null);
-        }}
+        title={t("chat.history.selection.permanent")}
+        onClick={() => void removeChats([chat])}
       >
         {t("common.delete")}
       </button>
@@ -392,20 +343,17 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   const renderRowActions = ({
     chat,
     editing,
-    confirmingDelete,
     deleted,
     busy,
   }: {
     readonly chat: Chat;
     readonly editing: boolean;
-    readonly confirmingDelete: boolean;
     readonly deleted: boolean;
     readonly busy: boolean;
   }): ReactNode => {
     if (editing) return renderEditingRowActions(chat, busy);
-    if (confirmingDelete) return renderConfirmingDeleteRowActions(chat, busy, deleted);
     if (deleted) return renderDeletedRowActions(chat, busy);
-    return renderDefaultRowActions(chat);
+    return renderDefaultRowActions(chat, busy);
   };
 
   return (
@@ -420,7 +368,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         <button
           type="button"
           className="lk-btn lk-btn-primary"
-          disabled={session.loading}
+          disabled={session.loading || busy}
           onClick={() => void createNew()}
         >
           <NewChatIcon size={15} />
@@ -430,8 +378,13 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       <label className="chat-history-search">
         <SearchIcon size={15} />
         <input
+          ref={searchRef}
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          disabled={busy}
+          onChange={(event) => {
+            selection.clear();
+            setQuery(event.target.value);
+          }}
           placeholder="Search"
           aria-label="Search chat history"
         />
@@ -450,6 +403,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           type="button"
           id={tabActiveId}
           role="tab"
+          disabled={busy}
           aria-selected={view === "active"}
           aria-controls={panelId}
           // Roving tabindex: only the selected tab is a Tab stop; arrows move the rest.
@@ -457,7 +411,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           className="chat-history-tab"
           onClick={() => {
             setView("active");
-            setDeleteConfirmId(null);
+            selection.clear();
           }}
         >
           {t("chat.history.tab.active")} <span>{activeCount}</span>
@@ -466,21 +420,31 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           type="button"
           id={tabDeletedId}
           role="tab"
+          disabled={busy}
           aria-selected={view === "deleted"}
           aria-controls={panelId}
           tabIndex={view === "deleted" ? 0 : -1}
           className="chat-history-tab"
           onClick={() => {
             setView("deleted");
-            setDeleteConfirmId(null);
+            selection.clear();
           }}
         >
           {t("chat.history.tab.deleted")} <span>{deletedCount}</span>
         </button>
       </div>
-      {error !== null ? (
+      <ChatHistorySelectionToolbar
+        checkboxRef={selectionRef}
+        visibleCount={chats.length}
+        selectedCount={selection.selectedChats.length}
+        busy={busy || session.loading}
+        toggleAll={selection.toggleAll}
+        clear={selection.clear}
+        removeSelected={() => void removeChats(selection.selectedChats)}
+      />
+      {error !== null || deletionError !== null ? (
         <div className="lk-alert" role="alert">
-          {error}
+          {error ?? deletionError}
         </div>
       ) : null}
       <div
@@ -497,17 +461,26 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           chats.map((chat) => {
             const sources = sourceCount(chat);
             const editing = editingId === chat.id;
-            const confirmingDelete = deleteConfirmId === chat.id;
-            const busy = busyId === chat.id;
             const deleted = chat.status === "closed";
             return (
               <article
                 key={chat.id}
-                className="chat-history-row"
+                className={`chat-history-row ${styles.cmpRow} ${selectedIds.has(chat.id) ? styles.cmpSelected : ""}`}
                 data-chat-id={chat.id}
                 data-state={deleted ? "deleted" : "active"}
                 aria-label={chat.title}
               >
+                <input
+                  type="checkbox"
+                  className={styles.cmpCheckbox}
+                  checked={selectedIds.has(chat.id)}
+                  disabled={busy || session.loading}
+                  aria-label={t("chat.history.selection.chat", { title: chat.title })}
+                  onChange={() => selection.toggleChat(chat.id)}
+                  onKeyDown={(event): void => {
+                    if (event.key === "Escape" && !busy) selection.clear();
+                  }}
+                />
                 <div className="chat-history-row-main">
                   {editing ? (
                     <>
@@ -550,8 +523,8 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
                     </button>
                   )}
                 </div>
-                <div className="chat-history-actions">
-                  {renderRowActions({ chat, editing, confirmingDelete, deleted, busy })}
+                <div className={`chat-history-actions ${styles.cmpActions}`}>
+                  {renderRowActions({ chat, editing, deleted, busy })}
                 </div>
               </article>
             );
@@ -560,4 +533,11 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       </div>
     </div>
   );
+}
+
+const HISTORY_TAB_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End"]);
+function historyNextTab(key: string, from: number, length: number): number {
+  if (key === "ArrowRight") return (from + 1) % length;
+  if (key === "ArrowLeft") return (from - 1 + length) % length;
+  return key === "Home" ? 0 : length - 1;
 }

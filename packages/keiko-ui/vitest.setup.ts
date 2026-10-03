@@ -6,6 +6,8 @@ import { setClientDiagnosticWriter } from "./src/lib/client-diagnostics";
 import { resetLoadedMessageCatalogs } from "./src/lib/i18n";
 import { writeToBrowserConsole } from "./src/lib/install-client-diagnostics";
 
+import { createOriginLocksFixture } from "./src/test-utils/origin-locks-fixture";
+
 expect.extend(toHaveNoViolations);
 
 // Give every test the transport the application installs, rather than the sink's pre-transport
@@ -13,6 +15,12 @@ expect.extend(toHaveNoViolations);
 // real delivery path end to end instead of a stand-in, and a suite that swaps the writer for its
 // own spy cannot leave the next one buffering into the void.
 beforeEach(() => {
+  if (typeof navigator !== "undefined") {
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: createOriginLocksFixture(),
+    });
+  }
   setClientDiagnosticWriter(writeToBrowserConsole);
   // The lazily loaded locale catalogs are module state that no DOM or storage teardown can reach
   // (#2871). `I18nProvider` reads them synchronously on its first render — `activeLocale =
@@ -185,6 +193,30 @@ if (typeof window !== "undefined" && typeof HTMLCanvasElement !== "undefined") {
         rect: () => {},
         clip: () => {},
       } as unknown as CanvasRenderingContext2D;
+    },
+  });
+}
+
+// ProseMirror asks for caret geometry; jsdom has no layout engine. Browser smoke owns geometry.
+if (typeof Range.prototype.getClientRects !== "function") {
+  Range.prototype.getClientRects = (): DOMRectList => ({
+    length: 0,
+    item: () => null,
+    [Symbol.iterator]: function* (): Generator<DOMRect> {},
+  });
+  Range.prototype.getBoundingClientRect = (): DOMRect => new DOMRect(0, 0, 0, 0);
+}
+if (typeof document.elementFromPoint !== "function") {
+  document.elementFromPoint = (): Element | null => null;
+}
+
+// jsdom omits this inherited editing-state property, which native shortcut guards rely on.
+if (!("isContentEditable" in HTMLElement.prototype)) {
+  Object.defineProperty(HTMLElement.prototype, "isContentEditable", {
+    configurable: true,
+    get(): boolean {
+      const value = this.closest("[contenteditable]")?.getAttribute("contenteditable");
+      return value === "true" || value === "" || value === "plaintext-only";
     },
   });
 }

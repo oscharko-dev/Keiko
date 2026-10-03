@@ -67,6 +67,13 @@ best-effort so an audit write never throws into the caller — is the proven reu
 it in a **sibling** module rather than extending the mutation ledger, because the mutation ledger's
 records are keyed to kernel outcomes and the fetch/pull outcome taxonomy is different (D5).
 
+Clone DNS preflight refuses loopback, link-local and unspecified destinations. A DNS lookup
+failure or its two-second deadline returns an explicit `403 DENIED`, without starting Git or
+including the hostname in diagnostics. SSH-only aliases and proxy-only names that the BFF cannot
+resolve are not supported by this preflight; use a DNS-resolvable repository hostname. A valid
+URL is never reported as malformed merely because name resolution failed. This preflight does
+not claim to pin SSH/Git transport resolution.
+
 ### Scope boundary (Issue #1573)
 
 In scope: three read contracts (`git-repository-summary.ts`, `git-history.ts`, plus the read fields

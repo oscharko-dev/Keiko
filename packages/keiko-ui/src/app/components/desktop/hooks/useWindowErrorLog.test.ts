@@ -5,6 +5,7 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   resetClientDiagnosticWriter,
+  currentGlobalClientFailure,
   setClientDiagnosticWriter,
   takeClientDiagnosticLoss,
   type ClientDiagnosticMeta,
@@ -32,6 +33,37 @@ afterEach(() => {
 });
 
 describe("useWindowErrorLog", () => {
+  it("ignores browser resize notifications before the real-error cap", () => {
+    const view = renderHook(() => {
+      useWindowErrorLog();
+    });
+    for (let index = 0; index < 8; index += 1) {
+      window.dispatchEvent(
+        new ErrorEvent("error", {
+          error: null,
+          message: "ResizeObserver loop completed with undelivered notifications.",
+        }),
+      );
+    }
+    expect(currentGlobalClientFailure()).toBeNull();
+    dispatchWindowError(new TypeError("real failure"));
+    view.unmount();
+    expect(received).toHaveLength(1);
+    expect(received[0]?.meta?.errorEvidence?.errorClass).toBe("TypeError");
+    expect(takeClientDiagnosticLoss()).toBeUndefined();
+  });
+
+  it("does not dismiss thrown errors that copy the resize notification text", () => {
+    const view = renderHook(() => {
+      useWindowErrorLog();
+    });
+    const message = "ResizeObserver loop completed with undelivered notifications.";
+    window.dispatchEvent(new ErrorEvent("error", { error: new Error(message), message }));
+    view.unmount();
+    expect(received).toHaveLength(1);
+    expect(currentGlobalClientFailure()).not.toBeNull();
+  });
+
   it("reports an uncaught error by its class only, with the closed kind", () => {
     const view = renderHook(() => {
       useWindowErrorLog();
@@ -40,12 +72,44 @@ describe("useWindowErrorLog", () => {
     view.unmount();
 
     expect(received).toEqual([
-      { message: "[keiko] uncaught window error: TypeError", meta: { kind: "window-error" } },
+      {
+        message: "[keiko] uncaught window error: TypeError",
+        meta: {
+          kind: "window-error",
+          globalFailure: true,
+          correlationId: expect.any(String),
+          errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+        },
+      },
     ]);
+    expect(currentGlobalClientFailure()?.correlationId).toBe(received[0]?.meta?.correlationId);
     for (const { message } of received) {
       expect(message).not.toContain("sk-secret");
       expect(message).not.toContain("raw browser message");
     }
+  });
+
+  it("preserves safe shipped chunk coordinates without customer prose or paths", () => {
+    const view = renderHook(() => {
+      useWindowErrorLog();
+    });
+    const cause = new TypeError("ClientAcmePayroll token=sk-secret");
+    cause.stack = `TypeError: ClientAcmePayroll\n    at customerFunction (${location.origin}/_next/static/chunks/1wntg-7ptuw73.js:20:400)`;
+    const error = new Error("ClientAcmePayroll at /Users/alice/private.ts", { cause });
+    error.stack = `Error: ClientAcmePayroll\n    at customerFunction (${location.origin}/_next/static/chunks/1wntg-7ptuw73.js:10:200)\n    at customerFunction (${location.origin}/Users/alice/private.ts:12:34)`;
+    dispatchWindowError(error);
+    view.unmount();
+    expect(received[0]?.meta?.errorEvidence).toEqual({
+      errorClass: "Error",
+      frames: [
+        "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:20:400",
+        "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:10:200",
+      ],
+      causeChain: ["TypeError"],
+    });
+    expect(JSON.stringify(received)).not.toMatch(
+      /ClientAcmePayroll|sk-secret|customerFunction|Users|https?:/u,
+    );
   });
 
   it("caps the reports per session and counts every error past the cap as suppressed", () => {

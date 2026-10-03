@@ -14,6 +14,24 @@
 
 title = "Keiko secret scan"
 
+[[allowlists]]
+description = "PR #3685: deterministic watcher root-token fixture in one immutable checkpoint; this 16-hex sequence is test metadata, not a credential, and is assembled from fragments in subsequent commits."
+condition = "AND"
+commits = ["69bb4b8ed88ac1a77d1107df52e533c30af9ef70"]
+paths = ['''packages/keiko-ui/src/app/components/desktop/widgets/cards/useWorkspaceWatch\.test\.tsx''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''rootToken: "0123456789abcdef",''']
+
+[[allowlists]]
+description = "PR #3685: the deterministic watcher root-token fixture was also copied into FilesWidget in this immutable checkpoint. It is test metadata, not a credential; the current fixture assembles it from fragments. Only this exact historical fixture line is exempt."
+condition = "AND"
+commits = ["269bbf2f91d40b6e9e8b636c807e3495a1e20f74"]
+paths = ['''packages/keiko-ui/src/app/components/desktop/widgets/cards/FilesWidget\.test\.tsx''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''rootToken: "0123456789abcdef",''']
+
 [extend]
 useDefault = true
 
@@ -71,6 +89,21 @@ regexes = [
 ]
 
 [[allowlists]]
+description = "PR #3679: the public jwt.io example token as a credential-shaped correlation fixture in two review regression tests of immutable commit e9d895ac; both are assembled from fragments afterwards, so the squash-merged tree carries no literal. Scoped to that commit, the two files and the one fixture line, so every other finding remains enforced."
+condition = "AND"
+commits = [
+  "e9d895acffb21df15fdbfc2637601d00b179f3f2",
+]
+paths = [
+  '''packages/keiko-activity-log/src/support-incident\.test\.ts''',
+  '''packages/keiko-activity-log/src/reader/support-report\.test\.ts''',
+]
+regexTarget = "line"
+regexes = [
+  '''^\s*"eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIn0\.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";$''',
+]
+
+[[allowlists]]
 description = "PR #3554: the RFC 6455 section 1.2 example Sec-WebSocket-Key (base64 of the public string `the sample nonce`) as a literal in the history of the live-dictation proof test. The generic-api-key rule reads `TEST_WS_KEY = ...` as a key. No credential was involved, and the fixture now derives the value from the RFC's nonce at runtime, so the squash-merged tree carries no literal. Scoped by content, not by commit, so it holds for any history shape: only that exact public test-vector line in that one file is exempt, and every other finding in the file remains enforced."
 condition = "AND"
 paths = [
@@ -79,4 +112,15 @@ paths = [
 regexTarget = "line"
 regexes = [
   '''const TEST_WS_KEY = "dGhlIHNhbXBsZSBub25jZQ=="; // RFC 6455 §1\.2 example Sec-WebSocket-Key\.''',
+]
+
+[[allowlists]]
+description = "PR #3678: a synthetic provider key assembled from two fragments in the history of the context-window report test (commit ede5dc259). The generic-api-key rule reads the `apiKey:` line as a key. No credential was involved, and the fixture now uses the low-entropy literal `fake-test-key`, so the squash-merged tree carries no key-shaped value. Scoped by content, not by commit, so it holds for any history shape: only that exact fixture line in that one file is exempt, and every other finding in the file remains enforced."
+condition = "AND"
+paths = [
+  '''packages/keiko-model-gateway/src/context-window-report\.test\.ts''',
+]
+regexTarget = "line"
+regexes = [
+  '''apiKey: \["example-test-token-", "1234567890abcd"\]\.join\(""\),''',
 ]

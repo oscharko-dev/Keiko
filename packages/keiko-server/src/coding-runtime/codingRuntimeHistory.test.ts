@@ -3,7 +3,7 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,7 +26,7 @@ let root: string;
 const operator = "local-operator";
 const operatorDigest = createHash("sha256").update(operator).digest("hex");
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "keiko-history-runtime-"));
+  root = mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-runtime-"));
   store = createInMemoryUiStore();
   store.createProject(root);
 });

@@ -42,6 +42,49 @@ function aiInput(change: Partial<EditorM7AiActivationInput> = {}): EditorM7AiAct
   };
 }
 
+describe("retired file-search keybindings", () => {
+  it("drops saved file-search bindings without dropping other overrides", () => {
+    expect(
+      parseEditorM7KeybindingOverrides([
+        "1|quick-access.files|CtrlOrMeta+Shift+O",
+        "1|undo|CtrlOrMeta+Alt+U",
+      ]),
+    ).toEqual({
+      ok: true,
+      value: [{ schemaVersion: "1", commandId: "undo", binding: "CtrlOrMeta+Alt+U" }],
+    });
+  });
+  it("migrates saved command-palette bindings to their retained command", () => {
+    expect(
+      parseEditorM7KeybindingOverrides(["1|quick-access.commands|CtrlOrMeta+Shift+O"]),
+    ).toEqual({
+      ok: true,
+      value: [
+        { schemaVersion: "1", commandId: "workspace.commands", binding: "CtrlOrMeta+Shift+O" },
+      ],
+    });
+  });
+  it("does not register the retired file picker or accept fresh overrides for it", () => {
+    expect(EDITOR_M7_COMMAND_REGISTRY.map((command) => command.id)).not.toContain(
+      "quick-access.files",
+    );
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding: "CtrlOrMeta+P",
+        activeBindings: [],
+      }).ok,
+    ).toBe(false);
+  });
+  it("continues to reject malformed and unsupported legacy records", () => {
+    expect(parseEditorM7KeybindingOverrides(["99|quick-access.files|CtrlOrMeta+P"]).ok).toBe(false);
+    expect(parseEditorM7KeybindingOverrides(["1|quick-access.files|CtrlOrMeta+Shift"]).ok).toBe(
+      false,
+    );
+    expect(parseEditorM7KeybindingOverrides(["1|unknown-command|CtrlOrMeta+O"]).ok).toBe(false);
+  });
+});
+
 describe("M7 editor setting registry", () => {
   it("declares an additive opaque debug workspace identity projection", () => {
     const workspaceId: NonNullable<EditorM7SettingsSnapshot["debugWorkspaceId"]> = "a".repeat(64);
@@ -314,14 +357,14 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     });
     expect(
       validateEditorM7Keybinding({
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding: "CtrlOrMeta+Shift+O",
         activeBindings: {},
       }),
     ).toStrictEqual({ ok: true, value: "CtrlOrMeta+Shift+O" });
     expect(
       validateEditorM7Keybinding({
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding: "CtrlOrMeta+Q",
         activeBindings: {},
       }),
@@ -349,7 +392,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ).toMatchObject({ ok: false, reasonCode: "POLICY_LOCKED" });
     expect(
       validateEditorM7Keybinding({
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding: "CtrlOrMeta+Shift",
         activeBindings: {},
       }),
@@ -359,14 +402,14 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
   it("rejects reserved bindings regardless of modifier case or order", () => {
     expect(
       validateEditorM7Keybinding({
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding: "ctrlormeta+q",
         activeBindings: {},
       }),
     ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
     expect(
       validateEditorM7Keybinding({
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding: "Shift+CtrlOrMeta+N",
         activeBindings: {},
       }),
@@ -400,7 +443,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     const binding = `Alt+${"A".repeat(168)}`;
     const record = serializeEditorM7KeybindingOverride({
       schemaVersion: "1",
-      commandId: "quick-access.files",
+      commandId: "workspace.commands",
       binding,
     });
     expect(parseEditorM7KeybindingOverrides([record])).toMatchObject({
@@ -410,7 +453,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
 
     expect(
       validateEditorM7Keybinding({
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding,
         activeBindings: {},
       }),
@@ -429,7 +472,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
   ])("rejects the malformed or hostile binding %j", (binding) => {
     expect(
       validateEditorM7Keybinding({
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding,
         activeBindings: {},
       }),
@@ -452,7 +495,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
   ])("rejects the doubled physical modifier in %s", (binding) => {
     expect(
       validateEditorM7Keybinding({
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding,
         activeBindings: {},
       }),
@@ -466,7 +509,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     (binding) => {
       expect(
         validateEditorM7Keybinding({
-          commandId: "quick-access.files",
+          commandId: "workspace.commands",
           binding,
           activeBindings: {},
         }),
@@ -476,14 +519,14 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
 
   // Collision is decided on the physical chord too: dispatch matches keystrokes, not strings. A
   // `Meta+P` override read as distinct from `CtrlOrMeta+P` and silently took Cmd+P from its owner.
-  it.each(["Meta+P", "Ctrl+P", "ctrlormeta+p", " meta + p "])(
+  it.each(["Meta+Shift+P", "Ctrl+Shift+P", "ctrlormeta+shift+p", " meta + shift + p "])(
     "detects the collision when the taken chord is spelled %s",
     (binding) => {
       expect(
         validateEditorM7Keybinding({
           commandId: "undo",
           binding,
-          activeBindings: { "quick-access.files": "CtrlOrMeta+P" },
+          activeBindings: { "workspace.commands": "CtrlOrMeta+Shift+P" },
         }),
       ).toMatchObject({ ok: false, reasonCode: "KEYBINDING_COLLISION" });
     },
@@ -501,7 +544,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
       validateEditorM7Keybinding({
         commandId: "undo",
         binding: "CtrlOrMeta+Alt+P",
-        activeBindings: { "quick-access.files": "CtrlOrMeta+P" },
+        activeBindings: { "workspace.commands": "CtrlOrMeta+Shift+P" },
       }),
     ).toStrictEqual({ ok: true, value: "CtrlOrMeta+Alt+P" });
   });
@@ -515,7 +558,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ]) {
       expect(
         validateEditorM7Keybinding({
-          commandId: "quick-access.files",
+          commandId: "workspace.commands",
           binding,
           activeBindings: {},
         }),
@@ -523,7 +566,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     }
     expect(
       validateEditorM7Keybinding({
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding: " shift + CTRLORMETA + alt + o ",
         activeBindings: {},
       }),
@@ -535,7 +578,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
       validateEditorM7Keybinding({
         commandId: "view.splitRight",
         binding: "shift+ctrlormeta+o",
-        activeBindings: { "quick-access.files": "CtrlOrMeta+Shift+O" },
+        activeBindings: { "workspace.commands": "CtrlOrMeta+Shift+O" },
       }),
     ).toMatchObject({ ok: false, reasonCode: "KEYBINDING_COLLISION" });
   });
@@ -996,14 +1039,14 @@ describe("M7 malformed input rejection paths", () => {
     });
     expect(() =>
       validateEditorM7Keybinding({
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding: "Alt+X",
         activeBindings: hostile,
       }),
     ).not.toThrow();
     expect(
       validateEditorM7Keybinding({
-        commandId: "quick-access.files",
+        commandId: "workspace.commands",
         binding: "Alt+X",
         activeBindings: hostile,
       }),

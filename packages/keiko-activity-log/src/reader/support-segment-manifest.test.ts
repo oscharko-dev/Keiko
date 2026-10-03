@@ -19,6 +19,7 @@ import {
   manifestMayContainAnyKey,
   parentCorrelationKey,
   parseSegmentManifest,
+  SEGMENT_MANIFEST_SCHEMA_VERSION,
   segmentManifestDirectory,
   serializeSegmentManifest,
   type SegmentManifest,
@@ -158,6 +159,21 @@ describe("segment manifests (#3531)", () => {
     expect(scanner.opened.size).toBe(0);
   });
 
+  it("reuses persisted manifests read-only without scanning bodies or modifying the store", () => {
+    writeHistory();
+    ensure();
+    const before = manifestTexts();
+    const scanner = new ActivityLogScanner(stateDir);
+    const pass = ensureSegmentManifests(stateDir, listActivityLogStoreFiles(stateDir), scanner, {
+      trigger: "export",
+      persist: false,
+      rebuild: false,
+    });
+    expect(pass.stats).toMatchObject({ reusedCount: 2, builtCount: 0, persisted: false });
+    expect(scanner.opened.size).toBe(0);
+    expect(manifestTexts()).toEqual(before);
+  });
+
   it("records a direct drain read failure without retaining a partial manifest", () => {
     writeHistory();
     const [file] = listActivityLogStoreFiles(stateDir);
@@ -186,7 +202,7 @@ describe("segment manifests (#3531)", () => {
 
     expect(manifest).toMatchObject({
       kind: "keiko.activity-log.segment-manifest",
-      schemaVersion: 1,
+      schemaVersion: SEGMENT_MANIFEST_SCHEMA_VERSION,
       time: { firstTs: new Date(T0).toISOString(), lastTs: new Date(T0 + 30).toISOString() },
       processes: {
         complete: true,
@@ -195,6 +211,7 @@ describe("segment manifests (#3531)", () => {
       evidence: { classification: "supported", supportedLineCount: 4, corruptLineCount: 0 },
       errorKinds: [{ name: "timeout", count: 1 }],
       uncorrelatedLineCount: 1,
+      processLossLineCount: 0,
       lifecycleReferences: {
         complete: true,
         incidentIds: [INCIDENT_ID],
@@ -210,6 +227,67 @@ describe("segment manifests (#3531)", () => {
     for (const id of ["corr-first-000001", "corr-second-00001", stateDir]) {
       expect(text).not.toContain(id);
     }
+  });
+
+  // Review #3679: the manifest counts the lines in which its process recorded losing its own
+  // evidence, so a query decides without opening the body: a loss summary's process counters and a
+  // seal's confirmed drop count, a summary of browser reports only and a lossless seal do not.
+  it("counts the lines in which its process recorded losing its own evidence", () => {
+    const a = fixtureProcess(3303, "abcdef03");
+    writeFixtureSegment(stateDir, segmentIdentity(a, T0, 1), [
+      fixtureLine(a, T0, {
+        op: "activity-log.loss",
+        fields: { trigger: "heartbeat", totalLost: 1, clientRejected: 1 },
+      }),
+      fixtureLine(a, T0 + 1, {
+        op: "activity-log.loss",
+        fields: { trigger: "heartbeat", totalLost: 2, clientRejected: 1, schemaRejected: 1 },
+      }),
+      fixtureLine(a, T0 + 2, {
+        op: "activity-log.segment.sealed",
+        correlationId: "unknown-correlation-id",
+        fields: {
+          completeness: "complete",
+          loss: "none",
+          sealReason: "close",
+          segmentIndex: 1,
+          segmentFirstSeq: 1,
+          segmentLastSeq: 3,
+          segmentLineCount: 3,
+          segmentBytes: 512,
+          segmentDurationMs: 1,
+          droppedEventCount: 0,
+          segmentByteLimit: 1_048_576,
+          segmentSecondsLimit: 3600,
+        },
+      }),
+      fixtureLine(a, T0 + 3, {
+        op: "activity-log.segment.sealed",
+        correlationId: "unknown-correlation-id",
+        fields: {
+          completeness: "partial",
+          loss: "event-dropped",
+          sealReason: "close",
+          segmentIndex: 1,
+          segmentFirstSeq: 1,
+          segmentLastSeq: 4,
+          segmentLineCount: 4,
+          segmentBytes: 512,
+          segmentDurationMs: 1,
+          droppedEventCount: 1,
+          segmentByteLimit: 1_048_576,
+          segmentSecondsLimit: 3600,
+        },
+      }),
+    ]);
+    ensure();
+    const directory = segmentManifestDirectory(stateDir);
+    const name = readdirSync(directory).find((entry) => entry.includes("-3303-")) ?? "";
+    const manifest = parseSegmentManifest(
+      readFileSync(join(directory, name), "utf8"),
+      parseSegmentManifestFileName(name) ?? "",
+    );
+    expect(manifest).toMatchObject({ lossLineCount: 2, processLossLineCount: 2 });
   });
 
   it("classifies a torn tail as truncated and never as a line of evidence", () => {

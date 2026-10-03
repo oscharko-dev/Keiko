@@ -56,48 +56,35 @@ afterEach(() => {
   }
 });
 
-describe("workspace state persistence", () => {
-  it("persists a versioned envelope and reloads it after in-memory reset", async () => {
+describe("workspace state ownership", () => {
+  it("keeps layout in memory even when the launcher supplies a UI data directory", async () => {
     const dataDir = tempDir();
     process.env.KEIKO_UI_DATA_DIR = dataDir;
-    const body = {
-      windows: [
-        { id: "files-1", type: "files", x: 1, y: 2, w: 3, h: 4, z: 5, cfg: {}, max: false },
-      ],
-      connections: [],
-    };
-
+    const deps = { env: { KEIKO_UI_DATA_DIR: dataDir } };
+    const windows = [{ id: "files-1", type: "files", cfg: { root: "/workspace" } }];
     const put = await handlePutWorkspaceState(
-      context("PUT", body, { "if-match": '"workspace-state-0"' }),
+      context("PUT", { windows, connections: [] }, { "if-match": '"workspace-state-0"' }),
+      deps,
     );
     expect(put.status).toBe(200);
-    const stored = JSON.parse(readFileSync(join(dataDir, "workspace-state.json"), "utf8")) as {
-      schemaVersion: number;
-      workspace: { revision: number; windows: unknown[] };
-    };
-    expect(stored.schemaVersion).toBe(1);
-    expect(stored.workspace.revision).toBe(1);
-
+    expect(handleGetWorkspaceState(context("GET"), deps).body).toMatchObject({
+      workspace: { revision: 1, windows },
+    });
+    expect(readdirSync(dataDir)).toEqual([]);
     resetWorkspaceStateForTests();
-    const get = handleGetWorkspaceState(context("GET"));
-
-    expect(get.status).toBe(200);
-    expect(get.body).toMatchObject({ workspace: { revision: 1 } });
+    expect(handleGetWorkspaceState(context("GET"), deps).body).toMatchObject({
+      workspace: { revision: 0, windows: [], connections: [] },
+    });
   });
 
-  it("quarantines a corrupt persisted envelope and starts from revision zero", () => {
+  it("never reads or quarantines an unrelated disk layout", () => {
     const dataDir = tempDir();
     process.env.KEIKO_UI_DATA_DIR = dataDir;
     writeFileSync(join(dataDir, "workspace-state.json"), "{not valid json", "utf8");
-
     const get = handleGetWorkspaceState(context("GET"));
-
     expect(get.status).toBe(200);
     expect(get.body).toMatchObject({ workspace: { revision: 0, windows: [], connections: [] } });
-    const siblings = readdirSync(dataDir);
-    expect(siblings.some((name) => name.startsWith("workspace-state.json.corrupt."))).toBe(true);
-    expect(
-      siblings.some((name) => /^workspace-state\.json\.corrupt\..*\.diagnostic\.json$/u.test(name)),
-    ).toBe(true);
+    expect(readdirSync(dataDir)).toEqual(["workspace-state.json"]);
+    expect(readFileSync(join(dataDir, "workspace-state.json"), "utf8")).toBe("{not valid json");
   });
 });

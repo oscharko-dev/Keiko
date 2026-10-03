@@ -2,6 +2,7 @@ import { act, render, renderHook, screen, waitFor } from "@testing-library/react
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { toUserErrorNotice } from "../format-error";
 import type {
   Chat,
   ChatGitChangeScope,
@@ -2570,7 +2571,35 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
       await result.current.sendMessage({ text: "summarise the retained conversation" });
     });
 
-    expect(result.current.error).toBe(CONTEXT_OVERSIZED_USER_MESSAGE);
+    // The single actionable message now carries its code, so the notice localizes it (1.1.13).
+    expect(result.current.error).toBe(
+      `${CONTEXT_OVERSIZED_USER_MESSAGE} (GATEWAY_CONTEXT_OVERFLOW)`,
+    );
+    expect(toUserErrorNotice(result.current.error, "fallback").title).toBe(
+      "Request larger than the context window",
+    );
+  });
+
+  // PR #3678 review: an oversized attachment is not a context-window overflow. The overflow notice
+  // told the user to resend a request that fails the same way.
+  it("keeps an oversized-attachment error apart from the context-window notice", async () => {
+    vi.mocked(sendDesktopChat).mockRejectedValueOnce(
+      new ApiError(
+        "CONVERSATION_OVERSIZED_CONTEXT",
+        "Attached content exceeds the conversation context budget. Remove or shorten attachments.",
+        400,
+      ),
+    );
+    const { result } = await setupUngroundedSession();
+
+    await act(async () => {
+      await result.current.sendMessage({ text: "summarise the attachment" });
+    });
+
+    expect(result.current.error).not.toContain(CONTEXT_OVERSIZED_USER_MESSAGE);
+    const notice = toUserErrorNotice(result.current.error, "fallback");
+    expect(notice.title).not.toBe("Request larger than the context window");
+    expect(notice.message).toBe("Attached content is too large. Shorten or remove it.");
   });
 
   it("prefers the explicit text and preserves the user's typed draft", async () => {
@@ -2585,6 +2614,16 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
 
     expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe("spoken question wins");
     expect(result.current.draft).toBe("stale draft");
+  });
+
+  it("submits live typed text and clears an older React draft after admission", async () => {
+    const { result } = await setupUngroundedSession();
+    act(() => result.current.setDraft("older draft"));
+    await act(async () => {
+      await result.current.sendMessage({ text: "Immediate send", clearDraftOnAdmission: true });
+    });
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]?.content).toBe("Immediate send");
+    expect(result.current.draft).toBe("");
   });
 
   it("ignores a whitespace-only explicit text (committed-only invariant)", async () => {

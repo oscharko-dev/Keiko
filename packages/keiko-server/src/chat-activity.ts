@@ -179,6 +179,7 @@ const CHAT_CONTEXT_SELECTED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["verbatim", "compacted"],
     },
+    omittedSummaryCategories: { type: "integer", dataClass: "count", required: true },
     compactedHistoryMessages: { type: "integer", dataClass: "count", required: true },
     retainedHistoryMessages: { type: "integer", dataClass: "count", required: true },
     tokensBefore: { type: "integer", dataClass: "count", required: true },
@@ -396,9 +397,8 @@ export function logChatContextSelection(
 ): void {
   const { compaction, diagnostics } = assembly;
   const compacted = compaction !== undefined;
-  const history = diagnostics.lanes.find((lane) => lane.laneId === "history-summary");
-  const tokensBefore = compaction?.tokensBefore ?? 0;
-  const tokensAfter = compaction?.tokensAfter ?? 0;
+  const historyMetrics = contextHistoryMetrics(assembly);
+  const { tokensBefore, tokensAfter } = historyMetrics;
   const textTokens = estimateFinalPromptTokens(
     assembly.messages,
     diagnostics.profile.tokenAccounting,
@@ -410,10 +410,7 @@ export function logChatContextSelection(
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         state: compacted ? "compacted" : "verbatim",
-        compactedHistoryMessages: compaction?.itemsBefore ?? 0,
-        retainedHistoryMessages: Math.max(0, (history?.includedItems ?? 0) - Number(compacted)),
-        tokensBefore,
-        tokensAfter,
+        ...historyMetrics,
         tokensSaved: Math.max(0, tokensBefore - tokensAfter),
         promptTokens: diagnostics.totalEstimatedTokens,
         inputBudget: diagnostics.profile.effectiveInputBudget,
@@ -424,6 +421,25 @@ export function logChatContextSelection(
       },
     ),
   );
+}
+
+function contextHistoryMetrics(assembly: GatewayPromptAssembly): {
+  readonly omittedSummaryCategories: number;
+  readonly compactedHistoryMessages: number;
+  readonly retainedHistoryMessages: number;
+  readonly tokensBefore: number;
+  readonly tokensAfter: number;
+} {
+  const history = assembly.diagnostics.lanes.find((lane) => lane.laneId === "history-summary");
+  const compacted = assembly.compaction !== undefined;
+  const compaction = assembly.compaction ?? { itemsBefore: 0, tokensBefore: 0, tokensAfter: 0 };
+  return {
+    omittedSummaryCategories: history?.provenanceCounts?.omittedSummaryCategories ?? 0,
+    compactedHistoryMessages: compaction.itemsBefore,
+    retainedHistoryMessages: Math.max(0, (history?.includedItems ?? 0) - Number(compacted)),
+    tokensBefore: compaction.tokensBefore,
+    tokensAfter: compaction.tokensAfter,
+  };
 }
 
 /** Connect durable assistant identities to each successful request, including replay/regeneration. */

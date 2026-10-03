@@ -15,6 +15,12 @@ import type { ChatSessionApi, SendMessageOutcome } from "./hooks/useChatSession"
 import * as api from "@/lib/api";
 import type { Chat, ModelCapability, VoiceCapabilityResolution } from "@/lib/types";
 
+// Every text synthesized so far. Negative pins compare texts, independent of the request's other
+// arguments (signal, turn correlation), so a new argument never turns them vacuous.
+function spokenTexts(): readonly string[] {
+  return vi.mocked(api.synthesizeAssistantSpeech).mock.calls.map(([input]) => input.text);
+}
+
 const realtimeVoiceMock = vi.hoisted(() => ({
   start: vi.fn(),
   stop: vi.fn(),
@@ -1253,6 +1259,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       expect(api.synthesizeAssistantSpeech).toHaveBeenCalledWith(
         { persona: "male", text: "The release is green." },
         expect.any(AbortSignal),
+        expect.any(String),
       ),
     );
 
@@ -1296,10 +1303,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     );
 
     expect(api.synthesizeAssistantSpeech).toHaveBeenCalledTimes(1);
-    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalledWith(
-      { persona: "male", text: "This later text-only update must stay silent." },
-      expect.any(AbortSignal),
-    );
+    expect(spokenTexts()).not.toContain("This later text-only update must stay silent.");
   });
 
   it("speaks only the assistant message identified by the canonical send outcome", async () => {
@@ -1366,12 +1370,10 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       expect(api.synthesizeAssistantSpeech).toHaveBeenCalledWith(
         { persona: "male", text: "This answer belongs to the spoken turn." },
         expect.any(AbortSignal),
+        expect.any(String),
       ),
     );
-    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalledWith(
-      { persona: "male", text: "This newer answer belongs to another send." },
-      expect.any(AbortSignal),
-    );
+    expect(spokenTexts()).not.toContain("This newer answer belongs to another send.");
   });
 
   it("does not arm speech for a blocked canonical send or a later unrelated answer", async () => {
@@ -1429,10 +1431,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       </ChatSessionProvider>,
     );
 
-    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalledWith(
-      { persona: "male", text: "This unrelated answer must stay silent." },
-      expect.any(AbortSignal),
-    );
+    expect(spokenTexts()).not.toContain("This unrelated answer must stay silent.");
   });
 
   it("never speaks a late pre-leave answer after re-entry and speaks the new exact answer", async () => {
@@ -1482,6 +1481,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       expect(api.synthesizeAssistantSpeech).toHaveBeenCalledWith(
         { persona: "male", text: "Answer B" },
         expect.any(AbortSignal),
+        expect.any(String),
       ),
     );
 
@@ -1503,10 +1503,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       </ChatSessionProvider>,
     );
 
-    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalledWith(
-      { persona: "male", text: "Late answer A" },
-      expect.any(AbortSignal),
-    );
+    expect(spokenTexts()).not.toContain("Late answer A");
     expect(realtimeVoiceMock.stop).toHaveBeenCalledOnce();
   });
 
@@ -1566,10 +1563,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       </ChatSessionProvider>,
     );
 
-    expect(api.synthesizeAssistantSpeech).not.toHaveBeenCalledWith(
-      { persona: "male", text: "Must not speak in B" },
-      expect.any(AbortSignal),
-    );
+    expect(spokenTexts()).not.toContain("Must not speak in B");
   });
 
   it("uses the same dialogue switch to leave dialogue mode and run cleanup", async () => {

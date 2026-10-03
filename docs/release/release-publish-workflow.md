@@ -254,8 +254,10 @@ owner requested the commit with the release button, and `authorize` accepts the 
 
 `npm run set-version -- <version>` moves the product version everywhere it lives mechanically: the
 root and every workspace `package.json`, every dependency pin one workspace package holds on
-another, the exported `KEIKO_*_VERSION` constants, and the lockfile through
-`npm install --package-lock-only`. It ends by running `check:version-consistency`, which also
+another, the exported `KEIKO_*_VERSION` constants, the lockfile through
+`npm install --package-lock-only`, and the support registry history: every stable release tag from
+1.1.9 up to the new version is captured, so `keiko support analyze` keeps validating reports and
+incidents from each older supported release (it needs the release tags locally). It ends by running `check:version-consistency`, which also
 refuses a lockfile entry or pin left behind: the 1.0.0 cut was written by hand and left
 `package-lock.json`'s 26 workspace entries at 0.3.17 while every manifest said 1.0.0. The
 release-impact catalog entry, `docs/PUBLIC_API_SURFACE.md` and the regenerated evidence documents

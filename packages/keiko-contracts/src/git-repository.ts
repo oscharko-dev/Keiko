@@ -155,6 +155,10 @@ export interface GitRepositoryStatusResponse {
   readonly untrackedCount: number;
   readonly conflictedCount: number;
   readonly changes: readonly GitChangedFile[];
+  /** True when Git reports the selected directory itself as ignored. */
+  readonly selectedRootIgnored?: boolean | undefined;
+  /** Fully untracked directories, omitted when either source listing is incomplete. */
+  readonly untrackedDirectories?: readonly string[] | undefined;
   readonly truncated: boolean;
   readonly maxChanges: number;
 }
@@ -291,6 +295,24 @@ function validateChangesArray(input: Readonly<Record<string, unknown>>, reasons:
   }
 }
 
+function validateStatusPresentation(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
+  if (input.selectedRootIgnored !== undefined && !isBoolean(input.selectedRootIgnored)) {
+    reasons.push("selectedRootIgnored must be a boolean when present");
+  }
+  if (
+    input.untrackedDirectories !== undefined &&
+    (!Array.isArray(input.untrackedDirectories) ||
+      !input.untrackedDirectories.every(isString) ||
+      (isNonNegativeInteger(input.maxChanges) &&
+        input.untrackedDirectories.length > input.maxChanges))
+  ) {
+    reasons.push("untrackedDirectories must be a bounded string array when present");
+  }
+}
+
 // Git status is a compact wire envelope with several required counters and flags; keeping the
 // validator in one place makes failure messages predictable for tests and callers.
 export function validateGitRepositoryStatusResponse(input: unknown): GitRepositoryValidation {
@@ -307,6 +329,7 @@ export function validateGitRepositoryStatusResponse(input: unknown): GitReposito
   }
   validateStatusCounters(input, reasons);
   validateChangesArray(input, reasons);
+  validateStatusPresentation(input, reasons);
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 

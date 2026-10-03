@@ -54,8 +54,8 @@ deleting live pages that were simply not visited due to budget constraints.
 
    ```bash
    # Find the refresh request and its outcome in the redacted Activity Log.
-   keiko support export --out keiko-support.jsonl
-   keiko support analyze keiko-support.jsonl --clusters
+   keiko support export   # prints the path of the private report it writes
+   keiko support analyze <report.json> --clusters
    ```
 
    Look for log lines mentioning page count, byte size, or depth bounds that were hit.
@@ -120,8 +120,8 @@ corrupting the vector index.
 
    ```bash
    # Look for failed model calls (http.gateway.fetch.failed) and their errorKind.
-   keiko support export --out keiko-support.jsonl
-   keiko support analyze keiko-support.jsonl --clusters
+   keiko support export   # prints the path of the private report it writes
+   keiko support analyze <report.json> --clusters
    ```
 
 **Resolution**
@@ -221,8 +221,8 @@ Reasons the indexing phase can fail or be cancelled include:
 
    ```bash
    # Look for failed or cancelled refresh requests and their errorKind.
-   keiko support export --out keiko-support.jsonl
-   keiko support analyze keiko-support.jsonl --clusters
+   keiko support export   # prints the path of the private report it writes
+   keiko support analyze <report.json> --clusters
    ```
 
    Look for a stack trace or error message that indicates the root cause (gateway error,
@@ -308,8 +308,8 @@ the operator is told to investigate.
 
    ```bash
    # Look for the refresh request and its errorKind.
-   keiko support export --out keiko-support.jsonl
-   keiko support analyze keiko-support.jsonl --clusters
+   keiko support export   # prints the path of the private report it writes
+   keiko support analyze <report.json> --clusters
    ```
 
 **Resolution**

@@ -16,7 +16,7 @@ import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import type { KnowledgeCapsuleMigration, StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleMigration } from "@oscharko-dev/keiko-contracts";
 import {
   KNOWLEDGE_CAPSULE_MIGRATIONS,
   KNOWLEDGE_CAPSULE_TABLES,
@@ -29,6 +29,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
+  assertSqliteStatePath,
   chmodIfPresent,
   ensureDirHardened,
   FILE_MODE,
@@ -53,10 +54,7 @@ import {
   PLAINTEXT_CONTENT_CIPHER,
   type StoreContentCipher,
 } from "./store-content-cipher.js";
-import {
-  applyStoreContentEncryption,
-  readStoreEncryptionMode,
-} from "./store-content-encryption.js";
+import { applyStoreContentEncryption } from "./store-content-encryption.js";
 import type { VectorIndexOptions } from "./retrieval/vector-index.js";
 
 const KNOWLEDGE_STORE_QUARANTINED_OPERATION = defineActivityLogOperation({
@@ -446,7 +444,9 @@ function quarantineFile(target: string, cause?: unknown): void {
   );
 }
 
-function tryOpenAndMigrate(dbPath: string): OpenAttempt {
+function tryOpenAndMigrate(dbPath: string, logSink?: KnowledgeLogSink): OpenAttempt {
+  if (dbPath !== ":memory:")
+    assertSqliteStatePath(dbPath, { store: "local-knowledge", sink: logSink });
   let db: DatabaseSync;
   try {
     db = new DatabaseSync(dbPath);
@@ -532,12 +532,14 @@ function logStoreQuarantine(
 }
 
 export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeStore {
+  if (opts.dbPath !== ":memory:")
+    assertSqliteStatePath(opts.dbPath, { store: "local-knowledge", sink: opts.logSink });
   ensureDirHardened(dirname(opts.dbPath));
-  let attempt = tryOpenAndMigrate(opts.dbPath);
+  let attempt = tryOpenAndMigrate(opts.dbPath, opts.logSink);
   if (attempt.status === "corrupt") {
     const corruptionCause = attempt.cause;
     quarantineFile(opts.dbPath, corruptionCause);
-    attempt = tryOpenAndMigrate(opts.dbPath);
+    attempt = tryOpenAndMigrate(opts.dbPath, opts.logSink);
     logStoreQuarantine(opts, corruptionCause, attempt.status === "ok");
   }
   if (attempt.status !== "ok") {
@@ -581,89 +583,5 @@ export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeSt
       handle.close();
     },
     _internal: { db: handle, now, contentCipher },
-  };
-}
-
-// ─── Store fingerprint (Wave 4a, epic #3233 §6.2) ──────────────────────────────
-//
-// A redacted, point-in-time snapshot of this store's schema/integrity state, embedded in the
-// support bundle manifest's `storeFingerprints` array. Read-only and never throwing: a bundle
-// export must not fail because the store it is reporting on is itself unhealthy — an unreadable
-// signal degrades to its own closed-vocabulary "unavailable" reading rather than aborting the
-// whole fingerprint.
-
-// Genuinely read-only open for a diagnostic snapshot. Unlike `openKnowledgeStore` above, this
-// never runs `runMigrations`, `applyStoreContentEncryption`, or the corruption-quarantine reopen
-// loop — every one of those is a write, and a fingerprint export must not migrate, re-encrypt, or
-// quarantine the very store an operator is trying to inspect. It also returns the raw handle
-// rather than a `KnowledgeStore`, so a caller never needs to reach into `KnowledgeStore._internal`
-// (deliberately package-private, see the doc comment on `KnowledgeStore` above) just to fingerprint
-// a store. `computeStoreFingerprint` below needs only `PRAGMA user_version`/`quick_check` and fixed
-// `SELECT COUNT(*)` reads, none of which need write access.
-export function openKnowledgeStoreReadOnly(dbPath: string): DatabaseSync {
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  // A short busy_timeout (Finding 2) so a reader opened with no wait bound does not spuriously
-  // report the store `open-failed` on an immediate SQLITE_BUSY from a concurrent WAL checkpoint
-  // or schema-changing transaction on a live production server. Connection-local PRAGMA: no write,
-  // does not throw on a `readOnly: true` handle, so the read-only guarantee above is unaffected.
-  db.exec(`PRAGMA busy_timeout = ${String(LK_STORE_BUSY_TIMEOUT_MS)}`);
-  return db;
-}
-
-// Reuses the SAME source list and comparison `runMigrations` already applies (`version` vs the
-// current `PRAGMA user_version`), just inverted: applied, not pending. Migration-group names are
-// `v<version>` — the manifest only carries `version`/`reason`, and `reason` is a free-text
-// sentence unsafe to embed verbatim in a redacted manifest field.
-function migrationsAppliedThrough(schemaVersion: number): readonly string[] {
-  return KNOWLEDGE_CAPSULE_MIGRATIONS.filter((migration) => migration.version <= schemaVersion).map(
-    (migration) => `v${String(migration.version)}`,
-  );
-}
-
-interface RowCount {
-  readonly n: number;
-}
-
-// `KNOWLEDGE_CAPSULE_TABLES` is the same FIXED, package-owned table list `expectedTablesPresent`
-// already validates post-migration — never a dynamic walk of `sqlite_master`, and never a
-// caller-influenced name reaching SQL text.
-function tableRowCountsFor(db: DatabaseSync): Readonly<Record<string, number>> {
-  const counts: Record<string, number> = {};
-  for (const table of KNOWLEDGE_CAPSULE_TABLES) {
-    const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as RowCount | undefined;
-    counts[table] = row?.n ?? 0;
-  }
-  return counts;
-}
-
-// A boolean projection of `assertQuickCheckOk`'s pass/fail — never the raw check-output rows,
-// and never throwing: a fingerprint reports a bad quick_check as `false` rather than aborting the
-// whole manifest assembly over one store's integrity.
-function quickCheckOkFor(db: DatabaseSync): boolean {
-  try {
-    assertQuickCheckOk(db);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Computes a {@link StoreFingerprint} for this package's capsule store. Read-only, pure
- * introspection over an already-open handle — never mutates, never throws.
- *
- * `keySource` is intentionally omitted: `KnowledgeStoreKeyProvider` carries only `providerId`,
- * with no key-resolution-tier concept to report (unlike the vault-backed stores this field also
- * covers), and this function takes only `db` so it has no provider to ask in any case.
- */
-export function computeStoreFingerprint(db: DatabaseSync): StoreFingerprint {
-  const schemaVersion = currentUserVersion(db);
-  return {
-    store: "local-knowledge",
-    schemaVersion,
-    migrationsApplied: migrationsAppliedThrough(schemaVersion),
-    tableRowCounts: tableRowCountsFor(db),
-    quickCheckOk: quickCheckOkFor(db),
-    encryptionMode: readStoreEncryptionMode(db),
   };
 }

@@ -18,8 +18,10 @@ import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
   WorkspaceBinding,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { Icons, type IconName } from "../Icons";
 import { useOptionalActiveWorkspace } from "../context/ActiveWorkspaceContext";
 import { useOptionalChatSessionProject } from "../context/ChatSessionContext";
@@ -88,6 +90,7 @@ const WINDOW_TRAFFIC_GROUP_STYLE: CSSProperties = {
 };
 
 interface WindowFrameProps {
+  readonly layoutLocked?: boolean;
   readonly win: AppWindow;
   readonly top: boolean;
   readonly connState: ConnState;
@@ -179,6 +182,7 @@ interface SelectBodyOptions {
   readonly selectedRoot: string | null;
   readonly activeRoot: string | null;
   readonly activeBinding: WorkspaceBinding | null;
+  readonly activeInstance: WorkspaceInstance | null;
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly focusWindow: (id: string) => void;
@@ -200,6 +204,7 @@ function selectBody({
   selectedRoot,
   activeRoot,
   activeBinding,
+  activeInstance,
   updateCfg,
   openWindow,
   focusWindow,
@@ -234,6 +239,7 @@ function selectBody({
         selectedRoot,
         activeRoot,
         activeBinding,
+        activeInstance,
         updateCfg,
         openWindow,
         focusWindow,
@@ -264,6 +270,7 @@ function selectBody({
       selectedRoot,
       activeRoot,
       activeBinding,
+      activeInstance,
       updateCfg,
       openWindow,
       focusWindow,
@@ -858,25 +865,34 @@ function raiseWindowForInteraction(api: WorkspaceApi, id: string): void {
 // window the user had moved to in the meantime — observed as a "Close Files window" click that
 // could never land because the editor kept re-raising itself over it.
 //
-// Two facts separate the two cases, both already recorded by the product:
-//   * the app shell writes `document.documentElement.dataset.inputModality` and sets it to
-//     `keyboard` only for a bare Tab keydown (pointer presses set `pointer`), and
-//   * a focus stolen by a window's own content arrives while the previously focused element sits
-//     in ANOTHER window.
-// Raise when the modality says the user tabbed here, or when the focus did not come out of a
-// different window at all. A pointer press never needs this path: `onPointerDown` raises first.
-function focusCameFromAnotherWindow(relatedTarget: EventTarget | null): boolean {
-  if (!(relatedTarget instanceof Element)) return false;
-  const previousWindow = relatedTarget.closest(".window");
-  if (previousWindow === null) return false;
-  return previousWindow !== relatedTarget.ownerDocument.activeElement?.closest(".window");
+// Only a recorded Tab traversal requests a keyboard raise. Programmatic focus from a closing
+// palette, the document body or a null relatedTarget is not evidence of a user switching windows.
+function raisesOnKeyboardFocus(): boolean {
+  return (
+    typeof document !== "undefined" && document.documentElement.dataset.inputModality === "keyboard"
+  );
 }
 
-function raisesOnKeyboardFocus(relatedTarget: EventTarget | null): boolean {
-  const tabbed =
-    typeof document !== "undefined" &&
-    document.documentElement.dataset.inputModality === "keyboard";
-  return tabbed || !focusCameFromAnotherWindow(relatedTarget);
+function deferredKeyboardFocusStillOwnsWindow(frame: HTMLElement, interaction: number): boolean {
+  return (
+    frame.isConnected &&
+    frame.closest("[inert]") === null &&
+    windowInteractionCount === interaction &&
+    frame.contains(document.activeElement)
+  );
+}
+
+function deferKeyboardWindowRaise(frame: HTMLElement, api: WorkspaceApi, id: string): void {
+  const interaction = windowInteractionCount;
+  window.setTimeout(() => {
+    if (!deferredKeyboardFocusStillOwnsWindow(frame, interaction)) {
+      reportClientDiagnostic("workspace-window: deferred keyboard focus superseded", {
+        kind: "other",
+      });
+      return;
+    }
+    api.focus(id);
+  }, 0);
 }
 
 function delayedFocusStillTargetsWindow(target: EventTarget | null): boolean {
@@ -884,6 +900,28 @@ function delayedFocusStillTargetsWindow(target: EventTarget | null): boolean {
   const activeElement = document.activeElement;
   if (activeElement === null || activeElement === document.body) return true;
   return target.closest(".window")?.contains(activeElement) === true;
+}
+
+function resizeHandlesAllowed(maximized: boolean, layoutLocked: boolean): boolean {
+  return !maximized && !layoutLocked;
+}
+
+function windowBodyStyle(
+  enableContentVisibility: boolean,
+  width: number,
+  height: number,
+  overflow: "hidden" | undefined,
+): CSSProperties {
+  return {
+    contain: "layout style paint",
+    ...(enableContentVisibility
+      ? {
+          contentVisibility: "auto",
+          containIntrinsicSize: `${String(Math.round(width))}px ${String(Math.round(height))}px`,
+        }
+      : {}),
+    ...(overflow === undefined ? {} : { overflow }),
+  };
 }
 
 // `linkRevision` only feeds the React.memo comparison and the linked-context
@@ -896,6 +934,7 @@ function WindowFrameImpl({
   connState,
   api,
   wsRef,
+  layoutLocked = false,
   selected = false,
   selectedWindowCount = 0,
   linkRevision,
@@ -911,6 +950,7 @@ function WindowFrameImpl({
   const selectedRoot = activeProject?.available === true ? activeProject.path : null;
   const activeRoot = activeWorkspace?.activeRoot ?? null;
   const activeBinding = activeWorkspace?.activeBinding ?? null;
+  const activeInstance = activeWorkspace?.activeInstance ?? null;
   const [draggingWindow, setDraggingWindow] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const resizeCleanupRef = useRef<((flushPending?: boolean) => void) | null>(null);
@@ -994,6 +1034,7 @@ function WindowFrameImpl({
         selectedRoot,
         activeRoot,
         activeBinding,
+        activeInstance,
         updateCfg,
         openWindow,
         focusWindow,
@@ -1014,6 +1055,7 @@ function WindowFrameImpl({
       selectedRoot,
       activeRoot,
       activeBinding,
+      activeInstance,
       updateCfg,
       openWindow,
       focusWindow,
@@ -1043,7 +1085,15 @@ function WindowFrameImpl({
   }, [currentAutoGrowContentKey]);
 
   useEffect(() => {
-    if (!shouldAutoGrowWindow(win.type, win.cfg) || win.max || bodyMode !== "full") return;
+    if (
+      !autoGrowLayoutAllowed(
+        layoutLocked,
+        shouldAutoGrowWindow(win.type, win.cfg),
+        win.max,
+        bodyMode,
+      )
+    )
+      return;
     if (currentAutoGrowContentKey === null) return;
     const body = bodyRef.current;
     if (body === null) return;
@@ -1079,7 +1129,17 @@ function WindowFrameImpl({
       }
       observer?.disconnect();
     };
-  }, [api, bodyMode, currentAutoGrowContentKey, win.cfg, win.h, win.id, win.max, win.type]);
+  }, [
+    api,
+    bodyMode,
+    currentAutoGrowContentKey,
+    layoutLocked,
+    win.cfg,
+    win.h,
+    win.id,
+    win.max,
+    win.type,
+  ]);
 
   useEffect(
     () => () => {
@@ -1120,7 +1180,7 @@ function WindowFrameImpl({
 
   const onHeaderPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLElement>): void => {
-      if (!isWindowDragPointer(e)) return;
+      if (layoutLocked || !isWindowDragPointer(e)) return;
       // When this window is a valid drop target for an in-flight connect, the
       // bubbling onPointerDown on <section> below confirms the link — don't
       // also start a header-drag, which would tear the window away from the
@@ -1165,6 +1225,7 @@ function WindowFrameImpl({
       connState,
       selected,
       selectedWindowCount,
+      layoutLocked,
       activateWindowForTarget,
     ],
   );
@@ -1172,7 +1233,7 @@ function WindowFrameImpl({
   const startResize = useCallback(
     (dir: Handle) =>
       (e: ReactPointerEvent<HTMLDivElement>): void => {
-        if (!isPrimaryActivationPointer(e)) return;
+        if (layoutLocked || !isPrimaryActivationPointer(e)) return;
         e.preventDefault();
         e.stopPropagation();
         resizeCleanupRef.current?.();
@@ -1193,7 +1254,17 @@ function WindowFrameImpl({
           resizeCleanupRef,
         );
       },
-    [api, win.id, win.x, win.y, win.w, win.h, win.type, suppressAutoGrowForManualResize],
+    [
+      api,
+      layoutLocked,
+      win.id,
+      win.x,
+      win.y,
+      win.w,
+      win.h,
+      win.type,
+      suppressAutoGrowForManualResize,
+    ],
   );
 
   // Stop propagation BEFORE delegating, so the parent .window's onPointerDown
@@ -1333,16 +1404,7 @@ function WindowFrameImpl({
       ? "hidden"
       : undefined;
   const bodyStyle = useMemo<CSSProperties>(
-    () => ({
-      ...(enableContentVisibility
-        ? {
-            contain: "layout style paint",
-            contentVisibility: "auto",
-            containIntrinsicSize: `${String(Math.round(ew))}px ${String(Math.round(eh))}px`,
-          }
-        : { contain: "layout style paint" }),
-      ...(bodyOverflow === undefined ? {} : { overflow: bodyOverflow }),
-    }),
+    () => windowBodyStyle(enableContentVisibility, ew, eh, bodyOverflow),
     [bodyOverflow, enableContentVisibility, ew, eh],
   );
   const sectionStyle = useMemo<CSSProperties>(
@@ -1414,8 +1476,8 @@ function WindowFrameImpl({
       // The !top guard matters: makeFocus bumps z unconditionally, so without it
       // every Tab step inside the top window would trigger a state update.
       onFocusCapture={(event) => {
-        if (!top && raisesOnKeyboardFocus(event.relatedTarget)) {
-          window.setTimeout(() => api.focus(win.id), 0);
+        if (!top && raisesOnKeyboardFocus()) {
+          deferKeyboardWindowRaise(event.currentTarget, api, win.id);
         }
       }}
     >
@@ -1425,9 +1487,10 @@ function WindowFrameImpl({
           {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
           <header
             className="win-head"
+            data-window-header
             onPointerDown={onHeaderPointerDown}
             onDoubleClick={(e) => {
-              if (shouldMaximizeFromHeaderDoubleClick(e)) api.maximize(win.id);
+              if (!layoutLocked && shouldMaximizeFromHeaderDoubleClick(e)) api.maximize(win.id);
             }}
           >
             <span
@@ -1518,6 +1581,7 @@ function WindowFrameImpl({
               <button
                 type="button"
                 className="win-traffic-btn win-traffic-maximize ui-tip"
+                disabled={layoutLocked}
                 data-tip={win.max ? "Restore" : "Full screen"}
                 aria-label={
                   win.max
@@ -1555,13 +1619,19 @@ function WindowFrameImpl({
               </button>
             </fieldset>
           </header>
-          <div ref={bodyRef} className="win-body" data-mode={bodyMode} style={bodyStyle}>
+          <div
+            ref={bodyRef}
+            className="win-body"
+            data-window-body
+            data-mode={bodyMode}
+            style={bodyStyle}
+          >
             {/* GEN-STAB-WINDOW-001 — a widget render throw degrades THIS body, not the canvas. */}
             <WindowBodyBoundary windowType={win.type}>{body}</WindowBodyBoundary>
           </div>
         </div>
       </div>
-      {!win.max
+      {resizeHandlesAllowed(win.max, layoutLocked)
         ? HANDLES.map((d: Handle) => (
             // GEN-UI-INTERACTION-007 — the resize handles are pointer-only affordances;
             // keyboard resize is the Alt+Arrow chord (useKeyboardCtrls). aria-hidden
@@ -1601,3 +1671,12 @@ function WindowFrameImpl({
 // `top`/`connState`/`linkRevision` are primitives. Default shallow comparison is
 // therefore sufficient and correct — `linkRevision` covers cross-window context.
 export const WindowFrame = memo(WindowFrameImpl);
+
+function autoGrowLayoutAllowed(
+  locked: boolean,
+  capable: boolean,
+  maximized: boolean | undefined,
+  mode: string,
+): boolean {
+  return !locked && capable && !maximized && mode === "full";
+}

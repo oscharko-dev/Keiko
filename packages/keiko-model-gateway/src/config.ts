@@ -15,6 +15,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { VOICE_PERSONAS, VOICE_PROVIDER_LOCALITIES } from "./types.js";
 import {
+  PLACEHOLDER_CHAT_CONTEXT_WINDOW,
+  RUNTIME_CONFIGURED_CAPABILITY_LIMITATION,
+} from "./capabilities.js";
+import {
   MODEL_REASONING_EFFORTS,
   PROVIDER_ENDPOINT_STYLES,
   REALTIME_AUTH_MODES,
@@ -22,6 +26,10 @@ import {
   isVoiceCapability,
   modelSupportsSpeechOutput,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  OWN_ASSESSMENT_POLICIES,
+  type OwnAssessmentPolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import { outboundTargetBlockedReason } from "./egress-policy.js";
 import { projectSafeCapabilities, type SafeModelCapability } from "./model-selection.js";
 import { validatedPrDescriptionLogoUrl } from "./prDescription/render.js";
@@ -32,6 +40,7 @@ import type {
   FigmaConnectorConfig,
   GatewayBrandingConfig,
   GatewayConfig,
+  GroundedAnswersConfig,
   InfillingAlignment,
   LatencyClass,
   ModelCapability,
@@ -1028,6 +1037,52 @@ function migrateChatCapabilityContextWindow(raw: unknown): unknown {
   return { ...raw, contextWindow: LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT };
 }
 
+// Configurations persisted before 1.1.14 stored an undeclared chat window as the bare 4,096 setup
+// placeholder, indistinguishable from a declared one, so every conversation surface planned such a
+// model as a 4k model (customer report on 1.1.13). A record that still carries the placeholder
+// signature — the placeholder window, the runtime-configured limitation, no explicit flag, and either
+// no declared output limit or one larger than the whole placeholder window (a discovery that declared
+// an output limit but no window; an output cannot exceed the window it belongs to) — is marked as
+// assumed at the file-load boundary. A limit that fits, including exactly 4,096, may describe a
+// genuinely declared small model and stays declared. A wrong guess is safe: the provider's overflow
+// answer or the startup context-window probe replaces it with the real window.
+// A provider-reported window carries its own provenance and is never reclassified, even when the
+// provider stated exactly 4,096 tokens.
+function markAssumedChatCapability(raw: unknown): unknown {
+  if (!isRecord(raw) || raw.kind !== "chat") return raw;
+  if (raw.contextWindowAssumed !== undefined || raw.contextWindowReported !== undefined) return raw;
+  const placeholder =
+    raw.contextWindow === PLACEHOLDER_CHAT_CONTEXT_WINDOW &&
+    placeholderOutputLimit(raw.maxOutputTokens) &&
+    Array.isArray(raw.knownLimitations) &&
+    raw.knownLimitations.includes(RUNTIME_CONFIGURED_CAPABILITY_LIMITATION);
+  return placeholder ? { ...raw, contextWindowAssumed: true } : raw;
+}
+
+// No declared output limit, or one that cannot fit inside the placeholder window.
+function placeholderOutputLimit(maxOutputTokens: unknown): boolean {
+  if (maxOutputTokens === undefined || maxOutputTokens === null || maxOutputTokens === 0) {
+    return true;
+  }
+  return typeof maxOutputTokens === "number" && maxOutputTokens > PLACEHOLDER_CHAT_CONTEXT_WINDOW;
+}
+
+export function markAssumedPlaceholderContextWindows(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  const marked: Record<string, unknown> = { ...raw };
+  if (Array.isArray(marked.capabilities)) {
+    marked.capabilities = (marked.capabilities as unknown[]).map(markAssumedChatCapability);
+  }
+  if (Array.isArray(marked.providers)) {
+    marked.providers = (marked.providers as unknown[]).map((provider) =>
+      isRecord(provider) && isRecord(provider.capability)
+        ? { ...provider, capability: markAssumedChatCapability(provider.capability) }
+        : provider,
+    );
+  }
+  return marked;
+}
+
 export function migrateLegacyChatContextWindows(raw: unknown): unknown {
   if (!isRecord(raw)) return raw;
   if (!isLegacySchemaRoot(raw)) return raw;
@@ -1272,6 +1327,7 @@ function buildProviderCapabilityBody(
     ...flags,
     ...optionalToolCallingVerification(raw, path, kind),
     ...optionalChatModeDeclaredFlag(raw, path),
+    ...optionalContextWindowAssumedFlag(raw, path, kind),
     ...optionalReasoningEfforts(raw.reasoningEfforts, `${path}.reasoningEfforts`, kind),
     ...resolveInfillingAlignment(raw, path, flags.supportsInfilling ?? false, kind),
     ...parseVoiceCapabilityFields(raw, path, kind),
@@ -1340,6 +1396,8 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "id",
   "kind",
   "contextWindow",
+  "contextWindowAssumed",
+  "contextWindowReported",
   "maxOutputTokens",
   "toolCalling",
   "toolCallingVerification",
@@ -1422,6 +1480,34 @@ function optionalChatModeDeclaredFlag(
   return value.chatModeDeclared !== undefined
     ? { chatModeDeclared: requireBoolean(value.chatModeDeclared, `${path}.chatModeDeclared`) }
     : {};
+}
+
+// Optional "window not yet measured" flag — preserved only when true so a declared or verified
+// capability round-trips without it. Only a chat window can be assumed: an embedding or voice
+// capability never feeds conversation budgeting.
+function optionalContextWindowAssumedFlag(
+  value: Record<string, unknown>,
+  path: string,
+  kind: ModelKind,
+): Partial<Pick<ModelCapability, "contextWindowAssumed" | "contextWindowReported">> {
+  return {
+    ...optionalChatWindowFlag(value, path, kind, "contextWindowAssumed"),
+    ...optionalChatWindowFlag(value, path, kind, "contextWindowReported"),
+  };
+}
+
+function optionalChatWindowFlag(
+  value: Record<string, unknown>,
+  path: string,
+  kind: ModelKind,
+  field: "contextWindowAssumed" | "contextWindowReported",
+): Partial<Pick<ModelCapability, "contextWindowAssumed" | "contextWindowReported">> {
+  if (value[field] === undefined) return {};
+  const flagged = requireBoolean(value[field], `${path}.${field}`);
+  if (flagged && kind !== "chat") {
+    throw new ConfigInvalidError(`${path}.${field} is only valid for chat models`);
+  }
+  return flagged ? { [field]: true } : {};
 }
 
 function isCanonicalIsoTimestamp(value: unknown): value is string {
@@ -1609,6 +1695,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
     ...optionalDeterminismFlags(value, path),
     ...optionalReasoningEfforts(value.reasoningEfforts, `${path}.reasoningEfforts`, kind),
     ...optionalChatModeDeclaredFlag(value, path),
+    ...optionalContextWindowAssumedFlag(value, path, kind),
     ...optionalInfillingFlags(value, path, kind),
     ...parseVoiceCapabilityFields(value, path, kind),
     workflowEligible,
@@ -1885,6 +1972,26 @@ function parseFigmaConnectorConfig(raw: unknown): FigmaConnectorConfig | undefin
 // decided once, downstream, by `resolvePrDescriptionBrandingFromConfig` reusing
 // `validatedPrDescriptionLogoUrl` — never restated here, and never rejected at load time, because
 // a bad branding value must degrade to Keiko's text-only attribution, not break config loading.
+const OWN_ASSESSMENT_POLICY_SET: ReadonlySet<string> = new Set(OWN_ASSESSMENT_POLICIES);
+
+// A governance setting: an explicit value outside the closed vocabulary fails the load, it is never
+// read as the permissive default.
+function parseGroundedAnswersConfig(raw: unknown): GroundedAnswersConfig | undefined {
+  if (!isRecord(raw) || raw.groundedAnswers === undefined) {
+    return undefined;
+  }
+  const block = raw.groundedAnswers;
+  if (!isRecord(block)) {
+    throw new ConfigInvalidError("groundedAnswers must be an object");
+  }
+  const policy = block.ownAssessment;
+  if (policy === undefined) return {};
+  if (typeof policy !== "string" || !OWN_ASSESSMENT_POLICY_SET.has(policy)) {
+    throw new ConfigInvalidError('groundedAnswers.ownAssessment must be "allowed" or "disabled"');
+  }
+  return { ownAssessment: policy as OwnAssessmentPolicy };
+}
+
 function parseGatewayBrandingConfig(raw: unknown): GatewayBrandingConfig | undefined {
   if (!isRecord(raw) || raw.branding === undefined) {
     return undefined;
@@ -2120,6 +2227,7 @@ function buildGatewayConfig(
   const reranker = parseRerankerConfig(raw, env, egress, options);
   const figma = parseFigmaConnectorConfig(raw);
   const branding = parseGatewayBrandingConfig(raw);
+  const groundedAnswers = parseGroundedAnswersConfig(raw);
   return {
     providers,
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),
@@ -2129,6 +2237,7 @@ function buildGatewayConfig(
     ...(egress !== undefined ? { egress } : {}),
     ...(figma !== undefined ? { figma } : {}),
     ...(branding !== undefined ? { branding } : {}),
+    ...(groundedAnswers !== undefined ? { groundedAnswers } : {}),
   };
 }
 
@@ -2177,7 +2286,9 @@ export function loadConfigFromFile(
   // configs runs HERE at the file-load boundary — not inside parseGatewayConfig — so a
   // fresh setup wizard save with contextWindow:0 still gets the strict rejection.
   return parseGatewayConfig(
-    migrateLegacyChatContextWindows(readGatewayConfigFile(path)),
+    markAssumedPlaceholderContextWindows(
+      migrateLegacyChatContextWindows(readGatewayConfigFile(path)),
+    ),
     env,
     options,
   );

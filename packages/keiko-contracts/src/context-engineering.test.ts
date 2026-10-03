@@ -18,6 +18,7 @@ import {
   countContextTokensForSegments,
   deriveContextProfile,
   deriveContextProfileFromCapability,
+  effectiveContextWindow,
   safetyMarginTokensFor,
   undeclaredOutputReserveTokens,
   estimateTokens,
@@ -494,6 +495,21 @@ describe("deriveContextProfile", () => {
       safetyMarginTokens: 5,
     };
     expect(deriveContextProfile(input)).toEqual(deriveContextProfile(input));
+  });
+});
+
+describe("effectiveContextWindow", () => {
+  it("keeps a declared window and plans an unknown or assumed one with the default window", () => {
+    expect(effectiveContextWindow({ contextWindow: 32_768 })).toBe(32_768);
+    expect(effectiveContextWindow({ contextWindow: 32_768, contextWindowAssumed: false })).toBe(
+      32_768,
+    );
+    expect(effectiveContextWindow({ contextWindow: 0 })).toBe(
+      DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+    );
+    expect(effectiveContextWindow({ contextWindow: 4_096, contextWindowAssumed: true })).toBe(
+      DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+    );
   });
 });
 

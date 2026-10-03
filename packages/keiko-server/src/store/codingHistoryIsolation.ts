@@ -17,6 +17,13 @@ export function isolateCodingHistory(store: UiStore, history: CodingHistoryStore
     listMessagesPrefix: (id, limit) => (ordinary(id) ? store.listMessagesPrefix(id, limit) : []),
     listGatewayMessages: (id, current, limit) =>
       ordinary(id) ? store.listGatewayMessages(id, current, limit) : [],
+    visitGatewayMessageUnits: (id, current, visit): void => {
+      if (ordinary(id)) store.visitGatewayMessageUnits(id, current, visit);
+    },
+    chatHistoryRevision: (id): number => {
+      requireOrdinary(id);
+      return store.chatHistoryRevision(id);
+    },
     countMessages: (id) => (ordinary(id) ? store.countMessages(id) : 0),
     findMessageById: (id): ChatMessage | undefined => {
       const message = store.findMessageById(id);

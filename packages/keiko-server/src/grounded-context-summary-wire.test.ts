@@ -1,9 +1,9 @@
 // ADR-0057 D1 (integration): the path-free GroundedAnswerContextSummary projection on the BFF
 // wire summary. When a ContextProfile is active AND the observer ran (pack.diagnostics?.contextBudget
 // present), buildGroundedAnswerContextPackSummary receives the shared assembly diagnostics via
-// groundedContextSummaryInput and emits a counts-only contextSummary. With no profile the field is
-// omitted and the summary is byte-identical to today (AC5: prompt/pack/wire-answer bytes unaffected
-// — this only touches the path-free summary projection). The path-free guarantee is asserted
+// groundedContextSummaryInput and emits a counts-only contextSummary. The pure legacy projection
+// omits it without an effective profile; routes also resolve the selected configured capability
+// when an explicit profile is absent. The path-free guarantee is asserted
 // structurally: no '/' or '\\' appears anywhere in the serialized contextSummary.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -312,7 +312,7 @@ describe("handleGroundedAsk wire summary call site (ADR-0057 D1)", () => {
     expect(JSON.stringify(answer.contextPack.contextSummary)).not.toContain("/");
   });
 
-  it("omits contextSummary on the wire answer when no profile is active", async () => {
+  it("emits a path-free summary from the configured model when no explicit profile is supplied", async () => {
     const chatId = scopedChat();
     const pack = attachContextBudgetDiagnostics(basePack(), DEFAULT_CONTEXT_PROFILE);
     const result = await handleGroundedAsk(
@@ -321,7 +321,12 @@ describe("handleGroundedAsk wire summary call site (ADR-0057 D1)", () => {
       runner(pack),
     );
     expect(result.status).toBe(200);
-    expect(asConnected(result).contextPack.contextSummary).toBeUndefined();
+    const summary = asConnected(result).contextPack.contextSummary;
+    expect(summary).toBeDefined();
+    expect(summary?.totalEstimatedTokens).toBeGreaterThan(0);
+    expect(summary?.laneCounts["repo-evidence"]).toBe(1);
+    expect(JSON.stringify(summary)).not.toContain("/");
+    expect(JSON.stringify(summary)).not.toContain("\\");
   });
 
   it("emits contextSummary from the active model profile resolver when the singleton profile is absent", async () => {

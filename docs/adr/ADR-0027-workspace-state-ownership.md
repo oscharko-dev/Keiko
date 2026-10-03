@@ -25,6 +25,10 @@ Workspace state is partitioned into the classes below. Each class has exactly on
 | Memory state (capture envelopes, governance, vault)                                                                | `keiko-memory-vault`           | `node:sqlite` memory vault                                 | Governance policy                                                   |
 | Object registry (window-type definitions, renderers)                                                               | `keiko-ui` build-time registry | TypeScript constant + in-memory `registerWindowRender` map | Build-time + module-evaluation                                      |
 
+The `/api/workspace/state` revision cache is memory-only, including when the launcher sets
+`KEIKO_UI_DATA_DIR`. It never reads, writes, or quarantines a second layout file. Browser-local
+layout restoration remains authoritative after BFF restarts.
+
 ### Object descriptor persistence expectation
 
 Every entry in the windows registry declares its `persistence` expectation from a closed set:

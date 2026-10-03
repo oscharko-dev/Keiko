@@ -1,7 +1,7 @@
 # Dependency and Security Currency Closeout (#2296)
 
 Closeout evidence for epic [#2291](https://github.com/oscharko-dev/Keiko/issues/2291). The
-checkout-bound rows were refreshed on 2026-09-18 against the dependency-rollup branch based on
+checkout-bound rows were refreshed on 2026-09-30 against the release branch based on
 `dev`.
 
 This document supersedes the version claims in
@@ -35,11 +35,38 @@ read it back. Evidence that no gate evaluates decays into a sentence that merely
 
 ## Security posture
 
-| Source                     | Result                                                                     |
-| -------------------------- | -------------------------------------------------------------------------- |
-| `npm audit --json`         | 0 vulnerabilities across 998 resolved packages (99 prod, 878 dev, 145 opt) |
-| Repository secret scanning | 0 open alerts; both prior findings triaged and closed below                |
-| Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout    |
+| Source                     | Result                                                                        |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| `npm audit --json`         | 0 vulnerabilities across 1,025 resolved packages (124 prod, 878 dev, 147 opt) |
+| OSV Scanner 2.6.0          | 0 unwaived findings; 2 time-boxed build-time waivers, recorded below          |
+| Repository secret scanning | 0 open alerts; both prior findings triaged and closed below                   |
+| Provider-SDK isolation     | Enforced by `arch:check` (ADR-0019 trust-1), unchanged by this closeout       |
+
+The 2026-09-30 OSV scan found newly reported advisories in the previous lockfile. The patched
+resolutions are `brace-expansion` 1.1.21 and 5.0.12, `fast-uri` 3.1.8, and `ip-address` 10.7.2.
+The two `brace-expansion` majors are pinned under their respective `minimatch` consumers so neither
+receives an incompatible major. `npm ci`, `npm audit`, and the exact OSV Scanner 2.6.0 scan pass
+with the updated lockfile.
+
+A later 2026-09-30 scan identified newly published advisories in Next.js 16.3.5 and DOMPurify
+3.4.13. [#3678](https://github.com/oscharko-dev/Keiko/pull/3678) moved Next.js and its ESLint
+configuration to 16.3.6, fixing
+[GHSA-vcvr-r3jv-pc5j](https://github.com/advisories/GHSA-vcvr-r3jv-pc5j), and the existing
+repository-wide DOMPurify override to 3.4.16, fixing
+[GHSA-p98j-92pf-mc4p](https://github.com/advisories/GHSA-p98j-92pf-mc4p). The full npm audit and
+exact OSV Scanner 2.6.0 repository scan both report zero vulnerabilities with these patches; no
+waiver or gate threshold changed.
+
+On 2026-10-02 GitHub reviewed
+[GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) (braces through 3.0.3)
+and [GHSA-ch52-4w7c-c8xp](https://github.com/advisories/GHSA-ch52-4w7c-c8xp) (http-cache-semantics
+through 4.2.0), and OSV began reporting both. Neither names a patched release. The lockfile holds
+one dev-only instance of each: braces under the keiko-ui ESLint configuration, and
+http-cache-semantics under the release-signing `sigstore` dependency.
+[#3679](https://github.com/oscharko-dev/Keiko/pull/3679) records each in `osv-scanner.toml` as an
+id-bound waiver. Each waiver carries its reachability analysis and an `ignoreUntil` of 2026-11-30.
+npm's audit feed did not list either advisory yet, so `check:osv-waiver-scope` now also asks OSV
+whether a waived advisory affects any package the lockfile does not flag dev.
 
 ### How this queue must be queried — and the trap in it
 
@@ -121,6 +148,8 @@ or peer graph).
 
 | Package                       | Scope                 | Version | Disposition    | Rationale                                                                                                                                                                                                                                                                                                    |
 | ----------------------------- | --------------------- | ------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `fast-uri`                    | root                  | 3.1.8   | current        | Patch for GHSA-hrr3-gc8f-f4qj and earlier advisories; exact OSV 2.6.0 lockfile scan passes. PR #3676.                                                                                                                                                                                                        |
+| `undici`                      | root                  | 8.10.2  | current        | The hoisted jsdom dependency is explicitly overridden to the patch for GHSA-3wwx-pv8p-q78v; the separate 7.29.0 override remains scoped to other consumers. PR #3675.                                                                                                                                        |
 | `typescript`                  | root                  | 6.0.3   | major-deferred | Programmatic API lane. TypeScript 7's stable API entry gate is #2269/#2270.                                                                                                                                                                                                                                  |
 | `typescript`                  | keiko-server          | 6.0.3   | major-deferred | Same API lane as root; the language-service consumers bind to it.                                                                                                                                                                                                                                            |
 | `typescript`                  | keiko-workspace       | 6.0.3   | major-deferred | Same API lane as root.                                                                                                                                                                                                                                                                                       |
@@ -130,10 +159,19 @@ or peer graph).
 | `eslint`                      | keiko-ui              | 10.10.0 | current        | Deduplicated onto the root node by #2777; the workspace no longer pins its own copy.                                                                                                                                                                                                                         |
 | `@eslint/js`                  | root                  | 10.0.1  | current        | Realigned with the `eslint` 10 lane by #2777; one family, one major again.                                                                                                                                                                                                                                   |
 | `typescript-eslint`           | root                  | 8.70.0  | current        | Includes rule correctness fixes and one opt-in rule. The dependency rollup regenerates the lockfile-bound tool-catalog evidence and runs the full lint lane before delivery.                                                                                                                                 |
-| `next`                        | keiko-ui              | 16.3.5  | current        | Patch on the 16.3 line taken 2026-09-25 (Dependabot #3571, consolidated); moved together with `eslint-config-next`.                                                                                                                                                                                          |
-| `eslint-config-next`          | keiko-ui              | 16.3.5  | current        | Kept exactly aligned with `next`; the two move together or not at all.                                                                                                                                                                                                                                       |
+| `next`                        | keiko-ui              | 16.3.6  | current        | Security patch on the 16.3 line taken 2026-09-30 for GHSA-vcvr-r3jv-pc5j (critical, fixed in 16.3.6; PR #3678); moved together with `eslint-config-next`.                                                                                                                                                    |
+| `eslint-config-next`          | keiko-ui              | 16.3.6  | current        | Kept exactly aligned with `next`; the two move together or not at all.                                                                                                                                                                                                                                       |
 | `react`                       | keiko-ui              | 19.3.0  | current        | React and its declarations move together across the UI and editor test/runtime surfaces; the UI, editor, static export, accessibility, and E2E lanes are authoritative.                                                                                                                                      |
 | `react-dom`                   | keiko-ui              | 19.3.0  | current        | Matches `react` across the UI and editor surfaces.                                                                                                                                                                                                                                                           |
+| `prosemirror-commands`        | keiko-ui              | 1.7.2   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
+| `prosemirror-history`         | keiko-ui              | 1.5.0   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
+| `prosemirror-inputrules`      | keiko-ui              | 1.5.1   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
+| `prosemirror-keymap`          | keiko-ui              | 1.2.3   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
+| `prosemirror-markdown`        | keiko-ui              | 1.13.8  | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
+| `prosemirror-model`           | keiko-ui              | 1.25.12 | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
+| `prosemirror-schema-list`     | keiko-ui              | 1.5.1   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
+| `prosemirror-state`           | keiko-ui              | 1.4.4   | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
+| `prosemirror-view`            | keiko-ui              | 1.42.6  | current        | Pinned MIT-licensed CommonMark composer editing, selection and history; PR #3675.                                                                                                                                                                                                                            |
 | `monaco-editor`               | root                  | 0.56.0  | current        | The reviewed editor pin; ADR-0042 was amended to 0.56.0 on 2026-08-16 and agrees.                                                                                                                                                                                                                            |
 | `monaco-editor`               | keiko-ui              | 0.56.0  | current        | Deduplicated with root.                                                                                                                                                                                                                                                                                      |
 | `monaco-editor`               | keiko-editor          | 0.56.0  | current        | Deduplicated with root.                                                                                                                                                                                                                                                                                      |

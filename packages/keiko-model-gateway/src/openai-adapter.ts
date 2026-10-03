@@ -920,6 +920,11 @@ function assertUsableAssistantResponse(
   throw new ProviderEmptyAnswerError(modelId, secrets);
 }
 
+// A provider error body is untrusted and may be megabytes long (the chat path caps it at 10 MB).
+// Every pattern below reads only the head of it, where a window statement or a failure class sits,
+// so a hostile body can never turn classification into a quadratic scan (PR #3678 audit).
+const ERROR_SIGNAL_MAX_CHARS = 4_096;
+
 function errorSignal(payload: unknown): string {
   const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
   if (!isRecord(error)) {
@@ -927,18 +932,94 @@ function errorSignal(payload: unknown): string {
   }
   return [error.code, error.type, error.message]
     .filter((value): value is string => typeof value === "string")
+    .map((value) => value.slice(0, ERROR_SIGNAL_MAX_CHARS))
     .join(" ")
+    .slice(0, ERROR_SIGNAL_MAX_CHARS)
     .toLowerCase();
 }
 
-const CONTEXT_OVERFLOW_SIGNAL =
-  /context[_ -]?length[_ -]?exceeded|context window|context.*exceed|maximum context|too many tokens|prompt too long|context overflow/;
+// vLLM (>= 0.11) rejects an output allocation larger than the whole window as
+// "max_tokens=N cannot be greater than max_model_len=M"; Anthropic says "prompt is too long",
+// llama.cpp "exceeds the available context size", TGI "`max_new_tokens` must be <= N" — each an
+// overflow like any other, and each a form REPORTED_CONTEXT_WINDOW_PATTERNS reads the window from.
+// llama.cpp names the class in `type` (`exceed_context_size_error`) and the window in `n_ctx`. The
+// exceed clause is bounded on one line: an open `.*` rescans the whole remainder from every
+// occurrence of "context".
+const CONTEXT_OVERFLOW_SIGNALS: readonly RegExp[] = [
+  /context[_ -]?length[_ -]?exceeded|context window|context[^\n]{0,120}exceed|maximum context/,
+  /too many tokens|prompt (?:is )?too long|context overflow|greater than max_model_len/,
+  /available context size|exceed_context_size|max_new_tokens`? must be <=/,
+];
 
 function isContextOverflow(status: number, payload: unknown): boolean {
   if (status !== 400 && status !== 413 && status !== 422) {
     return false;
   }
-  return CONTEXT_OVERFLOW_SIGNAL.test(errorSignal(payload));
+  const signal = errorSignal(payload);
+  return CONTEXT_OVERFLOW_SIGNALS.some((pattern) => pattern.test(signal));
+}
+
+// How providers state the deployment's TOTAL window in an overflow answer, first match wins:
+//   vLLM / OpenAI / Azure : "This model's maximum context length is 32768 tokens. ..."
+//   vLLM >= 0.11          : "max_tokens=... cannot be greater than max_model_len=32768. ..."
+//   Anthropic via LiteLLM : "prompt is too long: 250000 tokens > 200000 maximum"
+//   TGI                   : "`inputs` tokens + `max_new_tokens` must be <= 8192. Given: ..."
+//   llama.cpp server      : "... exceeds the available context size (n_ctx = 8192) ..."
+// LiteLLM forwards the upstream text inside its own message, so the same patterns apply behind it.
+// llama.cpp also states it as the numeric `n_ctx` field of the error object, which is read first.
+const REPORTED_CONTEXT_WINDOW_PATTERNS: readonly RegExp[] = [
+  /maximum context length is (\d{3,9}) tokens/,
+  /max_model_len\s{0,8}=\s{0,8}(\d{3,9})/,
+  /tokens? > (\d{3,9}) maximum/,
+  /must be <= (\d{3,9})\. given/,
+  /n_ctx\s{0,8}[=:]\s{0,8}(\d{3,9})/,
+];
+const MIN_REPORTED_CONTEXT_WINDOW = 512;
+const MAX_REPORTED_CONTEXT_WINDOW = 100_000_000;
+
+function plausibleContextWindow(tokens: number): number | undefined {
+  return Number.isSafeInteger(tokens) &&
+    tokens >= MIN_REPORTED_CONTEXT_WINDOW &&
+    tokens <= MAX_REPORTED_CONTEXT_WINDOW
+    ? tokens
+    : undefined;
+}
+
+function structuredContextWindow(payload: unknown): number | undefined {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  return isRecord(error) && typeof error.n_ctx === "number"
+    ? plausibleContextWindow(error.n_ctx)
+    : undefined;
+}
+
+/**
+ * The total context window a provider stated in an overflow answer, or undefined when it named
+ * none. Exported for the startup context-window probe (readiness-probe.ts), which reads the same
+ * answer. Only a bounded integer leaves this function — never the provider's text.
+ */
+export function reportedContextWindowTokens(payload: unknown): number | undefined {
+  const structured = structuredContextWindow(payload);
+  if (structured !== undefined) return structured;
+  const signal = errorSignal(payload);
+  for (const pattern of REPORTED_CONTEXT_WINDOW_PATTERNS) {
+    const tokens = plausibleContextWindow(Number(pattern.exec(signal)?.[1]));
+    if (tokens !== undefined) return tokens;
+  }
+  return undefined;
+}
+
+function contextOverflowError(
+  modelId: string,
+  secrets: readonly string[],
+  payload: unknown,
+): ContextOverflowError {
+  const error = new ContextOverflowError(
+    `provider reported context overflow for '${modelId}'`,
+    secrets,
+  );
+  const reported = reportedContextWindowTokens(payload);
+  if (reported !== undefined) error.reportedContextWindowTokens = reported;
+  return error;
 }
 
 const MODEL_REFUSAL_SIGNAL = /content[_ -]?filter|refus|safety|policy/;
@@ -1070,7 +1151,7 @@ function mapProviderFailure(
   streamed: boolean,
 ): never {
   if (isContextOverflow(status, payload)) {
-    throw new ContextOverflowError(`provider reported context overflow for '${modelId}'`, secrets);
+    throw contextOverflowError(modelId, secrets, payload);
   }
   if (isModelRefusal(payload)) {
     throw new ModelRefusalError(`provider refused the request for '${modelId}'`, secrets);
@@ -1107,12 +1188,12 @@ function throwOnStreamedFailure(chunk: unknown, modelId: string, secrets: readon
 // rate limit, so an overflow, a rejected key or a malformed request is never retried as an upstream
 // failure and generated again (PR #3452 review). OpenAI and Azure name a failure in `code`, `type`
 // and `message`; only a proxy such as LiteLLM writes its HTTP status.
-const STREAMED_FAILURE_SIGNALS: readonly (readonly [RegExp, number])[] = [
-  [CONTEXT_OVERFLOW_SIGNAL, 400],
-  [/invalid[_ -]?api[_ -]?key|authentication/, 401],
-  [/permission/, 403],
-  [/rate[_ -]?limit|too many requests/, 429],
-  [/invalid[_ -]?request/, 400],
+const STREAMED_FAILURE_SIGNALS: readonly (readonly [readonly RegExp[], number])[] = [
+  [CONTEXT_OVERFLOW_SIGNALS, 400],
+  [[/invalid[_ -]?api[_ -]?key|authentication/], 401],
+  [[/permission/], 403],
+  [[/rate[_ -]?limit|too many requests/], 429],
+  [[/invalid[_ -]?request/], 400],
 ];
 
 // The status a failure frame reports: LiteLLM's `code` is the upstream HTTP status as a string. A
@@ -1122,7 +1203,11 @@ function streamedFailureStatus(chunk: unknown, error: Record<string, unknown>): 
   const code = typeof error.code === "number" ? error.code : Number(error.code);
   if (Number.isInteger(code) && code >= 400 && code <= 599) return code;
   const signal = errorSignal(chunk);
-  return STREAMED_FAILURE_SIGNALS.find(([pattern]) => pattern.test(signal))?.[1] ?? 502;
+  return (
+    STREAMED_FAILURE_SIGNALS.find(([patterns]) =>
+      patterns.some((pattern) => pattern.test(signal)),
+    )?.[1] ?? 502
+  );
 }
 
 function apiKeyHeaders(config: ModelProviderConfig): Record<string, string> {

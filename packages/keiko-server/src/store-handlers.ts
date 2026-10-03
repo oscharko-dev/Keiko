@@ -1,3 +1,9 @@
+import { readChatContextStatus, compactChatContext } from "./chat-context-status.js";
+import { logChatContextManagement } from "./chat-context-log.js";
+import {
+  contextWindowProbeInFlight,
+  discoverAssumedContextWindow,
+} from "./gateway-context-window.js";
 // ADR-0013 D7 — Route handlers for UI-local store routes. All inputs are validated;
 // every error path uses the redacted `{ error: { code, message } }` envelope; SECURITY_HEADERS are
 // applied uniformly by the server layer. JSON body reading is bounded by MAX_STORE_BODY_BYTES.
@@ -10,7 +16,10 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ChatContextStatusWire,
+  ProjectWithAvailability,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
@@ -417,6 +426,17 @@ function projectTrustRemainsRestricted(deps: UiHandlerDeps, projectPath: string)
   }
 }
 
+function isExplicitProjectSelection(body: Record<string, unknown>): boolean {
+  const intent = body.selectionIntent;
+  if (
+    intent !== undefined &&
+    intent !== "explicit-folder-selection" &&
+    intent !== "file-navigation"
+  )
+    throw new InvalidRequest('Field "selectionIntent" must name a recognized selection intent.');
+  return intent === "explicit-folder-selection";
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Route 14 — POST /api/projects
 // ──────────────────────────────────────────────────────────────────────────
@@ -429,6 +449,7 @@ export async function handleCreateProject(
     const body = await readJsonObject(ctx.req);
     const path = requireString(body, "path");
     const name = optionalString(body, "name");
+    const explicitSelection = isExplicitProjectSelection(body);
     const normalizedPath = validateProjectPath(path, { mustExist: true });
     if (pathIsDenied(normalizedPath)) {
       return forbiddenResult(
@@ -440,14 +461,18 @@ export async function handleCreateProject(
     // The store owner writes the project row and its single-root workspace manifest in one
     // transaction (`createProjectRecord`). A successful response therefore exposes a current
     // membership projection; consumers never synthesize or assume membership client-side.
+    const registeredPaths = new Set(deps.store.listProjects().map((project) => project.path));
     const project = deps.store.createProject(normalizedPath, name);
-    // Choosing a local folder is the explicit local-human trust act. The trust service resolves
+    // The first explicit folder selection grants trust; reopening an existing canonical project
+    // preserves its trust decision, including revocation and invalidation. The store resolves aliases
+    // to that same registered path. The trust service resolves
     // every authoritative dimension itself (manifest/root/object identity and package.json basis);
     // the browser supplies only the path it already selected. When the service is unavailable the
     // project remains registered but restricted, preserving the legacy injectable test seam without
     // inventing browser-side authority.
     try {
-      deps.workspaceScriptTrust?.grant(project.path, ctx.correlationId);
+      if (explicitSelection && !registeredPaths.has(project.path))
+        deps.workspaceScriptTrust?.grant(project.path, ctx.correlationId);
     } catch (error) {
       const correlationId = reportProjectTrustGrantFailure(
         deps,
@@ -1430,3 +1455,95 @@ export async function handleUpdateMessage(
 
 // barrel-level NOT_FOUND helper used by future delete-missing paths
 export { notFoundResult };
+
+export function handleChatContextStatus(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
+    const chatId = requireQuery(ctx, "chatId");
+    const projectPath = requireQuery(ctx, "projectPath");
+    if (!chatBelongsToProject(deps, projectPath, chatId)) return notFoundResult("Chat not found.");
+    const modelId = requireQuery(ctx, "modelId");
+    assertChatModelId(deps, modelId);
+    const status = await contextStatusWithMeasuredWindow(deps, chatId, modelId, ctx.correlationId);
+    logChatContextManagement("inspected", status, 0, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
+    return { status: 200, body: status };
+  });
+}
+
+// The meter shows this model: ask its deployment once for the window its gateway never declared,
+// and wait briefly so the first reading already carries the real window. vLLM answers the probe
+// without generating; a slow gateway only delays the reading, never fails it.
+const CONTEXT_WINDOW_PROBE_WAIT_MS = 3_000;
+
+async function contextStatusWithMeasuredWindow(
+  deps: UiHandlerDeps,
+  chatId: string,
+  modelId: string,
+  correlationId: string | undefined,
+): Promise<ChatContextStatusWire> {
+  const status = readChatContextStatus(deps, chatId, modelId, correlationId);
+  const probe = discoverAssumedContextWindow(
+    deps,
+    modelId,
+    correlationId ?? UNKNOWN_CORRELATION_ID,
+  );
+  // A provider-reported window is re-checked in the background; only an assumed one delays.
+  if (status.contextWindowAssumed === true) {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, CONTEXT_WINDOW_PROBE_WAIT_MS);
+    });
+    await Promise.race([probe, deadline]);
+    clearTimeout(timer);
+  }
+  const measured =
+    status.contextWindowAssumed === true
+      ? readChatContextStatus(deps, chatId, modelId, correlationId)
+      : status;
+  // A probe still running — a slow one, or the background re-check of a reported window — tells
+  // the meter to read again until its answer is in (PR #3678 review).
+  return contextWindowProbeInFlight(deps, modelId)
+    ? { ...measured, contextWindowProbePending: true }
+    : measured;
+}
+
+export async function handleCompactChatContext(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const cancellation = createRequestCancellation(ctx, "context compaction cancelled");
+  try {
+    return await runHandler(async () => {
+      const body = await readJsonObject(ctx.req);
+      const chatId = requireString(body, "chatId");
+      const projectPath = requireString(body, "projectPath");
+      const modelId = requireString(body, "modelId");
+      const result = await runSerializedChatTurn(
+        deps,
+        chatId,
+        cancellation.signal,
+        (): RouteResult => {
+          if (!chatBelongsToProject(deps, projectPath, chatId))
+            return notFoundResult("Chat not found.");
+          assertChatModelId(deps, modelId);
+          return {
+            status: 200,
+            body: compactChatContext(
+              deps,
+              chatId,
+              modelId,
+              ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+            ),
+          };
+        },
+      );
+      return result === CHAT_TURN_WAIT_CANCELLED
+        ? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
+        : result;
+    });
+  } finally {
+    cancellation.dispose();
+  }
+}

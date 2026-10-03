@@ -140,18 +140,15 @@ export {
 } from "./evidence.js";
 // ADR-0013 — UI-local SQLite persistence: ports, factories, and route handlers.
 export {
-  computeStoreFingerprint,
   createInMemoryUiStore,
   createNodeUiStore,
   isProjectAvailable,
   openNodeUiDatabase,
-  openNodeUiDatabaseReadOnly,
   resolveUiDbPath,
   runMigrations,
   SCHEMA_VERSION,
   UI_DB_DIRNAME,
   UI_DB_FILENAME,
-  UI_STORE_FINGERPRINT_TABLES,
   UiStoreError,
   validateProjectPath,
   type Chat,
@@ -169,16 +166,6 @@ export {
   type WorkspaceTrustRecordRow,
   type WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
-// Wave 4a, epic #3233 §6.2/§8 — `keiko support export`'s per-store schema/integrity snapshot.
-// Lives here (not in keiko-cli) because this is the one package already depending on all three
-// store packages; see store-fingerprints.ts's header for the full ADR-0019 rationale.
-export {
-  collectStoreFingerprints,
-  type CollectStoreFingerprintsInput,
-  type CollectStoreFingerprintsResult,
-  type StoreFingerprintUnavailableEntry,
-  type StoreFingerprintUnavailableReasonKind,
-} from "./store-fingerprints.js";
 export {
   handleListProjects,
   handleCreateProject,
@@ -415,14 +402,14 @@ export {
 // giving operators diagnosable evidence without an env-var opt-in. The additional names below
 // (envelope identity/schema helpers, the log-level threshold resolver and its env constants, and
 // the category/level/threshold types) are exported for `keiko-cli`'s process-lifecycle logging
-// (`ui.ts`) and its support-bundle exporter (`support-export.ts`), which previously had to mirror
-// this package's log-level resolution and shutdown-close logic locally instead of reusing it.
+// (`ui.ts`) and its support report commands, which previously had to mirror this package's
+// log-level resolution and shutdown-close logic locally instead of reusing it.
 // `createBufferedServerLogSink` is deliberately absent: it is a test-only helper, every consumer
 // is an in-package test importing it from `./observability/index.js`, and a packaged export is a
-// promise this package would then have to keep. `redactLogFields` is exported for the same
-// support-bundle exporter's Wave 6 `config-snapshot` section (epic #3233 §6.2/§8): the ONE
-// redaction choke point this package's own log line formatter uses, reused rather than re-derived
-// so `keiko-cli` never grows a second copy of field redaction (AGENTS.md §7).
+// promise this package would then have to keep. `redactLogFields` is exported for the support
+// report's tool-lifecycle validation (#3534): the ONE redaction choke point this package's own
+// log line formatter uses, reused rather than re-derived so `keiko-cli` never grows a second copy
+// of field redaction (AGENTS.md §7).
 export {
   createFileServerLogSink,
   nullServerLogSink,
@@ -497,8 +484,7 @@ export { resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
 // evidence reaches the runtime state directory's Activity Log instead of an unwired no-op.
 export { processServerLogSink, type ProcessServerLogSink } from "./process-log-sink.js";
 
-// Install-mode detection for `keiko-cli`'s process-lifecycle (`process.started`) and
-// support-bundle manifest fields. `detectUpdateInstallMode`/`productionUpdateFacts` are exported
+// Install-mode detection for `keiko-cli`'s process-lifecycle (`process.started`) fields. `detectUpdateInstallMode`/`productionUpdateFacts` are exported
 // rather than `detectPortableUpdateInstallMode` (the narrower portable-only branch in
 // `./update-portable-install-mode.js`): the portable detector returns `undefined` for every
 // non-portable install, which is the common case, so it cannot answer "which install mode is this

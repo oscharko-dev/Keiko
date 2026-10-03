@@ -141,7 +141,6 @@ async function seedWindows(page: Page, windows: readonly Record<string, unknown>
 const SHELL_CHORD_MODIFIER = "ControlOrMeta";
 
 async function waitForShell(page: Page): Promise<void> {
-  await expect(page.getByRole("button", { name: "Open quick access" })).toBeVisible();
   await expect(page.getByRole("main", { name: "Workspace surface" })).toBeVisible();
 }
 
@@ -153,14 +152,12 @@ async function openSearchPanel(page: Page): Promise<Locator> {
   return searchbox;
 }
 
-async function openQuickAccess(page: Page): Promise<Locator> {
+async function openWorkspaceCommands(page: Page): Promise<Locator> {
   await waitForShell(page);
-  await page.keyboard.press(`${SHELL_CHORD_MODIFIER}+KeyP`);
-  const quickInput = page.getByRole("combobox", {
-    name: /workspace file or symbol query/i,
-  });
-  await expect(quickInput).toBeVisible();
-  return quickInput;
+  await page.keyboard.press(`${SHELL_CHORD_MODIFIER}+Shift+KeyP`);
+  const input = page.getByRole("combobox", { name: "Command query" });
+  await expect(input).toBeVisible();
+  return input;
 }
 
 // Monaco tags its two side-by-side panes `.original-in-monaco-diff-editor` / `-modified-`, so the
@@ -319,38 +316,34 @@ export const unsavedOnly = true;
   expect(pageErrors).toEqual([]);
 });
 
-test("workspace symbols and quick access route through the unified reveal-at-line flow", async ({
+test("the retired header file search and its shortcut cannot query workspace files", async ({
   page,
   request,
 }) => {
-  const root = createWorkspace("quick-access");
+  const root = createWorkspace("retired-header-search");
   await ensureProject(request, root);
-  const pageErrors = collectPageErrors(page);
   await seedWindows(page, []);
-  await page.goto("/");
-  const quickInput = await openQuickAccess(page);
-  await quickInput.fill("quick.ts");
-  await expect(page.getByRole("option").filter({ hasText: "src/quick.ts" }).first()).toBeVisible();
-  await quickInput.fill(">theme");
-  await expect(
-    page.getByRole("option").filter({ hasText: "Toggle light / dark theme" }).first(),
-  ).toBeVisible();
-  await page.getByRole("combobox", { name: "Command query" }).fill("");
-  const fileInput = page.getByRole("combobox", {
-    name: /workspace file or symbol query/i,
+  const queries: string[] = [];
+  page.on("request", (request) => {
+    if (/\/api\/(?:files\/search|editor\/workspace-(?:search|symbols))/u.test(request.url()))
+      queries.push(request.url());
   });
-  await expect(fileInput).toBeVisible();
-  await fileInput.fill("searchTarget");
-  await page.getByRole("option").filter({ hasText: "searchTarget" }).first().click();
-  await expect(page.getByRole("tab", { name: /search-target\.ts/ })).toBeVisible();
-  expect(pageErrors).toEqual([]);
+  await page.goto("/");
+  await waitForShell(page);
+  await expect(page.getByRole("button", { name: "Open quick access" })).toHaveCount(0);
+  await page.keyboard.press(`${SHELL_CHORD_MODIFIER}+KeyP`);
+  await expect(page.getByRole("dialog", { name: "Quick access" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: /workspace file or symbol query/i })).toHaveCount(
+    0,
+  );
+  expect(queries).toEqual([]);
 });
 
-test("editor-scoped commands run through the unified quick-access palette's command mode", async ({
+test("editor-scoped commands run through the workspace command palette", async ({
   page,
   request,
 }) => {
-  const root = createWorkspace("quick-access-editor");
+  const root = createWorkspace("workspace-commands-editor");
   await ensureProject(request, root);
   const pageErrors = collectPageErrors(page);
   await seedWindows(page, [
@@ -376,7 +369,7 @@ test("editor-scoped commands run through the unified quick-access palette's comm
   await page.goto("/");
   const workspace = await openEditorWorkspace(page);
   expect(await paneCount(workspace)).toBe(1);
-  const quickInput = await openQuickAccess(page);
+  const quickInput = await openWorkspaceCommands(page);
   await quickInput.fill(">");
   await expect(
     page.getByRole("option").filter({ hasText: "Toggle light / dark theme" }).first(),

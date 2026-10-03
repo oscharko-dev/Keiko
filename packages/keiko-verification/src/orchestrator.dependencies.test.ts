@@ -13,7 +13,12 @@ import {
   type VerificationStepOutput,
 } from "./orchestrator.js";
 import type { VerificationResult } from "./types.js";
-import { fakeMonitor, makeFakeChild, scriptChildClose } from "./_support.js";
+import {
+  verificationSandboxDeps,
+  fakeMonitor,
+  makeFakeChild,
+  scriptChildClose,
+} from "./_support.js";
 import { DEPENDENCY_APPROVED_REGISTRY } from "./dependencies.js";
 
 const roots: string[] = [];
@@ -96,6 +101,7 @@ function testDeps(
   extra: Partial<VerificationDeps> = {},
 ): VerificationDeps {
   return {
+    ...verificationSandboxDeps(),
     workspace,
     spawn,
     monitor: fakeMonitor(),
@@ -141,7 +147,7 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
 
     expect(spawn.calls()).toHaveLength(2);
     expect(spawn.calls()[0]?.args[0]).toBe("install");
-    expect(spawn.calls()[1]?.args).toEqual(["test"]);
+    expect(spawn.calls()[1]?.args.slice(-2)).toEqual(["/abs/npm", "test"]);
     expect(report.dependencies?.state).toBe("installed");
     expect(report.results[0]?.status).toBe("passed");
     expect(report.overallStatus).toBe("passed");
@@ -223,7 +229,7 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
     const report = await runVerification(plan, testDeps(workspace, spawn.fn));
 
     expect(spawn.calls()).toHaveLength(1);
-    expect(spawn.calls()[0]?.args).toEqual(["test"]);
+    expect(spawn.calls()[0]?.args.slice(-2)).toEqual(["/abs/npm", "test"]);
     expect(report.dependencies).toBeUndefined();
     expect("dependencies" in report).toBe(false);
   });

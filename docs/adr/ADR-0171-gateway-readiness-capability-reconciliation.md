@@ -43,8 +43,28 @@ Every readiness run captures the runtime configuration generation before asynchr
 Late results for a superseded generation are dropped. Replacing configuration clears all field
 observations and the coarse verification state. Observations intentionally survive separate HTTP
 requests in the current process, but not a configuration replacement or process restart; after
-either event the operator must run readiness again. This prevents stale point-in-time evidence from
-becoming durable configuration truth.
+either event basic-chat verification starts during configuration initialization. Successful
+credential-setup chat checks populate the same generation-bound ledger and are reused. A Chat
+create, send, streaming send, regeneration, or grounded question may join an already running
+initialization, and never initiates a provider readiness test for a model that is ready or whose
+readiness was never observed. Failed initialization remains
+visible. Inconclusive transport or provider failures recover through configuration-owned background
+probes with exponential backoff capped at five minutes; retries continue at that capped rate until the
+provider recovers or the configuration changes. A conclusive rejection (for example a 4xx the gateway
+gives while it is still starting) ends the background retries, but not the recovery: the first
+conversation request that needs the model after the 30-second not-ready cooldown starts one fresh
+probe, dated by the probe that last settled rather than by a preserved feature-observation
+timestamp. Concurrent requests join that probe, a failed one refreshes the cooldown, and a
+malformed observation timestamp never triggers it, so a dead gateway costs at most one bounded probe
+per model per cooldown. This restores the 1.1.11 behavior that 1.1.13 removed together with the
+per-question checks: without it one conclusive answer at startup left the model not-ready until a
+restart or a Settings change. Disposal aborts active requests, clears retries, and unsubscribes
+the configuration listener.
+At most two probes run concurrently per configuration holder, including across replacements;
+queued probes of superseded generations are discarded. Ready models are never rechecked per
+question. Settings-triggered background work carries a child correlation linked to the request
+that changed the configuration. Manual Settings checks remain available. This prevents stale point-in-time evidence from becoming
+durable configuration truth and removes an extra model request from interactive Chat traffic.
 
 ### D3 — Reconciliation is explicit and server-validated
 
@@ -95,8 +115,9 @@ judging every model as of the epoch and offering none (F76).
 - A failed persistence attempt leaves the generation-bound observation available for an identical
   retry; it can never cross a configuration replacement.
 - A context-window lower bound cannot silently shrink a correctly configured model capacity.
-- Readiness must be rerun after restart or configuration replacement, which is intentional because
-  no current live observation exists then.
+- Basic-chat readiness runs at initialization after restart or configuration replacement and reuses
+  successful credential checks; interactive Chat never adds a readiness request for a ready or
+  never-observed model, and re-probes a failed one at most once per not-ready cooldown.
 - A coding run admitted with a fresh tool-calling proof is not stranded when the proof ages out
   mid-run; a new run still needs a fresh proof.
 

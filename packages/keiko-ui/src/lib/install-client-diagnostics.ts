@@ -43,6 +43,7 @@ import {
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
+  CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
   type ClientBindingIngestRequest,
   type ClientBindingOutcome,
   type ClientDiagnosticIngestRequest,
@@ -63,16 +64,19 @@ import {
   recordClientDiagnosticLoss,
   restoreClientDiagnosticLoss,
   setClientDiagnosticWriter,
+  setClientDiagnosticDeliveryRetry,
   takeClientDiagnosticLoss,
 } from "./client-diagnostics";
 import { ApiError } from "./api-shared-primitives";
 import { bffFetchJson } from "./http";
 
-function writeToBrowserConsole(message: string): void {
+function writeToBrowserConsole(message: string, meta?: ClientDiagnosticMeta): void {
   // The single sanctioned console access in keiko-ui production code. Everything above this line is
   // why it is here — in the transport, not in the sink — rather than at each call site.
+  if (typeof console === "undefined") return;
+  const level = postBudget(meta) === "routine" ? "debug" : "warn";
   // eslint-disable-next-line no-console
-  if (typeof console !== "undefined" && typeof console.warn === "function") console.warn(message);
+  console[level]?.(message);
 }
 
 // Fixed, bounded, and content-free by construction: it never repeats the original diagnostic
@@ -135,6 +139,7 @@ function clientStagePostBody(
         phase: "started",
         ordinal: report.ordinal,
         correlationId: id,
+        deletion: report.deletion,
       }
     : {
         kind: "stage",
@@ -142,7 +147,11 @@ function clientStagePostBody(
         phase: "settled",
         ordinal: report.ordinal,
         durationMs: report.durationMs,
+        ...(report.navigationOutcome === undefined
+          ? {}
+          : { navigationOutcome: report.navigationOutcome }),
         correlationId: id,
+        deletion: report.deletion,
       };
 }
 
@@ -259,6 +268,7 @@ function clientMessagePostBody(
     correlationId: validCorrelationId(meta.correlationId),
     parentCorrelationId: validCorrelationId(meta.parentCorrelationId),
     errorKind: meta.errorKind,
+    renderFailure: meta.renderFailure,
     voiceDialogueStage: meta.voiceDialogueStage,
     voiceCaptureReason: meta.voiceCaptureReason,
     voiceCaptureError: meta.voiceCaptureError,
@@ -269,6 +279,12 @@ function clientMessagePostBody(
     workspaceTrustBinding: meta.workspaceTrustBinding,
     gitClientOperation: meta.gitClientOperation,
     selectDismissal: meta.selectDismissal,
+    knowledgeCatalog: meta.knowledgeCatalog,
+    answerCopy: meta.answerCopy,
+    answerSpeech: meta.answerSpeech,
+    composerActivity: meta.composerActivity,
+    composerFocusIndicator: meta.composerFocusIndicator,
+    composerCodeStage: meta.composerCodeStage,
     codingHistoryScope: meta.codingHistoryScope,
     codingIssueOutcome: meta.codingIssueOutcome,
     loss,
@@ -345,10 +361,22 @@ function gitClientOperationPostBudget(
 // Escape dismissal (PR #3625 review — there is no failure variant of that report at all). Everything
 // else is a failure report. The binding, repair and git-client rules are the server's own
 // (keiko-contracts), so the two budgets never drift.
+// The closed report shapes, by the server's own rule (client-diagnostics-routes closedReportBudget).
+function closedReportPostBudget(
+  meta: ClientDiagnosticMeta,
+): ClientDiagnosticPostBudget | undefined {
+  if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
+  if (meta.selectDismissal !== undefined || meta.knowledgeCatalog !== undefined) return "routine";
+  if (meta.answerSpeech !== undefined) return "routine";
+  if (meta.answerCopy === undefined) return undefined;
+  return meta.answerCopy.outcome === "failed" ? "failure" : "routine";
+}
+
 function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {
   if (meta === undefined) return "failure";
-  if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
-  if (meta.selectDismissal !== undefined) return "routine";
+  const closed = closedReportPostBudget(meta);
+  if (closed !== undefined) return closed;
+  if (routineComposerOrVoiceEvidence(meta)) return "routine";
   if (meta.bindingReport !== undefined) return bindingPostBudget(meta.bindingReport.outcome);
   if (meta.sessionRepairReport !== undefined) {
     return repairPostBudget(meta.sessionRepairReport.outcome);
@@ -357,6 +385,17 @@ function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPos
     return gitClientOperationPostBudget(meta.gitClientOperation.outcome);
   }
   return "failure";
+}
+
+function routineComposerOrVoiceEvidence(meta: ClientDiagnosticMeta): boolean {
+  if (meta.errorKind !== undefined || meta.errorEvidence !== undefined) return false;
+  if (meta.composerActivity !== undefined) return true;
+  if (meta.kind === "markdown-layout" && meta.markdownLayout !== undefined) return true;
+  return (
+    meta.kind === "voice-dialogue" &&
+    meta.voiceDialogueStage !== undefined &&
+    !CLIENT_VOICE_DIALOGUE_FAILURE_STAGES.has(meta.voiceDialogueStage)
+  );
 }
 
 function admittedByClientPostRateLimit(window: PostWindow, limit: number, nowMs: number): boolean {
@@ -386,6 +425,91 @@ export function resetClientDiagnosticPostStateForTests(): void {
   postWindows.routine = freshPostWindow();
   postFailureCount = 0;
   postThrottledCount = 0;
+  reportDeliveries.clear();
+  reportRetryWindow = freshPostWindow();
+}
+
+type DiagnosticPostBody = ReturnType<typeof clientDiagnosticPostBody>;
+interface ReportDelivery {
+  readonly body: ClientDiagnosticIngestRequest;
+  acknowledged: Promise<boolean>;
+}
+const MAX_REPORT_DELIVERIES = 100;
+const REPORT_RETRY_LIMIT = 6;
+const reportDeliveries = new Map<string, ReportDelivery>();
+let reportRetryWindow = freshPostWindow();
+
+// Contextual file/folder failures need the same exact-id replay as uncaught browser failures:
+// their original request may fail before the BFF can retain any evidence. Routine lifecycle
+// reports remain unretained; only already-projected failure evidence enters this bounded cache.
+function browserReportCorrelation(meta: ClientDiagnosticMeta | undefined): string | undefined {
+  if (meta === undefined) return undefined;
+  if (
+    meta.kind !== "window-error" &&
+    meta.kind !== "unhandled-rejection" &&
+    meta.renderFailure === undefined &&
+    meta.errorKind === undefined &&
+    meta.errorEvidence === undefined
+  )
+    return undefined;
+  return validCorrelationId(meta.correlationId);
+}
+
+function rememberReportDelivery(
+  body: DiagnosticPostBody,
+  meta: ClientDiagnosticMeta | undefined,
+  acknowledged: Promise<boolean>,
+): void {
+  if (!("message" in body)) return;
+  const key = browserReportCorrelation(meta);
+  if (key === undefined) return;
+  const retainedBody = { ...body };
+  delete retainedBody.loss;
+  reportDeliveries.set(key, { body: retainedBody, acknowledged });
+  if (reportDeliveries.size <= MAX_REPORT_DELIVERIES) return;
+  const oldest = reportDeliveries.keys().next().value;
+  if (oldest !== undefined) reportDeliveries.delete(oldest);
+}
+
+function waitForDelivery(delivery: Promise<boolean>, signal: AbortSignal): Promise<boolean> {
+  signal.throwIfAborted();
+  return new Promise<boolean>((resolve, reject): void => {
+    const abort = (): void => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    void delivery.then(
+      (value): void => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown): void => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function retryReportDelivery(
+  correlationId: string,
+  signal: AbortSignal,
+): Promise<boolean | undefined> {
+  const retained = reportDeliveries.get(correlationId);
+  if (retained === undefined) return undefined;
+  const pending = retained.acknowledged;
+  if (await waitForDelivery(pending, signal)) return true;
+  if (retained.acknowledged !== pending) return waitForDelivery(retained.acknowledged, signal);
+  if (!admittedByClientPostRateLimit(reportRetryWindow, REPORT_RETRY_LIMIT, Date.now()))
+    return false;
+  // One human report action may redeliver its original, already-projected diagnostic. It has a
+  // separate bounded budget; the server's ingest limiter remains authoritative. Never fall back
+  // to a different incident or send an error message, repository content or raw stack here.
+  const loss = takeClientDiagnosticLoss();
+  retained.acknowledged = sendClientDiagnosticBody(
+    { ...retained.body, ...(loss === undefined ? {} : { loss }) },
+    loss,
+    signal,
+  );
+  return waitForDelivery(retained.acknowledged, signal);
 }
 
 // Best-effort POST to the server activity log. Never awaited by a call site and never lets a
@@ -413,20 +537,35 @@ function recordFailedPost(loss: ClientDiagnosticLossCounts | undefined, error: u
   writeToBrowserConsole(DIAGNOSTIC_DELIVERY_FAILURE_NOTICE);
 }
 
+async function sendClientDiagnosticBody(
+  body: DiagnosticPostBody,
+  loss: ClientDiagnosticLossCounts | undefined,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  try {
+    await bffFetchJson<undefined>("/api/diagnostics/client", {
+      method: "POST",
+      body: JSON.stringify(body),
+      keepalive: true,
+      signal: signal ?? AbortSignal.timeout(15_000),
+    });
+    return true;
+  } catch (error) {
+    recordFailedPost(loss, error);
+    return false;
+  }
+}
+
 function sendClientDiagnostic(
   message: string,
   meta: ClientDiagnosticMeta | undefined,
   loss: ClientDiagnosticLossCounts | undefined,
+  admitted = true,
 ): void {
   try {
     const body = clientDiagnosticPostBody(message, meta ?? {}, loss);
-    void bffFetchJson<undefined>("/api/diagnostics/client", {
-      method: "POST",
-      body: JSON.stringify(body),
-      keepalive: true,
-    }).catch((error: unknown) => {
-      recordFailedPost(loss, error);
-    });
+    const acknowledged = admitted ? sendClientDiagnosticBody(body, loss) : Promise.resolve(false);
+    rememberReportDelivery(body, meta, acknowledged);
   } catch (error) {
     recordFailedPost(loss, error);
   }
@@ -444,6 +583,7 @@ function postClientDiagnosticToServer(message: string, meta?: ClientDiagnosticMe
     window.throttled += 1;
     recordClientDiagnosticLoss("postsThrottled");
     if (window.throttled === 1) writeToBrowserConsole(DIAGNOSTIC_DELIVERY_THROTTLED_NOTICE);
+    sendClientDiagnostic(message, meta, undefined, false);
     return;
   }
   const loss = structuredPostBody(meta) === undefined ? takeClientDiagnosticLoss() : undefined;
@@ -467,13 +607,14 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
 }
 
 // The fan-out composite: every diagnostic reaches both transports. Console first, so a developer
-// watching devtools sees it even when the POST below is throttled or fails. `meta` only ever
-// affects the POST body — the console transport stays the plain, undecorated message it always was.
+// watching devtools sees it even when the POST below is throttled or fails. Routine evidence uses
+// debug; failures and delivery loss remain warnings. Both retain the original body-free text.
 function fanOutClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): void {
-  writeToBrowserConsole(message);
+  writeToBrowserConsole(message, meta);
   postClientDiagnosticToServer(message, meta);
 }
 
+setClientDiagnosticDeliveryRetry(retryReportDelivery);
 setClientDiagnosticWriter(fanOutClientDiagnostic);
 
 export { writeToBrowserConsole, fanOutClientDiagnostic };

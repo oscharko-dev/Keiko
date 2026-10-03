@@ -196,7 +196,7 @@ const openChatWindow: SurfaceOpener = async (page, request, theme) => {
 
 const openCommandPalette: SurfaceOpener = async (page, _request, theme) => {
   await shellReady(page, theme);
-  // The product's own shortcut for `quick-access.commands` (CtrlOrMeta+Shift+P) — no test-only hook.
+  // The product's own shortcut for `workspace.commands` (CtrlOrMeta+Shift+P) — no test-only hook.
   //
   // "ControlOrMeta" is CORRECT here and must NOT be swapped for `editorModifier`, even though that
   // helper is the right answer for Monaco chords elsewhere in this suite. The two read different
@@ -209,7 +209,7 @@ const openCommandPalette: SurfaceOpener = async (page, _request, theme) => {
   //     exactly that.
   // Using `editorModifier` here sends Control to a product waiting for Meta: the palette never
   // opens. Verified by running it both ways on this macOS host — shorthand passes, helper fails.
-  const palette = page.getByRole("dialog", { name: "Quick access" });
+  const palette = page.getByRole("dialog", { name: "Commands" });
   // Retried, because a chord is FIRE-AND-FORGET: `shellReady` proves the shell rendered, not that
   // `useKeyboardShortcuts` has attached its window listener, and a keydown that arrives in that gap
   // is silently discarded — there is nothing to await and nothing to fail on. One press then left
@@ -286,9 +286,25 @@ const openDeleteConfirm: SurfaceOpener = async (page, request, theme) => {
   await expect(row).toBeVisible();
   await row.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Delete…" }).click();
-  const dialog = page.locator('.ed-dirty-dialog[role="dialog"][aria-modal="true"]');
+  const dialog = page.getByRole("dialog", { name: "Delete file?" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Delete" })).toBeFocused();
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
+  expect(await dialog.evaluate((element) => element.tagName)).toBe("DIALOG");
+  const confirm = dialog.getByRole("button", { name: "Delete" });
+  const cancel = dialog.getByRole("button", { name: "Cancel" });
+  // macOS WebKit follows Safari's default field-only Tab navigation; Option-Tab includes buttons.
+  // Linux WebKit and the other engines retain ordinary Tab navigation.
+  const tab =
+    process.platform === "darwin" && page.context().browser()?.browserType().name() === "webkit"
+      ? "Alt+Tab"
+      : "Tab";
+  await expect(confirm).toBeFocused();
+  await page.keyboard.press(tab);
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press(tab);
+  await expect(confirm).toBeFocused();
+  await page.keyboard.press(`Shift+${tab}`);
+  await expect(cancel).toBeFocused();
   return ".ed-dirty-dialog";
 };
 

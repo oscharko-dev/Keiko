@@ -141,6 +141,13 @@ export interface UiStore {
     currentUserMessageId: string,
     limit: number,
   ) => readonly ChatMessage[];
+  /** Visits eligible whole turns newest first, holding only a database page at a time. */
+  readonly visitGatewayMessageUnits: (
+    chatId: string,
+    currentUserMessageId: string,
+    visit: (messages: readonly ChatMessage[]) => boolean | undefined,
+  ) => void;
+  readonly chatHistoryRevision: (chatId: string) => number;
   readonly countMessages: (chatId: string) => number;
   readonly findMessageById: (id: string) => ChatMessage | undefined;
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;

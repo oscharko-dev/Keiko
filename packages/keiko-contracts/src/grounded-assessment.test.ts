@@ -1,0 +1,134 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  composeOwnAssessment,
+  hasOwnAssessmentTag,
+  ownAssessmentPlainText,
+  splitOwnAssessment,
+} from "./grounded-assessment.js";
+
+describe("splitOwnAssessment", () => {
+  it("keeps an answer without a block wholly source-backed", () => {
+    expect(splitOwnAssessment("  Java 17 is required [1].  ")).toEqual({
+      grounded: "Java 17 is required [1].",
+    });
+  });
+
+  it("separates the source-backed part from Keiko's assessment", () => {
+    const answer =
+      "The documents set no Java version [1].\n\n<assessment>\nMy own assessment: Java 21.\n</assessment>";
+    expect(splitOwnAssessment(answer)).toEqual({
+      grounded: "The documents set no Java version [1].",
+      assessment: "My own assessment: Java 21.",
+    });
+  });
+
+  it("reads tags case-insensitively and runs an unclosed block to the end", () => {
+    expect(splitOwnAssessment("Fact [1]. <Assessment>Mine: Java 21.")).toEqual({
+      grounded: "Fact [1].",
+      assessment: "Mine: Java 21.",
+    });
+  });
+
+  it("keeps text after a closed block source-backed and drops stray tags", () => {
+    expect(
+      splitOwnAssessment("A [1]. <assessment>Mine.</assessment> B [2]. </assessment>"),
+    ).toEqual({ grounded: "A [1].\n\nB [2].", assessment: "Mine." });
+  });
+
+  // PR #3678 review (P1): every block is the assessment; a second one never becomes source-backed.
+  it("collects every assessment block and keeps the text between them source-backed", () => {
+    expect(
+      splitOwnAssessment(
+        "The API uses TLS [1]. <assessment>Use Java 21.</assessment><assessment>MFA is mandatory.</assessment> Keys rotate [2].",
+      ),
+    ).toEqual({
+      grounded: "The API uses TLS [1].\n\nKeys rotate [2].",
+      assessment: "Use Java 21.\n\nMFA is mandatory.",
+    });
+  });
+
+  it("keeps a nested block's words, inner and outer, in the assessment", () => {
+    expect(
+      splitOwnAssessment(
+        "The API uses TLS [1]. <assessment>Use Java 21. <assessment>MFA is mandatory.</assessment> Keys must rotate daily.</assessment> Keys rotate [2].",
+      ),
+    ).toEqual({
+      grounded: "The API uses TLS [1].\n\nKeys rotate [2].",
+      assessment: "Use Java 21.\n\nMFA is mandatory.\n\nKeys must rotate daily.",
+    });
+  });
+
+  it("returns no assessment for an empty block and an empty source part for a block alone", () => {
+    expect(splitOwnAssessment("Fact [1]. <assessment>  </assessment>")).toEqual({
+      grounded: "Fact [1].",
+    });
+    expect(splitOwnAssessment("<assessment>Hello! How can I help?</assessment>")).toEqual({
+      grounded: "",
+      assessment: "Hello! How can I help?",
+    });
+  });
+
+  it("keeps the offsets of non-ASCII text intact", () => {
+    expect(splitOwnAssessment("İstanbul ẞ [1]. <assessment>Einschätzung.</assessment>")).toEqual({
+      grounded: "İstanbul ẞ [1].",
+      assessment: "Einschätzung.",
+    });
+  });
+});
+
+describe("composeOwnAssessment", () => {
+  it("stores the canonical block after the source-backed part and round-trips", () => {
+    const stored = composeOwnAssessment("Fact [1].", " Mine. ");
+    expect(stored).toBe("Fact [1].\n\n<assessment>\nMine.\n</assessment>");
+    expect(splitOwnAssessment(stored)).toEqual({ grounded: "Fact [1].", assessment: "Mine." });
+  });
+
+  it("stores the block alone without a source-backed part, and the answer alone without a block", () => {
+    expect(composeOwnAssessment("  ", "Hello.")).toBe("<assessment>\nHello.\n</assessment>");
+    expect(composeOwnAssessment("Fact [1].", undefined)).toBe("Fact [1].");
+  });
+});
+
+// PR #3678 review: a tag inside Markdown code is literal content, such as an XML example.
+describe("literal tags inside Markdown code", () => {
+  it("keeps an inline-code tag and its citation in the source-backed part", () => {
+    expect(splitOwnAssessment("The XML element is `<assessment>` [1].")).toEqual({
+      grounded: "The XML element is `<assessment>` [1].",
+    });
+    expect(hasOwnAssessmentTag("The XML element is `<assessment>` [1].")).toBe(false);
+  });
+
+  it("keeps a fenced XML example intact and still finds a real block after it", () => {
+    const answer =
+      "The schema reads [1]:\n```xml\n<assessment>required</assessment>\n```\n<assessment>Mine.</assessment>";
+    expect(splitOwnAssessment(answer)).toEqual({
+      grounded: "The schema reads [1]:\n```xml\n<assessment>required</assessment>\n```",
+      assessment: "Mine.",
+    });
+  });
+
+  it("ignores a closing tag inside code within the block", () => {
+    expect(
+      splitOwnAssessment("Fact [1]. <assessment>Use `</assessment>` tags.</assessment>"),
+    ).toEqual({
+      grounded: "Fact [1].",
+      assessment: "Use `</assessment>` tags.",
+    });
+  });
+});
+
+describe("tag handling for reading and a disabled policy", () => {
+  it("detects a tag repeatedly (no global-regex state)", () => {
+    expect(hasOwnAssessmentTag("a <assessment>b")).toBe(true);
+    expect(hasOwnAssessmentTag("a <assessment>b")).toBe(true);
+    expect(hasOwnAssessmentTag("no tag")).toBe(false);
+  });
+
+  it("keeps the words and drops the tags", () => {
+    expect(ownAssessmentPlainText("Fact [1].\n\n<assessment>\nMine.\n</assessment>")).toBe(
+      "Fact [1].\n\nMine.",
+    );
+    expect(ownAssessmentPlainText("Plain answer.")).toBe("Plain answer.");
+  });
+});

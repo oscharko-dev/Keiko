@@ -63,19 +63,23 @@ describe("createCodingAppSessionChannel", () => {
     expect(channel.sessionCount()).toBe(0);
   });
 
-  it("ensures a local session only when launcher pairing authority is composed", () => {
+  it("never mints authority from a missing or forged cookie even when launcher authority exists", () => {
     const channel = createCodingAppSessionChannel({
       registry: createSessionRegistry(),
       pairingPort: createFakeSessionPairingPort(),
     });
-
-    const issued = channel.ensureLocalSession(undefined);
-
-    expect(issued.status).toBe("issued");
-    if (issued.status !== "issued") throw new TypeError("expected a local app session");
+    expect(channel.ensureLocalSession(undefined)).toEqual({ status: "unavailable" });
+    expect(channel.ensureLocalSession("sess_000000000000000000000000.forged")).toEqual({
+      status: "unavailable",
+    });
+    expect(channel.sessionCount()).toBe(0);
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("expected launcher pairing");
+    expect(channel.ensureLocalSession(paired.cookieToken)).toEqual({ status: "active" });
     expect(channel.sessionCount()).toBe(1);
-    expect(channel.ensureLocalSession(issued.cookieToken)).toEqual({ status: "active" });
-    expect(channel.sessionCount()).toBe(1);
+    channel.signOut(paired.cookieToken);
+    expect(channel.ensureLocalSession(paired.cookieToken)).toEqual({ status: "unavailable" });
+    expect(channel.sessionCount()).toBe(0);
   });
 
   it("does not pair when the authority denies a well-formed attestation", () => {

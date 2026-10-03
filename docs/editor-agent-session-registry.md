@@ -1,9 +1,11 @@
 # Agent editor session registry, action queue, and SSE events
 
-The agent editor control plane lets agents discover live editor sessions and queue actions for a
-connected browser bridge. The browser owns live Monaco state; for `applyChangeset`, the server owns
-the governed atomic disk transaction and the browser reconciles affected open buffers afterward. It
-is owned by Issue #1392 (Epic #1491) and builds on the public contract from
+The shared control plane lets its active consumers discover live execution sessions and queue
+actions for an authenticated bridge. For `applyChangeset`, the server owns the governed atomic disk
+transaction. The ordinary Editor is no longer an execution consumer: its agent integration and Chat
+handoffs were retired by owner decision on 2026-10-03 (ADR-0061). Its content-free dirty-buffer state
+uses the same registry solely to protect unsaved edits, without becoming a live agent session.
+The control plane is owned by Issue #1392 (Epic #1491) and builds on the public contract from
 [`docs/editor-agent-contracts.md`](./editor-agent-contracts.md). The governing decision record is
 [ADR-0060](./adr/ADR-0060-agent-editor-session-registry-and-queue.md), as amended by
 [ADR-0125](./adr/ADR-0125-governed-agent-docking-and-editor-changesets.md).
@@ -12,20 +14,38 @@ The runtime is split between the HTTP edge
 ([`agentRoutes.ts`](../packages/keiko-server/src/editor/agentRoutes.ts)) and the in-memory control-plane
 registry ([`agentSessionRegistry.ts`](../packages/keiko-server/src/editor/agentSessionRegistry.ts)). The
 server coordinates authority, preflight, queueing, terminal confirmation, and atomic changeset disk
-mutation; the browser bridge owns active-buffer/Monaco mutation, review UI, and reconciliation.
+mutation; an independent execution consumer owns its supported review/confirmation behavior.
+
+Safety-only buffer publications have a separate ownership capability for refresh and clean release.
+It cannot authenticate an action stream or grant an agent decision. Passive records are excluded
+from discovery and action execution, while dirty-buffer checks still see them. Disconnection does
+not silently discard dirty state. The separate Coding Workbench retains its existing live bridge.
 
 ## Routes
 
-| Method | Path                         | Purpose                                                        |
-| ------ | ---------------------------- | -------------------------------------------------------------- |
-| GET    | `/api/editor/agent/sessions` | List the registered session snapshots.                         |
-| POST   | `/api/editor/agent/snapshot` | Register a bridge snapshot, or read a (text-bounded) snapshot. |
-| POST   | `/api/editor/agent/actions`  | Queue an action, or report a browser action result.            |
-| GET    | `/api/editor/agent/events`   | Subscribe to the SSE event stream (session / action / result). |
+| Method | Path                         | Purpose                                                                  |
+| ------ | ---------------------------- | ------------------------------------------------------------------------ |
+| GET    | `/api/editor/agent/sessions` | Discover authorized live execution sessions.                             |
+| POST   | `/api/editor/agent/snapshot` | Register/read bridge snapshots, or publish/release passive buffer state. |
+| POST   | `/api/editor/agent/actions`  | Queue an action, or report a browser action result.                      |
+| GET    | `/api/editor/agent/events`   | Subscribe to the SSE event stream (session / action / result).           |
 
 The two mutating routes (`snapshot`, `actions`) are state-changing, so they inherit the centralized BFF
 CSRF / same-origin guard: a JSON content type, the `X-Keiko-CSRF: 1` header, and a loopback
 `Host`/`Origin` are all required.
+
+### Ordinary Editor buffer safety
+
+The existing snapshot route accepts `kind: "buffer-snapshot"` with a content-free snapshot of
+open and dirty files. Registration returns `bufferSnapshotCapability`; subsequent refreshes and
+`kind: "buffer-release"` require that same owner capability. The browser retains this safety-only
+capability in session storage for the exact Editor session and root so a page reload can resume
+publication. It grants no agent execution or review authority.
+
+Passive records cannot become live bridges, authenticate SSE, receive actions, or appear in agent
+discovery. The existing verified-commit dirty-buffer check still sees them. Clean records can be
+released by their owner; dirty records remain on disconnect or a failed release. Losing ownership
+does not silently clear unsaved state. The server registry itself remains in memory.
 
 ## Bridge liveness
 

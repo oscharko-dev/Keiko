@@ -195,6 +195,53 @@ describe("SupportIncident candidates", () => {
     rmSync(stateDir, { recursive: true, force: true });
   });
 
+  it("retains separate windows for later browser occurrences despite identical coarse defect evidence", () => {
+    const first = created(
+      recordRegisteredFailureIncident(stateDir, {
+        op: "client.diagnostic",
+        errorKind: "timeout",
+        correlationId: "browser-window-stall",
+        clientKind: "other",
+        frames: [],
+      }),
+    );
+    const later = created(
+      recordRegisteredFailureIncident(stateDir, {
+        op: "client.diagnostic",
+        errorKind: "timeout",
+        correlationId: "browser-editor-read",
+        clientKind: "other",
+        frames: [],
+      }),
+    );
+    expect(first.record.fingerprint.algorithm).toBe(2);
+    expect(later.record.fingerprint.defectFingerprint).toBe(
+      first.record.fingerprint.defectFingerprint,
+    );
+    expect(later.incidentId).not.toBe(first.incidentId);
+    expect(later.record.pin.pinId).not.toBe(first.record.pin.pinId);
+    const replay = recordRegisteredFailureIncident(stateDir, {
+      op: "client.diagnostic",
+      errorKind: "timeout",
+      correlationId: "browser-editor-read",
+      clientKind: "other",
+      frames: [],
+    });
+    expect(replay).toMatchObject({ status: "deduplicated", incidentId: later.incidentId });
+    expect(listSupportIncidents(stateDir)).toHaveLength(2);
+    dismissSupportIncident(stateDir, later.incidentId);
+    const retried = created(
+      recordRegisteredFailureIncident(stateDir, {
+        op: "client.diagnostic",
+        errorKind: "timeout",
+        correlationId: "browser-editor-read",
+        clientKind: "other",
+        frames: [],
+      }),
+    );
+    expect(retried.incidentId).not.toBe(later.incidentId);
+  });
+
   // Backdates a store file past the in-flight grace: a file whose writer crashed long ago, as
   // opposed to one another process may still be writing.
   function abandon(name: string): void {
@@ -289,11 +336,12 @@ describe("SupportIncident candidates", () => {
   describe("the registered-failure trigger", () => {
     it("derives eligibility from the registry, not from a caller list", () => {
       expect(supportIncidentEligibleOperation(FAILURE_OP)).toBe(true);
-      expect(supportIncidentEligibleOperation("support.analyze.classified")).toBe(false);
+      // A registered operation outside the failure lifecycle is never eligible.
+      expect(supportIncidentEligibleOperation("support.report.completed")).toBe(false);
       expect(supportIncidentEligibleOperation("support.incident.rejected")).toBe(false);
       expect(supportIncidentEligibleOperation("not.a.registered.operation")).toBe(false);
       expect(
-        recordRegisteredFailureIncident(stateDir, { op: "support.analyze.classified" }),
+        recordRegisteredFailureIncident(stateDir, { op: "support.report.completed" }),
       ).toBeUndefined();
     });
 
@@ -325,6 +373,27 @@ describe("SupportIncident candidates", () => {
         rootCorrelationId: "root-correlation-1",
         childCorrelationIds: ["child-correlation-1"],
       });
+    });
+
+    // Review #3679: the writer redacts a credential-shaped correlation label, so an incident never
+    // adopts one: it could only leak the secret, never join the persisted evidence.
+    it("never adopts a correlation label the writer would redact", () => {
+      // Assembled at runtime so the secret scanner never sees a token literal.
+      const token = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "c2lnbmF0dXJl"].join(".");
+      const failure = created(
+        recordRegisteredFailureIncident(stateDir, {
+          op: FAILURE_OP,
+          correlationId: token,
+          parentCorrelationId: "root-correlation-2",
+        }),
+      ).record;
+      expect(failure.correlation).toEqual({
+        rootCorrelationId: "root-correlation-2",
+        childCorrelationIds: [],
+      });
+      const report = created(recordUserReportedIncident(stateDir, { correlationId: token })).record;
+      expect(report.correlation.rootCorrelationId).not.toBe(token);
+      expect(JSON.stringify([failure, report])).not.toContain(token);
     });
 
     it("maps an open errorKind outside the closed vocabulary to unknown", () => {
@@ -581,6 +650,21 @@ describe("SupportIncident candidates", () => {
         errorKind: "internal",
         correlationId: "over-quota-1",
       });
+      expect(
+        recordRegisteredFailureIncident(stateDir, {
+          op: "client.diagnostic",
+          errorKind: "internal",
+          correlationId: "over-quota-browser",
+          clientKind: "boundary",
+          renderFailure: "window-body",
+        }),
+      ).toEqual({ status: "rejected", reason: "quota-exhausted" });
+      expect(
+        expectActivityLogProof(
+          "support.incident.rejected.emitted-line",
+          lines("support.incident.rejected").at(-1) ?? "",
+        ),
+      ).toMatchObject({ fingerprintAlgorithm: 2, correlationId: "over-quota-browser" });
       expect(rejected).toEqual({ status: "rejected", reason: "quota-exhausted" });
       expect(storeNames()).toHaveLength(MAX_REGISTERED_FAILURE_INCIDENTS);
       const line = expectActivityLogProof(
@@ -793,6 +877,21 @@ describe("SupportIncident candidates", () => {
           [FAILURE_OP, "activity-log.pin.created", "support.incident.created"].includes(op),
         );
       expect(ops).toEqual([FAILURE_OP, "activity-log.pin.created", "support.incident.created"]);
+    });
+
+    it("flushes a queued failure candidate before sealing the final log segment", () => {
+      setSupportIncidentTriggerForTests(true);
+      createFileServerLogSink(stateDir).write(failureEvent());
+
+      closeFileServerLogSinks();
+
+      expect(listSupportIncidents(stateDir)).toHaveLength(1);
+      expect(lines("support.incident.created")).toHaveLength(1);
+      expect(
+        readdirSync(join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME)).filter((name) =>
+          name.endsWith(".active.jsonl"),
+        ),
+      ).toEqual([]);
     });
 
     it("releases the trigger's own pin when the deferred step finds a duplicate", async () => {

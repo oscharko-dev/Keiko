@@ -94,6 +94,47 @@ describe("CapsuleSetComposeDialog — rendering", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders the member guidance and the busy submit label in German", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    let release: (value: { capsuleSet: CapsuleSetDetail }) => void = () => undefined;
+    const createImpl = vi.fn().mockImplementation(
+      () =>
+        new Promise<{ capsuleSet: CapsuleSetDetail }>((resolve) => {
+          release = resolve;
+        }),
+    );
+    render(
+      <I18nProvider>
+        <CapsuleSetComposeDialog
+          {...defaultProps({
+            createImpl,
+            capsules: [
+              capsuleWithGuidance("cap-legacy", "Legacy vectors", {
+                code: "reindex-recommended",
+                scope: "pod",
+                tone: "warning",
+              }),
+            ],
+          })}
+        />
+      </I18nProvider>,
+    );
+
+    const member = await screen.findByRole("checkbox", { name: /Legacy vectors/i });
+    expect(await screen.findByText("Neuindexierung empfohlen")).toBeInTheDocument();
+    expect(member).toHaveAccessibleDescription(
+      "Die Kompatibilität ist ungeprüft; der lexikalische Fallback bleibt verfügbar.",
+    );
+
+    await user.click(member);
+    await user.type(screen.getByLabelText(/Name des Knowledge Pod Set/i), "Kombiniert");
+    await user.click(screen.getByRole("button", { name: "Knowledge Pod Set erstellen" }));
+
+    expect(await screen.findByRole("button", { name: "Wird erstellt…" })).toBeInTheDocument();
+    release(okSet());
+  });
+
   it("shows a live selection counter", async () => {
     const user = userEvent.setup();
     render(<CapsuleSetComposeDialog {...defaultProps()} />);
@@ -108,8 +149,8 @@ describe("CapsuleSetComposeDialog — rendering", () => {
         {...defaultProps({
           capsules: [
             capsuleWithGuidance("cap-legacy", "Legacy vectors", {
-              label: "Reindex recommended",
-              description: "Compatibility is unverified; lexical fallback remains available.",
+              code: "reindex-recommended",
+              scope: "pod",
               tone: "warning",
             }),
           ],

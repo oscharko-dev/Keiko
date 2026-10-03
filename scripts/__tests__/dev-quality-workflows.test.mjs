@@ -66,6 +66,35 @@ describe("dev quality workflows", () => {
     );
   });
 
+  // PR #3679: a body edit 48 s after a push put two scans of one pull request in flight, SonarCloud
+  // refused the push run's older report, and the required `SonarCloud Code Analysis` check on the
+  // unchanged head ended `cancelled` with the quality gate OK. ADR-0157 D5 serializes the analysis.
+  it("serializes every SonarCloud analysis of one pull request across code-head and metadata runs", () => {
+    const { concurrency } = ciWorkflow.jobs["coverage-sonar"];
+    expect(concurrency).toEqual({
+      group:
+        "ci-sonar-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}",
+      "cancel-in-progress": false,
+    });
+    // One group for both classes of a pull request: never keyed on the event action or a head, as a
+    // superseded run's scan files under the same SonarCloud pull request as the current one.
+    expect(concurrency.group).not.toContain("github.event.action");
+    expect(concurrency.group).not.toContain("sha");
+    // Outside the workflow-level namespace: a job-level group equal to a run's group would queue the
+    // job behind runs, its own included.
+    expect(concurrency.group.startsWith("ci-sonar-")).toBe(true);
+    // One pending slot holds only while each pull request has exactly two workflow-level classes that
+    // each cancel their superseded run. A third scan in the group would make GitHub cancel the older
+    // pending one, and that run's required `ci` would turn red.
+    expect(ciWorkflow.concurrency.group.match(/'(?:metadata|code-head)'/gu)).toEqual([
+      "'metadata'",
+      "'code-head'",
+    ]);
+    expect(ciWorkflow.concurrency["cancel-in-progress"]).toBe(
+      "${{ github.event_name == 'pull_request' }}",
+    );
+  });
+
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
     expect(mutation).not.toContain("pull_request:");
     expect(mutation).toContain('cron: "17 2 * * *"');
@@ -304,6 +333,16 @@ describe("dev quality workflows", () => {
     expect(ciWorkflow.jobs["coverage-sonar"]["timeout-minutes"]).toBe(50);
   });
 
+  it("isolates local rule analysis from mutable coverage while retaining CI coverage inputs", () => {
+    const scannerInvocation = localSonar.slice(
+      localSonar.indexOf('"${compose[@]}" run --rm --no-deps scanner'),
+      localSonar.indexOf("# SonarQube Community carries no shell analyzer"),
+    );
+    expect(scannerInvocation).toContain('-Dsonar.javascript.lcov.reportPaths=""');
+    const properties = readFileSync(resolve(root, "sonar-project.properties"), "utf8");
+    expect(properties).toMatch(/^sonar\.javascript\.lcov\.reportPaths=.+$/mu);
+  });
+
   it("isolates local Sonar state by repository and selectable loopback port", () => {
     expect(localSonar).toContain('sonar_port="${KEIKO_LOCAL_SONAR_PORT:-9234}"');
     expect(localSonar).toContain("--path-format=absolute --git-common-dir");
@@ -319,8 +358,11 @@ describe("dev quality workflows", () => {
     );
     expect(localSonar).toContain('git -C "${repo_root}" ls-files -z --others --exclude-standard');
     expect(localSonar).toContain("--needs-full-scan");
-    expect(localSonar).not.toContain("-Dsonar.javascript.node.maxspace=4096");
-    expect(localSonar).toContain("-Dsonar.javascript.node.maxspace=4608");
+    // The analyzer heap defaults to 4608 MiB (never the old 4096) and reaches the scanner through the
+    // validated override (PR #3678).
+    expect(localSonar).not.toMatch(/node\.maxspace=4096|NODE_MAXSPACE:-4096/u);
+    expect(localSonar).toContain('node_maxspace="${KEIKO_LOCAL_SONAR_NODE_MAXSPACE:-4608}"');
+    expect(localSonar).toContain('-Dsonar.javascript.node.maxspace="${node_maxspace}"');
     expect(localSonar).toContain("--partition-inclusions");
     expect(localSonar).toContain(
       '"-Dsonar.inclusions=${source_inclusions:-${empty_source_inclusion}}"',

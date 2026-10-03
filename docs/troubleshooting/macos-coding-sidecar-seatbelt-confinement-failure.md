@@ -136,8 +136,8 @@ SAME attested loopback BFF port `/api/coding-sidecar/gateway/*` already uses (at
 1. Export and reconstruct the run's timeline:
 
    ```bash
-   keiko support export --out bundle.jsonl
-   keiko support analyze bundle.jsonl --correlation-id <runCorrelationId> --json
+   keiko support export --correlation-id <runCorrelationId>
+   keiko support analyze <report.json> --correlation-id <runCorrelationId> --json
    ```
 
 2. Look for `op: "gateway.tool-catalog.call-bound"` lines showing the model successfully binding

@@ -32,16 +32,19 @@ import {
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
-import type {
-  GatewayConfig,
-  GatewayRequest,
-  NormalizedResponse,
-  OpenAIEmbeddingOutcome,
-  OpenAIEmbeddingRequest,
+import {
+  selectConfiguredModel,
+  type GatewayConfig,
+  type GatewayRequest,
+  type NormalizedResponse,
+  type OpenAIEmbeddingOutcome,
+  type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import {
+  configuredEmbeddingModelIds,
+  configuredEmbeddingProviders,
   handleDeleteLocalKnowledgeCapsule,
   handleCancelLocalKnowledgeCapsuleIndexing,
   handleConnectLocalKnowledgeCapsule,
@@ -4406,6 +4409,69 @@ describe("local-knowledge handlers", () => {
         capabilities: [chatCapability(modelId)],
       };
       expect(selectEmbeddingModelId(config)).toBeUndefined();
+    });
+  });
+
+  // A gateway that lists several embedding engines must bind ONE of them consistently: pod
+  // creation, full re-embed, repository semantic search and memory all read the same order, which
+  // is the preference `selectConfiguredModel({ kind: "embedding" })` already applies.
+  describe("the default embedding model is one deterministic choice", () => {
+    function severalEmbeddingConfig(): GatewayConfig {
+      const base = gatewayConfig("embed-first-expensive");
+      const [template] = base.providers;
+      if (template === undefined) throw new Error("missing provider template");
+      return {
+        ...base,
+        providers: ["embed-first-expensive", "embed-second-cheap", "embed-third-cheap"].map(
+          (modelId) => ({ ...template, modelId }),
+        ),
+        capabilities: [
+          { ...embeddingCapability("embed-first-expensive"), costClass: "high" },
+          { ...embeddingCapability("embed-second-cheap"), costClass: "low" },
+          { ...embeddingCapability("embed-third-cheap"), costClass: "low" },
+        ],
+      };
+    }
+
+    it("orders embedding providers cheapest first, configured order breaking ties", () => {
+      const config = severalEmbeddingConfig();
+      expect(configuredEmbeddingProviders(config).map((provider) => provider.modelId)).toEqual([
+        "embed-second-cheap",
+        "embed-third-cheap",
+        "embed-first-expensive",
+      ]);
+      expect(selectEmbeddingModelId(config)).toBe("embed-second-cheap");
+      expect(selectEmbeddingModelId(config)).toBe(
+        selectConfiguredModel(config, { kind: "embedding" }),
+      );
+    });
+
+    it("never lets a chat provider into the embedding order", () => {
+      const config = severalEmbeddingConfig();
+      const [template] = config.providers;
+      if (template === undefined) throw new Error("missing provider template");
+      const withChat: GatewayConfig = {
+        ...config,
+        providers: [{ ...template, modelId: "chat-first" }, ...config.providers],
+        capabilities: [chatCapability("chat-first"), ...(config.capabilities ?? [])],
+      };
+      expect(configuredEmbeddingModelIds(withChat)).not.toContain("chat-first");
+    });
+
+    it("binds a new pod to the elected embedding model, not merely the first listed", async () => {
+      const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+      tempDirs.push(tmp);
+
+      const result = await handleCreateLocalKnowledgeCapsule(
+        baseCtx(tmp, "POST", { displayName: "Preferred Embed" }),
+        depsFor(tmp, severalEmbeddingConfig()),
+      );
+
+      expect(result.status).toBe(201);
+      const body = result.body as {
+        readonly capsule: { readonly embeddingModelIdentity: { readonly modelId: string } };
+      };
+      expect(body.capsule.embeddingModelIdentity.modelId).toBe("embed-second-cheap");
     });
   });
 

@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   CHAT_MODEL_WALK_BUDGET_MS,
+  awaitAnyInitializedConversationReadyChatModel,
+  awaitInitializedConversationReadiness,
   ensureAnyConversationReadyChatModel,
   ensureOnDemandConversationReadiness,
+  initializeConfiguredConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
 } from "./gateway-readiness.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
@@ -53,6 +56,16 @@ function holderWith(
 }
 
 describe("ensureOnDemandConversationReadiness guards", () => {
+  // Interactive Chat adds no readiness request for a model it cannot date: the observation here
+  // carries a malformed timestamp. A WELL-FORMED failed observation older than the cooldown earns
+  // one re-probe from the first request that needs the model — pinned, with its bounds, in
+  // gateway-readiness.initialization.test.ts (ADR-0171 D2).
+  it("does not start probes from conversation requests with unknown or malformed observations", async () => {
+    const { deps, fetchCalls } = probeableDeps("invalid");
+    await awaitInitializedConversationReadiness(deps, "chat-model");
+    await awaitAnyInitializedConversationReadyChatModel(deps, "chat-model");
+    expect(fetchCalls()).toBe(0);
+  });
   it("returns without probing when no gateway is configured", async () => {
     await expect(
       ensureOnDemandConversationReadiness({} as UiHandlerDeps, "chat-model"),
@@ -164,6 +177,9 @@ function probeableDeps(
     maxRetries: 0,
     retryBaseDelayMs: 1,
   };
+  let latestObservation: ReturnType<
+    NonNullable<UiHandlerDeps["gatewayConfig"]>["verifiedCapability"]
+  > = { modelId: "chat-model", generation, checkedAt, fields };
   const holder = {
     ...holderWith(
       {
@@ -174,12 +190,19 @@ function probeableDeps(
       },
       generation,
     ),
+    verifiedCapability: (): typeof latestObservation => latestObservation,
     current: (): { providers: (typeof provider)[] } => ({ providers: [provider] }),
     recordVerifiedCapability: (
       _modelId: string,
       fields: { conversationReady?: boolean | undefined },
     ): void => {
       recorded.push(fields.conversationReady);
+      latestObservation = {
+        modelId: "chat-model",
+        generation,
+        checkedAt: new Date().toISOString(),
+        fields,
+      };
     },
   };
   const deps = {
@@ -392,5 +415,96 @@ describe("on-demand readiness correlation", () => {
     expect(joined[0]?.correlationId).not.toBe("corr-probe-only");
     expect(joined[0]?.correlationId).not.toBe(UNKNOWN_CORRELATION_ID);
     expect(joined[0]?.parentCorrelationId).toBe("corr-probe-only");
+  });
+});
+
+describe("configuration-owned conversation recovery", () => {
+  it.each([429, 500, 503])(
+    "heals a startup HTTP %i through the conversation guard without per-question probes",
+    async (status) => {
+      vi.useFakeTimers();
+      const { deps, readyRecords } = probeableDeps("invalid");
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("", { status }))
+        .mockImplementation(() =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+              { headers: { "content-type": "application/json" } },
+            ),
+          ),
+        );
+      const recovering = { ...deps, gatewayReadinessFetch: fetch };
+      initializeConfiguredConversationReadiness(recovering);
+      await awaitInitializedConversationReadiness(recovering, "chat-model", "corr-first-question");
+      const initialCalls = fetch.mock.calls.length;
+      await awaitInitializedConversationReadiness(recovering, "chat-model", "corr-second-question");
+      expect(fetch).toHaveBeenCalledTimes(initialCalls);
+      await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS + 1);
+      await awaitInitializedConversationReadiness(
+        recovering,
+        "chat-model",
+        "corr-recovered-question",
+      );
+      expect(readyRecords().at(-1)).toBe(true);
+      expect(fetch.mock.calls.length).toBeGreaterThan(initialCalls);
+      const recoveredCalls = fetch.mock.calls.length;
+      await awaitAnyInitializedConversationReadyChatModel(recovering, "chat-model");
+      expect(fetch).toHaveBeenCalledTimes(recoveredCalls);
+    },
+  );
+
+  it("bounds startup fan-out and skips queued probes after replacement", async () => {
+    const { deps } = probeableDeps("invalid");
+    const originalHolder = deps.gatewayConfig;
+    const base = originalHolder?.current();
+    const provider = base?.providers[0];
+    if (originalHolder === undefined || provider === undefined || base === undefined)
+      throw new Error("Missing fixture config");
+    let generation = originalHolder.generation();
+    const releases: (() => void)[] = [];
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          releases.push(() => {
+            resolve(
+              new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+                headers: { "content-type": "application/json" },
+              }),
+            );
+          });
+        }),
+    );
+    const holder = {
+      ...originalHolder,
+      generation: (): number => generation,
+      current: (): NonNullable<ReturnType<typeof originalHolder.current>> => ({
+        ...base,
+        providers: Array.from({ length: 8 }, (_, index) => ({
+          ...provider,
+          modelId: "m" + String(index),
+        })),
+      }),
+    };
+    const queued = { ...deps, gatewayConfig: holder, gatewayReadinessFetch: fetch };
+    initializeConfiguredConversationReadiness(queued, "corr-config-change");
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalledTimes(2);
+    });
+    generation++;
+    initializeConfiguredConversationReadiness(queued, "corr-next-change");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    releases.splice(0).forEach((release) => {
+      release();
+    });
+    await vi.waitFor(() => {
+      expect(fetch).toHaveBeenCalledTimes(4);
+    });
+    expect(releases).toHaveLength(2);
+    generation++;
+    releases.splice(0).forEach((release) => {
+      release();
+    });
   });
 });

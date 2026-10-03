@@ -855,22 +855,6 @@
     "en": "Open or focus workspace search.",
     "de": "Öffnet oder fokussiert die Arbeitsbereichssuche."
   },
-  "command.quickAccessFiles": {
-    "en": "Quick Access: files",
-    "de": "Schnellzugriff: Dateien"
-  },
-  "command.quickAccessFiles.description": {
-    "en": "Open the unified quick-access file picker.",
-    "de": "Öffnet den einheitlichen Datei-Schnellzugriff."
-  },
-  "command.quickAccessCommands": {
-    "en": "Quick Access: commands",
-    "de": "Schnellzugriff: Befehle"
-  },
-  "command.quickAccessCommands.description": {
-    "en": "Open the unified command palette.",
-    "de": "Öffnet die einheitliche Befehlspalette."
-  },
   "command.openEditorSettings": {
     "en": "Open editor settings",
     "de": "Editor-Einstellungen öffnen"
@@ -966,22 +950,6 @@
   "command.editorFormat.description": {
     "en": "Monaco format action backed by governed formatting.",
     "de": "Monaco-Formataktion mit governter Formatierung."
-  },
-  "command.editorGenerateTests": {
-    "en": "Generate tests",
-    "de": "Tests generieren"
-  },
-  "command.editorGenerateTests.description": {
-    "en": "Host-injected Monaco action for governed test generation.",
-    "de": "Host-injizierte Monaco-Aktion für governte Testgenerierung."
-  },
-  "command.editorAskSelection": {
-    "en": "Ask Keiko about selection",
-    "de": "Keiko zur Auswahl fragen"
-  },
-  "command.editorAskSelection.description": {
-    "en": "Host-injected Monaco action for selected text context.",
-    "de": "Host-injizierte Monaco-Aktion für ausgewählten Textkontext."
   },
   "command.editorRenameSymbol": {
     "en": "Rename symbol",
@@ -1258,5 +1226,13 @@
   "settings.autonomy.footnote": {
     "en": "Full access removes per-action prompts only inside the validated authority envelope. Hard denials and deployment ceilings always remain enforced.",
     "de": "Vollzugriff entfernt Einzelrückfragen nur innerhalb des validierten Authority Envelope. Harte Verbote und Bereitstellungsgrenzen bleiben immer wirksam."
+  },
+  "command.workspaceCommands": {
+    "en": "Workspace commands",
+    "de": "Arbeitsbereichsbefehle"
+  },
+  "command.workspaceCommands.description": {
+    "en": "Open the workspace and editor command palette.",
+    "de": "Öffnet die Befehlsliste für Arbeitsbereich und Editor."
   }
 }

@@ -1,4 +1,4 @@
-# Epic #2091 agent docking security review
+# Epic #2091 agent docking security review — historical findings
 
 Date: 2026-07-10
 
@@ -6,24 +6,30 @@ Scope: Epic #2091 and child issues #2114 through #2122, covering the editor-agen
 multi-file changesets, live editor context, chat docking, presence/audit surfaces, and Authority
 Envelope enforcement.
 
-## Policy baseline
+## Current scope and policy (2026-10-03)
 
-This review uses ADR-0125's maintained three-mode policy. The old blanket rule that every content
-mutation requires review and a later manual Save is obsolete:
+The finding and verification sections retain the dated 2026-07-10 review. The ordinary Editor's
+agent action subscription, dispatch, presence, patch review, selection-to-chat handoff, and Chat
+**Apply to editor** are now retired. The exclusive Chat authority wrapper and its local authority
+factory are removed. The independent Coding Workbench and shared governed producer, transaction,
+authority, and verification paths retain their existing behavior.
 
-- **Ask for approval** allows workspace-contained edits, saves, and commands. External files,
-  internet use, and delivery require approval.
-- **Approve for me** allows low- and medium-risk actions. High- and critical-risk actions require
-  approval.
-- **Full access** allows file and internet actions inside a validated Authority Envelope without
-  per-action approval.
-- Commit, push, pull-request creation, and merge remain separately human-approved delivery actions.
+Current policy follows ADR-0138 and `AGENTS.md`: **Ask for approval** requires approval for workspace
+mutations; **Supervised workspace** permits routine contained work within its validated authority;
+**Full access** permits work within the validated Authority Envelope and server ceiling. Accepted
+repository delivery follows ADR-0135; the product's Governed Merge Gateway remains approval-gated.
+Hard denials for invalid authority, workspace escape, sensitive paths, secret exfiltration,
+unsupported actions, exhausted budgets, and invalid execution leases remain independent.
 
-Independent hard denials still win in every mode: invalid or expired authority, workspace escape,
-sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and invalid bridge
-leases fail closed.
+The ordinary Editor publishes body-free buffer-safety state only. Its separately scoped ownership
+token cannot authenticate actions or SSE, expose agent context, or make it discoverable. Dirty
+state survives disconnect and participates in the existing verified-commit guard. Clean release is
+owned and acknowledged; restart reseeding cannot replace any existing record. These constraints
+are covered by `editor-agent.test.ts`, `agentSessionRegistry.test.ts`, `agentRoutes.test.ts`, and
+`productionVerifiedCommitDependencies.test.ts`. This is preservation of unsaved-buffer safety,
+not a new agent execution path.
 
-## Trust boundaries reviewed
+## Historical trust boundaries reviewed
 
 1. `keiko-tools` model-facing schemas and the bounded loopback HTTP producer.
 2. Shared editor-agent wire parsing in `keiko-contracts`.
@@ -77,9 +83,10 @@ Action payload fields are type-discriminated, preventing an `applyTextEdits` act
 uncounted patch. Existing server-prepared `applyPatch` text edits remain valid. Contract and route
 tests cover missing or foreign schema versions, additional keys, and type-foreign payloads.
 
-No unresolved high or critical finding remains after these fixes.
+The original review recorded no unresolved high or critical finding after these fixes. This is
+not a claim about the current branch's full gate or review status.
 
-## Adversarial verification matrix
+## Historical adversarial verification matrix
 
 | Boundary                         | Adversarial cases                                                                                                                  | Passing evidence                                                                                |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
@@ -91,7 +98,7 @@ No unresolved high or critical finding remains after these fixes.
 | Authority and capability         | missing/wrong/replayed bridge capability; expired changeset authority; delayed stream close; unknown-field smuggling               | `agentRoutes.test.ts`: bridge lease/supersession, changeset expiry, and canonical-wire tests    |
 | Atomicity                        | browser rejection; stale member; writer failure on a later member; replay; forged result                                           | `agentRoutes.test.ts`: apply-none, rollback, idempotency, and forged-result tests               |
 | Authority budgets                | cumulative tool calls and UTF-8 patch bytes; elapsed runtime; text-edit bytes; identical re-registration                           | `agentAuthorityRegistry.test.ts` and `agentRoutes.test.ts` Authority Envelope budget tests      |
-| Cross-pane reconciliation        | active-pane switching; stale retained snapshots; clean peer model; dirty/delete rechecks; bounded queue                            | route, queue, runtime, and the `editor-agent-pins` split-pane session pin (#2955)               |
+| Cross-pane reconciliation        | active-pane switching; stale retained snapshots; clean peer model; dirty/delete rechecks; bounded queue                            | historical route/queue/runtime and former `editor-agent-pins` session pin (#2955)               |
 | Diagnostics/context              | item/message caps, ingest rejection, truncation, unsafe-format stripping, redaction                                                | `editor-agent.test.ts`, `agentRoutes.test.ts`, and `codingContextProviders.test.ts`             |
 
 The credential-path case intentionally uses a well-known credential store (`.aws/credentials`). A
@@ -107,35 +114,30 @@ is validated again immediately before atomic apply, and an apply failure rolls b
 The server also re-resolves Authority Envelope expiry and policy after the browser's terminal
 acknowledgment.
 
-Review timing follows policy rather than an obsolete blanket Save rule:
+The original review distinguished supervised high-risk browser review, policy-allowed changesets,
+and Chat Apply followed by manual Save. Those ordinary Editor browser journeys are retired.
+`tests/e2e/editor-manual-pins.spec.ts` now verifies manual undo/redo and split-pane operation without
+agent control requests. It does not claim agent reconciliation or Workbench transaction coverage.
 
-- A supervised high-risk changeset remains byte-identical on disk until the user accepts its review.
-  Accept then commits the complete selected transaction and reconciles Monaco.
-- An allowed contained changeset confirms through the live bridge, commits without a visible review,
-  and reconciles Monaco.
-- Chat **Apply to editor** is an explicit review workflow. Accept changes the active buffer, marks it
-  dirty, and requires explicit Save before that buffer reaches disk.
-
-`tests/e2e/editor-agent-pins.spec.ts` verifies all three paths against the real BFF and
-filesystem, and pins that a split keeps exactly ONE live agent session with the SSE bridge
-subscribed to that same session across a pane-focus change. Two-visible-model reconciliation is
-NOT covered end to end and is not currently reachable: a split moves the active tab, so proving it
-needs a changeset touching both panes' files at once, and #2256 removed the only route that could
-supply one. `packages/keiko-editor/src/components/editor-model-registry.test.ts` keeps the
-unit-level proof against a mocked Monaco. See
-[`2091-agent-docking-demo.md`](2091-agent-docking-demo.md) for the full gap statement.
+The shared server transaction and its independent Workbench consumers remain unchanged by this
+retirement. Their existing authority, containment, precondition, atomicity, and verification tests
+must remain in place. See [the current demo](./2091-agent-docking-demo.md) for the ordinary Editor
+scope and [the historical regression evidence](./2091-agent-docking-regression-evidence.md) for the
+original measured results.
 
 ## Audit and data handling
 
 Editor-agent audit records contain only bounded identifiers, action type/origin, policy disposition,
 reason code, status, target label, counts, and byte counts. They do not contain patch text, file
 content, diagnostic messages, selections, prompts, credentials, reusable capabilities, full
-Authority Envelopes, or private endpoints. The reviewed terminal capability is random, memory-only,
-session-bound, and consumed through a live bridge lease.
+Authority Envelopes, or private endpoints. The reviewed execution capability is random, memory-only,
+session-bound, and consumed through an execution lease for active independent consumers. The
+ordinary Editor's passive safety token may be retained in sessionStorage across reload; it grants
+only owned snapshot refresh and clean release, never execution authority.
 
 ## Disposition
 
-Security review: **passed after four high-severity fixes and one medium hardening group**.
+Historical security review: **passed after four high-severity fixes and one medium hardening group**.
 Sensitive-path, containment,
 precondition, authority, capability, budget, atomicity, and redaction controls have named passing
 regression coverage. No governance gate or deny was weakened.

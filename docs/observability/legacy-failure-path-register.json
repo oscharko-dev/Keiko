@@ -494,50 +494,8 @@
       "count": 2
     },
     {
-      "path": "packages/keiko-cli/src/support-export.ts",
-      "owner": "discoverServerLogFiles",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-cli/src/support.ts",
       "owner": "emitSupportInstallLayoutRefusal",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
-      "owner": "loadToolAnalysisOptions",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
-      "owner": "processIsRunning",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
-      "owner": "resolveEvidenceIndexCount",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
-      "owner": "resolveExportInstallMode",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
-      "owner": "resolveIncludedEvidenceSections",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-cli/src/support.ts",
-      "owner": "writeFixtureOrExitCode",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -1683,12 +1641,6 @@
     },
     {
       "path": "packages/keiko-local-knowledge/src/store.ts",
-      "owner": "quickCheckOkFor",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-local-knowledge/src/store.ts",
       "owner": "tryOpenAndMigrate",
       "kind": "unregistered-catch",
       "count": 3
@@ -1738,36 +1690,6 @@
     {
       "path": "packages/keiko-memory-vault/src/cipher.ts",
       "owner": "keyFromKeychain",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/cipher.ts",
-      "owner": "keyFromKeychainReadOnly",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/db.ts",
-      "owner": "computeStoreFingerprint",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/db.ts",
-      "owner": "safeQuickCheckOk",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/db.ts",
-      "owner": "safeTableRowCount",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-memory-vault/src/db.ts",
-      "owner": "safeUserVersion",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -2320,18 +2242,6 @@
     {
       "path": "packages/keiko-server/src/chat-compaction-model-summary.ts",
       "owner": "callModelWithTimeout",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/chat-compaction-resurfacing.ts",
-      "owner": "buildChatCompactionResurfacingContext",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/chat-compaction-resurfacing.ts",
-      "owner": "safeLoad",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -4455,12 +4365,6 @@
     },
     {
       "path": "packages/keiko-server/src/editor/watch/workspaceWatchService.ts",
-      "owner": "deferred",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/editor/watch/workspaceWatchService.ts",
       "owner": "metadataFor",
       "kind": "unregistered-catch",
       "count": 1
@@ -6146,24 +6050,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/store-fingerprints.ts",
-      "owner": "localKnowledgeStoreFingerprintOutcome",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/store-fingerprints.ts",
-      "owner": "memoryVaultStoreFingerprintOutcome",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/store-fingerprints.ts",
-      "owner": "uiStoreFingerprintOutcome",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/store-handlers.ts",
       "owner": "projectTrustRemainsRestricted",
       "kind": "unregistered-catch",
@@ -6196,18 +6082,6 @@
     {
       "path": "packages/keiko-server/src/store/db.ts",
       "owner": "isProjectAvailable",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/store/db.ts",
-      "owner": "readOneTableRowCount",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/store/db.ts",
-      "owner": "readQuickCheckOk",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -7202,12 +7076,6 @@
       "count": 2
     },
     {
-      "path": "packages/keiko-server/src/workspace-state-handlers.ts",
-      "owner": "loadWorkspaceStateFromDisk",
-      "kind": "unregistered-catch",
-      "count": 2
-    },
-    {
       "path": "packages/keiko-tool-catalog/src/schema.ts",
       "owner": "isValidRegexSource",
       "kind": "unregistered-catch",
@@ -8030,24 +7898,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorSelectionHandoff.ts",
-      "owner": "availableId",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorSelectionHandoff.ts",
-      "owner": "currentTime",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorSelectionHandoff.ts",
-      "owner": "decodeBoundedUtf8",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorSemanticTokens.ts",
       "owner": "resolveTokens",
       "kind": "unregistered-catch",
@@ -8290,54 +8140,6 @@
     {
       "path": "packages/keiko-ui/src/lib/api.ts",
       "owner": "sendDesktopChatStream",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "actionIdentity",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "attemptQueueOnce",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "fetchSelectedSession",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "loadCreateTarget",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "loadExistingTarget",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "parsePatchEntries",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "prepareSubmission",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/chat-editor-apply.ts",
-      "owner": "queueChatEditorApply",
       "kind": "unregistered-catch",
       "count": 1
     },

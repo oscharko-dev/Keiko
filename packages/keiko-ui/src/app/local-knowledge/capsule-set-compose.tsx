@@ -16,11 +16,12 @@ import { CAPSULE_SET_MAX_MEMBERS } from "@oscharko-dev/keiko-contracts/runtime/l
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import { NATIVE_DIALOG_STYLE } from "@/app/components/desktop/native-element-styles";
 import {
+  knowledgePodGuidanceText,
   useLocalKnowledgeTranslate as useTranslate,
   type I18nTranslate,
 } from "./local-knowledge-i18n";
 import { createCapsuleSet, type CapsuleListEntry } from "@/lib/local-knowledge-api";
-import { STATUS_LABELS } from "./connector-graph-types";
+import { STATUS_LABEL_KEYS } from "./connector-graph-types";
 import { formatError } from "./format-error";
 
 function focusablesIn(root: HTMLElement): readonly HTMLElement[] {
@@ -108,7 +109,9 @@ function MemberCheckbox({
   readonly disabled: boolean;
   readonly onToggle: (id: KnowledgeCapsuleId) => void;
 }): ReactNode {
+  const t = useTranslate();
   const guidance = capsule.knowledgePod?.guidance;
+  const guidanceText = guidance === undefined ? undefined : knowledgePodGuidanceText(guidance, t);
   const guidanceId = useId();
   const describedBy = guidance === undefined ? undefined : guidanceId;
   return (
@@ -125,20 +128,20 @@ function MemberCheckbox({
           {capsule.displayName}
         </span>
         <span className="lk-badge" data-state={capsule.lifecycleState}>
-          {STATUS_LABELS[capsule.lifecycleState]}
+          {t(STATUS_LABEL_KEYS[capsule.lifecycleState])}
         </span>
-        {guidance !== undefined ? (
+        {guidance !== undefined && guidanceText !== undefined ? (
           <span className="lk-badge" data-state={guidance.tone === "danger" ? "error" : "stale"}>
-            {guidance.label}
+            {guidanceText.label}
           </span>
         ) : null}
       </label>
-      {guidance !== undefined ? (
+      {guidanceText !== undefined ? (
         <small
           id={guidanceId}
           style={{ display: "block", marginLeft: 24, color: "var(--text-secondary)" }}
         >
-          {guidance.description}
+          {guidanceText.description}
         </small>
       ) : null}
     </li>
@@ -293,7 +296,7 @@ export function CapsuleSetComposeDialog({
               disabled={busy}
               aria-busy={busy}
             >
-              {busy ? "Creating..." : t("localKnowledge.set.submit")}
+              {busy ? t("localKnowledge.create.creating") : t("localKnowledge.set.submit")}
             </button>
           </div>
         </form>

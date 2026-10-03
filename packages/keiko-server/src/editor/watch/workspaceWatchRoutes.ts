@@ -239,6 +239,10 @@ export async function handleEditorWorkspaceWatchEvents(
     root: root.realRoot,
     lastSequence: parseLastSequence(ctx),
     onEvent: (event) => writeOrDestroy(ctx.res, frameWatchEvent(event), controller),
+    onSnapshot: (snapshot) => {
+      if (ctx.res.headersSent) writeOrDestroy(ctx.res, frameSnapshot(snapshot), controller);
+    },
+    correlationId: ctx.correlationId,
     // The resolver itself, not a boolean reduction of it (#3347 owner P1): the watch session runs
     // every scan/metadata read of this long-lived effect on the capability each re-proof mints.
     reproveRoot: resolveAccess,

@@ -531,7 +531,8 @@ describe("WindowFrame content zoom controls", () => {
       />,
     );
 
-    fireEvent.focus(screen.getByRole("region"), { relatedTarget: otherControl });
+    otherControl.focus();
+    screen.getByRole("region").focus();
     vi.advanceTimersByTime(1);
 
     expect(focus).toHaveBeenCalledWith("editor-1");
@@ -539,6 +540,84 @@ describe("WindowFrame content zoom controls", () => {
     delete document.documentElement.dataset.inputModality;
     vi.useRealTimers();
   });
+
+  it.each(["null", "body", "palette"] as const)(
+    "does not raise background content focused from %s under pointer modality",
+    (origin) => {
+      vi.useFakeTimers();
+      document.documentElement.dataset.inputModality = "pointer";
+      const focus = vi.fn();
+      const previousBodyTabIndex = document.body.getAttribute("tabindex");
+      const palette = document.createElement("input");
+      palette.setAttribute("role", "combobox");
+      document.body.append(palette);
+      const view = render(
+        <WindowFrame
+          win={appWindow({ id: "editor-1", type: "editor" })}
+          top={false}
+          connState={null}
+          linkRevision={0}
+          api={api({ focus })}
+          wsRef={createRef<HTMLElement>()}
+        />,
+      );
+      try {
+        if (origin === "palette") palette.focus();
+        else if (origin === "body") {
+          document.body.tabIndex = -1;
+          document.body.focus();
+        }
+        screen.getByRole("region").focus();
+        vi.advanceTimersByTime(1);
+        expect(focus).not.toHaveBeenCalled();
+      } finally {
+        view.unmount();
+        palette.remove();
+        if (previousBodyTabIndex === null) document.body.removeAttribute("tabindex");
+        else document.body.setAttribute("tabindex", previousBodyTabIndex);
+        delete document.documentElement.dataset.inputModality;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["newer-window", "inert-background"] as const)(
+    "yields a queued keyboard raise to %s before its timer executes",
+    (destination) => {
+      vi.useFakeTimers();
+      document.documentElement.dataset.inputModality = "keyboard";
+      const focus = vi.fn();
+      const newerWindow = document.createElement("button");
+      newerWindow.className = "window";
+      newerWindow.dataset.windowId = "workspace-trust-1";
+      document.body.append(newerWindow);
+      const view = render(
+        <div className="app">
+          <WindowFrame
+            win={appWindow({ id: "editor-1", type: "editor" })}
+            top={false}
+            connState={null}
+            linkRevision={0}
+            api={api({ focus })}
+            wsRef={createRef<HTMLElement>()}
+          />
+        </div>,
+      );
+      try {
+        screen.getByRole("region").focus();
+        expect(focus).not.toHaveBeenCalled();
+        if (destination === "newer-window") newerWindow.focus();
+        else view.container.querySelector(".app")?.setAttribute("inert", "");
+        vi.advanceTimersByTime(1);
+        expect(focus).not.toHaveBeenCalled();
+      } finally {
+        view.unmount();
+        newerWindow.remove();
+        delete document.documentElement.dataset.inputModality;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("routes an open-area pointer activation through the atomic workspace operation", () => {
     const activateWindow = vi.fn();

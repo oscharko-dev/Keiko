@@ -579,3 +579,83 @@ describe("editor agent session registry", () => {
     expect(registry.snapshotFor("session-3")?.sessionId).toBe("session-3");
   });
 });
+
+describe("passive editor buffer protection", () => {
+  it("rejects late clean publications while accepting identical retries and newer settlements", () => {
+    const registry = createEditorAgentRegistry();
+    const dirty = { ...safetySnapshot(), dirtyFiles: ["src/a.ts"], updatedAt: 2 };
+    expect(registry.registerBufferSnapshot(dirty, CAPABILITY_DIGEST)).toBe(true);
+    expect(registry.refreshBufferSnapshot(safetySnapshot(), CAPABILITY_DIGEST)).toBe(false);
+    expect(
+      registry.refreshBufferSnapshot({ ...safetySnapshot(), updatedAt: 2 }, CAPABILITY_DIGEST),
+    ).toBe(false);
+    expect(registry.refreshBufferSnapshot({ ...dirty }, CAPABILITY_DIGEST)).toBe(true);
+    expect(registry.listSessions()).toEqual([dirty]);
+    expect(registry.releaseBufferSnapshot(dirty.sessionId, CAPABILITY_DIGEST)).toBe(false);
+    expect(
+      registry.refreshBufferSnapshot({ ...safetySnapshot(), updatedAt: 3 }, CAPABILITY_DIGEST),
+    ).toBe(true);
+    expect(registry.releaseBufferSnapshot(dirty.sessionId, CAPABILITY_DIGEST)).toBe(true);
+  });
+  it("retains dirty snapshots without giving action or bridge authority", () => {
+    const registry = createEditorAgentRegistry();
+    const dirty = { ...safetySnapshot(), dirtyFiles: ["src/a.ts"] };
+    expect(registry.registerBufferSnapshot(dirty, CAPABILITY_DIGEST)).toBe(true);
+    expect(registry.listSessions()).toEqual([dirty]);
+    expect(registry.snapshotFor(dirty.sessionId)).toBeUndefined();
+    expect(registry.matchesBridgeDecisionCapabilityDigest(dirty.sessionId, CAPABILITY_DIGEST)).toBe(
+      false,
+    );
+    expect(
+      registry.connectAuthenticated(dirty.sessionId, CAPABILITY_DIGEST, () => undefined),
+    ).toBeUndefined();
+    registry.connect(dirty.sessionId, () => undefined);
+    expect(registry.hasLiveBridge(dirty.sessionId)).toBe(false);
+    expect(registry.refreshSnapshot(safetySnapshot(), CAPABILITY_DIGEST)).toBe(false);
+    expect(registry.rotateSnapshotCapability(safetySnapshot(), CAPABILITY_DIGEST)).toBe(false);
+    expect(registry.releaseBufferSnapshot(dirty.sessionId, CAPABILITY_DIGEST)).toBe(false);
+    expect(registry.selectSnapshot(dirty.sessionId)).toBeUndefined();
+  });
+  it("only lets the original owner settle and release clean state", () => {
+    const registry = createEditorAgentRegistry();
+    registry.registerBufferSnapshot(
+      { ...safetySnapshot(), dirtyFiles: ["src/a.ts"] },
+      CAPABILITY_DIGEST,
+    );
+    expect(registry.refreshBufferSnapshot(safetySnapshot(), WRONG_CAPABILITY_DIGEST)).toBe(false);
+    expect(registry.releaseBufferSnapshot("session-1", WRONG_CAPABILITY_DIGEST)).toBe(false);
+    expect(
+      registry.refreshBufferSnapshot({ ...safetySnapshot(), updatedAt: 2 }, CAPABILITY_DIGEST),
+    ).toBe(true);
+    expect(registry.releaseBufferSnapshot("session-1", CAPABILITY_DIGEST)).toBe(true);
+    expect(registry.listSessions()).toEqual([]);
+  });
+  it("does not evict dirty protection to admit another passive record", () => {
+    const registry = createEditorAgentRegistry({ maxSessions: 1 });
+    const dirty = { ...safetySnapshot(), dirtyFiles: ["src/a.ts"] };
+    registry.registerBufferSnapshot(dirty, CAPABILITY_DIGEST);
+    expect(registry.registerBufferSnapshot(safetySnapshot("session-2"), CAPABILITY_DIGEST)).toBe(
+      false,
+    );
+    expect(registry.listSessions()).toEqual([dirty]);
+  });
+});
+
+function safetySnapshot(sessionId = "session-1"): EditorAgentSessionSnapshot {
+  const source = snapshot(sessionId);
+  return {
+    schemaVersion: "1",
+    sessionId: source.sessionId,
+    windowId: source.windowId,
+    workspaceRoot: source.workspaceRoot,
+    activePaneId: source.activePaneId,
+    panes: source.panes,
+    dirtyFiles: source.dirtyFiles,
+    activeFile: source.activeFile,
+    cursor: null,
+    selection: null,
+    diagnosticsSummary: null,
+    textMode: "none",
+    updatedAt: source.updatedAt,
+  };
+}

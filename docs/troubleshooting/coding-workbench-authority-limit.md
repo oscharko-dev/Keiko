@@ -33,8 +33,8 @@ the next run. A run that is already live keeps the authority it was minted with.
 The activity log records both modes on every run start. Export and analyze it:
 
 ```bash
-keiko support export --out keiko-support.jsonl
-keiko support analyze keiko-support.jsonl --clusters
+keiko support export   # prints the path of the private report it writes
+keiko support analyze <report.json> --clusters
 ```
 
 A `coding-runtime.run.started` line whose `requestedMode` is wider than its `effectiveMode` confirms

@@ -2,14 +2,15 @@
 // the window buttons are wired to the workspace API instead of being dead
 // controls, the tab strip no longer advertises a non-existent tab model,
 // and the project tab exposes its full name via title once truncated.
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import { Header } from "./Header";
 
 function renderHeader(overrides: Partial<Parameters<typeof Header>[0]> = {}) {
   const props = {
-    openCommandPalette: vi.fn(),
+    layoutLocked: false,
+    onToggleLayoutLock: vi.fn(),
     onTileAll: vi.fn(),
     onSplitFront: vi.fn(),
     onCascade: vi.fn(),
@@ -41,10 +42,22 @@ describe("Header window controls (C023)", () => {
 });
 
 describe("Header release controls", () => {
-  it("exposes quick access without restoring the old New button", () => {
+  it("exposes a reversible layout lock and disables arrangement commands while locked", () => {
+    const props = renderHeader({ layoutLocked: true });
+    const lock = screen.getByRole("button", { name: "Lock layout" });
+    expect(lock).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(lock);
+    expect(props.onToggleLayoutLock).toHaveBeenCalledOnce();
+    for (const name of ["Tile all windows", "Split front windows", "Cascade windows"]) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    }
+  });
+
+  it("exposes layout controls without the retired quick-access search", () => {
     renderHeader();
     expect(screen.queryByRole("button", { name: "New window" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open quick access" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open quick access" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button")).toHaveLength(4);
   });
 });
 
@@ -81,7 +94,7 @@ describe("Header connection status", () => {
 });
 
 describe("Header split action wording (F039 C401)", () => {
-  it("uses the CommandPalette's wording 'Split front windows' for tooltip and aria-label", () => {
+  it("uses 'Split front windows' for tooltip and aria-label", () => {
     renderHeader();
     const btn = screen.getByRole("button", { name: "Split front windows" });
     expect(btn.getAttribute("data-tip")).toBe("Split front windows");
@@ -92,7 +105,8 @@ describe("Header split action wording (F039 C401)", () => {
     render(
       <I18nProvider>
         <Header
-          openCommandPalette={vi.fn()}
+          layoutLocked={false}
+          onToggleLayoutLock={vi.fn()}
           onTileAll={vi.fn()}
           onSplitFront={vi.fn()}
           onCascade={vi.fn()}
@@ -123,7 +137,8 @@ describe("Header brand (C399)", () => {
   it("keeps the logo decorative next to the visible wordmark (no 'Keiko Keiko')", () => {
     const { container } = render(
       <Header
-        openCommandPalette={vi.fn()}
+        layoutLocked={false}
+        onToggleLayoutLock={vi.fn()}
         onTileAll={vi.fn()}
         onSplitFront={vi.fn()}
         onCascade={vi.fn()}

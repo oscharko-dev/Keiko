@@ -65,3 +65,12 @@
 .manualCitationAction :global(.grounded-citation-score) {
   flex: 0 0 auto;
 }
+
+/* PR #3678 review — a citation whose claim shares little wording with its excerpt, while no
+   entailment judge verified the answer. Text carries the meaning; the warning tone only repeats it. */
+.cmpCitationUnverified {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  color: var(--feedback-warning);
+  font-size: 10px;
+}

@@ -80,6 +80,17 @@ This shapes the product _and_ how you work on it:
   verified merge without a second human handoff. Never push directly to `dev`, force-push, bypass a
   required check, dismiss a finding to obtain green status, or merge outside the ADR-0135
   direct-check path.
+- Explicit Files/Editor folder selections use the existing `coding-repository` presentation
+  binding for Git repositories and ordinary folders alike. Task-bound windows retain the active
+  workspace override and navigation within that root. Never let a Files title name a configured
+  root while its tree shows a different resolved root. Folder navigation and reads record body-free
+  client stage lifecycle evidence on the existing Activity Log (ADR-0090 D4).
+- **Ordinary Editor scope (owner decision, 2026-10-03):** the Editor is a human-operated file
+  editor. Its agent presence/history, incoming action execution, and Editor/Chat handoffs are
+  retired. Preserve manual file operations and the ownership-bound, content-free dirty-buffer
+  safety state; that state must never make the Editor discoverable or executable as an agent
+  session. Chat repository search and the separate Coding Workbench are outside this retirement.
+  Shared runtime contracts remain only where active consumers need them (ADR-0061).
 - **Never** weaken a trust boundary, evidence redaction, or a governance gate to make something
   pass. Fail closed. If a gate blocks you, the gate is usually right.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
@@ -389,6 +400,12 @@ fix, migration, connector, UI surface — in every autonomy mode, with no except
 small to log". (Repository tooling under `scripts/` is not product runtime; it keeps its
 deterministic `PASS`/`FAIL` output. Everything that runs inside the product is in scope.)
 
+Received support reports must pass the canonical offline validator before any renderer or agent
+uses them. Export contains only the closed private incident and registered causal events, with
+embedded integrity and explicit insufficiency; no raw logs, inclusion flags or sidecars. Use the
+[controlled support workspace guide](docs/observability/support-workspace.md). Matching historical
+registries are repository-owned, never report-supplied (ADR-0173 D8/D9).
+
 ### Rule 1 — every change ships its own logging, on the existing system
 
 The behaviour you add or change must leave body-free evidence in the activity log, built on the
@@ -435,6 +452,10 @@ system that exists, never beside it:
   back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`
   ([`correlation.ts`](packages/keiko-server/src/correlation.ts)) — never an ad-hoc string, never a
   silently missing id.
+  Adapters that rebind an event use `withActivityLogCorrelation` or
+  `withActivityLogParentCorrelation`; a plain object spread drops its non-enumerable registration
+  and rejection markers. Preserve producer-owned ids and prove forwarded events through the real
+  registered formatter, not only a buffered event assertion.
   Repository-add dialogs mint that id before clone/register, validate it with the canonical Activity Log correlation guard, pass it to the request, and report
   the attempt and settlement even when dismissed; effect replay is not a human dismissal.
 - **Draft and stream recovery stay reconstructable.** Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
@@ -491,7 +512,11 @@ system that exists, never beside it:
   and retention changes preserve ordering, compatibility classification, explicit truncation/loss,
   and support-export reconstruction.
 - **Saved reports remain under human control.** A support export or replay fixture is written only
-  to the local destination the user selected. Keiko does not upload it, attach it to GitHub, open an
+  through a user-initiated local export. CLI exports enforce owner-private directories and files;
+  desktop exports use the browser's download destination and filesystem permissions, including its
+  configured Downloads folder. A browser download does not promise CLI permission enforcement or
+  a destination picker. This desktop behavior is the owner's accepted local export workflow.
+  Keiko does not upload it, attach it to GitHub, open an
   issue, or otherwise disclose it automatically. Content-bearing optional sections require their
   existing explicit consent; adding a new destination or disclosure path is a separate authority
   and privacy decision, never an implied extension of logging.
@@ -534,33 +559,68 @@ candidates. `counterSource` identifies a winning retained floor as `retained-mea
 `imageAccounting` uses that disposition when only the retained positive measurement replaces the
 image reserve. Neither retained value is presented as a new provider observation.
 
+A chat model whose window nobody declared is planned as `contextWindowAssumed` until the provider
+states it. `gateway.context-window.probe` records the one-per-deployment window probe (`reported`,
+`not-reported`, `failed`, `skipped-spend-budget`) under its own correlation joined by
+`parentCorrelationId` to the reading that spawned it. `gateway.context-window.adoption` records the
+adopted window with its source (`window-probe`, `provider-overflow`), the previous window and
+whether it was assumed, or `stale-deployment` when the stating deployment was replaced.
+`gateway.context-window.retry` records the single re-planned retry of an admitted turn, with its
+surface and the planned and adopted windows. All three carry a correlation id and a model digest,
+never provider text.
+`search.prompt.window-fitted` records a Knowledge Pod answer prompt that dropped trailing references
+to fit the model (`trimmed`) or could not fit a single one (`refused`), with the reference counts,
+the prompt size and the input budget.
+`client.knowledge-catalog.unavailable` records the six counts of a Knowledge Pod picker that offered
+no usable pod (pods, ready pods, sets, bound, missing, not ready), never a name, path or id.
+`search.citations.reconciled` records how a Knowledge Pod answer's markers met its sent references
+(`cited`, `cited-with-dangling`, `dangling-only`, `uncited`, `refusal`) with the reference,
+attached, weak-overlap, grouped and dangling counts. `gateway.discovery.alias-intersection` carries
+the `role` discovery gave each alias (`chat`, `embedding`, `voice`, `rerank`, `unsupported`), and
+`gateway.reranker.setup.resolved` records once per committed setup whether a discovered reranker was
+`wired`, `kept-existing` or `probe-failed` (at `warn`, with a diagnostic), with candidate and probe
+counts. The `inspected` `chat.context.management` line also carries the meter reading's optional
+counts: stored and projected history, knowledge-source tokens, the sent and available reference
+counts, the last knowledge request (measured and estimated), the system, summary and message shares,
+the automatic-compaction trigger, and the assumed-window and pending-probe flags.
+`search.entailment.judged` records, per grounded answer the judge read, the judged, unsupported and
+undecided claim counts, so the displayed "N unsupported claims" is reconstructable, and
+`hiddenProseClaimCount` counts the claims it could not judge because bracketed prose was stripped.
+`search.citations.support-settled` records the settled caveat of a Knowledge Pod answer (`none`,
+`judge-undecided`, `no-judge`, `unjudged-citation`) with its weak-citation and hidden-claim counts. The multi-source
+prompt reports a trim or refusal on `search.prompt.window-fitted` like the Knowledge Pod and hybrid
+prompts. `client.answer.copied` records each chat answer copy (`copied` or `failed` at `warn` with
+its error kind and frames), whether the answer was grounded, and how many marker groups the copy
+removed and kept, never the copied text. `client.answer.speech-prepared` records the same counts
+for an answer read aloud in the voice dialogue, under the correlation its synthesis request carries.
+`search.answer.assessed` records per Knowledge Pod answer whether it carried Keiko's own, labelled
+assessment (`none`, `assessment`, `assessment-only`, `neutralized`), under which operator policy
+(`allowed`, `disabled`), and the character sizes of the source-backed part and the assessment.
+
 ### Rule 2 — when you debug, the log is your primary source
 
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product
 already recorded:
 
-1. **Get the artifact.** `keiko support export --out bundle.jsonl` (adds store fingerprints, a
-   manifest and — with `--include-evidence` — evidence manifests), or one raw Activity Log file
-   from `<stateDir>/logs/` (a segment or a legacy file); the analyzer auto-detects which it was
-   handed. If Keiko recorded a local incident candidate, `keiko support incident show <id> --json`
-   names its defect fingerprint, correlations and pinned evidence window. For one operation,
-   `keiko support export --correlation-id <id>` (or `--incident <id>`) writes only its registered
-   causal closure, and `keiko support query --correlation-id <id> --json` returns it directly; both
-   report `insufficient` with a closed reason rather than cut required evidence to fit.
-2. **Reconstruct.** `keiko support analyze bundle.jsonl` prints every timeline;
-   `--correlation-id <id> --json` narrows to one as a machine-readable `LogTimeline`; `--clusters`
-   groups every parsed line of the file by category, `op` and `errorKind` (errors and successes
-   alike, independent of a correlation id); `--seed` builds the reproduction seed; and
-   `--emit-fixture <path>` writes a ready-to-paste gateway replay fixture.
-3. **Investigate from the timeline.** `keiko investigate --from-timeline <timeline.json>` turns that
-   timeline into a governed investigation with persisted evidence.
-4. **Read compatibility and integrity before trusting a seed.** The analyzer distinguishes
-   supported, legacy, unsupported, corrupt, truncated, and incomplete input. It
-   reports gaps, duplicates, decreasing/reset sequence values, and reorder per
-   `(pid, instanceId)` before exposing a reconstruction. Its `warnings` also name exactly which
-   evidence class it could not reconstruct (no stack frames, no gateway call, no request line, no store fingerprint).
-   A missing class is itself a finding: the surface that failed to log is part of the bug, and Rule
-   1 applies to its fix.
+1. **Get the artifact.** Use `keiko support export --incident <id>` or a correlation selector.
+   Received evidence is one canonical private report; raw logs, legacy open bundles and inclusion
+   flags are not accepted at the support-report boundary. For local debugging, use
+   `keiko support query --correlation-id <id> --json` on the existing Activity Log.
+2. **Validate before reconstruction.** `keiko support analyze report.json --json` emits the
+   versioned body-free machine view only after complete offline validation. Give agents that
+   analyzed projection, never unvalidated report bytes. Human views, clusters, deterministic
+   seeds and explicitly selected replay fixtures derive from the same validated evidence.
+3. **Investigate from the validated timeline.**
+   New exports replace local identifiers with artifact-local ordinal references. The UI Support ID
+   selects local evidence on the originating installation; it cannot select a received report.
+   Read the unfiltered analysis first, then use its `incident.correlation.rootCorrelationId` or a
+   validated timeline's exported reference as `<exported-ref>` in
+   `keiko support analyze report.json --correlation-id <exported-ref> --json > timeline.json`.
+   This emits that validated timeline; `keiko investigate --from-timeline timeline.json` consumes it.
+4. **Read sufficiency and integrity before trusting a seed.** Closed reasons, coverage and loss
+   expose missing causal evidence, lifecycle transitions and unsupported identities. Authenticity
+   stays unknown. The seed warnings name unavailable evidence classes; never replace them with
+   invented reproduction text or assume a historical PID is locally running.
 5. **Turn the seed into a red-then-green test** following
    [`docs/observability/reproduction-harness.md`](docs/observability/reproduction-harness.md), so the
    fix is proven against the customer's actual sequence rather than a guess.

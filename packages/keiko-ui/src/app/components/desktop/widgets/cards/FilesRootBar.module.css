@@ -1,0 +1,33 @@
+.cmpRootBar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding-right: 2px;
+}
+
+.cmpRootBar[data-navigation="false"] {
+  padding-top: 32px;
+}
+
+.cmpControls {
+  display: flex;
+  gap: 5px;
+  padding-right: var(--files-root-action-reserve);
+}
+
+.cmpPath {
+  display: flex;
+  gap: 5px;
+  min-width: 0;
+}
+
+.cmpForward {
+  transform: rotate(180deg);
+}
+
+.cmpRootGroup {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}

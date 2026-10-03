@@ -1,4 +1,4 @@
-import { buildUnifiedQuickAccessCommands } from "./quickAccessCommands";
+import { buildPaletteCommands } from "./paletteCommands";
 // German locale coverage for the three shell surfaces a user actually operates windows with.
 //
 // Before this suite, a user who selected Deutsch got a mixed-language shell: settings, header,
@@ -12,20 +12,13 @@ import { createRef } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  fetchFilesSearch,
-  fetchProjects,
-  fetchWorkspaceSearch,
-  fetchWorkspaceSymbols,
-} from "@/lib/api";
+import { fetchProjects } from "@/lib/api";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages, translate } from "@/lib/i18n";
-import { translateOptionalWidget } from "@/lib/optional-widget-i18n";
 import type { I18nTranslate } from "@/lib/i18n";
 import type { WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
 import { buildAppShellCommands } from "./AppShell";
 import { Palette } from "./modals/Palette";
 import { NewWindowDialog } from "./modals/NewWindowDialog";
-import { UnifiedQuickAccessPalette } from "./modals/UnifiedQuickAccessPalette";
 import { Workspace } from "./Workspace";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
@@ -41,9 +34,6 @@ vi.mock("@/lib/api", async () => {
   return {
     ...actual,
     fetchProjects: vi.fn(),
-    fetchFilesSearch: vi.fn(),
-    fetchWorkspaceSearch: vi.fn(),
-    fetchWorkspaceSymbols: vi.fn(),
   };
 });
 
@@ -69,18 +59,6 @@ function undoStack(): WorkspaceUndoStackApi {
 
 beforeEach(() => {
   vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
-  vi.mocked(fetchWorkspaceSearch).mockResolvedValue({
-    results: [],
-    truncated: false,
-    filesScanned: 0,
-    elapsedMs: 1,
-  });
-  vi.mocked(fetchWorkspaceSymbols).mockResolvedValue({
-    results: [],
-    truncated: false,
-    filesScanned: 0,
-    elapsedMs: 1,
-  });
 });
 
 afterEach(() => {
@@ -160,7 +138,7 @@ describe("New Window dialog under the German locale", () => {
   });
 });
 
-describe("Quick Access command palette under the German locale", () => {
+describe("Workspace command palette under the German locale", () => {
   it("translates every command label and group name the palette lists", async () => {
     // `deTranslate` reads the lazily loaded German catalog and falls back to English when it is
     // absent, so without this the whole block below is tautological: both sides of every `toBe`
@@ -177,7 +155,7 @@ describe("Quick Access command palette under the German locale", () => {
       undoStack(),
       deTranslate,
     );
-    const paletteCommands = buildUnifiedQuickAccessCommands(commands, null, deTranslate);
+    const paletteCommands = buildPaletteCommands(commands, null, deTranslate);
     const byId = new Map(paletteCommands.map((command) => [command.id, command]));
 
     expect(byId.get("new-files")?.label).toBe(
@@ -201,29 +179,6 @@ describe("Quick Access command palette under the German locale", () => {
     expect(labels).not.toContain("New Files");
     expect(labels).not.toContain("Open Settings");
     expect(labels).not.toContain("Tile all windows");
-  });
-
-  it("translates the per-root search failure notice", async () => {
-    await loadLocaleMessages("de");
-    vi.mocked(fetchFilesSearch).mockRejectedValue(new Error("search backend down"));
-    germanShell(
-      <UnifiedQuickAccessPalette
-        initialMode="files"
-        roots={[{ id: "repo", root: "/repo", label: "repo" }]}
-        commands={[]}
-        openEditorFile={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    await userEvent.type(screen.getByRole("combobox"), "abc");
-
-    await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        translateOptionalWidget("de", "quickAccess.searchUnavailable", { roots: "repo" }),
-      );
-    });
-    expect(screen.queryByText(/^Search unavailable for/)).not.toBeInTheDocument();
   });
 });
 
@@ -275,6 +230,7 @@ describe("Workspace clipboard status pill under the German locale", () => {
       resetView: vi.fn(),
       panBy: vi.fn(),
       rect: vi.fn(() => null),
+      toggleLayoutLock: vi.fn(),
       currentView: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
       ...patch,
     };
@@ -285,6 +241,7 @@ describe("Workspace clipboard status pill under the German locale", () => {
       wins: [],
       winsById: new Map(),
       snapPrev: null,
+      layoutLocked: false,
       palOpen: false,
       setPalOpen: vi.fn(),
       conns: [],

@@ -11,7 +11,7 @@ async function nextFrame(): Promise<void> {
     });
   });
 }
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import {
   EDITOR_VERIFICATION_KINDS,
@@ -21,10 +21,16 @@ import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/ru
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { FilesMutationEvent } from "./FilesWidget";
 import { EditorWidget } from "./EditorWidget";
+import type { EditorPaletteHost } from "./editorCommands";
+import {
+  setClientDiagnosticWriter,
+  resetClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import editorWidgetStyles from "./EditorWidget.module.css";
 import { resetEditorVerificationRunStateForTests } from "./useEditorVerificationRun";
 import { WORKSPACE_TRUST_CHANGED_EVENT } from "../../../../../lib/workspace-trust-api";
-import { EditorQuickAccessTriggerProvider } from "../../EditorQuickAccessTriggerContext";
+import { EditorShellActionsProvider } from "../../EditorShellActionsContext";
 import { editorSidebarTrackWidth } from "../../editorSidebarSizing";
 
 const createProjectMock = vi.hoisted(() => vi.fn());
@@ -42,11 +48,18 @@ function editorWidgetCssClass(name: keyof typeof editorWidgetStyles): string {
 
 const probeState = vi.hoisted(() => ({
   runtimeProps: null as EditorRuntimeWidgetProps | null,
+  commandHost: null as EditorPaletteHost | null,
   dragModeStarts: [] as Array<{ readonly paneId: string; readonly path: string }>,
   // GEN-PERF-EDITOR-003 — the latest props each pane received, keyed by paneId, so a test
   // can compare a non-dragged pane's prop bundle (esp. renderTabHandle identity) across a
   // hold-state change on a different pane and prove React.memo would bail it out.
   propsByPane: new Map<string, EditorRuntimeWidgetProps>(),
+}));
+
+vi.mock("../../EditorPaletteHostRegistryContext", () => ({
+  useRegisterEditorPaletteHost: (_id: string | undefined, host: EditorPaletteHost): void => {
+    probeState.commandHost = host;
+  },
 }));
 
 vi.mock("next/dynamic", () => ({
@@ -210,6 +223,9 @@ vi.mock("./FilesWidget", () => ({
         <button type="button" onClick={() => onOpenFile("/repo", "package.json")}>
           Open package
         </button>
+        <button type="button" onClick={() => onOpenFile(root ?? "", "src/b.ts")}>
+          Open same-root b
+        </button>
         <button type="button" onClick={() => onOpenFile("/repo", "")}>
           Open empty file
         </button>
@@ -308,7 +324,14 @@ vi.mock("./editorHotExitStore", async (importOriginal) => {
   };
 });
 
+beforeEach(() => {
+  createProjectMock.mockImplementation(async ({ path }: { readonly path: string }) => ({
+    project: { path, workspaceAvailable: true },
+  }));
+});
+
 afterEach(() => {
+  resetClientDiagnosticWriter();
   probeState.runtimeProps = null;
   probeState.dragModeStarts = [];
   probeState.propsByPane.clear();
@@ -331,6 +354,43 @@ async function flushPreflight(): Promise<void> {
 }
 
 describe("EditorWidget workspace session", () => {
+  it("applies an explicit folder selection with a joined stage lifecycle", async () => {
+    const records: ClientDiagnosticMeta[] = [];
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) records.push(meta);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    await waitFor(() => expect(screen.getByTestId("runtime-root").textContent).toBe("/next"));
+    const stages = records.filter(
+      (record) => record.stageReport?.stage === "editor project selection",
+    );
+    expect(stages).toHaveLength(2);
+    expect(stages[0]?.stageReport?.phase).toBe("started");
+    expect(stages[1]?.stageReport).toMatchObject({
+      phase: "settled",
+      navigationOutcome: "applied",
+    });
+    expect(stages[1]?.correlationId).toBe(stages[0]?.correlationId);
+    expect(createProjectMock).toHaveBeenCalledWith(
+      { path: "/next", selectionIntent: "explicit-folder-selection" },
+      stages[0]?.correlationId,
+    );
+  });
+
+  it("consumes a restricted registration notice after displaying it once", () => {
+    const consumed = vi.fn();
+    render(
+      <EditorWidget
+        root="/repo"
+        initialWorkspaceNotice={{ code: "trust-grant-failed", correlationId: "warning-id" }}
+        onWorkspaceNoticeConsumed={consumed}
+      />,
+    );
+    expect(screen.getByText(/Workspace scripts are unavailable/)).toHaveTextContent("warning-id");
+    expect(consumed).toHaveBeenCalledTimes(1);
+  });
+
   it("shows the project picker (not the runtime widget) while no workspace root is selected", () => {
     render(<EditorWidget />);
 
@@ -546,7 +606,6 @@ describe("EditorWidget workspace session", () => {
     expect(beforePane1).toBeDefined();
     const renderTabHandleBefore = beforePane1?.renderTabHandle;
     const onSelectBefore = beforePane1?.onSelectOpenFile;
-    const onMoveTabBefore = beforePane1?.onMoveTab;
     // pane-1 is not held, so its held-tab scalar is undefined before AND after.
     expect(beforePane1?.heldTabFile).toBeUndefined();
 
@@ -564,7 +623,6 @@ describe("EditorWidget workspace session", () => {
     // React.memo shallow compare would bail pane-1 out entirely.
     expect(afterPane1?.renderTabHandle).toBe(renderTabHandleBefore);
     expect(afterPane1?.onSelectOpenFile).toBe(onSelectBefore);
-    expect(afterPane1?.onMoveTab).toBe(onMoveTabBefore);
     expect(afterPane1?.heldTabFile).toBeUndefined();
 
     // Release the pointer so the window-level drag listeners installed by the hold are torn
@@ -942,7 +1000,7 @@ describe("EditorWidget workspace session", () => {
     expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
   });
 
-  it("anchors a single absolute file outside the root to a containing root via openFile (#1374 AC3)", () => {
+  it("anchors a single absolute file outside the root to a containing root via openFile (#1374 AC3)", async () => {
     // Exercises the editor's openFile single-file-target contract directly: handed an absolute file
     // that does not live under the current root, it selects the file's containing directory as the
     // root and opens the basename root-relative (AC3 "selects a containing root"). The pure
@@ -952,14 +1010,72 @@ describe("EditorWidget workspace session", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open absolute file outside root" }));
 
-    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/other/project");
+    await waitFor(() =>
+      expect(screen.getByTestId("runtime-root")).toHaveTextContent("/other/project"),
+    );
     expect(screen.getByTestId("runtime-file")).toHaveTextContent("main.py");
     expect(onWorkspaceChange).toHaveBeenCalledWith(
       expect.objectContaining({ root: "/other/project", file: "main.py" }),
     );
   });
 
-  it("remains mounted with the embedded tree after switching to a new root (#1374 AC4)", () => {
+  it("registers a selected plain folder before replacing the editor root", async () => {
+    let resolveProject: (value: unknown) => void = () => undefined;
+    createProjectMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveProject = resolve;
+        }),
+    );
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    expect(createProjectMock).toHaveBeenCalledWith(
+      { path: "/next", selectionIntent: "explicit-folder-selection" },
+      expect.any(String),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    expect(createProjectMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
+    await act(async () =>
+      resolveProject({ project: { path: "/canonical/next", workspaceAvailable: true } }),
+    );
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/canonical/next");
+  });
+
+  it("protects edits made while a new folder connection is pending", async () => {
+    let resolveProject: (value: unknown) => void = () => undefined;
+    createProjectMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveProject = resolve;
+        }),
+    );
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    await act(async () => resolveProject({ project: { path: "/next", workspaceAvailable: true } }));
+    expect(await screen.findByRole("dialog", { name: "Unsaved editor changes" })).toHaveTextContent(
+      "src/a.ts",
+    );
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("src/a.ts");
+  });
+
+  it("keeps the previous editor usable when a folder cannot acquire workspace membership", async () => {
+    createProjectMock.mockResolvedValueOnce({
+      project: { path: "/next", workspaceAvailable: false },
+    });
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    expect(await screen.findByTestId("editor-workspace-registration-notice")).toHaveTextContent(
+      "Folder could not be opened. Try again.",
+    );
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("src/a.ts");
+  });
+
+  it("remains mounted with the embedded tree after switching to a new root (#1374 AC4)", async () => {
     const onWorkspaceChange = vi.fn();
     render(<EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />);
 
@@ -969,9 +1085,12 @@ describe("EditorWidget workspace session", () => {
     // ("arbitrary folder opening …": an unavailable root renders role="alert").
     fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
 
-    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next");
+    await waitFor(() => expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next"));
     expect(screen.getByTestId("files-probe")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open next root" })).toBeEnabled();
+    expect(onWorkspaceChange).toHaveBeenCalledWith(
+      expect.objectContaining({ root: "/next", rootBinding: "coding-repository" }),
+    );
   });
 
   it("ignores empty root, file, and tab-selection intents from embedded controls", () => {
@@ -1122,6 +1241,73 @@ describe("EditorWidget workspace session", () => {
     expect(screen.getByTestId("runtime-file")).toHaveTextContent("src/a.ts");
   });
 
+  it("protects dirty buffers when a file outside the project selects another root", async () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open absolute file outside root" }));
+    expect(await screen.findByRole("dialog", { name: "Unsaved editor changes" })).toHaveTextContent(
+      "src/a.ts",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo");
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("src/a.ts");
+    fireEvent.click(screen.getByRole("button", { name: "Open absolute file outside root" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("runtime-root")).toHaveTextContent("/other/project"),
+    );
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("main.py");
+    expect(screen.queryByRole("button", { name: "Tab handle pane-1 src/a.ts" })).toBeNull();
+    expect(screen.getByTestId("runtime-open-files").textContent).toBe("main.py");
+  });
+
+  it.each(["/repo/", "C:\\Users\\me\\repo"])(
+    "preserves dirty tabs when opening within normalized root %s",
+    (root) => {
+      const records: ClientDiagnosticMeta[] = [];
+      setClientDiagnosticWriter((_message, meta) => {
+        if (meta !== undefined) records.push(meta);
+      });
+      try {
+        render(<EditorWidget root={root} file="src/a.ts" openFiles={["src/a.ts", "src/c.ts"]} />);
+        fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+        records.length = 0;
+        fireEvent.click(screen.getByRole("button", { name: "Open same-root b" }));
+        expect(screen.queryByRole("dialog", { name: "Unsaved editor changes" })).toBeNull();
+        expect(screen.getByTestId("runtime-open-files").textContent).toBe(
+          "src/a.ts|src/c.ts|src/b.ts",
+        );
+        expect(createProjectMock).not.toHaveBeenCalled();
+        expect(
+          records.filter((meta) => meta.stageReport?.stage === "editor project selection"),
+        ).toEqual([]);
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("queues a connected root behind an existing dirty-tab save", async () => {
+    let resolveProject: (value: unknown) => void = () => undefined;
+    createProjectMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveProject = resolve;
+      }),
+    );
+    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open next root" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close a" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await act(async () => {
+      resolveProject({ project: { path: "/next", workspaceAvailable: true } });
+    });
+    expect(screen.getByRole("button", { name: "Saving..." })).toBeDisabled();
+    fireEvent.click(await screen.findByRole("button", { name: "Complete save src/a.ts" }));
+    await waitFor(() => expect(screen.getByTestId("runtime-root").textContent).toBe("/next"));
+    expect(screen.queryByRole("dialog", { name: "Unsaved editor changes" })).toBeNull();
+  });
+
   it("discards dirty files before changing the editor root", async () => {
     const onWorkspaceChange = vi.fn();
     render(<EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />);
@@ -1137,7 +1323,7 @@ describe("EditorWidget workspace session", () => {
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
-    expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next");
+    await waitFor(() => expect(screen.getByTestId("runtime-root")).toHaveTextContent("/next"));
     expect(screen.getByTestId("runtime-file")).toHaveTextContent("");
     expect(onWorkspaceChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -2391,57 +2577,43 @@ describe("EditorWidget workspace session", () => {
   });
 });
 
-describe("EditorWidget — Cmd/Ctrl+P quick access while editing (Epic #2090 regression)", () => {
-  // #2112 originally routed the Cmd/Ctrl+P chord for the editor-local Quick Open through the
-  // shared useKeyboardShortcuts substrate, which bails out for any editable event target
-  // (isEditableTarget) — including Monaco's own hidden textarea. That silently broke Cmd/Ctrl+P
-  // while the cursor was inside a file, regressing pre-#2112 behavior and violating the epic's
-  // own closure statement ("Cmd/Ctrl+P finds any file from anywhere"). The fix keeps this chord on
-  // the editor's own capture-phase container listener, which fires before Monaco and is
-  // unaffected by that guard.
-  it("opens the unified quick-access palette in file mode from the editor's capturing listener", () => {
-    const openFiles = vi.fn();
+describe("EditorWidget — workspace commands and settings while editing", () => {
+  it("does not capture the retired file-search shortcut", () => {
     const openCommands = vi.fn();
     const openEditorSettings = vi.fn();
     const { container } = render(
-      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands, openEditorSettings }}>
+      <EditorShellActionsProvider value={{ openCommands, openEditorSettings }}>
         <EditorWidget root="/repo" file="src/a.ts" />
-      </EditorQuickAccessTriggerProvider>,
+      </EditorShellActionsProvider>,
     );
-
     const workspace = container.querySelector(".editor-workspace");
-    expect(workspace).not.toBeNull();
-    fireEvent.keyDown(workspace as Element, { key: "p", metaKey: true });
-
-    expect(openFiles).toHaveBeenCalledTimes(1);
+    expect(fireEvent.keyDown(workspace as Element, { key: "p", metaKey: true })).toBe(true);
     expect(openCommands).not.toHaveBeenCalled();
+    expect(openEditorSettings).not.toHaveBeenCalled();
   });
 
-  it("opens the unified quick-access palette in command mode on Cmd/Ctrl+Shift+P", () => {
-    const openFiles = vi.fn();
+  it("opens the workspace command palette on Cmd/Ctrl+Shift+P", () => {
     const openCommands = vi.fn();
     const openEditorSettings = vi.fn();
     const { container } = render(
-      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands, openEditorSettings }}>
+      <EditorShellActionsProvider value={{ openCommands, openEditorSettings }}>
         <EditorWidget root="/repo" file="src/a.ts" />
-      </EditorQuickAccessTriggerProvider>,
+      </EditorShellActionsProvider>,
     );
 
     const workspace = container.querySelector(".editor-workspace");
     fireEvent.keyDown(workspace as Element, { key: "p", metaKey: true, shiftKey: true });
 
     expect(openCommands).toHaveBeenCalledTimes(1);
-    expect(openFiles).not.toHaveBeenCalled();
   });
 
   it("opens Editor settings from Monaco's editable target", () => {
-    const openFiles = vi.fn();
     const openCommands = vi.fn();
     const openEditorSettings = vi.fn();
     const { container } = render(
-      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands, openEditorSettings }}>
+      <EditorShellActionsProvider value={{ openCommands, openEditorSettings }}>
         <EditorWidget root="/repo" file="src/a.ts" />
-      </EditorQuickAccessTriggerProvider>,
+      </EditorShellActionsProvider>,
     );
 
     const workspace = container.querySelector(".editor-workspace");
@@ -2451,11 +2623,10 @@ describe("EditorWidget — Cmd/Ctrl+P quick access while editing (Epic #2090 reg
 
     expect(fireEvent.keyDown(monacoInput, { key: ",", metaKey: true })).toBe(false);
     expect(openEditorSettings).toHaveBeenCalledTimes(1);
-    expect(openFiles).not.toHaveBeenCalled();
     expect(openCommands).not.toHaveBeenCalled();
   });
 
-  it("does not throw when no quick-access trigger is registered (defensive no-op)", () => {
+  it("does not throw when no shell action is registered (defensive no-op)", () => {
     const { container } = render(<EditorWidget root="/repo" file="src/a.ts" />);
     const workspace = container.querySelector(".editor-workspace");
     expect(() =>
@@ -2626,7 +2797,7 @@ describe("EditorWidget — Issue #1375 layout regression hardening", () => {
 
 // ─── Issue #2696 — deterministic post-trust readiness signal on the workspace root ───────────────
 // `data-trust-settled` is the attribute browser regression harnesses settle on instead of racing
-// the initial trust prompt with a timeout. `fetch` is stubbed PER TEST and unstubbed in a `finally`
+// catalog completion with a timeout. `fetch` is stubbed PER TEST and unstubbed in a `finally`
 // so the suite's other cases keep running against the unstubbed environment.
 
 type CatalogOutcome = "trusted" | "restricted" | "unavailable";
@@ -2742,12 +2913,7 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
     stubVerificationFetch("restricted");
     try {
       const { container } = render(
-        <EditorWidget
-          root="/managed/task"
-          file="src/a.ts"
-          workspaceTrustUiAvailable={false}
-          onOpenWorkspaceTrust={vi.fn()}
-        />,
+        <EditorWidget root="/managed/task" file="src/a.ts" workspaceTrustUiAvailable={false} />,
       );
       const workspace = workspaceRootOf(container);
 
@@ -2768,23 +2934,15 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
     }
   });
 
-  it("discards an open trust decision when a managed workspace takes over presentation", async () => {
+  it("keeps ordinary editor opening uninterrupted across presentation changes", async () => {
     stubVerificationFetch("restricted");
     try {
       const { rerender } = render(<EditorWidget root="/repo" file="src/a.ts" />);
 
-      expect(
-        await screen.findByRole("alertdialog", { name: /Trust this workspace/iu }),
-      ).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByTestId("runtime-root")).toHaveTextContent("/repo"));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
 
-      rerender(
-        <EditorWidget
-          root="/repo"
-          file="src/a.ts"
-          workspaceTrustUiAvailable={false}
-          onOpenWorkspaceTrust={vi.fn()}
-        />,
-      );
+      rerender(<EditorWidget root="/repo" file="src/a.ts" workspaceTrustUiAvailable={false} />);
       expect(screen.queryByRole("alertdialog")).toBeNull();
 
       rerender(<EditorWidget root="/repo" file="src/a.ts" workspaceTrustUiAvailable />);
@@ -2798,7 +2956,60 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
     }
   });
 
-  it("reports settled only in the commit that has already mounted the initial trust prompt", async () => {
+  it("discards an explicitly opened trust decision when managed presentation takes over", async () => {
+    stubVerificationFetch("restricted");
+    try {
+      const view = render(<EditorWidget root="/repo" file="src/a.ts" />);
+      act(() => probeState.commandHost?.trustWorkspaceScripts?.());
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+      view.rerender(
+        <EditorWidget root="/repo" file="src/a.ts" workspaceTrustUiAvailable={false} />,
+      );
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      view.rerender(<EditorWidget root="/repo" file="src/a.ts" workspaceTrustUiAvailable />);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
+  it("discards an explicitly opened trust decision when the selected root changes", async () => {
+    stubVerificationFetch("restricted");
+    try {
+      const view = render(<EditorWidget root="/repo-a" file="src/a.ts" />);
+      act(() => probeState.commandHost?.trustWorkspaceScripts?.());
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+      view.rerender(<EditorWidget root="/repo-b" file="src/a.ts" />);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      view.rerender(<EditorWidget root="/repo-a" file="src/a.ts" />);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
+  it("clears a failed trust attempt before the next explicit decision", async () => {
+    stubVerificationFetch("restricted");
+    try {
+      render(<EditorWidget root="/repo" file="src/a.ts" />);
+      act(() => probeState.commandHost?.trustWorkspaceScripts?.());
+      fireEvent.click(screen.getByRole("button", { name: "Trust workspace" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "This workspace remains restricted.",
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      act(() => probeState.commandHost?.revokeWorkspaceScriptTrust?.());
+      expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
+  });
+
+  it("opens a restricted workspace without a trust prompt or warning banner", async () => {
     stubVerificationFetch("restricted");
     try {
       const { container } = render(<EditorWidget root="/repo" file="src/a.ts" />);
@@ -2817,16 +3028,14 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
         observer.disconnect();
       }
 
-      // The whole point of the signal: once it reads "true" the prompt is ALREADY in the DOM, so a
-      // SYNCHRONOUS read resolves it. A `findBy*` here would re-introduce the race it removes.
-      expect(
-        screen.getByRole("alertdialog", { name: /Trust this workspace/iu }),
-      ).toBeInTheDocument();
+      // Resolved execution metadata must never turn ordinary file opening into an approval flow.
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.queryByTestId("workspace-trust-banner-editor")).toBeNull();
       expect(observations.some((entry) => entry.settled === "true")).toBe(true);
       expect(
         observations
           .filter((entry) => entry.settled === "true")
-          .every((entry) => entry.promptMounted),
+          .every((entry) => !entry.promptMounted),
       ).toBe(true);
     } finally {
       vi.unstubAllGlobals();
@@ -2834,7 +3043,7 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
     }
   });
 
-  it("re-arms the signal on a root switch and re-prompts only from the NEW restricted root", async () => {
+  it("re-arms catalog readiness on a root switch without prompting for either root", async () => {
     const pendingB = deferredCatalog();
     stubVerificationFetchByRoot(
       new Map([
@@ -2848,24 +3057,17 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
       await waitFor(() => {
         expect(workspace).toHaveAttribute("data-trust-settled", "true");
       });
-      expect(
-        screen.getByRole("alertdialog", { name: /Trust this workspace/iu }),
-      ).toBeInTheDocument();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.queryByTestId("workspace-trust-banner-editor")).toBeNull();
 
       const observations: SettledObservation[] = [];
       const observer = observeSettledTransitions(workspace, observations);
       try {
         rerender(<EditorWidget root="/repo-b" file="src/a.ts" />);
-        // A switch to an undecided root re-arms the signal: /repo-a's prompt is dismissed and
-        // readiness drops back to "false" until /repo-b's own trust state resolves.
+        // Readiness resets until the new root returns its own execution catalog.
         await waitFor(() => {
           expect(workspace).toHaveAttribute("data-trust-settled", "false");
         });
-        // The stale-catalog class (#2696): while /repo-b's catalog is still in flight the ONLY
-        // trust state in the tree is /repo-a's. A prompt standing here could only have been raised
-        // from the previous root's catalog — which is exactly the pairing the render-phase catalog
-        // invalidation rules out. An effect-based invalidation raises it one commit after the
-        // switch, before /repo-b has said anything at all.
         expect(screen.queryByRole("alertdialog")).toBeNull();
 
         await act(async () => {
@@ -2878,17 +3080,15 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
         observer.disconnect();
       }
 
-      // Re-settling is again a conjunction: the prompt for the NEW root is already mounted in the
-      // commit that reports "true", so a synchronous read resolves it.
-      expect(
-        screen.getByRole("alertdialog", { name: /Trust this workspace/iu }),
-      ).toBeInTheDocument();
+      // The new root settles without mounting a prompt or persistent trust warning.
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.queryByTestId("workspace-trust-banner-editor")).toBeNull();
       expect(observations.some((entry) => entry.settled === "false")).toBe(true);
       expect(observations.some((entry) => entry.settled === "true")).toBe(true);
       expect(
         observations
           .filter((entry) => entry.settled === "true")
-          .every((entry) => entry.promptMounted),
+          .every((entry) => !entry.promptMounted),
       ).toBe(true);
     } finally {
       vi.unstubAllGlobals();
@@ -2941,11 +3141,6 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
   });
 
   it("does not re-raise the initial prompt after the human revokes trust", async () => {
-    // The initial prompt answers "this binding is opening on an untrusted root", once per binding.
-    // The latch was only consumed when the FIRST resolved state was `restricted`, so opening on a
-    // TRUSTED root left it unconsumed — and an explicit revocation then moved trust to `restricted`
-    // and re-raised the first-open prompt, asking the human to grant back what they had just
-    // deliberately revoked, flagged `initialPrompt`.
     let outcome: CatalogOutcome = "trusted";
     let catalogRequests = 0;
     vi.stubGlobal(
@@ -2962,7 +3157,6 @@ describe("EditorWidget workspace-trust readiness signal (#2696)", () => {
       await waitFor(() => {
         expect(workspace).toHaveAttribute("data-trust-settled", "true");
       });
-      // Opening on a trusted root raises nothing, which is what leaves the latch unconsumed.
       expect(screen.queryByRole("alertdialog")).toBeNull();
 
       // The human revokes: the catalog now reports restricted, exactly as the real revoke path

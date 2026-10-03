@@ -5,6 +5,7 @@ import {
   type ActivityLogFieldContract,
   type ActivityLogOperationRegistration,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { effectiveContextWindow } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
   GatewayCallRequest,
@@ -212,9 +213,11 @@ function upperCharge(
   ) {
     throw new ConfigInvalidError("spend-bound-unavailable");
   }
-  // Reserve the declared full context, not a text-length/token estimate. The configured prices
-  // must be upper rates for every admitted tier, including long-context and reasoning tokens.
-  return cost(pricing, capability.contextWindow, output);
+  // Reserve the full context the request is planned with, not a text-length/token estimate: for
+  // an assumed window that is the default planning window, never the setup placeholder. The
+  // configured prices must be upper rates for every admitted tier, including long-context and
+  // reasoning tokens.
+  return cost(pricing, effectiveContextWindow(capability), output);
 }
 
 /** A usage report the pricing cannot turn into a safe charge must not discard the response the

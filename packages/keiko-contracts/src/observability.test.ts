@@ -15,6 +15,7 @@ import {
   validateActivityLogOperationFields,
   validateRegisteredActivityLogEvent,
   withActivityLogCorrelation,
+  withActivityLogParentCorrelation,
   type ActivityLogFieldContract,
   type ActivityLogOperationRegistration,
 } from "./observability.js";
@@ -607,6 +608,43 @@ describe("canonical Activity Log event validation", () => {
     expect(() => validateRegisteredActivityLogEvent(rebound)).toThrow(
       new ActivityLogEventValidationError("invalid-field-vocabulary"),
     );
+  });
+
+  // PR #3678: a startup readiness probe added its parent with a plain spread, so every probe line
+  // lost its registration and the sink discarded it as an unregistered operation.
+  it("keeps the markers when a spawned event gets its parent correlation", () => {
+    const canonical = canonicalFixtureRegistration();
+    const source = attachActivityLogEventRegistration(
+      {
+        category: canonical.category,
+        op: canonical.op,
+        correlationId: "probe-00000001",
+        extra: { completeness: "complete", loss: "none", generation: 1 },
+      },
+      canonical,
+    );
+
+    const rebound = withActivityLogParentCorrelation(source, "boot-00000001");
+
+    expect(rebound).toMatchObject({
+      correlationId: "probe-00000001",
+      parentCorrelationId: "boot-00000001",
+    });
+    expect(validateRegisteredActivityLogEvent(rebound)).toBe(canonical);
+    expect(() =>
+      validateRegisteredActivityLogEvent({ parentCorrelationId: "boot-00000001", ...source }),
+    ).toThrow(new ActivityLogEventValidationError("unregistered-operation"));
+    const rejected = chatRequestDispatchEvent({ modelId: "/etc/passwd" });
+    expect(() =>
+      validateRegisteredActivityLogEvent(
+        withActivityLogParentCorrelation(rejected, "boot-00000001"),
+      ),
+    ).toThrow(new ActivityLogEventValidationError("invalid-field-vocabulary"));
+  });
+
+  it("never overrides the parent an event names itself", () => {
+    const own = { op: "unregistered.fixture", parentCorrelationId: "own-00000001" };
+    expect(withActivityLogParentCorrelation(own, "boot-00000001")).toBe(own);
   });
 
   it("leaves an event without a registration unmarked", () => {

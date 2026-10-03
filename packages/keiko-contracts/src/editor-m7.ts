@@ -1078,16 +1078,8 @@ export const EDITOR_M7_COMMAND_REGISTRY: readonly EditorM7CommandDefinition[] = 
     true,
   ),
   editorCommand(
-    "quick-access.files",
-    "command.quickAccessFiles",
-    "global",
-    ["global", "editor"],
-    ["CtrlOrMeta+P"],
-    true,
-  ),
-  editorCommand(
-    "quick-access.commands",
-    "command.quickAccessCommands",
+    "workspace.commands",
+    "command.workspaceCommands",
     "global",
     ["global", "editor"],
     ["CtrlOrMeta+Shift+P"],
@@ -1168,24 +1160,6 @@ export const EDITOR_M7_COMMAND_REGISTRY: readonly EditorM7CommandDefinition[] = 
     "editor",
     ["editor", "monaco"],
     ["Shift+Alt+F"],
-    false,
-    "monaco",
-  ),
-  editorCommand(
-    "editor.generateTests",
-    "command.editorGenerateTests",
-    "editor",
-    ["editor", "monaco"],
-    ["CtrlOrMeta+Alt+T"],
-    false,
-    "monaco",
-  ),
-  editorCommand(
-    "editor.askKeikoAboutSelection",
-    "command.editorAskSelection",
-    "editor",
-    ["editor", "monaco"],
-    ["CtrlOrMeta+Alt+K"],
     false,
     "monaco",
   ),
@@ -1288,8 +1262,8 @@ function modifiersConflict(
  * The PHYSICAL chord a binding produces, as one comparable key. `CtrlOrMeta+T`, `Meta+T` and
  * `Ctrl+T` are one keystroke — the browser's reserved Cmd/Ctrl+T — so reservation AND collision are
  * both decided here rather than on the canonical binding string. Comparing strings let the
- * explicit-modifier spellings through: a `Meta+P` override read as distinct from `CtrlOrMeta+P` and
- * silently took Cmd+P away from `quick-access.files` (0.3.0 release audit, #2802), and the
+ * explicit-modifier spellings through (0.3.0 release audit, #2802). For example, `Meta+Shift+P`
+ * must collide with `workspace.commands` on `CtrlOrMeta+Shift+P`. The
  * substrate refuses a reserved chord by THROWING in render, so an accepted `Ctrl+T` became a
  * persisted white screen. `WORKSPACE_RESERVED_CHORDS` in workspace-ui.ts is the chord-level twin of
  * `RESERVED_BINDINGS`, and this list must stay at least as strict.
@@ -1445,9 +1419,8 @@ export function __validateEditorM7KeybindingForTests(
 }
 
 // Collision is decided on the PHYSICAL chord, never on the canonical binding string: dispatch
-// matches keystrokes, so `Meta+P` and `CtrlOrMeta+P` are the same claim even though the two strings
-// differ. Comparing strings here let a persisted `Meta+P` override be accepted alongside
-// `quick-access.files`' own `CtrlOrMeta+P` and take the chord away from it (0.3.0 audit, #2802).
+// matches keystrokes, so `Meta+Shift+P` and `CtrlOrMeta+Shift+P` are the same claim. Comparing
+// strings would let an override take that chord away from `workspace.commands` (#2802).
 function collidesWithCommand(
   command: EditorM7CommandDefinition,
   binding: string,
@@ -1493,6 +1466,20 @@ export function parseEditorM7KeybindingOverrideRecord(
   };
 }
 
+/** Retire the old file picker and preserve the command palette's saved bindings. */
+function migrateRetiredQuickAccessOverride(value: string): string | undefined {
+  if (utf8ByteLength(value) > MAX_KEYBINDING_OVERRIDE_BYTES) return value;
+  const parts = value.split(KEYBINDING_OVERRIDE_SEPARATOR);
+  if (parts.length !== 3 || parts[0] !== EDITOR_M7_KEYBINDING_OVERRIDE_VERSION) return value;
+  const [, commandId, binding] = parts;
+  if (commandId === "quick-access.files" && canonicalBinding(binding ?? "") !== undefined)
+    return undefined;
+  if (commandId === "quick-access.commands") {
+    return [parts[0], "workspace.commands", binding].join(KEYBINDING_OVERRIDE_SEPARATOR);
+  }
+  return value;
+}
+
 export function parseEditorM7KeybindingOverrides(
   value: unknown,
 ): EditorM7ParseResult<readonly EditorM7KeybindingOverride[]> {
@@ -1504,7 +1491,9 @@ export function parseEditorM7KeybindingOverrides(
   const seen = new Set<string>();
   for (const entry of value) {
     if (typeof entry !== "string") return { ok: false, reasonCode: "INVALID_INPUT" };
-    const parsed = parseEditorM7KeybindingOverrideRecord(entry, active);
+    const migrated = migrateRetiredQuickAccessOverride(entry);
+    if (migrated === undefined) continue;
+    const parsed = parseEditorM7KeybindingOverrideRecord(migrated, active);
     if (!parsed.ok) return parsed;
     if (seen.has(parsed.value.commandId)) {
       return { ok: false, reasonCode: "KEYBINDING_COLLISION" };

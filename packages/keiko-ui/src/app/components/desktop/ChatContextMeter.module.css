@@ -1,0 +1,227 @@
+.cmpRoot {
+  position: relative;
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+.cmpRoot[data-tone="warning"] {
+  color: var(--feedback-warning);
+}
+.cmpRoot[data-tone="critical"] {
+  color: var(--feedback-danger);
+}
+.cmpRoot[data-tone="unknown"] {
+  color: var(--fg-muted);
+}
+.cmpTrigger {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm, 6px);
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+.cmpTrigger:hover {
+  background: var(--surface-accent-subtle);
+}
+.cmpTrigger:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmpTrack {
+  stroke: currentColor;
+  opacity: 0.2;
+}
+.cmpFill {
+  stroke: currentColor;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 200ms ease;
+}
+.cmpPanel {
+  position: fixed;
+  z-index: 100100;
+  box-sizing: border-box;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  color: var(--fg);
+  background: var(--surface-overlay);
+  box-shadow: 0 8px 30px #0003;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.cmpPanel h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.cmpMetrics {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+.cmpMetrics > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.cmpMetrics dt {
+  color: var(--fg-muted);
+}
+.cmpMetrics dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.cmpHelp {
+  color: var(--fg-muted);
+  margin: 10px 0;
+}
+/* ── window breakdown (design-system/keiko-dataviz.css: categorical palette, legend, and the
+      hatched "not measured input" encoding that never relies on colour alone) ── */
+.cmpTotal {
+  margin: 0 0 8px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.cmpBar {
+  display: flex;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--viz-grid);
+}
+.cmpBarSegment {
+  flex-shrink: 0;
+  flex-basis: 0;
+  min-width: 0;
+}
+.cmpBarSegment + .cmpBarSegment {
+  box-shadow: inset 1px 0 0 var(--surface-overlay);
+}
+.cmpLegend {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.cmpLegendRow {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto 3.5em;
+  align-items: baseline;
+  gap: 8px;
+}
+.cmpSwatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+  align-self: center;
+}
+.cmpLegendLabel {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cmpLegendDetail {
+  display: block;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.cmpLegendValue,
+.cmpLegendShare {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.cmpLegendShare {
+  color: var(--fg-muted);
+}
+.cmpBarSegment[data-segment="system"],
+.cmpSwatch[data-segment="system"] {
+  background: var(--viz-6);
+}
+.cmpBarSegment[data-segment="summary"],
+.cmpSwatch[data-segment="summary"] {
+  background: var(--viz-3);
+}
+.cmpBarSegment[data-segment="messages"],
+.cmpSwatch[data-segment="messages"] {
+  background: var(--viz-2);
+}
+.cmpBarSegment[data-segment="knowledge"],
+.cmpSwatch[data-segment="knowledge"] {
+  background: var(--viz-1);
+}
+.cmpBarSegment[data-segment="free"],
+.cmpSwatch[data-segment="free"] {
+  background: transparent;
+}
+.cmpSwatch[data-segment="free"] {
+  box-shadow: inset 0 0 0 1px var(--border-default);
+}
+.cmpBarSegment[data-segment="compaction-buffer"],
+.cmpSwatch[data-segment="compaction-buffer"],
+.cmpBarSegment[data-segment="output-reserve"],
+.cmpSwatch[data-segment="output-reserve"],
+.cmpBarSegment[data-segment="safety-margin"],
+.cmpSwatch[data-segment="safety-margin"] {
+  background-color: color-mix(in oklch, var(--fg-muted) 35%, transparent);
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 3px,
+    color-mix(in oklch, var(--surface-overlay) 55%, transparent) 3px 5px
+  );
+}
+.cmpBarSegment[data-segment="output-reserve"],
+.cmpSwatch[data-segment="output-reserve"] {
+  background-color: color-mix(in oklch, var(--viz-4) 55%, transparent);
+}
+.cmpWarning {
+  margin: 10px 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--fg);
+  background: var(--feedback-warning-surface);
+  box-shadow: inset 2px 0 0 var(--feedback-warning);
+}
+.cmpSavings {
+  color: var(--accent-text);
+}
+.cmpCompact {
+  width: 100%;
+  padding: 7px 10px;
+  color: var(--button-primary-text);
+  background: var(--button-primary-surface);
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.cmpCompact:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.cmpCompact:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmpSpinning {
+  animation: context-spin 1.2s linear infinite;
+}
+@keyframes context-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmpFill {
+    transition: none;
+  }
+  .cmpSpinning {
+    animation: none;
+  }
+}
