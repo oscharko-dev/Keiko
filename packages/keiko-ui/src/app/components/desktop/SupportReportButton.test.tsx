@@ -21,12 +21,31 @@ const download = vi.mocked(downloadSupportReport);
 const report = { fileName: "report.json", reportJson: "{}" };
 afterEach(() => {
   vi.clearAllMocks();
+  vi.restoreAllMocks();
   resetSupportReportOutcomesForTests();
   vi.useRealTimers();
   window.localStorage.removeItem("keiko.locale");
 });
 
 describe("SupportReportButton", () => {
+  it("releases a stalled export at the complete action deadline and allows retry", async () => {
+    const deadline = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    create.mockReturnValueOnce(new Promise(() => undefined));
+    render(<SupportReportButton correlationId="stalled-export" />);
+    await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    expect(AbortSignal.timeout).toHaveBeenCalledExactlyOnceWith(35_000);
+    await act(async () => deadline.abort(new DOMException("Deadline expired", "TimeoutError")));
+    expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
+    expect(download).not.toHaveBeenCalled();
+    expect(reportClientDiagnostic).not.toHaveBeenCalled();
+    create.mockResolvedValueOnce(report);
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(new AbortController().signal);
+    await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await waitFor(() => expect(download).toHaveBeenCalledExactlyOnceWith(report));
+  });
+
   it("keeps missing diagnostic delivery retryable without creating a reporting incident", async () => {
     create.mockRejectedValueOnce(new SupportReportEvidenceUnavailable());
     render(<SupportReportButton correlationId="offline-original-error" />);

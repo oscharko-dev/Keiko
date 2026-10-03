@@ -10,11 +10,6 @@ import {
 } from "react";
 import { useTranslate } from "@/lib/i18n";
 import {
-  createSupportReport,
-  downloadSupportReport,
-  SupportReportEvidenceUnavailable,
-} from "@/lib/support-report-api";
-import {
   currentGlobalClientFailure,
   dismissGlobalClientFailure,
   reportClientDiagnostic,
@@ -25,6 +20,7 @@ import { bffRequestErrorKind } from "@/lib/http";
 import styles from "./SupportReportButton.module.css";
 
 const FEEDBACK_MS = 1500;
+const REPORT_DEADLINE_MS = 35_000;
 const MAX_FULFILLED_REPORTS = 128;
 type ReportOutcome = AbortController | "fulfilled";
 const outcomes = new Map<string, ReportOutcome>();
@@ -82,6 +78,34 @@ interface ReportFeedback {
 
 interface ReportRequestRef {
   current: { key: string; controller: AbortController } | null;
+}
+
+function waitForReportStep<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject): void => {
+    const abort = (): void => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    void work.then(
+      (value): void => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error: unknown): void => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function isReportDeliveryUnavailable(
+  error: unknown,
+  api: typeof import("@/lib/support-report-api") | undefined,
+  signal: AbortSignal,
+): boolean {
+  return (
+    signal.aborted || (api !== undefined && error instanceof api.SupportReportEvidenceUnavailable)
+  );
 }
 
 function useReportCancellation(key: string): ReportRequestRef {
@@ -149,10 +173,14 @@ async function runReport(
   if (controller === undefined) return;
   const pending = { key, controller };
   request.current = pending;
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(REPORT_DEADLINE_MS)]);
+  let api: typeof import("@/lib/support-report-api") | undefined;
   try {
-    const report = await createSupportReport(correlationId, controller.signal);
+    api = await waitForReportStep(import("@/lib/support-report-api"), signal);
+    const report = await waitForReportStep(api.createSupportReport(correlationId, signal), signal);
     if (controller.signal.aborted || request.current !== pending) return;
-    downloadSupportReport(report);
+    signal.throwIfAborted();
+    api.downloadSupportReport(report);
     setFeedback({ key, state: "saved" });
     fulfillReport(key);
   } catch (error) {
@@ -161,7 +189,7 @@ async function runReport(
     setFeedback({ key, state: "error" });
     // The transport already accounts for missing evidence. Do not create another incident for
     // the same offline delivery or replace the selected original error with a reporting failure.
-    if (error instanceof SupportReportEvidenceUnavailable) return;
+    if (isReportDeliveryUnavailable(error, api, signal)) return;
     reportClientDiagnostic(`[keiko] support report failed: ${clientErrorSummary(error)}`, {
       correlationId: correlationIdOf(error),
       errorKind: bffRequestErrorKind(error),
