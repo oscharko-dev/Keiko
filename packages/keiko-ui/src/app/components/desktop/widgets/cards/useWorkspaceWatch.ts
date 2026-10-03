@@ -11,6 +11,7 @@ import { refreshSharedEventSource, subscribeSharedEventSource } from "./sharedEv
 
 export interface WorkspaceWatchClientState {
   readonly refresh: () => void;
+  readonly acknowledgeSnapshot: () => void;
   readonly health: EditorM7WatchHealth;
   readonly sequence: number;
   readonly degradedReason: string | null;
@@ -29,7 +30,7 @@ const WATCH_EVENT_TYPES = Object.freeze([
   "ready",
 ] as const);
 
-type WatchState = Omit<WorkspaceWatchClientState, "refresh">;
+type WatchState = Omit<WorkspaceWatchClientState, "refresh" | "acknowledgeSnapshot">;
 
 const INITIAL_STATE: WatchState = {
   health: "healthy",
@@ -67,6 +68,12 @@ export function useWorkspaceWatch(
     refreshSharedEventSource(watchEventsUrl(root));
   }, [root]);
 
+  const acknowledgeSnapshot = useCallback((): void => {
+    setState((current) =>
+      current.snapshotRequired ? { ...current, snapshotRequired: false } : current,
+    );
+  }, []);
+
   useEffect(() => {
     setState(INITIAL_STATE);
     if (root === undefined || root.length === 0) return;
@@ -82,7 +89,7 @@ export function useWorkspaceWatch(
     });
   }, [root]);
 
-  return { ...state, refresh };
+  return { ...state, refresh, acknowledgeSnapshot };
 }
 
 function watchStateFrom(event: MessageEvent<string>): {

@@ -1168,28 +1168,37 @@ export function FilesWidget({
   }, [currentDirectoryPath, invalidateGitStatus, loadDirectory]);
 
   const watchRoot = watchActive ? (nonemptyRoot(effectiveRoot) ?? undefined) : undefined;
+  const refreshVisibleDirectories = useCallback((): void => {
+    const paths = new Set([...expandedRef.current, currentDirectoryRef.current ?? ""]);
+    invalidateGitStatus();
+    setDirectories((current) =>
+      Object.fromEntries(Object.entries(current).filter(([path]) => paths.has(path))),
+    );
+    for (const path of paths) void loadDirectory(path);
+  }, [invalidateGitStatus, loadDirectory]);
   const workspaceWatch = useWorkspaceWatch(
     watchRoot,
     useCallback(
       (event): void => {
-        invalidateGitStatus();
-        if (event.kind === "rescan" || event.kind === "overflow" || event.relativePath === "") {
-          setDirectories({});
-          void loadDirectory(currentDirectoryPath ?? "");
+        // Rescan/overflow set the consumable snapshot flag; its effect refreshes each visible path.
+        if (event.kind === "rescan" || event.kind === "overflow") return;
+        if (event.relativePath === "") {
+          refreshVisibleDirectories();
           return;
         }
+        invalidateGitStatus();
         void loadDirectory(parentDirectoryForWatchPath(event.relativePath));
       },
-      [currentDirectoryPath, invalidateGitStatus, loadDirectory],
+      [invalidateGitStatus, loadDirectory, refreshVisibleDirectories],
     ),
   );
 
+  const { snapshotRequired, acknowledgeSnapshot } = workspaceWatch;
   useEffect(() => {
-    if (!workspaceWatch.snapshotRequired) return;
-    setDirectories({});
-    invalidateGitStatus();
-    void loadDirectory(currentDirectoryPath ?? "");
-  }, [workspaceWatch.snapshotRequired, currentDirectoryPath, invalidateGitStatus, loadDirectory]);
+    if (!snapshotRequired) return;
+    acknowledgeSnapshot();
+    refreshVisibleDirectories();
+  }, [snapshotRequired, acknowledgeSnapshot, refreshVisibleDirectories]);
 
   // The root every mutation targets — the resolved real root, or the configured one before it loads.
   const mutationRoot = effectiveRoot;

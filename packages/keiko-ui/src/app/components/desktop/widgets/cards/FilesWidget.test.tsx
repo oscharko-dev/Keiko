@@ -1281,6 +1281,66 @@ describe("FilesWidget", () => {
     }
   });
 
+  it.each(["directory", "project"] as const)(
+    "refreshes expanded folders after a snapshot gap in the %s view without repeating on navigation",
+    async (presentation) => {
+      installFakeEventSource();
+      let fresh = false;
+      vi.mocked(fetchFilesTree).mockImplementation(async (_root, path = "") => ({
+        root: "/repo",
+        path,
+        truncated: false,
+        entries:
+          path === ""
+            ? [{ name: "src", path: "src", kind: "directory", extension: null, readable: true }]
+            : [
+                {
+                  ...treeEntryBase,
+                  name: fresh ? "new.ts" : "old.ts",
+                  path: `src/${fresh ? "new.ts" : "old.ts"}`,
+                  kind: "file",
+                },
+              ],
+      }));
+      render(<FilesWidget root="/repo" presentation={presentation} />);
+      await screen.findByRole("treeitem", { name: /^src$/u });
+      await userEvent.click(caretButton("src"));
+      await screen.findByText("old.ts");
+      fresh = true;
+      act(() =>
+        workspaceWatchEventSources()[0]?.emit("editor-watch:snapshot-required", {
+          schemaVersion: "1",
+          sequence: 0,
+          rootToken: ["01234567", "89abcdef"].join(""),
+          nativeWatcherCount: 1,
+          subscriberCount: 1,
+          queueDepth: 0,
+          replayCapacity: 100,
+          replayOldestSequence: 0,
+          eventCount: 0,
+          requiresSnapshot: true,
+          health: "rescanRequired",
+          degradedReasons: ["sequence-gap"],
+        }),
+      );
+      expect(await screen.findByText("new.ts")).toBeInTheDocument();
+      expect(screen.queryByText("old.ts")).toBeNull();
+      expect(screen.getByRole("treeitem", { name: /^src$/u })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(vi.mocked(fetchFilesTree).mock.calls.filter((call) => call[1] === "src")).toHaveLength(
+        2,
+      );
+      if (presentation !== "directory") return;
+      await userEvent.dblClick(screen.getByRole("treeitem", { name: /^src$/u }));
+      await waitFor(() => expect(screen.queryByRole("treeitem", { name: /^src$/u })).toBeNull());
+      expect(vi.mocked(fetchFilesTree).mock.calls.filter((call) => call[1] === "src")).toHaveLength(
+        3,
+      );
+    },
+  );
+
   it("refreshes the visible directory when a restarted watch requests a snapshot", async () => {
     installFakeEventSource();
     vi.mocked(fetchFilesTree)

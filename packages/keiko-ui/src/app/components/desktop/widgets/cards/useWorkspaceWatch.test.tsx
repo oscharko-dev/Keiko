@@ -112,6 +112,14 @@ describe("useWorkspaceWatch", () => {
       });
     });
 
+    act(() => result.current.acknowledgeSnapshot());
+    expect(result.current).toMatchObject({
+      health: "rescanRequired",
+      sequence: 9,
+      degradedReason: "sequence-gap",
+      snapshotRequired: false,
+    });
+
     act(() => {
       FakeEventSource.instances[0]?.emitRaw("editor-watch:changed", "{not-json");
     });
