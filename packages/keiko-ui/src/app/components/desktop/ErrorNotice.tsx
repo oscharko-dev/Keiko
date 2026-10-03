@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { Icons } from "./Icons";
 import { toUserErrorNotice, type UserErrorNotice } from "./format-error";
+import { SupportReportButton } from "./SupportReportButton";
 import { useTranslate } from "@/lib/i18n";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -86,6 +87,7 @@ function ErrorNotice({
           {t("chat.error.supportId", { correlationId: notice.correlationId })}
         </div>
       ) : null}
+      <SupportReportButton key={noticeKey} correlationId={notice.correlationId} errorKey={noticeKey} />
     </div>
   );
 }

@@ -598,8 +598,11 @@ export interface SupportIncidentSufficiency {
   readonly coverage: SupportIncidentCoverage;
 }
 
+/** Report preparation carries no ownership claim when the bounded candidate store is full. */
+export type SupportIncidentDescriptorRecord = Omit<SupportIncidentRecord, "slotIndex">;
+
 /** The canonical resolved descriptor every manual exit derives from. */
-export interface SupportIncident extends SupportIncidentRecord {
+export interface SupportIncident extends SupportIncidentDescriptorRecord {
   readonly evidence: SupportIncidentEvidence;
   readonly sufficiency: SupportIncidentSufficiency;
 }

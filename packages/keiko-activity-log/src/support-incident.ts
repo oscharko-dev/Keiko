@@ -53,6 +53,7 @@ import {
   type SupportIncidentCorrelation,
   type SupportIncidentPin,
   type SupportIncidentRecord,
+  type SupportIncidentDescriptorRecord,
   type SupportIncidentSegmentReference,
   type SupportIncidentTrigger,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -649,13 +650,12 @@ function overlappingSealedSegmentNames(
   }
 }
 
-function buildRecord(
+function buildDescriptor(
   draft: CandidateDraft,
   context: CandidateContext,
   pin: SupportIncidentPin,
   incidentId: string,
-  slotIndex: number,
-): SupportIncidentRecord {
+ ): SupportIncidentDescriptorRecord {
   const identity = serverLogProcessIdentity();
   return {
     schemaVersion: SUPPORT_INCIDENT_SCHEMA_VERSION,
@@ -674,10 +674,40 @@ function buildRecord(
     build: supportIncidentBuild(identity.productVersion, identity.platformClass),
     window: incidentWindow(context.nowMs),
     pin,
-    slotIndex,
     createdAtMs: context.nowMs,
     expiresAtMs: context.nowMs + SUPPORT_INCIDENT_TTL_MS,
   };
+}
+
+function buildRecord(
+  draft: CandidateDraft,
+  context: CandidateContext,
+  pin: SupportIncidentPin,
+  incidentId: string,
+  slotIndex: number,
+): SupportIncidentRecord {
+  return { ...buildDescriptor(draft, context, pin, incidentId), slotIndex };
+}
+
+/** A manual export can describe retained evidence without claiming another durable candidate. */
+export function prepareUnretainedUserReportIncident(
+  stateDir: string,
+  correlationId: string,
+): SupportIncidentDescriptorRecord {
+  const safeCorrelationId = incidentCorrelationId(correlationId);
+  if (safeCorrelationId === undefined) throw new TypeError("Invalid support report correlation");
+  const input = UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT;
+  return buildDescriptor(
+    {
+      trigger: "user-report",
+      input,
+      correlation: { rootCorrelationId: safeCorrelationId, childCorrelationIds: [] },
+      evidenceCorrelationId: safeCorrelationId,
+    },
+    { stateDir, nowMs: Date.now(), env: process.env, defectFingerprint: computeDefectFingerprint(input) },
+    { status: "rejected", pinnedSegmentCount: 0, pinnedBytes: 0, evidenceLostBeforePin: false },
+    randomBytes(16).toString("hex"),
+  );
 }
 
 // Automatics claim ascending from slot 0 (0..MAX_REGISTERED_FAILURE_INCIDENTS-1); user reports
@@ -1230,7 +1260,7 @@ export interface SupportIncidentSegmentFile extends SupportIncidentSegmentRefere
  */
 export function supportIncidentSegmentFiles(
   stateDir: string,
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
 ): readonly SupportIncidentSegmentFile[] {
   const coverage = windowCoverageRecord(record.window, record.pin.pinId);
   return listActivityLogDirectory(join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME))

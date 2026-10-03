@@ -2,9 +2,9 @@
 // underlying failure carried a correlation id, using the same "{feature}.supportId" i18n key
 // pattern already proven at VoiceDictation.tsx and WorkspaceTrustSurfaces.tsx.
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import {
   I18N_STORAGE_KEY,
@@ -12,9 +12,13 @@ import {
   loadLocaleMessages,
   resetLoadedMessageCatalogs,
 } from "@/lib/i18n";
+import * as reportApi from "@/lib/support-report-api";
+import { resetSupportReportOutcomesForTests } from "./SupportReportButton";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  resetSupportReportOutcomesForTests();
   window.localStorage.clear();
   resetLoadedMessageCatalogs();
 });
@@ -29,6 +33,18 @@ function renderInLocale(error: unknown, locale: "en" | "de"): ReturnType<typeof 
 }
 
 describe("ErrorNoticeFromError — correlation support id", () => {
+  it("downloads a report for the support id displayed in the chat error", async () => {
+    const report = { fileName: "report.json", reportJson: "{}" };
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    const download = vi.spyOn(reportApi, "downloadSupportReport").mockImplementation(() => undefined);
+    const error = new ApiError("CLARIFICATION_NEEDED", "Need more context", 400);
+    error.correlationId = "chat-search-failed";
+    renderInLocale(error, "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await waitFor(() => expect(download).toHaveBeenCalledExactlyOnceWith(report));
+    expect(create).toHaveBeenCalledWith("chat-search-failed", expect.any(AbortSignal));
+  });
+
   it("renders the EN support id line for an ApiError carrying a correlationId", () => {
     const error = new ApiError("GATEWAY_TIMEOUT", "GATEWAY_TIMEOUT", 503);
     error.correlationId = "req-en-000123";

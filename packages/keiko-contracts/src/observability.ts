@@ -117,6 +117,7 @@ export {
   type SupportIncidentPrivateProjection,
   type SupportIncidentPublicProjection,
   type SupportIncidentRecord,
+  type SupportIncidentDescriptorRecord,
   type SupportIncidentSegmentReference,
   type SupportIncidentState,
   type SupportIncidentSufficiency,

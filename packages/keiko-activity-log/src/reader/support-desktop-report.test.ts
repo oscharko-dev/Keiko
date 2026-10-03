@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listSupportIncidents, recordRegisteredFailureIncident } from "../support-incident.js";
+import { MAX_SUPPORT_INCIDENTS, listSupportIncidents, recordUserReportedIncident, recordRegisteredFailureIncident } from "../support-incident.js";
 import {
   fixtureLine,
   fixtureProcess,
@@ -48,6 +48,20 @@ function writeFailures(): void {
 }
 
 describe("desktop canonical support report", () => {
+  it("exports retained error evidence even when every incident slot is occupied", () => {
+    writeFailures();
+    for (let index = 0; index < MAX_SUPPORT_INCIDENTS; index += 1) {
+      expect(recordUserReportedIncident(stateDir, { correlationId: `previous-report-${String(index)}` }).status).toBe("created");
+    }
+    const response = createDesktopSupportReport(stateDir, "desktop-failure-1");
+    const analyzed = analyzeSupportReport(response.reportJson);
+    expect(analyzed.analysis.timelines.flatMap((timeline) => timeline.lines).some((line) =>
+      line.op === "client.diagnostic" && line.errorKind === "timeout",
+    )).toBe(true);
+    expect(listSupportIncidents(stateDir)).toHaveLength(MAX_SUPPORT_INCIDENTS);
+    expect(parseSupportReport(response.reportJson).incident.pin.status).toBe("rejected");
+  });
+
   it("exports the selected failure through the canonical analyzer without unrelated evidence or paths", () => {
     writeFailures();
     const response = createDesktopSupportReport(stateDir, "desktop-failure-1");

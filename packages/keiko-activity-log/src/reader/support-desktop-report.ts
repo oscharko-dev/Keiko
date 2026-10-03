@@ -5,13 +5,14 @@ import {
   supportIncidentPrivateProjection,
   supportReportFileName,
   type DesktopSupportReportResponse,
-  type SupportIncidentRecord,
+  type SupportIncidentDescriptorRecord,
   type SupportReport,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   listSupportIncidents,
   SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   recordUserReportedIncident,
+  prepareUnretainedUserReportIncident,
   supportIncidentSegmentFiles,
   type SupportIncidentRejection,
 } from "../support-incident.js";
@@ -57,16 +58,21 @@ function correlationSelection(correlationId: string): SupportQuerySelection {
   };
 }
 
-function createReportIncident(stateDir: string, correlationId: string): SupportIncidentRecord {
+function createReportIncident(stateDir: string, correlationId: string): SupportIncidentDescriptorRecord {
   const created = recordUserReportedIncident(stateDir, { correlationId });
-  if (created.status === "rejected") throw new DesktopSupportReportPreparationError(created.reason);
+  if (created.status === "rejected") {
+    if (created.reason === "quota-exhausted") {
+      return prepareUnretainedUserReportIncident(stateDir, correlationId);
+    }
+    throw new DesktopSupportReportPreparationError(created.reason);
+  }
   if (created.record === undefined) throw new SupportReportError("selection-unavailable");
   return created.record;
 }
 
 function incidentDescriptor(
   stateDir: string,
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   selected?: SupportQueryResult,
 ): SupportReport["incident"] {
   const segments = selected === undefined ? supportIncidentSegmentFiles(stateDir, record) : [];
@@ -83,7 +89,7 @@ function incidentDescriptor(
   }
 }
 
-function incidentSelection(stateDir: string, record: SupportIncidentRecord): SupportQuerySelection {
+function incidentSelection(stateDir: string, record: SupportIncidentDescriptorRecord): SupportQuerySelection {
   const segmentIds = new Set(
     supportIncidentSegmentFiles(stateDir, record).map((segment) => segment.segmentId),
   );
@@ -102,7 +108,7 @@ export function prepareDesktopSupportReport(
   stateDir: string,
   correlationId?: string,
   requestCorrelationId?: string,
-): SupportIncidentRecord {
+): SupportIncidentDescriptorRecord {
   const existing =
     correlationId === undefined
       ? undefined
@@ -163,7 +169,7 @@ export function validateDesktopSupportReportSelection(
 /** Read-only composition: safe to run off the server request event loop. */
 export function createPreparedDesktopSupportReport(
   stateDir: string,
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   correlationId?: string,
   selectedEvidence?: ReturnType<typeof executeLocalSupportQuery>,
 ): DesktopSupportReportResponse {

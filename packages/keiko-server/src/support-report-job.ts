@@ -3,7 +3,7 @@ import {
   type ActivityLogErrorKind,
   type DesktopSupportReportResponse,
   type SupportReportFailure,
-  type SupportIncidentRecord,
+  type SupportIncidentDescriptorRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   prepareDesktopSupportReport,
@@ -33,7 +33,7 @@ export type SupportReportWorkerMessage =
   | { readonly kind: "prepare"; readonly correlationId?: string | undefined };
 export interface SupportReportPreparedMessage {
   readonly kind: "prepared";
-  readonly record: SupportIncidentRecord;
+  readonly record: SupportIncidentDescriptorRecord;
 }
 
 export class SupportReportJobError extends Error {

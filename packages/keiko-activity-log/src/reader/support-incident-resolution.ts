@@ -4,7 +4,7 @@ import {
   MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
   MAX_SUPPORT_REPORT_TIMELINE_BYTES,
   type SupportIncident,
-  type SupportIncidentRecord,
+  type SupportIncidentDescriptorRecord,
   type SupportIncidentSufficiency,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
@@ -94,7 +94,7 @@ export function resolveSupportIncidentEvidence(
 }
 
 function incidentFailureClasses(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   analysis: AnalyzeAllResult,
 ): readonly string[] {
   if (record.trigger === "registered-failure") {
@@ -108,7 +108,7 @@ function incidentFailureClasses(
 }
 
 function incidentSufficiency(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   analysis: AnalyzeAllResult,
 ): SupportIncidentSufficiency {
   const required = incidentFailureClasses(record, analysis);
@@ -139,7 +139,7 @@ function evidenceLineCount(evidence: ActivityLogEvidenceSummary): number {
 
 /** Builds the canonical SupportIncident descriptor from a record and its window's evidence. */
 export function resolveSupportIncident(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   segments: readonly SupportIncidentSegmentFile[],
   stateDir: string,
 ): SupportIncident {
@@ -152,7 +152,7 @@ export function resolveSupportIncident(
 
 /** A selected causal closure supplies its own evidence, independent of the report click time. */
 export function resolveSupportIncidentAnalysis(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   segments: readonly SupportIncidentSegmentFile[],
   analysis: AnalyzeAllResult,
 ): SupportIncident {
@@ -180,7 +180,7 @@ export function resolveSupportIncidentAnalysis(
  * publish an honest report instead of failing.
  */
 export function unresolvedSupportIncident(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   segments: readonly SupportIncidentSegmentFile[],
   reason: SupportIncidentWindowError["reason"],
 ): SupportIncident {
@@ -231,7 +231,7 @@ function selectedSegments(query: SupportQueryResult): readonly SupportIncidentSe
 }
 
 export function resolveSelectedSupportIncident(
-  record: SupportIncidentRecord,
+  record: SupportIncidentDescriptorRecord,
   selected: SupportQueryResult,
 ): ReturnType<typeof resolveSupportIncidentAnalysis> {
   const segments = selectedSegments(selected);
