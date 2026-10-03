@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceManifest, WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
@@ -19,6 +19,7 @@ import {
 } from "./support/editorWorkspace.js";
 import { replaceEditorBuffer } from "./support/editor-chord.js";
 import { FILE_HISTORY_APP_SESSION_LAUNCHER_SECRET } from "./support/file-history-2531.js";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
 
 const FILE = "src/app.ts";
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -260,21 +261,7 @@ async function rootTabIsSelected(tab: Locator): Promise<boolean> {
   return (await tab.getAttribute("aria-selected")) === "true";
 }
 
-/**
- * A root tab, addressed through the DOM instead of the accessibility tree.
- *
- * Playwright's role engine honours `aria-modal`: while the workspace-trust dialog that selecting a
- * root raises is open, every `getByRole("tab", …)` query for that tab reports "element(s) not
- * found" for its whole timeout, even though the tab is attached, on screen, and carrying the
- * correct `aria-selected`. That is how this spec failed on `dev` — the assertion could not observe
- * the very state the click had just produced. A CSS locator does not consult the accessibility
- * tree, so `aria-selected` stays readable through the dialog the selection itself raised. Measured
- * here with the dialog open: the role query resolves 0 elements, this one resolves 1 and reads
- * `aria-selected="true"` — the selection HAD taken, only the assertion could not see it.
- *
- * Scoped to the roots switcher so the locator stays strict: the editor mounts a second tablist for
- * open documents, and a strict-mode violation here must fail by name rather than as a timeout.
- */
+// Scope root selection separately from the Editor's open-document tablist.
 function rootTab(page: Page, displayName: string): Locator {
   return page
     .locator('[role="tablist"][aria-label="Editor workspace roots"]')
@@ -283,55 +270,89 @@ function rootTab(page: Page, displayName: string): Locator {
     .filter({ hasText: displayName });
 }
 
-/**
- * Selects a root tab and proves it took, idempotently.
- *
- * Clicking is still conditional — clicking an already-selected tab is not a no-op in this UI, it
- * re-enters the trust flow the caller may have just resolved. What changed is that the outcome is
- * asserted with a retrying, web-first expectation instead of being inferred from the click having
- * been issued: under the bootstrap race described in `rootTabIsSelected`, the click and the
- * bootstrap's own selection can land in either order, and only the end state is stable.
- */
+// Await this root's selected state rather than infer it from an issued click or bootstrap sample.
 async function selectRootTab(tab: Locator): Promise<void> {
   if (!(await rootTabIsSelected(tab))) await tab.click();
-  // Still `aria-selected` on THIS tab, and nothing weaker. Treating "some trust dialog is open" as
-  // proof that the selection took would accept a dialog raised for a different root — and would
-  // answer it, which is how the caller below silently restricted the wrong workspace. `rootTab`
-  // keeps the attribute observable through the dialog, so the strict assertion needs no escape.
   await expect(tab).toHaveAttribute("aria-selected", "true", { timeout: ROOT_TAB_TIMEOUT_MS });
 }
 
-async function restrictBetaAndExpectAlphaTrusted(page: Page): Promise<void> {
-  const prompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
-  // Project bootstrap may focus either root when both registrations share the same timestamp, and
-  // WHICH one it focused decides whether Beta can be clicked at all. When bootstrap lands on Beta,
-  // Beta's trust prompt is already open — and it is `aria-modal`, so everything outside it leaves
-  // the accessibility tree. Role-based locators then resolve to nothing even though the tab is in
-  // the DOM and 235x32 pixels large: measured directly, `querySelector` finds the tablist in 3ms
-  // while `getByRole` reports "element(s) not found" for the entire timeout. That is the whole
-  // flake — not a slow bootstrap and not a sampling race, but a modal that legitimately hides the
-  // tab this step used to insist on clicking first.
-  //
-  // So the prompt is consulted BEFORE the tab. If it is already open, bootstrap focused Beta, the
-  // selection this function wanted has already happened, and clicking a tab that is not in the
-  // accessibility tree is both impossible and unnecessary.
-  if (!(await prompt.isVisible())) {
-    // Bootstrap focused Alpha instead: Beta is reachable, and selecting it raises its prompt.
-    await selectRootTab(rootTab(page, "M11 Root Beta"));
-  }
-  await expect(prompt).toBeVisible();
-  await prompt.getByRole("button", { name: "Stay restricted" }).click();
-  await expect(page.getByRole("note", { name: "Restricted Mode", exact: true })).toContainText(
-    "Restricted Mode",
+async function openTrustManagement(page: Page): Promise<void> {
+  await page.keyboard.press("ControlOrMeta+Shift+KeyP");
+  const query = page.getByRole("combobox", { name: "Command query" });
+  await query.fill(">Open Workspace Trust");
+  const option = page.getByRole("option").filter({ hasText: "Open Workspace Trust" });
+  await expect(option).toHaveCount(1);
+  await expect(option).toHaveAttribute("aria-selected", "true");
+  await expect(query).toBeFocused();
+  await query.press("Enter");
+  await expect(query).toBeHidden();
+  await expect(page.getByTestId("workspace-trust-panel")).toBeVisible();
+}
+
+function trustCard(page: Page, root: string): Locator {
+  return page.getByTestId("workspace-trust-root").filter({ hasText: root });
+}
+
+async function grantAlphaFromManagement(page: Page, root: string): Promise<void> {
+  const card = trustCard(page, root);
+  await expect(card).toHaveCount(1);
+  const trust = card.getByRole("button", { name: "Trust", exact: true });
+  await expect(trust).toBeEnabled();
+  await trust.click();
+  const response = page.waitForResponse(
+    (value) =>
+      value.request().method() === "POST" && value.url().endsWith("/api/editor/verification/trust"),
   );
+  await page
+    .getByRole("alertdialog", { name: "Trust this workspace?" })
+    .getByRole("button", { name: "Trust workspace", exact: true })
+    .click();
+  const confirmed = await response;
+  expect(confirmed.ok()).toBe(true);
+  expect((await confirmed.json()) as WorkspaceTrustStatus).toMatchObject({
+    projectId: root,
+    trust: "trusted",
+  });
+  await expect(card.locator("output[data-trust='trusted']")).toBeVisible();
+}
+
+async function keepBetaRestrictedFromManagement(page: Page, root: string): Promise<void> {
+  const card = trustCard(page, root);
+  await expect(card).toHaveCount(1);
+  await expect(card.locator("output[data-trust='restricted']")).toBeVisible();
+  const trust = card.getByRole("button", { name: "Trust", exact: true });
+  await expect(trust).toBeEnabled();
+  await trust.click();
+  await page
+    .getByRole("alertdialog", { name: "Trust this workspace?" })
+    .getByRole("button", { name: "Cancel", exact: true })
+    .click();
+  await expect(card.locator("output[data-trust='restricted']")).toBeVisible();
+  await expectRootTrust(page.request, root, "restricted");
+}
+
+async function restrictBetaAndExpectAlphaTrusted(
+  page: Page,
+  harness: CloseoutHarness,
+): Promise<void> {
+  await openTrustManagement(page);
+  await grantAlphaFromManagement(page, harness.alpha.root);
+  await keepBetaRestrictedFromManagement(page, harness.beta.root);
+  await clickWindowChromeButton(
+    page.getByRole("region", { name: /^Workspace Trust/u }),
+    "Close Workspace Trust window",
+  );
+  await selectRootTab(rootTab(page, "M11 Root Beta"));
+  await expect(page.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(0);
+  await expect(page.getByTestId("workspace-trust-banner-editor")).toHaveCount(0);
   await expect(
     page.getByRole("treeitem", { name: "M11 Root Beta" }).getByLabel("Restricted Mode"),
   ).toBeVisible();
-  await rootTab(page, "M11 Root Alpha").click();
-  await expect(prompt).toHaveCount(0);
+  await selectRootTab(rootTab(page, "M11 Root Alpha"));
   await expect(
     page.getByRole("treeitem", { name: "M11 Root Alpha" }).getByLabel("Trusted workspace"),
   ).toBeVisible();
+  await expectRootTrust(page.request, harness.alpha.root, "trusted");
 }
 
 async function switchProfile(
@@ -410,12 +431,12 @@ async function leaveUnsavedHotExitEdit(
   // product's own observable outcome — the dirty marker the same effect gates on — before dumping.
   await expect(pane.locator(`${EDITOR_SELECTORS.tab}[data-dirty="true"]`).first()).toBeVisible();
   // Restore the surface this journey still scans for accessibility further down.
-  await pane.getByRole("button", { name: "Open file history" }).click();
+  await openFileHistory(pane);
   await expect(page.locator("aside[aria-label='File history']")).toBeVisible();
 }
 
 async function restoreOldest(page: Page, pane: Locator): Promise<number> {
-  await pane.getByRole("button", { name: "Open file history" }).click();
+  await openFileHistory(pane);
   const rows = pane.locator("li[data-entry-ref]");
   await expect(rows).toHaveCount(2);
   const startedAt = Date.now();
@@ -428,6 +449,11 @@ async function restoreOldest(page: Page, pane: Locator): Promise<number> {
   expect((await restored).ok()).toBe(true);
   await expect(pane.locator("li[data-entry-ref]")).toHaveCount(3);
   return Date.now() - startedAt;
+}
+
+async function openFileHistory(pane: Locator): Promise<void> {
+  await pane.locator('summary[aria-label="More file actions"]').click();
+  await pane.getByRole("button", { name: "Open file history" }).click();
 }
 
 // The settings window opens on its Models tab. Scanning it in that state answers a question the
@@ -479,12 +505,16 @@ async function expectAxeGreen(page: Page, selector: string): Promise<void> {
  * the catalog read succeeded on the replaced page — a different property, and one this journey does
  * not control.
  */
-async function expectRootStillTrusted(request: APIRequestContext, root: string): Promise<void> {
+async function expectRootTrust(
+  request: APIRequestContext,
+  root: string,
+  trust: "trusted" | "restricted",
+): Promise<void> {
   const response = await request.get("/api/editor/verification/trust", {
     params: { projectId: root },
   });
   expect(response.ok(), await response.text()).toBe(true);
-  expect((await response.json()) as { readonly trust: string }).toMatchObject({ trust: "trusted" });
+  expect((await response.json()) as WorkspaceTrustStatus).toMatchObject({ projectId: root, trust });
 }
 
 async function prepareCloseoutJourney(
@@ -502,26 +532,21 @@ async function prepareCloseoutJourney(
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto("/");
   await openEditorWorkspace(page, { dismissTrustPrompt: false });
-  await restrictBetaAndExpectAlphaTrusted(page);
+  await restrictBetaAndExpectAlphaTrusted(page, harness);
   return { harness, switched: await switchProfile(page, harness.alpha.root, profileRef) };
 }
 
-async function reopenTrustedAlphaAfterProfileSwitch(page: Page, root: string): Promise<Locator> {
-  // The active root is server-owned and can legitimately start on either root after replacement.
-  // Clear only Beta's expected restricted prompt when Beta is active, then select Alpha explicitly
-  // and prove the profile switch preserved Alpha's server-owned grant.
-  const betaTab = rootTab(page, "M11 Root Beta");
-  if (await rootTabIsSelected(betaTab)) {
-    await page
-      .getByRole("alertdialog", { name: "Trust this workspace?" })
-      .getByRole("button", { name: "Stay restricted" })
-      .click();
-  }
+async function reopenTrustedAlphaAfterProfileSwitch(
+  page: Page,
+  harness: CloseoutHarness,
+): Promise<Locator> {
+  // Root selection stays prompt-free; replacing the page must preserve both server decisions.
   const alphaTab = rootTab(page, "M11 Root Alpha");
   await selectRootTab(alphaTab);
   const editor = await openEditorWorkspace(page, { dismissTrustPrompt: false });
   await expect(page.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(0);
-  await expectRootStillTrusted(page.request, root);
+  await expectRootTrust(page.request, harness.alpha.root, "trusted");
+  await expectRootTrust(page.request, harness.beta.root, "restricted");
   await editor.locator(`${EDITOR_SELECTORS.treeRow}[data-path="src"]`).click();
   await openTreeFile(editor, FILE);
   return editor;
@@ -536,7 +561,7 @@ test("mixed-trust multi-root, profile switching, and local-history restore compo
 }, testInfo) => {
   const { harness, switched } = await prepareCloseoutJourney(page);
   const journeyPage = switched.page;
-  const editor = await reopenTrustedAlphaAfterProfileSwitch(journeyPage, harness.alpha.root);
+  const editor = await reopenTrustedAlphaAfterProfileSwitch(journeyPage, harness);
   const pane = firstPane(editor);
   await saveVersion(journeyPage, pane, VERSION_ONE, harness.alpha.root);
   // Read the oldest checkpoint's content from disk instead of hard-coding it (the sibling #2531
