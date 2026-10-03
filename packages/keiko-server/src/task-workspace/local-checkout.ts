@@ -184,7 +184,12 @@ function currentBranch(root: string): string | undefined {
 }
 
 function localIdentity(root: string): string | undefined {
-  if (realpathSync(root) !== root || git(root, "rev-parse", "--show-toplevel") !== root) {
+  // Git for Windows prints forward slashes; compare canonical filesystem identities, not
+  // Git's presentation spelling. The selected root must still be canonical and repository-top.
+  if (
+    realpathSync(root) !== root ||
+    realpathSync(git(root, "rev-parse", "--show-toplevel")) !== root
+  ) {
     return undefined;
   }
   const gitdir = realpathSync(git(root, "rev-parse", "--absolute-git-dir"));

@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { parse } from "yaml";
 import { describe, expect, it } from "vitest";
 
@@ -97,7 +97,7 @@ function classify(steps) {
 function allGroups() {
   const groups = [];
   for (const path of [...collectYaml(WORKFLOW_DIR), ...collectYaml(ACTION_DIR)]) {
-    const label = relative(repoRoot, path);
+    const label = relative(repoRoot, path).split(sep).join("/");
     groups.push(...stepGroups(parse(readFileSync(path, "utf8")), label));
   }
   return groups;
@@ -210,8 +210,8 @@ describe("workflow Node toolchain parity", () => {
     // release-button run authorizes the commit, so the automation's github-actions[bot] dispatch
     // carries out an existing human decision instead of making one. The customer-shape release
     // qualification lane added for #3591 brings the setup-node total to 32; its independent
-    // macOS 15 pull-request replay brings the total to 33.
-    expect(withSetupNode).toHaveLength(33);
+    // macOS 15 pull-request replay brings the total to 33; the Windows gateway proof adds one.
+    expect(withSetupNode).toHaveLength(34);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

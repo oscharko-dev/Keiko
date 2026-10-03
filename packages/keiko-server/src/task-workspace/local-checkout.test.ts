@@ -2,9 +2,17 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { WorkspaceLifecycleEvidenceRecord } from "./evidence.js";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -79,12 +87,13 @@ function fixture(
 
 beforeEach(() => {
   lifecycleEvidence = [];
-  root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-local-checkout-")));
+  root = realpathSync(mkdtempSync(join(tmpdir(), "keiko local checkout-")));
   db = new DatabaseSync(":memory:");
   runMigrations(db);
   git("init", "-q", "-b", "main");
   git("config", "user.email", "test@example.invalid");
   git("config", "user.name", "Keiko Test");
+  git("config", "core.autocrlf", "false");
   writeFileSync(join(root, "README.md"), "fixture\n");
   git("add", "README.md");
   git("commit", "-qm", "fixture");
@@ -98,6 +107,53 @@ afterEach(() => {
 });
 
 describe("local checkout selection", () => {
+  it("binds Git's native top-level path spelling and preserves correlated lifecycle evidence", () => {
+    const gitRoot = git("rev-parse", "--show-toplevel");
+    expect(realpathSync(gitRoot)).toBe(root);
+    if (process.platform === "win32") {
+      expect(gitRoot).toContain("/");
+      expect(gitRoot).not.toBe(root);
+    }
+    const log = createBufferedServerLogSink();
+    const service = fixture(log);
+    const selected = service.selectLocal({
+      root,
+      branch: "main",
+      requestedBy: "test",
+      correlationId: "windows-path-binding",
+    });
+    expect(selected.binding.activeRoot).toBe(root);
+    expect(service.getActive()?.instance.workspaceId).toBe(selected.instance.workspaceId);
+    const line = log.events.find((event) => event.extra?.outcome === "activated");
+    expect(line).toMatchObject({
+      op: "task-workspace.lifecycle",
+      correlationId: "windows-path-binding",
+      extra: { operation: "activate", outcome: "activated" },
+    });
+    expectActivityLogProof("task-workspace.lifecycle.line", formatActivityLogProofLine(line ?? {}));
+    expect(JSON.stringify(line)).not.toContain(root);
+  });
+
+  it("still rejects a registered subdirectory rather than binding its parent repository", () => {
+    const nested = join(root, "nested");
+    mkdirSync(nested);
+    const service = fixture(undefined, nested);
+    expect(() =>
+      service.selectLocal({ root: nested, branch: "main", requestedBy: "test" }),
+    ).toThrow("The local checkout is unavailable.");
+    expect(service.getActive()).toBeUndefined();
+    expect(git("branch", "--show-current")).toBe("main");
+  });
+
+  it("still requires the registered root itself to be canonical", () => {
+    const noncanonical = `${root}${sep}.`;
+    const service = fixture(undefined, noncanonical);
+    expect(() =>
+      service.selectLocal({ root: noncanonical, branch: "main", requestedBy: "test" }),
+    ).toThrow("Select a registered repository.");
+    expect(service.getActive()).toBeUndefined();
+  });
+
   it("produces a Local trust identity accepted by the diagnostic ingest contract", () => {
     const { instance } = fixture().selectLocal({ root, branch: "main", requestedBy: "test" });
     expect(
