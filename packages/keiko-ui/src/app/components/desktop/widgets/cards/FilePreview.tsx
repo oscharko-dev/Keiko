@@ -314,7 +314,7 @@ function PreviewRevealNotice({
   revealLineStart,
   revealLineEnd,
   t,
-}: TextFilePreviewProps): ReactNode {
+}: Pick<TextFilePreviewProps, "lines" | "revealLineStart" | "revealLineEnd" | "t">): ReactNode {
   if (
     revealLineStart === undefined ||
     !Number.isSafeInteger(revealLineStart) ||

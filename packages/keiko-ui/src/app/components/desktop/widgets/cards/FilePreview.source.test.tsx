@@ -45,6 +45,23 @@ afterEach(() => {
 });
 
 describe("read-only cited source preview", () => {
+  it("keeps the measured size refusal ahead of a generic searchable-document hint", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      ...textPreview("/repo", "manual.pdf"),
+      kind: "binary",
+      extension: "pdf",
+      mime: "application/pdf",
+      sizeBytes: 12 * 1024 * 1024,
+      reason: "too_large",
+      maxBytes: 2 * 1024 * 1024,
+    });
+    render(<FilePreview root="/repo" path="manual.pdf" onClose={() => undefined} />);
+    expect(
+      await screen.findByText("Preview disabled because this file exceeds 2.00 MB."),
+    ).toBeVisible();
+    expect(screen.queryByText(/is searchable/)).toBeNull();
+  });
+
   it("keeps the revealed source region accessible with its range announcement", async () => {
     vi.mocked(fetchFilesPreview).mockResolvedValueOnce(
       textPreview("/repo", "manual.html", "first\nsecond\nthird\nfourth"),
