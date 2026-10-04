@@ -32,7 +32,10 @@ import {
   activityLogOperationSchema,
   ACTIVITY_LOG_ERROR_KINDS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { createDesktopSupportReport } from "./reader/support-desktop-report.js";
+import {
+  createDesktopSupportReport,
+  prepareManualSupportReportIncident,
+} from "./reader/support-desktop-report.js";
 import { parseSupportReport, analyzeSupportReport } from "./reader/support-report.js";
 
 import {
@@ -81,6 +84,25 @@ function persistFreshFailure(): void {
 }
 
 describe("rolling diagnostic candidate retention", () => {
+  it("does not sweep retained candidates when completing an unretained manual descriptor", () => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    ensureSupportIncidentDirectory(stateDir);
+    const policy = supportIncidentRetentionPolicy(stateDir);
+    for (let index = 0; index < policy.capacity; index += 1) {
+      expect(claimSupportIncidentSlot(stateDir, index, "a".repeat(32))).toBe(true);
+    }
+    const descriptor = prepareManualSupportReportIncident(stateDir, "transient-manual-report");
+    expect(descriptor).not.toHaveProperty("slotIndex");
+    const claims = listSupportIncidentClaims(stateDir);
+    const pins = listActivityLogDirectory(join(stateDir, "logs")).pins;
+    const listing = vi.spyOn(incidentStore, "listSupportIncidentEntries");
+
+    expect(completePreparedSupportIncident(stateDir, descriptor.incidentId)).toBe("not-found");
+    expect(listing).not.toHaveBeenCalled();
+    expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual(pins);
+  });
+
   it("does not retain a published pin when a manual candidate write fails", () => {
     vi.spyOn(incidentStore, "writeSupportIncidentRecord").mockImplementation(() => {
       throw new Error("simulated candidate publication failure");

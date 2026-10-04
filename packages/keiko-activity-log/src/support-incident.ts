@@ -585,6 +585,7 @@ interface CandidateDraft {
   // instead of pinning again. A rejected pre-pin can retry after admission; immediate protection
   // never retires another candidate before deduplication. Non-created outcomes release the pin.
   readonly prePinned?: SupportIncidentPin | undefined;
+  readonly sealedSegmentsBeforePin?: ReadonlySet<string> | undefined;
 }
 
 interface CandidateContext {
@@ -914,7 +915,9 @@ function pinIncidentWindow(
   candidate?: CandidateDraft,
 ): SupportIncidentPin {
   const window = supportIncidentWindow(nowMs);
-  const before = overlappingSealedSegmentNames(stateDir, window, correlationId);
+  const before =
+    candidate?.sealedSegmentsBeforePin ??
+    overlappingSealedSegmentNames(stateDir, window, correlationId);
   try {
     const pin = pinFromResult(
       requestIncidentPin({ stateDir, nowMs, correlationId, env, candidate }, allowRolling),
@@ -1484,6 +1487,7 @@ function retireSupportIncident(
   options: SupportIncidentOptions,
   state: "candidate" | "reported",
 ): SupportIncidentDismissal {
+  if (readSupportIncidentRecord(stateDir, incidentId) === undefined) return "not-found";
   const correlationId = options.correlationId ?? randomUUID();
   const open = sweepExpiredEntries(stateDir, options.nowMs ?? Date.now(), correlationId);
   const record = open.find((entry) => entry.incidentId === incidentId)?.record;
@@ -1756,8 +1760,23 @@ export function observeSupportIncidentTrigger(stateDir: string, event: ServerLog
     }
     if (admission.status !== "admitted") return;
     const nowMs = Date.now();
-    const draft = registeredFailureDraft(admission.evidence);
-    const pin = pinIncidentWindow(stateDir, nowMs, draft.evidenceCorrelationId, process.env, false);
+    const initial = registeredFailureDraft(admission.evidence);
+    const draft = {
+      ...initial,
+      sealedSegmentsBeforePin: overlappingSealedSegmentNames(
+        stateDir,
+        supportIncidentWindow(nowMs),
+        initial.evidenceCorrelationId,
+      ),
+    };
+    const pin = pinIncidentWindow(
+      stateDir,
+      nowMs,
+      draft.evidenceCorrelationId,
+      process.env,
+      false,
+      draft,
+    );
     pendingCandidates.push({ stateDir, draft: { ...draft, prePinned: pin }, nowMs });
     scheduleDrain();
   } catch (error) {

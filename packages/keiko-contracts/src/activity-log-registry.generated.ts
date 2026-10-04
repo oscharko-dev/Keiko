@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "6b9ace7aca0b5941d37d66d1127f73de33498f26a9c6447ffb14aa4b7227da2c" as const;
+  "d1dc76fbe360125df2d9e6e2f6219a9b23a9b77a145c94cd64a44fa064b40907" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -28782,6 +28782,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "store-unavailable",
           "record-too-large",
           "evaluation-rate-limited",
+          "delivery-capacity",
         ],
       },
       failureKind: {

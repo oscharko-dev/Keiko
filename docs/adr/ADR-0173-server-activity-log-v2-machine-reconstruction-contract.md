@@ -1591,7 +1591,10 @@ admission must succeed first. A newly admitted candidate whose immediate pin was
 through the existing owned-pin retention mechanism; a duplicate preserves the original candidate
 and its pin. Deduplication, quota admission, and the record write run outside the logging call and
 never transfer data. A duplicate or rejected candidate releases any pin its trigger already
-published instead of leaving it until its TTL. The residual race a synchronous publish cannot fully close on its own — a concurrent process's
+published instead of leaving it until its TTL. A queued candidate retains the original trigger-time
+sealed-segment snapshot when immediate protection is rejected; admission retries compare against
+that same snapshot, so evidence removed while the candidate was waiting remains observable.
+The residual race a synchronous publish cannot fully close on its own — a concurrent process's
 retention removing a sealed segment in the narrow gap between observing the window and the pin
 actually covering it — is detected by comparing that snapshot to the pin's own outcome and reported
 as the pin's `evidenceLostBeforePin`, so the window is never reported as a clean "pinned" when part

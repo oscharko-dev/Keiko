@@ -140,13 +140,7 @@ async function createReportResponse(
       headers: { "Cache-Control": "no-store" },
     };
   } catch (error) {
-    if (!(error instanceof SupportReportJobError)) throw error;
-    emitSupportReportFailed(ctx.correlationId, error);
-    const status = error.reason === "busy" ? 429 : 503;
-    return {
-      status,
-      body: errorBody("SUPPORT_REPORT_UNAVAILABLE", "Report unavailable.", ctx.correlationId),
-    };
+    return reportPreparationFailure(ctx, error);
   } finally {
     ctx.res.off("close", cancel);
   }
@@ -177,8 +171,24 @@ function clientOnlyReportResponse(
       headers: { "Cache-Control": "no-store" },
     };
   } catch (error) {
-    if (!(error instanceof SupportReportDeliveryCapacityError)) throw error;
-    emitSupportReportFailed(ctx.correlationId, new SupportReportJobError("busy", error));
-    return { status: 429, body: errorBody("RATE_LIMITED", "Try again later.", ctx.correlationId) };
+    return reportPreparationFailure(ctx, error);
   }
+}
+
+function reportPreparationFailure(ctx: RouteContext, error: unknown): RouteResult {
+  const capacity = error instanceof SupportReportDeliveryCapacityError;
+  const failure =
+    error instanceof SupportReportJobError
+      ? error
+      : new SupportReportJobError(capacity ? "busy" : "unavailable", error);
+  emitSupportReportFailed(
+    ctx.correlationId,
+    failure,
+    undefined,
+    capacity ? "delivery-capacity" : undefined,
+  );
+  return {
+    status: failure.reason === "busy" ? 429 : 503,
+    body: errorBody("SUPPORT_REPORT_UNAVAILABLE", "Report unavailable.", ctx.correlationId),
+  };
 }

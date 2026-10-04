@@ -612,6 +612,35 @@ describe("SupportIncident candidates", () => {
   });
 
   describe("the incident window pin", () => {
+    it("retains the trigger-time loss baseline when a rejected pin is retried after admission", () => {
+      createFileServerLogSink(stateDir).write(failureEvent({ correlationId: "prior-occurrence" }));
+      closeFileServerLogSinks();
+      const directory = join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME);
+      const sealedName = readdirSync(directory).find(
+        (name) => name.endsWith(".jsonl") && !name.endsWith(".active.jsonl"),
+      );
+      if (sealedName === undefined) throw new TypeError("Expected sealed trigger-time evidence");
+      vi.spyOn(serverLogModule, "pinActivityLogWindow").mockReturnValueOnce({
+        status: "rejected",
+        reason: "pin-limit-reached",
+      });
+      setSupportIncidentTriggerForTests(true);
+      observeSupportIncidentTrigger(
+        stateDir,
+        failureEvent({ correlationId: "deferred-pin-occurrence" }),
+      );
+      rmSync(join(directory, sealedName));
+      drainSupportIncidentCandidates();
+
+      const [record] = listSupportIncidents(stateDir, { readOnly: true });
+      expect(record?.pin).toMatchObject({ status: "pinned", evidenceLostBeforePin: true });
+      const line = expectActivityLogProof(
+        "support.incident.created.emitted-line",
+        lines("support.incident.created")[0] ?? "",
+      );
+      expect(line).toMatchObject({ evidenceLostBeforePin: true, completeness: "partial" });
+    });
+
     it("is already published before recordRegisteredFailureIncident returns", () => {
       const { record } = created(
         recordRegisteredFailureIncident(stateDir, {

@@ -207,6 +207,7 @@ const FAILED = defineActivityLogOperation({
         "store-unavailable",
         "record-too-large",
         "evaluation-rate-limited",
+        "delivery-capacity",
       ],
     },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
@@ -313,7 +314,9 @@ export function emitSupportReportFailed(
   correlationId: string | undefined,
   error: SupportReportJobError,
   parentCorrelationId?: string,
+  reasonOverride?: "delivery-capacity",
 ): void {
+  const reason = reasonOverride ?? error.reason;
   const event = activityLogEvent(
     FAILED,
     {
@@ -321,7 +324,7 @@ export function emitSupportReportFailed(
       errorKind: supportReportJobErrorKind(error),
     },
     {
-      reason: error.reason,
+      reason,
       failureKind: error.failureKind,
       ...(error.frames.length === 0 ? {} : { frames: error.frames }),
       ...(error.causeChain.length === 0 ? {} : { causeChain: error.causeChain }),
@@ -329,7 +332,7 @@ export function emitSupportReportFailed(
       loss: "none",
     },
   );
-  if (EXPECTED_REFUSALS.has(error.reason)) getServerLogger().warn(event);
+  if (EXPECTED_REFUSALS.has(reason)) getServerLogger().warn(event);
   else getServerLogger().error(event);
 }
 
@@ -340,6 +343,7 @@ const EXPECTED_REFUSALS = new Set([
   "quota-exhausted",
   "evaluation-rate-limited",
   "record-too-large",
+  "delivery-capacity",
 ]);
 
 function supportReportJobErrorKind(error: SupportReportJobError): ActivityLogErrorKind {

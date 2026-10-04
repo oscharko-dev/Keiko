@@ -7,6 +7,7 @@ import {
   recordUserReportedIncident,
 } from "@oscharko-dev/keiko-activity-log";
 import {
+  MAX_SUPPORT_REPORT_BYTES,
   parseSupportIncidentPrivateProjection,
   supportReportFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -15,6 +16,8 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { gunzipSync } from "node:zlib";
 import { handleDownloadSupportReport } from "./support-report-download.js";
+import * as reportDownload from "./support-report-download.js";
+vi.mock("./support-report-download.js", { spy: true });
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
@@ -88,6 +91,59 @@ afterEach(() => {
 });
 
 describe("desktop support report transport", () => {
+  it.each(["client-only", "server"])(
+    "records delivery-capacity rejection as a terminal failure for %s preparation",
+    async (scope) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const owner = deps(scope === "server");
+      if (scope === "client-only") {
+        reportDownload.cacheSupportReportDownload(owner, "protected-owner", {
+          fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+          reportJson: '"' + "x".repeat(MAX_SUPPORT_REPORT_BYTES - 2) + '"',
+        });
+      } else {
+        vi.mocked(runSupportReportJob).mockResolvedValue({
+          fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+          reportJson: "{}",
+        });
+        vi.mocked(reportDownload.cacheSupportReportDownload).mockImplementationOnce(() => {
+          throw new reportDownload.SupportReportDeliveryCapacityError();
+        });
+      }
+      const result = await handleCreateSupportReport(context("{}"), owner);
+      expect(result).toMatchObject({
+        status: 429,
+        body: { error: { code: "SUPPORT_REPORT_UNAVAILABLE", correlationId: "report-route-test" } },
+      });
+      const failures = sink.events.filter((event) => event.op === "support.report.ui.failed");
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.extra).toMatchObject({ reason: "delivery-capacity" });
+      expect(
+        expectActivityLogProof(
+          "support.report.ui.failed.lifecycle",
+          formatActivityLogProofLine(failures[0] ?? {}),
+        ),
+      ).toMatchObject({ reason: "delivery-capacity", errorKind: "rate-limited" });
+      expect(sink.events.some((event) => event.op === "support.report.ui.completed")).toBe(false);
+    },
+  );
+
+  it("records an unexpected post-worker artifact failure without revealing its private cause", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    vi.mocked(runSupportReportJob).mockResolvedValue({
+      fileName: "/private/customer-report.json",
+      reportJson: "{}",
+    });
+    expect(await handleCreateSupportReport(context("{}"), deps())).toMatchObject({ status: 503 });
+    const failures = sink.events.filter((event) => event.op === "support.report.ui.failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.extra).toMatchObject({ reason: "unavailable" });
+    expect(sink.lines().join("\n")).not.toContain("customer-report");
+    expect(sink.events.some((event) => event.op === "support.report.ui.completed")).toBe(false);
+  });
+
   it.each(["absent", "forged", "expired"])(
     "exports only a canonical limited artifact for a %s session without private evidence",
     async (state) => {
