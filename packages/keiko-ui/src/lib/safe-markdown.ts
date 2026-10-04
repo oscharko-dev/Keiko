@@ -648,7 +648,7 @@ function consumeParagraph(ctx: ParseContext): SafeMarkdownNode | null {
     ctx.i++;
   }
   if (paraLines.length === 0) return null;
-  return { kind: "paragraph", children: parseInline(paraLines.join(" ")) };
+  return { kind: "paragraph", children: parseInline(paraLines.join("\n")) };
 }
 
 // ---------------------------------------------------------------------------

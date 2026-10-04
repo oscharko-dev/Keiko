@@ -1369,6 +1369,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "grounded.summary.hybrid.knowledge.one": "{count} knowledge citation",
   "grounded.summary.hybrid.knowledge.other": "{count} knowledge citations",
   "grounded.warning.noEvidence": "No supporting evidence was found — this answer is not grounded.",
+  "grounded.search.empty": "No matching evidence was found for this search.",
+  "grounded.search.emptyCoverage":
+    "{scanned} / {eligible} eligible files searched across the search scopes. Overlapping scopes may count the same file more than once.",
   "grounded.warning.rerankerUnavailable":
     "Ranking: reranker unavailable — showing fused retrieval order.",
   "grounded.count.unsupportedCitation.one": "{count} unsupported citation",

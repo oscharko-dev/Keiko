@@ -52,7 +52,7 @@ import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/cont
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import { ClarificationNeededError } from "./grounded-orchestrator.js";
-import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
+import { connectedSearchNoEvidenceAnswer } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   parseGatewayConfig,
@@ -1484,54 +1484,55 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     expect(body.error.message).not.toContain("clarification needed:");
   });
 
-  it("returns no evidence without calling the model when connector retrieval returns zero references", async () => {
-    const { capsuleId: capA } = await seedReadyCapsule("Empty A Docs");
-    const { capsuleId: capB } = await seedReadyCapsule("Empty B Docs");
-    const chatId = makeHybridChat(
-      [],
-      [
-        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
-        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
-      ],
-    );
-    const connectorRetrieve: ConnectorRetrieve = () =>
-      Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" });
+  it.each(["What evidence exists?", "Welche Belege gibt es?"])(
+    "returns localized no evidence without calling the model for zero references: %s",
+    async (question) => {
+      const { capsuleId: capA } = await seedReadyCapsule("Empty A Docs");
+      const { capsuleId: capB } = await seedReadyCapsule("Empty B Docs");
+      const chatId = makeHybridChat(
+        [],
+        [
+          { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+          { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+        ],
+      );
+      const connectorRetrieve: ConnectorRetrieve = () =>
+        Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" });
 
-    const result = await handleGroundedAsk(
-      routeCtx(JSON.stringify({ chatId, content: "What evidence exists?" })),
-      hybridDeps(),
-      undefined,
-      undefined,
-      { connectorRetrieve, answer: throwingHybridAnswerer() },
-    );
+      const result = await handleGroundedAsk(
+        routeCtx(JSON.stringify({ chatId, content: question })),
+        hybridDeps(),
+        undefined,
+        undefined,
+        { connectorRetrieve, answer: throwingHybridAnswerer() },
+      );
 
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = asHybrid(result.body as GroundedAnswer);
-    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
-    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
-    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
-    // A deterministic abstention sent no prompt, so it reports no prompt context.
-    expect((result.body as GroundedAnswer).promptContext).toBeUndefined();
-    expect(answer.citations).toHaveLength(0);
-    expect(answer.knowledgeCitations).toHaveLength(0);
-    expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
-    expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(false);
-    expect(answer.retrievalActivity?.summary.unavailableCount).toBe(2);
-    expect(answer.retrievalActivity?.summary.referenceCount).toBe(0);
-    expect(answer.retrievalActivity?.summary.citationCount).toBe(0);
-    expect(answer.retrievalActivity?.pods).toHaveLength(2);
-    expect(answer.retrievalActivity?.pods.map((pod) => pod.state)).toEqual([
-      "unavailable",
-      "unavailable",
-    ]);
-    for (const pod of answer.retrievalActivity?.pods ?? []) {
-      expect(pod.reasonCodes).toContain("no-vectors");
-      expect(pod.counts.referenceCount).toBe(0);
-      expect(pod.counts.citationCount).toBe(0);
-    }
-    expect(auditKindsFor(capA)).toEqual(["retrieval-performed"]);
-    expect(auditKindsFor(capB)).toEqual(["retrieval-performed"]);
-  });
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      const answer = asHybrid(result.body as GroundedAnswer);
+      expect(answer.content).toBe(connectedSearchNoEvidenceAnswer(question));
+      // A deterministic abstention sent no prompt, so it reports no prompt context.
+      expect((result.body as GroundedAnswer).promptContext).toBeUndefined();
+      expect(answer.citations).toHaveLength(0);
+      expect(answer.knowledgeCitations).toHaveLength(0);
+      expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
+      expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(false);
+      expect(answer.retrievalActivity?.summary.unavailableCount).toBe(2);
+      expect(answer.retrievalActivity?.summary.referenceCount).toBe(0);
+      expect(answer.retrievalActivity?.summary.citationCount).toBe(0);
+      expect(answer.retrievalActivity?.pods).toHaveLength(2);
+      expect(answer.retrievalActivity?.pods.map((pod) => pod.state)).toEqual([
+        "unavailable",
+        "unavailable",
+      ]);
+      for (const pod of answer.retrievalActivity?.pods ?? []) {
+        expect(pod.reasonCodes).toContain("no-vectors");
+        expect(pod.counts.referenceCount).toBe(0);
+        expect(pod.counts.citationCount).toBe(0);
+      }
+      expect(auditKindsFor(capA)).toEqual(["retrieval-performed"]);
+      expect(auditKindsFor(capB)).toEqual(["retrieval-performed"]);
+    },
+  );
 
   // PR #3678 review: the entailment verdict line minted its own correlation, so the displayed
   // unsupported-claim total could not be joined to the grounded request it describes.
@@ -1816,9 +1817,9 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
-    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
-    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
+    expect(answer.content).toBe(
+      connectedSearchNoEvidenceAnswer("What do the skipped sources say?"),
+    );
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -3132,9 +3133,7 @@ describe("shared byte budget — oversized evidence fails closed", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
 
-    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
-    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
-    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
+    expect(answer.content).toBe(connectedSearchNoEvidenceAnswer("Budget question?"));
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -3739,8 +3738,12 @@ describe("hybrid folder budgets stay within the base cap (KEIKO-0174)", () => {
     for (const key of Object.keys(
       DEFAULT_EXPLORATION_BUDGET,
     ) as (keyof typeof DEFAULT_EXPLORATION_BUDGET)[]) {
-      const sum = observedBudgets.reduce((total, budget) => total + budget[key], 0);
       const cap = DEFAULT_EXPLORATION_BUDGET[key];
+      if (cap === null) {
+        expect(observedBudgets.map((budget) => budget[key])).toEqual([null, null, null]);
+        continue;
+      }
+      const sum = observedBudgets.reduce((total, budget) => total + (budget[key] ?? 0), 0);
       expect(
         sum,
         `dimension ${key} exceeded cap ${String(cap)} (sum=${String(sum)})`,

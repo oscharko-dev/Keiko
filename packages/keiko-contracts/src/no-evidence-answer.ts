@@ -28,6 +28,42 @@ import { findCitationMarkerGroups } from "./citation-markers.js";
 /** Longest answer (after whitespace collapse) that can still be read as a bare refusal. */
 export const NO_EVIDENCE_ANSWER_MAX_CHARS = 240;
 
+export const LEGACY_CONNECTED_SEARCH_ABSTENTION =
+  "I could not find evidence in the connected scope to answer this question. " +
+  "No answer is given because there is nothing to ground it in.";
+
+const CONNECTED_SEARCH_ABSTENTION_EN = "No matching evidence was found for this search.";
+const CONNECTED_SEARCH_ABSTENTION_DE = "Keine passenden Belege für diese Suche gefunden.";
+const CANONICAL_CONNECTED_SEARCH_ABSTENTIONS: ReadonlySet<string> = new Set([
+  LEGACY_CONNECTED_SEARCH_ABSTENTION,
+  CONNECTED_SEARCH_ABSTENTION_EN,
+  CONNECTED_SEARCH_ABSTENTION_DE,
+]);
+
+const GERMAN_QUERY_PATTERNS: readonly RegExp[] = [
+  /[äöüß]/iu,
+  /\b(?:bitte|was|wie|warum|welche|welcher|welches|wieviel|wieso)\b/iu,
+  /\b(?:erkläre|erklaere|zeige|gibt|ist|sind|der|die|das|den|dem|des)\b/iu,
+  /\b(?:und|oder|nicht|keine|kein|evidenz|belege|hinweise)\b/iu,
+];
+
+/** Shared language selection for deterministic system answers, independent of model invocation. */
+export function shouldUseGermanForSystemAnswer(question: string | undefined): boolean {
+  return question !== undefined && GERMAN_QUERY_PATTERNS.some((pattern) => pattern.test(question));
+}
+
+/** Reports a search outcome without claiming that an arbitrary fact is absent from the scope. */
+export function connectedSearchNoEvidenceAnswer(question?: string): string {
+  return shouldUseGermanForSystemAnswer(question)
+    ? CONNECTED_SEARCH_ABSTENTION_DE
+    : CONNECTED_SEARCH_ABSTENTION_EN;
+}
+
+/** Strict canonical recognition; arbitrary model refusals and additional claims are excluded. */
+export function isCanonicalConnectedSearchAbstention(text: string): boolean {
+  return CANONICAL_CONNECTED_SEARCH_ABSTENTIONS.has(text);
+}
+
 // Explicit "there is not enough evidence/information" statements. They stay unconditional (bar the
 // length and marker guards): no answer about a subject is phrased this way.
 const STOCK_REFUSAL_PATTERNS: readonly RegExp[] = [

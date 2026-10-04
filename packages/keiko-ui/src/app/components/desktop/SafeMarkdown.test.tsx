@@ -261,6 +261,51 @@ describe("SafeMarkdown — repository references", () => {
     expect(jsonReference.querySelector(".fi-img")).toHaveAttribute("src", "/assets/icons/json.svg");
   });
 
+  it.each([
+    "src/überprüfung/status.ts",
+    "src/u\u0308berpru\u0308fung/status.ts",
+    "Handbücher/Service Anleitung.html",
+    "Handbücher/Service  Anleitung.html",
+    "Handbücher/🔧.html",
+  ])("opens the exact complete citation path %s", (path) => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source={`Grüße [${path}:1-2].`}
+        repositoryRoots={[{ root: "/repo", label: "Manuals" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+    const reference = screen.getByRole("button", {
+      name: `Open ${path.replace(/ +/gu, " ")} at lines 1-2 in editor`,
+    });
+    expect(reference).toHaveAttribute("aria-label", `Open ${path} at lines 1-2 in editor`);
+    fireEvent.click(reference);
+    expect(openReference).toHaveBeenCalledWith({ root: "/repo", path, lineStart: 1, lineEnd: 2 });
+    expect(screen.getAllByRole("button", { name: /^Open / })).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("[src/überprü");
+  });
+
+  it.each([
+    "/private/status.ts",
+    "../private/status.ts",
+    "src/\u0001private/status.ts",
+    "src/\u202eprivate/status.ts",
+    "src/\t\tprivate/status.ts",
+    "src/\nprivate/status.ts",
+  ])("keeps an invalid citation path as text without clickable suffixes: %s", (path) => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source={`Evidence [${path}:1-2].`}
+        repositoryRoots={[{ root: "/repo", label: "Manuals" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /^Open / })).toBeNull();
+    expect(openReference).not.toHaveBeenCalled();
+  });
+
   it("renders root-level repository files and bracket citations as editor-open controls", () => {
     const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
     render(

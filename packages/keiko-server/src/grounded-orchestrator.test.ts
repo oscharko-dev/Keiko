@@ -77,7 +77,6 @@ import {
   type WorkspaceFileReader,
   type WorkspaceHardLinkPolicy,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
 import type { GitFileHistoryEvidenceProvider } from "./grounded-git-history-evidence.js";
 
 const NOW = 1_700_000_000_000;
@@ -1169,6 +1168,92 @@ describe("scanFirstSymbolLine", () => {
 });
 
 describe("runGroundedExploration", () => {
+  it("avoids unrelated graph and history work for a complete exact factual lookup in Git", async () => {
+    mkdirSync(join(ROOT, ".git"));
+    mkdirSync(join(ROOT, "src/überprüfung"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "src/überprüfung/status.ts"),
+      'export const LAB_UNICODE_MARKER = "Grüße aus dem Suchlabor";\n',
+    );
+    const history = vi.fn<GitFileHistoryEvidenceProvider>(() => Promise.resolve([]));
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Suche rekursiv nach der exakten Kennung LAB_UNICODE_MARKER. Welche Information steht dort? Nenne den tatsächlichen Unicode-Dateipfad und die belegte Zeile.",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        fs: nodeWorkspaceFs,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        gitFileHistoryEvidence: history,
+      },
+    );
+    const file = out.pack.files.find((entry) => entry.scopePath === "src/überprüfung/status.ts");
+    expect(file?.excerpts[0]?.content).toContain("Grüße aus dem Suchlabor");
+    expect(file?.excerpts[0]?.atom.lineRange?.startLine).toBe(1);
+    expect(out.pack.diagnostics?.coverage?.incomplete).toBe(false);
+    expect(out.pack.usage.searchCalls).toBe(1);
+    expect(history).not.toHaveBeenCalled();
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(false);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("preserves lexical incompleteness for an exact factual lookup in Git", async () => {
+    mkdirSync(join(ROOT, ".git"));
+    for (const name of ["first", "second"])
+      writeFileSync(
+        join(ROOT, "src", `${name}.ts`),
+        'export const LAB_UNICODE_MARKER = "value";\n',
+      );
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Find the exact identifier LAB_UNICODE_MARKER and its value.",
+          maxResults: 1,
+        }),
+      }),
+      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+    );
+    expect(out.pack.diagnostics?.coverage?.incomplete).toBe(true);
+    expect(out.pack.diagnostics?.coverage?.reasons).toContain("match-cap");
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(true);
+  });
+
+  it.each([
+    "Which functions reference the exact identifier LAB_UNICODE_MARKER?",
+    "Show recent git history for the exact identifier LAB_UNICODE_MARKER.",
+  ])(
+    "preserves explicitly requested relationship and history work in Git: %s",
+    async (question) => {
+      mkdirSync(join(ROOT, ".git"));
+      writeFileSync(join(ROOT, "src/status.ts"), 'export const LAB_UNICODE_MARKER = "value";\n');
+      const history = vi.fn<GitFileHistoryEvidenceProvider>(() => Promise.resolve([]));
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({ text: question }),
+        }),
+        {
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+          gitFileHistoryEvidence: history,
+        },
+      );
+      expect(out.pack.usage.searchCalls).toBeGreaterThan(1);
+      expect(history).toHaveBeenCalled();
+      expect(out.pack.files.some((file) => file.scopePath === "src/status.ts")).toBe(true);
+    },
+  );
+
   it.each(["chapters/35/page-3599.html", "build/service.html", "dist/service.html"])(
     "prioritizes an independently named HTML marker in %s over query prose",
     async (path) => {
@@ -3542,31 +3627,40 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("RB-4 (GEN-AI-GROUNDING-002/-003): abstains BEFORE the model call on empty evidence", async () => {
-    let answererCalled = false;
-    const trackingAnswerer: GroundedAnswerer = {
-      answer: () => {
-        answererCalled = true;
-        return Promise.resolve("A confident but ungrounded fabricated answer.");
-      },
-    };
-    const out = await runGroundedExploration(
-      input({
-        scope: happyScope({ kind: "files", relativePaths: ["src/bar.ts"] }),
-        query: happyQuery({ text: "Investigate `CompletelyMissingSymbol`" }),
-      }),
-      {
-        correlationId: undefined,
-        answerer: trackingAnswerer,
-        nowMs: () => NOW,
-        detectWorkspace: () => fakeWorkspace(),
-      },
-    );
-    expect(answererCalled).toBe(false);
-    expect(out.noEvidence).toBe(true);
-    expect(out.assistantContent).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
-    expect(out.pack.files).toEqual([]);
-  });
+  it.each([
+    ["Investigate `CompletelyMissingSymbol`", "No matching evidence was found for this search."],
+    [
+      "Ist `CompletelyMissingSymbol` vorhanden?",
+      "Keine passenden Belege für diese Suche gefunden.",
+    ],
+  ])(
+    "RB-4: localizes empty-evidence abstention before the model call: %s",
+    async (text, expected) => {
+      let answererCalled = false;
+      const trackingAnswerer: GroundedAnswerer = {
+        answer: () => {
+          answererCalled = true;
+          return Promise.resolve("A confident but ungrounded fabricated answer.");
+        },
+      };
+      const out = await runGroundedExploration(
+        input({
+          scope: happyScope({ kind: "files", relativePaths: ["src/bar.ts"] }),
+          query: happyQuery({ text }),
+        }),
+        {
+          correlationId: undefined,
+          answerer: trackingAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+      expect(answererCalled).toBe(false);
+      expect(out.noEvidence).toBe(true);
+      expect(out.assistantContent).toBe(expected);
+      expect(out.pack.files).toEqual([]);
+    },
+  );
 
   it("answers from explicit governed personal context without projecting source evidence", async () => {
     let receivedQuestion = "";

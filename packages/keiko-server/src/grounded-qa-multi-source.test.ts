@@ -821,6 +821,47 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answerQuestion).toContain("Prefer concise answers");
   });
 
+  it.each([
+    ["Find CompletelyMissingSymbol", "No matching evidence was found for this search."],
+    ["Ist CompletelyMissingSymbol vorhanden?", "Keine passenden Belege für diese Suche gefunden."],
+  ])(
+    "localizes an empty multi-source search without calling the model: %s",
+    async (content, expected) => {
+      const scopes: ChatConnectedScope[] = ["src/a.ts", "src/b.ts"].map((path, index) => ({
+        kind: "directory",
+        relativePaths: [path],
+        connectedAtMs: NOW,
+        root: tempRoot(`empty-search-${String(index)}`),
+      }));
+      const chat = store.findChatById(makeChat(scopes));
+      if (chat === undefined) throw new TypeError("chat fixture missing");
+      const packs = new Map(
+        scopes.map((scope) => {
+          const path = scope.relativePaths[0] ?? "";
+          return [path, { ...scopePack(path, 0.5, path), files: [], omitted: [] }] as const;
+        }),
+      );
+      const result = await runMultiSourceAsk({
+        chat,
+        scopes,
+        content,
+        modelId: CHAT_MODEL,
+        contextProfile: undefined,
+        deps: recordingDeps([]),
+        retriever: packPerScope(packs),
+        answerer: () => {
+          throw new TypeError("empty search must not invoke the model");
+        },
+        signal: new AbortController().signal,
+      });
+      expect(result.status).toBe(200);
+      const body = result.body as GroundedAnswer;
+      expect(body.content).toBe(expected);
+      expect(body.citations).toHaveLength(0);
+      expect(body.evidenceRunId).toBeUndefined();
+    },
+  );
+
   it("keeps a memory-only answer ungrounded when every source has no evidence", async () => {
     const scopes: ChatConnectedScope[] = [
       {

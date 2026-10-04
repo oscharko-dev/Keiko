@@ -1422,6 +1422,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "grounded.summary.hybrid.knowledge.other": "{count} Knowledge-Quellenangaben",
   "grounded.warning.noEvidence":
     "Es wurde keine stützende Evidenz gefunden — diese Antwort ist nicht belegt.",
+  "grounded.search.empty": "Keine passenden Belege für diese Suche gefunden.",
+  "grounded.search.emptyCoverage":
+    "{scanned} / {eligible} zulässige Dateien durchsucht. Überlappende Suchbereiche können dieselbe Datei mehrfach zählen.",
   "grounded.warning.rerankerUnavailable":
     "Ranking: Reranker nicht verfügbar — es wird die zusammengeführte Suchreihenfolge angezeigt.",
   "grounded.count.unsupportedCitation.one": "{count} nicht belegte Quellenangabe",

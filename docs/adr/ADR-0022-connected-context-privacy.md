@@ -142,6 +142,11 @@ source bytes are processed with bounded concurrency, and only bounded best match
 summaries survive the scan. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
 Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
+The shared size-admitted decoder accepts UTF-8, BOM or recognizable-pattern UTF-16LE/BE, and declared
+legacy HTML labels that normalize to UTF-8 or Windows-1252. HTML declarations are inspected within
+the first 1,024 bytes; `http-equiv` charset parameters are case-insensitive, and standard aliases such
+as `iso_8859-1` resolve through the platform decoder. Unsupported declared codecs are excluded rather
+than guessed. Whole-file NUL/control checks still apply after decoding, including files with a BOM.
 Files above the 2 MiB eligibility ceiling remain visible as excluded candidates and skipped counts;
 they do not make an otherwise complete eligible-text scan incomplete. An explicitly narrower
 caller byte cap still reports incomplete coverage when it excludes otherwise eligible text.
@@ -169,6 +174,9 @@ evidence. When distinct explicit anchors identify different candidate paths, bou
 prioritizes coverage of those paths before additional alternatives for an already covered anchor.
 Ordinary-folder factual
 HTML/text lookups and complete literal absences avoid unrelated code-graph augmentation;
+complete explicit exact fact lookups also avoid optional graph/history work in Git folders,
+including facts stored in source-code files. Incomplete lexical evidence and explicitly requested
+definitions, relationships, and history retain their existing retrieval and uncertainty behavior.
 Git-history discovery is not attempted for a folder without Git unless the question requests
 history or relationships. Requested definition, relationship, and history evidence retains its
 existing retrieval path and reports genuine unavailability.

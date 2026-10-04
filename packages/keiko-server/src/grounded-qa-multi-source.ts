@@ -65,7 +65,7 @@ import {
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
 import {
-  GROUNDED_NO_EVIDENCE_ANSWER,
+  connectedSearchNoEvidenceAnswer,
   buildPackCitationIndex,
   citationSourceIdForIndex,
   incompleteAnswerMarker,
@@ -1241,7 +1241,7 @@ async function answerMultiSource(
   ensureNotCancelled(ctx.signal);
   if (abstained && ctx.answerOnlyContextAvailable !== true) {
     return {
-      content: GROUNDED_NO_EVIDENCE_ANSWER,
+      content: connectedSearchNoEvidenceAnswer(ctx.content),
       usage: { promptTokens: 0, completionTokens: 0 },
     };
   }

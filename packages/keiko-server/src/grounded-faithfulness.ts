@@ -32,21 +32,19 @@ import {
   citationMarkerIndices,
   findCitationMarkerGroups,
   markdownCodeRanges,
+  type MarkdownCodeRange,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
-import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
+import {
+  LEGACY_CONNECTED_SEARCH_ABSTENTION,
+  isNoEvidenceAnswerText,
+} from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
+export { connectedSearchNoEvidenceAnswer } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
-// Deterministic no-evidence answer used when the folder/multi-source path abstains BEFORE the
-// model call. Kept generic (no scope path) so it is safe to display and speak verbatim.
-// Source-neutral on purpose: this constant is now shared by the folder, multi-source AND
-// hybrid topologies (KEIKO-0196), and a hybrid scope may contain only knowledge-capsule
-// connectors with no repository scope searched at all. Naming "repository evidence" there
-// would report on a source that was never queried, so the wording states only what is
-// true of every topology — nothing in the connected scope matched.
-export const GROUNDED_NO_EVIDENCE_ANSWER =
-  "I could not find evidence in the connected scope to answer this question. " +
-  "No answer is given because there is nothing to ground it in.";
+// Preserve the legacy source-neutral response for stored answers and historical evaluation
+// fixtures. Current folder, multi-source and hybrid producers share the localized builder above.
+export const GROUNDED_NO_EVIDENCE_ANSWER = LEGACY_CONNECTED_SEARCH_ABSTENTION;
 
 // ─── Evidence-presence predicates ─────────────────────────────────────────────
 
@@ -170,6 +168,37 @@ function citationDedupKey(citation: ParsedInlineCitation): string {
   return `${citation.sourceId ?? "*"}:${citation.scopePath}@${range}`;
 }
 
+function skipCompletedCodeRanges(
+  code: readonly MarkdownCodeRange[],
+  from: number,
+  offset: number,
+): number {
+  let next = from;
+  let range = code[next];
+  while (range !== undefined && range.end <= offset) {
+    next += 1;
+    range = code[next];
+  }
+  return next;
+}
+
+function appendBracketCitations(
+  inner: string,
+  seen: Set<string>,
+  out: ParsedInlineCitation[],
+): void {
+  // A single bracket may hold several comma-separated refs: `[a.ts:1-2, b.ts:3]`.
+  for (const part of inner.split(",")) {
+    const citation = parseCitationToken(part.trim());
+    if (citation === undefined) continue;
+    const dedupKey = citationDedupKey(citation);
+    if (!seen.has(dedupKey)) {
+      seen.add(dedupKey);
+      out.push(citation);
+    }
+  }
+}
+
 /** Parse the inline `[path:line]` / `[path:start-end]` / `[path]` markers from an answer. */
 export function parseInlineCitations(answerText: string): readonly ParsedInlineCitation[] {
   const out: ParsedInlineCitation[] = [];
@@ -177,27 +206,10 @@ export function parseInlineCitations(answerText: string): readonly ParsedInlineC
   const code = markdownCodeRanges(answerText);
   let nextCode = 0;
   for (const match of answerText.matchAll(BRACKET_RE)) {
-    while (code[nextCode] !== undefined && (code[nextCode]?.end ?? 0) <= match.index) {
-      nextCode += 1;
-    }
+    nextCode = skipCompletedCodeRanges(code, nextCode, match.index);
     if ((code[nextCode]?.start ?? Number.POSITIVE_INFINITY) <= match.index) continue;
-    if (isMarkdownLink(answerText, match)) {
-      continue;
-    }
-    const inner = match[1]?.trim() ?? "";
-    // A single bracket may hold several comma-separated refs: `[a.ts:1-2, b.ts:3]`.
-    for (const part of inner.split(",")) {
-      const citation = parseCitationToken(part.trim());
-      if (citation === undefined) {
-        continue;
-      }
-      const dedupKey = citationDedupKey(citation);
-      if (seen.has(dedupKey)) {
-        continue;
-      }
-      seen.add(dedupKey);
-      out.push(citation);
-    }
+    if (isMarkdownLink(answerText, match)) continue;
+    appendBracketCitations(match[1]?.trim() ?? "", seen, out);
   }
   return out;
 }

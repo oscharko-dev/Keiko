@@ -12,6 +12,8 @@ import {
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
 
+const { URL, fetch, TextDecoder, setTimeout } = globalThis;
+
 describe("customer-shape LiteLLM twin", () => {
   it("requires the configured custom authentication header for chat", async () => {
     const twin = await startCustomerShapeLiteLlmTwin();
@@ -419,6 +421,24 @@ describe("synthetic gateway transport profile", () => {
       }),
     };
   }
+
+  it("keeps basic readiness valid before exercising a truncated interactive stream", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true });
+    const url = `${new URL(twin.baseUrl).origin}/partial/v1/chat/completions`;
+    try {
+      const buffered = await fetch(url, fixtureRequest(false));
+      expect(buffered.headers.get("content-type")).toBe("application/json");
+      const payload = await buffered.json();
+      expect(payload.choices[0].message.content).toContain("transport test completed");
+      const streaming = await fetch(url, fixtureRequest(true));
+      const partial = await streaming.text();
+      expect(partial).toContain("Synthetic partial reply.");
+      expect(partial).not.toContain("[DONE]");
+      expect(twin.requests).toHaveLength(2);
+    } finally {
+      await twin.close();
+    }
+  });
 
   it("delays headers and reports transport metadata without recording prompt content", async () => {
     const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 25 });

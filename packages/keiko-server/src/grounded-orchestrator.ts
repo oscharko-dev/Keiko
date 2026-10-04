@@ -124,7 +124,7 @@ import {
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
 import {
-  GROUNDED_NO_EVIDENCE_ANSWER,
+  connectedSearchNoEvidenceAnswer,
   buildPackCitationIndex,
   incompleteAnswerMarker,
   missingCitationMarkerFor,
@@ -1847,6 +1847,29 @@ function elapsedDeadlineStop(
 }
 
 const DOCUMENT_EVIDENCE_PATH_RE = /\.(?:html?|txt|rst|adoc|xml)$/iu;
+const EXPLICIT_LITERAL_LOOKUP_RE =
+  /\b(?:exact(?:ly)?|literal(?:ly)?|exakt(?:e[nmrs]?)?|wörtlich(?:e[nmrs]?)?)\b/iu;
+
+function isCompleteExactLiteralLookup(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  diagnostics: ContextPackDiagnostics | undefined,
+): boolean {
+  const coverage = diagnostics?.coverage;
+  const hasLiteralTarget = anchors.some(
+    (anchor) =>
+      anchor.kind === "quoted" ||
+      (anchor.kind === "identifier" && anchor.weight >= 0.85 && anchor.term.includes("_")),
+  );
+  return (
+    (query.kind === "exact-symbol" ||
+      (EXPLICIT_LITERAL_LOOKUP_RE.test(query.text) && hasLiteralTarget)) &&
+    coverage?.incomplete === false &&
+    coverage.matchesReturned > 0 &&
+    !requiresRelationshipOrHistoryRings(query) &&
+    directDefinitionSymbol(query, anchors) === undefined
+  );
+}
 
 function isOrdinaryDocumentLookup(
   query: RetrievalQuery,
@@ -1889,6 +1912,11 @@ function optionalRingIsUnneeded(
   diagnostics: ContextPackDiagnostics | undefined,
 ): boolean {
   if (requiresRelationshipOrHistoryRings(inputs.query)) return false;
+  if (
+    ring.kind !== "lexical" &&
+    isCompleteExactLiteralLookup(inputs.query, inputs.anchors, diagnostics)
+  )
+    return true;
   if (ring.kind === "git-history") return !inputs.hasGitMetadata;
   return (
     ring.kind === "structural" &&
@@ -4986,6 +5014,7 @@ function ordinaryLookupNeedsNoAugmentation(
   rings: RingRunSummary,
 ): boolean {
   return (
+    isCompleteExactLiteralLookup(args.input.query, args.plan.anchors, rings.diagnostics) ||
     isOrdinaryDocumentLookup(args.input.query, args.hasGitMetadata, rings.diagnostics) ||
     isOrdinaryLiteralAbsence(
       args.input.query,
@@ -6877,7 +6906,7 @@ export async function runGroundedExploration(
     const elapsedMs = Math.max(0, nowMs() - start);
     return {
       pack,
-      assistantContent: GROUNDED_NO_EVIDENCE_ANSWER,
+      assistantContent: connectedSearchNoEvidenceAnswer(input.query.text),
       elapsedMs,
       plan,
       noEvidence: true,

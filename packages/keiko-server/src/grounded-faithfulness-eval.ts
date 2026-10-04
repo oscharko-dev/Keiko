@@ -15,6 +15,7 @@ import {
   reconcileInlineCitations,
   type PackCitationIndex,
 } from "./grounded-faithfulness.js";
+import { isCanonicalConnectedSearchAbstention } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { buildEvalContextPack, evalFileEntry, evalUncertainty } from "./grounded-eval-support.js";
 import type {
   ConnectedContextPack,
@@ -191,7 +192,7 @@ export function isGroundedEmptyEvidenceAbstention(
   pack: ConnectedContextPack,
   answerText: string,
 ): boolean {
-  return !packHasUsableEvidence(pack) && answerText === GROUNDED_NO_EVIDENCE_ANSWER;
+  return !packHasUsableEvidence(pack) && isCanonicalConnectedSearchAbstention(answerText);
 }
 
 function emptyEvidenceVariantMatched(fixture: FaithfulnessFixture): boolean {

@@ -1,6 +1,41 @@
 import { describe, expect, it } from "vitest";
 
-import { NO_EVIDENCE_ANSWER_MAX_CHARS, isNoEvidenceAnswerText } from "./no-evidence-answer.js";
+import {
+  NO_EVIDENCE_ANSWER_MAX_CHARS,
+  connectedSearchNoEvidenceAnswer,
+  isCanonicalConnectedSearchAbstention,
+  isNoEvidenceAnswerText,
+} from "./no-evidence-answer.js";
+
+describe("connected search abstention", () => {
+  it.each([
+    ["Ist ExactMissingProbe enthalten?", "Keine passenden Belege für diese Suche gefunden."],
+    ["Find ExactMissingProbe", "No matching evidence was found for this search."],
+  ])("mirrors the question language without asserting universal absence: %s", (question, text) => {
+    const result = connectedSearchNoEvidenceAnswer(question);
+    expect(result).toBe(text);
+    expect(isCanonicalConnectedSearchAbstention(result)).toBe(true);
+    expect(isNoEvidenceAnswerText(result)).toBe(true);
+  });
+
+  it("recognizes the legacy English deterministic response", () => {
+    expect(
+      isCanonicalConnectedSearchAbstention(
+        "I could not find evidence in the connected scope to answer this question. " +
+          "No answer is given because there is nothing to ground it in.",
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "This project does not support OAuth.",
+    "Keine passenden Belege für diese Suche gefunden. OAuth is disabled.",
+    "No matching evidence was found for this search. [1]",
+    "No evidence found in the supplied citations.",
+  ])("does not certify arbitrary model refusals or additional claims: %s", (text) => {
+    expect(isCanonicalConnectedSearchAbstention(text)).toBe(false);
+  });
+});
 
 describe("isNoEvidenceAnswerText", () => {
   it.each([

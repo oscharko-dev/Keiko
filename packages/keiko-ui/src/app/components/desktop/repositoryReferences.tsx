@@ -11,6 +11,8 @@ import {
 } from "react";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { FileIcon } from "./widgets/shared/projectTree";
+import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
 export interface RepositoryReference {
   readonly label: string;
@@ -50,12 +52,16 @@ export interface RepositoryReferenceTextPart {
 //     bound is raised generously — to 1000 — so that no realistic repository path can ever reach
 //     the ceiling, while staying finite so the retry cost above stays a bounded constant and static
 //     analysis still recognizes the quantifier as bounded.
-const REPOSITORY_REFERENCE_SEGMENT = "[A-Za-z0-9_.-]{1,255}";
+const REPOSITORY_REFERENCE_SEGMENT = String.raw`[\p{L}\p{N}\p{M}_.-]{1,255}`;
 const REPOSITORY_REFERENCE_PATH_CORE = String.raw`(?:${REPOSITORY_REFERENCE_SEGMENT}\/){0,1000}${REPOSITORY_REFERENCE_SEGMENT}\.[A-Za-z0-9][A-Za-z0-9]{0,15}`;
 const REPOSITORY_REFERENCE_PATTERN = new RegExp(
-  String.raw`@?(${REPOSITORY_REFERENCE_PATH_CORE})(?::(\d{1,7})(?:-(\d{1,7}))?)?`,
+  String.raw`\[[^\]]{1,4096}\]|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?::(\d{1,7})(?:-(\d{1,7}))?)?`,
   "gu",
 );
+// Exact/bracketed references have a known boundary, so their filenames may contain spaces or
+// other Unicode characters. The shared portable-path contract still owns path validity.
+const EXACT_REPOSITORY_REFERENCE_PATTERN =
+  /^@?([^:[\]\r\n]{1,4096})(?::(\d{1,7})(?:-(\d{1,7}))?)?$/u;
 const REPOSITORY_REFERENCE_SOURCE = String.raw`@?${REPOSITORY_REFERENCE_PATH_CORE}(?::\d{1,7}(?:-\d{1,7})?)?`;
 const REPOSITORY_REFERENCE_IN_BRACKETS_PATTERN = new RegExp(
   String.raw`\[\s*(${REPOSITORY_REFERENCE_SOURCE})\s*\]`,
@@ -135,14 +141,14 @@ const KNOWN_REPOSITORY_EXTENSIONS = new Set([
 
 function boundaryBefore(value: string, index: number): boolean {
   if (index <= 0) return true;
-  const previous = value[index - 1] ?? "";
-  return !/[A-Za-z0-9_./:@-]/u.test(previous);
+  const previous = value.slice(Math.max(0, index - 2), index);
+  return !/[\p{L}\p{N}\p{M}\p{S}_./:@-]$/u.test(previous);
 }
 
 function boundaryAfter(value: string, index: number): boolean {
   if (index >= value.length) return true;
-  const next = value[index] ?? "";
-  return !/[A-Za-z0-9_/:+-]/u.test(next);
+  const next = value.slice(index, index + 2);
+  return !/^[\p{L}\p{N}\p{M}\p{S}_/:+-]/u.test(next);
 }
 
 // Plain string scans (not regexes) for leading/trailing slash trimming: an unanchored-at-start
@@ -179,13 +185,22 @@ function collapseDuplicateReferences(first: string, second: string, fallback: st
   return firstIdentity !== null && firstIdentity === secondIdentity ? first : fallback;
 }
 
-function tidyEvidenceText(source: string): string {
+function tidyEvidenceProse(source: string): string {
   // The first pass already collapses every run of 2+ space/tab characters down to a single " ",
   // so by the time the second pass runs, no two space/tab characters can ever be adjacent. The
   // trailing `+` in the second pass therefore only ever matches 0 or 1 characters in practice;
   // dropping it removes the unbounded-quantifier-next-to-a-group shape S8786 flags, with no
   // behavior change given that invariant.
   return source.replace(/[ \t]{2,}/gu, " ").replace(/[ \t]([,.;:!?])/gu, "$1");
+}
+
+function tidyEvidenceText(source: string): string {
+  // Keep bracket contents byte-for-byte: whitespace can be part of a real filename, and
+  // converting controls to spaces could invent a different valid citation path.
+  return source
+    .split(/(\[[^\]]{1,4096}\])/gu)
+    .map((part) => (part.startsWith("[") && part.endsWith("]") ? part : tidyEvidenceProse(part)))
+    .join("");
 }
 
 // Grounded model answers sometimes echo evidence as:
@@ -210,16 +225,19 @@ export function sanitizeRepositoryEvidenceText(source: string): string {
   );
 }
 
+function isSafeRawReferencePath(path: string): boolean {
+  return (
+    isPortableWorkspaceRelativePath(path) &&
+    stripUnsafeFormatChars(path) === path &&
+    !/\p{Cc}/u.test(path)
+  );
+}
+
 function validRepositoryPath(path: string): boolean {
-  const normalized = normalizeReferencePath(path);
-  if (normalized.length === 0 || normalized !== path) return false;
-  if (normalized.startsWith(".") || normalized.includes("..")) return false;
-  if (!normalized.includes(".")) return false;
-  const segments = normalized.split("/");
-  if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
-    return false;
-  }
-  const filename = segments.at(-1) ?? "";
+  if (!isSafeRawReferencePath(path)) return false;
+  if (path.startsWith(".") || path.includes("..")) return false;
+  if (!path.includes(".")) return false;
+  const filename = path.split("/").at(-1) ?? "";
   const extension = filename.split(".").pop()?.toLowerCase() ?? "";
   return KNOWN_REPOSITORY_EXTENSIONS.has(extension);
 }
@@ -236,7 +254,7 @@ function referenceFromMatch(match: RegExpExecArray, source: string): RepositoryR
   if (!boundaryBefore(source, matchIndex) || !boundaryAfter(source, matchIndex + raw.length)) {
     return null;
   }
-  const path = normalizeReferencePath(match[1] ?? "");
+  const path = match[1] ?? "";
   if (!validRepositoryPath(path)) return null;
   const lineStart = parseLine(match[2]);
   const rawLineEnd = parseLine(match[3]);
@@ -250,6 +268,42 @@ function referenceFromMatch(match: RegExpExecArray, source: string): RepositoryR
   };
 }
 
+function referencesFromTextMatch(
+  match: RegExpExecArray,
+  source: string,
+): readonly RepositoryReference[] {
+  const token = match[0] ?? "";
+  if (!token.startsWith("[")) {
+    const reference = referenceFromMatch(match, source);
+    return reference === null ? [] : [reference];
+  }
+  // Consume invalid bracketed paths atomically, never linking their relative-looking suffix.
+  const contents = token.slice(1, -1);
+  if (/\p{Cc}/u.test(contents)) return [];
+  const reference = parseExactRepositoryReference(contents.trim(), true);
+  if (reference !== null) return [reference];
+  // A valid comma-bearing filename wins above. Lists need an explicit line range on every
+  // member, and every member must validate before any link is exposed.
+  const members = contents.split(",");
+  if (members.length < 2) return [];
+  const references: RepositoryReference[] = [];
+  for (const member of members) {
+    const parsed = parseExactRepositoryReference(member.trim(), true);
+    if (parsed?.lineStart === undefined) return [];
+    references.push(parsed);
+  }
+  return references;
+}
+
+function referenceParts(references: readonly RepositoryReference[]): RepositoryReferenceTextPart[] {
+  const parts: RepositoryReferenceTextPart[] = [];
+  for (const reference of references) {
+    if (parts.length > 0) parts.push({ kind: "text", text: ", " });
+    parts.push({ kind: "reference", reference });
+  }
+  return parts;
+}
+
 export function repositoryReferenceTextParts(
   source: string,
 ): readonly RepositoryReferenceTextPart[] {
@@ -259,12 +313,12 @@ export function repositoryReferenceTextParts(
   for (;;) {
     const match = REPOSITORY_REFERENCE_PATTERN.exec(source);
     if (match === null) break;
-    const reference = referenceFromMatch(match, source);
-    if (reference === null) continue;
+    const references = referencesFromTextMatch(match, source);
+    if (references.length === 0) continue;
     if (match.index > lastIndex) {
       parts.push({ kind: "text", text: source.slice(lastIndex, match.index) });
     }
-    parts.push({ kind: "reference", reference });
+    parts.push(...referenceParts(references));
     lastIndex = match.index + (match[0]?.length ?? 0);
   }
   if (lastIndex === 0) return [{ kind: "text", text: source }];
@@ -272,9 +326,12 @@ export function repositoryReferenceTextParts(
   return parts;
 }
 
-export function parseExactRepositoryReference(source: string): RepositoryReference | null {
-  REPOSITORY_REFERENCE_PATTERN.lastIndex = 0;
-  const match = REPOSITORY_REFERENCE_PATTERN.exec(source);
+export function parseExactRepositoryReference(
+  source: string,
+  allowSpaces = false,
+): RepositoryReference | null {
+  if (!allowSpaces && /\s/u.test(source)) return null;
+  const match = EXACT_REPOSITORY_REFERENCE_PATTERN.exec(source);
   if (match?.index !== 0 || (match[0]?.length ?? 0) !== source.length) {
     return null;
   }

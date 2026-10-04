@@ -68,6 +68,75 @@ describe("parseExactRepositoryReference / repositoryReferenceTextParts (S8786 re
     });
   });
 
+  it.each([
+    "src/überprüfung/status.ts",
+    "src/u\u0308berpru\u0308fung/status.ts",
+    "Handbücher/Service Anleitung.html",
+  ])("preserves the entire Unicode or spaced citation path %s", (path) => {
+    const text = `Evidence [${path}:1-2].`;
+    expect(parseExactRepositoryReference(`${path}:1-2`, true)).toMatchObject({
+      path,
+      lineStart: 1,
+      lineEnd: 2,
+    });
+    expect(repositoryReferenceTextParts(text)).toEqual([
+      { kind: "text", text: "Evidence " },
+      { kind: "reference", reference: { label: `${path}:1-2`, path, lineStart: 1, lineEnd: 2 } },
+      { kind: "text", text: "." },
+    ]);
+  });
+
+  it.each([
+    "/private/status.ts",
+    "C:/private/status.ts",
+    "../private/status.ts",
+    "src/../private/status.ts",
+    "src/\u0001private/status.ts",
+    "src/\u202eprivate/status.ts",
+  ])(
+    "does not turn a fragment of an invalid bracketed path into a clickable reference: %s",
+    (path) => {
+      const text = `Evidence [${path}:1-2].`;
+      expect(parseExactRepositoryReference(`${path}:1-2`)).toBeNull();
+      expect(repositoryReferenceTextParts(text)).toEqual([{ kind: "text", text }]);
+    },
+  );
+
+  it.each([",", ", ", ",  "])(
+    "retains distinct line-numbered citations separated by %j",
+    (separator) => {
+      const parts = repositoryReferenceTextParts(`Evidence [a.ts:1${separator}b.ts:2].`);
+      expect(
+        parts.filter((part) => part.kind === "reference").map((part) => part.reference),
+      ).toEqual([
+        { label: "a.ts:1", path: "a.ts", lineStart: 1, lineEnd: 1 },
+        { label: "b.ts:2", path: "b.ts", lineStart: 2, lineEnd: 2 },
+      ]);
+    },
+  );
+
+  it.each([
+    "../a.ts:1, b.ts:2",
+    "a.ts:1, /private/b.ts:2",
+    "a.ts:1, src/\u202eb.ts:2",
+    "../a.ts:1,b.ts:2",
+    "a.ts:1,/private/b.ts:2",
+    "a.ts:1,src/\u202eb.ts:2",
+  ])("rejects every link in an invalid citation list: %s", (list) => {
+    const source = `Evidence [${list}].`;
+    expect(repositoryReferenceTextParts(source)).toEqual([{ kind: "text", text: source }]);
+  });
+
+  it.each(["manual/a,b.ts", "manual/a, b.ts"])(
+    "keeps a comma inside citation filename %s",
+    (path) => {
+      const parts = repositoryReferenceTextParts(`Evidence [${path}:1].`);
+      expect(
+        parts.filter((part) => part.kind === "reference").map((part) => part.reference?.path),
+      ).toEqual([path]);
+    },
+  );
+
   it("still rejects representative invalid references", () => {
     expect(parseExactRepositoryReference("not-a-path")).toBeNull();
     expect(parseExactRepositoryReference("../escape/file.ts")).toBeNull();

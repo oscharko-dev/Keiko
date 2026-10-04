@@ -110,7 +110,7 @@ import {
 } from "./grounded-answer.js";
 import {
   buildPackCitationIndex,
-  GROUNDED_NO_EVIDENCE_ANSWER,
+  connectedSearchNoEvidenceAnswer,
   incompleteAnswerMarker,
   missingCitationMarkerFor,
   noEvidenceMarker,
@@ -789,12 +789,7 @@ async function retrieveOneConnector(
 
 // ─── Merged prompt ────────────────────────────────────────────────────────────
 
-// KEIKO-0196: keep the hybrid topology's no-evidence text identical to what the folder
-// and multi-source topologies already emit via GROUNDED_NO_EVIDENCE_ANSWER, so a
-// downstream consumer (evaluation harnesses, UI copy, notMovingWindow checks) sees the
-// same string regardless of which grounding topology answered. Prior to the fix the
-// hybrid path emitted its own shorter string, so grounded-faithfulness-eval's
-// "answerText === GROUNDED_NO_EVIDENCE_ANSWER" comparison never matched a hybrid answer.
+// The hybrid topology shares the folder prompt and deterministic localized abstention producer.
 const HYBRID_SYSTEM_PROMPT =
   `${GROUNDED_SYSTEM_PROMPT} Connector excerpts are indexed-document citations: attribute every ` +
   "connector claim to its source label and the matching [n] marker in addition to any file reference.";
@@ -1816,11 +1811,9 @@ async function noEvidenceAssistant(
 ): Promise<GroundedAnswerResult | RouteResult> {
   ensureNotCancelled(ctx.signal);
   if (ctx.answerOnlyContextAvailable !== true) {
-    // KEIKO-0196: emit the shared abstention text so hybrid answers match folder and
-    // multi-source; grounded-faithfulness-eval's answerText === GROUNDED_NO_EVIDENCE_ANSWER
-    // check depends on the exact string equality.
+    // Share the localized deterministic search outcome with folder and multi-source paths.
     return {
-      content: GROUNDED_NO_EVIDENCE_ANSWER,
+      content: connectedSearchNoEvidenceAnswer(ctx.content),
       usage: { promptTokens: 0, completionTokens: 0 },
     };
   }

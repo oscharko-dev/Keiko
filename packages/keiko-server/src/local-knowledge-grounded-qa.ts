@@ -64,6 +64,7 @@ import {
 import {
   NO_EVIDENCE_ANSWER_MAX_CHARS,
   isNoEvidenceAnswerText,
+  shouldUseGermanForSystemAnswer,
 } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import {
@@ -1090,17 +1091,6 @@ function localKnowledgeQuery(
       ? { capsuleSetId: chat.localKnowledgeScope.capsuleSetId }
       : {}),
   };
-}
-
-const GERMAN_QUERY_PATTERNS: readonly RegExp[] = [
-  /[äöüß]/iu,
-  /\b(?:bitte|was|wie|warum|welche|welcher|welches|wieviel|wieso)\b/iu,
-  /\b(?:erkläre|erklaere|zeige|gibt|ist|sind|der|die|das|den|dem|des)\b/iu,
-  /\b(?:und|oder|nicht|keine|kein|evidenz|belege|hinweise)\b/iu,
-];
-
-function shouldUseGermanForSystemAnswer(question: string | undefined): boolean {
-  return question !== undefined && GERMAN_QUERY_PATTERNS.some((pattern) => pattern.test(question));
 }
 
 function isNoEvidenceAnswer(answer: string): boolean {

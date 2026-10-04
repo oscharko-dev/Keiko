@@ -1496,6 +1496,109 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     );
   }
 
+  function emptySearchAnswer(): GroundedAnswerType {
+    return answer({
+      content:
+        "I could not find evidence in the connected scope to answer this question. " +
+        "No answer is given because there is nothing to ground it in.",
+      citations: [],
+      uncertainty: [{ kind: "no-evidence", claim: "No evidence matched." }],
+      contextPack: contextPack({
+        queryKind: "exact-symbol",
+        fileCount: 0,
+        citationCount: 0,
+        usage: { ...contextPack().usage, modelInputTokens: 0, modelOutputTokens: 0 },
+        coverage: {
+          incomplete: false,
+          reasons: [],
+          filesDiscovered: 200_005,
+          filesAfterPolicy: 200_002,
+          filesScanned: 200_002,
+          filesSkipped: 0,
+          truncated: false,
+          ignoredByDiscovery: 3,
+          deniedByDiscovery: 0,
+          depthPrunedByDiscovery: 0,
+          maxFilesPrunedByDiscovery: 0,
+          matchesReturned: 0,
+          elapsedMs: 34_000,
+          limits: { maxFilesScanned: null, maxMatchesReturned: 50, elapsedMsMax: null },
+        },
+      }),
+    });
+  }
+
+  it("shows a complete empty search as a neutral German result with eligible coverage", async () => {
+    const { container } = renderInLocale("de", emptySearchAnswer());
+    const status = await screen.findByRole("status");
+    await waitFor(() =>
+      expect(status).toHaveTextContent("Keine passenden Belege für diese Suche gefunden."),
+    );
+    expect(status).toHaveTextContent("200,002 / 200,002 zulässige Dateien durchsucht");
+    expect(status).not.toHaveTextContent("200,005");
+    expect(container.querySelector(".grounded-uncertainty[role='alert']")).toBeNull();
+    expect(container).not.toHaveTextContent("Bitte prüfen");
+    expect(container).not.toHaveTextContent("diese Antwort ist nicht belegt");
+  });
+
+  it.each(["scope-incomplete", "budget-clipped", "tool-unavailable", "unsupported-claim"])(
+    "keeps an empty search with %s as a review warning",
+    (kind) => {
+      const a = emptySearchAnswer();
+      const { container } = renderInLocale("en", {
+        ...a,
+        uncertainty: [...a.uncertainty, { kind, claim: "Search could not complete." }],
+      });
+      expect(container.querySelector(".grounded-uncertainty[role='alert']")).not.toBeNull();
+      expect(container).toHaveTextContent("Needs review");
+    },
+  );
+
+  it.each([
+    "incomplete",
+    "truncated",
+    "unscanned",
+    "skipped",
+    "matches",
+    "omissions",
+    "model-answer",
+  ])("does not certify an empty search with %s", (caseName) => {
+    const a = emptySearchAnswer();
+    if (a.groundingKind !== "connected-context" || a.contextPack.coverage === undefined) {
+      throw new TypeError("expected connected empty search fixture");
+    }
+    const coverage = { ...a.contextPack.coverage };
+    const pack = a.contextPack;
+    if (caseName === "incomplete") coverage.incomplete = true;
+    if (caseName === "truncated") coverage.truncated = true;
+    if (caseName === "unscanned") coverage.filesScanned -= 1;
+    if (caseName === "skipped") coverage.filesSkipped = 1;
+    if (caseName === "matches") coverage.matchesReturned = 1;
+    const { container } = renderInLocale("en", {
+      ...a,
+      ...(caseName === "model-answer" ? { content: "This project does not support OAuth." } : {}),
+      contextPack: {
+        ...pack,
+        coverage,
+        ...(caseName === "omissions" ? { omittedCount: 1 } : {}),
+      },
+    });
+    expect(container.querySelector(".grounded-uncertainty[role='alert']")).not.toBeNull();
+  });
+
+  it("retains review warnings when the empty answer reports model output usage", () => {
+    const a = emptySearchAnswer();
+    if (a.groundingKind !== "connected-context") throw new TypeError("expected connected fixture");
+    const { container } = renderInLocale("en", {
+      ...a,
+      contextPack: {
+        ...a.contextPack,
+        usage: { ...a.contextPack.usage, modelOutputTokens: 1 },
+      },
+    });
+    expect(container.querySelector(".grounded-uncertainty[role='alert']")).not.toBeNull();
+  });
+
   it("separates German recursive traversal from selected reads and source time bounds", async () => {
     const pack = contextPack({
       scopeKind: "workspace-root",

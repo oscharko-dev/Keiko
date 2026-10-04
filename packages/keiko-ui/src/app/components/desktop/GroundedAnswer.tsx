@@ -14,6 +14,7 @@ import {
   citationMarkerIndices,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { isCanonicalConnectedSearchAbstention } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { formatBytes, formatMs } from "@/lib/format";
 import {
   useOptionalWidgetTranslate as useTranslate,
@@ -1408,8 +1409,75 @@ function groundedSummaryWarnings(answer: GroundedAnswer, t: I18nTranslate): read
 // A visible, non-collapsed banner so uncertainty/degradation is never hidden behind the disclosure
 // (GEN-AI-GROUNDING-007 / GEN-AI-RETRIEVAL-001). Reuses existing grounded CSS classes so it does not
 // touch the SHA-pinned globals.css surface.
+function isCanonicalEmptySearch(answer: ConnectedGroundedAnswer): boolean {
+  return (
+    isCanonicalConnectedSearchAbstention(answer.content) &&
+    answer.citations.length === 0 &&
+    answer.omittedCount === 0 &&
+    answer.uncertainty.length > 0 &&
+    answer.uncertainty.every((marker) => marker.kind === "no-evidence")
+  );
+}
+
+function hasEmptyUninvokedSearchSummary(pack: GroundedAnswerContextPackSummary): boolean {
+  return (
+    pack.fileCount === 0 &&
+    pack.citationCount === 0 &&
+    pack.omittedCount === 0 &&
+    Object.values(pack.omittedCounts).every((count) => count === 0) &&
+    pack.usage.modelInputTokens === 0 &&
+    pack.usage.modelOutputTokens === 0
+  );
+}
+
+function hasCompleteEligibleCoverage(
+  coverage: NonNullable<GroundedAnswerContextPackSummary["coverage"]>,
+): boolean {
+  return (
+    !coverage.incomplete &&
+    !coverage.truncated &&
+    coverage.reasons.length === 0 &&
+    coverage.filesScanned === coverage.filesAfterPolicy &&
+    coverage.filesSkipped === 0 &&
+    coverage.depthPrunedByDiscovery === 0 &&
+    coverage.maxFilesPrunedByDiscovery === 0
+  );
+}
+
+function certifiedEmptySearchCoverage(
+  answer: GroundedAnswer,
+): GroundedAnswerContextPackSummary["coverage"] {
+  if (answer.groundingKind !== "connected-context" || !isCanonicalEmptySearch(answer)) {
+    return undefined;
+  }
+  const coverage = answer.contextPack.coverage;
+  if (
+    coverage === undefined ||
+    coverage.matchesReturned !== 0 ||
+    !hasEmptyUninvokedSearchSummary(answer.contextPack) ||
+    !hasCompleteEligibleCoverage(coverage)
+  ) {
+    return undefined;
+  }
+  return coverage;
+}
+
 function GroundedAnswerWarnings({ answer }: { readonly answer: GroundedAnswer }): ReactNode {
   const t = useTranslate();
+  const emptyCoverage = certifiedEmptySearchCoverage(answer);
+  if (emptyCoverage !== undefined) {
+    return (
+      <div className="grounded-meta" role="status" aria-live="polite">
+        <p>{t("grounded.search.empty")}</p>
+        <p>
+          {t("grounded.search.emptyCoverage", {
+            scanned: formatCount(emptyCoverage.filesScanned),
+            eligible: formatCount(emptyCoverage.filesAfterPolicy),
+          })}
+        </p>
+      </div>
+    );
+  }
   const warnings = groundedSummaryWarnings(answer, t);
   if (warnings.length === 0) {
     return null;

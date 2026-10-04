@@ -241,7 +241,7 @@ function transportReply(response, stream, text = "Synthetic gateway transport te
 }
 
 async function transportWait(response, milliseconds) {
-  const controller = new AbortController();
+  const controller = new globalThis.AbortController();
   const cancel = () => controller.abort();
   response.once("close", cancel);
   try {
@@ -263,6 +263,10 @@ function transportCooldown(response, scenario, options) {
   });
   response.end('{"error":{"type":"synthetic_overload"}}');
   return status;
+}
+
+function isDelayedTransport(scenario) {
+  return scenario === "delay35" || scenario === "pause35";
 }
 
 async function transportChat(request, response, requests, options, scenario) {
@@ -288,7 +292,7 @@ async function transportChat(request, response, requests, options, scenario) {
       return;
     }
   }
-  if (scenario === "partial") {
+  if (scenario === "partial" && stream) {
     observed.status = 200;
     truncatedStream(response);
     return;
@@ -298,11 +302,7 @@ async function transportChat(request, response, requests, options, scenario) {
     response.writeHead(200, { "content-type": "text/event-stream" });
     writeFrame(response, { content: "Synthetic gateway stream started. " });
   }
-  if (
-    (scenario === "delay35" || scenario === "pause35") &&
-    !(await transportWait(response, options.delayMs))
-  )
-    return;
+  if (isDelayedTransport(scenario) && !(await transportWait(response, options.delayMs))) return;
   observed.status = 200;
   transportReply(response, stream);
 }

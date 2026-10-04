@@ -43,6 +43,12 @@ describe("grounded faithfulness eval (RB-4, GEN-AI-EVAL-003)", () => {
       ),
     ).toBe(false);
     expect(isGroundedEmptyEvidenceAbstention(emptyPack, GROUNDED_NO_EVIDENCE_ANSWER)).toBe(true);
+    expect(
+      isGroundedEmptyEvidenceAbstention(
+        emptyPack,
+        "Keine passenden Belege für diese Suche gefunden.",
+      ),
+    ).toBe(true);
     expect(runGroundedFaithfulnessEval().failures).toEqual([]);
   });
 
