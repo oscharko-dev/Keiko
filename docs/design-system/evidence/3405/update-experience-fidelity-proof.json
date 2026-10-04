@@ -2,16 +2,16 @@
   "issue": 3405,
   "epic": 3403,
   "verdict": "PASS",
-  "cssSha256": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
+  "cssSha256": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
   "sourceSha256": {
     "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx": "3a9c9a489d7f87e2afc920fa1fa4dd412af7bbecd44900b52a8b2f4acb5acdc8",
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "095cf18b86ecf3158d00020203985fa736a836ec09dbb1aa5d3473d9550f2f89",
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "9ae951f2aa6c98beaa04b587364291776998ba000d0e33064bffc09962d51998",
     "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "5e34eb591f63aca2ce64fd43daba10de0e172d12014f055092b4a1a00830c2da",
-    "packages/keiko-ui/src/app/globals.css": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
-    "packages/keiko-ui/src/lib/api.ts": "7f4b73d7528afdfda11f9f78daf075374300fe6063aaf7259102898818a3e355",
-    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "78dec755495a3b2d7a081003396aa86d4ddee221acfd3231ee3ea62c53190087",
-    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "bc8159f71c29f3604e06633f55d35d9439c241763a72f086f8c3b84fc8684c33"
+    "packages/keiko-ui/src/app/globals.css": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
+    "packages/keiko-ui/src/lib/api.ts": "aa6080a704f6f23edbe66ce015b84511afc142a8edb799b15b8d1065f65e71a2",
+    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "acd51a360dd12323e55a23c37e76c710d6adea1fca843797b6c169a19603f00e",
+    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "1602d838bb813e5d52a1aa389056a8fdf737011f4244e08b90c0b8eb30f5198e"
   },
   "harnessProvenanceSha256": {
     "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
@@ -22,7 +22,7 @@
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-10-03T15:25:27.284Z",
+  "generatedAt": "2026-10-04T16:52:53.596Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {

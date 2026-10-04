@@ -1,13 +1,14 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-10-03 for PR #3685 after Editor repairs
+The current repair evidence was regenerated on 2026-10-04 for PR #3687 after connected-source repairs
 changed the shared UI API and localization modules. No updater behavior changed. All eight Chromium
-checks passed on the supported Node 24.21.0 runtime in an isolated checkout, including the real-BFF
+checks passed on the supported Node runtime in an isolated checkout, including the real-BFF
 outage journey, and refreshed the tracked updater artifacts. The eight source and four harness hashes
 match the current checkout. The tests prove the startup notice yields only while a visible, foreground **ready**
 Update window owns the same critical context and actions; the notice returns when that window is
 backgrounded or minimized, and remains available while the foreground updater is loading or
-contains only a load error.
+contains only a load error. The background-window check establishes keyboard modality with a real
+Tab press before moving focus; programmatic focus after a pointer click must not steal the foreground.
 
 The current suite includes the real-BFF outage journey. Both the main server and the outage
 harness use isolated copies of the fake-key gateway fixture, preserving the tracked source

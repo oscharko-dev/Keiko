@@ -940,6 +940,9 @@ async function assertManualCheckActionIsUnobscuredAt320CssPixels(
     ),
   ).toBeVisible();
 
+  // Window activation follows user modality; a programmatic focus after a pointer click must
+  // not steal the foreground. Exercise the keyboard path before focusing the background window.
+  await page.keyboard.press("Tab");
   await settings.focus();
   await expect(updateWindow).toHaveAttribute("data-top", "false");
   await expect(notice).toBeVisible();
