@@ -3,6 +3,7 @@ import {
   supportIncidentRetentionPolicy,
   listSupportIncidents,
   resolveActivityLogStateDir,
+  currentActivityLogReadiness,
 } from "@oscharko-dev/keiko-activity-log";
 import {
   activityLogEvent,
@@ -61,10 +62,33 @@ function recordCapacity(
   );
 }
 
-type Capacity = Pick<
-  ActivityLogReadinessSnapshot,
-  "retainedDiagnosticCount" | "diagnosticCapacity"
+type Capacity = Partial<
+  Pick<
+    ActivityLogReadinessSnapshot,
+    "retainedDiagnosticCount" | "diagnosticCapacity" | "readiness" | "reasons"
+  >
 >;
+
+function reportCapacityFailure(ctx: CapacityContext, deps: CapacityDeps, error: unknown): Capacity {
+  if (observedCounts.get(deps) !== "unavailable") {
+    observedCounts.set(deps, "unavailable");
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        operation: "GET /api/health",
+        source: "support.diagnostic-capacity",
+        error,
+        redact: (message): string => message,
+      }),
+    );
+  }
+  const current = currentActivityLogReadiness();
+  return {
+    readiness: current.readiness === "unavailable" ? "unavailable" : "degraded",
+    reasons: [...new Set([...current.reasons, "storage-check-failed" as const])],
+  };
+}
 export function supportDiagnosticCapacity(ctx: CapacityContext, deps: CapacityDeps): Capacity {
   const stateDir = resolveActivityLogStateDir(deps.env);
   if (stateDir === undefined) return {};
@@ -77,16 +101,6 @@ export function supportDiagnosticCapacity(ctx: CapacityContext, deps: CapacityDe
       diagnosticCapacity: capacity,
     };
   } catch (error) {
-    emitServerDiagnostic(
-      deps.diagnostics,
-      serverDiagnosticFromError({
-        correlationId: correlationIdOrUnknown(ctx.correlationId),
-        operation: "GET /api/health",
-        source: "support.diagnostic-capacity",
-        error,
-        redact: (message): string => message,
-      }),
-    );
-    return {};
+    return reportCapacityFailure(ctx, deps, error);
   }
 }

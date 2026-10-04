@@ -5,7 +5,7 @@
 // `server-log.test.ts` ("activity log store policy"); the registered conflict-evidence line is
 // proven through the production formatter in `server-log.activity-log-proof.test.ts`.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -91,6 +91,51 @@ function seedActiveSegment(dir: string, pid: number, instanceId: string): void {
 }
 
 describe("Activity Log store policy record I/O (#3554)", () => {
+  it("allows bootstrap absence but refuses present corrupt or unsafe policy for admission", () => {
+    const dir = makeLogsDir();
+    expect(
+      readActivityLogPolicyRecord(join(dir, "bootstrap"), join(dir, "bootstrap"), {
+        requireReadable: true,
+      }),
+    ).toBeUndefined();
+    expect(readActivityLogPolicyRecord(dir, dir, { requireReadable: true })).toBeUndefined();
+    writeActivityLogPolicyRecord(dir, dir, { schemaVersion: 1, ...VALUES_A });
+    expect(readActivityLogPolicyRecord(dir, dir, { requireReadable: true })).toStrictEqual({
+      schemaVersion: 1,
+      ...VALUES_A,
+    });
+    chmodSync(policyPath(dir), 0o644);
+    expect(() => readActivityLogPolicyRecord(dir, dir, { requireReadable: true })).toThrow(
+      SafeArtifactFileError,
+    );
+    chmodSync(policyPath(dir), 0o600);
+    writeFileSync(policyPath(dir), "not json at all");
+    expect(() => readActivityLogPolicyRecord(dir, dir, { requireReadable: true })).toThrow(
+      SafeArtifactFileError,
+    );
+    expect(readActivityLogPolicyRecord(dir, dir)).toBeUndefined();
+  });
+
+  it("refuses a broken policy symlink rather than substituting the bootstrap policy", () => {
+    const dir = makeLogsDir();
+    symlinkSync(join(dir, "missing.json"), policyPath(dir));
+    expect(() => readActivityLogPolicyRecord(dir, dir, { requireReadable: true })).toThrow(
+      SafeArtifactFileError,
+    );
+  });
+
+  it("refuses bootstrap absence beneath a symlinked ancestor", () => {
+    const dir = makeLogsDir();
+    const actual = join(dir, "actual");
+    mkdirSync(join(actual, "nested"), { recursive: true, mode: 0o700 });
+    const alias = join(dir, "alias");
+    symlinkSync(actual, alias);
+    for (const directory of [join(alias, "missing"), join(alias, "nested", "missing")])
+      expect(() =>
+        readActivityLogPolicyRecord(directory, directory, { requireReadable: true }),
+      ).toThrow(SafeArtifactFileError);
+    expect(readActivityLogPolicyRecord(join(actual, "missing"), actual)).toBeUndefined();
+  });
   it("publishes the first record exclusively; a second creator loses the race", () => {
     const dir = makeLogsDir();
     writeActivityLogPolicyRecord(dir, dir, { schemaVersion: 1, ...VALUES_A });

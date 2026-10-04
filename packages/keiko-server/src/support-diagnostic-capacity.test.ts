@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +7,9 @@ import {
   listSupportIncidents,
   recordUserReportedIncident,
   closeFileServerLogSinks,
+  currentActivityLogReadiness,
 } from "@oscharko-dev/keiko-activity-log";
+import { ACTIVITY_LOG_STORE_POLICY_FILE_NAME } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
   expectActivityLogProof,
@@ -58,6 +60,44 @@ function fixture(): { ctx: RouteContext; deps: UiHandlerDeps; stateDir: string }
   };
 }
 describe("existing health diagnostic storage projection", () => {
+  it.each(["corrupt", "unsafe-permissions"] as const)(
+    "reports %s governing storage once per failure streak without inventing counts or event loss",
+    (fault) => {
+      const { ctx, deps: originalDeps, stateDir } = fixture();
+      const record = vi.fn();
+      const deps = { ...originalDeps, diagnostics: { record } };
+      expect(recordUserReportedIncident(stateDir).status).toBe("created");
+      closeFileServerLogSinks();
+      const path = join(stateDir, "logs", ACTIVITY_LOG_STORE_POLICY_FILE_NAME);
+      const original = readFileSync(path);
+      const baseline = currentActivityLogReadiness();
+      const breakPolicy = (): void => {
+        if (fault === "corrupt") writeFileSync(path, "not a policy", { mode: 0o600 });
+        else chmodSync(path, 0o644);
+      };
+      breakPolicy();
+      const failed = supportDiagnosticCapacity(ctx, deps);
+      expect(failed.readiness).toBe(
+        baseline.readiness === "unavailable" ? "unavailable" : "degraded",
+      );
+      expect(failed.reasons).toEqual([...new Set([...baseline.reasons, "storage-check-failed"])]);
+      expect(failed).not.toHaveProperty("retainedDiagnosticCount");
+      expect(failed).not.toHaveProperty("diagnosticCapacity");
+      expect({ ...baseline, ...failed }).toMatchObject({
+        writer: baseline.writer,
+        lostEvents: baseline.lostEvents,
+      });
+      supportDiagnosticCapacity(ctx, deps);
+      expect(record).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(record.mock.calls)).not.toContain(stateDir);
+      chmodSync(path, 0o600);
+      writeFileSync(path, original);
+      expect(supportDiagnosticCapacity(ctx, deps)).toHaveProperty("retainedDiagnosticCount", 1);
+      breakPolicy();
+      supportDiagnosticCapacity(ctx, deps);
+      expect(record).toHaveBeenCalledTimes(2);
+    },
+  );
   it("reports retained candidates against the governing byte reservation capacity without calling them open defects or mutating their identity", async () => {
     const { ctx, deps, stateDir } = fixture();
     for (let slot = 0; slot < 33; slot += 1)
@@ -95,5 +135,34 @@ describe("existing health diagnostic storage projection", () => {
     expectActivityLogProof("support.diagnostics.capacity.line", formatActivityLogProofLine(event));
     expect(event.level).toBe("info");
     expect(event.errorKind).toBeUndefined();
+    expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    supportDiagnosticCapacity({ correlationId: "later-health-observation" }, deps);
+    const observations = sink.events.filter((entry) => entry.op === "support.diagnostics.capacity");
+    expect(observations).toHaveLength(2);
+    expect(observations[1]).toMatchObject({
+      correlationId: "later-health-observation",
+      extra: { retainedCandidateCount: 1 },
+    });
+  });
+  it("keeps truthful storage counts when the production logger owns a sink failure", () => {
+    const { ctx, deps: originalDeps, stateDir } = fixture();
+    const record = vi.fn();
+    const deps = { ...originalDeps, diagnostics: { record } };
+    setServerLogger(
+      createServerLogger({
+        sink: {
+          write: (): never => {
+            throw new Error("synthetic logging failure");
+          },
+        },
+      }),
+    );
+    const before = currentActivityLogReadiness().lostEvents;
+    expect(supportDiagnosticCapacity(ctx, deps)).toMatchObject({
+      retainedDiagnosticCount: 0,
+      diagnosticCapacity: supportIncidentRetentionPolicy(stateDir).capacity,
+    });
+    expect(record).not.toHaveBeenCalled();
+    expect(currentActivityLogReadiness().lostEvents).toBeGreaterThan(before);
   });
 });

@@ -26,7 +26,8 @@ export function supportIncidentRetentionPolicy(
 ): SupportIncidentRetentionPolicy {
   const directory = join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME);
   const policy =
-    readActivityLogPolicyRecord(directory, directory) ?? resolveActivityLogStorageConfig(env);
+    readActivityLogPolicyRecord(directory, directory, { requireReadable: true }) ??
+    resolveActivityLogStorageConfig(env);
   const capacity = Math.floor(policy.retentionBytes / CANDIDATE_RESERVATION_BYTES);
   return {
     capacity,

@@ -33,6 +33,7 @@ import {
   MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES,
   MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES,
   SafeArtifactFileError,
+  assertSafeArtifactAncestors,
   acknowledgeSafeArtifactFileSet,
   archiveSafeArtifactFile,
   chmodIfPresent,
@@ -67,6 +68,24 @@ afterEach(() => {
   for (const path of cleanups.splice(0)) {
     rmSync(path, { recursive: true, force: true });
   }
+});
+
+describe("absent artifact ancestor preflight", () => {
+  it("allows a regular missing bootstrap and refuses missing descendants behind an alias", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-artifact-bootstrap-"));
+    cleanups.push(root);
+    const existing = join(root, "existing");
+    mkdirSync(join(existing, "nested"), { recursive: true, mode: 0o700 });
+    expect(() => {
+      assertSafeArtifactAncestors(join(existing, "missing", "policy.json"), "activity-log");
+    }).not.toThrow();
+    const alias = join(root, "alias");
+    symlinkSync(existing, alias);
+    expect(() => {
+      assertSafeArtifactAncestors(join(alias, "nested", "missing", "policy.json"), "activity-log");
+    }).toThrow(SafeArtifactFileError);
+    expect(existsSync(join(existing, "missing"))).toBe(false);
+  });
 });
 
 interface DirectoryMutationInvocation {

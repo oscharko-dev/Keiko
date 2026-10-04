@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,7 +24,11 @@ import {
   claimSupportIncidentSlot,
   listSupportIncidentClaims,
 } from "./support-incident-store.js";
-import { MAX_ACTIVITY_LOG_PINS, listActivityLogDirectory } from "./activity-log-store.js";
+import {
+  MAX_ACTIVITY_LOG_PINS,
+  listActivityLogDirectory,
+  readActivityLogPolicyRecord,
+} from "./activity-log-store.js";
 import * as incidentStore from "./support-incident-store.js";
 import * as serverLog from "./server-log.js";
 import * as artifactFiles from "@oscharko-dev/keiko-security/fs-hardening";
@@ -35,6 +39,7 @@ import {
   ACTIVITY_LOG_ERROR_KINDS,
   supportIncidentFileName,
   supportIncidentSlotClaimFileName,
+  ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createDesktopSupportReport,
@@ -101,6 +106,32 @@ function persistFreshFailure(): void {
 }
 
 describe("rolling diagnostic candidate retention", () => {
+  it.each(["corrupt", "unsafe-permissions"] as const)(
+    "refuses an alternate admission policy when the governing policy is %s",
+    (fault) => {
+      expect(recordUserReportedIncident(stateDir).status).toBe("created");
+      closeFileServerLogSinks();
+      const directory = join(stateDir, "logs");
+      expect(readActivityLogPolicyRecord(directory, directory)).not.toBeUndefined();
+      const path = join(directory, ACTIVITY_LOG_STORE_POLICY_FILE_NAME);
+      if (fault === "corrupt") writeFileSync(path, "not a policy", { mode: 0o600 });
+      else chmodSync(path, 0o644);
+      expect(() =>
+        supportIncidentRetentionPolicy(stateDir, { KEIKO_LOG_RETENTION_BYTES: "65536" }),
+      ).toThrow(artifactFiles.SafeArtifactFileError);
+      const retainedIds = listSupportIncidents(stateDir, { readOnly: true }).map(
+        (record) => record.incidentId,
+      );
+      expect(recordUserReportedIncident(stateDir)).toEqual({
+        status: "rejected",
+        reason: "store-unavailable",
+      });
+      expect(
+        listSupportIncidents(stateDir, { readOnly: true }).map((record) => record.incidentId),
+      ).toEqual(retainedIds);
+    },
+  );
+
   it("does not sweep retained candidates when completing an unretained manual descriptor", () => {
     vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
     ensureSupportIncidentDirectory(stateDir);

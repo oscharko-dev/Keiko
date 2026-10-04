@@ -30,6 +30,7 @@ import {
 import { join } from "node:path";
 import {
   SafeArtifactFileError,
+  assertSafeArtifactAncestors,
   openSafeArtifactFile,
   removeSafeArtifactFile,
 } from "@oscharko-dev/keiko-security/fs-hardening";
@@ -491,10 +492,27 @@ function policyRecordPath(directory: string): string {
   return join(directory, ACTIVITY_LOG_STORE_POLICY_FILE_NAME);
 }
 
-/** Reads the store's governing policy record, or `undefined` when absent, unreadable, or corrupt. */
+function policyBootstrapAbsent(directory: string, error: unknown): boolean {
+  if (!(error instanceof SafeArtifactFileError)) return false;
+  if (error.kind !== "open-failed" && error.kind !== "unsafe-ancestor") return false;
+  const parent = lstatSync(directory, { throwIfNoEntry: false });
+  if (parent === undefined) {
+    assertSafeArtifactAncestors(policyRecordPath(directory), "activity-log");
+    return true;
+  }
+  return (
+    error.kind === "open-failed" &&
+    parent.isDirectory() &&
+    !parent.isSymbolicLink() &&
+    lstatSync(policyRecordPath(directory), { throwIfNoEntry: false }) === undefined
+  );
+}
+
+/** The default reader tolerates unavailable policy; admission can require a readable existing one. */
 export function readActivityLogPolicyRecord(
   directory: string,
   trustedRoot: string,
+  options: { readonly requireReadable?: boolean } = {},
 ): ActivityLogPolicyRecord | undefined {
   let descriptor: number | undefined;
   try {
@@ -504,11 +522,17 @@ export function readActivityLogPolicyRecord(
       trustedRoot,
     });
     const text = readBoundedText(descriptor, fstatSync(descriptor).size);
-    if (text === undefined) return undefined;
+    if (text === undefined) throw new SafeArtifactFileError("activity-log", "read-failed");
     const value: unknown = JSON.parse(text);
-    return isActivityLogPolicyRecord(value) ? value : undefined;
-  } catch {
-    return undefined;
+    if (!isActivityLogPolicyRecord(value))
+      throw new SafeArtifactFileError("activity-log", "read-failed");
+    return value;
+  } catch (error) {
+    if (options.requireReadable !== true) return undefined;
+    if (policyBootstrapAbsent(directory, error)) return undefined;
+    throw error instanceof SafeArtifactFileError
+      ? error
+      : new SafeArtifactFileError("activity-log", "read-failed");
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }

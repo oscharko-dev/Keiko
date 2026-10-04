@@ -1661,6 +1661,14 @@ opaque owning-id claim payloads; there is no independent candidate-count setting
 candidates expire after twenty-four hours, including older records written with a longer expiry.
 On byte pressure, the oldest eligible candidate rolls out and its pin and claims are released.
 Generated reports remain only in the existing transient download cache, without a disk archive.
+The health projection reports actual retained stock and the governing admission capacity separately;
+stock can exceed a reduced capacity until retention removes older candidates. An absent bootstrap
+policy permits the existing environment fallback, while a present unreadable or corrupt governing
+policy refuses diagnostic admission. Health exposes `storage-check-failed` without inventing counts
+or event loss. `support.diagnostics.capacity` timestamps a changed pair when a health request observes
+it, under that request's correlation; candidate lifecycle events retain the actual creation or
+retirement timing. A failed inspection emits one diagnostic per failure streak, and a successful
+inspection resets the streak and records the recovered observation.
 The existing Activity Log pin ceiling remains unchanged. If a new diagnostic window is refused
 specifically because that pin ceiling is full, one oldest diagnostic candidate with an exact owned
 `incident` window pin is retired and the existing pin manager is retried once. Durable-batch and

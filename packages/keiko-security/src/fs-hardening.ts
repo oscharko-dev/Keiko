@@ -136,24 +136,42 @@ function sqliteStatePathRefusedEvent(
 }
 
 function sqlitePathStat(path: string): BigIntStats | undefined {
+  return ancestorPathStat(path, (kind): Error => new SqliteStatePathError(kind));
+}
+
+type AncestorFailure = "open-failed" | "unsafe-ancestor";
+
+function ancestorPathStat(
+  path: string,
+  failure: (kind: AncestorFailure) => Error,
+): BigIntStats | undefined {
   try {
     return lstatSync(path, { bigint: true });
   } catch (error) {
     if (errorCode(error) === "ENOENT") return undefined;
-    throw new SqliteStatePathError("open-failed");
+    throw failure("open-failed");
   }
 }
 
-function verifySqliteAncestors(path: string): void {
+function verifyAncestors(path: string, failure: (kind: AncestorFailure) => Error): void {
   for (const ancestor of directoryChain(dirname(resolve(path)))) {
-    const stat = sqlitePathStat(ancestor);
+    const stat = ancestorPathStat(ancestor, failure);
     // macOS owns these fixed root aliases. Descendants are still checked individually;
     // repository-created links (including links below the system temporary root) are refused.
     if (isMacSystemAlias(ancestor, stat)) continue;
     if (stat !== undefined && (!stat.isDirectory() || stat.isSymbolicLink())) {
-      throw new SqliteStatePathError("unsafe-ancestor");
+      throw failure("unsafe-ancestor");
     }
   }
+}
+
+function verifySqliteAncestors(path: string): void {
+  verifyAncestors(path, (kind): Error => new SqliteStatePathError(kind));
+}
+
+/** Read-only ancestor preflight for an absent artifact; existing opens still bind their guards. */
+export function assertSafeArtifactAncestors(path: string, artifactClass: SafeArtifactClass): void {
+  verifyAncestors(path, (kind): Error => safeFileError(artifactClass, kind));
 }
 
 function isMacSystemAlias(path: string, stat: BigIntStats | undefined): boolean {
