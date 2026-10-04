@@ -41,7 +41,7 @@ import type {
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
-import { fetchFilesSearch, updateChat } from "@/lib/api";
+import { ApiError, fetchChats, fetchFilesSearch, updateChat } from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
@@ -53,6 +53,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return {
     ...actual,
     fetchFilesSearch: vi.fn(),
+    fetchChats: vi.fn(),
     updateChat: vi.fn(),
   };
 });
@@ -228,6 +229,7 @@ beforeEach(() => {
     scannedFileCount: 0,
   });
   updateChatMock.mockReset();
+  vi.mocked(fetchChats).mockReset();
 });
 
 function makeCapsuleId(value: string): KnowledgeCapsuleId {
@@ -1051,6 +1053,7 @@ describe("ChatWindow repository file focus picker", () => {
       makeSession({
         activeChat: makeChat({
           projectPath: "/repo",
+          groundingScopeIdentity: "gsi-v1:" + "a".repeat(64),
           connectedScopes: [existingScope],
           connectedScope: existingScope,
         }),
@@ -1081,6 +1084,7 @@ describe("ChatWindow repository file focus picker", () => {
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        expectedGroundingScopeIdentity: "gsi-v1:" + "a".repeat(64),
         connectedScopes: [
           expect.objectContaining({
             kind: "files",
@@ -2344,6 +2348,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat({
+          groundingScopeIdentity: "gsi-v1:" + "b".repeat(64),
           connectedScopes: [
             { kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 },
           ],
@@ -2359,11 +2364,54 @@ describe("ChatWindow local knowledge scope disclosure", () => {
 
     await waitFor(() => {
       expect(updateChatMock).toHaveBeenCalledWith("chat-1", {
+        expectedGroundingScopeIdentity: "gsi-v1:" + "b".repeat(64),
         connectedScopes: null,
         localKnowledgeScopes: null,
       });
     });
     expect(replaceChat).toHaveBeenCalledWith(updated);
+    confirmSpy.mockRestore();
+  });
+
+  it("refreshes a conflicting source clear without replaying the previously confirmed deletion", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const original = makeChat({
+      groundingScopeIdentity: "gsi-v1:" + "a".repeat(64),
+      connectedScopes: [
+        { kind: "workspace-root", root: "/original", relativePaths: [], connectedAtMs: 1 },
+      ],
+    });
+    const current = makeChat({
+      groundingScopeIdentity: "gsi-v1:" + "b".repeat(64),
+      connectedScopes: [
+        {
+          kind: "workspace-root",
+          root: "/added-in-another-tab",
+          relativePaths: [],
+          connectedAtMs: 2,
+        },
+      ],
+    });
+    vi.mocked(fetchChats).mockResolvedValueOnce({ chats: [current] });
+    updateChatMock.mockRejectedValueOnce(
+      new ApiError(
+        "GROUNDING_SCOPE_CHANGED",
+        "The connected sources changed before this update could run.",
+        409,
+      ),
+    );
+    renderWindow(makeSession({ activeChat: original, replaceChat }));
+    await chooseComboboxOption(user, "Grounding mode", "Model only");
+    await waitFor(() => {
+      expect(replaceChat).toHaveBeenCalledWith(current);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "The connected sources changed in the meantime.",
+      );
+    });
+    expect(updateChatMock).toHaveBeenCalledTimes(1);
+    expect(fetchChats).toHaveBeenCalledWith(original.projectPath);
     confirmSpy.mockRestore();
   });
 

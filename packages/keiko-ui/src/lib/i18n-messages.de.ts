@@ -480,6 +480,11 @@ export const DE_MESSAGES = {
   "chat.role.user": "Du",
   // #3591: Gateway-Fehler auf den Desktop-Chat-Oberflächen (format-error.ts). Ein langsames Gateway
   // ist kein defektes Gateway, und keiner der Texte macht die Größe der Anfrage verantwortlich.
+  "chat.error.scopeChanged.title": "Verbundene Quellen wurden geändert",
+  "chat.error.scopeChanged.message":
+    "Die verbundenen Quellen haben sich zwischenzeitlich geändert. Die Anfrage wurde nicht mit einer veralteten Quellenliste ausgeführt.",
+  "chat.error.scopeChanged.remediation":
+    "Prüfe die aktuellen Quellen des Chats und sende deine Anfrage anschließend erneut.",
   "chat.error.gatewayTimeout.title": "Das Modell-Gateway hat nicht rechtzeitig geantwortet",
   "chat.error.gatewayTimeout.message":
     "Das Modell-Gateway hat die Anfrage nicht innerhalb von Keikos Wartezeit abgeschlossen. Keiko wartet bei einem langsamen Gateway minutenlang; das bedeutet in der Regel, dass das Gateway oder das Modell hängt – nicht, dass die Anfrage zu groß war.",

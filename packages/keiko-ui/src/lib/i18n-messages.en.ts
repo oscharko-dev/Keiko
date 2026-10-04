@@ -466,6 +466,11 @@ export const EN_MESSAGES = {
   "chat.role.user": "You",
   // #3591: gateway failures on the desktop chat surfaces (format-error.ts). A slow gateway is not a
   // broken gateway, and neither text blames the size of the request.
+  "chat.error.scopeChanged.title": "Connected sources changed",
+  "chat.error.scopeChanged.message":
+    "The connected sources changed in the meantime. The request was not run with an outdated source list.",
+  "chat.error.scopeChanged.remediation":
+    "Check the Chat's current sources, then send your request again.",
   "chat.error.gatewayTimeout.title": "Model gateway did not answer in time",
   "chat.error.gatewayTimeout.message":
     "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large.",

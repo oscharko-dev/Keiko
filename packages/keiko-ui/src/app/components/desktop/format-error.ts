@@ -141,6 +141,11 @@ interface GatewayErrorKeys {
 }
 
 const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
+  GROUNDING_SCOPE_CHANGED: {
+    title: "chat.error.scopeChanged.title",
+    message: "chat.error.scopeChanged.message",
+    remediation: "chat.error.scopeChanged.remediation",
+  },
   GATEWAY_TIMEOUT: {
     title: "chat.error.gatewayTimeout.title",
     message: "chat.error.gatewayTimeout.message",

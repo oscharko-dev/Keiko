@@ -144,7 +144,13 @@ import type {
   OpenEditorFileResult,
   WorkspaceLinkedGitChangeComparison,
 } from "./hooks/useWorkspace.types";
-import { fetchFilesSearch, updateChat } from "@/lib/api";
+import {
+  ApiError,
+  fetchChats,
+  fetchFilesSearch,
+  updateChat,
+  type UpdateChatInput,
+} from "@/lib/api";
 import { GitChangeScopePill } from "./GitChangeScopePill";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { ConnectorScopePill } from "./ConnectorScopePill";
@@ -3638,8 +3644,12 @@ function ComposerCoreImpl({
       try {
         const merged = mergeRepositoryFileScope(activeChat, result.root, result.path);
         if (merged.changed) {
-          const response = await updateChat(activeChat.id, { connectedScopes: merged.scopes });
-          replaceChat(response.chat);
+          const updated = await updateGroundingScopes(
+            activeChat,
+            { connectedScopes: merged.scopes },
+            replaceChat,
+          );
+          replaceChat(updated);
         }
         const fallbackCursor = taRef.current?.selectionStart ?? draft.length;
         const mention = repositoryMention ?? repositoryMentionAtCursor(draft, fallbackCursor);
@@ -4123,10 +4133,32 @@ function isSelectableGroundingCapsuleSet(capsuleSet: CapsuleSetListEntry): boole
   );
 }
 
-// Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "Model only"
-// branch. #2 — permanently discards ALL active grounding sources (folder scopes + connectors);
-// when sources are present, asks for explicit confirmation. On cancel, returns without mutating
-// the chat (the caller's finally still releases the busy lock).
+// A stale source mutation must not replace changes made in another tab. Refresh the visible
+// canonical sources after a conflict; the user can review them before repeating the action.
+async function updateGroundingScopes(
+  chat: Chat,
+  patch: UpdateChatInput,
+  onChatChanged: (chat: Chat) => void,
+): Promise<Chat> {
+  try {
+    const response = await updateChat(chat.id, {
+      ...patch,
+      ...(chat.groundingScopeIdentity === undefined
+        ? {}
+        : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
+    });
+    return response.chat;
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "GROUNDING_SCOPE_CHANGED") {
+      const response = await fetchChats(chat.projectPath).catch(() => undefined);
+      const current = response?.chats.find((candidate) => candidate.id === chat.id);
+      if (current !== undefined) onChatChanged(current);
+    }
+    throw error;
+  }
+}
+
+// The "Model only" branch clears active sources after explicit confirmation.
 async function disconnectAllGroundingScopes(
   chat: Chat,
   t: I18nTranslate,
@@ -4143,8 +4175,12 @@ async function disconnectAllGroundingScopes(
     );
     if (!confirmed) return;
   }
-  const response = await updateChat(chat.id, { connectedScopes: null, localKnowledgeScopes: null });
-  onChatChanged(response.chat);
+  const updated = await updateGroundingScopes(
+    chat,
+    { connectedScopes: null, localKnowledgeScopes: null },
+    onChatChanged,
+  );
+  onChatChanged(updated);
 }
 
 // Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "Live files"
@@ -4153,8 +4189,8 @@ async function connectLiveFilesScope(
   chat: Chat,
   onChatChanged: (chat: Chat) => void,
 ): Promise<void> {
-  const response = await updateChat(chat.id, { localKnowledgeScopes: null });
-  onChatChanged(response.chat);
+  const updated = await updateGroundingScopes(chat, { localKnowledgeScopes: null }, onChatChanged);
+  onChatChanged(updated);
 }
 
 // Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the
@@ -4181,8 +4217,8 @@ async function connectCapsuleSetScope(
   )
     ? current
     : [...current, scope];
-  const response = await updateChat(chat.id, { localKnowledgeScopes: next });
-  onChatChanged(response.chat);
+  const updated = await updateGroundingScopes(chat, { localKnowledgeScopes: next }, onChatChanged);
+  onChatChanged(updated);
 }
 
 // Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "capsule:"
@@ -4204,8 +4240,8 @@ async function connectCapsuleScope(
   const next = current.some((s) => s.kind === "capsule" && s.capsuleId === scope.capsuleId)
     ? current
     : [...current, scope];
-  const response = await updateChat(chat.id, { localKnowledgeScopes: next });
-  onChatChanged(response.chat);
+  const updated = await updateGroundingScopes(chat, { localKnowledgeScopes: next }, onChatChanged);
+  onChatChanged(updated);
 }
 
 // Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the classifier
