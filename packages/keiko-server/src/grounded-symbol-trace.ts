@@ -7,7 +7,11 @@ import type {
   UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { CONTEXT_COVERAGE_TRUNCATION_REASONS } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { RetrievalIntent, SearchAnchor } from "@oscharko-dev/keiko-workflows";
+import {
+  isDirectEvidenceLookup,
+  type RetrievalIntent,
+  type SearchAnchor,
+} from "@oscharko-dev/keiko-workflows";
 import {
   DEFAULT_SEARCH_LIMITS,
   evidenceAtomStableId,
@@ -22,7 +26,6 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import type { StructuralAdapterRequestContext } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
-import { directDefinitionSymbol } from "./grounded-query-shape.js";
 
 interface FollowSymbolTraceEvidenceInput {
   readonly scope: SelectedScope;
@@ -450,7 +453,7 @@ export async function collectDiscoveredSymbolTraceEvidence(
 
 function reservedFollowTraceSymbols(input: FollowSymbolTraceEvidenceInput): readonly string[] {
   if (!shouldTrace(input)) return [];
-  if (directDefinitionSymbol(input.query, input.anchors) !== undefined) return [];
+  if (isDirectEvidenceLookup(input.query, input.anchors)) return [];
   const symbols = traceSymbols(input.anchors);
   if (symbols.length === 0 || input.tryReserveSearchCall?.() === false) return [];
   return traceWorkStopped(input) ? [] : symbols;

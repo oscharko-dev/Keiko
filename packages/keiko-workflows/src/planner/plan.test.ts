@@ -9,7 +9,12 @@ import {
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 
-import { createExplorationPlan, type ExplorationPlan } from "./plan.js";
+import {
+  createExplorationPlan,
+  directDefinitionSymbol,
+  isDirectEvidenceLookup,
+  type ExplorationPlan,
+} from "./plan.js";
 
 function happyScope(overrides: Partial<SelectedScope> = {}): SelectedScope {
   return {
@@ -191,6 +196,45 @@ describe("createExplorationPlan", () => {
     expect(p.anchors.some((anchor) => anchor.term === "windowframe")).toBe(true);
     expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
     expect(p.clarification).toBeUndefined();
+  });
+
+  it.each([
+    "Untersuche den aktuell verbundenen Ordner rekursiv. Wo sind LateAuxiliaryProbe und DeepAuxiliaryProbe implementiert, und welche Werte liefern sie? Was steht in ADR-987654 und ADR-987655 zum Wartungsintervall? Nenne belegte Dateien und Zeilen und unterscheide fehlende Evidenz von nicht vorhandenen Dateien.",
+    "Was steht in ADR-987654 und RFC-987655 zum Wartungsintervall? Nenne belegte Dateien und Zeilen.",
+  ])("keeps explicitly named source and document facts direct: %s", (text) => {
+    const p = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({ text }),
+    });
+    expect(p.state).toBe("ready");
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
+  });
+
+  it("preserves one-symbol lexical narrowing separately from multi-target direct evidence", () => {
+    const query = happyQuery({ text: "Where are WindowFrame and ChatPanel implemented?" });
+    const anchors = [
+      { term: "windowframe", kind: "identifier", weight: 0.85 },
+      { term: "chatpanel", kind: "identifier", weight: 0.85 },
+    ] as const;
+    expect(isDirectEvidenceLookup(query, anchors)).toBe(true);
+    expect(directDefinitionSymbol(query, anchors)).toBeUndefined();
+    expect(directDefinitionSymbol(query, anchors.slice(0, 1))).toBe("windowframe");
+  });
+
+  it.each([
+    "Where are WindowFrame and ChatPanel defined and called by their callers?",
+    "Where are WindowFrame and ChatPanel implemented and imported?",
+    "Where are WindowFrame and ChatPanel defined and exercised by integration tests?",
+    "Where are WindowFrameTest and ChatPanelSpec implemented?",
+    "Where are WindowFrame and ChatPanel defined and how have they changed?",
+    "Where are WindowFrame and ChatPanel defined and why do they fail?",
+    "Trace the implementation of WindowFrame and ChatPanel from route to handler.",
+  ])("preserves requested relationships and diagnostics for multiple targets: %s", (text) => {
+    const p = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query: happyQuery({ text }),
+    });
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
   });
 
   it("explicitConnection: workspace-root allows lowercase definition lookups", () => {

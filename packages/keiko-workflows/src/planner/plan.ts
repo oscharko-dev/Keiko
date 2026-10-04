@@ -292,6 +292,35 @@ export function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boole
   );
 }
 
+const DIRECT_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
+const REQUESTED_TEST_RELATION_RE =
+  /\b(?:tests?|testing|tested|specs?|integration|integrations|integrationstests?|testet|getestet)\b/iu;
+
+// Direct named evidence needs definition/document discovery, while requested relationships and
+// diagnostics retain their structural/history routing. The single-symbol narrowing API below
+// remains separate so a multi-target question cannot accidentally become a one-symbol query.
+export function isDirectEvidenceLookup(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+): boolean {
+  if (
+    requiresRelationshipOrHistoryRings(query) ||
+    REQUESTED_TEST_RELATION_RE.test(query.text) ||
+    classifyRetrievalIntent(query.text).intent === "diagnostic-search"
+  )
+    return false;
+  const targets = anchors.filter(
+    (anchor) =>
+      (anchor.kind === "identifier" || anchor.kind === "quoted") &&
+      anchor.weight >= 0.85 &&
+      /^[a-z_$][a-z0-9_$-]*$/iu.test(anchor.term),
+  );
+  if (targets.length === 0) return false;
+  return hasDefinitionLookup(query.text)
+    ? targets.every((anchor) => !isTestIdentifier(query.text, anchor.term))
+    : targets.every((anchor) => DIRECT_DOCUMENT_REFERENCE_RE.test(anchor.term));
+}
+
 export function directDefinitionSymbol(
   query: RetrievalQuery,
   anchors: readonly SearchAnchor[],
@@ -319,8 +348,7 @@ function composeRings(
   budget: ExplorationBudget,
 ): readonly RetrievalRing[] {
   const rings: RetrievalRing[] = [buildRing("lexical", anchors, budget)];
-  const directLookup =
-    isDirectRouteLookup(query) || directDefinitionSymbol(query, anchors) !== undefined;
+  const directLookup = isDirectRouteLookup(query) || isDirectEvidenceLookup(query, anchors);
   if (!directLookup && (hasKind(anchors, "identifier") || hasKind(anchors, "path"))) {
     rings.push(buildRing("structural", anchors, budget));
   }

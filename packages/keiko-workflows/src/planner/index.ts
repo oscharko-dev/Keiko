@@ -26,6 +26,7 @@ export type {
 export {
   createExplorationPlan,
   directDefinitionSymbol,
+  isDirectEvidenceLookup,
   requiresRelationshipOrHistoryRings,
 } from "./plan.js";
 

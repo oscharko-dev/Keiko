@@ -2876,7 +2876,11 @@ function symbolFileAnchorTerms(plan: ExplorationPlan): readonly string[] {
     if ((anchor.kind !== "identifier" && anchor.kind !== "quoted") || anchor.weight < 0.7) {
       continue;
     }
-    if (!/^[a-z_$][a-z0-9_$-]+$/u.test(anchor.term) || anchor.term.includes(".")) {
+    if (
+      !/^[a-z_$][a-z0-9_$-]+$/u.test(anchor.term) ||
+      anchor.term.includes(".") ||
+      DOCUMENT_REFERENCE_ANCHOR_RE.test(anchor.term)
+    ) {
       continue;
     }
     if (!seen.has(anchor.term)) {

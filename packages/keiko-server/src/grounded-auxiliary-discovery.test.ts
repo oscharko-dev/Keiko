@@ -111,6 +111,54 @@ afterAll(() => {
 });
 
 describe("grounded auxiliary discovery traverses the complete admitted scope", () => {
+  it("answers explicitly requested implementation and document facts without relationship searches", async () => {
+    const text =
+      "Untersuche den aktuell verbundenen Ordner rekursiv. Wo sind LateAuxiliaryProbe und DeepAuxiliaryProbe implementiert, und welche Werte liefern sie? Was steht in ADR-987654 und ADR-987655 zum Wartungsintervall? Nenne belegte Dateien und Zeilen und unterscheide fehlende Evidenz von nicht vorhandenen Dateien.";
+    const output = await retrieveConnectedContextPack(request(text), {
+      correlationId: undefined,
+      answerer: { answer: () => Promise.reject(new Error("Retrieval must not call the model.")) },
+      nowMs: () => NOW,
+      detectWorkspace: workspace,
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toEqual(
+      expect.arrayContaining([
+        "zzzz/LateAuxiliaryProbe.ts",
+        `${deepDirectory}/DeepAuxiliaryProbe.ts`,
+        "zzzz/ADR-987654-late.md",
+        `${deepDirectory}/ADR-987655-deep.md`,
+      ]),
+    );
+    expect(output.plan.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
+    expect(output.pack.usage.searchCalls).toBe(3);
+    // The fixture's 110 repeated neighboring implementations legitimately clip lexical output;
+    // retain that disclosure while avoiding any unrequested structural/history warning.
+    expect(output.pack.diagnostics?.coverage?.reasons).toEqual(["match-cap"]);
+    expect(output.pack.uncertainty).toHaveLength(1);
+    expect(output.pack.uncertainty[0]?.claim).toContain("repository search coverage");
+    expect(validateConnectedContextPack(output.pack).ok).toBe(true);
+  }, 60_000);
+
+  it("retains document discovery for an explicit document-only fact question", async () => {
+    const output = await retrieveConnectedContextPack(
+      request(
+        "Was steht in ADR-987654 und ADR-987655 zum Wartungsintervall? Nenne belegte Dateien und Zeilen.",
+      ),
+      {
+        correlationId: undefined,
+        answerer: { answer: () => Promise.reject(new Error("Retrieval must not call the model.")) },
+        nowMs: () => NOW,
+        detectWorkspace: workspace,
+      },
+    );
+    expect(output.pack.files.map((file) => file.scopePath)).toEqual(
+      expect.arrayContaining(["zzzz/ADR-987654-late.md", `${deepDirectory}/ADR-987655-deep.md`]),
+    );
+    expect(output.plan.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
+    expect(output.pack.usage.searchCalls).toBe(2);
+    expect(output.pack.uncertainty).toEqual([]);
+    expect(validateConnectedContextPack(output.pack).ok).toBe(true);
+  }, 60_000);
+
   it("retains a separately requested implementation after more than 96 earlier matches", async () => {
     const input = request(
       "Where are FairAlphaProbe and FairBetaProbe implemented? Cite both actual files and lines.",

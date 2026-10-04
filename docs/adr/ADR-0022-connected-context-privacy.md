@@ -149,6 +149,9 @@ policy. Each requested filename pattern retains a bounded independent result buc
 shared traversal per batch. Actual source-line inspection and final candidate ordering preserve
 distinct requested targets before the accepted read and context budgets select answer evidence;
 a popular first target must not displace every result for another explicitly requested target.
+Direct named implementation and ADR/RFC fact questions use lexical evidence plus the required
+filename batches; they do not schedule unrelated graph or history traversal. Explicit relationship,
+caller, import, test, integration, history, and diagnostic questions retain their structural routing.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
 the accepted file-read budget, preserving primary root manifests before nested services. Workspace
