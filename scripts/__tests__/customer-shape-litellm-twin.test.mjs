@@ -414,13 +414,65 @@ describe("synthetic gateway transport profile", () => {
   function fixtureRequest(stream) {
     return {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "x-litellm-key": apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY),
+      },
       body: JSON.stringify({
         stream,
         messages: [{ role: "user", content: "private fixture prompt" }],
       }),
     };
   }
+
+  it("rejects unauthenticated transport chat and malformed authenticated requests", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true });
+    try {
+      const url = `${twin.baseUrl}/chat/completions`;
+      const denied = await fetch(url, { ...fixtureRequest(false), headers: {} });
+      expect(denied.status).toBe(401);
+      expect(await denied.json()).toEqual({ error: { type: "authentication_error" } });
+      const invalid = await fetch(url, { ...fixtureRequest(false), body: "{" });
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toEqual({ error: { type: "invalid_request_error" } });
+      expect(twin.requests).toEqual([]);
+    } finally {
+      await twin.close();
+    }
+  });
+
+  it("offers a usable default URL for the transport profile", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true });
+    try {
+      const response = await fetch(`${twin.baseUrl}/chat/completions`, fixtureRequest(false));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("transport test completed");
+    } finally {
+      await twin.close();
+    }
+  });
+
+  it("closes active delayed connections without waiting for the configured pause", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 60_000 });
+    const url = `${new URL(twin.baseUrl).origin}/pause35/v1/chat/completions`;
+    const controller = new globalThis.AbortController();
+    let closing;
+    try {
+      const response = await fetch(url, { ...fixtureRequest(true), signal: controller.signal });
+      const reader = response.body.getReader();
+      await reader.read();
+      let closed = false;
+      closing = twin.close().then(() => {
+        closed = true;
+      });
+      await vi.waitFor(() => expect(closed).toBe(true), { timeout: 500 });
+      await expect(reader.read()).rejects.toThrow();
+      reader.releaseLock();
+    } finally {
+      controller.abort();
+      await (closing ?? twin.close());
+    }
+  });
 
   it("keeps basic readiness valid before exercising a truncated interactive stream", async () => {
     const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true });

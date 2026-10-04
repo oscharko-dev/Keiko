@@ -241,6 +241,7 @@ function transportReply(response, stream, text = "Synthetic gateway transport te
 }
 
 async function transportWait(response, milliseconds) {
+  if (response.destroyed) return false;
   const controller = new globalThis.AbortController();
   const cancel = () => controller.abort();
   response.once("close", cancel);
@@ -337,14 +338,26 @@ function handleTransportRequest(request, response, requests, options) {
     return;
   }
   if (request.method === "POST" && (request.url ?? "").endsWith("/chat/completions")) {
+    if (!acceptChatAuthentication(request, response)) return;
     void transportChat(request, response, requests, options, scenario).catch(() => {
       if (!response.destroyed && !response.headersSent)
         sendJson(response, { error: { type: "invalid_request_error" } }, 400);
+      else if (!response.destroyed) response.destroy();
     });
     return;
   }
   request.resume();
   sendJson(response, { error: { type: "not_found" } }, 404);
+}
+
+function acceptChatAuthentication(request, response) {
+  if (
+    request.headers["x-litellm-key"] === apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY)
+  )
+    return true;
+  request.resume();
+  sendJson(response, { error: { type: "authentication_error" } }, 401);
+  return false;
 }
 
 function handleTwinRequest(request, response, requests, behavior) {
@@ -370,13 +383,7 @@ function handleTwinRequest(request, response, requests, behavior) {
     return;
   }
   if (request.method === "POST" && url.endsWith("/chat/completions")) {
-    if (
-      request.headers["x-litellm-key"] !==
-      apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY)
-    ) {
-      sendJson(response, { error: { type: "authentication_error" } }, 401);
-      return;
-    }
+    if (!acceptChatAuthentication(request, response)) return;
     void handleTwinChat(request, response, requests, behavior);
     return;
   }
@@ -419,7 +426,7 @@ export async function startCustomerShapeLiteLlmTwin(options = {}) {
 
 function twinControls(server, requests, behavior, port) {
   return {
-    baseUrl: `http://127.0.0.1:${String(port)}/v1`,
+    baseUrl: `http://127.0.0.1:${String(port)}${behavior.transport ? "/immediate" : ""}/v1`,
     requests,
     rejectAllStreaming: () => {
       behavior.rejectAllStreams = true;
@@ -440,8 +447,9 @@ function twinControls(server, requests, behavior, port) {
       behavior.truncateNextAcceptedStream = true;
     },
     close: () =>
-      new Promise((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      new Promise((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      }),
   };
 }
