@@ -1522,6 +1522,73 @@ describe("GroundedAnswer", () => {
     expect(citationPreview.openCitation).toHaveBeenCalledWith(pdfCitation, "citation-chip");
   });
 
+  it.each([false, true])(
+    "strips unsafe Knowledge citation display characters without changing its target (action=%s)",
+    (action) => {
+      const citation = knowledgeCitation({
+        source: "Hand\u0001book\u200b",
+        label: "policy\u202e.pdf",
+      });
+      const preview = citationPreviewController("available", citation);
+      const { container } = render(
+        <GroundedAnswer
+          answer={localKnowledgeAnswer([citation])}
+          busy={false}
+          {...(action ? { citationPreview: preview } : {})}
+        />,
+      );
+      openEvidenceDisclosure(container);
+      const label = "[1] Handbook · policy.pdf";
+      const chip = action
+        ? screen.getByRole("button", { name: `${label} · Open PDF` })
+        : screen.getByText(label).closest(".grounded-citation");
+      if (chip === null) throw new TypeError("Missing Knowledge citation chip");
+      expect(chip).toHaveTextContent(label);
+      expect(chip.getAttribute("title")).toMatch(/^Handbook · policy\.pdf/u);
+      expect(chip.outerHTML).not.toMatch(/[\u0001\u200b\u202e]/u);
+      if (action) {
+        fireEvent.click(chip);
+        expect(preview.openCitation).toHaveBeenCalledWith(citation, "citation-chip");
+      }
+    },
+  );
+
+  it("strips unsafe manual labels, titles and sections while opening the unchanged opaque target", () => {
+    const openDocumentationTarget = vi.fn().mockReturnValue(true);
+    const target = "keiko-html-manual-citation:original-safe-target";
+    const citation = knowledgeCitation({
+      source: "Device\u0001 Handbook",
+      label: "original\u200b-label",
+      htmlManual: {
+        sourceKind: "html-manual-http",
+        pageTitle: "device\u202e.html",
+        safePageId: "safe-page",
+        sectionPath: ["Trouble\u200bshooting", "Time\u0001outs"],
+        parsedUnitId: "safe-unit",
+        targetSummary: { originSummary: "https://manual.example.invalid", pathSummary: "/…" },
+        open: { state: "available", target },
+      },
+    });
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([citation])}
+        busy={false}
+        openDocumentationTarget={openDocumentationTarget}
+      />,
+    );
+    openEvidenceDisclosure(container);
+    const chip = screen.getByRole("button", {
+      name: "[1] Device Handbook · HTML manual · device.html · Troubleshooting · Timeouts · Open manual",
+    });
+    expect(chip.getAttribute("title")).toBe(
+      "device.html · Troubleshooting · Timeouts — HTML manual evidence · Open manual",
+    );
+    expect(chip.outerHTML).not.toMatch(/[\u0001\u200b\u202e]/u);
+    fireEvent.click(chip);
+    expect(openDocumentationTarget).toHaveBeenCalledWith(target);
+    expect(citation.htmlManual?.pageTitle).toBe("device\u202e.html");
+  });
+
   it("opens a recoverable PDF citation chip through active authorization", () => {
     const pdfCitation = knowledgeCitation({ label: "policy.pdf" });
     const citationPreview = citationPreviewController("recoverable", pdfCitation);

@@ -979,9 +979,11 @@ function knowledgeCitationLabel(
   if (citation.htmlManual !== undefined) {
     return manualCitationLabel(citation, t);
   }
-  return citation.source === undefined
-    ? `${citation.marker} ${citation.label}`
-    : `${citation.marker} ${citation.source} · ${citation.label}`;
+  const label =
+    citation.source === undefined
+      ? `${citation.marker} ${citation.label}`
+      : `${citation.marker} ${citation.source} · ${citation.label}`;
+  return stripUnsafeFormatChars(label);
 }
 
 function LocalKnowledgeCitationList({
@@ -1041,21 +1043,27 @@ function knowledgeCitationTitle(
   if (citation.htmlManual !== undefined) {
     const section = citation.htmlManual.sectionPath?.join(" · ");
     const suffix = section === undefined ? "" : ` · ${section}`;
-    return `${citation.htmlManual.pageTitle}${suffix} — ${t("grounded.manual.evidence")}`;
+    return stripUnsafeFormatChars(
+      `${citation.htmlManual.pageTitle}${suffix} — ${t("grounded.manual.evidence")}`,
+    );
   }
-  return citation.source === undefined ? citation.label : `${citation.source} · ${citation.label}`;
+  const title =
+    citation.source === undefined ? citation.label : `${citation.source} · ${citation.label}`;
+  return stripUnsafeFormatChars(title);
 }
 
 function manualCitationLabel(citation: LocalKnowledgeEvidenceCitation, t: I18nTranslate): string {
   const manual = citation.htmlManual;
-  if (manual === undefined) return `${citation.marker} ${citation.label}`;
+  if (manual === undefined) return stripUnsafeFormatChars(`${citation.marker} ${citation.label}`);
   const source =
     citation.source === undefined
       ? t("grounded.manual.name")
       : `${citation.source} · ${t("grounded.manual.name")}`;
   const section = manual.sectionPath?.join(" · ");
   const sectionSuffix = section === undefined || section.length === 0 ? "" : ` · ${section}`;
-  return `${citation.marker} ${source} · ${manual.pageTitle}${sectionSuffix}`;
+  return stripUnsafeFormatChars(
+    `${citation.marker} ${source} · ${manual.pageTitle}${sectionSuffix}`,
+  );
 }
 
 // Curated, short copy for every governed reason a manual citation cannot be reopened — mirrors the
