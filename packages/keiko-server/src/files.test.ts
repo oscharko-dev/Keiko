@@ -1812,6 +1812,48 @@ describe("desktop files browser", () => {
     expect(await readFile(join(root, "bad.txt"))).toEqual(badBytes);
   });
 
+  it.each(["é", "€", "😀"])(
+    "previews, opens and saves UTF-8 characters crossing the classification prefix (%s)",
+    async (character) => {
+      const content = `${"a".repeat(4095)}${character} valid tail\n`;
+      await writeFile(join(root, "boundary"), content);
+      expect(await readFilesPreview(store, root, "boundary", buildRedactor({}))).toMatchObject({
+        kind: "text",
+        canEdit: true,
+        content,
+      });
+      expect((await readFilesContent(store, root, "boundary")).content).toBe(content);
+      const saved = await writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "boundary",
+        content: `${content}updated\n`,
+      });
+      expect(saved.content).toBe(`${content}updated\n`);
+      expect(await readFile(join(root, "boundary"), "utf8")).toBe(saved.content);
+    },
+  );
+
+  it.each([
+    Buffer.concat([Buffer.alloc(4095, 97), Buffer.from([0xc3])]),
+    Buffer.concat([Buffer.alloc(4094, 97), Buffer.from([0xc3, 0x28]), Buffer.from("tail")]),
+    Buffer.concat([Buffer.alloc(4095, 97), Buffer.from([0xff]), Buffer.from("tail")]),
+    Buffer.concat([Buffer.alloc(4095, 97), Buffer.from([0]), Buffer.from("tail")]),
+  ])("does not admit invalid UTF-8 or NUL in the prefix (%#)", async (bytes) => {
+    await writeFile(join(root, "invalid"), bytes);
+    expect(await readFilesPreview(store, root, "invalid", buildRedactor({}))).toMatchObject({
+      kind: "binary",
+      reason: "unsupported",
+    });
+    await expect(readFilesContent(store, root, "invalid")).rejects.toMatchObject({
+      code: "UNSUPPORTED_FILE",
+    });
+    await expect(
+      writeFilesContent({ store, rootInput: root, pathInput: "invalid", content: "replacement" }),
+    ).rejects.toMatchObject({ code: "UNSUPPORTED_FILE" });
+    expect(await readFile(join(root, "invalid"))).toEqual(bytes);
+  });
+
   it("treats a mostly-printable file containing a supplementary-plane character as editable text", async () => {
     // "😀" (U+1F600) is a 2-UTF-16-code-unit surrogate pair. The printable-ratio scan iterates by
     // Unicode code point and must not misclassify it as a non-printable control character (which

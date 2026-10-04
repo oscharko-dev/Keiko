@@ -1486,9 +1486,13 @@ function isKnownTextExtension(extension: string | null): boolean {
   return extension !== null && TEXT_EXTENSIONS.has(extension);
 }
 
-function decodeUtf8(buffer: Buffer): string | null {
+function decodeUtf8(buffer: Buffer, incompletePrefix = false): string | null {
   try {
-    return UTF8_DECODER.decode(buffer);
+    // A bounded prefix can end inside a valid sequence. A fresh streaming decoder holds only
+    // that incomplete tail while still rejecting malformed bytes already present in the prefix.
+    return incompletePrefix
+      ? new TextDecoder("utf-8", { fatal: true }).decode(buffer, { stream: true })
+      : UTF8_DECODER.decode(buffer);
   } catch {
     return null;
   }
@@ -1504,16 +1508,14 @@ function decodedTextLooksPrintable(decoded: string): boolean {
   return printable / decoded.length > 0.85;
 }
 
-function isLikelyUtf8Text(buffer: Buffer): boolean {
-  if (buffer.includes(0)) return false;
-  const decoded = decodeUtf8(buffer);
-  return decoded !== null && decodedTextLooksPrintable(decoded);
-}
-
-function isEditableUtf8File(extension: string | null, buffer: Buffer): boolean {
-  const decoded = decodeUtf8(buffer);
+function isEditableUtf8File(
+  extension: string | null,
+  buffer: Buffer,
+  incompletePrefix = false,
+): boolean {
+  const decoded = decodeUtf8(buffer, incompletePrefix);
   if (decoded === null || buffer.includes(0)) return false;
-  return isKnownTextExtension(extension) || isLikelyUtf8Text(buffer);
+  return isKnownTextExtension(extension) || decodedTextLooksPrintable(decoded);
 }
 
 async function readPrefix(
@@ -1703,7 +1705,7 @@ async function textPreview(
     canEdit:
       decoded.encoding === "utf-8" &&
       target.stats.size <= MAX_TEXT_PREVIEW_BYTES &&
-      isEditableUtf8File(base.extension, bytes.buffer.subarray(0, 4096)),
+      isEditableUtf8File(base.extension, bytes.buffer),
   };
 }
 
@@ -1881,7 +1883,7 @@ export async function readFilesContent(
     target.identity,
     Math.min(target.stats.size, 4096),
   );
-  if (!isEditableUtf8File(base.extension, prefix.buffer)) {
+  if (!isEditableUtf8File(base.extension, prefix.buffer, prefix.truncated)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
   return editableTextContent(target);
@@ -2077,7 +2079,7 @@ async function writeResolvedFilesContent(args: {
     args.target.identity,
     Math.min(args.target.stats.size, 4096),
   );
-  if (!isEditableUtf8File(base.extension, prefix.buffer)) {
+  if (!isEditableUtf8File(base.extension, prefix.buffer, prefix.truncated)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
   if (Buffer.byteLength(args.content, "utf8") > MAX_TEXT_PREVIEW_BYTES) {
