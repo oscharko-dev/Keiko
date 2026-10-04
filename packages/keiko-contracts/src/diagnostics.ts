@@ -99,6 +99,16 @@ export const CLIENT_VOICE_DIALOGUE_STAGES = [
 ] as const;
 export type ClientVoiceDialogueStage = (typeof CLIENT_VOICE_DIALOGUE_STAGES)[number];
 
+/** Shared failure classification for browser severity, rate admission and server persistence. */
+export const CLIENT_VOICE_DIALOGUE_FAILURE_STAGES: ReadonlySet<ClientVoiceDialogueStage> = new Set([
+  "preparation-failed",
+  "queue-unavailable",
+  "delivery-failed",
+  "delivery-cancelled",
+  "delivery-rejected",
+  "capture-renewal-failed",
+]);
+
 // Browser-side delivery loss the page counted since its previous accepted report (#3532). Each
 // value is a bounded non-negative count, never content: the pre-transport buffer evicting its
 // oldest record, the client-side POST throttle dropping a report, a POST that failed, and
@@ -320,6 +330,16 @@ export function isClientDiagnosticFrame(value: unknown): value is string {
   );
 }
 
+/** Persisted browser coordinates carry only the reducer's digest and bounded coordinates. */
+export function isPersistedClientDiagnosticFrame(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^dist\/ui\/static\/_next\/static\/chunks\/sha256-[a-f0-9]{64}\.js:\d{1,8}:\d{1,8}$/u.test(
+      value,
+    )
+  );
+}
+
 export interface ClientErrorEvidence {
   readonly errorClass: string;
   readonly frames: readonly string[];
@@ -365,6 +385,56 @@ export function isClientMarkdownLayout(value: unknown): value is ClientMarkdownL
   );
 }
 
+export const CLIENT_COMPOSER_ACTIVITIES = [
+  "initialized",
+  "input-limit",
+  "code-ready",
+  "code-language-detected",
+  "format-removed",
+  "cursor-collision",
+  "workspace-scroll-ready",
+  "workspace-layout-locked",
+  "workspace-layout-unlocked",
+  "literal-input-preserved",
+  "draft-resynchronized",
+  "equivalent-edit-ignored",
+  "stale-draft-echo-ignored",
+  "non-text-paste-ignored",
+  "text-copied",
+] as const;
+export type ClientComposerActivity = (typeof CLIENT_COMPOSER_ACTIVITIES)[number];
+export const CLIENT_COMPOSER_CODE_STAGES = [
+  "module-load",
+  "runtime",
+  "language",
+  "theme",
+  "theme-tokens",
+  "theme-register",
+  "editor-mount",
+  "editor-wiring",
+] as const;
+export type ClientComposerCodeStage = (typeof CLIENT_COMPOSER_CODE_STAGES)[number];
+const COMPOSER_ACTIVITIES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_ACTIVITIES);
+const COMPOSER_CODE_STAGES: ReadonlySet<unknown> = new Set(CLIENT_COMPOSER_CODE_STAGES);
+
+function hasValidComposerContext(value: Record<string, unknown>): boolean {
+  if (
+    value.composerFocusIndicator !== undefined &&
+    (value.composerFocusIndicator !== "keyboard" || value.composerActivity !== "initialized")
+  )
+    return false;
+  if (!isOptional(value.composerCodeStage, (stage) => COMPOSER_CODE_STAGES.has(stage)))
+    return false;
+  if (value.composerActivity === undefined) return true;
+  return (
+    COMPOSER_ACTIVITIES.has(value.composerActivity) &&
+    value.kind === undefined &&
+    value.errorKind === undefined &&
+    value.errorEvidence === undefined &&
+    value.composerCodeStage === undefined
+  );
+}
+
 export interface ClientDiagnosticIngestRequest {
   readonly message: string;
   readonly clientTs: string;
@@ -380,11 +450,18 @@ export interface ClientDiagnosticIngestRequest {
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
   readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly renderFailure?: "shell" | "window-body" | undefined;
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
   readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
+  readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
+  readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
+  readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
+  readonly composerActivity?: ClientComposerActivity | undefined;
+  readonly composerFocusIndicator?: "keyboard" | undefined;
+  readonly composerCodeStage?: ClientComposerCodeStage | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
@@ -564,17 +641,49 @@ function hasValidGitContext(value: Record<string, unknown>): boolean {
   );
 }
 
+function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.voiceCaptureReason, isClientVoiceCaptureReason) &&
+    isOptional(value.voiceCaptureError, isClientVoiceCaptureError)
+  );
+}
+
+// The closed, routine report shapes that may ride a message report (select dismissal, catalog).
+function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
+  return (
+    isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal) &&
+    isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
+    isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
+    isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech)
+  );
+}
+
+function hasValidRenderFailure(value: Record<string, unknown>): boolean {
+  if (value.renderFailure === undefined) return true;
+  return (
+    value.kind === "boundary" &&
+    (value.renderFailure === "shell" || value.renderFailure === "window-body")
+  );
+}
+
+function hasValidOperationalContext(value: Record<string, unknown>): boolean {
+  return hasValidVoiceCaptureContext(value) && hasValidGitContext(value);
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
   const { errorKind, loss, parentCorrelationId } = value;
   if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
   if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
   if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
-  if (!isOptional(value.voiceCaptureReason, isClientVoiceCaptureReason)) return false;
-  if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
-  if (!hasValidGitContext(value)) return false;
-  if (!isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal)) return false;
-  return hasValidCodingContext(value) && hasValidClientLoss(value.kind, loss);
+  if (!hasValidRenderFailure(value)) return false;
+  if (!hasValidOperationalContext(value)) return false;
+  if (!hasValidClosedReportContext(value)) return false;
+  return (
+    hasValidComposerContext(value) &&
+    hasValidCodingContext(value) &&
+    hasValidClientLoss(value.kind, loss)
+  );
 }
 
 function hasValidClientLoss(kind: unknown, loss: unknown): boolean {
@@ -617,6 +726,12 @@ export const CLIENT_STAGE_IDS = [
   "editor widget chunk",
   "files widget chunk",
   "chat bind",
+  "command palette",
+  "chat history deletion",
+  "files directory load",
+  "files directory navigation",
+  "files project selection",
+  "editor project selection",
 ] as const;
 export type ClientStageId = (typeof CLIENT_STAGE_IDS)[number];
 
@@ -632,6 +747,12 @@ export const CLIENT_STAGE_ORDINAL_MAX = 1_000_000;
 // anymore (a hung tab, not a slow one) — cap it instead of carrying an unbounded number on the wire.
 export const CLIENT_STAGE_DURATION_MS_MAX = 86_400_000;
 
+export interface ClientChatHistoryDeletionCounts {
+  readonly requestedCount: number;
+  readonly deletedCount: number;
+  readonly failedCount: number;
+}
+
 // One correlation id per mounted stage (#3557 review): `started` and `settled` carry the same id, so
 // the pair joins in the log even when another tab reuses the same stage and ordinal.
 export interface ClientStageStartedIngestRequest {
@@ -640,6 +761,7 @@ export interface ClientStageStartedIngestRequest {
   readonly phase: "started";
   readonly ordinal: number;
   readonly correlationId?: string | undefined;
+  readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
 }
 
 export interface ClientStageSettledIngestRequest {
@@ -649,6 +771,8 @@ export interface ClientStageSettledIngestRequest {
   readonly ordinal: number;
   readonly durationMs: number;
   readonly correlationId?: string | undefined;
+  readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
+  readonly navigationOutcome?: ClientNavigationOutcome | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -663,7 +787,60 @@ const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "ordinal",
   "durationMs",
   "correlationId",
+  "deletion",
+  "navigationOutcome",
 ]);
+
+export const CLIENT_NAVIGATION_OUTCOMES = [
+  "applied",
+  "unavailable",
+  "failed",
+  "dropped",
+  "stale",
+  "cancelled",
+  "deferred",
+] as const;
+export type ClientNavigationOutcome = (typeof CLIENT_NAVIGATION_OUTCOMES)[number];
+const NAVIGATION_OUTCOMES: ReadonlySet<string> = new Set(CLIENT_NAVIGATION_OUTCOMES);
+const NAVIGATION_OUTCOME_STAGES: ReadonlySet<string> = new Set([
+  "editor project selection",
+  "files directory load",
+  "files directory navigation",
+  "files project selection",
+]);
+
+function hasValidNavigationOutcome(value: Record<string, unknown>): boolean {
+  if (value.navigationOutcome === undefined) return true;
+  return (
+    value.phase === "settled" &&
+    typeof value.stage === "string" &&
+    NAVIGATION_OUTCOME_STAGES.has(value.stage) &&
+    typeof value.navigationOutcome === "string" &&
+    NAVIGATION_OUTCOMES.has(value.navigationOutcome)
+  );
+}
+
+const CHAT_HISTORY_DELETION_COUNT_KEYS: ReadonlySet<string> = new Set([
+  "requestedCount",
+  "deletedCount",
+  "failedCount",
+]);
+
+function hasValidStageDeletion(value: Record<string, unknown>): boolean {
+  if (value.stage !== "chat history deletion") return value.deletion === undefined;
+  const counts = value.deletion;
+  if (!isRecord(counts)) return false;
+  if (Object.keys(counts).some((key) => !CHAT_HISTORY_DELETION_COUNT_KEYS.has(key))) return false;
+  if (!isBoundedPositiveInteger(counts.requestedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (!isBoundedNonNegativeInteger(counts.deletedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (!isBoundedNonNegativeInteger(counts.failedCount, CLIENT_STAGE_ORDINAL_MAX)) return false;
+  if (value.phase === "started") return counts.deletedCount === 0 && counts.failedCount === 0;
+  return counts.deletedCount + counts.failedCount === counts.requestedCount;
+}
+
+function hasValidStageContext(value: Record<string, unknown>): boolean {
+  return hasValidStageDeletion(value) && hasValidNavigationOutcome(value);
+}
 
 function isClientStageId(value: unknown): value is ClientStageId {
   return typeof value === "string" && CLIENT_STAGE_ID_SET.has(value);
@@ -693,6 +870,7 @@ export function isClientStageIngestRequest(value: unknown): value is ClientStage
   if (!isClientStageId(value.stage)) return false;
   if (!isBoundedPositiveInteger(value.ordinal, CLIENT_STAGE_ORDINAL_MAX)) return false;
   if (!isOptional(value.correlationId, isCorrelationIdShape)) return false;
+  if (!hasValidStageContext(value)) return false;
   if (value.phase === "started") return value.durationMs === undefined;
   if (value.phase === "settled") {
     return isBoundedNonNegativeInteger(value.durationMs, CLIENT_STAGE_DURATION_MS_MAX);
@@ -1197,6 +1375,123 @@ export function isClientDiagnosticSelectDismissal(
   return (
     isSetMember(value.reason, SELECT_DISMISSAL_REASON_SET) &&
     isSetMember(value.focus, SELECT_DISMISSAL_FOCUS_SET)
+  );
+}
+
+// ─── Knowledge Pod catalog availability (PR #3678 review) ─────────────────────────
+//
+// The chat's Knowledge Pod picker offered no usable pod: every bound pod is missing or not ready,
+// or no pod is ready at all. Counts only — never a pod name, path or id — so the Activity Log can
+// tell a missing bound pod from one that is still indexing without a free-text message.
+
+export const CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX = 100_000;
+
+export interface ClientDiagnosticKnowledgeCatalog {
+  readonly podCount: number;
+  readonly readyPodCount: number;
+  readonly setCount: number;
+  readonly boundCount: number;
+  readonly missingCount: number;
+  readonly notReadyCount: number;
+}
+
+const KNOWLEDGE_CATALOG_COUNT_KEYS: ReadonlySet<string> = new Set([
+  "podCount",
+  "readyPodCount",
+  "setCount",
+  "boundCount",
+  "missingCount",
+  "notReadyCount",
+]);
+
+/** True for exactly the six bounded, non-negative catalog counts and no other field. */
+export function isClientDiagnosticKnowledgeCatalog(
+  value: unknown,
+): value is ClientDiagnosticKnowledgeCatalog {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== KNOWLEDGE_CATALOG_COUNT_KEYS.size) return false;
+  return keys.every(
+    (key) =>
+      KNOWLEDGE_CATALOG_COUNT_KEYS.has(key) &&
+      isBoundedNonNegativeInteger(value[key], CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX),
+  );
+}
+
+// ─── Chat answer copy (PR #3678 review) ─────────────────────────────────────────
+//
+// The copy button removes a grounded answer's in-range citation markers and keeps every other
+// bracket (code, an ordinary answer, an index beyond the references). Counts only — never the
+// copied text — so the log shows that the path ran, what it removed and kept, and a failure.
+
+export const CLIENT_ANSWER_COPY_OUTCOMES = ["copied", "failed"] as const;
+export type ClientAnswerCopyOutcome = (typeof CLIENT_ANSWER_COPY_OUTCOMES)[number];
+
+export interface ClientDiagnosticAnswerCopy {
+  readonly outcome: ClientAnswerCopyOutcome;
+  readonly grounded: boolean;
+  /** Citation marker groups removed from the copied text. */
+  readonly strippedGroupCount: number;
+  /** Numeric bracket groups outside code kept as content. */
+  readonly keptGroupCount: number;
+}
+
+const ANSWER_COPY_OUTCOME_SET: ReadonlySet<string> = new Set(CLIENT_ANSWER_COPY_OUTCOMES);
+const ANSWER_COPY_KEYS: ReadonlySet<string> = new Set([
+  "outcome",
+  "grounded",
+  "strippedGroupCount",
+  "keptGroupCount",
+]);
+
+/** True for exactly the closed copy outcome, the grounded flag and the two bounded counts. */
+export function isClientDiagnosticAnswerCopy(value: unknown): value is ClientDiagnosticAnswerCopy {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== ANSWER_COPY_KEYS.size || keys.some((key) => !ANSWER_COPY_KEYS.has(key))) {
+    return false;
+  }
+  return (
+    isSetMember(value.outcome, ANSWER_COPY_OUTCOME_SET) &&
+    typeof value.grounded === "boolean" &&
+    isBoundedNonNegativeInteger(value.strippedGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX) &&
+    isBoundedNonNegativeInteger(value.keptGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX)
+  );
+}
+
+// ─── Chat answer read aloud (PR #3678 review) ───────────────────────────────────
+//
+// The voice dialogue reads an answer aloud without its grounded citation markers and keeps every
+// other bracket, a repository path included. Counts only — never the spoken text — reported under
+// the correlation the synthesis request carries, so the spoken turn and its preparation join.
+
+export interface ClientDiagnosticAnswerSpeech {
+  readonly grounded: boolean;
+  /** Citation marker groups removed from the spoken text. */
+  readonly strippedGroupCount: number;
+  /** Numeric bracket groups outside code kept as spoken content. */
+  readonly keptGroupCount: number;
+}
+
+const ANSWER_SPEECH_KEYS: ReadonlySet<string> = new Set([
+  "grounded",
+  "strippedGroupCount",
+  "keptGroupCount",
+]);
+
+/** True for exactly the grounded flag and the two bounded counts. */
+export function isClientDiagnosticAnswerSpeech(
+  value: unknown,
+): value is ClientDiagnosticAnswerSpeech {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== ANSWER_SPEECH_KEYS.size || keys.some((key) => !ANSWER_SPEECH_KEYS.has(key))) {
+    return false;
+  }
+  return (
+    typeof value.grounded === "boolean" &&
+    isBoundedNonNegativeInteger(value.strippedGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX) &&
+    isBoundedNonNegativeInteger(value.keptGroupCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX)
   );
 }
 

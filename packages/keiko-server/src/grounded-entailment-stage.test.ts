@@ -17,6 +17,13 @@ import { defaultServerDiagnosticSink, type ServerDiagnosticRecord } from "./diag
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const MODEL_ID = "test-chat-model";
 const NOW = 1_700_000_000_000;
@@ -312,6 +319,40 @@ describe("createEntailmentStage — active flagging", () => {
     );
     expect(markers?.map((marker) => marker.kind)).toEqual(["unsupported-claim"]);
     expect(markers?.[0]?.claim).toContain("[1]");
+  });
+
+  // PR #3678 review: one marker stands for every unentailed claim, so the displayed total must be
+  // reconstructable from the log: the verdict counts land on search.entailment.judged.
+  it("records the judged, unsupported and undecided claim counts on the verdict line", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const stage = createEntailmentStage(
+        depsWith(portReturning('{"verdict":"unsupported"}')),
+        [],
+        MODEL_ID,
+        { correlationId: "corr-entailment-verdict" },
+      );
+      await stage?.evaluateNumeric(
+        "Retention is ten years [1]. Backups run hourly [2]. Keys rotate daily [3].",
+        [1, 2, 3].map((marker) => ({ marker, excerptText: "Retention: 30 days" })),
+        NOW,
+      );
+
+      const event = sink.events.find((entry) => entry.op === "search.entailment.judged");
+      const record = expectActivityLogProof(
+        "search.entailment.judged.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(record).toMatchObject({
+        correlationId: "corr-entailment-verdict",
+        judgedClaimCount: 3,
+        unsupportedClaimCount: 3,
+        unavailableClaimCount: 0,
+      });
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("caveats an answer whose cited claims run past the per-answer claim ceiling", async () => {

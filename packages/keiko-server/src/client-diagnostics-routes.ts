@@ -35,7 +35,7 @@
 //
 // KEIKO-3557: this route accepts TWO closed report shapes on the same rate limit, size bound, and
 // rejection/loss accounting above. A message report (the shape this header describes) reaches
-// `client.diagnostic` — a FAILURE, always at warn. A stage report (`useWindowStageEvidence`,
+// `client.diagnostic` — a FAILURE, at error for timeouts and warn otherwise. A stage report (`useWindowStageEvidence`,
 // keiko-ui: a desktop window placeholder mounting and later unmounting) reaches
 // `client.stage.started`/`client.stage.settled` instead — the ORDINARY case, at info, with no
 // `errorKind`. Routing routine evidence through the failure-shaped operation is exactly the defect
@@ -71,6 +71,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_COMPOSER_ACTIVITIES,
+  CLIENT_COMPOSER_CODE_STAGES,
+  CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   isClientBindingIngestRequest,
@@ -121,6 +124,37 @@ const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEYS = {
   routine: "client-diagnostics-routine",
   loss: "client-diagnostics-loss",
 } as const;
+
+const CLIENT_COMPOSER_ACTIVITY = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.composer.activity",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientComposerActivity",
+  fields: {
+    activity: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_COMPOSER_ACTIVITIES,
+    },
+    focusIndicator: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["keyboard"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-diagnostic"],
+  proofIds: ["client.composer.activity.line"],
+  releaseImpact: "patch",
+});
 
 const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -299,6 +333,12 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientDiagnostic",
   fields: {
+    composerCodeStage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_COMPOSER_CODE_STAGES,
+    },
     codingIssueOutcome: {
       type: "string",
       dataClass: "closed-enum",
@@ -325,6 +365,12 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: ["git-sync", "git-history"],
+    },
+    renderFailure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["shell", "window-body"],
     },
     clientNoteDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     readyState: { type: "integer", dataClass: "count", required: false },
@@ -505,6 +551,12 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "editor-widget-chunk",
   "files-widget-chunk",
   "chat-bind",
+  "command-palette",
+  "chat-history-deletion",
+  "files-directory-load",
+  "files-directory-navigation",
+  "files-project-selection",
+  "editor-project-selection",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -513,6 +565,12 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "editor widget chunk": "editor-widget-chunk",
   "files widget chunk": "files-widget-chunk",
   "chat bind": "chat-bind",
+  "command palette": "command-palette",
+  "chat history deletion": "chat-history-deletion",
+  "files directory load": "files-directory-load",
+  "files directory navigation": "files-directory-navigation",
+  "files project selection": "files-project-selection",
+  "editor project selection": "editor-project-selection",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its
@@ -528,6 +586,9 @@ const CLIENT_STAGE_FIELDS = {
     values: CLIENT_STAGE_ACTIVITY_LOG_IDS,
   },
   ordinal: { type: "integer", dataClass: "count", required: true },
+  requestedCount: { type: "integer", dataClass: "count", required: false },
+  deletedCount: { type: "integer", dataClass: "count", required: false },
+  failedCount: { type: "integer", dataClass: "count", required: false },
 } as const;
 
 const CLIENT_STAGE_STARTED_OPERATION = defineActivityLogOperation({
@@ -553,7 +614,15 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
   category: "diagnostic",
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientStageSettled",
-  fields: CLIENT_STAGE_FIELDS,
+  fields: {
+    ...CLIENT_STAGE_FIELDS,
+    navigationOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["applied", "unavailable", "failed", "dropped", "stale", "cancelled", "deferred"],
+    },
+  },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -921,6 +990,107 @@ const CLIENT_GIT_OPERATION_ATTEMPTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// PR #3678 review: the chat's Knowledge Pod picker offered no usable pod. The availability counts
+// used to ride only the free-text message, which ingest reduces to a digest, so the log could not
+// tell a missing bound pod from one still indexing. One line per distinct picture, counts only.
+const CLIENT_KNOWLEDGE_CATALOG_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.knowledge-catalog.unavailable",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientKnowledgeCatalog",
+  fields: {
+    podCount: { type: "integer", dataClass: "count", required: true },
+    readyPodCount: { type: "integer", dataClass: "count", required: true },
+    setCount: { type: "integer", dataClass: "count", required: true },
+    boundCount: { type: "integer", dataClass: "count", required: true },
+    missingCount: { type: "integer", dataClass: "count", required: true },
+    notReadyCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-knowledge-catalog"],
+  proofIds: ["client.knowledge-catalog.unavailable.line"],
+  releaseImpact: "patch",
+});
+
+// PR #3678 review: the chat copy button strips a grounded answer's in-range citation markers and
+// keeps every other bracket. One line per copy: whether it succeeded, whether the answer was
+// grounded, and how many marker groups were removed and kept — never the copied text. A failed copy
+// carries its closed error kind and the page's reduced frames.
+const CLIENT_ANSWER_COPIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.answer.copied",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientAnswerCopy",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["copied", "failed"],
+    },
+    grounded: { type: "boolean", dataClass: "closed-enum", required: true },
+    strippedGroupCount: { type: "integer", dataClass: "count", required: true },
+    keptGroupCount: { type: "integer", dataClass: "count", required: true },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 128 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+      maxLength: 512,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+      maxLength: 128,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-answer-copy"],
+  proofIds: ["client.answer.copied.line"],
+  releaseImpact: "patch",
+});
+
+// PR #3678 review: the voice dialogue reads an answer aloud without its grounded citation markers
+// and keeps every other bracket. One line per spoken turn, under the correlation its synthesis
+// request carries: whether the answer was grounded and how many marker groups were removed and
+// kept — never the spoken text. Preparation cannot fail, so it always spends the routine budget.
+const CLIENT_ANSWER_SPEECH_PREPARED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.answer.speech-prepared",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientAnswerSpeech",
+  fields: {
+    grounded: { type: "boolean", dataClass: "closed-enum", required: true },
+    strippedGroupCount: { type: "integer", dataClass: "count", required: true },
+    keptGroupCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-answer-speech"],
+  proofIds: ["client.answer.speech-prepared.line"],
+  releaseImpact: "patch",
+});
+
 // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits — the
 // trigger, the search box, or an option — instead of leaving it to the workspace's own Escape
 // shortcut, which otherwise would have cleared the window selection while the menu stayed open. This
@@ -1188,15 +1358,6 @@ function clientDiagnosticErrorKind(
   return kind === undefined ? "unknown" : CLIENT_DIAGNOSTIC_ERROR_KINDS[kind];
 }
 
-const VOICE_FAILURE_STAGES = new Set([
-  "preparation-failed",
-  "queue-unavailable",
-  "delivery-failed",
-  "delivery-cancelled",
-  "delivery-rejected",
-  "capture-renewal-failed",
-]);
-
 function clientDiagnosticCorrelation(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
@@ -1218,7 +1379,7 @@ function logVoiceDialogueStage(
   correlationId: string,
 ): boolean {
   const stage = request.voiceDialogueStage;
-  if (stage === undefined || VOICE_FAILURE_STAGES.has(stage)) return false;
+  if (stage === undefined || CLIENT_VOICE_DIALOGUE_FAILURE_STAGES.has(stage)) return false;
   const extra: Record<string, unknown> = {
     voiceDialogueStage: stage,
     ...(request.voiceCaptureError === undefined
@@ -1291,6 +1452,7 @@ function projectClientFailure(
   extra: Record<string, unknown>,
 ): void {
   if (request.moduleLoadFailure !== undefined) extra.moduleLoadFailure = request.moduleLoadFailure;
+  if (request.renderFailure !== undefined) extra.renderFailure = request.renderFailure;
   if (request.errorEvidence !== undefined) {
     extra.errorClass = request.errorEvidence.errorClass;
     extra.frames = request.errorEvidence.frames;
@@ -1404,6 +1566,99 @@ function logClientSelectDismissed(
   return true;
 }
 
+function projectClientStageContext(
+  request: ClientDiagnosticIngestRequest,
+  extra: Record<string, unknown>,
+): void {
+  if (request.composerCodeStage !== undefined) extra.composerCodeStage = request.composerCodeStage;
+  if (request.readyState !== undefined) extra.readyState = request.readyState;
+  if (request.kind !== undefined) extra.clientKind = request.kind;
+  if (request.voiceDialogueStage !== undefined)
+    extra.voiceDialogueStage = request.voiceDialogueStage;
+}
+
+function logClientKnowledgeCatalog(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const catalog = request.knowledgeCatalog;
+  if (catalog === undefined) return false;
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_KNOWLEDGE_CATALOG_UNAVAILABLE_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      { ...catalog, completeness: "complete", loss: "none" },
+    ),
+  );
+  return true;
+}
+
+function answerCopyFailureEvidence(
+  request: ClientDiagnosticIngestRequest,
+): Readonly<Record<string, unknown>> {
+  const evidence = request.errorEvidence;
+  return evidence === undefined
+    ? {}
+    : {
+        errorClass: evidence.errorClass,
+        frames: evidence.frames,
+        causeChain: evidence.causeChain,
+      };
+}
+
+function logClientAnswerCopy(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const copy = request.answerCopy;
+  if (copy === undefined) return false;
+  const failed = copy.outcome === "failed";
+  const envelope = clientDiagnosticCorrelation(request, correlationId);
+  const logger = getServerLogger();
+  const event = activityLogEvent(
+    CLIENT_ANSWER_COPIED_OPERATION,
+    failed ? { ...envelope, errorKind: request.errorKind ?? "unavailable" } : envelope,
+    {
+      ...copy,
+      ...(failed ? answerCopyFailureEvidence(request) : {}),
+      completeness: "complete",
+      loss: "none",
+    },
+  );
+  if (failed) logger.warn(event);
+  else logger.info(event);
+  return true;
+}
+
+function logClientAnswerSpeech(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const speech = request.answerSpeech;
+  if (speech === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_ANSWER_SPEECH_PREPARED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      { ...speech, completeness: "complete", loss: "none" },
+    ),
+  );
+  return true;
+}
+
+// The closed report shapes, each of which owns its own registered line.
+function logClosedClientReport(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  return (
+    logClientSelectDismissed(request, correlationId) ||
+    logClientKnowledgeCatalog(request, correlationId) ||
+    logClientAnswerCopy(request, correlationId) ||
+    logClientAnswerSpeech(request, correlationId)
+  );
+}
+
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
@@ -1416,7 +1671,8 @@ function logClientDiagnostic(
     logVoiceDialogueStage(request, correlationId) ||
     logMarkdownLayout(request, correlationId) ||
     logClientGitOperationSettled(request, correlationId) ||
-    logClientSelectDismissed(request, correlationId)
+    logClientComposerActivity(request, correlationId) ||
+    logClosedClientReport(request, correlationId)
   ) {
     return;
   }
@@ -1424,17 +1680,16 @@ function logClientDiagnostic(
     clientNoteDigest: clientDiagnosticNoteDigest(request.message),
   };
   projectClientFailure(request, extra);
-  if (request.readyState !== undefined) extra.readyState = request.readyState;
-  if (request.kind !== undefined) extra.clientKind = request.kind;
-  if (request.voiceDialogueStage !== undefined) {
-    extra.voiceDialogueStage = request.voiceDialogueStage;
-  }
+  projectClientStageContext(request, extra);
   projectGitContext(request, extra);
   projectCodingContext(request, extra);
   projectClientLoss(request.loss, extra);
   extra.completeness = "complete";
   extra.loss = "none";
-  getServerLogger().warn(
+  // Failed operations and browser crashes must reach the existing automatic incident trigger.
+  const logger = getServerLogger();
+  const level = clientDiagnosticLevel(request);
+  logger[level](
     activityLogEvent(
       CLIENT_DIAGNOSTIC_OPERATION,
       {
@@ -1444,6 +1699,39 @@ function logClientDiagnostic(
       extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
     ),
   );
+}
+
+function clientDiagnosticLevel(request: ClientDiagnosticIngestRequest): "warn" | "error" {
+  const errorKind = requestDiagnosticErrorKind(request);
+  return errorKind === "timeout" ||
+    request.renderFailure !== undefined ||
+    request.moduleLoadFailure !== undefined ||
+    request.kind === "window-error" ||
+    request.kind === "unhandled-rejection"
+    ? "error"
+    : "warn";
+}
+
+function logClientComposerActivity(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  if (request.composerActivity === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_COMPOSER_ACTIVITY,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        activity: request.composerActivity,
+        ...(request.composerFocusIndicator === undefined
+          ? {}
+          : { focusIndicator: request.composerFocusIndicator }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
 }
 
 function logClientStageStarted(
@@ -1457,6 +1745,7 @@ function logClientStageStarted(
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
+        ...request.deletion,
         completeness: "complete",
         loss: "none",
       },
@@ -1475,6 +1764,10 @@ function logClientStageSettled(
       {
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
+        ...request.deletion,
+        ...(request.navigationOutcome === undefined
+          ? {}
+          : { navigationOutcome: request.navigationOutcome }),
         completeness: "complete",
         loss: "none",
       },
@@ -1861,9 +2154,35 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
 // failure, exactly like a binding that resolved or a session repair that recovered (#3625 review) —
 // and a select menu's Escape dismissal, which has no failure variant at all (PR #3625 review,
 // KeikoSelect.tsx finding).
+function isRoutineVoiceReport(report: ClientDiagnosticIngestRequest): boolean {
+  if (report.errorKind !== undefined || report.errorEvidence !== undefined) return false;
+  if (report.kind === "markdown-layout" && report.markdownLayout !== undefined) return true;
+  return (
+    report.kind === "voice-dialogue" &&
+    report.voiceDialogueStage !== undefined &&
+    !CLIENT_VOICE_DIALOGUE_FAILURE_STAGES.has(report.voiceDialogueStage)
+  );
+}
+
+// The closed report shapes: a select dismissal and a catalog picture are routine, and an answer copy
+// spends the failure budget only when it failed.
+function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget | undefined {
+  if (
+    report.selectDismissal !== undefined ||
+    report.knowledgeCatalog !== undefined ||
+    report.answerSpeech !== undefined
+  ) {
+    return "routine";
+  }
+  if (report.answerCopy === undefined) return undefined;
+  return report.answerCopy.outcome === "failed" ? "failure" : "routine";
+}
+
 function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget {
   if (report.kind === "delivery-loss") return "loss";
-  if (report.selectDismissal !== undefined) return "routine";
+  const closed = closedReportBudget(report);
+  if (closed !== undefined) return closed;
+  if (report.composerActivity !== undefined || isRoutineVoiceReport(report)) return "routine";
   const outcome = report.gitClientOperation?.outcome;
   if (outcome === undefined) return "failure";
   return CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome) ? "failure" : "routine";

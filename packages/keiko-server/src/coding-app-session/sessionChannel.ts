@@ -16,7 +16,6 @@ import {
 } from "./channelContract.js";
 import {
   isWellFormedSessionPairingAttestation,
-  LOCAL_APP_SESSION_PRINCIPAL_LABEL,
   type SessionPairingPort,
 } from "./sessionPairingPort.js";
 import type { AppSession, SessionRegistry } from "./sessionRegistry.js";
@@ -46,9 +45,7 @@ export type CodingAppSessionRotateResult =
   { readonly rotated: true; readonly cookieToken: string } | { readonly rotated: false };
 
 export type CodingAppSessionEnsureResult =
-  | { readonly status: "active" }
-  | { readonly status: "issued"; readonly cookieToken: string }
-  | { readonly status: "unavailable" };
+  { readonly status: "active" } | { readonly status: "unavailable" };
 
 export interface CodingAppSessionChannel {
   readonly pair: (attestation: unknown) => CodingAppSessionPairResult;
@@ -360,13 +357,11 @@ function pairSession(
 
 function ensureLocalSession(
   registry: SessionRegistry,
-  pairingPort: SessionPairingPort | undefined,
   cookieToken: string | undefined,
 ): CodingAppSessionEnsureResult {
-  if (registry.verify(cookieToken) !== undefined) return { status: "active" };
-  if (pairingPort === undefined) return { status: "unavailable" };
-  const mint = registry.mint(LOCAL_APP_SESSION_PRINCIPAL_LABEL);
-  return { status: "issued", cookieToken: mint.cookieToken };
+  return registry.verify(cookieToken) === undefined
+    ? { status: "unavailable" }
+    : { status: "active" };
 }
 
 export function createCodingAppSessionChannel(
@@ -378,7 +373,7 @@ export function createCodingAppSessionChannel(
     pair: (attestation: unknown): CodingAppSessionPairResult =>
       pairSession(registry, pairingPort, attestation),
     ensureLocalSession: (cookieToken: string | undefined): CodingAppSessionEnsureResult => {
-      return ensureLocalSession(registry, pairingPort, cookieToken);
+      return ensureLocalSession(registry, cookieToken);
     },
     snapshot: (cookieToken: string | undefined): CodingAppSessionChannelSnapshot => {
       const session = registry.verify(cookieToken);

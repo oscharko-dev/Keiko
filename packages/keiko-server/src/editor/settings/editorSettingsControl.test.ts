@@ -378,7 +378,7 @@ describe("editor settings control service", () => {
       expectedRevision: 1,
       idempotencyKey: "configure-focus",
       profileRef: profileRef("profile-focus"),
-      values: { fontSize: 18, keybindingOverrides: ["1|quick-access.files|CtrlOrMeta+Shift+O"] },
+      values: { fontSize: 18, keybindingOverrides: ["1|workspace.commands|CtrlOrMeta+Shift+O"] },
     });
     await mutateProfile(control, {
       action: "switch",
@@ -862,7 +862,7 @@ describe("editor settings control service", () => {
       expectedRevision: 1,
       idempotencyKey: "snapshot-race-profile-set",
       profileRef: profileRef("profile-race"),
-      values: { keybindingOverrides: ["1|quick-access.files|CtrlOrMeta+Shift+O"] },
+      values: { keybindingOverrides: ["1|workspace.commands|CtrlOrMeta+Shift+O"] },
     });
     await mutateProfile(base, {
       action: "switch",

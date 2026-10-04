@@ -8,6 +8,34 @@ import {
   type ManagedTaskWorkspaceAccess,
 } from "./cards/ManagedTaskWorkspaceUnavailable";
 
+type TaskWorkspaceContext = Pick<WindowRenderContext, "activeBinding" | "activeInstance">;
+
+// Local execution uses the registered checkout itself. Missing or inconsistent instance metadata
+// retains the private-workspace classification instead of trusting a window's root configuration.
+function isLocalCheckout(ctx: TaskWorkspaceContext): boolean {
+  const binding = ctx.activeBinding;
+  const instance = ctx.activeInstance;
+  return (
+    binding !== null &&
+    instance?.executionLocation === "local" &&
+    instance.workspaceId === binding.workspaceId &&
+    instance.taskId === binding.taskId &&
+    instance.repositoryRoot === binding.activeRoot &&
+    instance.managedWorktreePath === binding.activeRoot
+  );
+}
+
+export function isManagedTaskWorkspaceRoot(
+  ctx: TaskWorkspaceContext,
+  targetRoot: string | undefined,
+): boolean {
+  return (
+    ctx.activeBinding !== null &&
+    targetRoot === ctx.activeBinding.activeRoot &&
+    !isLocalCheckout(ctx)
+  );
+}
+
 // One predicate for "this window targets the bound managed task-workspace root and the paired read
 // authority is not confirmed", shared by the editor, Files and Git hosts (release-audit F-08, PR
 // #3452 review) so no surface can disagree about when the managed root is presentable. The managed
@@ -15,13 +43,11 @@ import {
 // session (ADR-0141); when authority is missing the host renders the paired-session note instead of
 // the raw denials.
 export function managedTaskWorkspaceAccess(
-  ctx: Pick<WindowRenderContext, "activeBinding">,
+  ctx: TaskWorkspaceContext,
   targetRoot: string | undefined,
   workspace: Pick<WorkspaceManifestView, "pathReadAuthority">,
 ): ManagedTaskWorkspaceAccess | null {
-  return ctx.activeBinding !== null &&
-    targetRoot === ctx.activeBinding.activeRoot &&
-    workspace.pathReadAuthority !== "available"
+  return isManagedTaskWorkspaceRoot(ctx, targetRoot) && workspace.pathReadAuthority !== "available"
     ? workspace.pathReadAuthority
     : null;
 }
@@ -36,7 +62,7 @@ export function ManagedTaskWorkspaceGate({
   root,
   children,
 }: {
-  readonly ctx: Pick<WindowRenderContext, "activeBinding">;
+  readonly ctx: TaskWorkspaceContext;
   readonly root: string | undefined;
   readonly children: ReactNode;
 }): ReactNode {

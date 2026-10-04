@@ -1,7 +1,11 @@
 "use client";
 
-import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import {
+  createSameOriginApiEventSource,
+  sameOriginApiEventSourceUrl,
+} from "../../../../../lib/safe-event-source";
+import {
+  acquirePersistentBrowserStreamCapacity,
   backgroundBrowserStreamsSuspended,
   subscribeBrowserStreamCapacity,
 } from "../../../../../lib/browser-stream-capacity";
@@ -21,6 +25,7 @@ type SharedEventListener = (event: MessageEvent<string>) => void;
 interface SharedEventSourceEntry {
   readonly url: string;
   source: EventSource | null;
+  capacityLease: (() => void) | undefined;
   readonly subscribersByType: Map<string, Set<SharedEventListener>>;
   readonly dispatchersByType: Map<string, EventListener>;
   refCount: number;
@@ -54,6 +59,11 @@ const RECONNECT_JITTER_MS = 500;
 let visibilityListenerInstalled = false;
 let capacityUnsubscribe: (() => void) | undefined;
 let nextSourceGeneration = 0;
+// Leave connections for finite reads, diagnostics, the run stream and development HMR.
+const MAX_SHARED_CONNECTIONS = 3;
+const STREAM_LEASE_MS = 5_000;
+let budgetTimer: number | undefined;
+const budgetCursors = { essential: 0, background: 0 };
 
 export interface SharedEventSourceOptions {
   readonly priority?: "essential" | "background";
@@ -109,7 +119,13 @@ function dispatcherFor(entry: SharedEventSourceEntry, type: string): EventListen
   if (dispatcher !== undefined) return dispatcher;
   dispatcher = (event: Event): void => {
     sourceGenerationByEvent.set(event, entry.sourceGeneration);
-    recordLastEventId(entry, event, type === "editor-debug:snapshot-required");
+    recordLastEventId(
+      entry,
+      event,
+      type === "editor-debug:snapshot-required" ||
+        type === "editor-watch:snapshot" ||
+        type === "editor-watch:snapshot-required",
+    );
     const subscribers = entry.subscribersByType.get(type);
     if (subscribers === undefined || subscribers.size === 0) return;
     for (const subscriber of subscribers) {
@@ -122,6 +138,9 @@ function dispatcherFor(entry: SharedEventSourceEntry, type: string): EventListen
 }
 
 function closeEntrySource(entry: SharedEventSourceEntry): void {
+  const release = entry.capacityLease;
+  entry.capacityLease = undefined;
+  release?.();
   if (entry.source === null) return;
   for (const [type, dispatcher] of entry.dispatchersByType) {
     removeSourceListener(entry.source, type, dispatcher);
@@ -141,7 +160,7 @@ function scheduleReconnect(entry: SharedEventSourceEntry): void {
   }
   entry.reconnectTimer = window.setTimeout(() => {
     entry.reconnectTimer = undefined;
-    openEntrySource(entry);
+    refreshStreamBudget();
   }, reconnectDelay(entry));
 }
 
@@ -195,12 +214,30 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   if (
     entry.refCount === 0 ||
     entry.source !== null ||
+    entry.capacityLease !== undefined ||
     (entry.essentialRefCount === 0 && backgroundBrowserStreamsSuspended()) ||
     documentHidden() ||
-    typeof EventSource === "undefined"
+    typeof EventSource === "undefined" ||
+    sameOriginApiEventSourceUrl(entry.url) === null
   ) {
     return;
   }
+  entry.failureStreakCorrelationId ??= newClientCorrelationId();
+  entry.capacityLease = acquirePersistentBrowserStreamCapacity(
+    () => connectEntrySource(entry),
+    (reason) => {
+      closeEntrySource(entry);
+      if (reason === "unavailable") scheduleReconnect(entry);
+      queueMicrotask(() => refreshStreamBudget());
+    },
+    {
+      yieldable: replayableEntry(entry),
+      correlationId: entry.failureStreakCorrelationId,
+    },
+  );
+}
+
+function connectEntrySource(entry: SharedEventSourceEntry): void {
   const source = createSameOriginApiEventSource(resumeUrl(entry));
   if (source === null) return;
   nextSourceGeneration += 1;
@@ -217,32 +254,112 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
     closeEntrySource(entry);
     repairSessionOnce(entry, streak);
     scheduleReconnect(entry);
+    refreshStreamBudget();
   };
   for (const type of entry.subscribersByType.keys()) {
     source.addEventListener(type, dispatcherFor(entry, type));
   }
 }
 
-function reconcileCapacity(backgroundStreamsSuspended: boolean): void {
+function clearBudgetTimer(): void {
+  if (budgetTimer === undefined) return;
+  window.clearInterval(budgetTimer);
+  budgetTimer = undefined;
+}
+
+function eligibleEntries(): SharedEventSourceEntry[] {
+  if (documentHidden()) return [];
+  return [...sourcesByUrl.values()].filter(
+    (entry) =>
+      entry.refCount > 0 &&
+      entry.reconnectTimer === undefined &&
+      (entry.essentialRefCount > 0 || !backgroundBrowserStreamsSuspended()),
+  );
+}
+
+function replayableEntry(entry: SharedEventSourceEntry): boolean {
+  const path = entry.url.split("?")[0] ?? "";
+  return (
+    entry.essentialRefCount === 0 ||
+    path.startsWith("/api/editor/workspace-watch/") ||
+    path.startsWith("/api/editor/watch/") ||
+    path.startsWith("/api/editor/debug/")
+  );
+}
+
+function hasLease(entry: SharedEventSourceEntry): boolean {
+  return entry.source !== null || entry.capacityLease !== undefined;
+}
+
+function rotateEntries(
+  entries: readonly SharedEventSourceEntry[],
+  slots: number,
+  priority: "essential" | "background",
+): SharedEventSourceEntry[] {
+  if (entries.length === 0) return [];
+  budgetCursors[priority] = (budgetCursors[priority] + slots) % entries.length;
+  const offset = budgetCursors[priority];
+  return [...entries.slice(offset), ...entries.slice(0, offset)];
+}
+
+function retainLeasedEntries(entries: readonly SharedEventSourceEntry[]): SharedEventSourceEntry[] {
+  return [...entries.filter(hasLease), ...entries.filter((entry) => !hasLease(entry))];
+}
+
+function selectBudgetEntries(
+  entries: readonly SharedEventSourceEntry[],
+  order: typeof rotateEntries,
+): Set<SharedEventSourceEntry> {
+  const pinned = entries.filter((entry) => !replayableEntry(entry) && hasLease(entry));
+  const essential = entries.filter(
+    (entry) => entry.essentialRefCount > 0 && !pinned.includes(entry),
+  );
+  const background = entries.filter((entry) => entry.essentialRefCount === 0);
+  const essentialSlots = Math.min(MAX_SHARED_CONNECTIONS - pinned.length, essential.length);
+  const backgroundSlots = MAX_SHARED_CONNECTIONS - pinned.length - essentialSlots;
+  return new Set(
+    [
+      ...pinned,
+      ...order(essential, essentialSlots, "essential"),
+      ...order(background, backgroundSlots, "background"),
+    ].slice(0, MAX_SHARED_CONNECTIONS),
+  );
+}
+
+// Keep healthy leases stable between contention ticks. Essential streams precede recoverable
+// background metadata; active streams without replay retain their connection until completion.
+function refreshStreamBudget(mode: "retain" | "rotate" = "retain"): void {
+  const entries = eligibleEntries();
+  const selected = selectBudgetEntries(
+    entries,
+    mode === "rotate" ? rotateEntries : retainLeasedEntries,
+  );
   for (const entry of sourcesByUrl.values()) {
-    if (entry.essentialRefCount > 0) {
-      openEntrySource(entry);
-    } else if (backgroundStreamsSuspended) {
-      suspendEntry(entry);
-    } else {
-      openEntrySource(entry);
-    }
+    if (!selected.has(entry) && hasLease(entry)) suspendEntry(entry);
   }
+  for (const entry of selected) openEntrySource(entry);
+  if (entries.length <= MAX_SHARED_CONNECTIONS) {
+    clearBudgetTimer();
+    return;
+  }
+  budgetTimer ??= window.setInterval(() => refreshStreamBudget("rotate"), STREAM_LEASE_MS);
+}
+
+function reconcileCapacity(backgroundStreamsSuspended: boolean): void {
+  if (backgroundStreamsSuspended) {
+    budgetCursors.essential = 0;
+    budgetCursors.background = 0;
+  }
+  refreshStreamBudget();
 }
 
 function handleVisibilityChange(): void {
   if (documentHidden()) {
     for (const entry of sourcesByUrl.values()) suspendEntry(entry);
+    clearBudgetTimer();
     return;
   }
-  for (const entry of sourcesByUrl.values()) {
-    openEntrySource(entry);
-  }
+  refreshStreamBudget();
 }
 
 function ensureVisibilityListener(): void {
@@ -268,6 +385,7 @@ function entryForUrl(url: string): SharedEventSourceEntry {
   const entry: SharedEventSourceEntry = {
     url,
     source: null,
+    capacityLease: undefined,
     subscribersByType: new Map(),
     dispatchersByType: new Map(),
     refCount: 0,
@@ -283,6 +401,21 @@ function entryForUrl(url: string): SharedEventSourceEntry {
   sourcesByUrl.set(url, entry);
   ensureVisibilityListener();
   return entry;
+}
+
+function reconcileUnsubscription(entry: SharedEventSourceEntry, url: string): void {
+  if (entry.refCount > 0 && entry.essentialRefCount === 0 && backgroundBrowserStreamsSuspended()) {
+    suspendEntry(entry);
+  }
+  if (entry.refCount > 0) {
+    refreshStreamBudget();
+    return;
+  }
+  clearReconnectTimer(entry);
+  closeEntrySource(entry);
+  sourcesByUrl.delete(url);
+  refreshStreamBudget();
+  removeVisibilityListenerIfIdle();
 }
 
 export function subscribeSharedEventSource(
@@ -301,7 +434,7 @@ export function subscribeSharedEventSource(
     entry.subscribersByType.set(type, subscribers);
     dispatcherFor(entry, type);
   }
-  openEntrySource(entry);
+  refreshStreamBudget();
   // React effect cleanups may run more than once; a second call must not double-decrement the
   // ref counts (an essential underflow would suspend streams that still have live subscribers).
   let unsubscribed = false;
@@ -321,19 +454,65 @@ export function subscribeSharedEventSource(
     }
     entry.refCount -= 1;
     if (essential) entry.essentialRefCount -= 1;
-    if (
-      entry.refCount > 0 &&
-      entry.essentialRefCount === 0 &&
-      backgroundBrowserStreamsSuspended()
-    ) {
-      suspendEntry(entry);
-    }
-    if (entry.refCount > 0) return;
-    clearReconnectTimer(entry);
-    closeEntrySource(entry);
-    sourcesByUrl.delete(url);
-    removeVisibilityListenerIfIdle();
+    reconcileUnsubscription(entry, url);
   };
+}
+
+/** Wait for an actual open handshake on the shared source, with bounded cancellable cleanup. */
+export function awaitSharedEventSourceOpen(url: string, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) return Promise.reject(new DOMException("Cancelled", "AbortError"));
+  if (sourcesByUrl.get(url)?.source?.readyState === 1) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let ended = false;
+    let unsubscribe = (): void => undefined;
+    const finish = (error?: Error): void => {
+      if (ended) return;
+      ended = true;
+      window.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      unsubscribe();
+      if (error === undefined) resolve();
+      else reject(error);
+    };
+    const onAbort = (): void => finish(new DOMException("Cancelled", "AbortError"));
+    const timer = window.setTimeout(
+      () => finish(new DOMException("Stream unavailable", "TimeoutError")),
+      15_000,
+    );
+    signal?.addEventListener("abort", onAbort, { once: true });
+    unsubscribe = subscribeSharedEventSource(url, ["open", "error"], (event) => {
+      queueMicrotask(() =>
+        finish(event.type === "open" ? undefined : new TypeError("Stream unavailable")),
+      );
+    });
+  });
+}
+
+/** Keep the execution callback subscribed before its POST and throughout its completion. */
+export async function withSharedEventSourceOpen<T>(
+  url: string,
+  eventTypes: readonly string[],
+  onMessage: SharedEventListener,
+  run: () => Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  const unsubscribe = subscribeSharedEventSource(url, eventTypes, onMessage);
+  signal?.addEventListener("abort", unsubscribe, { once: true });
+  try {
+    await awaitSharedEventSourceOpen(url, signal);
+    return await run();
+  } finally {
+    signal?.removeEventListener("abort", unsubscribe);
+    unsubscribe();
+  }
+}
+
+/** Reopen one existing subscription so every consumer receives its fresh server snapshot. */
+export function refreshSharedEventSource(url: string): void {
+  const entry = sourcesByUrl.get(url);
+  if (entry === undefined) return;
+  suspendEntry(entry);
+  refreshStreamBudget();
 }
 
 export function sharedEventSourceGeneration(event: MessageEvent<string>): number {
@@ -346,6 +525,9 @@ export function resetSharedEventSourcesForTests(): void {
     closeEntrySource(entry);
   }
   sourcesByUrl.clear();
+  clearBudgetTimer();
+  budgetCursors.essential = 0;
+  budgetCursors.background = 0;
   nextSourceGeneration = 0;
   removeVisibilityListenerIfIdle();
 }

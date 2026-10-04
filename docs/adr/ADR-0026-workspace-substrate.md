@@ -28,6 +28,18 @@ Mapped against the four options in issue #525 AC3 ("no canvas / independent canv
 6. **Connections (workspace-level).** `windows/ConnectionsLayer.tsx` renders edges as SVG; `Connection` records live in workspace state. Connection hit-testing uses `windows/connectionUtils.ts`.
 7. **Graph (capsule-level).** `app/local-knowledge/connector-graph.tsx` is the capsule graph. Its state lives in `connector-graph-state.ts`. Future agent/MCP/connector graphs reuse these patterns through the registry rather than introducing a parallel graph substrate.
 
+### Workspace layout lock (2026-09-29)
+
+The header exposes a reversible layout lock owned by `useWorkspace`. Locking clears
+window selection and snap previews, freezes workspace pan/zoom and window geometry,
+and disables layout commands, dragging, resizing, and maximizing. Window contents,
+content zoom, focus, and explicit open/close/minimize actions remain usable. Wheel
+input belongs to the window under the pointer without a prior selection; reaching a
+scroll boundary never moves the workspace while locked. The owning API also guards
+commands and pointer gestures that started before the lock. Unlocking restores the
+existing canvas interactions. This lock is transient tab-session UI state under
+ADR-0027 and starts unlocked after reload; it adds no persistence store.
+
 ### Graph substrate per-term coverage
 
 Issue #525 AC5 names seven graph concepts. Each is mapped explicitly below against the existing surfaces:

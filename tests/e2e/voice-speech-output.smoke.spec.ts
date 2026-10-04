@@ -63,7 +63,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
   await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
-  await expect(composer).toHaveValue("plain typed message");
+  await expect(composer).toHaveText("plain typed message");
   await expect(page.getByRole("button", { name: "Mute assistant voice" })).toHaveCount(0);
 }
 
@@ -94,7 +94,7 @@ async function speechOutputFlow(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Unmute assistant voice" })).toBeVisible();
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("typing with assistant voice muted");
-  await expect(composer).toHaveValue("typing with assistant voice muted");
+  await expect(composer).toHaveText("typing with assistant voice muted");
 }
 
 test("assistant speech output @smoke — no-voice composer has no playback control (AC1)", async ({

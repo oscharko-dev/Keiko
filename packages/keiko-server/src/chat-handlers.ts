@@ -1,8 +1,22 @@
+import { CancelledError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { hasGroundingScope } from "./chat-grounding.js";
+import {
+  withAdoptedContextWindowRetry,
+  type ContextWindowAttempt,
+} from "./gateway-context-window.js";
+import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
 // Desktop chat BFF routes for the Keiko canvas UI. These routes intentionally keep the model call
 // behind the existing ModelPort/Gateway boundary: the browser sends only chat content and a registry
 // model id, while provider endpoints and keys remain resolved from the local gateway config/.env.
 
 import type { IncomingMessage } from "node:http";
+import {
+  captureChatHistory,
+  stampHistoryRevision,
+  type GatewayHistorySnapshot,
+} from "./chat-history-snapshot.js";
+import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
+import { rehydrateChatHistory } from "./chat-history-rehydration.js";
 import { createHash, randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import {
@@ -70,8 +84,8 @@ import {
 } from "./memory-retrieval-signals.js";
 import { reinforcementAccessIdsForAssistantUse } from "./memory-reinforcement.js";
 import {
-  ensureAnyConversationReadyChatModel,
-  ensureOnDemandConversationReadiness,
+  awaitAnyInitializedConversationReadyChatModel,
+  awaitInitializedConversationReadiness,
 } from "./gateway-readiness.js";
 import {
   extractCandidatesFromUserText,
@@ -168,6 +182,7 @@ import {
   logChatCreationRejectionEvent,
   logChatRejectionEvent,
   logChatTurnStartedEvent,
+  logChatContextSelection,
   logChatResponse,
   logGitChangeApply,
   logGitChangeDescriptionTargetDenied,
@@ -213,9 +228,14 @@ import { userFacingProjects } from "./workspace-root-membership.js";
 import {
   buildChatCompactionContextText,
   selectGatewayPromptAssembly,
+  gatewayAssemblyOutputAllocation,
   type GatewayPromptAssembly,
 } from "./chat-prompt-budget.js";
-import { MAX_CONTEXT_MESSAGES, usableGatewayMessages } from "./conversation-gateway.js";
+import {
+  MAX_CONTEXT_MESSAGES,
+  usableGatewayMessages,
+  withGatewayConversationImages,
+} from "./conversation-gateway.js";
 import type { GatewayConversationMessage } from "./conversation-gateway.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import { ConversationAttachmentStoreError } from "./conversation-attachment-store.js";
@@ -446,12 +466,19 @@ function gatewayErrorResult(
   return { status, body: errorBody(error.code, redactErrorMessage(error.message, deps)) };
 }
 
+class ChatPromptPreparationRejection extends Error {
+  constructor(readonly result: RouteResult) {
+    super("Desktop chat prompt preparation was rejected.");
+  }
+}
+
 export function desktopChatErrorResult(
   error: unknown,
   deps: UiHandlerDeps,
   correlationId?: string,
   emitDiagnostic = true,
 ): RouteResult {
+  if (error instanceof ChatPromptPreparationRejection) return error.result;
   if (error instanceof ConversationAttachmentStoreError) {
     return {
       status: 409,
@@ -1191,6 +1218,31 @@ export function settleRejectedDesktopChatTurn(
   );
 }
 
+export function settleFailedChatPromptPreparation(
+  deps: UiHandlerDeps,
+  prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
+  admitted: AdmittedTurnHandle,
+  error: unknown,
+  signal: AbortSignal,
+): void {
+  const cancelled =
+    signal.aborted ||
+    error instanceof CancelledError ||
+    (error instanceof Error && error.name === "AbortError");
+  settleRejectedDesktopChatTurn(deps, prepared, admitted, cancelled ? "cancelled" : "failed");
+}
+
+export function settlePromptPreparationRejection(
+  deps: UiHandlerDeps,
+  prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
+  admitted: AdmittedTurnHandle,
+  error: unknown,
+): boolean {
+  if (!(error instanceof ChatPromptPreparationRejection)) return false;
+  settleRejectedDesktopChatTurn(deps, prepared, admitted);
+  return true;
+}
+
 export function createAssistantMessage(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -1578,13 +1630,28 @@ async function captureActionFromOutcome(
   }
 }
 
-async function captureMemoryActions(
+function captureActionsFromOutcomes(
+  outcomes: readonly CaptureOutcome[],
+  deps: UiHandlerDeps,
+  mode: CodingWorkbenchMode,
+  surface: ConversationMemoryCaptureSurfaceWire,
+  canonicalCapture: boolean,
+): Promise<ConversationMemoryActionWire[]> {
+  return outcomes.reduce<Promise<ConversationMemoryActionWire[]>>(async (previous, outcome) => {
+    const actions = await previous;
+    const action = await captureActionFromOutcome(outcome, deps, mode, surface, canonicalCapture);
+    if (action !== null) actions.push(action);
+    return actions;
+  }, Promise.resolve([]));
+}
+
+function captureMemoryActions(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
   context: ConversationMemoryRuntimeContext,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   if (request.memory === undefined || !request.memory.enabled || deps.memoryVault === undefined) {
-    return [];
+    return Promise.resolve([]);
   }
   const outcomes = extractCandidatesFromUserText(
     request.content,
@@ -1595,20 +1662,15 @@ async function captureMemoryActions(
       }),
     },
   );
-  const actions: ConversationMemoryActionWire[] = [];
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
   const surface = request.memory.surface ?? "desktop";
-  for (const outcome of outcomes) {
-    const action = await captureActionFromOutcome(
-      outcome,
-      deps,
-      mode,
-      surface,
-      request.clientTurnId !== undefined,
-    );
-    if (action !== null) actions.push(action);
-  }
-  return actions;
+  return captureActionsFromOutcomes(
+    outcomes,
+    deps,
+    mode,
+    surface,
+    request.clientTurnId !== undefined,
+  );
 }
 
 export async function collectMemoryActions(
@@ -1705,10 +1767,7 @@ export function commitChatAfterTurn(
 // #152 — assemble the exact gateway prompt from the history snapshot captured synchronously after
 // admission. Both buffered and streaming callers exclude the admitted user by stable message id and
 // append the request exactly once, so concurrent non-turn writers cannot mutate the in-flight prompt.
-export interface GatewayTurnSnapshot {
-  readonly history: readonly ChatMessage[];
-  readonly currentUserMessageId: string;
-}
+export type GatewayTurnSnapshot = GatewayHistorySnapshot;
 
 export function gatewayHistoryPrefix(snapshot: GatewayTurnSnapshot): readonly ChatMessage[] {
   return snapshot.history.filter(
@@ -1716,19 +1775,83 @@ export function gatewayHistoryPrefix(snapshot: GatewayTurnSnapshot): readonly Ch
   );
 }
 
+export function captureAdmittedSnapshot(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  admitted: AdmittedTurnHandle,
+  signal: AbortSignal,
+  correlationId?: string,
+): GatewayTurnSnapshot {
+  try {
+    return captureGatewayTurnSnapshot(
+      deps,
+      { ...prepared.request, modelId: prepared.modelId },
+      admitted.userMessage,
+      correlationId,
+    );
+  } catch (error) {
+    settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
+    throw error;
+  }
+}
+
 export function captureGatewayTurnSnapshot(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   userMessage: ChatMessage,
+  correlationId?: string,
+  rehydrate = true,
 ): GatewayTurnSnapshot {
-  return {
-    history: deps.store.listGatewayMessages(
-      request.chatId,
-      userMessage.id,
-      CHAT_HISTORY_READ_LIMIT,
-    ),
-    currentUserMessageId: userMessage.id,
-  };
+  let checkpointDisposition: "none" | "revision-mismatch" | "available" = "none";
+  const checkpoint = loadChatContinuityCheckpoint(
+    deps.evidenceStore,
+    request.chatId,
+    deps.store.chatHistoryRevision(request.chatId),
+    correlationId,
+    (disposition) => {
+      checkpointDisposition = disposition;
+    },
+  );
+  const snapshot = captureChatHistory(
+    deps.store,
+    request.chatId,
+    userMessage.id,
+    currentContextProfileForModel(deps, request.modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    currentRedactionSecrets(deps),
+    checkpoint,
+    { correlationId, checkpointDisposition },
+  );
+  return snapshot.earlierCompaction === undefined || !rehydrate
+    ? snapshot
+    : {
+        ...snapshot,
+        rehydratedContext: rehydrateChatHistory(
+          deps.store,
+          request.chatId,
+          request.content,
+          new Set(snapshot.history.map((message) => message.id)),
+          currentRedactionSecrets(deps),
+          correlationId,
+        ),
+      };
+}
+
+function finalizeGatewayAssembly(
+  selected: GatewayPromptAssembly | undefined,
+  request: SendDesktopChatRequest,
+  correlationId: string | undefined,
+): GatewayPromptAssembly {
+  if (selected === undefined) {
+    throw new ContextOverflowError(
+      "conversation prompt exceeds the effective input budget and cannot be assembled without overflow.",
+    );
+  }
+  logChatContextSelection(
+    correlationId,
+    selected,
+    request.attachments.filter((attachment) => attachment.kind === "image").length,
+  );
+  return selected;
 }
 
 export function buildGatewayAssembly(
@@ -1737,33 +1860,59 @@ export function buildGatewayAssembly(
   memory: ConversationMemoryResultWire,
   modelId: string | undefined,
   snapshot: GatewayTurnSnapshot,
+  correlationId?: string,
 ): GatewayPromptAssembly {
-  const currentUserIndex = snapshot.history.findIndex(
+  const hasCurrentUser = snapshot.history.some(
     (message) => message.id === snapshot.currentUserMessageId,
   );
-  if (currentUserIndex < 0) {
+  if (!hasCurrentUser) {
     throw new UiStoreError("INTERNAL", "Admitted chat turn is missing from its history.", 500);
   }
   const historyPrefix = gatewayHistoryPrefix(snapshot);
   const selected = selectGatewayPromptAssembly({
+    proactiveCompaction: true,
     historyPrefix,
     historyTurnCount: usableGatewayMessages(historyPrefix).length,
     request: {
       content: request.content,
       discussionMode: request.discussionMode,
+      imageCount: request.attachments.filter((attachment) => attachment.kind === "image").length,
     },
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
     memoryEntries: memory.context.memories,
-    compactionContextText: buildChatCompactionContextText(deps.evidenceStore, request.chatId),
+    compactionContextText: buildChatCompactionContextText(
+      deps.evidenceStore,
+      request.chatId,
+      snapshot.historyRevision,
+      correlationId,
+    ),
+    continuityContextText: snapshot.rehydratedContext,
+    earlierCompaction: snapshot.earlierCompaction,
     documentContext: request.documentContext,
     redactionSecrets: currentRedactionSecrets(deps),
   });
-  if (selected === undefined) {
-    throw new ContextOverflowError(
-      "conversation prompt exceeds the effective input budget and cannot be assembled without overflow.",
-    );
-  }
-  return selected;
+  return finalizeGatewayAssembly(
+    stampGatewayCompaction(selected, deps, modelId, snapshot),
+    request,
+    correlationId,
+  );
+}
+
+function stampGatewayCompaction(
+  selected: GatewayPromptAssembly | undefined,
+  deps: UiHandlerDeps,
+  modelId: string | undefined,
+  snapshot: GatewayTurnSnapshot,
+): GatewayPromptAssembly | undefined {
+  if (selected === undefined) return undefined;
+  return {
+    ...selected,
+    compaction: stampHistoryRevision(
+      selected.compaction,
+      snapshot.historyRevision ?? 0,
+      (currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE).maxInputTokens,
+    ),
+  };
 }
 
 // ADR-0173 D5 g9 — the INPUT shape of a chat turn, never its content: how many messages the
@@ -1853,6 +2002,7 @@ export function recordChatCompaction(deps: UiHandlerDeps, turn: ChatCompactionTu
     messageCount: turn.messageCount,
     startedAt: turn.startedAt,
     finishedAt: Date.now(),
+    correlationId: turn.correlationId,
   } satisfies ChatCompactionEvidenceInput;
   persistChatCompactionEvidence(deps, input);
   scheduleCompactionModelSummary(deps, input, turn.historyPrefix, turn.correlationId);
@@ -1910,35 +2060,29 @@ function buildRegenerateGatewayAssembly(
   memory: ConversationMemoryResultWire,
   modelId: string,
   historyBeforeAssistant: readonly ChatMessage[],
+  correlationId: string | undefined,
 ): GatewayPromptAssembly {
-  let latestUserIndex = -1;
-  for (let index = historyBeforeAssistant.length - 1; index >= 0; index -= 1) {
-    if (historyBeforeAssistant[index]?.role === "user") {
-      latestUserIndex = index;
-      break;
-    }
-  }
-  const historyPrefix =
-    latestUserIndex < 0 ? historyBeforeAssistant : historyBeforeAssistant.slice(0, latestUserIndex);
-  const selected = selectGatewayPromptAssembly({
-    historyPrefix,
-    historyTurnCount: usableGatewayMessages(historyPrefix).length,
-    request: {
-      content: request.content,
-      discussionMode: request.discussionMode,
+  const user = [...historyBeforeAssistant].reverse().find((message) => message.role === "user");
+  if (user === undefined)
+    throw new UiStoreError("INTERNAL", "Regeneration user turn is missing.", 500);
+  const snapshot = captureGatewayTurnSnapshot(
+    deps,
+    { ...request, content: user.content, modelId },
+    user,
+    correlationId,
+  );
+  const currentIndex = snapshot.history.findIndex((message) => message.id === user.id);
+  return buildGatewayAssembly(
+    deps,
+    request,
+    memory,
+    modelId,
+    {
+      ...snapshot,
+      history: snapshot.history.slice(0, currentIndex + 1),
     },
-    profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
-    memoryEntries: memory.context.memories,
-    compactionContextText: buildChatCompactionContextText(deps.evidenceStore, request.chatId),
-    documentContext: request.documentContext,
-    redactionSecrets: currentRedactionSecrets(deps),
-  });
-  if (selected === undefined) {
-    throw new ContextOverflowError(
-      "conversation prompt exceeds the effective input budget and cannot be assembled without overflow.",
-    );
-  }
-  return selected;
+    correlationId,
+  );
 }
 
 function latestRegenerableTurn(
@@ -1977,15 +2121,6 @@ function latestRegenerableTurn(
     };
   }
   return { assistant, user: previousUser, beforeAssistant: messages.slice(0, targetIndex) };
-}
-
-function hasGroundingScope(chat: Chat): boolean {
-  return (
-    chat.connectedScope !== undefined ||
-    (chat.connectedScopes?.length ?? 0) > 0 ||
-    chat.localKnowledgeScope !== undefined ||
-    (chat.localKnowledgeScopes?.length ?? 0) > 0
-  );
 }
 
 function groundedRegenerateResult(): RouteResult {
@@ -2046,6 +2181,50 @@ function bufferedModelAtProviderBoundary(
       body: errorBody("NO_MODEL", "No model provider is configured."),
     }
   );
+}
+
+export async function prepareDesktopChatPrompt(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  modelId: string,
+  admission: DesktopChatExecutionAdmission,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+  operation: "chat.send.rejected" | "chat.regeneration.rejected" = "chat.send.rejected",
+): Promise<SendDesktopChatRequest> {
+  const content = await compactCurrentChatPrompt({
+    content: request.content,
+    modelId,
+    profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    signal,
+    correlationId,
+    redact: (value) => String(deps.redactor(value)),
+    call: (summaryRequest, summarySignal) => {
+      const model = bufferedModelAtProviderBoundary(
+        deps,
+        modelId,
+        admission,
+        correlationId,
+        operation,
+      );
+      if (isRouteResult(model)) throw new ChatPromptPreparationRejection(model);
+      return model.call(summaryRequest, summarySignal);
+    },
+  });
+  signal.throwIfAborted();
+  const invalid = validateDesktopChatProviderBoundary(modelId, admission, deps);
+  if (invalid !== undefined) {
+    logChatRejection(
+      operation,
+      correlationId,
+      modelId,
+      deps,
+      invalid.status,
+      desktopChatProviderBoundaryRejectionReason(modelId, admission, deps),
+    );
+    throw new ChatPromptPreparationRejection(invalid);
+  }
+  return content === request.content ? request : { ...request, content };
 }
 
 function bufferedTurnCancellationResult(
@@ -2167,6 +2346,135 @@ async function persistModelChatTurn(
   }
 }
 
+function buildBufferedGatewayAssembly(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  memory: ConversationMemoryResultWire,
+  modelId: string,
+  gatewayTurn: GatewayTurnSnapshot,
+  correlationId: string | undefined,
+): GatewayPromptAssembly {
+  const baseAssembly = buildGatewayAssembly(
+    deps,
+    request,
+    memory,
+    modelId,
+    gatewayTurn,
+    correlationId,
+  );
+  // Logged from the base assembly, BEFORE image content parts are spliced in: image delivery can
+  // still fail its own (unrelated) authority/session check below, and this shape evidence must
+  // exist either way. Splicing only augments the final message's contentParts, never message
+  // count or role — so the counted shape is identical from either assembly.
+  logChatTurnStarted(correlationId, baseAssembly.messages, request.attachments);
+  return assemblyWithConversationImages(deps, request, modelId, baseAssembly);
+}
+
+// The per-attempt inputs of one buffered assembly: the turn's abort signal and correlation, and the
+// context-window attempt that decides whether a failure is retried with the adopted window.
+interface BufferedAssemblyAttempt {
+  readonly signal: AbortSignal;
+  readonly correlationId: string | undefined;
+  readonly attempt: ContextWindowAttempt;
+}
+
+async function prepareBufferedGatewayAssembly(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  memory: ConversationMemoryResultWire,
+  admission: {
+    readonly admitted: AdmittedTurnHandle;
+    readonly executionAdmission: DesktopChatExecutionAdmission;
+  },
+  gatewayTurn: GatewayTurnSnapshot,
+  run: BufferedAssemblyAttempt,
+): Promise<GatewayPromptAssembly> {
+  const { request, modelId } = prepared;
+  const { admitted, executionAdmission } = admission;
+  const { signal, correlationId, attempt } = run;
+  try {
+    const executionRequest = await prepareDesktopChatPrompt(
+      deps,
+      request,
+      modelId,
+      executionAdmission,
+      signal,
+      correlationId,
+    );
+    return buildBufferedGatewayAssembly(
+      deps,
+      executionRequest,
+      memory,
+      modelId,
+      gatewayTurn,
+      correlationId,
+    );
+  } catch (error) {
+    // A summary call that taught Keiko the model's real window is retried with the whole turn:
+    // the admitted turn stays open for it.
+    if (!attempt.retryFollows(error)) {
+      settleFailedChatPromptPreparation(deps, prepared, admitted, error, signal);
+    }
+    throw error;
+  }
+}
+
+function callPreparedAssembly(
+  model: BufferedModelPort,
+  modelId: string,
+  assembly: GatewayPromptAssembly,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<NormalizedResponse> {
+  return model.call(
+    {
+      modelId,
+      messages: assembly.messages,
+      ...gatewayAssemblyOutputAllocation(assembly),
+      stream: false,
+      logContext: { correlationId },
+    },
+    signal,
+  );
+}
+
+// One assembled attempt: plans the prompt from the CURRENT context profile, re-checks the provider
+// boundary and calls the model. Re-run as a whole when the provider taught Keiko its real window.
+async function assembleAndCallBuffered(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  memory: ConversationMemoryResultWire,
+  admission: {
+    readonly admitted: AdmittedTurnHandle;
+    readonly executionAdmission: DesktopChatExecutionAdmission;
+  },
+  snapshot: GatewayTurnSnapshot,
+  run: BufferedAssemblyAttempt,
+): Promise<{ assembly: GatewayPromptAssembly; response: NormalizedResponse } | RouteResult> {
+  const { modelId } = prepared;
+  const { signal: abortSignal, correlationId } = run;
+  const assembly = await prepareBufferedGatewayAssembly(
+    deps,
+    prepared,
+    memory,
+    admission,
+    snapshot,
+    run,
+  );
+  const model = bufferedModelAtProviderBoundary(
+    deps,
+    modelId,
+    admission.executionAdmission,
+    correlationId,
+  );
+  if (isRouteResult(model)) {
+    settleRejectedDesktopChatTurn(deps, prepared, admission.admitted);
+    return model;
+  }
+  const response = await callPreparedAssembly(model, modelId, assembly, abortSignal, correlationId);
+  return { assembly, response };
+}
+
 async function executeBufferedModelTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
@@ -2175,30 +2483,26 @@ async function executeBufferedModelTurn(
   startedAt: number,
   correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const { request, modelId } = prepared;
+  const { modelId } = prepared;
   const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
   if (isRouteResult(outcome)) return outcome;
-  const { admitted, executionAdmission } = outcome;
+  const { admitted } = outcome;
   const { userMessage } = admitted;
-  const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
+  const snapshot = captureAdmittedSnapshot(deps, prepared, admitted, abortSignal, correlationId);
   const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal, correlationId);
   if (isRouteResult(memory)) return memory;
-  const baseAssembly = buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn);
-  // Logged from the base assembly, BEFORE image content parts are spliced in: image delivery can
-  // still fail its own (unrelated) authority/session check below, and this shape evidence must
-  // exist either way. Splicing only augments the final message's contentParts, never message
-  // count or role — so the counted shape is identical from either assembly.
-  logChatTurnStarted(correlationId, baseAssembly.messages, request.attachments);
-  const assembly = assemblyWithConversationImages(deps, request, modelId, baseAssembly);
-  const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission, correlationId);
-  if (isRouteResult(model)) {
-    settleRejectedDesktopChatTurn(deps, prepared, admitted);
-    return model;
-  }
-  const response = await model.call(
-    { modelId, messages: assembly.messages, stream: false, logContext: { correlationId } },
-    abortSignal,
+  const called = await withAdoptedContextWindowRetry(
+    deps,
+    { modelId, surface: "chat-buffered", correlationId },
+    (attempt) =>
+      assembleAndCallBuffered(deps, prepared, memory, outcome, snapshot, {
+        signal: abortSignal,
+        correlationId,
+        attempt,
+      }),
   );
+  if (isRouteResult(called)) return called;
+  const { assembly, response } = called;
   const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, abortSignal);
   if (cancelledAfterCall !== undefined) return cancelledAfterCall;
   return finalizeAndRecordBufferedTurn(
@@ -2211,7 +2515,7 @@ async function executeBufferedModelTurn(
       assembly,
       messageCount: messageCountBeforeTurn,
       startedAt,
-      historyPrefix: gatewayHistoryPrefix(gatewayTurn),
+      historyPrefix: gatewayHistoryPrefix(snapshot),
       correlationId,
     },
   );
@@ -2411,7 +2715,13 @@ async function generateAdmittedGitChangeTurn(
   signal: AbortSignal,
   correlationId: string,
 ): Promise<Awaited<ReturnType<typeof generateGitChangeChatDescription>>> {
-  const gatewayTurn = captureGatewayTurnSnapshot(deps, prepared.request, admission.userMessage);
+  const gatewayTurn = captureGatewayTurnSnapshot(
+    deps,
+    { ...prepared.request, modelId: prepared.modelId },
+    admission.userMessage,
+    correlationId,
+    false,
+  );
   return generateGitChangeChatDescription({
     deps,
     projectPath: prepared.chat.projectPath,
@@ -2566,16 +2876,15 @@ export async function handleCreateDesktopChat(
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
-  // Fresh-install gap: verify a usable model on demand BEFORE the sync readiness guard —
-  // walking past an unsuitable default (e.g. an OCR model first in the list) so a
-  // configured-but-never-probed gateway does not reject the very first chat. The walk runs
-  // only for a DEFAULTED request: for an explicit modelId the admission validates that model
-  // alone, so probing its siblings could never change the outcome — it would only add their
-  // probe latency to an already-decided answer.
+  // Reuse configuration initialization; opening a chat never sends a readiness request.
   const explicitModelId = explicitChatModelId(body);
   await (explicitModelId === undefined
-    ? ensureAnyConversationReadyChatModel(deps, defaultChatModelId(deps), ctx.correlationId)
-    : ensureOnDemandConversationReadiness(deps, explicitModelId, ctx.correlationId));
+    ? awaitAnyInitializedConversationReadyChatModel(
+        deps,
+        defaultChatModelId(deps),
+        ctx.correlationId,
+      )
+    : awaitInitializedConversationReadiness(deps, explicitModelId, ctx.correlationId));
   const modelId = modelFromBody(body, deps);
   if (isRouteResult(modelId)) {
     logChatCreationRejection(
@@ -3332,7 +3641,7 @@ export async function handleSendDesktopChat(
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
     if (activeGitChangeScope(prepared.chat) === undefined) {
-      await ensureOnDemandConversationReadiness(deps, prepared.modelId, ctx.correlationId);
+      await awaitInitializedConversationReadiness(deps, prepared.modelId, ctx.correlationId);
     }
     const gitChangeDenial = admitGitChangeScopedTurn(
       deps,
@@ -3415,42 +3724,46 @@ function canonicalTurnAsSendRequest(
   };
 }
 
-async function collectCanonicalTurnLocalMemoryActions(
+function collectCanonicalTurnLocalMemoryActions(
   deps: UiHandlerDeps,
   request: CanonicalTurnMemoryRequest,
   context: ConversationMemoryRuntimeContext | undefined,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   if (context === undefined || request.memory?.enabled !== true) {
-    return [];
+    return Promise.resolve([]);
   }
-  if (deps.memoryVault === undefined) {
-    return [];
+  const vault = deps.memoryVault;
+  if (vault === undefined) {
+    return Promise.resolve([]);
   }
-  const actions: ConversationMemoryActionWire[] = [];
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
-  for (const [messageOrdinal, message] of request.messages.entries()) {
-    if (message.role !== "user") continue;
-    const outcomes = extractCandidatesFromUserText(
-      message.content,
-      buildCaptureContext(context, request.clientTurnId, messageOrdinal),
-      {
-        ...memoryCapturePolicyForDeps(deps, {
-          resolver: createMemoryTargetResolver(deps.memoryVault),
-        }),
-      },
-    );
-    for (const outcome of outcomes) {
-      const action = await captureActionFromOutcome(
-        outcome,
-        deps,
-        mode,
-        request.memory.surface ?? "desktop",
-        request.clientTurnId !== undefined,
+  const surface = request.memory.surface ?? "desktop";
+  return request.messages.reduce<Promise<ConversationMemoryActionWire[]>>(
+    async (previous, message, messageOrdinal) => {
+      const actions = await previous;
+      if (message.role !== "user") return actions;
+      const outcomes = extractCandidatesFromUserText(
+        message.content,
+        buildCaptureContext(context, request.clientTurnId, messageOrdinal),
+        {
+          ...memoryCapturePolicyForDeps(deps, {
+            resolver: createMemoryTargetResolver(vault),
+          }),
+        },
       );
-      if (action !== null) actions.push(action);
-    }
-  }
-  return actions;
+      actions.push(
+        ...(await captureActionsFromOutcomes(
+          outcomes,
+          deps,
+          mode,
+          surface,
+          request.clientTurnId !== undefined,
+        )),
+      );
+      return actions;
+    },
+    Promise.resolve([]),
+  );
 }
 
 interface CanonicalTurnSaliencePair {
@@ -3537,15 +3850,7 @@ export function assemblyWithConversationImages(
 ): GatewayPromptAssembly {
   const imageParts = conversationImageParts(deps, request, modelId);
   if (imageParts.length === 0) return assembly;
-  const lastIndex = assembly.messages.length - 1;
-  const messages = assembly.messages.map((message, index): GatewayConversationMessage =>
-    index === lastIndex
-      ? {
-          ...message,
-          contentParts: [{ type: "text", text: message.content }, ...imageParts],
-        }
-      : message,
-  );
+  const messages = withGatewayConversationImages(assembly.messages, imageParts);
   return { ...assembly, messages };
 }
 
@@ -3719,26 +4024,45 @@ function captureGatewayGeneration(deps: UiHandlerDeps): DesktopChatExecutionAdmi
   return { gatewayConfigGeneration: deps.gatewayConfig?.generation() };
 }
 
-async function buildRegenerateMemoryAndMessages(
+function resolveRegenerateMemory(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
+): Promise<ConversationMemoryResultWire> {
+  const { memoryRequest, memoryContext } = prepared;
+  return memoryContext === undefined
+    ? Promise.resolve(emptyMemoryResult(false))
+    : buildMemoryResult(memoryRequest, deps, memoryContext);
+}
+
+async function buildRegenerateContext(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatRegenerate,
+  memory: ConversationMemoryResultWire,
+  correlationId: string | undefined,
+  signal: AbortSignal,
 ): Promise<{
-  readonly memory: ConversationMemoryResultWire;
   readonly messages: readonly GatewayConversationMessage[];
+  readonly maxOutputTokens?: number;
 }> {
-  const { modelId, turn, memoryRequest, memoryContext } = prepared;
-  const memory =
-    memoryContext === undefined
-      ? emptyMemoryResult(false)
-      : await buildMemoryResult(memoryRequest, deps, memoryContext);
-  const assembly = buildRegenerateGatewayAssembly(
+  const { modelId, turn, memoryRequest } = prepared;
+  const executionRequest = await prepareDesktopChatPrompt(
     deps,
     memoryRequest,
+    modelId,
+    prepared.executionAdmission,
+    signal,
+    correlationId,
+    "chat.regeneration.rejected",
+  );
+  const assembly = buildRegenerateGatewayAssembly(
+    deps,
+    executionRequest,
     memory,
     modelId,
     turn.beforeAssistant,
+    correlationId,
   );
-  return { memory, messages: assembly.messages };
+  return { messages: assembly.messages, ...gatewayAssemblyOutputAllocation(assembly) };
 }
 
 function validateRegenerateCommit(
@@ -3765,48 +4089,89 @@ function validateRegenerateCommit(
   return current.assistant;
 }
 
+function commitRegeneratedChatTurn(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatRegenerate,
+  memory: ConversationMemoryResultWire,
+  response: NormalizedResponse,
+): RouteResult {
+  const { chat, modelId, memoryRequest } = prepared;
+  const redactedContent = deps.redactor(response.content) as string;
+  assertUsableAssistantContent(redactedContent, modelId);
+  const currentAssistant = validateRegenerateCommit(deps, prepared);
+  if (isRouteResult(currentAssistant)) return currentAssistant;
+  const assistantMessage = deps.store.createAssistantResponseVersion(
+    currentAssistant.id,
+    redactedContent,
+    Date.now(),
+  );
+  const updatedChat = commitChatAfterTurn(deps, chat, memoryRequest, modelId);
+  return {
+    status: 200,
+    body: {
+      chat: updatedChat,
+      messages: [assistantMessage],
+      usage: response.usage,
+      memory: { ...memory, actions: [] },
+    },
+  };
+}
+
+// One regeneration attempt: plans the prompt from the CURRENT context profile and calls the model.
+// Re-run as a whole when the provider's overflow answer taught Keiko the deployment's real window.
+async function assembleAndCallRegeneration(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatRegenerate,
+  memory: ConversationMemoryResultWire,
+  signal: AbortSignal,
+  correlationId: string | undefined,
+): Promise<NormalizedResponse | RouteResult> {
+  const { modelId, executionAdmission } = prepared;
+  const { messages, maxOutputTokens } = await buildRegenerateContext(
+    deps,
+    prepared,
+    memory,
+    correlationId,
+    signal,
+  );
+  if (requestSignalAborted(signal)) return requestCancelledResult();
+  const model = bufferedModelAtProviderBoundary(
+    deps,
+    modelId,
+    executionAdmission,
+    correlationId,
+    "chat.regeneration.rejected",
+  );
+  if (isRouteResult(model)) return model;
+  return model.call(
+    {
+      modelId,
+      messages,
+      ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+      stream: false,
+      logContext: { correlationId },
+    },
+    signal,
+  );
+}
+
 async function persistRegeneratedChatTurn(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
   signal: AbortSignal,
   correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const { chat, modelId, memoryRequest, executionAdmission } = prepared;
+  const { modelId } = prepared;
   try {
-    const { memory, messages } = await buildRegenerateMemoryAndMessages(deps, prepared);
-    if (requestSignalAborted(signal)) return requestCancelledResult();
-    const model = bufferedModelAtProviderBoundary(
+    const memory = await resolveRegenerateMemory(deps, prepared);
+    const response = await withAdoptedContextWindowRetry(
       deps,
-      modelId,
-      executionAdmission,
-      correlationId,
-      "chat.regeneration.rejected",
+      { modelId, surface: "chat-buffered", correlationId },
+      () => assembleAndCallRegeneration(deps, prepared, memory, signal, correlationId),
     );
-    if (isRouteResult(model)) return model;
-    const response = await model.call(
-      { modelId, messages, stream: false, logContext: { correlationId } },
-      signal,
-    );
+    if (isRouteResult(response)) return response;
     if (requestSignalAborted(signal)) return requestCancelledResult();
-    const redactedContent = deps.redactor(response.content) as string;
-    assertUsableAssistantContent(redactedContent, modelId);
-    const currentAssistant = validateRegenerateCommit(deps, prepared);
-    if (isRouteResult(currentAssistant)) return currentAssistant;
-    const assistantMessage = deps.store.createAssistantResponseVersion(
-      currentAssistant.id,
-      redactedContent,
-      Date.now(),
-    );
-    const updatedChat = commitChatAfterTurn(deps, chat, memoryRequest, modelId);
-    return {
-      status: 200,
-      body: {
-        chat: updatedChat,
-        messages: [assistantMessage],
-        usage: response.usage,
-        memory: { ...memory, actions: [] },
-      },
-    };
+    return commitRegeneratedChatTurn(deps, prepared, memory, response);
   } catch (error) {
     return signal.aborted
       ? requestCancelledResult()
@@ -3823,7 +4188,7 @@ export async function handleRegenerateDesktopChat(
     const prepared = await parseDesktopChatRegenerate(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(prepared)) return prepared;
-    await ensureOnDemandConversationReadiness(
+    await awaitInitializedConversationReadiness(
       deps,
       prepared.request.modelId ?? prepared.chat.selectedModel,
       ctx.correlationId,

@@ -7,11 +7,14 @@ Governing decision:
 per-root Workspace Trust and Restricted Mode. Its trust-record binding dimensions are since
 narrowed by [ADR-0155](../adr/ADR-0155-root-scoped-workspace-trust-binding.md): the
 workspace-level manifest revision and digest no longer participate in validity, so focusing or
-reordering roots cannot demote a granted root. Every other ADR-0147 decision, including every
-boundary reviewed below, stands.
+reordering roots cannot demote a granted root. PR #3685 corrects the opening workflow described
+below; the server-owned authority boundaries remain in force.
 
-Issue #2523 adds the human-facing prompt, Restricted Mode banners, and per-root management view
-defined by that decision. It extends the existing `WorkspaceScriptTrustService`, verification
+Issue #2523 originally added an opening prompt, Restricted Mode banners, and per-root management
+view. PR #3685 removes the automatic opening prompt and editor warning banner. An explicit folder
+selection carries its selection intent to server registration; ordinary file navigation and
+registration without that intent do not grant trust. The workflow extends the existing
+`WorkspaceScriptTrustService`, verification
 catalog, command catalog, managed-language status, window registry, and confirmation-dialog
 patterns. It does not introduce another trust store, policy reducer, execution path, or durable
 browser store.
@@ -41,21 +44,23 @@ browser store.
 
 ## Human-control and accessibility review
 
-Opening a root never grants trust. The first prompt focuses **Stay restricted**, so Enter keeps the
-safe state; grant and revoke each require a consequence-stating confirmation and server
-acknowledgement. Restricted Mode remains visible in the editor, command runner, and managed
-language surfaces. Component and real-browser axe checks cover the prompt, banner, and management
-view, including keyboard focus, forced-color/reduced-motion rules, and 320 px layout at 200% text
-zoom.
+The user explicitly selects a folder to start working. The server resolves that folder and applies
+the existing trust service for this explicit selection, inside the deployment ceiling. Restoring a
+window or opening a file does not widen trust. No automatic modal interrupts this opening workflow.
+Per-root management retains explicit grant and revoke controls with server acknowledgement;
+revocation and narrower deployment policy continue to restrict capabilities. The original #2523
+prompt/banner accessibility evidence below describes the historical implementation, not a claim
+that removed surfaces still exist.
 
 ## Verification evidence
 
 - Contract and server regression tests cover exact status validation, registered-root rejection,
   explicit grant/revoke, and digest invalidation.
-- UI regression tests cover malformed successful responses, non-optimistic transitions,
-  confirmation focus, safe Enter behavior, honest reason copy, and axe.
+- UI regression tests cover malformed successful responses, non-optimistic transitions and
+  explicit management controls. PR #3685 additionally covers opening without an automatic trust
+  dialog and distinguishes explicit folder selection from ordinary navigation.
 - `npm run test:e2e:workspace-trust-2523` exercises the complete real-BFF restricted → trusted →
   revoked journey through user-facing controls.
 
-No trust-boundary weakening, raw-content evidence, secret-bearing diagnostic, or new unresolved
-security finding was identified in this scope.
+The historical #2523 browser journey verifies explicit per-root management. Current PR #3685
+verification and review settlement record the corrected folder-opening workflow separately.

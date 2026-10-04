@@ -317,6 +317,8 @@ export type ContextCompactionModelSummaryFailureReason =
 // Optional model-written continuity summary. This is an enrichment, not the authoritative raw
 // source: structured fields, sourceSpans, and rehydration handles remain the auditable basis.
 export interface ContextCompactionModelSummary {
+  /** Number of eligible prefix messages incorporated in this running summary. */
+  readonly coveredItems?: number | undefined;
   readonly promptVersion: typeof CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION;
   readonly modelId: string;
   readonly status?: ContextCompactionModelSummaryStatus | undefined;
@@ -334,6 +336,15 @@ export interface ContextCompactionModelSummary {
 
 // ─── Compaction record (PR1 stub extended additively) ─────────────────────── [PR2, additive]
 export interface ContextCompactionRecord {
+  /** Versioned checkpoint covering every eligible message through the recorded stable id. */
+  readonly conversationCoverage?:
+    | {
+        readonly version: 1;
+        readonly throughMessageId: string;
+        readonly historyRevision: number;
+        readonly contextWindowTokens?: number | undefined;
+      }
+    | undefined;
   // ── PR1 fields (unchanged) ───────────────────────────────
   readonly schemaVersion: typeof CONTEXT_ENGINEERING_SCHEMA_VERSION;
   readonly laneId: ContextLaneId;
@@ -728,18 +739,35 @@ export function undeclaredOutputReserveTokens(maxInputTokens: number): number {
   return Math.max(scaled, floor);
 }
 
+/**
+ * The context window a surface plans with: the declared (or provider-reported) window, or the
+ * DEFAULT_CONTEXT_PROFILE window for an unknown (0) or assumed (`contextWindowAssumed`) one. An
+ * undeclared window is not evidence of a small model, and the provider's own statement corrects the
+ * assumption (customer report on 1.1.13). Every consumer reads the window through this one rule;
+ * a raw `capability.contextWindow` of an assumed model is the setup placeholder, not a window
+ * (PR #3678 review: commit drafts, PR descriptions and spend reservations read it raw).
+ */
+export function effectiveContextWindow(
+  capability: Pick<ModelCapability, "contextWindow" | "contextWindowAssumed">,
+): number {
+  return capability.contextWindow > 0 && capability.contextWindowAssumed !== true
+    ? capability.contextWindow
+    : DEFAULT_CONTEXT_PROFILE.maxInputTokens;
+}
+
 // Derives a model-keyed ContextProfile from a configured chat capability. Unknown/placeholder
-// runtime capabilities (0 window / 0 output) fall back to the DEFAULT_CONTEXT_PROFILE geometry.
+// runtime capabilities (0 window / 0 output, or a window flagged `contextWindowAssumed`) fall back
+// to the DEFAULT_CONTEXT_PROFILE geometry through `effectiveContextWindow`.
 export function deriveContextProfileFromCapability(
-  capability: Pick<ModelCapability, "id" | "contextWindow" | "maxOutputTokens" | "tokenAccounting">,
+  capability: Pick<
+    ModelCapability,
+    "id" | "contextWindow" | "maxOutputTokens" | "tokenAccounting" | "contextWindowAssumed"
+  >,
 ): ContextProfile {
-  const maxInputTokens =
-    capability.contextWindow > 0
-      ? capability.contextWindow
-      : DEFAULT_CONTEXT_PROFILE.maxInputTokens;
+  const maxInputTokens = effectiveContextWindow(capability);
   const reservedOutputTokens =
     capability.maxOutputTokens > 0
-      ? Math.min(maxInputTokens, capability.maxOutputTokens)
+      ? Math.min(undeclaredOutputReserveTokens(maxInputTokens), capability.maxOutputTokens)
       : undeclaredOutputReserveTokens(maxInputTokens);
   const safetyMarginTokens = safetyMarginTokensFor(maxInputTokens, reservedOutputTokens);
   return {

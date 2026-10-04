@@ -1,0 +1,57 @@
+.cmpToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.cmpSelectAll {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cmpCheckbox {
+  appearance: auto;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.cmpCheckbox:disabled {
+  cursor: default;
+}
+
+.cmpCheckbox:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.cmpRow.cmpRow {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 10px;
+}
+
+.cmpRow > .cmpCheckbox {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  margin-top: 2px;
+}
+
+.cmpActions {
+  grid-column: 2;
+}
+
+.cmpSelected.cmpSelected {
+  background: var(--surface-primary);
+  border-color: var(--border-strong);
+}

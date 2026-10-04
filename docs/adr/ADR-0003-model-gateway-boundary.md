@@ -313,6 +313,13 @@ absent or invalid value never fails config load — it falls back to Keiko's tex
 `Generated with [Keiko](https://github.com/oscharko-dev/Keiko)` attribution, since branding is
 decorative, never load-bearing.
 
+**`groundedAnswers?: GroundedAnswersConfig`** (PR #3678, ADR-0144) is the operator's policy for
+Keiko's own, labelled assessment in grounded answers. `ownAssessment` is `allowed` (the default when
+absent) or `disabled`. It is a governance setting, so unlike `branding` an explicit value outside
+that closed vocabulary fails the configuration load instead of being read as the permissive default.
+Setup rebuilds produce only providers and capabilities, so `groundedAnswers` and `branding` carry
+over verbatim through `rawConfigFromCurrent` and the setup's optional-block restoration.
+
 ```typescript
 // ─── Request / response ───────────────────────────────────────────────────────
 

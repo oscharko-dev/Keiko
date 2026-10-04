@@ -14,7 +14,19 @@ import { Footer } from "./Footer";
 import { HEALTH_POLL_INTERVAL_MS } from "./hooks/useBackendHealth";
 import type { AppWindow } from "./windows/types";
 import { fetchHealth } from "@/lib/api";
-import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import {
+  currentGlobalClientFailure,
+  reportClientDiagnostic,
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+} from "@/lib/client-diagnostics";
+import { createSupportReport, downloadSupportReport } from "@/lib/support-report-api";
+import { resetSupportReportOutcomesForTests } from "./SupportReportButton";
+
+vi.mock("@/lib/support-report-api", () => ({
+  createSupportReport: vi.fn(),
+  downloadSupportReport: vi.fn(),
+}));
 
 vi.mock("@/lib/api", () => ({
   fetchHealth: vi.fn(),
@@ -55,6 +67,9 @@ function renderFooter(
 
 afterEach(() => {
   vi.clearAllMocks();
+  resetClientDiagnosticWriter();
+  resetSupportReportOutcomesForTests();
+  vi.useRealTimers();
 });
 
 describe("Footer — window status trigger", () => {
@@ -67,6 +82,7 @@ describe("Footer — window status trigger", () => {
       expect(screen.getByText("Keiko | 0.2.0-beta.5")).toBeInTheDocument();
     });
     expect(fetchHealthMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
   });
 
   it("keeps the footer signature present when the version request fails", async () => {
@@ -76,6 +92,49 @@ describe("Footer — window status trigger", () => {
     await waitFor(() => {
       expect(screen.getByText("Keiko | version unavailable")).toBeInTheDocument();
     });
+  });
+
+  it("only offers a dismissible action for actual global uncaught failures", async () => {
+    renderFooter();
+    await screen.findByText("Keiko | 0.2.0-test");
+    act(() =>
+      reportClientDiagnostic("[keiko] contextual error", {
+        kind: "window-error",
+        errorKind: "internal",
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
+    act(() =>
+      reportClientDiagnostic("[keiko] uncaught window error: Error", {
+        kind: "window-error",
+        globalFailure: true,
+        correlationId: "global-error-one",
+      }),
+    );
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
+    expect(Object.keys(currentGlobalClientFailure() ?? {})).toEqual(["ordinal", "correlationId"]);
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
+  });
+
+  it("removes the global error action after its one download and short confirmation", async () => {
+    vi.useFakeTimers();
+    vi.mocked(createSupportReport).mockResolvedValue({ fileName: "report.json", reportJson: "{}" });
+    renderFooter();
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    act(() =>
+      reportClientDiagnostic("[keiko] unhandled promise rejection: Error", {
+        kind: "unhandled-rejection",
+        globalFailure: true,
+        correlationId: "global-error-two",
+      }),
+    );
+    await act(async () => screen.getByRole("button", { name: "Create error report" }).click());
+    expect(downloadSupportReport).toHaveBeenCalledOnce();
+    expect(screen.getByRole("status")).toHaveTextContent("Downloaded.");
+    await act(async () => vi.advanceTimersByTimeAsync(1500));
+    expect(screen.queryByRole("group", { name: "Create error report" })).not.toBeInTheDocument();
+    expect(currentGlobalClientFailure()).toBeNull();
   });
 
   it("renders the workflow-readiness indicator showing the active window count", () => {

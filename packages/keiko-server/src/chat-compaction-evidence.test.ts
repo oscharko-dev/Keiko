@@ -1,3 +1,4 @@
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 // ADR-0057 D3 (integration): the chat send paths persist the discarded ContextCompactionRecord as
 // regulated evidence. Drives the REAL buffered (handleSendDesktopChat) and streaming
@@ -23,7 +24,10 @@ import {
   loadEvidence,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
-import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleSendDesktopChat } from "./chat-handlers.js";
@@ -191,6 +195,36 @@ function seedChat(): string {
   return store.createChat(projectDir, "Untitled chat", CHAT_MODEL).id;
 }
 
+it("never relabels a delayed checkpoint with a newer conversation revision", () => {
+  const chatId = seedChat();
+  const evidenceStore = createInMemoryEvidenceStore();
+  const revision = vi.spyOn(store, "chatHistoryRevision").mockReturnValue(7);
+  persistChatCompactionEvidence(deps(bufferedModel("answer"), evidenceStore, true), {
+    chatId,
+    modelId: CHAT_MODEL,
+    messageCount: 4,
+    startedAt: 1,
+    finishedAt: 2,
+    compaction: {
+      schemaVersion: "1",
+      laneId: "history-summary",
+      reason: "budget",
+      itemsBefore: 2,
+      itemsAfter: 1,
+      tokensBefore: 100,
+      tokensAfter: 20,
+      conversationCoverage: {
+        version: 1,
+        throughMessageId: "earlier-assistant",
+        historyRevision: 3,
+      },
+    },
+  });
+  const manifest = loadEvidence(evidenceStore, `chat-${sha256Hex(chatId).slice(0, 16)}-t4`);
+  expect(manifest?.compaction?.[0]?.conversationCoverage?.historyRevision).toBe(3);
+  revision.mockRestore();
+});
+
 // Seeds `count` alternating user/assistant turns. The first dropped user turn carries the config
 // secret so the redaction gate has something concrete to scrub.
 function seedHistory(chatId: string, count: number): void {
@@ -293,6 +327,63 @@ afterEach(() => {
 });
 
 describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
+  it.each(["buffered", "streaming"] as const)(
+    "uses the selected model window for %s sends without an explicit model id",
+    async (mode) => {
+      const chatId = seedChat();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const seedBaseTimestamp = Date.now() - 1000;
+      for (let index = 0; index < 60; index += 1) {
+        store.createMessage({
+          chatId,
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `Turn ${String(index)}. ${"safe prose ".repeat(30)}`,
+          timestamp: seedBaseTimestamp + index,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        });
+      }
+      const calls: GatewayRequest[] = [];
+      const model: ModelPort = {
+        ...capturingBufferedModel("answer", calls),
+        async *callStream(request): AsyncGenerator<GatewayStreamChunk> {
+          calls.push(request);
+          yield { type: "done", response: normalizedResponse("answer") };
+          await Promise.resolve();
+        },
+      };
+      const d: UiHandlerDeps = {
+        ...deps(model, createInMemoryEvidenceStore(), false),
+        contextProfileForModel: (id) =>
+          id === CHAT_MODEL
+            ? deriveContextProfile({
+                maxInputTokens: 64000,
+                reservedOutputTokens: 4096,
+                safetyMarginTokens: 1000,
+              })
+            : DEFAULT_CONTEXT_PROFILE,
+      };
+      const res = captureRes();
+      const context = routeContext(
+        makeReq({ chatId, projectPath: projectDir, content: "Latest question" }),
+        res.res,
+      );
+      if (mode === "buffered") expect((await handleSendDesktopChat(context, d)).status).toBe(200);
+      else await handleSendDesktopChatStream(context, d);
+      expect(
+        sink.events.find((event) => event.op === "chat.continuity.capture")?.extra,
+      ).toMatchObject({ contextWindowTokens: 64000 });
+      expect(calls[0]?.modelId).toBe(CHAT_MODEL);
+      expect(calls[0]?.messages.filter((message) => message.role !== "system")).toHaveLength(61);
+      expect(calls[0]?.messages.some((message) => message.content.startsWith("Turn 0."))).toBe(
+        true,
+      );
+    },
+  );
   it("buffered slow path persists a valid, redacted compaction manifest with a hashed chatId", async () => {
     const chatId = seedChat();
     const count = seedOversizedHistory(chatId);

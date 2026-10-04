@@ -86,10 +86,11 @@ export interface WorkspaceClipboardPasteResult {
 }
 
 export interface WorkspaceApi {
+  readonly toggleLayoutLock: () => void;
   readonly add: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
   readonly toggleTool: (type: WindowType) => void;
-  /** Atomically raises, focuses, and selects a window for a primary user activation. */
+  /** Raises and focuses on primary activation; also selects when layout is unlocked. */
   readonly activateWindow: (id: string) => void;
   /** Raises and focuses without changing an intentional workspace selection. */
   readonly focus: (id: string) => void;
@@ -155,6 +156,7 @@ export interface WorkspaceApi {
 }
 
 export interface UseWorkspaceResult {
+  readonly layoutLocked: boolean;
   readonly wins: AppWindow[] | null;
   readonly winsById: ReadonlyMap<string, AppWindow>;
   readonly snapPrev: SnapPrev | null;

@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { countContextTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 
 describe("countGatewayPromptTokens", () => {
+  it("does not lose the dense-text floor when JSON escapes multiline content", () => {
+    const content = "A long German conversation with decisions and corrections.\n".repeat(30);
+    expect(
+      countGatewayPromptTokens({ messages: [{ role: "system", content }] }),
+    ).toBeGreaterThanOrEqual(countContextTokens(content));
+  });
   it("counts assistant tool arguments and tool-result ids as forwarded prompt context", () => {
     const visibleOnly = countGatewayPromptTokens({
       messages: [
@@ -57,4 +64,25 @@ describe("countGatewayPromptTokens", () => {
     expect(calibrated).toBeGreaterThan(fallback);
     expect(calibrated).toBeLessThan(128_000);
   });
+});
+
+it("scales the unmeasured image allowance to a small model without counting encoded bytes", () => {
+  const image = {
+    type: "image_url" as const,
+    image_url: { url: "data:image/png;base64," + "A".repeat(1_000_000) },
+  };
+  const input = {
+    messages: [
+      {
+        role: "user" as const,
+        content: "describe",
+        contentParts: [{ type: "text" as const, text: "describe" }, image],
+      },
+    ],
+  };
+  const text = countGatewayPromptTokens(input, undefined, { imageTokensMeasured: true });
+  expect(countGatewayPromptTokens(input, undefined, { contextWindow: 8192 }) - text).toBe(2048);
+  expect(countGatewayPromptTokens(input, undefined, { contextWindow: 131072 }) - text).toBe(8192);
+  expect(countGatewayPromptTokens(input) - text).toBe(8192);
+  expect(countGatewayPromptTokens(input, undefined, { contextWindow: NaN }) - text).toBe(8192);
 });

@@ -194,6 +194,7 @@ describe("applySetVersion", () => {
     for (const text of files.values()) expect(text).not.toContain("1.0.0");
     expect(spawned).toStrictEqual([
       ["npm", "install", "--package-lock-only", "--ignore-scripts", `@${ROOT}`],
+      ["node", "scripts/generate-support-registry-history.mjs", `@${ROOT}`],
       ["node", "scripts/check-version-consistency.mjs", `@${ROOT}`],
     ]);
   });
@@ -202,7 +203,7 @@ describe("applySetVersion", () => {
     const { seams, spawned } = repo("1.0.1");
 
     expect(applySetVersion({ ...seams, version: "1.0.1" })).toStrictEqual([]);
-    expect(spawned).toHaveLength(2);
+    expect(spawned).toHaveLength(3);
   });
 
   it("fails when the lockfile refresh fails, and names it", () => {
@@ -215,10 +216,24 @@ describe("applySetVersion", () => {
     );
   });
 
+  it("fails when the support registry history cannot capture a release, and names it", () => {
+    const { seams } = repo();
+    const spawn = (_executable, args) =>
+      args[0] === "scripts/generate-support-registry-history.mjs"
+        ? { status: 1, stdout: "", stderr: "no release tag is available" }
+        : { status: 0 };
+
+    expect(() => applySetVersion({ ...seams, spawn, version: "1.0.1" })).toThrow(
+      "the support registry history failed: no release tag is available",
+    );
+  });
+
   it("fails when the consistency check refuses the result", () => {
     const { seams } = repo();
-    const spawn = (executable) =>
-      executable === "node" ? { status: 1, stdout: "", stderr: "" } : { status: 0 };
+    const spawn = (_executable, args) =>
+      args[0] === "scripts/check-version-consistency.mjs"
+        ? { status: 1, stdout: "", stderr: "" }
+        : { status: 0 };
 
     expect(() => applySetVersion({ ...seams, spawn, version: "1.0.1" })).toThrow(
       "the version consistency check failed.",

@@ -114,6 +114,106 @@ describe("formatUserError", () => {
     }
   });
 
+  // PR #3678 audit (finding 3): the server answers CONVERSATION_OVERSIZED_CONTEXT for an oversized
+  // attachment or document context as well, so only the gateway-layer overflow code may carry the
+  // context-window notice. Resending an oversized attachment fails the same way.
+  describe("context-size failures", () => {
+    const overflowKeys = [
+      "chat.error.contextOverflow.title",
+      "chat.error.contextOverflow.message",
+      "chat.error.contextOverflow.remediation",
+    ] as const;
+
+    it("maps GATEWAY_CONTEXT_OVERFLOW to the whole context-window notice", () => {
+      const notice = toUserErrorNotice(
+        new ApiError("GATEWAY_CONTEXT_OVERFLOW", "provider reported context length exceeded", 413),
+        "Could not send message.",
+      );
+      expect(notice).toMatchObject({
+        title: translate("en", overflowKeys[0]),
+        message: translate("en", overflowKeys[1]),
+        remediation: translate("en", overflowKeys[2]),
+        code: "GATEWAY_CONTEXT_OVERFLOW",
+      });
+    });
+
+    it("keeps an oversized attachment on its own attachment message", () => {
+      const serverMessage =
+        "Attached content exceeds the conversation context budget. Remove or shorten attachments.";
+      const notice = toUserErrorNotice(
+        new ApiError("CONVERSATION_OVERSIZED_CONTEXT", serverMessage, 400),
+        "Could not send message.",
+      );
+      expect(notice.code).toBe("CONVERSATION_OVERSIZED_CONTEXT");
+      expect(notice.message).toBe(translate("en", "chat.error.attachmentOversized.message"));
+      expect(notice.message).toMatch(/attached content/iu);
+      expect(notice.message).not.toMatch(/context window/iu);
+      expect(notice.message).not.toBe(translate("en", overflowKeys[1]));
+      expect(notice.title).not.toBe(translate("en", overflowKeys[0]));
+      expect(notice.remediation).not.toBe(translate("en", overflowKeys[2]));
+    });
+
+    it("carries the attachment message through the formatted-string round trip", () => {
+      const error = new ApiError("CONVERSATION_OVERSIZED_CONTEXT", "server text", 400);
+      error.correlationId = "req-attachment-1";
+      const text = formatUserError(error, "Could not send message.");
+      expect(text).toBe(
+        `${translate("en", "chat.error.attachmentOversized.message")} (CONVERSATION_OVERSIZED_CONTEXT) [correlationId:req-attachment-1]`,
+      );
+      const notice = toUserErrorNotice(text, "Could not send message.");
+      expect(notice.message).toBe(translate("en", "chat.error.attachmentOversized.message"));
+      expect(notice.correlationId).toBe("req-attachment-1");
+      expect(notice.title).not.toBe(translate("en", overflowKeys[0]));
+    });
+
+    it("localizes the attachment message and never falls back to the context-window text", async () => {
+      await loadLocaleMessages("de");
+      window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+      try {
+        const notice = toUserErrorNotice(
+          new ApiError("CONVERSATION_OVERSIZED_CONTEXT", "server text", 400),
+          "Could not send message.",
+        );
+        expect(notice.message).toBe(translate("de", "chat.error.attachmentOversized.message"));
+        expect(notice.message).not.toBe(translate("en", "chat.error.attachmentOversized.message"));
+        expect(notice.message).not.toBe(translate("de", overflowKeys[1]));
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+        resetLoadedMessageCatalogs();
+      }
+    });
+
+    it("maps a stalled answer stream to its own localized notice", () => {
+      const notice = toUserErrorNotice(
+        new ApiError("DESKTOP_CHAT_STREAM_STALLED", "stopped delivering", 504),
+        "Could not send message.",
+      );
+      expect(notice).toMatchObject({
+        title: translate("en", "chat.error.streamStalled.title"),
+        message: translate("en", "chat.error.streamStalled.message"),
+        remediation: translate("en", "chat.error.streamStalled.remediation"),
+        code: "DESKTOP_CHAT_STREAM_STALLED",
+      });
+    });
+
+    // PR #3678 audit (finding 11): the user sees this notice only after the single automatic retry
+    // on an adopted window already failed, so it cannot promise adoption or that a resend helps.
+    it("states the window adoption conditionally and does not promise a working resend", async () => {
+      const english = translate("en", overflowKeys[1]);
+      expect(english).toContain("If the provider reports its window");
+      expect(english).not.toMatch(/automatically/iu);
+      expect(translate("en", overflowKeys[2])).not.toMatch(/send the message again/iu);
+      await loadLocaleMessages("de");
+      try {
+        expect(translate("de", overflowKeys[1])).toMatch(/^.*Meldet der Anbieter sein Fenster/u);
+        expect(translate("de", overflowKeys[1])).not.toMatch(/automatisch/iu);
+        expect(translate("de", overflowKeys[2])).not.toMatch(/erneut/iu);
+      } finally {
+        resetLoadedMessageCatalogs();
+      }
+    });
+  });
+
   it("adds gateway timeout title and remediation for structured notices", () => {
     const notice = toUserErrorNotice(
       new ApiError("GATEWAY_TIMEOUT", "GATEWAY_TIMEOUT", 503),

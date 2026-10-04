@@ -5,10 +5,25 @@ import {
   type ClientDiagnosticMeta,
 } from "../../../../../lib/client-diagnostics";
 import {
+  withSharedEventSourceOpen,
+  awaitSharedEventSourceOpen,
   resetSharedEventSourcesForTests,
+  refreshSharedEventSource,
   sharedEventSourceGeneration,
   subscribeSharedEventSource,
 } from "./sharedEventSource";
+
+const acquireCapacity = vi.hoisted(() =>
+  vi.fn((onGranted: () => void): (() => void) => {
+    onGranted();
+    return () => undefined;
+  }),
+);
+
+vi.mock("../../../../../lib/browser-stream-capacity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../../lib/browser-stream-capacity")>()),
+  acquirePersistentBrowserStreamCapacity: acquireCapacity,
+}));
 
 interface StreamRepair {
   readonly acknowledged: boolean;
@@ -73,9 +88,133 @@ afterEach(() => {
   resetClientDiagnosticWriter();
   ensureLocalSession.mockClear();
   reportRecovered.mockClear();
+  acquireCapacity.mockClear();
 });
 
 describe("subscribeSharedEventSource", () => {
+  it.each([4, 7])(
+    "keeps every one of %i roots rotating alongside background settings",
+    async (count) => {
+      vi.useFakeTimers();
+      vi.stubGlobal("EventSource", FakeEventSource);
+      try {
+        const releases = Array.from({ length: count }, (_, index) =>
+          subscribeSharedEventSource(
+            `/api/editor/watch/events?root=${String(index)}`,
+            ["change"],
+            vi.fn(),
+          ),
+        );
+        releases.push(
+          subscribeSharedEventSource("/api/editor/settings/events", ["settings"], vi.fn(), {
+            priority: "background",
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(100_000);
+        const halfway = FakeEventSource.instances.length;
+        await vi.advanceTimersByTimeAsync(100_000);
+        const reopened = new Set(
+          FakeEventSource.instances.slice(halfway).map((source) => source.url),
+        );
+        for (let index = 0; index < count; index += 1)
+          expect(reopened.has(`/api/editor/watch/events?root=${String(index)}`)).toBe(true);
+        expect(FakeEventSource.instances.filter((source) => !source.closed)).toHaveLength(3);
+        releases.forEach((release) => release());
+      } finally {
+        resetSharedEventSourcesForTests();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("admits a later execution handshake among six roots and background settings", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const releases = Array.from({ length: 6 }, (_, index) =>
+        subscribeSharedEventSource(
+          `/api/editor/watch/events?root=${String(index)}`,
+          ["change"],
+          vi.fn(),
+        ),
+      );
+      releases.push(
+        subscribeSharedEventSource("/api/editor/settings/events", ["settings"], vi.fn(), {
+          priority: "background",
+        }),
+      );
+      FakeEventSource.immediateEventType = "open";
+      const execute = vi.fn(() => Promise.resolve("completed"));
+      const pending = withSharedEventSourceOpen(
+        "/api/commands/events",
+        ["command:run"],
+        vi.fn(),
+        execute,
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(pending).resolves.toBe("completed");
+      expect(execute).toHaveBeenCalledOnce();
+      releases.forEach((release) => release());
+    } finally {
+      resetSharedEventSourcesForTests();
+      vi.useRealTimers();
+    }
+  });
+  it("constructs a persistent connection only after its origin lease is granted", () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    let grant = (): void => undefined;
+    const releaseCapacity = vi.fn();
+    acquireCapacity.mockImplementationOnce((onGranted) => {
+      grant = onGranted;
+      return releaseCapacity;
+    });
+    const unsubscribe = subscribeSharedEventSource(
+      "/api/commands/events",
+      ["command:run"],
+      vi.fn(),
+    );
+    expect(FakeEventSource.instances).toHaveLength(0);
+    grant();
+    expect(FakeEventSource.instances).toHaveLength(1);
+    unsubscribe();
+    expect(releaseCapacity).toHaveBeenCalledOnce();
+    expect(FakeEventSource.instances[0]?.closed).toBe(true);
+  });
+
+  it("bounds persistent connections and rotates queued roots without losing replay cursors", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    try {
+      const releases = Array.from({ length: 7 }, (_, index) =>
+        subscribeSharedEventSource(
+          `/api/editor/watch/events?root=${String(index)}`,
+          ["change"],
+          vi.fn(),
+        ),
+      );
+      expect(FakeEventSource.instances.filter((source) => !source.closed)).toHaveLength(3);
+      const first = FakeEventSource.instances[0];
+      first?.listeners
+        .get("change")
+        ?.forEach((listener) =>
+          listener(new MessageEvent("change", { data: "{}", lastEventId: "42" })),
+        );
+      vi.advanceTimersByTime(15_000);
+      expect(FakeEventSource.instances.filter((source) => !source.closed)).toHaveLength(3);
+      expect(
+        new Set(FakeEventSource.instances.map((source) => source.url.split("&")[0])).size,
+      ).toBe(7);
+      expect(
+        FakeEventSource.instances.some((source) => source.url.includes("lastEventId=42")),
+      ).toBe(true);
+      releases.forEach((release) => release());
+      expect(FakeEventSource.instances.every((source) => source.closed)).toBe(true);
+    } finally {
+      resetSharedEventSourcesForTests();
+      vi.useRealTimers();
+    }
+  });
+
   it("opens same-origin API streams", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
 
@@ -504,4 +643,147 @@ describe("subscribeSharedEventSource", () => {
     unsubscribe();
     vi.useRealTimers();
   });
+});
+
+it.each(["editor-watch:snapshot", "editor-watch:snapshot-required"])(
+  "accepts the watch service's restarted cursor from %s",
+  (snapshotType) => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const url = "/api/editor/workspace-watch/events?root=%2Frepo";
+    const unsubscribe = subscribeSharedEventSource(
+      url,
+      ["editor-watch:changed", snapshotType],
+      vi.fn(),
+    );
+    try {
+      const change = FakeEventSource.instances[0]?.listeners.get("editor-watch:changed");
+      if (change === undefined) throw new Error("Expected watch stream");
+      for (const listener of change)
+        listener(
+          new MessageEvent("editor-watch:changed", {
+            data: "{}",
+            lastEventId: "700",
+          }),
+        );
+      refreshSharedEventSource(url);
+      const snapshot = FakeEventSource.instances[1]?.listeners.get(snapshotType);
+      if (snapshot === undefined) throw new Error("Expected resumed watch stream");
+      for (const listener of snapshot)
+        listener(
+          new MessageEvent(snapshotType, {
+            data: "{}",
+            lastEventId: "2",
+          }),
+        );
+      refreshSharedEventSource(url);
+      expect(FakeEventSource.instances[2]?.url).toBe(`${url}&lastEventId=2`);
+    } finally {
+      unsubscribe();
+    }
+  },
+);
+
+it("opens an essential terminal immediately ahead of background metadata and retains it", () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("EventSource", FakeEventSource);
+  const stopSettings = subscribeSharedEventSource("/api/settings/events", ["change"], vi.fn(), {
+    priority: "background",
+  });
+  const stopSnippets = subscribeSharedEventSource("/api/snippets/events", ["change"], vi.fn(), {
+    priority: "background",
+  });
+  const stopWatch = subscribeSharedEventSource(
+    "/api/editor/workspace-watch/events?root=a",
+    ["change"],
+    vi.fn(),
+  );
+  const watch = FakeEventSource.instances.at(-1);
+  const stopTerminal = subscribeSharedEventSource(
+    "/api/terminal/events",
+    ["execution-started"],
+    vi.fn(),
+  );
+  const terminal = FakeEventSource.instances.find(
+    (source) => source.url === "/api/terminal/events",
+  );
+  expect(terminal).toBeDefined();
+  expect(watch?.closed).toBe(false);
+  vi.advanceTimersByTime(20_000);
+  expect(terminal?.closed).toBe(false);
+  stopSettings();
+  stopSnippets();
+  stopWatch();
+  stopTerminal();
+  vi.useRealTimers();
+});
+
+it("keeps healthy essential leases when an unrelated connection enters backoff", () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("EventSource", FakeEventSource);
+  const stops = Array.from({ length: 5 }, (_, index) =>
+    subscribeSharedEventSource(
+      `/api/editor/workspace-watch/events?root=${String(index)}`,
+      ["change"],
+      vi.fn(),
+    ),
+  );
+  vi.advanceTimersByTime(5_000);
+  const healthy = FakeEventSource.instances.find(
+    (source) => source.url.includes("root=3") && !source.closed,
+  );
+  expect(healthy).toBeDefined();
+  FakeEventSource.instances[0]?.onerror?.();
+  expect(healthy?.closed).toBe(false);
+  stops.forEach((stop) => stop());
+  vi.useRealTimers();
+});
+
+it("waits for the native open handshake and holds execution listeners throughout the POST", async () => {
+  vi.stubGlobal("EventSource", FakeEventSource);
+  const received = vi.fn();
+  const run = vi.fn(async () => {
+    const source = FakeEventSource.instances[0];
+    source?.listeners
+      .get("execution-started")
+      ?.forEach((listener) => listener(new MessageEvent("execution-started", { data: "started" })));
+    return "done";
+  });
+  const pending = withSharedEventSourceOpen(
+    "/api/terminal/events",
+    ["execution-started"],
+    received,
+    run,
+  );
+  expect(run).not.toHaveBeenCalled();
+  FakeEventSource.instances[0]?.listeners
+    .get("open")
+    ?.forEach((listener) => listener(new MessageEvent("open")));
+  expect(await pending).toBe("done");
+  expect(received).toHaveBeenCalledOnce();
+  expect(FakeEventSource.instances[0]?.closed).toBe(true);
+});
+
+it("releases an execution subscription when readiness is aborted or times out", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("EventSource", FakeEventSource);
+  const abort = new AbortController();
+  const run = vi.fn(async () => undefined);
+  const pending = withSharedEventSourceOpen(
+    "/api/terminal/events",
+    ["execution-started"],
+    vi.fn(),
+    run,
+    abort.signal,
+  );
+  const assertion = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  abort.abort();
+  await assertion;
+  expect(run).not.toHaveBeenCalled();
+  expect(FakeEventSource.instances.every((source) => source.closed)).toBe(true);
+  const timeout = awaitSharedEventSourceOpen("/api/commands/events");
+  const timeoutAssertion = expect(timeout).rejects.toMatchObject({ name: "TimeoutError" });
+  await vi.advanceTimersByTimeAsync(15_000);
+  await timeoutAssertion;
+  expect(FakeEventSource.instances.every((source) => source.closed)).toBe(true);
+  vi.useRealTimers();
 });

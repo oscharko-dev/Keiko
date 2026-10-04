@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ContextCompactionRecord } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
@@ -12,6 +12,7 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   CHAT_COMPACTION_CONTEXT_HEADER,
   buildChatCompactionResurfacingContext,
+  loadChatContinuityCheckpoint,
 } from "./chat-compaction-resurfacing.js";
 
 const NOW = 1_700_000_000_000;
@@ -20,6 +21,7 @@ const OTHER_CHAT_ID = "chat-resurface-2";
 const SECRET = "sk-resurface-secret-1234567890abcdef";
 const ABS_PATH = "/Users/private/project/src/secret.ts";
 const SPACED_ABS_PATH = "/Users/Alice Smith/Secret Project/src/file.ts";
+afterEach(() => vi.restoreAllMocks());
 
 function runId(chatId: string, turn: number): string {
   return `chat-${sha256Hex(chatId).slice(0, 16)}-t${String(turn)}`;
@@ -102,6 +104,34 @@ function persist(input: {
 }
 
 describe("buildChatCompactionResurfacingContext", () => {
+  it.each(["listing", "manifest"])(
+    "joins a failed %s read to the caller with safe frames",
+    (failure) => {
+      const output = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const base = createInMemoryEvidenceStore();
+      const fail = (): never => {
+        throw new Error("Private checkpoint body canary", {
+          cause: new TypeError("Private cause canary"),
+        });
+      };
+      const store = {
+        ...base,
+        list: failure === "listing" ? fail : (): string[] => [runId(CHAT_ID, 4)],
+        get: failure === "manifest" ? fail : base.get,
+      };
+      expect(
+        loadChatContinuityCheckpoint(store, CHAT_ID, 0, "corr-checkpoint-read"),
+      ).toBeUndefined();
+      const lines = JSON.stringify(output.mock.calls);
+      expect(lines).toContain("corr-checkpoint-read");
+      expect(lines).toContain("frames");
+      expect(lines).toContain("chat-compaction-resurfacing");
+      expect(lines).toContain("causeChain");
+      expect(lines).toContain("TypeError");
+      expect(lines).not.toContain("canary");
+      expect(lines).not.toContain(CHAT_ID);
+    },
+  );
   it("resurfaces same-chat pinned facts, decisions, constraints, questions, and rehydration", () => {
     const store = persist({ chatId: CHAT_ID, turn: 4, records: [record()] });
 

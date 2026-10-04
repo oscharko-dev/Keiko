@@ -13,6 +13,10 @@ import type {
   ManualRefreshChangeSummary,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  knowledgePodGuidanceText,
+  translateLocalKnowledge,
+} from "@/app/local-knowledge/local-knowledge-i18n";
+import {
   capsulesForKnowledgePodUi,
   capsuleSetsForKnowledgePodUi,
   cancelIndexing,
@@ -34,7 +38,28 @@ import {
   startIndexing,
   updateCapsuleContextualRetrieval,
   updateCapsuleModelUsePolicy,
+  type CapsuleListEntry,
+  type KnowledgePodUiGuidance,
 } from "./local-knowledge-api";
+
+function guidanceAt(
+  capsules: readonly CapsuleListEntry[],
+  index: number,
+): KnowledgePodUiGuidance | undefined {
+  return capsules[index]?.knowledgePod?.guidance;
+}
+
+// The producer emits a guidance code; these tests still pin the English wording an English operator
+// reads, by resolving the code through the catalog exactly as the surfaces do.
+function englishGuidance(guidance: KnowledgePodUiGuidance | undefined): {
+  readonly label: string;
+  readonly description: string;
+} {
+  if (guidance === undefined) throw new TypeError("expected Knowledge Pod guidance");
+  return knowledgePodGuidanceText(guidance, (key, values) =>
+    translateLocalKnowledge("en", key, values),
+  );
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -213,11 +238,9 @@ describe("local knowledge BFF boundary helpers", () => {
       embeddingCompatibilityReason: "legacy-unverified-profile",
       reindexRecommended: true,
       queryEmbeddingAllowed: false,
-      guidance: {
-        label: "Reindex recommended",
-        tone: "warning",
-      },
+      guidance: { code: "reindex-recommended", scope: "pod", tone: "warning" },
     });
+    expect(englishGuidance(capsule?.knowledgePod?.guidance).label).toBe("Reindex recommended");
   });
 
   it("surfaces HTML manual source kind and readiness through existing pod metadata", () => {
@@ -268,19 +291,29 @@ describe("local knowledge BFF boundary helpers", () => {
     expect(capsules[0]?.knowledgePod).toMatchObject({
       sourceKinds: ["html-manual-http"],
       guidance: {
-        label: "HTML manual",
-        description: expect.stringContaining("3 docs · 8 chunks · 8 vectors"),
+        code: "manual-ready",
+        scope: "pod",
         tone: "muted",
+        manual: { documentCount: 3, chunkCount: 8, vectorCount: 8, readiness: "ready" },
       },
+    });
+    expect(englishGuidance(capsules[0]?.knowledgePod?.guidance)).toMatchObject({
+      label: "HTML manual",
+      description: expect.stringContaining("3 docs · 8 chunks · 8 vectors"),
     });
     expect(capsules[1]?.knowledgePod).toMatchObject({
       readiness: "degraded",
       sourceKinds: ["html-manual-local"],
       guidance: {
-        label: "Manual degraded",
-        description: expect.stringContaining("1 docs · 2 chunks · 0 vectors"),
+        code: "manual-degraded",
+        scope: "pod",
         tone: "warning",
+        manual: { documentCount: 1, chunkCount: 2, vectorCount: 0, readiness: "degraded" },
       },
+    });
+    expect(englishGuidance(capsules[1]?.knowledgePod?.guidance)).toMatchObject({
+      label: "Manual degraded",
+      description: expect.stringContaining("1 docs · 2 chunks · 0 vectors"),
     });
     expect(JSON.stringify(capsules)).not.toContain("https://docs.internal");
     expect(JSON.stringify(capsules)).not.toContain("/Users/alice");
@@ -381,13 +414,17 @@ describe("local knowledge BFF boundary helpers", () => {
     });
 
     expect(capsules[0]?.knowledgePod?.guidance).toMatchObject({
-      label: "Embedding unavailable",
+      code: "embedding-unavailable",
       tone: "danger",
     });
+    expect(englishGuidance(capsules[0]?.knowledgePod?.guidance).label).toBe(
+      "Embedding unavailable",
+    );
     expect(capsules[1]?.knowledgePod?.guidance).toMatchObject({
-      label: "Embedding mismatch",
+      code: "embedding-mismatch",
       tone: "danger",
     });
+    expect(englishGuidance(capsules[1]?.knowledgePod?.guidance).label).toBe("Embedding mismatch");
   });
 
   it("maps sealed Knowledge Pod policy guidance and denied operation metadata", () => {
@@ -423,11 +460,9 @@ describe("local knowledge BFF boundary helpers", () => {
         "answerSynthesis",
         "rawContentRelease",
       ],
-      guidance: {
-        label: "Policy denied",
-        tone: "danger",
-      },
+      guidance: { code: "policy-denied", scope: "pod", tone: "danger" },
     });
+    expect(englishGuidance(capsule?.knowledgePod?.guidance).label).toBe("Policy denied");
   });
 
   it("prefers policy-denied guidance over an embedding mismatch on the same pod", () => {
@@ -473,11 +508,9 @@ describe("local knowledge BFF boundary helpers", () => {
 
     expect(capsule?.knowledgePod).toMatchObject({
       sealed: true,
-      guidance: {
-        label: "Policy denied",
-        tone: "danger",
-      },
+      guidance: { code: "policy-denied", scope: "pod", tone: "danger" },
     });
+    expect(englishGuidance(capsule?.knowledgePod?.guidance).label).toBe("Policy denied");
   });
 
   it("uses Knowledge Pod Set copy for embedding guidance", () => {
@@ -509,6 +542,10 @@ describe("local knowledge BFF boundary helpers", () => {
     })[0];
 
     expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
+      code: "embedding-mismatch",
+      scope: "pod-set",
+    });
+    expect(englishGuidance(capsuleSet?.knowledgePod?.guidance)).toMatchObject({
       label: "Embedding mismatch",
       description:
         "Semantic retrieval is disabled for affected set members until they are reindexed locally.",
@@ -540,10 +577,16 @@ describe("local knowledge BFF boundary helpers", () => {
     })[0];
 
     expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
+      code: "policy-denied",
+      scope: "pod-set",
+    });
+    expect(englishGuidance(capsuleSet?.knowledgePod?.guidance)).toMatchObject({
       label: "Policy denied",
       description: expect.stringContaining("This Knowledge Pod Set blocks"),
     });
-    expect(capsuleSet?.knowledgePod?.guidance?.description).toContain("affected members");
+    expect(englishGuidance(capsuleSet?.knowledgePod?.guidance).description).toContain(
+      "affected members",
+    );
   });
 
   it("maps Knowledge Pod Set readiness reasons into UI guidance", () => {
@@ -584,8 +627,12 @@ describe("local knowledge BFF boundary helpers", () => {
     })[0];
 
     expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
-      label: "Members unavailable",
+      code: "members-unavailable",
+      scope: "pod-set",
       tone: "danger",
+    });
+    expect(englishGuidance(capsuleSet?.knowledgePod?.guidance)).toMatchObject({
+      label: "Members unavailable",
       description: expect.stringContaining("missing, failed, or unavailable"),
     });
   });
@@ -629,8 +676,12 @@ describe("local knowledge BFF boundary helpers", () => {
     })[0];
 
     expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
-      label: "Future member placeholder",
+      code: "future-member-placeholder",
+      scope: "pod-set",
       tone: "warning",
+    });
+    expect(englishGuidance(capsuleSet?.knowledgePod?.guidance)).toMatchObject({
+      label: "Future member placeholder",
       description: expect.stringContaining("not active retrieval sources yet"),
     });
   });
@@ -662,11 +713,9 @@ describe("local knowledge BFF boundary helpers", () => {
         "answerSynthesis",
         "rawContentRelease",
       ],
-      guidance: {
-        label: "Policy denied",
-        tone: "danger",
-      },
+      guidance: { code: "policy-denied", scope: "pod", tone: "danger" },
     });
+    expect(englishGuidance(capsule?.knowledgePod?.guidance).label).toBe("Policy denied");
   });
 
   it("maps unavailable and incompatible Knowledge Pod guidance for HTML manual capsules", () => {
@@ -700,9 +749,10 @@ describe("local knowledge BFF boundary helpers", () => {
     })[0];
 
     expect(capsule?.knowledgePod?.guidance).toMatchObject({
-      label: "Embedding unavailable",
+      code: "embedding-unavailable",
       tone: "danger",
     });
+    expect(englishGuidance(capsule?.knowledgePod?.guidance).label).toBe("Embedding unavailable");
   });
 
   it("distinguishes in-progress HTML manual readiness from a hard-failure readiness", () => {
@@ -749,18 +799,25 @@ describe("local knowledge BFF boundary helpers", () => {
       ],
     });
 
-    expect(capsules[0]?.knowledgePod?.guidance).toMatchObject({
-      label: "Manual indexing",
+    expect(guidanceAt(capsules, 0)).toMatchObject({
+      code: "manual-indexing",
       tone: "warning",
+    });
+    expect(englishGuidance(guidanceAt(capsules, 0))).toMatchObject({
+      label: "Manual indexing",
       description: expect.stringContaining("not yet ready to contribute evidence"),
     });
-    expect(capsules[1]?.knowledgePod?.guidance).toMatchObject({
-      label: "Manual indexing",
+    expect(guidanceAt(capsules, 1)).toMatchObject({
+      code: "manual-indexing",
       tone: "warning",
     });
-    expect(capsules[2]?.knowledgePod?.guidance).toMatchObject({
-      label: "Manual unavailable",
+    expect(englishGuidance(guidanceAt(capsules, 1)).label).toBe("Manual indexing");
+    expect(guidanceAt(capsules, 2)).toMatchObject({
+      code: "manual-unavailable",
       tone: "danger",
+    });
+    expect(englishGuidance(guidanceAt(capsules, 2))).toMatchObject({
+      label: "Manual unavailable",
       description: expect.stringContaining("cannot contribute silently as empty evidence"),
     });
   });

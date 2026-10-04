@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   ACTIVITY_LOG_READINESS_REASONS,
+  isClientDiagnosticFrame,
+  isPersistedClientDiagnosticFrame,
   ACTIVITY_LOG_READINESS_STATES,
   ACTIVITY_LOG_WRITER_KINDS,
   CLIENT_BINDING_CANDIDATES_MAX,
@@ -17,6 +19,7 @@ import {
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   CLIENT_SESSION_REPAIR_STREAMS,
   CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS,
+  CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX,
   CLIENT_SELECT_DISMISSAL_REASONS,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
@@ -360,6 +363,57 @@ describe("isClientDiagnosticIngestRequest", () => {
       );
     }
   });
+
+  // PR #3678 review: the Knowledge Pod catalog's availability picture is six bounded counts, never
+  // a name, path or id, and never a field beyond them.
+  it("accepts only the six bounded knowledge catalog counts", () => {
+    const counts = {
+      podCount: 2,
+      readyPodCount: 0,
+      setCount: 1,
+      boundCount: 1,
+      missingCount: 1,
+      notReadyCount: 0,
+    };
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), knowledgeCatalog: counts })).toBe(
+      true,
+    );
+    const { notReadyCount: _omitted, ...missingField } = counts;
+    for (const invalid of [
+      missingField,
+      { ...counts, podName: "Customer contracts" },
+      { ...counts, podCount: -1 },
+      { ...counts, podCount: 1.5 },
+      { ...counts, podCount: CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX + 1 },
+      "pods=2",
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), knowledgeCatalog: invalid }),
+      ).toBe(false);
+    }
+  });
+});
+
+// PR #3678 review: a chat answer copy reports a closed outcome, the grounded flag and two bounded
+// counts, never the copied text and never another field.
+describe("client answer copy evidence", () => {
+  it("accepts only the closed copy outcome, the grounded flag and two bounded counts", () => {
+    const copy = { outcome: "copied", grounded: true, strippedGroupCount: 3, keptGroupCount: 1 };
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), answerCopy: copy })).toBe(true);
+    for (const invalid of [
+      { ...copy, outcome: "pasted" },
+      { ...copy, grounded: "yes" },
+      { ...copy, strippedGroupCount: -1 },
+      { ...copy, keptGroupCount: 1.5 },
+      { ...copy, text: "The API uses TLS." },
+      { outcome: "copied", grounded: true, strippedGroupCount: 3 },
+      "copied",
+    ]) {
+      expect(isClientDiagnosticIngestRequest({ ...validRequest(), answerCopy: invalid })).toBe(
+        false,
+      );
+    }
+  });
 });
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`) rides this closed,
@@ -375,8 +429,36 @@ describe("isClientStageIngestRequest", () => {
 
   it("accepts a well-formed started report for every closed stage id", () => {
     for (const stage of CLIENT_STAGE_IDS) {
-      expect(isClientStageIngestRequest({ ...startedRequest(), stage })).toBe(true);
+      expect(
+        isClientStageIngestRequest({
+          ...startedRequest(),
+          stage,
+          ...(stage === "chat history deletion"
+            ? { deletion: { requestedCount: 1, deletedCount: 0, failedCount: 0 } }
+            : {}),
+        }),
+      ).toBe(true);
     }
+  });
+
+  it("accepts body-free deletion counts and rejects content, missing counts and impossible settlements", () => {
+    const request = { ...settledRequest(), stage: "chat history deletion" };
+    const deletion = { requestedCount: 3, deletedCount: 2, failedCount: 1 };
+    expect(isClientStageIngestRequest({ ...request, deletion })).toBe(true);
+    for (const invalid of [
+      undefined,
+      { ...deletion, requestedCount: 0 },
+      { ...deletion, failedCount: -1 },
+      { ...deletion, deletedCount: 0 },
+      { ...deletion, requestedCount: 1.5 },
+      { ...deletion, requestedCount: 1_000_001 },
+      { ...deletion, title: "Private conversation" },
+    ])
+      expect(isClientStageIngestRequest({ ...request, deletion: invalid })).toBe(false);
+    expect(
+      isClientStageIngestRequest({ ...startedRequest(), stage: "chat history deletion", deletion }),
+    ).toBe(false);
+    expect(isClientStageIngestRequest({ ...settledRequest(), deletion })).toBe(false);
   });
 
   it("accepts a well-formed settled report, including a genuinely instant 0ms settle", () => {
@@ -1120,6 +1202,22 @@ describe("client error evidence trust boundary", () => {
   const base = { message: "failure", clientTs: "2026-09-19T00:00:00.000Z" };
   const frame = "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345";
   const evidence = { errorClass: "TypeError", frames: [frame], causeChain: ["Error"] };
+  it("keeps persisted digest coordinates separate from untrusted browser wire frames", () => {
+    const persisted = `dist/ui/static/_next/static/chunks/sha256-${"a".repeat(64)}.js:12:345`;
+    expect(isClientDiagnosticFrame(persisted)).toBe(false);
+    expect(isPersistedClientDiagnosticFrame(persisted)).toBe(true);
+    expect(isPersistedClientDiagnosticFrame(frame)).toBe(false);
+    expect(isPersistedClientDiagnosticFrame(null)).toBe(false);
+    expect(isPersistedClientDiagnosticFrame(persisted.replace("12:345", "123456789:345"))).toBe(
+      false,
+    );
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...base,
+        errorEvidence: { ...evidence, frames: [persisted] },
+      }),
+    ).toBe(false);
+  });
   it("accepts the bounded closed evidence shape", () => {
     expect(isClientDiagnosticIngestRequest({ ...base, errorEvidence: evidence })).toBe(true);
   });
@@ -1269,3 +1367,62 @@ it.each([undefined, null, { unknown: 1 }, { postsFailed: -1 }, { postsFailed: 1_
     ).toBe(false);
   },
 );
+
+describe("closed diagnostic navigation and render context", () => {
+  it.each(["applied", "unavailable", "failed", "dropped", "stale", "cancelled", "deferred"])(
+    "accepts settled navigation outcome %s only on a navigation stage",
+    (navigationOutcome) => {
+      const base = {
+        kind: "stage",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 2,
+        navigationOutcome,
+      };
+      expect(isClientStageIngestRequest({ ...base, stage: "editor project selection" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "files directory load" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "files directory navigation" })).toBe(
+        true,
+      );
+      expect(isClientStageIngestRequest({ ...base, stage: "files project selection" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "chat bind" })).toBe(false);
+      expect(
+        isClientStageIngestRequest({
+          ...base,
+          stage: "editor project selection",
+          phase: "started",
+        }),
+      ).toBe(false);
+    },
+  );
+  it("rejects unknown outcomes and confines render failure to a caught render boundary", () => {
+    expect(
+      isClientStageIngestRequest({
+        kind: "stage",
+        stage: "editor project selection",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 2,
+        navigationOutcome: "CustomerFile",
+      }),
+    ).toBe(false);
+    for (const renderFailure of ["shell", "window-body"])
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), kind: "boundary", renderFailure }),
+      ).toBe(true);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        kind: "window-error",
+        renderFailure: "shell",
+      }),
+    ).toBe(false);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        kind: "boundary",
+        renderFailure: "CustomerFile",
+      }),
+    ).toBe(false);
+  });
+});

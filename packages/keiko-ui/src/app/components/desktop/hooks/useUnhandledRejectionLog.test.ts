@@ -6,13 +6,14 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resetClientDiagnosticWriter,
+  currentGlobalClientFailure,
   setClientDiagnosticWriter,
   takeClientDiagnosticLoss,
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
 import { useUnhandledRejectionLog } from "./useUnhandledRejectionLog";
 
-function dispatchRejection(reason: string): void {
+function dispatchRejection(reason: unknown): void {
   const event = new Event("unhandledrejection");
   Object.defineProperty(event, "reason", { value: reason });
   window.dispatchEvent(event);
@@ -23,6 +24,28 @@ afterEach(() => {
 });
 
 describe("useUnhandledRejectionLog", () => {
+  it("ignores exact Monaco cancellation before the real-rejection cap", () => {
+    const received: (ClientDiagnosticMeta | undefined)[] = [];
+    resetClientDiagnosticWriter();
+    setClientDiagnosticWriter((_message, meta) => received.push(meta));
+    const view = renderHook(() => {
+      useUnhandledRejectionLog();
+    });
+    try {
+      for (let index = 0; index < 8; index += 1) {
+        dispatchRejection(Object.assign(new Error("Canceled"), { name: "Canceled" }));
+      }
+      expect(currentGlobalClientFailure()).toBeNull();
+      dispatchRejection(new TypeError("real failure"));
+      expect(received).toHaveLength(1);
+      expect(received[0]?.errorEvidence?.errorClass).toBe("TypeError");
+      expect(takeClientDiagnosticLoss()).toBeUndefined();
+    } finally {
+      view.unmount();
+      resetClientDiagnosticWriter();
+    }
+  });
+
   it("logs an escaped rejection with the shell's console idiom", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const view = renderHook(() => {
@@ -39,6 +62,30 @@ describe("useUnhandledRejectionLog", () => {
       }
     }
     view.unmount();
+  });
+
+  it("preserves safe shipped chunk evidence for an escaped rejection", () => {
+    const received: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => received.push(meta));
+    const view = renderHook(() => {
+      useUnhandledRejectionLog();
+    });
+    try {
+      const error = new TypeError("ClientAcmePayroll token=sk-secret /Users/alice/private.ts");
+      error.stack = `TypeError: ClientAcmePayroll\n    at customerFunction (${location.origin}/_next/static/chunks/1wntg-7ptuw73.js:12:345)\n    at customerFunction (${location.origin}/Users/alice/private.ts:12:34)`;
+      dispatchRejection(error);
+      expect(received[0]?.errorEvidence).toEqual({
+        errorClass: "TypeError",
+        frames: ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345"],
+        causeChain: [],
+      });
+      expect(JSON.stringify(received)).not.toMatch(
+        /ClientAcmePayroll|sk-secret|customerFunction|Users|https?:/u,
+      );
+    } finally {
+      view.unmount();
+      resetClientDiagnosticWriter();
+    }
   });
 
   it("caps the log volume so a rejection storm cannot flood the console", () => {

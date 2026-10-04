@@ -1,3 +1,5 @@
+import type { GroundedPromptContextWire } from "@oscharko-dev/keiko-contracts/bff-wire";
+
 export interface GroundedAnswerUsage {
   readonly promptTokens: number;
   readonly completionTokens: number;
@@ -10,6 +12,8 @@ export interface GroundedAnswerResult {
   // answer was truncated and must be surfaced (incomplete-answer marker) rather than consumed as a
   // complete grounded answer. Optional/absent on deterministic test answerers and legacy payloads.
   readonly finishReason?: string | undefined;
+  // The share the sent prompt took, for the context meter (grounded-prompt-context.ts). Counts only.
+  readonly promptContext?: GroundedPromptContextWire | undefined;
 }
 
 export type GroundedAnswerPayload = string | GroundedAnswerResult;
@@ -100,6 +104,7 @@ export function normalizeGroundedAnswerPayload(
         : 0,
     },
     ...(payload.finishReason === undefined ? {} : { finishReason: payload.finishReason }),
+    ...(payload.promptContext === undefined ? {} : { promptContext: payload.promptContext }),
   };
 }
 

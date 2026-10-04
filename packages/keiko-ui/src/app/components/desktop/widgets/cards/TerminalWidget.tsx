@@ -36,7 +36,7 @@ import type {
 } from "../../../../../lib/types";
 import { secureRandomId } from "../../../../../lib/secure-random";
 import KeikoSelect from "../../KeikoSelect";
-import { subscribeSharedEventSource } from "./sharedEventSource";
+import { withSharedEventSourceOpen } from "./sharedEventSource";
 
 interface TerminalWidgetProps {
   readonly projectPath?: string;
@@ -155,26 +155,24 @@ function TerminalResult({
         ) : null}
       </div>
       {result.stdout.length > 0 ? (
-        <pre
+        <section
           className="tm-stdout"
-          role="region"
           aria-label={t("terminalWidget.result.stdoutAriaLabel")}
           // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
           tabIndex={0}
         >
-          {result.stdout}
-        </pre>
+          <pre className="tm-output-content">{result.stdout}</pre>
+        </section>
       ) : null}
       {result.stderr.length > 0 ? (
-        <pre
+        <section
           className="tm-stderr"
-          role="region"
           aria-label={t("terminalWidget.result.stderrAriaLabel")}
           // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
           tabIndex={0}
         >
-          {result.stderr}
-        </pre>
+          <pre className="tm-output-content">{result.stderr}</pre>
+        </section>
       ) : null}
     </div>
   );
@@ -241,54 +239,56 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
     };
   }, [projectInput, cwdInput]);
 
-  useEffect(() => {
-    if (!running) {
-      return;
-    }
-    const onMessage = (ev: MessageEvent<string>): void => {
-      try {
-        const parsed = JSON.parse(ev.data) as TerminalEventEnvelope;
-        // Only arm Cancel for the execution that echoes the current requestId.
-        // The SSE channel is global, so an unrelated execution-started event must be ignored.
-        if (
-          parsed.kind === "execution-started" &&
-          runningRef.current &&
-          isOwnEvent(parsed, pendingRequestIdRef.current)
-        ) {
-          setInFlightExecutionId((current) => current ?? parsed.executionId);
-        }
-        // Clear the captured id when the run ends so the next submit starts clean.
-        if (
-          (parsed.kind === "execution-completed" ||
-            parsed.kind === "execution-failed" ||
-            parsed.kind === "execution-cancelled") &&
-          isOwnEvent(parsed, pendingRequestIdRef.current)
-        ) {
-          setInFlightExecutionId((current) => {
-            if (current === null || current !== parsed.executionId) return current;
-            return null;
-          });
-        }
-        // KEIKO-0204 — the channel stays global (ADR-0018 D7); a foreign execution's events are
-        // still processed above for Cancel-arming/clearing, but the visible "Recent events" log
-        // is scoped to this widget's own in-flight request so another window's run never shows up.
-        if (isOwnEvent(parsed, pendingRequestIdRef.current)) {
-          setEvents((current) => {
-            const next = [parsed, ...current];
-            return next.length > MAX_EVENT_LOG ? next.slice(0, MAX_EVENT_LOG) : next;
-          });
-        }
-      } catch {
-        // Ignore unparsable frames; the BFF never emits malformed JSON.
+  const onMessage = useCallback((ev: MessageEvent<string>): void => {
+    try {
+      const parsed = JSON.parse(ev.data) as TerminalEventEnvelope;
+      // Only arm Cancel for the execution that echoes the current requestId.
+      // The SSE channel is global, so an unrelated execution-started event must be ignored.
+      if (
+        parsed.kind === "execution-started" &&
+        runningRef.current &&
+        isOwnEvent(parsed, pendingRequestIdRef.current)
+      ) {
+        setInFlightExecutionId((current) => current ?? parsed.executionId);
       }
-    };
-    return subscribeSharedEventSource(terminalEventsUrl(), TERMINAL_EVENT_SOURCE_TYPES, onMessage);
-  }, [running]);
+      // Clear the captured id when the run ends so the next submit starts clean.
+      if (
+        (parsed.kind === "execution-completed" ||
+          parsed.kind === "execution-failed" ||
+          parsed.kind === "execution-cancelled") &&
+        isOwnEvent(parsed, pendingRequestIdRef.current)
+      ) {
+        setInFlightExecutionId((current) => {
+          if (current === null || current !== parsed.executionId) return current;
+          return null;
+        });
+      }
+      // KEIKO-0204 — the channel stays global (ADR-0018 D7); a foreign execution's events are
+      // still processed above for Cancel-arming/clearing, but the visible "Recent events" log
+      // is scoped to this widget's own in-flight request so another window's run never shows up.
+      if (isOwnEvent(parsed, pendingRequestIdRef.current)) {
+        setEvents((current) => {
+          const next = [parsed, ...current];
+          return next.length > MAX_EVENT_LOG ? next.slice(0, MAX_EVENT_LOG) : next;
+        });
+      }
+    } catch {
+      // Ignore unparsable frames; the BFF never emits malformed JSON.
+    }
+  }, []);
+
+  const runAbort = useRef<AbortController | null>(null);
+  useEffect(
+    () => (): void => {
+      runAbort.current?.abort();
+    },
+    [],
+  );
 
   const onSubmit = useCallback(
     async (e: SubmitEvent<HTMLFormElement>): Promise<void> => {
       e.preventDefault();
-      if (running) return;
+      if (running || runningRef.current) return;
       setError(null);
       setResult(null);
       setInFlightExecutionId(null);
@@ -297,6 +297,8 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
       const parsedArgs = parseArgs(argsInput);
       runningRef.current = true;
       setRunning(true);
+      const controller = new AbortController();
+      runAbort.current = controller;
       try {
         const executionInput: Parameters<typeof createTerminalExecution>[0] = {
           projectId: projectInput,
@@ -305,18 +307,26 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
           ...(cwdInput.length > 0 ? { cwd: cwdInput } : {}),
           requestId,
         };
-        const next = await createTerminalExecution(executionInput);
+        const next = await withSharedEventSourceOpen(
+          terminalEventsUrl(),
+          TERMINAL_EVENT_SOURCE_TYPES,
+          onMessage,
+          () => createTerminalExecution(executionInput),
+          controller.signal,
+        );
         setResult(next);
       } catch (err: unknown) {
         setError(errorFromUnknown(err, t));
       } finally {
+        controller.abort();
+        runAbort.current = null;
         runningRef.current = false;
         setRunning(false);
         pendingRequestIdRef.current = null;
         setInFlightExecutionId(null);
       }
     },
-    [argsInput, command, cwdInput, projectInput, running, t],
+    [argsInput, command, cwdInput, onMessage, projectInput, running, t],
   );
 
   const onAbort = useCallback(async (): Promise<void> => {

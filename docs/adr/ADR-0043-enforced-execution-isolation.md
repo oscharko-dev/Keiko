@@ -78,10 +78,10 @@ package is the platform's reusable isolation owner, consumable anywhere an enfor
 
 The single disposable-command subprocess boundary remains `keiko-tools/src/exec.ts` `runCommand`.
 When a caller passes
-`policy.network === "none"`, `runCommand` asks keiko-sandbox for an enforcing wrapper and spawns the
+`policy.network === "none"` or `policy.filesystem === "execution-root"`, `runCommand` asks keiko-sandbox for an enforcing wrapper and spawns the
 wrapped command, recording the attestation on `CommandResult`. No second spawning path is introduced
 (preserving the ADR-0019 invariant that verification and tools share one command boundary). Callers
-that do not request `network: "none"` are unaffected — egress enforcement is opt-in per call, so the
+that request neither boundary are unaffected — egress enforcement is opt-in per call, so the
 read-only command tools keep `network: "inherit"` and their existing behaviour.
 
 D12's gateway-only Linux wrapper does not create another product command boundary: the planned child
@@ -164,14 +164,23 @@ depends on keiko-sandbox) probes once via `probeNetworkIsolation` and injects th
 post-apply path runs `"enforce-or-fail-closed"` — it executes the applied test under an enforced
 `network:"none"` boundary or not at all.
 
-### D9 — Network-only isolation for in-place post-apply verification
+### D9 — Filesystem confinement for repository verification
 
-The assured pre-filter (#1202) runs in a disposable execution-root copy (`filesystem:"execution-root"`).
-Post-apply verification (#1204) is a different operation: it re-confirms an already-assured candidate
-**in place**, against the real workspace the user explicitly applied the patch to, so it enforces
-**network egress only** (`filesystem` inherited). A `network:"none"` run is enforceable on more backends
-(macOS Seatbelt, Linux bubblewrap/`unshare`) than the execution-root boundary, widening coverage while
-keeping the data-exfiltration threat (OWASP LLM05) blocked.
+Both assured pre-filter execution and in-place repository verification request
+`filesystem:"execution-root"`. In-place runs still operate against the selected real workspace,
+including ordinary package scripts and targeted tests, but repository code may write only inside
+that root and sandbox temporary storage. The governed command runner uses the same existing policy.
+Strict bubblewrap or the Docker/Podman fallback must enforce the requested filesystem boundary;
+network-only `unshare` and Seatbelt wrappers do not qualify. If no compatible backend is available,
+execution fails closed before spawning. A network compatibility setting never removes a requested
+filesystem boundary. Sandbox attestations report network and filesystem enforcement separately.
+
+The Docker fallback resolves only the selected local engine endpoint before spawning: a canonical
+Unix socket outside the execution root, or a Windows named pipe under the local `npipe:////./pipe/` namespace (including Docker Desktop's Linux engine). Remote or
+unavailable contexts fail closed with a body-free reason. The CLI receives the local endpoint
+explicitly while HOME stays empty; Docker configuration and credentials are never forwarded.
+Container commands use the allowlisted executable name from the image's PATH, not a host symlink
+target such as `npm-cli.js`. Native wrappers continue to use the validated absolute host executable.
 
 ### D10 — Merge governance for this delivery
 
@@ -335,7 +344,7 @@ refuses the launch outright with the identical `GATEWAY_UNSUPPORTED_ON_HOST_REAS
 `planIsolatedRun` would produce, rather than a silent unconfined spawn — its native launch-packet
 protocol has no field for a network policy and cannot enforce one; the refusal is also recorded as a
 body-free `runtime.confinement.failed` activity-log line, matching the macOS dev-lane path, so a
-Windows refusal leaves the same evidence a support bundle can reconstruct. Production composition
+Windows refusal leaves the same evidence a support report can reconstruct. Production composition
 (`productionOpenCodeBackend.ts`) always supplies the exact gateway policy, including Windows dev
 and release-qualified native lanes. Process-tree qualification alone cannot authorize an unconfined
 network launch. Until a native backend can enforce the policy, starting that run refuses before

@@ -4,6 +4,11 @@
 
 Accepted (Issue #2114, 2026-07-09).
 
+> **Ordinary Editor retirement (owner decision, 2026-10-03).** As recorded in ADR-0061, the
+> normal Editor no longer acts as an agent bridge or accepts Chat code proposals. Shared governed
+> changeset execution remains for its independent active consumers. This retirement does not
+> change the separate Coding Workbench or its headless bridge.
+
 > **Amended by [ADR-0138](ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md).**
 > D1's mode policy matrix and the **Approve for me** label are superseded: `supervised-coding` is
 > displayed as **Supervised workspace**, `governed-assist` workspace-contained mutations are
@@ -141,12 +146,10 @@ Omission is the legacy harness/agent producer and canonicalizes to `agent`; `cha
 chat producer. The bounded marker is carried through the existing queue and governance paths and
 does not change authority, approval, risk, or disposition.
 
-The explicit local **Apply to editor** command uses an additive bridge-action request wrapper. Its
-memory-only bridge capability must match a live session lease. The server derives workspace and a
-narrow, action-bound Ask for approval authority, canonicalizes origin to `chat`, and removes both
-the capability and injected authority reference before SSE emission. A raw `origin: "chat"` value
-does not grant this authority. This explicit command remains a review workflow and therefore forces
-review even when its derived Ask for approval policy would otherwise allow the contained patch.
+The explicit local **Apply to editor** command and its exclusive bridge-action wrapper are retired
+with the ordinary Editor integration (2026-10-03). The retained `origin` marker is provenance for
+the shared protocol, never authority. Independent producers continue to require their existing
+validated authority and live execution bridge.
 
 For emitted `applyPatch` and `applyChangeset` actions, the server adds an optional
 `requiresReview` boolean derived from the composed decision. `review-required` always emits `true`;
@@ -210,6 +213,11 @@ the 50-file cap. This supports conflict review and partial acceptance without ra
 results or evidence.
 
 ### D4 - Bounded diagnostics and live editor context
+
+The ordinary Editor stopped publishing agent context on 2026-10-03 (ADR-0061). Its passive
+buffer-safety projection excludes selection, text, diagnostics and language context. The shared
+optional context contracts below remain for independent consumers; they do not connect normal
+Chat to the ordinary Editor.
 
 `EditorAgentSessionSnapshot` keeps the counts-only `diagnosticsSummary` and gains optional
 `diagnosticsDetail`. Each item contains only severity, an existing `LanguageRange`, and a message.

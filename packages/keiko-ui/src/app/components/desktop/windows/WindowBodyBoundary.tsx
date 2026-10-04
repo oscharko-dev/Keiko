@@ -13,6 +13,8 @@
 // reuses the existing global lk-empty/lk-btn classes — globals.css is SHA-gated (#1300)
 // and must not grow for this.
 
+import { SupportReportButton } from "../SupportReportButton";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { Component, type ReactNode } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
@@ -31,6 +33,7 @@ interface InnerWindowBodyBoundaryProps extends WindowBodyBoundaryProps {
 
 interface WindowBodyBoundaryState {
   readonly failed: boolean;
+  readonly correlationId?: string | undefined;
 }
 
 class InnerWindowBodyBoundary extends Component<
@@ -46,9 +49,17 @@ class InnerWindowBodyBoundary extends Component<
   public override componentDidCatch(error: Error): void {
     // Same observable-not-silent idiom as AppShell's connected-scope warn: the crash must
     // be diagnosable from the console, keyed by window type so it can be attributed.
+    const correlationId = correlationIdOf(error) ?? crypto.randomUUID();
+    this.setState({ correlationId });
     reportClientDiagnostic(
       `[keiko] window body crashed: ${this.props.windowType}: ${clientErrorSummary(error)}`,
-      { correlationId: correlationIdOf(error) },
+      {
+        correlationId,
+        kind: "boundary",
+        renderFailure: "window-body",
+        errorKind: "internal",
+        errorEvidence: clientErrorEvidence(error),
+      },
     );
   }
 
@@ -65,6 +76,7 @@ class InnerWindowBodyBoundary extends Component<
         <button type="button" className="lk-btn lk-btn-ghost" onClick={this.retry}>
           {this.props.t("common.retry")}
         </button>
+        <SupportReportButton correlationId={this.state.correlationId} />
       </div>
     );
   }

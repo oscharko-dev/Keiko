@@ -197,15 +197,12 @@ const MONACO_CODE_MARKERS = [
 ];
 
 const PRODUCT_CODE_MARKERS = [
-  "quick-access",
-  "Quick access",
   "Command query",
   "runPaletteCommand(",
   "searchbox",
   "Search files and symbols",
   'data-window-id="search"',
-  "Open quick access",
-  "UnifiedQuickAccessPalette",
+  "CommandPalette",
   "workspace file or symbol query",
 ];
 
@@ -305,7 +302,7 @@ describe("editorModifier is paired with Monaco surfaces, ControlOrMeta with prod
 
   // Reproduces, as a minimal synthetic fixture, the exact bug class already fixed three times this
   // round (multi-root-search-2526.spec.ts, workspace-search-2090.spec.ts, workspace-trust-2523.spec.ts):
-  // a PRODUCT chord (recognizable by its "Command query" combobox / quick-access surface) wrongly
+  // a PRODUCT chord (recognizable by its "Command query" combobox / command-palette surface) wrongly
   // reading the browser-derived helper instead of the host-derived shorthand.
   it("flags editorModifier reintroduced at a product call site", () => {
     const source = `

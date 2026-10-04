@@ -7,7 +7,7 @@ import {
   realpathSync,
   type Stats,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 
 const HEAD_BYTES = 4_096;
 const PACKED_REFS_BYTES = 1_048_576;
@@ -161,7 +161,7 @@ function readLooseReference(
     const candidate = resolve(root, reference);
     if (
       !containsCanonicalPath(root, dirname(candidate)) ||
-      fileSystem.realpath(candidate) !== candidate
+      !hasNoSymbolicLinkComponents(candidate, fileSystem)
     ) {
       return undefined;
     }
@@ -271,10 +271,13 @@ function stableFile(left: Stats, right: Stats): boolean {
 }
 
 function sameIdentity(left: Stats, right: Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+  // On Windows, lstat can report dev=0 while fstat on the opened handle reports the NTFS volume
+  // serial. The stable file ID is still `ino`; compare device IDs whenever both APIs provide one.
+  return left.ino === right.ino && (left.dev === right.dev || left.dev === 0 || right.dev === 0);
 }
 
 function canonicalDirectory(path: string, fileSystem: ProductionWorkspaceHeadFileSystem): string {
+  if (!hasNoSymbolicLinkComponents(path, fileSystem)) throw new Error("directory-invalid");
   const before = fileSystem.lstat(path);
   if (before.isSymbolicLink() || !before.isDirectory()) throw new Error("directory-invalid");
   const canonical = fileSystem.realpath(path);
@@ -291,6 +294,24 @@ function canonicalDirectory(path: string, fileSystem: ProductionWorkspaceHeadFil
     throw new Error("directory-invalid");
   }
   return canonical;
+}
+
+function hasNoSymbolicLinkComponents(
+  path: string,
+  fileSystem: ProductionWorkspaceHeadFileSystem,
+): boolean {
+  const absolute = resolve(path);
+  const root = parse(absolute).root;
+  let current = root;
+  try {
+    for (const segment of relative(root, absolute).split(sep).filter(Boolean)) {
+      current = join(current, segment);
+      if (fileSystem.lstat(current).isSymbolicLink()) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function parseGitPointer(value: string | undefined): string | undefined {

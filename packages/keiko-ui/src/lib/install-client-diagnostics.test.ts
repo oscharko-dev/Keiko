@@ -3,8 +3,19 @@
 // that it does — and that it does nothing else — lives where a reviewer looks for it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { act, renderHook } from "@testing-library/react";
+import {
+  isClientDiagnosticIngestRequest,
+  isClientStageIngestRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { clientErrorEvidence } from "./client-error-evidence";
+import { fetchFilesTree } from "./api";
+import { CORRELATION_HEADER } from "./bff-correlation";
+import {
+  observeFilesDirectoryRead,
+  resetFilesNavigationEvidenceForTests,
+} from "./files-navigation-evidence";
+import { useFilesNavigation } from "@/app/components/desktop/widgets/cards/useFilesNavigation";
 import {
   clientDiagnosticPostFailureCount,
   clientDiagnosticPostThrottledCount,
@@ -32,11 +43,66 @@ function lastPostedBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unk
 }
 
 afterEach(() => {
+  resetFilesNavigationEvidenceForTests();
   resetClientDiagnosticWriter();
   resetClientDiagnosticPostStateForTests();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+it.each([false, true])(
+  "persists product navigation and its actual directory request on one causal timeline (failed=%s)",
+  async (failed) => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      if (!String(input).startsWith("/api/files/tree?")) return jsonResponse();
+      const correlationId = new Headers(init?.headers).get(CORRELATION_HEADER) ?? "";
+      return new Response(
+        JSON.stringify(
+          failed
+            ? { error: { code: "INTERNAL", message: "customer body" } }
+            : {
+                root: "/private/customer",
+                path: "docs",
+                entries: [],
+                truncated: false,
+              },
+        ),
+        { status: failed ? 500 : 200, headers: { [CORRELATION_HEADER]: correlationId } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setClientDiagnosticWriter(fanOutClientDiagnostic);
+    const { result, unmount } = renderHook(() => useFilesNavigation("/private/customer"));
+    act(() => result.current.visit("docs"));
+    const navigation = result.current.takeRead("docs");
+    expect(navigation).toBeDefined();
+    await observeFilesDirectoryRead(
+      (correlationId) => fetchFilesTree("/private/customer", "docs", correlationId),
+      navigation,
+    ).catch(() => undefined);
+    const stages = fetchMock.mock.calls
+      .filter(([input]) => input === "/api/diagnostics/client")
+      .map(([, init]) => JSON.parse(String(init?.body)) as unknown)
+      .filter(isClientStageIngestRequest);
+    expect(stages).toHaveLength(4);
+    expect(new Set(stages.map((stage) => stage.correlationId))).toEqual(
+      new Set([navigation?.correlationId]),
+    );
+    const request = fetchMock.mock.calls.find(([input]) =>
+      String(input).startsWith("/api/files/tree?"),
+    );
+    expect(new Headers(request?.[1]?.headers).get(CORRELATION_HEADER)).toBe(
+      navigation?.correlationId,
+    );
+    expect(
+      stages.filter((stage) => stage.phase === "settled").map((stage) => stage.navigationOutcome),
+    ).toEqual([failed ? "failed" : "applied", failed ? "failed" : "applied"]);
+    expect(JSON.stringify(stages)).not.toContain("customer");
+    unmount();
+  },
+);
 
 describe("writeToBrowserConsole", () => {
   it("writes the message verbatim and adds nothing of its own", () => {
@@ -70,6 +136,51 @@ describe("writeToBrowserConsole", () => {
 // `POST /api/diagnostics/client`, fanned out alongside the console so neither call site regresses
 // when the other is added.
 describe("fanOutClientDiagnostic", () => {
+  it("keeps healthy Composer, workspace and voice lifecycle evidence out of console warnings", () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    fanOutClientDiagnostic("Composer initialized", { composerActivity: "initialized" });
+    fanOutClientDiagnostic("Workspace ready", { composerActivity: "workspace-scroll-ready" });
+    fanOutClientDiagnostic("Chat loading", {
+      stageReport: { stage: "chat bind", phase: "started", ordinal: 1 },
+    });
+    fanOutClientDiagnostic("Markdown list layout", {
+      kind: "markdown-layout",
+      markdownLayout: { listStart: 2, listIndex: 0, depth: 0 },
+    });
+    fanOutClientDiagnostic("Voice started", {
+      kind: "voice-dialogue",
+      voiceDialogueStage: "started",
+    });
+    expect(warning).not.toHaveBeenCalled();
+    expect(debug).toHaveBeenCalledTimes(5);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(lastPostedBody(fetchMock)).toMatchObject({ voiceDialogueStage: "started" });
+  });
+
+  it("retains warning delivery and failure capacity during routine voice reports", () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    for (let index = 0; index < 30; index += 1) {
+      fanOutClientDiagnostic("Voice turn submitted", {
+        kind: "voice-dialogue",
+        voiceDialogueStage: "turn-submitted",
+      });
+    }
+    fanOutClientDiagnostic("Voice failed", {
+      kind: "voice-dialogue",
+      voiceDialogueStage: "delivery-failed",
+    });
+    expect(warning).toHaveBeenCalledExactlyOnceWith("Voice failed");
+    expect(fetchMock).toHaveBeenCalledTimes(31);
+    expect(lastPostedBody(fetchMock)).toMatchObject({ voiceDialogueStage: "delivery-failed" });
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
+  });
+
   it("writes to the console and posts the same message to the server", async () => {
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
@@ -501,7 +612,7 @@ describe("fanOutClientDiagnostic correlationId handling", () => {
 // same human-readable text (nothing here decorates or replaces it) — only the POST body changes.
 describe("fanOutClientDiagnostic stage evidence", () => {
   it("posts the closed stage wire shape for a started report, never the message body", () => {
-    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const consoleDebug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
     vi.stubGlobal("fetch", fetchMock);
 
@@ -511,7 +622,7 @@ describe("fanOutClientDiagnostic stage evidence", () => {
 
     // The console still gets the plain, human-readable text — the transport is the only thing that
     // changes what reaches the server.
-    expect(consoleWarn).toHaveBeenCalledWith("desktop chat bind #1: started");
+    expect(consoleDebug).toHaveBeenCalledWith("desktop chat bind #1: started");
     const body = lastPostedBody(fetchMock);
     expect(body).toEqual({ kind: "stage", stage: "chat bind", phase: "started", ordinal: 1 });
   });
@@ -533,6 +644,70 @@ describe("fanOutClientDiagnostic stage evidence", () => {
       ordinal: 1,
       durationMs: 5,
     });
+  });
+
+  it("preserves the closed navigation outcome without the user message", () => {
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    fanOutClientDiagnostic("customer repository details must not be transported", {
+      correlationId: "navigation-123",
+      stageReport: {
+        stage: "editor project selection",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 5,
+        navigationOutcome: "deferred",
+      },
+    });
+    const body = lastPostedBody(fetchMock);
+    expect(body).toEqual({
+      kind: "stage",
+      stage: "editor project selection",
+      phase: "settled",
+      ordinal: 1,
+      durationMs: 5,
+      navigationOutcome: "deferred",
+      correlationId: "navigation-123",
+    });
+    expect(isClientStageIngestRequest(body)).toBe(true);
+  });
+
+  it("preserves the closed caught-render marker through the message transport", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    fanOutClientDiagnostic("Workspace window render failed", {
+      kind: "boundary",
+      renderFailure: "window-body",
+    });
+    const body = lastPostedBody(fetchMock);
+    expect(body).toMatchObject({ kind: "boundary", renderFailure: "window-body" });
+    expect(isClientDiagnosticIngestRequest(body)).toBe(true);
+  });
+
+  it("preserves correlated body-free bulk-deletion counts through the stage transport", () => {
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    fanOutClientDiagnostic("chat history deletion: settled", {
+      correlationId: "ui_history-delete-0001",
+      stageReport: {
+        stage: "chat history deletion",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 12,
+        deletion: { requestedCount: 3, deletedCount: 2, failedCount: 1 },
+      },
+    });
+    const body = lastPostedBody(fetchMock);
+    expect(isClientStageIngestRequest(body)).toBe(true);
+    expect(body).toMatchObject({
+      correlationId: "ui_history-delete-0001",
+      deletion: { requestedCount: 3, deletedCount: 2, failedCount: 1 },
+    });
+    expect(body).not.toHaveProperty("message");
+    expect(debug).toHaveBeenCalledOnce();
   });
 
   it("never drains the page's pending delivery loss for a stage report, leaving it for the next report", () => {
@@ -820,6 +995,25 @@ describe("fanOutClientDiagnostic correlated closed reports", () => {
 // #3557: a page load posts about a dozen routine stage reports. With one shared budget, a failure
 // raised during boot (the one most likely to hold a real stall) was dropped console-only.
 describe("fanOutClientDiagnostic budgets", () => {
+  it("reserves failure capacity after routine Composer and scroll events", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    for (let index = 0; index < 30; index += 1) {
+      fanOutClientDiagnostic("Composer ready", { composerActivity: "initialized" });
+    }
+    fanOutClientDiagnostic("Code unavailable", {
+      kind: "other",
+      composerCodeStage: "editor-mount",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(31);
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      kind: "other",
+      composerCodeStage: "editor-mount",
+    });
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
+    expect(isClientDiagnosticIngestRequest(lastPostedBody(fetchMock))).toBe(true);
+  });
   it("never lets routine evidence use up the budget of a failure report", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
@@ -1023,6 +1217,28 @@ describe("fanOutClientDiagnostic budgets", () => {
     expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
     expect(clientDiagnosticPostThrottledCount()).toBe(0);
   });
+});
+
+// PR #3678 review: the catalog counts reach the wire as structured evidence and spend the routine
+// budget, like every other closed, non-failure report.
+it("posts the knowledge catalog counts on the wire and spends the routine budget", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const knowledgeCatalog = {
+    podCount: 1,
+    readyPodCount: 0,
+    setCount: 0,
+    boundCount: 1,
+    missingCount: 0,
+    notReadyCount: 1,
+  };
+  for (let index = 1; index <= 25; index += 1) {
+    fanOutClientDiagnostic("Keiko knowledge catalog offers no usable pod.", { knowledgeCatalog });
+  }
+  expect(lastPostedBody(fetchMock)).toMatchObject({ knowledgeCatalog });
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
 });
 
 it("posts reduced production frames and closed causes through the existing transport", () => {

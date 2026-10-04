@@ -15,6 +15,12 @@ import {
   type AppSessionTestServer,
 } from "./_support.js";
 
+import {
+  createLauncherSessionPairingPort,
+  mintLauncherPairingAttestation,
+} from "./launcherSessionPairingPort.js";
+
+const LAUNCHER_SECRET = "journey-launcher-pairing-secret-with-32-characters";
 const CANARY = { kind: "transcript-probe", body: "milestone-1-bounded-canary" } as const;
 
 // The local-session route path lives here rather than in `_support.ts` because that file is a
@@ -24,7 +30,7 @@ const APP_SESSION_LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-
 
 function startServer(): Promise<AppSessionTestServer> {
   return startAppSessionTestServer({
-    sessionPairingPort: createFakeSessionPairingPort(),
+    sessionPairingPort: createLauncherSessionPairingPort({ secret: LAUNCHER_SECRET }),
     contentSource: createStaticContentSource(CANARY),
   });
 }
@@ -44,7 +50,13 @@ async function pairSession(server: AppSessionTestServer): Promise<string> {
   const response = await fetch(`${server.baseUrl}${APP_SESSION_PATHS.pair}`, {
     method: "POST",
     headers: postHeaders(),
-    body: JSON.stringify(fakePairingRequestBody()),
+    body: JSON.stringify(
+      mintLauncherPairingAttestation({
+        secret: LAUNCHER_SECRET,
+        requestId: "req_journey_pairing",
+        issuedAtMs: Date.now(),
+      }),
+    ),
   });
   expect(response.status).toBe(200);
   const cookie = extractSessionCookie(response);
@@ -52,10 +64,13 @@ async function pairSession(server: AppSessionTestServer): Promise<string> {
   return cookie;
 }
 
-async function ensureLocalSession(server: AppSessionTestServer): Promise<string | undefined> {
+async function ensureLocalSession(
+  server: AppSessionTestServer,
+  cookie?: string,
+): Promise<string | undefined> {
   const response = await fetch(`${server.baseUrl}${APP_SESSION_LOCAL_SESSION_PATH}`, {
     method: "POST",
-    headers: postHeaders(),
+    headers: postHeaders(cookie),
   });
   expect(response.status).toBe(200);
   return extractSessionCookie(response);
@@ -109,11 +124,13 @@ describe("authenticated app-session channel journey (ADR-0141, #2477)", () => {
     }
   });
 
-  it("a launcher-authorized local session reads the bounded payload without a URL fragment", async () => {
+  it("a launcher-attested session survives local confirmation without a new cookie", async () => {
     const server = await startServer();
     try {
-      const cookie = await ensureLocalSession(server);
-      if (cookie === undefined) throw new TypeError("local session did not issue a cookie");
+      await expect(ensureLocalSession(server)).resolves.toBeUndefined();
+      expect(await snapshotContent(server)).toBeNull();
+      const cookie = await pairSession(server);
+      await expect(ensureLocalSession(server, cookie)).resolves.toBeUndefined();
       expect(await snapshotContent(server, cookie)).toEqual(CANARY);
       expect(await readStreamContent(server, cookie)).toEqual(CANARY);
     } finally {

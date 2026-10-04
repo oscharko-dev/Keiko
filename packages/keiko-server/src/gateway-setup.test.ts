@@ -18,15 +18,18 @@ import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
-import { buildUiHandlerDeps } from "./deps.js";
+import { buildUiHandlerDeps as createUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   ERROR_CODES,
+  assumedChatCapability,
+  createDefaultChatCapability,
   parseGatewayConfig,
   resolveCodingSafeSidecarGatewayProfile,
   resolveVoiceCapability,
@@ -60,7 +63,7 @@ import {
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
 } from "./gateway-spend-budget.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
-import { runGatewayReadiness } from "./gateway-readiness.js";
+import { runGatewayReadiness, stopConfiguredConversationReadiness } from "./gateway-readiness.js";
 import { recommendQiModelPolicy } from "./qualityIntelligence/modelSelection.js";
 import type { RouteContext } from "./routes.js";
 import {
@@ -69,6 +72,15 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 
 const tmpDirs: string[] = [];
+const handlerDeps: UiHandlerDeps[] = [];
+
+function buildUiHandlerDeps(
+  options: Parameters<typeof createUiHandlerDeps>[0],
+): ReturnType<typeof createUiHandlerDeps> {
+  const deps = createUiHandlerDeps(options);
+  handlerDeps.push(deps);
+  return deps;
+}
 
 // Issue #1320: pin both local vaults (provider credentials + Figma PAT) to the explicit env-key tier
 // so tests never touch the real macOS keychain — deterministic, side-effect-free, and identical on
@@ -98,7 +110,8 @@ const INVALID_VOICE_STRING_CASES = VOICE_STRING_SETUP_FIELDS.flatMap((field) =>
   INVALID_VOICE_STRING_VALUES.map((value) => ({ field, value })),
 );
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(handlerDeps.splice(0).map(stopConfiguredConversationReadiness));
   for (const dir of tmpDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -667,7 +680,7 @@ describe("handleGatewaySetup", () => {
       modelId: provider.modelId,
       generation: gatewayConfig.generation(),
       checkedAt: proof.checkedAt,
-      fields: { toolCalling: true },
+      fields: { toolCalling: true, conversationReady: false },
     });
     deps.store.close();
   });
@@ -1378,6 +1391,47 @@ describe("handleGatewaySetup", () => {
     expect(contextWindow()).toBe(32_000);
     expect(await apply(8_000)).toBe(200);
     expect(contextWindow()).toBe(32_000);
+    deps.store.close();
+  });
+
+  // PR #3678 review: the long-context proof is a lower bound. On an undeclared window it raises the
+  // stored floor the Coding Workbench reads, but the window stays assumed, so conversations keep
+  // the default geometry and the provider's own statement can still replace it.
+  it("raises an assumed window's proven floor without ending the assumption", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-assumed-floor-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-assumed-floor-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "model-one", baseUrl: "https://gateway.example.com/v1", apiKey: "token" },
+        ],
+        capabilities: [assumedChatCapability("model-one")],
+      }),
+      true,
+    );
+    gatewayConfig.recordVerifiedCapability(
+      "model-one",
+      { contextWindow: 32_000 },
+      "2026-09-30T06:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { contextWindow: 32_000 } }), params: { modelId: "model-one" } },
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const capability = requiredGatewayConfig(deps).capabilities?.find(
+      (candidate) => candidate.id === "model-one",
+    );
+    expect(capability?.contextWindow).toBe(32_000);
+    expect(capability?.contextWindowAssumed).toBe(true);
     deps.store.close();
   });
 
@@ -5215,6 +5269,148 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  // 1.1.13 field report: a fresh setup against a gateway that declares no window must install the
+  // model as window-ASSUMED immediately — not only after a reload migrates the placeholder.
+  it("installs an undeclared chat window as assumed on fresh setup, without a restart", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-assumed-window-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-assumed-window-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["hosted-vllm-chat"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const live = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "hosted-vllm-chat",
+    );
+    expect(live?.contextWindowAssumed).toBe(true);
+    const saved = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+      readonly providers?: readonly {
+        readonly modelId: string;
+        readonly capability?: { readonly contextWindowAssumed?: boolean };
+      }[];
+    };
+    expect(
+      saved.providers?.find((item) => item.modelId === "hosted-vllm-chat")?.capability
+        ?.contextWindowAssumed,
+    ).toBe(true);
+    deps.store.close();
+  });
+
+  // A re-setup must keep what a stored window's provenance records: it is assumed only while nobody
+  // has stated it. A gateway's declaration ends the assumption (and replaces a reported window), but
+  // a rediscovery that declares nothing must neither invent an assumption for a window a provider
+  // reported or a probe measured, nor forget one for a window that was never stated.
+  it.each([
+    {
+      title: "an assumed window stays assumed while discovery declares nothing",
+      stored: { contextWindow: 4_096, contextWindowAssumed: true },
+      declared: undefined,
+      expected: {
+        contextWindow: 4_096,
+        contextWindowAssumed: true,
+        contextWindowReported: undefined,
+      },
+    },
+    {
+      title: "a declared window ends the assumption",
+      stored: { contextWindow: 4_096, contextWindowAssumed: true },
+      declared: 131_072,
+      expected: {
+        contextWindow: 131_072,
+        contextWindowAssumed: undefined,
+        contextWindowReported: undefined,
+      },
+    },
+    {
+      title: "a provider-reported window survives a rediscovery that declares nothing",
+      stored: { contextWindow: 200_000, contextWindowReported: true },
+      declared: undefined,
+      expected: {
+        contextWindow: 200_000,
+        contextWindowAssumed: undefined,
+        contextWindowReported: true,
+      },
+    },
+    {
+      title: "a declared window replaces a provider-reported one",
+      stored: { contextWindow: 200_000, contextWindowReported: true },
+      declared: 131_072,
+      expected: {
+        contextWindow: 131_072,
+        contextWindowAssumed: undefined,
+        contextWindowReported: undefined,
+      },
+    },
+    {
+      title: "a measured window (neither flag) stays measured",
+      stored: { contextWindow: 32_000 },
+      declared: undefined,
+      expected: {
+        contextWindow: 32_000,
+        contextWindowAssumed: undefined,
+        contextWindowReported: undefined,
+      },
+    },
+  ] as const)("keeps window provenance across a re-setup: $title", async (row) => {
+    const baseUrl = "https://llm-gateway.example.com/v1";
+    const deps = createUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-window-provenance-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-window-provenance-"), "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          row.declared === undefined
+            ? ["hosted-vllm-chat"]
+            : parseModelDiscovery({
+                data: [
+                  {
+                    model_name: "hosted-vllm-chat",
+                    model_info: { mode: "chat", max_input_tokens: row.declared },
+                  },
+                ],
+              }),
+        ),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "hosted-vllm-chat",
+            baseUrl,
+            apiKey: "old-token",
+            capability: { ...createDefaultChatCapability("hosted-vllm-chat"), ...row.stored },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(ctx({ baseUrl, apiKey: "example-secret-token" }), deps);
+
+    expect(result.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "hosted-vllm-chat",
+    );
+    expect({
+      contextWindow: capability?.contextWindow,
+      contextWindowAssumed: capability?.contextWindowAssumed,
+      contextWindowReported: capability?.contextWindowReported,
+    }).toEqual(row.expected);
+    deps.store.close();
+  });
+
   it("keeps a NEW image claim on the verified rebuild path", async () => {
     // Expanding image capability onto an id that never carried it still demands the vision
     // probe — only clears and shrinks are metadata edits.
@@ -5376,6 +5572,11 @@ describe("handleGatewaySetup", () => {
       gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
+    // The reranker candidate is probed before it may be wired; this fixture's engine does not
+    // answer, so it stays a reported, unconfigured model. Injected so the run never opens a socket.
+    Object.assign(deps, {
+      rerankRequest: () => Promise.resolve({ ok: false, kind: "transport" } as const),
+    });
 
     const result = await handleGatewaySetup(
       ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
@@ -5386,6 +5587,7 @@ describe("handleGatewaySetup", () => {
     expect(result.body).toMatchObject({
       unsupportedModels: [{ id: "house-reranker", reason: "rerank" }],
     });
+    expect(currentGatewayConfig(deps)?.reranker).toBeUndefined();
     deps.store.close();
   });
 
@@ -5499,17 +5701,399 @@ describe("handleGatewaySetup", () => {
     });
   });
 
-  it("lets a usable duplicate win over an unsupported entry with the same id", () => {
-    // A LiteLLM model_name is a routing alias that can front several deployments. An unusable one
-    // listed first must not shadow the usable duplicate behind it.
-    expect(
-      normalizeDiscoveryPayloadForSetup({
+  it("intersects routing alias limits independently of deployment order", () => {
+    const deployments = [
+      {
+        model_name: "shared-chat",
+        model_info: {
+          mode: "chat",
+          max_input_tokens: 131_072,
+          max_output_tokens: 16_384,
+          supports_function_calling: true,
+        },
+      },
+      {
+        model_name: "shared-chat",
+        model_info: {
+          mode: "chat",
+          max_input_tokens: 32_768,
+          max_output_tokens: 4_096,
+          supports_function_calling: false,
+        },
+      },
+    ];
+    const forward = parseModelDiscovery({ data: deployments });
+    const reverse = parseModelDiscovery({ data: [...deployments].reverse() });
+    expect(forward.modelMetadata?.["shared-chat"]).toMatchObject({
+      contextWindow: 32_768,
+      maxOutputTokens: 4_096,
+      toolCalling: false,
+    });
+    expect(reverse).toEqual(forward);
+  });
+
+  it("uses conservative context geometry if one alias deployment omits its limit", () => {
+    const result = parseModelDiscovery({
+      data: [
+        { model_name: "shared-chat", model_info: { mode: "chat", max_input_tokens: 131_072 } },
+        { model_name: "shared-chat", model_info: { mode: "chat" } },
+      ],
+    });
+    expect(result.modelMetadata?.["shared-chat"]?.contextWindow).toBe(4_096);
+    // PR #3678 review: the fallback is not a declaration.
+    expect(result.modelMetadata?.["shared-chat"]?.contextWindowUndeclared).toBe(true);
+  });
+
+  it("installs a partly undeclared replica set as window-assumed", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-partly-undeclared-");
+    const discovered = parseModelDiscovery({
+      data: [
+        { model_name: "shared-chat", model_info: { mode: "chat", max_input_tokens: 131_072 } },
+        { model_name: "shared-chat", model_info: { mode: "chat" } },
+      ],
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-partly-undeclared-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(discovered),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "shared-chat",
+    );
+    expect(capability?.contextWindowAssumed).toBe(true);
+    deps.store.close();
+  });
+
+  it("keeps prompt capacity when an unknown context has a declared output ceiling", () => {
+    const parsed = parseModelDiscovery({
+      data: [
+        {
+          model_name: "shared-chat",
+          model_info: { mode: "chat", max_input_tokens: 131_072, max_output_tokens: 16_384 },
+        },
+        { model_name: "shared-chat", model_info: { mode: "chat", max_output_tokens: 8_192 } },
+      ],
+    });
+    const metadata = parsed.modelMetadata?.["shared-chat"];
+    const capability = {
+      ...createDefaultChatCapability("shared-chat"),
+      contextWindow: metadata?.contextWindow ?? 0,
+      maxOutputTokens: metadata?.maxOutputTokens ?? 0,
+    };
+    expect(capability.contextWindow).toBe(4_096);
+    expect(deriveContextProfileFromCapability(capability).effectiveInputBudget).toBeGreaterThan(0);
+  });
+
+  it("preserves an authoritative unknown output ceiling in either alias order", () => {
+    const entries = [
+      { model_name: "shared-chat", model_info: { mode: "chat", max_input_tokens: 131_072 } },
+      {
+        model_name: "shared-chat",
+        model_info: { mode: "chat", max_input_tokens: 131_072, max_output_tokens: 16_384 },
+      },
+    ];
+    for (const data of [entries, [...entries].reverse()]) {
+      expect(parseModelDiscovery({ data }).modelMetadata?.["shared-chat"]?.maxOutputTokens).toBe(0);
+    }
+  });
+
+  it("records alias fallback bounds with body-free correlated analyzer evidence", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      parseModelDiscovery(
+        {
+          data: [
+            {
+              model_name: "private-customer-alias",
+              model_info: { mode: "chat", max_input_tokens: 131_072 },
+            },
+            { model_name: "private-customer-alias", model_info: { mode: "chat" } },
+            {
+              model_name: "private-customer-alias",
+              model_info: { mode: "chat", max_input_tokens: 131_072 },
+            },
+          ],
+        },
+        "corr-alias-intersection",
+      );
+      const event = sink.events
+        .filter((entry) => entry.op === "gateway.discovery.alias-intersection")
+        .at(-1);
+      expect(event).toMatchObject({
+        correlationId: "corr-alias-intersection",
+        extra: {
+          state: "intersected",
+          deploymentCount: 3,
+          contextWindow: 4_096,
+          maxOutputTokens: 0,
+          undeclaredOutputLimit: true,
+          undeclaredLimit: true,
+          reasoningOptionCount: 0,
+          completeness: "complete",
+          loss: "none",
+        },
+      });
+      expect(event?.extra?.modelIdDigest).toMatch(/^[a-f0-9]{16}$/u);
+      expect(JSON.stringify(event)).not.toContain("private-customer-alias");
+      expectActivityLogProof(
+        "gateway.discovery.alias-intersection.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it.each([false, true])(
+    "rejects explicit non-chat alias capabilities, reversed=%s",
+    (reversed) => {
+      const entries = [
+        { model_name: "mixed-chat", capabilities: { chat_completion: false } },
+        { model_name: "mixed-chat", model_info: { mode: "chat" } },
+      ];
+      const result = parseModelDiscovery({
         data: [
-          { model_name: "shared-alias", model_info: { mode: "rerank" } },
-          { model_name: "shared-alias", model_info: { mode: "chat" } },
+          ...(reversed ? entries.reverse() : entries),
+          { model_name: "mixed-chat", model_info: { mode: "chat" } },
+          { model_name: "healthy-chat", model_info: { mode: "chat" } },
         ],
-      }),
-    ).toMatchObject({ chatModelIds: ["shared-alias"] });
+      });
+      expect(result.chatModelIds).toEqual(["healthy-chat"]);
+    },
+  );
+
+  it("records both normalized bounds of a single deployment", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      parseModelDiscovery(
+        {
+          data: [
+            {
+              model_name: "private-single-alias",
+              max_input_tokens: 131_072,
+              model_info: { mode: "chat", max_input_tokens: 32_768, max_output_tokens: 8_192 },
+              litellm_params: { max_tokens: 2_048 },
+            },
+          ],
+        },
+        "corr-single-deployment",
+      );
+      const event = sink.events.find(
+        (entry) => entry.op === "gateway.discovery.alias-intersection",
+      );
+      expect(event).toMatchObject({
+        correlationId: "corr-single-deployment",
+        extra: {
+          state: "normalized",
+          contextWindow: 32_768,
+          maxOutputTokens: 2_048,
+          undeclaredLimit: false,
+          undeclaredOutputLimit: false,
+        },
+      });
+      const line = formatActivityLogProofLine(event ?? {});
+      expectActivityLogProof("gateway.discovery.alias-intersection.line", line);
+      expect(line).not.toContain("private-single-alias");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("clears stored reasoning choices on same-endpoint alias rediscovery", async () => {
+    const uiDir = await tempDir("keiko-alias-reasoning-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-alias-evidence-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          parseModelDiscovery({
+            data: [
+              {
+                model_name: "shared-chat",
+                model_info: { mode: "chat", reasoning_efforts: ["low", "high"] },
+              },
+              { model_name: "shared-chat", model_info: { mode: "chat" } },
+            ],
+          }),
+        ),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new TypeError("Missing fixture config store");
+    const raw = {
+      providers: [
+        {
+          modelId: "shared-chat",
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "fixture-token",
+          capability: {
+            ...createDefaultChatCapability("shared-chat"),
+            reasoningEfforts: ["medium"],
+            maxOutputTokens: 16_384,
+          },
+        },
+      ],
+    };
+    gatewayConfig.set(parseGatewayConfig(raw), true);
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify(raw), "utf8");
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm.example.com/v1",
+          apiKey: "fixture-token",
+          preserveExisting: false,
+          deploymentNames: [],
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(
+        currentGatewayConfig(deps)?.capabilities?.find(
+          (capability) => capability.id === "shared-chat",
+        )?.reasoningEfforts ?? [],
+      ).toEqual([]);
+      expect(
+        currentGatewayConfig(deps)?.capabilities?.find(
+          (capability) => capability.id === "shared-chat",
+        )?.maxOutputTokens,
+      ).toBe(0);
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it.each([
+    { replicas: 1, explicitEmpty: false },
+    { replicas: 2, explicitEmpty: false },
+    { replicas: 3, explicitEmpty: false },
+    { replicas: 1, explicitEmpty: true },
+    { replicas: 2, explicitEmpty: true },
+    { replicas: 3, explicitEmpty: true },
+  ])(
+    "preserves proven context bounds and respects reasoning declarations: %j",
+    async ({ replicas, explicitEmpty }) => {
+      const uiDir = await tempDir("keiko-alias-reasoning-");
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: await tempDir("keiko-alias-evidence-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
+        gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+        gatewayModelDiscovery: () =>
+          Promise.resolve(
+            parseModelDiscovery({
+              data: Array.from({ length: replicas }, () => ({
+                model_name: "shared-chat",
+                model_info: {
+                  mode: "chat",
+                  ...(explicitEmpty ? { supported_reasoning_efforts: [] } : {}),
+                },
+              })),
+            }),
+          ),
+      });
+      const gatewayConfig = deps.gatewayConfig;
+      if (gatewayConfig === undefined) throw new TypeError("Missing fixture config store");
+      const raw = {
+        providers: [
+          {
+            modelId: "shared-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "fixture-token",
+            capability: {
+              ...createDefaultChatCapability("shared-chat"),
+              contextWindow: 32_000,
+              reasoningEfforts: ["medium"],
+              maxOutputTokens: 16_384,
+            },
+          },
+        ],
+      };
+      gatewayConfig.set(parseGatewayConfig(raw), true);
+      writeFileSync(gatewayConfig.storagePath, JSON.stringify(raw), "utf8");
+      try {
+        const result = await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "fixture-token",
+            preserveExisting: false,
+            deploymentNames: [],
+          }),
+          deps,
+        );
+        expect(result.status).toBe(200);
+        expect(
+          currentGatewayConfig(deps)?.capabilities?.find(
+            (capability) => capability.id === "shared-chat",
+          )?.reasoningEfforts ?? [],
+        ).toEqual(explicitEmpty ? [] : ["medium"]);
+        expect(
+          currentGatewayConfig(deps)?.capabilities?.find(
+            (capability) => capability.id === "shared-chat",
+          )?.contextWindow,
+        ).toBe(32_000);
+      } finally {
+        deps.store.close();
+      }
+    },
+  );
+
+  it("keeps conflicting deployment roles unusable after a third alias entry", () => {
+    const chat = { model_name: "mixed-alias", model_info: { mode: "chat" } };
+    const embedding = { model_name: "mixed-alias", model_info: { mode: "embedding" } };
+    for (const entries of [
+      [chat, embedding, chat],
+      [embedding, chat, chat],
+      [chat, chat, embedding],
+    ]) {
+      const result = parseModelDiscovery({
+        data: [...entries, { model_name: "healthy-chat", model_info: { mode: "chat" } }],
+      });
+      expect(result.chatModelIds).toEqual(["healthy-chat"]);
+      expect(result.embeddingModelIds).toEqual([]);
+      expect(result.modelIds).not.toContain("mixed-alias");
+    }
+  });
+
+  it("uses the smallest declared bound within a deployment record", () => {
+    const result = parseModelDiscovery({
+      data: [
+        {
+          model_name: "bounded-chat",
+          max_input_tokens: 131_072,
+          model_info: { mode: "chat", max_input_tokens: 32_768, max_output_tokens: 8_192 },
+          litellm_params: { max_tokens: 2_048 },
+        },
+      ],
+    });
+    expect(result.modelMetadata?.["bounded-chat"]).toMatchObject({
+      contextWindow: 32_768,
+      maxOutputTokens: 2_048,
+    });
+  });
+
+  it("rejects a routing alias containing a declared reranker in either order", () => {
+    // A declared non-chat backend can receive this alias too; ignoring it would widen authority.
+    const entries = [
+      { model_name: "shared-alias", model_info: { mode: "rerank" } },
+      { model_name: "shared-alias", model_info: { mode: "chat" } },
+    ];
+    for (const data of [entries, [...entries].reverse()]) {
+      expect(() => normalizeDiscoveryPayloadForSetup({ data })).toThrow();
+    }
   });
 
   it("never lets unsupported models consume discovery-cap slots", () => {
@@ -5891,6 +6475,46 @@ describe("handleGatewaySetup", () => {
     expect(
       requiredCapability(requiredGatewayConfig(deps), "Mistral-Large-3").knownLimitations,
     ).not.toContain(note);
+    deps.store.close();
+  });
+
+  // PR #3678: a setup rebuild produces providers and capabilities only; the operator's grounded-
+  // answer policy and PR branding must survive it verbatim, never fall back to the defaults.
+  it("keeps the grounded-answer policy and the branding through a preserve-mode rebuild", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-policy-blocks-");
+    const evidenceDir = await tempDir("keiko-gw-ev-policy-blocks-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "example-chat", baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        groundedAnswers: { ownAssessment: "disabled" },
+        branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.groundedAnswers).toEqual({ ownAssessment: "disabled" });
+    expect(currentGatewayConfig(deps)?.branding).toEqual({
+      logoUrl: "https://assets.example.invalid/keiko.svg",
+    });
     deps.store.close();
   });
 
@@ -8236,12 +8860,14 @@ describe("handleGatewaySetup", () => {
         maxOutputTokens: 128_000,
         toolCalling: false,
       });
+      expectLiteLlmCounter(config);
       expect(selectEmbeddingModelId(config)).toBe("litellm-embedding");
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
       expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');
       expect(saved).toContain("litellm-embedding");
       expect(saved).toContain('"kind": "embedding"');
       expect(saved).not.toContain("litellm-image");
+      expect(saved).toContain('"tokenCounter": "litellm"');
     } finally {
       globalThis.fetch = originalFetch;
       deps.store.close();
@@ -9708,11 +10334,13 @@ describe("normalizeDiscoveryPayload", () => {
   );
 
   it("uses the canonical embedding model-id families", () => {
+    // Discovery orders the embedding lane declared-first, then by id (never by listing order), so
+    // this all-name-inferred list is written in id order: the assertion stays an exact match.
     const embeddingModelIds = [
       "bge-large-en-v1.5",
+      "hkunlp/instructor-xl",
       "intfloat/e5-large-v2",
       "thenlper/gte-large",
-      "hkunlp/instructor-xl",
     ];
     expect(
       normalizeDiscoveryPayloadForSetup({
@@ -10467,6 +11095,20 @@ describe("rawConfigFromCurrent — voice persona persistence round-trip", () => 
     expect(reloaded.reranker).toEqual(config.reranker);
   });
 
+  // PR #3678: operator policy blocks no setup step produces survive a setup save verbatim.
+  it("preserves the grounded-answer policy and the PR branding on reload", () => {
+    const config = parseGatewayConfig({
+      ...voiceRaw,
+      groundedAnswers: { ownAssessment: "disabled" },
+      branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
+    });
+
+    const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
+
+    expect(reloaded.groundedAnswers).toEqual({ ownAssessment: "disabled" });
+    expect(reloaded.branding).toEqual({ logoUrl: "https://assets.example.invalid/keiko.svg" });
+  });
+
   it("preserves an explicit output-token parameter override on reload", () => {
     const config = parseGatewayConfig({
       ...voiceRaw,
@@ -10789,4 +11431,32 @@ describe("gateway setup embedding spend ceiling", () => {
       globalThis.fetch = originalFetch;
     }
   });
+});
+
+function expectLiteLlmCounter(config: GatewayConfig | undefined): void {
+  expect(config?.providers).toContainEqual(
+    expect.objectContaining({ modelId: "litellm-chat-large", tokenCounter: "litellm" }),
+  );
+}
+
+it("bounds discovery evidence by selected aliases instead of raw replica count", () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  try {
+    const replicas = Array.from({ length: 2_000 }, () => ({
+      model_name: "replicated-chat",
+      model_info: { mode: "chat" },
+    }));
+    parseModelDiscovery({ data: replicas }, "bounded-discovery");
+    const events = sink.events.filter(
+      (event) => event.op === "gateway.discovery.alias-intersection",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toMatchObject({
+      deploymentCount: replicas.length,
+      undeclaredLimit: true,
+    });
+  } finally {
+    resetServerLogger();
+  }
 });

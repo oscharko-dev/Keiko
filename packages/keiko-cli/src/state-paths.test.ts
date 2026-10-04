@@ -24,6 +24,7 @@ import {
   removePidFileIfMatches,
   removeStaleShutdownRequest,
   resolveStateDir,
+  resolveContainedStateDir,
   scanRuntimeState,
   writeExclusivePidFile,
   writeShutdownRequest,
@@ -45,6 +46,20 @@ afterEach(() => {
 });
 
 describe("resolveStateDir", () => {
+  it("refuses a default state directory redirected outside the selected working directory", () => {
+    const cwd = makeRoot();
+    const outside = makeRoot();
+    symlinkSync(outside, join(cwd, DEFAULT_STATE_DIR_NAME), "junction");
+    expect(() => resolveContainedStateDir(cwd, {}, cwd)).toThrow(
+      expect.objectContaining({ code: "STATE_DIR_ESCAPE" }),
+    );
+  });
+
+  it("accepts an absent default state directory below a canonical working directory", () => {
+    const cwd = makeRoot();
+    expect(resolveContainedStateDir(cwd, {}, cwd)).toBe(join(cwd, DEFAULT_STATE_DIR_NAME));
+  });
+
   it("uses an explicit --state-dir argument over env and default", () => {
     const dir = resolveStateDir("/cwd", { KEIKO_STATE_DIR: "/env/state" }, "/explicit/state");
     expect(dir).toBe("/explicit/state");
@@ -476,6 +491,24 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(categoryOf(scan, `support-incidents/${INCIDENT_RECORD}`)).toBe("support-incident");
     expect(categoryOf(scan, "support-incidents/incident-draft.json")).toBeUndefined();
     expect(scan.retained.map((r) => r.relPath)).toContain("support-incidents/incident-draft.json");
+  });
+
+  // #3534: the default report directory owns exactly the closed report names.
+  it("owns only the closed report grammar under support-reports/", () => {
+    const stateDir = join(makeRoot(), ".keiko");
+    const reports = join(stateDir, "support-reports");
+    mkdirSync(reports, { recursive: true });
+    const report = `keiko-support-v1-${"a".repeat(12)}-2026-09-30.json`;
+    writeFileSync(join(reports, report), "{}\n");
+    writeFileSync(join(reports, "my-notes.json"), "{}\n");
+    const stage = `.keiko-publish-${"c".repeat(24)}-0.stage`;
+    writeFileSync(join(reports, stage), "{}\n");
+    const scan = scanRuntimeState(stateDir);
+    expect(categoryOf(scan, "support-reports")).toBe("support-report");
+    expect(categoryOf(scan, `support-reports/${report}`)).toBe("support-report");
+    expect(categoryOf(scan, `support-reports/${stage}`)).toBe("support-report");
+    expect(categoryOf(scan, "support-reports/my-notes.json")).toBeUndefined();
+    expect(scan.retained.map((r) => r.relPath)).toContain("support-reports/my-notes.json");
   });
 
   // #3531: the rebuildable segment-manifest store owns exactly `manifest-<segmentId>.json`.

@@ -18,6 +18,7 @@ import {
   countContextTokensForSegments,
   deriveContextProfile,
   deriveContextProfileFromCapability,
+  effectiveContextWindow,
   safetyMarginTokensFor,
   undeclaredOutputReserveTokens,
   estimateTokens,
@@ -497,7 +498,31 @@ describe("deriveContextProfile", () => {
   });
 });
 
+describe("effectiveContextWindow", () => {
+  it("keeps a declared window and plans an unknown or assumed one with the default window", () => {
+    expect(effectiveContextWindow({ contextWindow: 32_768 })).toBe(32_768);
+    expect(effectiveContextWindow({ contextWindow: 32_768, contextWindowAssumed: false })).toBe(
+      32_768,
+    );
+    expect(effectiveContextWindow({ contextWindow: 0 })).toBe(
+      DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+    );
+    expect(effectiveContextWindow({ contextWindow: 4_096, contextWindowAssumed: true })).toBe(
+      DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+    );
+  });
+});
+
 describe("deriveContextProfileFromCapability", () => {
+  it("treats the output ceiling as a limit, leaving room for a GPT OSS request", () => {
+    const profile = deriveContextProfileFromCapability(
+      chatCapability("gpt-oss-120b", 131_072, 131_072),
+    );
+    expect(profile.effectiveInputBudget).toBeGreaterThan(100_000);
+    expect(profile.reservedOutputTokens).toBe(undeclaredOutputReserveTokens(131_072));
+    expect(validateContextProfile(profile).ok).toBe(true);
+  });
+
   it("derives distinct effective budgets for 32k, 128k, and 200k chat capabilities", () => {
     const profile32 = deriveContextProfileFromCapability(chatCapability("ctx-32k", 32_000, 2_048));
     const profile128 = deriveContextProfileFromCapability(

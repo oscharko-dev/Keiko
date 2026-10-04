@@ -25,15 +25,85 @@
   min-width: 0;
 }
 
-/*
- * The close control moved from a sibling of the tab into it. These two declarations keep the
- * label-to-× and ×-to-edge metrics of the previous sibling layout: the tab's 2px flex gap plus the
- * hit area's 8px right padding become the hit area's own 6px gap plus 4px here.
- */
 .tabHitClosable {
   padding-right: 0;
 }
 
-.tabClose {
+span.cmpTabClose {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  min-width: 24px;
+  min-height: 24px;
   margin-left: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+div.cmpToolbar {
+  align-items: center;
+  align-self: center;
+  gap: 4px;
+  padding-bottom: 3px;
+  font-family: var(--font-ui);
+}
+
+.cmpPrimaryAction,
+.cmpDocumentActions > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font: 400 12px var(--font-ui);
+  cursor: pointer;
+}
+
+.cmpPrimaryAction {
+  padding: 4px 8px;
+}
+
+.cmpPrimaryAction[aria-disabled="true"] {
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.cmpDocumentActions > summary {
+  width: 30px;
+  padding: 0;
+}
+
+.cmpPrimaryAction:hover:not([aria-disabled="true"]),
+.cmpDocumentActions > summary:hover,
+.cmpDocumentActions[open] > summary,
+.cmpDocumentActionPanel > button:hover {
+  background: var(--menu-item-surface-hover);
+  color: var(--text-primary);
+}
+
+.cmpPrimaryAction:focus-visible,
+.cmpDocumentActions > summary:focus-visible,
+.cmpDocumentActionPanel > button:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+div.cmpDocumentActionPanel {
+  width: max-content;
+  min-width: 170px;
+  max-width: min(300px, calc(100vw - 24px));
+}
+
+.cmpDocumentActionPanel > button {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font: 400 13px var(--font-ui);
+  text-align: left;
+  cursor: pointer;
 }

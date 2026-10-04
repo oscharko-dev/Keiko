@@ -12,11 +12,83 @@ against a LiteLLM-only configuration. Buffered dictation and read-aloud remain a
 
 ---
 
+## Context limits and token admission
+
+Configure each LiteLLM route's actual deployed input/output limits in `model_info`. Discovery reads
+the window from the first of `max_input_tokens`, `max_model_len` (what a vLLM `/v1/models` entry
+publishes), `context_length` and `context_window` that holds a positive integer, in the entry itself
+or in its `model_info`, `litellm_params` or `capabilities` record. Keiko intersects
+the limits of every backend sharing an alias; missing bounds use conservative defaults, and
+conflicting task kinds are rejected. If every replica omits context/reasoning metadata, same-endpoint
+rediscovery retains previously verified capability evidence. An explicitly empty reasoning list
+clears stored reasoning choices; it is not treated as missing metadata. A mixture of declared and undeclared
+context bounds remains conservative. One final event per selected alias records `deploymentCount`,
+`modelIdDigest`, effective bounds, and persistent unknown-bound provenance. A catalog model name alone does not prove that the deployment
+is callable or that a larger context window is available.
+
+Keiko reserves a bounded answer budget rather than the model's full output ceiling. Before a chat
+request, the gateway checks the complete prompt, tool context, and response schema against the
+remaining input budget on every attempt, including schema-correction retries. Without an explicit
+caller allocation or spend guard, the output field stays absent and the provider's default remains
+in effect. Images use a separate fallback allowance, never their base64 text length: one quarter
+of the declared context window per image, capped at 8,192 tokens. A positive provider count replaces
+the image allowance while the local text/tool/schema floor still applies. Zero counts retain the
+fallback. These estimates do not prove a model's image-token cost; a larger provider count can
+still refuse admission.
+Discovery through `/model/info` enables `"tokenCounter": "litellm"` for
+those providers. The count request goes to `/utils/token_counter` on the configured proxy (including
+any reverse-proxy prefix), uses the same authorization and egress policy, and has a five-second
+limit inside the attempt's time budget; an open circuit makes no counting request. A proxy key may be permitted to generate but forbidden to count; Keiko then uses its local
+estimate and waits 60 seconds before probing that unavailable counter again. Response-schema cost
+is added to the reported message/tool count before admission. Counter failures, malformed responses,
+and admission refusals carry correlated closed error kinds and body-free stack/cause evidence.
+This counter is an additional estimate, not a guarantee of the backend tokenizer.
+
+Desktop chat reserves complete message framing and image capacity before choosing or compacting
+history. Prompt assembly, compaction savings, and gateway local admission use the same accountant;
+long conversations therefore do not fill a text-only budget that fails at the next gateway check.
+Image bytes remain subject to the existing final authority check. A higher proxy-reported count can
+still reject a locally fitting prompt; compare the local and reported counts when diagnosing that
+case, rather than increasing the deployed window without evidence.
+
+Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
+`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
+`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+replaces the image reserve even when the local text/tool/schema floor determines the final total;
+a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
+
+On retries, `reportedPromptTokens` always describes only the current counter response and is
+absent when that response has no count. `providerPromptTokens` adds the current response-schema
+cost to that raw count; `retainedPromptTokens` separately records the carried measurement floor
+plus schema cost. Admission preserves the maximum of local, current-provider and retained
+candidates. `counterSource` identifies a winning retained floor as `retained-measurement`, and
+`imageAccounting` uses that disposition when only the retained positive measurement replaces the
+image reserve. Neither retained value is presented as a new provider observation.
+
+Inspect `gateway.prompt.admission` in the activity log for `counterStatus`, `counterSource`,
+`tokenizer`, `promptTokens`, `inputBudget`, and `outputBudget`. No prompt or counter response body is
+logged. For a counter that stays unavailable, inspect `gateway.prompt.counter-cooldown`: its
+`state` distinguishes a new 60-second cooldown, suppression on the current call, and expiry;
+`modelIdDigest` joins the affected model and `remainingMs` states when the next probe is allowed.
+For a pre-generation timeout or cancellation, `gateway.prompt.admission-failed` records `phase`
+(counter or validation), `budgetMs`, `elapsedMs`, and structured stack/cause evidence.
+A local overflow ends before generation. If counting is unavailable, check the key's route
+permissions and the proxy version; do not grant broader model access solely to enable counting.
+
+The [LiteLLM Docker guide](https://docs.litellm.ai/docs/proxy/docker_quick_start) describes the
+OpenAI-compatible generation endpoint and Bearer authentication. Azure development routes retain
+either the configured deployment endpoint/API version or the
+[Azure v1 endpoint](https://learn.microsoft.com/en-us/azure/foundry/openai/api-version-lifecycle).
+They use local token admission without calling the LiteLLM counter. An alias for a reasoning model
+may still need the explicit output-token parameter described below.
+
+---
+
 ## Coding Workbench turn has no assistant reply
 
 For a Workbench run that accepted a message but has no assistant reply, note the run id and export a
-body-free bundle with `keiko support export --out keiko-bundle.jsonl`. Analyze that bundle with
-`keiko support analyze keiko-bundle.jsonl --correlation-id <runId>`. The run timeline includes
+body-free report with `keiko support export --correlation-id <runId>`. Analyze the report with
+`keiko support analyze <report.json> --correlation-id <runId>`. The run timeline includes
 `coding-sidecar.gateway.request-validated`, any closed `coding-sidecar.gateway.rejected` reason,
 the provider dispatch, and a redacted diagnostic for a failed model call. The analyzer follows the
 request's explicit parent link and includes its entire request timeline; the request ID still
@@ -69,8 +141,8 @@ run failed after the two-minute start timeout without a reason.
 
 **Diagnostic Steps**
 
-Export a bundle and analyze the run with
-`keiko support analyze keiko-bundle.jsonl --correlation-id <runId>`. The `coding-runtime.start`
+Export a report with `keiko support export --correlation-id <runId>` and analyze the run with
+`keiko support analyze <report.json> --correlation-id <runId>`. The `coding-runtime.start`
 diagnostic reads
 `stage=start:reason=launch-resolution:model-unavailable:model-context-window-insufficient`, or
 `...:model-verification-pending` while the probe runs. `gateway.readiness.automatic.completed`
@@ -415,7 +487,7 @@ message policy/shape — and reports each with its own code and safe message:
 **Diagnostic Steps**
 
 `keiko support export --correlation-id <id>` (the id shown with the failure) and
-`keiko support analyze <bundle> --correlation-id <id>` reconstruct the `git.commit.draft.completed`
+`keiko support analyze <report.json> --correlation-id <id>` reconstruct the `git.commit.draft.completed`
 line for that request: its `failureCode` field names exactly one of the three codes above, and
 `errorKind` is `timeout` for the first, `validation-failed` for the other two. Neither the diff nor
 the model's raw output ever appears in the log or in the export.
@@ -518,7 +590,7 @@ answer with `finish_reason: length` and no content) does not.
 **Diagnostic Steps**
 
 For a chat failure: `keiko support export --correlation-id <id>` and
-`keiko support analyze <bundle> --correlation-id <id>` reconstruct the `gateway.stream.started` /
+`keiko support analyze <report.json> --correlation-id <id>` reconstruct the `gateway.stream.started` /
 `gateway.stream.failed` (or `gateway.chat.started` / `gateway.chat.failed`) pair for that request.
 `gateway.stream.failed`'s `errorKind` is `timeout` only once the read has actually exceeded the
 floored silence or budget bound reported on the paired `chat.response.streamed` line
@@ -539,3 +611,52 @@ setup's `GatewayDiscoveryUnusableModels` diagnostic reports the counts of both, 
   used. A candidate in `droppedChatModelIds` was genuinely rejected by the gateway (wrong model id,
   no chat capability, credential mismatch for that deployment) and must be corrected in the setup
   form.
+
+---
+
+## A discovered rerank model does not reach retrieval
+
+| Field             | Value                                                                   |
+| ----------------- | ----------------------------------------------------------------------- |
+| Severity          | Medium                                                                  |
+| Surface           | Gateway Setup discovery; grounded retrieval reranking                   |
+| Stable identifier | `gateway.reranker.setup.resolved` / `GATEWAY_DISCOVERY_UNUSABLE_MODELS` |
+
+**Symptom**
+
+The proxy lists a rerank model (`mode: rerank`, or an id such as `bge-reranker-v2-m3`), but
+retrieval answers show no model reranking and Gateway Setup lists the model as skipped with the
+reason `rerank`.
+
+**Root Cause**
+
+Discovery gives a rerank model a lane of its own: it is never configured as a chat or embedding
+model, whatever its family prefix says. After the chat and embedding probes, setup sends the same
+two-document request gateway readiness sends to the discovered engine and wires it as the retrieval
+reranker on the verified setup connection only when the provider answers and ranks the matching
+document first; the matching document is sent second, so an engine that only returns the input
+order fails. It is not wired when (a) the probe failed or ranked wrongly — at most three candidates
+are probed, declared rerank models before name-inferred ones and then by id, within one shared
+45-second probe budget per setup — or (b) a reranker already exists in the stored or current
+configuration: a file- or operator-configured reranker is never replaced. One that shares the
+gateway connection follows a credential rotation, and when the setup moves to a new endpoint it is
+probed there again and dropped when the new gateway does not host it.
+
+**Diagnostic Steps**
+
+`keiko support analyze <report.json>` shows one `gateway.discovery.alias-intersection` line per
+discovered alias whose `role` names its lane, and one `gateway.reranker.setup.resolved` line per
+committed setup that found a rerank model: `outcome` is `wired`, `kept-existing` (an existing
+reranker blocked the wiring; probed once only when it moved to a new endpoint) or `probe-failed`
+(logged at `warn`, with a `GATEWAY_RERANKER_PROBE_FAILED` diagnostic), with the candidate and probe
+counts. The probe itself leaves a `search.rerank.completed` line with the closed `failureKind`.
+The setup response lists every model Keiko did not configure under `unsupportedModels`; a wired
+reranker is absent from it and appears as `config.reranker.modelId`.
+
+**Resolution**
+
+- `probe-failed`: check that the proxy serves `POST <base URL>/rerank` for that model with the same
+  key, then save the setup again; discovery repeats the probe. A reranker on a separate endpoint or
+  key belongs in the configuration file's `reranker` block, which discovery never overrides.
+- `kept-existing`: nothing to fix; remove the stored `reranker` block first if the discovered engine
+  should replace it.

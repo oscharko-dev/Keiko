@@ -10,13 +10,17 @@
 // PATCH /api/chats with the remaining `localKnowledgeScopes` array (or null when it was the last).
 //
 // Accessibility:
-//  - pill body is role="status" aria-live="polite" — screen readers announce binding changes
+//  - one always-mounted sr-only polite region announces a genuine binding change (GEN-UI-STATE-001)
 //  - × is a real <button type="button"> with aria-label naming the specific connector removed
 //  - minimum 24×24 target (WCAG 2.5.8)
 //  - stable keys derived from kind+id, not array indices
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { updateChatLocalKnowledgeScopes } from "@/lib/api";
+import {
+  useLocalKnowledgeTranslate,
+  type I18nTranslate,
+} from "@/app/local-knowledge/local-knowledge-i18n";
 import { restoreScopeHeaderFocus } from "./ConnectedScopePill";
 import { formatUserError } from "./format-error";
 import { effectiveLocalKnowledgeScopes } from "./hooks/workspaceActions";
@@ -27,25 +31,39 @@ export interface ConnectorScopePillProps {
   readonly onDisconnect?: (chat: Chat) => void;
   /** Injectable wire seam for tests. Defaults to the real BFF helper. */
   readonly updateScopes?: typeof updateChatLocalKnowledgeScopes;
-  /** Optional label lookup map: scope key → display name. When absent, falls back to the id. */
+  /** Optional label lookup map: scope key → display name. */
   readonly labels?: ReadonlyMap<string, string>;
+  /**
+   * The catalog behind `labels` has answered. A scope it does not name then reads as unavailable;
+   * until it answers (or while it failed) the pill names only the kind. Never the raw id.
+   */
+  readonly labelsSettled?: boolean;
 }
 
 function scopeKey(scope: ChatLocalKnowledgeScope): string {
   return scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
 }
 
-function scopeLabel(scope: ChatLocalKnowledgeScope, labels: ReadonlyMap<string, string>): string {
-  const key = scopeKey(scope);
-  const resolved = labels.get(key);
+// The display name the catalog gave the scope. A scope it does not name reads as unavailable once
+// the catalog answered, and by its kind until then — never by its raw id (PR #3678, as the picker).
+function scopeLabel(
+  scope: ChatLocalKnowledgeScope,
+  labels: ReadonlyMap<string, string>,
+  labelsSettled: boolean,
+  t: I18nTranslate,
+): string {
+  const resolved = labels.get(scopeKey(scope));
   if (resolved !== undefined && resolved.length > 0) return resolved;
-  if (scope.kind === "capsule") return `Knowledge Pod: ${scope.capsuleId}`;
-  return `Knowledge Pod Set: ${scope.capsuleSetId}`;
+  const pod = scope.kind === "capsule";
+  if (!labelsSettled) {
+    return t(pod ? "localKnowledge.scopePill.pendingPod" : "localKnowledge.scopePill.pendingSet");
+  }
+  return t(pod ? "localKnowledge.picker.unavailablePod" : "localKnowledge.picker.unavailableSet");
 }
 
-function formatErrorMessage(error: unknown): string {
+function formatErrorMessage(error: unknown, t: I18nTranslate): string {
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
-  return formatUserError(error, "Unable to disconnect Knowledge Pod.");
+  return formatUserError(error, t("localKnowledge.scopePill.disconnectError"));
 }
 
 interface ConnectorPillItemProps {
@@ -54,7 +72,8 @@ interface ConnectorPillItemProps {
   readonly allScopes: readonly ChatLocalKnowledgeScope[];
   readonly onDisconnect?: ((chat: Chat) => void) | undefined;
   readonly updateScopes: typeof updateChatLocalKnowledgeScopes;
-  readonly labels: ReadonlyMap<string, string>;
+  readonly label: string;
+  readonly t: I18nTranslate;
 }
 
 function ConnectorPillItem({
@@ -63,13 +82,14 @@ function ConnectorPillItem({
   allScopes,
   onDisconnect,
   updateScopes,
-  labels,
+  label,
+  t,
 }: ConnectorPillItemProps): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const disconnectRef = useRef<HTMLButtonElement | null>(null);
-  const label = scopeLabel(scope, labels);
   const key = scopeKey(scope);
+  const disconnectLabel = t("localKnowledge.scopePill.disconnect", { label });
 
   async function handleDisconnect(): Promise<void> {
     if (busy) return;
@@ -83,7 +103,7 @@ function ConnectorPillItem({
       onDisconnect?.(response.chat);
       restoreScopeHeaderFocus(header);
     } catch (error_) {
-      setError(formatErrorMessage(error_));
+      setError(formatErrorMessage(error_, t));
     } finally {
       setBusy(false);
     }
@@ -105,8 +125,8 @@ function ConnectorPillItem({
           ref={disconnectRef}
           className="scope-pill-disconnect"
           aria-disabled={busy}
-          aria-label={`Disconnect ${label} from chat`}
-          title={`Disconnect ${label} from chat`}
+          aria-label={disconnectLabel}
+          title={disconnectLabel}
           onClick={() => {
             void handleDisconnect();
           }}
@@ -130,17 +150,12 @@ function connectorScopesSignature(scopes: readonly ChatLocalKnowledgeScope[]): s
   return scopes.map((scope) => scopeKey(scope)).join(" ");
 }
 
-// S3358 — the "removed" and "updated" announcements are two distinct sentences, not a
-// shared template varying by one word; keep the zero-count branch as its own assignment.
-function connectorScopesAnnouncement(count: number): string {
-  let announcement: string;
-  if (count === 0) {
-    announcement = "Connected Knowledge Pod removed.";
-  } else {
-    const noun = count === 1 ? "source" : "sources";
-    announcement = `Connected Knowledge Pods updated: ${String(count)} ${noun}.`;
-  }
-  return announcement;
+// The "removed" and "updated" announcements are distinct sentences in every language, each with
+// its own singular and plural catalog entry.
+function connectorScopesAnnouncement(count: number, t: I18nTranslate): string {
+  if (count === 0) return t("localKnowledge.scopePill.removed");
+  if (count === 1) return t("localKnowledge.scopePill.updated.one");
+  return t("localKnowledge.scopePill.updated.other", { count });
 }
 
 export function ConnectorScopePill({
@@ -148,7 +163,9 @@ export function ConnectorScopePill({
   onDisconnect,
   updateScopes = updateChatLocalKnowledgeScopes,
   labels = new Map(),
+  labelsSettled = true,
 }: ConnectorScopePillProps): ReactNode {
+  const t = useLocalKnowledgeTranslate();
   const scopes = effectiveLocalKnowledgeScopes(chat);
   const signature = connectorScopesSignature(scopes);
 
@@ -161,9 +178,9 @@ export function ConnectorScopePill({
   useEffect(() => {
     if (prevSignatureRef.current !== signature) {
       prevSignatureRef.current = signature;
-      setAnnouncement(connectorScopesAnnouncement(scopes.length));
+      setAnnouncement(connectorScopesAnnouncement(scopes.length, t));
     }
-  }, [signature, scopes.length]);
+  }, [signature, scopes.length, t]);
 
   const announcer = (
     <span
@@ -193,7 +210,8 @@ export function ConnectorScopePill({
           allScopes={scopes}
           onDisconnect={onDisconnect}
           updateScopes={updateScopes}
-          labels={labels}
+          label={scopeLabel(scope, labels, labelsSettled, t)}
+          t={t}
         />
       ))}
     </span>

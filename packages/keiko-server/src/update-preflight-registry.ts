@@ -1,3 +1,11 @@
+import {
+  isStableProductVersion as isStableVersion,
+  isProductVersion,
+} from "@oscharko-dev/keiko-contracts/runtime/version";
+export {
+  compareProductVersions as compareSemver,
+  isStableProductVersion as isStableVersion,
+} from "@oscharko-dev/keiko-contracts/runtime/version";
 import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
   UpdatePreflightImpactSummary,
@@ -16,13 +24,6 @@ const MAX_METADATA_BYTES = 256_000;
 const UPDATE_PREFLIGHT_TIMEOUT_MS = 8_000;
 const DEFAULT_RELEASE_TITLE_PREFIX = "Keiko";
 export const BULLET_LIMIT = 12;
-
-interface StableSemver {
-  readonly major: number;
-  readonly minor: number;
-  readonly patch: number;
-  readonly prerelease?: string;
-}
 
 export interface RegistryOutcome {
   readonly status: "ok" | "unavailable" | "malformed";
@@ -54,38 +55,8 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseSemver(version: string): StableSemver | undefined {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$/u.exec(version);
-  if (match === null) return undefined;
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-    ...(match[4] !== undefined ? { prerelease: match[4] } : {}),
-  };
-}
-
-export function isStableVersion(version: string): boolean {
-  return parseSemver(version)?.prerelease === undefined;
-}
-
 export function isStableVersionString(value: unknown): value is string {
   return typeof value === "string" && isStableVersion(value);
-}
-
-export function compareSemver(left: string, right: string): number {
-  const a = parseSemver(left);
-  const b = parseSemver(right);
-  if (a === undefined || b === undefined) {
-    throw new TypeError(`Cannot compare malformed semver values: ${left}, ${right}`);
-  }
-  if (a.major !== b.major) return a.major - b.major;
-  if (a.minor !== b.minor) return a.minor - b.minor;
-  if (a.patch !== b.patch) return a.patch - b.patch;
-  if (a.prerelease === undefined && b.prerelease === undefined) return 0;
-  if (a.prerelease === undefined) return 1;
-  if (b.prerelease === undefined) return -1;
-  return a.prerelease.localeCompare(b.prerelease, "en");
 }
 
 export function normalizeText(value: string): string {
@@ -287,7 +258,7 @@ export async function fetchRegistryLatestVersion(
     }
     const json = (await readJsonCapped(response, MAX_METADATA_BYTES)) as NpmMetadata;
     const latest = json["dist-tags"]?.latest;
-    if (typeof latest !== "string" || parseSemver(latest) === undefined) {
+    if (!isProductVersion(latest)) {
       return { status: "malformed", warning: "The update registry returned malformed metadata." };
     }
     if (!isStableVersion(latest)) {

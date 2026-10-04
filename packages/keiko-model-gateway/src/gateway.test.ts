@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { Gateway } from "./gateway.js";
+import { Gateway, type GatewaySpendReservation } from "./gateway.js";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { createDefaultChatCapability } from "./capabilities.js";
+import type { ModelGatewayLogEvent } from "./observability.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { ResponseRedactionError } from "./openai-adapter.js";
 import { createScriptedGatewayClock } from "./replay.js";
 import {
@@ -75,6 +82,84 @@ const REQUEST: GatewayRequest = {
 };
 
 describe("Gateway.chat", () => {
+  it("sends the bounded answer allocation used by spend admission", async () => {
+    const capability = {
+      ...createDefaultChatCapability("example-chat-model"),
+      contextWindow: 131_072,
+      maxOutputTokens: 131_072,
+    };
+    const requests: GatewayRequest[] = [];
+    const events: ModelGatewayLogEvent[] = [];
+    const gateway = new Gateway(
+      { ...config([provider()]), capabilities: [capability] },
+      {
+        spendBudget: {
+          reserve: (): GatewaySpendReservation => ({ settle: (): void => undefined }),
+        },
+        adapter: fakeAdapter((request) => {
+          requests.push(request);
+          return Promise.resolve(okResponse(request.modelId));
+        }),
+        log: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+      },
+    );
+    await gateway.chat(REQUEST);
+    expect(requests[0]?.maxOutputTokens).toBe(
+      deriveContextProfileFromCapability(capability).reservedOutputTokens,
+    );
+    const line = formatActivityLogProofLine(
+      events.find((event) => event.op === "gateway.prompt.admission") ?? {},
+    );
+    expect(expectActivityLogProof("gateway.prompt.admission.bounds", line)).toMatchObject({
+      state: "admitted",
+      outputBudget: 8192,
+      counterSource: "fallback-estimated",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  it("rejects the complete over-budget provider projection before invoking its adapter", async () => {
+    const capability = {
+      ...createDefaultChatCapability("example-chat-model"),
+      contextWindow: 4_096,
+      maxOutputTokens: 1_024,
+    };
+    let calls = 0;
+    const gateway = new Gateway(
+      { ...config([provider()]), capabilities: [capability] },
+      {
+        adapter: fakeAdapter((request) => {
+          calls += 1;
+          return Promise.resolve(okResponse(request.modelId));
+        }),
+      },
+    );
+    await expect(
+      gateway.chat({
+        ...REQUEST,
+        messages: [
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: "large-call",
+                name: "large_schema",
+                arguments: { description: "description ".repeat(2000) },
+              },
+            ],
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ code: "GATEWAY_CONTEXT_OVERFLOW" });
+    expect(calls).toBe(0);
+  });
+
   // #3591 / PR #3602 review: the buffered-answer floor now applies to every whole-body
   // Gateway.chat() attempt (this fakeAdapter has no `callStream`), not just "coding-workbench"
   // ones (raising the Workbench provider floor to the silence floor makes that
@@ -466,6 +551,7 @@ describe("Gateway.chatStream", () => {
     };
     const gateway = new Gateway(config([provider({ timeoutMs: 30_000, maxRetries: 0 })]), {
       adapter,
+      clock: createScriptedGatewayClock(),
     });
     await collectStream(gateway.chatStream(REQUEST));
     expect(timeouts).toStrictEqual([GATEWAY_BUFFERED_BUDGET_FLOOR_MS]);

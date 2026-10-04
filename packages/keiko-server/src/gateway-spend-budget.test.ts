@@ -182,6 +182,26 @@ describe("shared persistent model spend admission", () => {
     ).toThrow("spend-bound-unavailable");
   });
 
+  // PR #3678 review: an assumed window's stored value is the setup placeholder; the request is
+  // planned against the default window, so the reservation must cover that window.
+  it("reserves the planned default window for an assumed window, not the placeholder", () => {
+    budget("200000").reserve(
+      { ...capability, contextWindowAssumed: true },
+      request,
+      "assumed-window",
+    );
+    const reservation = events.filter((event) => event.op === "gateway.spend.reserved").at(-1);
+    const proof = expectActivityLogProof(
+      "gateway.spend.reserved.line",
+      formatActivityLogProofLine(reservation ?? {}),
+    );
+    // (128,000 planned input + 20 output tokens) at 1 USD per token.
+    expect(proof).toMatchObject({
+      correlationId: "assumed-window",
+      reservedNanoUsd: 128_020_000_000_000,
+    });
+  });
+
   it("charges the reserved bound and keeps the response when the usage report cannot be priced", () => {
     // Keiko for Quality on #3394: `measuredCharge` threw from `settle`, which runs in a `finally`,
     // and a successful model response was replaced by a raw error. The reserved upper bound stays

@@ -46,9 +46,6 @@ import type {
   EditorInlineCompletionWireResponse,
   EditorInlineCompletionWireTriggerKind,
   EditorInlineCompletionTelemetryReport,
-  EditorTestGenerationWireRequest,
-  EditorTestGenerationWireResponse,
-  EditorTestGenerationWireTarget,
   EditorPatchApplyDecision,
   EditorPatchApplyWireRequest,
   EditorPatchApplyWireResponse,
@@ -69,11 +66,9 @@ import type {
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
   EditorAgentActionResultRequest,
-  EditorAgentBridgeActionRequest,
-  EditorAgentAuditResponse,
+  EditorBufferSnapshotRequest,
+  EditorBufferReleaseRequest,
   EditorAgentSessionSnapshot,
-  EditorAgentSessionsResponse,
-  EditorAgentSnapshotRequest,
   EditorAgentSnapshotResponse,
   CostClass,
   GroundingLimits,
@@ -192,6 +187,7 @@ import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   GIT_CHANGE_BLOCKED_REASONS,
   isDesktopChatStreamEvent,
+  type ChatContextStatusWire,
   type DesktopChatSendRequestWire,
   type ConversationAttachmentUploadRequestWire,
   type ConversationAttachmentUploadResponseWire,
@@ -205,7 +201,6 @@ import {
   EDITOR_COMPLETION_SCHEMA_VERSION,
   EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
   EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
-  EDITOR_TEST_GENERATION_SCHEMA_VERSION,
   EDITOR_PATCH_APPLY_SCHEMA_VERSION,
 } from "./types";
 // Runtime primitives shared with `./coding-workbench-lazy-fetchers.ts`: both files import them
@@ -671,15 +666,22 @@ export interface VoiceSpeechResult {
   readonly mimeType: string;
 }
 
+// `correlationId` joins the request to the read-aloud preparation the caller reported under it.
 export async function synthesizeAssistantSpeech(
   input: VoiceSpeechRequest,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<VoiceSpeechResult> {
-  return fetchJson<VoiceSpeechResult>("/api/voice/speak", {
-    method: "POST",
-    body: JSON.stringify(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  return fetchJson<VoiceSpeechResult>(
+    "/api/voice/speak",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    undefined,
+    correlationId,
+  );
 }
 
 // Streaming synthesis: returns the raw Response so the caller can read `response.body` as PCM chunks
@@ -689,8 +691,9 @@ export async function synthesizeAssistantSpeech(
 export async function streamAssistantSpeech(
   input: VoiceSpeechRequest,
   signal?: AbortSignal,
+  requestCorrelationId?: string,
 ): Promise<Response> {
-  const correlationId = newClientCorrelationId();
+  const correlationId = requestCorrelationId ?? newClientCorrelationId();
   const res = await fetch("/api/voice/speak/stream", {
     method: "POST",
     headers: {
@@ -1071,6 +1074,7 @@ export async function fetchProjects(): Promise<ProjectsResponse> {
 
 export interface CreateProjectInput {
   path: string;
+  selectionIntent?: "explicit-folder-selection" | "file-navigation";
   name?: string;
 }
 
@@ -1091,6 +1095,7 @@ export async function createProject(
     {
       method: "POST",
       body: JSON.stringify(input),
+      signal: AbortSignal.timeout(15_000),
     },
     undefined,
     correlationId,
@@ -1255,15 +1260,21 @@ export async function updateChatGitChangeScopes(
   });
 }
 
-export async function deleteChat(id: string, projectPath: string): Promise<void> {
+export async function deleteChat(
+  id: string,
+  projectPath: string,
+  correlationId?: string,
+): Promise<void> {
   const request: PurgeChatRequest = {
     projectPath,
     confirmation: { chatId: id, irreversible: true },
   };
-  await fetchJson<void>(`/api/chats?id=${encodeURIComponent(id)}`, {
-    method: "DELETE",
-    body: JSON.stringify(request),
-  });
+  await fetchJson<void>(
+    `/api/chats?id=${encodeURIComponent(id)}`,
+    { method: "DELETE", body: JSON.stringify(request) },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function fetchChatMessages(
@@ -1505,23 +1516,116 @@ function processSseLines(
   return current;
 }
 
+// The BFF writes a keep-alive comment every 15 s while a turn streams (keiko-server sse.ts). A
+// stream that delivers no byte for four intervals is a dead connection — the server process ended
+// or a proxy holds a half-open socket — not a slow model, so the turn fails with a clear error
+// instead of showing "Receiving response" forever. The same limit bounds the wait for the response
+// headers: Node sends them with the first write, the first token or the first heartbeat.
+export const DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS = 60_000;
+
+// The stalled turn's own request correlation, so the diagnostic joins the failed turn's timeline.
+function stalledDesktopChatStreamError(correlationId: string): ApiError {
+  const error = new ApiError(
+    "DESKTOP_CHAT_STREAM_STALLED",
+    "The connection to Keiko stopped delivering the answer. Retry the request.",
+    504,
+  );
+  error.correlationId = correlationId;
+  return error;
+}
+
+// Races `work` against the idle limit. A stall rejects with the stalled-stream error and runs
+// `onStall`, which closes the half-open connection so the server observes the disconnect and
+// settles the turn.
+async function withinIdleLimit<T>(
+  work: Promise<T>,
+  correlationId: string,
+  onStall: () => void,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stalled = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(stalledDesktopChatStreamError(correlationId));
+      onStall();
+    }, DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS);
+  });
+  try {
+    return await Promise.race([work, stalled]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readWithinIdleLimit(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  correlationId: string,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  return withinIdleLimit(reader.read(), correlationId, () => {
+    void reader.cancel();
+  });
+}
+
+// Starts the streaming POST and gives up when no response headers arrive within the idle limit.
+// The request follows the caller's signal AND a stall controller (the same combinator every other
+// read uses), so the stall path can abort the half-open request while a caller abort still
+// surfaces as the fetch's own AbortError and never as a stall. The caller's signal stays wired to
+// the response body after the headers arrived.
+async function fetchWithinIdleLimit(
+  url: string,
+  init: RequestInit,
+  signal: AbortSignal,
+  correlationId: string,
+): Promise<Response> {
+  const stall = new AbortController();
+  const pending = fetch(url, { ...init, signal: combineAbortSignals(signal, stall.signal) });
+  return withinIdleLimit(pending, correlationId, () => {
+    stall.abort();
+  });
+}
+
+// `done`, `error` and `cancelled` end the turn. Nothing after them is read and the body is
+// released, so a proxy that keeps the socket half-open after the terminal event cannot turn a
+// settled turn into a late stalled-stream failure (PR #3678 review).
+function terminalAwareHandlers(handlers: StreamHandlers, onTerminal: () => void): StreamHandlers {
+  return {
+    onToken: handlers.onToken,
+    onDone: (payload): void => {
+      onTerminal();
+      handlers.onDone(payload);
+    },
+    onError: (payload): void => {
+      onTerminal();
+      handlers.onError(payload);
+    },
+    onCancelled: (): void => {
+      onTerminal();
+      handlers.onCancelled();
+    },
+  };
+}
+
 // Reads `response.body` as a text/event-stream, buffering partial lines across
 // reads. Dispatches typed events to `handlers`. Respects the passed `signal` —
 // when aborted it stops reading without dispatching further events.
 async function consumeSseStream(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
-  handlers: StreamHandlers,
+  streamHandlers: StreamHandlers,
+  correlationId: string,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let lineBuffer = "";
   let pendingEvent: DesktopChatStreamEventType | undefined;
   let reachedEof = false;
+  let terminated = false;
+  const handlers = terminalAwareHandlers(streamHandlers, () => {
+    terminated = true;
+  });
 
   try {
-    while (!signal.aborted) {
-      const read = await reader.read();
+    while (!signal.aborted && !terminated) {
+      const read = await readWithinIdleLimit(reader, correlationId);
       if (read.done) {
         reachedEof = true;
         break;
@@ -1538,6 +1642,7 @@ async function consumeSseStream(
     if (reachedEof && lineBuffer !== "") {
       processSseLines([lineBuffer], pendingEvent, handlers);
     }
+    if (terminated && !reachedEof) void reader.cancel();
   } finally {
     reader.releaseLock();
   }
@@ -1564,11 +1669,12 @@ export async function sendDesktopChatStream(
     body: JSON.stringify(input),
     headers: { Accept: "text/event-stream" },
   };
-  const res = await fetch("/api/desktop/chat/stream", {
-    ...requestInit,
-    headers: buildBffHeaders(requestInit, correlationId),
+  const res = await fetchWithinIdleLimit(
+    "/api/desktop/chat/stream",
+    { ...requestInit, headers: buildBffHeaders(requestInit, correlationId) },
     signal,
-  });
+    correlationId,
+  );
   const responseCorrelationId = res.headers.get(CORRELATION_HEADER) ?? correlationId;
 
   const contentType = res.headers.get("content-type") ?? "";
@@ -1597,7 +1703,7 @@ export async function sendDesktopChatStream(
     throw streamingError;
   }
 
-  await consumeSseStream(res.body, signal, handlers);
+  await consumeSseStream(res.body, signal, handlers, responseCorrelationId);
 }
 
 // ---------------------------------------------------------------------------
@@ -1627,11 +1733,15 @@ export async function openNativeFileDialog(
 // Desktop files — selected-root browser, preview, and editor control plane
 // ---------------------------------------------------------------------------
 
-export async function fetchFilesTree(root: string, path = ""): Promise<FilesTreeResponse> {
+export async function fetchFilesTree(
+  root: string,
+  path = "",
+  correlationId?: string,
+): Promise<FilesTreeResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   if (path.length > 0) params.set("path", path);
-  return fetchJson(`/api/files/tree?${params.toString()}`);
+  return fetchJson(`/api/files/tree?${params.toString()}`, undefined, undefined, correlationId);
 }
 
 export async function fetchFilesSearch(
@@ -1689,18 +1799,26 @@ export async function applyWorkspaceReplace(
   });
 }
 
-export async function fetchFilesPreview(root: string, path: string): Promise<FilesPreviewResponse> {
+export async function fetchFilesPreview(
+  root: string,
+  path: string,
+  correlationId?: string,
+): Promise<FilesPreviewResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   params.set("path", path);
-  return fetchJson(`/api/files/preview?${params.toString()}`);
+  return fetchJson(`/api/files/preview?${params.toString()}`, undefined, undefined, correlationId);
 }
 
-export async function fetchFilesContent(root: string, path: string): Promise<FilesContentResponse> {
+export async function fetchFilesContent(
+  root: string,
+  path: string,
+  correlationId?: string,
+): Promise<FilesContentResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   params.set("path", path);
-  return fetchJson(`/api/files/content?${params.toString()}`);
+  return fetchJson(`/api/files/content?${params.toString()}`, undefined, undefined, correlationId);
 }
 
 export async function saveFilesContent(input: {
@@ -2121,37 +2239,6 @@ export async function reportEditorInlineCompletionTelemetry(
   await fetchJson("/api/editor/inline-completion/telemetry", {
     method: "POST",
     body: JSON.stringify(report),
-  });
-}
-
-// Issue #1202 — governed editor-driven test generation (ADR-0042 D7). Posts the editor target (the
-// overlay buffer + scope coordinates) to the wave-2 BFF, which returns a `disabled`/`deferred` outcome
-// in v1 (no candidate; the feature ships switched off) or, once an enforced egress boundary unlocks it,
-// a reviewable candidate patch. The browser never reaches a model directly. `signal` cancels a run.
-export interface EditorTestGenerationRequestInput {
-  readonly root: string;
-  readonly editorSessionId?: string;
-  readonly target: EditorTestGenerationWireTarget;
-  readonly contextBudgetBytes: number;
-  readonly context?: EditorCompletionContextSelectors;
-}
-
-export async function requestEditorTestGeneration(
-  input: EditorTestGenerationRequestInput,
-  signal?: AbortSignal,
-): Promise<EditorTestGenerationWireResponse> {
-  const requestBody: EditorTestGenerationWireRequest = {
-    schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,
-    root: input.root,
-    target: input.target,
-    contextBudgetBytes: input.contextBudgetBytes,
-    ...(input.editorSessionId === undefined ? {} : { editorSessionId: input.editorSessionId }),
-    ...(input.context === undefined ? {} : { context: input.context }),
-  };
-  return fetchJson("/api/editor/test-generation", {
-    method: "POST",
-    body: JSON.stringify(requestBody),
-    ...(signal === undefined ? {} : { signal }),
   });
 }
 
@@ -2697,19 +2784,6 @@ export async function requestEditorRenameApply(
   return envelope.result;
 }
 
-export async function fetchEditorAgentSessions(): Promise<EditorAgentSessionsResponse> {
-  return fetchJson("/api/editor/agent/sessions");
-}
-
-export async function requestEditorAgentSnapshot(
-  input: EditorAgentSnapshotRequest,
-): Promise<EditorAgentSnapshotResponse> {
-  return fetchJson("/api/editor/agent/snapshot", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
 export async function postEditorAgentSessionSnapshot(
   snapshot: EditorAgentSessionSnapshot,
   bridgeDecisionCapability?: string,
@@ -2734,19 +2808,14 @@ export async function queueEditorAgentAction(
   });
 }
 
-export async function queueEditorAgentBridgeAction(
-  action: EditorAgentAction,
-  bridgeDecisionCapability: string,
-): Promise<EditorAgentActionQueuedResponse> {
-  const request: EditorAgentBridgeActionRequest = {
-    schemaVersion: action.schemaVersion,
-    kind: "action",
-    action,
-    bridgeDecisionCapability,
-  };
-  return fetchJson("/api/editor/agent/actions", {
+/** Passive unsaved-buffer protection; this does not register an agent bridge. */
+export async function postEditorBufferSafetyRequest(
+  request: EditorBufferSnapshotRequest | EditorBufferReleaseRequest,
+): Promise<EditorAgentSnapshotResponse> {
+  return fetchJson("/api/editor/agent/snapshot", {
     method: "POST",
     body: JSON.stringify(request),
+    signal: AbortSignal.timeout(15_000),
   });
 }
 
@@ -2757,12 +2826,6 @@ export async function postEditorAgentActionResult(
     method: "POST",
     body: JSON.stringify(result),
   });
-}
-
-// Issue #1395 (ADR-0062) — read the bounded audit feed of recent agent editor actions for a session.
-// Content-free records only (no raw source, no secrets); used by the recent-actions governance panel.
-export async function fetchEditorAgentAudit(sessionId: string): Promise<EditorAgentAuditResponse> {
-  return fetchJson(`/api/editor/agent/audit?sessionId=${encodeURIComponent(sessionId)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -4117,4 +4180,30 @@ export async function applyGitChangeChatDescription(
     adapter.validateGitChangeApplyDescriptionResponse,
     correlationId,
   );
+}
+
+export function fetchChatContextStatus(
+  chatId: string,
+  projectPath: string,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<ChatContextStatusWire> {
+  const params = new URLSearchParams({ chatId, projectPath, modelId });
+  return fetchJson(
+    `/api/chats/context?${params.toString()}`,
+    signal === undefined ? undefined : { signal },
+  );
+}
+
+export function compactChatContext(
+  chatId: string,
+  projectPath: string,
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<ChatContextStatusWire> {
+  return fetchJson("/api/chats/context/compact", {
+    method: "POST",
+    body: JSON.stringify({ chatId, projectPath, modelId }),
+    ...(signal === undefined ? {} : { signal }),
+  });
 }

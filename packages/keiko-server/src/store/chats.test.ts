@@ -1,7 +1,7 @@
 // ADR-0013 — chats CRUD scoped to a project; FK cascade behaviours.
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -14,7 +14,7 @@ let proj: string;
 let store: UiStore;
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), "keiko-chats-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-chats-"));
   proj = join(tmp, "p");
   mkdirSync(proj);
   let t = 1;

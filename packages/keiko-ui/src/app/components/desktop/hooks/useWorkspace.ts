@@ -57,6 +57,7 @@ import {
 import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLayoutLock";
 
 export type { AppWindow, View };
 export type { UseWorkspaceResult, ViewportWorld };
@@ -298,6 +299,8 @@ function focusedWindowId(): string | null {
 }
 
 interface UsePanZoomArgs {
+  readonly layoutLocked: boolean;
+  readonly isLayoutLocked: () => boolean;
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly view: View;
   readonly cameraSmoothness: number;
@@ -336,6 +339,17 @@ function overflowCanScroll(value: string): boolean {
   return value === "auto" || value === "scroll" || value === "overlay";
 }
 
+function installWorkspaceWheelListener(
+  element: HTMLElement,
+  onWheel: (event: WheelEvent) => void,
+): () => void {
+  element.addEventListener("wheel", onWheel, { passive: false, capture: true });
+  reportClientDiagnostic("[keiko] workspace native and virtual scroll routing ready.", {
+    composerActivity: "workspace-scroll-ready",
+  });
+  return (): void => element.removeEventListener("wheel", onWheel, { capture: true });
+}
+
 function canScrollVertically(element: HTMLElement, deltaY: number): boolean {
   if (deltaY === 0) return false;
   const style = window.getComputedStyle(element);
@@ -363,6 +377,9 @@ function scrollTargetCanConsumeWheel(
   if (!(target instanceof Element)) return false;
   const windowElement = target.closest(".window[data-window-id]");
   if (windowElement === null) return false;
+  // Virtual editors scroll a surface with overflow:hidden. Cancelling the event in this
+  // capture handler prevents its own wheel handler from running, even with scrollable code.
+  if (target.closest('[data-workspace-scroll-owner="virtual"]') !== null) return true;
   let current: Element | null = target;
   while (current !== null && current !== windowElement) {
     if (
@@ -374,6 +391,14 @@ function scrollTargetCanConsumeWheel(
     current = current.parentElement;
   }
   return false;
+}
+
+function focusedEditorOwnsWheelTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const editor = target.closest(
+    '[data-workspace-scroll-owner="virtual"], [contenteditable="true"], textarea',
+  );
+  return editor !== null && editor.contains(document.activeElement);
 }
 
 function activeSelectedWindowId(selection: WorkspaceUiSelectionState): string | null {
@@ -389,6 +414,15 @@ function activeSelectedWindowId(selection: WorkspaceUiSelectionState): string | 
 function windowIdFromWheelTarget(target: EventTarget | null): string | null {
   if (!(target instanceof Element)) return null;
   return target.closest<HTMLElement>(".window[data-window-id]")?.dataset.windowId ?? null;
+}
+
+function routeLockedWorkspaceWheel(event: WheelEvent, locked: boolean): boolean {
+  if (!locked) return false;
+  // Every window owns its wheel input, including virtual editors and native scrollers
+  // at their boundaries. Background gestures and pinch must not move the camera.
+  if (event.ctrlKey || event.metaKey || windowIdFromWheelTarget(event.target) === null)
+    event.preventDefault();
+  return true;
 }
 
 function activeWindowOwnsWheelTarget(
@@ -535,6 +569,8 @@ function interpolateView(from: View, to: View, progress: number): View {
 }
 
 function usePanZoom({
+  layoutLocked,
+  isLayoutLocked,
   wsRef,
   view,
   cameraSmoothness,
@@ -560,6 +596,17 @@ function usePanZoom({
   const scheduleViewPersist = useCallback((): void => {
     viewPersistDebounceRef.current?.schedule(() => persistList(VIEW_LS, viewRef.current));
   }, []);
+
+  useEffect(() => {
+    if (!layoutLocked) return;
+    if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+    if (animationFrameRef.current !== null) window.cancelAnimationFrame(animationFrameRef.current);
+    frameRef.current = null;
+    animationFrameRef.current = null;
+    pendingViewRef.current = null;
+    viewRef.current = renderedViewRef.current;
+    scheduleViewPersist();
+  }, [layoutLocked, scheduleViewPersist]);
 
   // GEN-PERF-WORKSPACE-004 — flag the workspace host with data-view-active while a
   // wheel/trackpad pan or zoom gesture is in flight so WorkspaceShader can skip its
@@ -621,13 +668,9 @@ function usePanZoom({
 
   const animateView = useCallback(
     (target: View, smoothnessScale = 1, minDurationMs = MIN_CAMERA_ANIMATION_DURATION_MS): void => {
+      if (isLayoutLocked()) return;
       const effectiveSmoothness = Math.min(100, Math.max(0, cameraSmoothness * smoothnessScale));
-      if (
-        effectiveSmoothness <= 0 ||
-        prefersReducedCameraMotion() ||
-        typeof window.requestAnimationFrame !== "function" ||
-        typeof window.cancelAnimationFrame !== "function"
-      ) {
+      if (!supportsCameraAnimation(effectiveSmoothness)) {
         if (animationFrameRef.current !== null) {
           window.cancelAnimationFrame(animationFrameRef.current);
           animationFrameRef.current = null;
@@ -656,6 +699,10 @@ function usePanZoom({
 
       if (animationFrameRef.current !== null) return;
       const step = (time: number): void => {
+        if (isLayoutLocked()) {
+          animationFrameRef.current = null;
+          return;
+        }
         const progress = Math.min(
           1,
           Math.max(0, (time - animationStartedAtRef.current) / durationMs),
@@ -671,11 +718,12 @@ function usePanZoom({
       };
       animationFrameRef.current = window.requestAnimationFrame(step);
     },
-    [cameraSmoothness, setView],
+    [cameraSmoothness, isLayoutLocked, setView],
   );
 
   const queueView = useCallback(
     (next: View | ((current: View) => View), options: QueueViewOptions = {}): void => {
+      if (isLayoutLocked()) return;
       const base = pendingViewRef.current ?? viewRef.current;
       const resolved = typeof next === "function" ? next(base) : next;
       const smoothnessScale = options.smoothnessScale ?? 1;
@@ -708,7 +756,7 @@ function usePanZoom({
         if (pending !== null) animateView(pending, pendingSmoothnessScale, pendingMinDurationMs);
       });
     },
-    [animateView, scheduleViewPersist, markViewActive, setView],
+    [animateView, isLayoutLocked, scheduleViewPersist, markViewActive, setView],
   );
 
   useEffect(() => {
@@ -733,6 +781,7 @@ function usePanZoom({
       return zoomRect;
     };
     const onWheel = (e: WheelEvent): void => {
+      if (routeLockedWorkspaceWheel(e, isLayoutLocked())) return;
       if (e.metaKey || e.ctrlKey) {
         if (activeWindowOwnsWheelTarget(e.target, selectionRef.current)) {
           e.preventDefault();
@@ -753,6 +802,7 @@ function usePanZoom({
         return;
       }
       const delta = normalizeWheelDelta(e);
+      if (focusedEditorOwnsWheelTarget(e.target)) return;
       if (activeWindowOwnsWheelTarget(e.target, selectionRef.current)) {
         if (scrollTargetCanConsumeWheel(e.target, delta)) return;
         e.preventDefault();
@@ -764,11 +814,8 @@ function usePanZoom({
         smoothnessScale: DIRECT_PAN_SMOOTHNESS_SCALE,
       });
     };
-    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
-    return () => {
-      el.removeEventListener("wheel", onWheel, { capture: true });
-    };
-  }, [wsRef, queueView, selectionRef]);
+    return installWorkspaceWheelListener(el, onWheel);
+  }, [wsRef, queueView, selectionRef, isLayoutLocked]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -1522,6 +1569,7 @@ interface SnapChordActions {
 }
 
 interface UseKeyboardArgs {
+  readonly isLayoutLocked: () => boolean;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly rect: () => DOMRect | null;
   readonly cancelConnectRef: CurrentRef<() => void>;
@@ -1661,7 +1709,13 @@ function runArrowChordKey(
   handleArrowKey(setWins, r, { key: e.key, shift: e.shiftKey }, size, targetId);
 }
 
-function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeyboardArgs): void {
+function useKeyboardCtrls({
+  setWins,
+  rect,
+  cancelConnectRef,
+  snapRef,
+  isLayoutLocked,
+}: UseKeyboardArgs): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       // Escape must cancel an in-flight connect even when focus sits in a form
@@ -1697,7 +1751,7 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
         runContentZoomChord(e, setWins, zoomKey, targetId);
         return;
       }
-      if (!e.key.startsWith("Arrow")) return;
+      if (isLayoutLocked() || !e.key.startsWith("Arrow")) return;
       // GEN-UI-KEYBOARD-009 — Cmd/Ctrl+Alt+Arrow snaps the focused window to a
       // half/maximized region (the keyboard equivalent of an edge/quadrant drag
       // snap). Checked before the move/resize branch below because it shares the
@@ -1713,7 +1767,7 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
     return () => {
       window.removeEventListener("keydown", onKey);
     };
-  }, [setWins, rect, cancelConnectRef, snapRef]);
+  }, [setWins, rect, cancelConnectRef, snapRef, isLayoutLocked]);
 }
 
 interface UseFitMaximizedArgs {
@@ -2024,6 +2078,12 @@ export function useWorkspace(
     selectedWindowIds: [],
   });
   const [snapPrev, setSnapPrev] = useState<SnapPrev | null>(null);
+  const clearLayoutInteraction = useCallback((): void => {
+    setSelection((current) => ({ ...current, selectedWindowIds: [] }));
+    setSnapPrev(null);
+  }, []);
+  const { layoutLocked, isLayoutLocked, toggleLayoutLock } =
+    useWorkspaceLayoutLock(clearLayoutInteraction);
   const [palOpen, setPalOpen] = useState(false);
   const [conns, setConns] = useState<Connection[]>([]);
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
@@ -2200,6 +2260,8 @@ export function useWorkspace(
   const snapChordRef = useRef<SnapChordActions | null>(null);
 
   const { viewRef, worldVP, zoomTo, fitView, resetView, panBy, rect } = usePanZoom({
+    layoutLocked,
+    isLayoutLocked,
     wsRef,
     view,
     cameraSmoothness,
@@ -2264,7 +2326,7 @@ export function useWorkspace(
     });
   }, [conns, wins]);
 
-  useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef: snapChordRef });
+  useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef: snapChordRef, isLayoutLocked });
   useFitMaximized({ wsRef, viewRef, setWins });
 
   // Issue #1580 — the WorkspaceApi object and all of its action closures are the
@@ -2329,10 +2391,13 @@ export function useWorkspace(
   const activateLayoutOwner = useCallback(
     (ownerId: string | null): void => {
       if (ownerId === null || worldVP() === null) return;
-      setSelection({ focusedWindowId: ownerId, selectedWindowIds: [ownerId] });
+      setSelection({
+        focusedWindowId: ownerId,
+        selectedWindowIds: isLayoutLocked() ? [] : [ownerId],
+      });
       mutations.focus(ownerId);
     },
-    [mutations, setSelection, worldVP],
+    [isLayoutLocked, mutations, setSelection, worldVP],
   );
   const addWithActivation = useCallback<WorkspaceApi["add"]>(
     (type, cfg) => {
@@ -2742,8 +2807,9 @@ export function useWorkspace(
   // object keeps a constant identity during gestures, which is what lets the
   // React.memo on WindowFrame/ConnectionsLayer collapse the per-frame re-render
   // storm from O(N windows) to O(windows that actually changed).
-  const api = useMemo<WorkspaceApi>(
+  const rawApi = useMemo<WorkspaceApi>(
     () => ({
+      toggleLayoutLock,
       add: addWithActivation,
       openEditorFile: mutations.openEditorFile,
       toggleTool: toggleToolWithActivation,
@@ -2793,6 +2859,7 @@ export function useWorkspace(
       currentView,
     }),
     [
+      toggleLayoutLock,
       mutations,
       snap,
       addWithActivation,
@@ -2824,7 +2891,13 @@ export function useWorkspace(
     ],
   );
 
+  const api = useMemo(
+    () => protectWorkspaceLayout(rawApi, isLayoutLocked),
+    [rawApi, isLayoutLocked],
+  );
+
   return {
+    layoutLocked,
     wins,
     winsById,
     snapPrev,
@@ -2836,4 +2909,13 @@ export function useWorkspace(
     view,
     api,
   };
+}
+
+function supportsCameraAnimation(smoothness: number): boolean {
+  return (
+    smoothness > 0 &&
+    !prefersReducedCameraMotion() &&
+    typeof window.requestAnimationFrame === "function" &&
+    typeof window.cancelAnimationFrame === "function"
+  );
 }

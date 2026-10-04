@@ -23,9 +23,12 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import type { EditorAgentConflictCode } from "@oscharko-dev/keiko-contracts";
+import {
+  findCitationMarkerGroups,
+  type CitationMarkerGroup,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { parseSafeMarkdown, type SafeMarkdownNode } from "@/lib/safe-markdown";
+import { parseSafeUserInput, parseSafeMarkdown, type SafeMarkdownNode } from "@/lib/safe-markdown";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import {
   highlightLines,
@@ -43,53 +46,26 @@ import {
   type RepositoryReferenceRoot,
 } from "./repositoryReferences";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
-import {
-  useEditorAgentTranslate,
-  type EditorAgentTranslate,
-} from "./widgets/cards/editor-agent-i18n";
-
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CopyIcon = Icons.copy;
-const EditorIcon = Icons.editor;
-
-interface AssistantCodeBlockApplyRequest {
-  readonly codeBlockText: string;
-  readonly language?: string | undefined;
-}
-
-export type AssistantCodeBlockApplyOutcome =
-  | { readonly kind: "queued" }
-  | {
-      readonly kind: "conflict";
-      readonly code: EditorAgentConflictCode;
-      readonly message?: string | undefined;
-    }
-  | { readonly kind: "rejected"; readonly message?: string | undefined }
-  | { readonly kind: "outcome-unknown" };
-
-export type AssistantCodeBlockApply = (
-  request: AssistantCodeBlockApplyRequest,
-) => Promise<AssistantCodeBlockApplyOutcome>;
 
 export interface SafeMarkdownProps {
+  readonly literalUserInput?: boolean | undefined;
   readonly source: string;
   readonly diagnosticCorrelationId?: string | undefined;
   readonly diagnosticMessageId?: string | undefined;
-  readonly applyScopeId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
-  readonly onApplyCodeBlock?: AssistantCodeBlockApply | undefined;
   readonly streaming?: boolean | undefined;
   readonly trailing?: ReactNode | undefined;
 }
 
 interface RenderOptions {
-  readonly applyScopeId: string | undefined;
+  readonly literalUserInput: boolean;
   readonly citationPreview: CitationPreviewController | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
-  readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
   readonly streaming: boolean;
 }
 
@@ -150,118 +126,6 @@ function CopyButton({ text }: { readonly text: string }): ReactNode {
           the copy success / unavailable feedback (audit C135). <output> is the
           native status live region (S6819) and is inline like the <span> it
           replaces, so the surface keeps its box. */}
-      <output className="sm-code-copy-status">{status}</output>
-    </div>
-  );
-}
-
-type ApplyState =
-  | { readonly kind: "idle" }
-  | { readonly kind: "preparing" }
-  | { readonly kind: "queued" }
-  | { readonly kind: "conflict"; readonly code: EditorAgentConflictCode }
-  | { readonly kind: "rejected" }
-  | { readonly kind: "outcome-unknown" };
-
-type TerminalApplyState = Extract<ApplyState, { readonly kind: "queued" | "outcome-unknown" }>;
-
-const APPLY_TERMINAL_STATE_CAPACITY = 256;
-const terminalApplyStates = new Map<string, TerminalApplyState>();
-
-function cachedApplyState(stateKey: string | undefined): ApplyState {
-  return stateKey === undefined
-    ? { kind: "idle" }
-    : (terminalApplyStates.get(stateKey) ?? { kind: "idle" });
-}
-
-function cacheTerminalApplyState(stateKey: string | undefined, state: ApplyState): void {
-  if (stateKey === undefined || (state.kind !== "queued" && state.kind !== "outcome-unknown"))
-    return;
-  terminalApplyStates.delete(stateKey);
-  terminalApplyStates.set(stateKey, state);
-  while (terminalApplyStates.size > APPLY_TERMINAL_STATE_CAPACITY) {
-    const oldest = terminalApplyStates.keys().next().value as string | undefined;
-    if (oldest === undefined) return;
-    terminalApplyStates.delete(oldest);
-  }
-}
-
-function applyStateFromOutcome(outcome: AssistantCodeBlockApplyOutcome): ApplyState {
-  if (outcome.kind === "conflict") return { kind: "conflict", code: outcome.code };
-  return { kind: outcome.kind };
-}
-
-function applyButtonLabel(state: ApplyState, t: EditorAgentTranslate, retryLabel: string): string {
-  if (state.kind === "idle") return t("chat.codeApply.action");
-  if (state.kind === "preparing") return t("chat.codeApply.preparing");
-  if (state.kind === "queued") return t("chat.codeApply.queued");
-  if (state.kind === "outcome-unknown") return t("chat.codeApply.outcomeUnknown");
-  return retryLabel;
-}
-
-function applyStatusLabel(state: ApplyState, t: EditorAgentTranslate): string {
-  if (state.kind === "idle") return "";
-  if (state.kind === "conflict") return t("chat.codeApply.conflict", { code: state.code });
-  if (state.kind === "rejected") return t("chat.codeApply.unavailable");
-  if (state.kind === "outcome-unknown") return t("chat.codeApply.outcomeUnknownStatus");
-  return state.kind === "queued" ? t("chat.codeApply.queued") : t("chat.codeApply.preparing");
-}
-
-function ApplyCodeBlockButton({
-  text,
-  language,
-  onApply,
-  stateKey,
-}: {
-  readonly text: string;
-  readonly language: string | undefined;
-  readonly onApply: AssistantCodeBlockApply;
-  readonly stateKey: string | undefined;
-}): ReactNode {
-  const commonT = useTranslate();
-  const t = useEditorAgentTranslate();
-  const [state, setState] = useState<ApplyState>(() => cachedApplyState(stateKey));
-  const inFlight = useRef(false);
-  const handleApply = useCallback((): void => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setState({ kind: "preparing" });
-    void Promise.resolve<AssistantCodeBlockApplyRequest>({ codeBlockText: text, language })
-      .then(onApply)
-      .then(
-        (outcome) => {
-          inFlight.current = false;
-          const next = applyStateFromOutcome(outcome);
-          cacheTerminalApplyState(stateKey, next);
-          setState(next);
-        },
-        () => {
-          inFlight.current = false;
-          setState({ kind: "rejected" });
-        },
-      );
-  }, [language, onApply, stateKey, text]);
-  const label = applyButtonLabel(state, t, commonT("common.retry"));
-  const status = applyStatusLabel(state, t);
-  const disabled =
-    state.kind === "preparing" || state.kind === "queued" || state.kind === "outcome-unknown";
-  const failed =
-    state.kind === "conflict" || state.kind === "rejected" || state.kind === "outcome-unknown";
-  return (
-    <div className="sm-code-copy-wrap">
-      <button
-        type="button"
-        className="sm-code-copy"
-        aria-label={label}
-        title={label}
-        disabled={disabled}
-        data-apply-state={state.kind}
-        data-failed={failed ? "true" : "false"}
-        onClick={handleApply}
-      >
-        <EditorIcon size={13} aria-hidden="true" />
-        <span>{label}</span>
-      </button>
       <output className="sm-code-copy-status">{status}</output>
     </div>
   );
@@ -432,7 +296,6 @@ function renderChildren(
 function renderCodeBlockHeader(
   codeText: string,
   lang: string | undefined,
-  key: string,
   options: RenderOptions,
 ): ReactNode {
   if (options.streaming) return null;
@@ -441,16 +304,6 @@ function renderCodeBlockHeader(
       {/* "untitled" read like a missing file name; untagged fences are plain text (C307) */}
       <span className="sm-code-lang">{lang ?? "text"}</span>
       <div className="sm-code-copy-wrap">
-        {options.onApplyCodeBlock === undefined ? null : (
-          <ApplyCodeBlockButton
-            text={codeText}
-            language={lang}
-            onApply={options.onApplyCodeBlock}
-            stateKey={
-              options.applyScopeId === undefined ? undefined : `${options.applyScopeId}:${key}`
-            }
-          />
-        )}
         <CopyButton text={codeText} />
       </div>
     </div>
@@ -470,7 +323,7 @@ function renderCodeBlockNode(
   const long = lineCount > 24;
   return (
     <div key={key} className="sm-code-block-frame" data-long={long ? "true" : "false"}>
-      {renderCodeBlockHeader(codeText, lang, key, options)}
+      {renderCodeBlockHeader(codeText, lang, options)}
       {options.streaming ? (
         <PlainCodeBlock
           text={codeText}
@@ -617,7 +470,6 @@ function renderTableNode(
   }
 }
 
-const INLINE_CITATION_MARKER_PATTERN = /(\[\d+\]|【\d+】|［\d+］)/gu;
 const BLOCKED_CITATION_MESSAGE = "PDF preview unavailable";
 
 function markerButtonLabel(marker: string, state: "available" | "recoverable" | "blocked"): string {
@@ -672,6 +524,32 @@ function InlineCitationMarker({
   );
 }
 
+// One bracket pair holding one or more cited indices (`[1]`, `[1, 7, 8]`, `【2】`). Every index with
+// structured metadata renders as its OWN marker link (the whole group used to be dead text); a group
+// with no linkable index keeps its original text untouched, and an unlinked index inside a linked
+// group stays plain text.
+function InlineCitationGroup({
+  group,
+  preview,
+}: {
+  readonly group: CitationMarkerGroup;
+  readonly preview: CitationPreviewController;
+}): ReactNode {
+  if (!group.entries.some((entry) => preview.forMarker(entry.marker) !== undefined)) {
+    return group.text;
+  }
+  return (
+    <>
+      {group.entries.map((entry, position) => (
+        <Fragment key={`${entry.marker}-${String(position)}`}>
+          {position > 0 ? " " : null}
+          <InlineCitationMarker marker={entry.marker} preview={preview} />
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
 function renderCitationText(
   text: string,
   key: string,
@@ -686,27 +564,22 @@ function renderCitationText(
       </span>
     );
   }
-  INLINE_CITATION_MARKER_PATTERN.lastIndex = 0;
   const fragments: ReactNode[] = [];
   let cursor = 0;
-  let match = INLINE_CITATION_MARKER_PATTERN.exec(text);
-  while (match !== null) {
-    const marker = match[0];
-    const index = match.index;
-    if (index > cursor) {
+  for (const group of findCitationMarkerGroups(text)) {
+    if (group.start > cursor) {
       fragments.push(
-        <span key={`${key}-text-${String(cursor)}`}>{text.slice(cursor, index)}</span>,
+        <span key={`${key}-text-${String(cursor)}`}>{text.slice(cursor, group.start)}</span>,
       );
     }
     fragments.push(
-      <InlineCitationMarker
-        key={`${key}-marker-${String(index)}`}
-        marker={marker}
+      <InlineCitationGroup
+        key={`${key}-marker-${String(group.start)}`}
+        group={group}
         preview={citationPreview}
       />,
     );
-    cursor = index + marker.length;
-    match = INLINE_CITATION_MARKER_PATTERN.exec(text);
+    cursor = group.end;
   }
   if (cursor < text.length) {
     fragments.push(<span key={`${key}-tail`}>{text.slice(cursor)}</span>);
@@ -787,6 +660,13 @@ function renderInlineNode(
 ): ReactNode | null {
   switch (node.kind) {
     case "text":
+      if (options.literalUserInput)
+        return (
+          <span key={key}>
+            {node.text}
+            {trailing}
+          </span>
+        );
       return renderRepositoryText(node.text ?? "", key, options, trailing);
 
     case "inline-code":
@@ -900,43 +780,41 @@ function useMarkdownListEvidence(
 
 function SafeMarkdownImpl({
   source,
+  literalUserInput = false,
   diagnosticCorrelationId,
   diagnosticMessageId,
-  applyScopeId,
   repositoryRoots = EMPTY_ROOTS,
   openRepositoryReference,
   citationPreview,
-  onApplyCodeBlock,
   streaming = false,
   trailing,
 }: SafeMarkdownProps): ReactNode {
-  const tree = useMemo(() => parseSafeMarkdown(source), [source]);
+  const tree = useMemo(
+    () => (literalUserInput ? parseSafeUserInput(source) : parseSafeMarkdown(source)),
+    [source, literalUserInput],
+  );
   useMarkdownListEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
   const options = useMemo<RenderOptions>(
     () => ({
-      applyScopeId,
+      literalUserInput,
       citationPreview,
       streaming,
       repositoryRoots,
       openRepositoryReference,
-      onApplyCodeBlock,
     }),
-    [
-      applyScopeId,
-      citationPreview,
-      onApplyCodeBlock,
-      openRepositoryReference,
-      repositoryRoots,
-      streaming,
-    ],
+    [literalUserInput, citationPreview, openRepositoryReference, repositoryRoots, streaming],
   );
-  return <div className="sm-root">{renderMarkdownTree(tree, options, trailing)}</div>;
+  return (
+    <div className="sm-root" style={literalUserInput ? { whiteSpace: "pre-wrap" } : undefined}>
+      {renderMarkdownTree(tree, options, trailing)}
+    </div>
+  );
 }
 
 // GEN-PERF-CHAT-010 — memoized so a settled assistant bubble does not re-parse/re-highlight its
 // Markdown when an unrelated parent (draft/streaming) re-renders. Keying is a shallow prop compare;
-// `source` is immutable per message and repositoryRoots/openRepositoryReference/citationPreview/
-// onApplyCodeBlock are caller-memoized, so the compare is cheap and the security invariants
+// `source` is immutable per message and repositoryRoots/openRepositoryReference/citationPreview
+// are caller-memoized, so the compare is cheap and the security invariants
 // (AST-only parse keyed on the source text) are unchanged.
 export const SafeMarkdown = memo(SafeMarkdownImpl);
 
@@ -949,14 +827,13 @@ export const SafeMarkdown = memo(SafeMarkdownImpl);
 // ---------------------------------------------------------------------------
 
 export interface SafeMarkdownBoundaryProps {
+  readonly literalUserInput?: boolean | undefined;
   readonly source: string;
   readonly diagnosticCorrelationId?: string | undefined;
   readonly diagnosticMessageId?: string | undefined;
-  readonly applyScopeId?: string | undefined;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
-  readonly onApplyCodeBlock?: AssistantCodeBlockApply | undefined;
   readonly streaming?: boolean | undefined;
   readonly trailing?: ReactNode | undefined;
 }
@@ -987,13 +864,12 @@ export class SafeMarkdownBoundary extends Component<
     return (
       <SafeMarkdown
         source={this.props.source}
+        literalUserInput={this.props.literalUserInput}
         diagnosticCorrelationId={this.props.diagnosticCorrelationId}
         diagnosticMessageId={this.props.diagnosticMessageId}
-        applyScopeId={this.props.applyScopeId}
         repositoryRoots={this.props.repositoryRoots}
         openRepositoryReference={this.props.openRepositoryReference}
         citationPreview={this.props.citationPreview}
-        onApplyCodeBlock={this.props.onApplyCodeBlock}
         streaming={this.props.streaming}
         trailing={this.props.trailing}
       />

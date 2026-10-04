@@ -1,3 +1,11 @@
+.cmpWorkspaceSurface[data-layout-locked="true"] [data-window-header] {
+  cursor: default;
+}
+
+.cmpWorkspaceSurface[data-layout-locked="true"] [data-window-body] {
+  overscroll-behavior: contain;
+}
+
 .marquee {
   position: absolute;
   z-index: 72;

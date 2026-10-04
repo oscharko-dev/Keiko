@@ -47,7 +47,65 @@ import {
   type ServerDiagnosticSink,
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
-import type { UiHandlerDeps } from "./deps.js";
+import { currentGroundingLimits, type UiHandlerDeps } from "./deps.js";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { getServerLogger, reportServerLogFailure } from "./observability/index.js";
+
+// Body-free evidence of what the judge decided for one answer (PR #3678 review): one marker stands
+// for every unentailed claim, so the "N unsupported claims" the reader sees, a judge that read no
+// claim and a partly undecided answer are reconstructable from the log alone. Counts only.
+const SEARCH_ENTAILMENT_JUDGED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.entailment.judged",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-entailment-stage.logEntailmentVerdict",
+  fields: {
+    judgedClaimCount: { type: "integer", dataClass: "count", required: true },
+    unsupportedClaimCount: { type: "integer", dataClass: "count", required: true },
+    unavailableClaimCount: { type: "integer", dataClass: "count", required: true },
+    hiddenProseClaimCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["grounded-entailment-verdict"],
+  proofIds: ["search.entailment.judged.line"],
+  releaseImpact: "patch",
+});
+
+// Evidence never breaks the verdict it describes: a failed write is reported on the independent
+// channel and the markers are still returned.
+function logEntailmentVerdict(result: EntailmentReconciliation, correlationId: string): void {
+  try {
+    getServerLogger().info(
+      activityLogEvent(
+        SEARCH_ENTAILMENT_JUDGED_OPERATION,
+        { correlationId },
+        {
+          judgedClaimCount: result.judgedClaims,
+          unsupportedClaimCount: result.unentailed.length,
+          unavailableClaimCount: result.unavailableClaims,
+          hiddenProseClaimCount: result.hiddenProseClaims ?? 0,
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SEARCH_ENTAILMENT_JUDGED_OPERATION.op,
+      correlationId,
+      loss: "event-dropped",
+    });
+  }
+}
 
 export interface EntailmentStage {
   // Judge the answer's citations for support against their in-pack excerpts and return the resulting
@@ -121,6 +179,7 @@ function markersFor(
   nowMs: number,
   observability: CorrelatedEntailmentObservability,
 ): readonly UncertaintyMarker[] {
+  logEntailmentVerdict(result, observability.correlationId);
   const markers: UncertaintyMarker[] = [];
   const unsupported = unsupportedClaimMarker(result.unentailed, nowMs);
   if (unsupported !== undefined) {
@@ -239,6 +298,7 @@ async function evaluateHybridEntailment(
         unentailed: [...inline.unentailed, ...numeric.unentailed],
         judgedClaims: inline.judgedClaims + numeric.judgedClaims,
         unavailableClaims: inline.unavailableClaims + numeric.unavailableClaims,
+        hiddenProseClaims: (inline.hiddenProseClaims ?? 0) + (numeric.hiddenProseClaims ?? 0),
       },
       nowMs,
       observability,
@@ -254,6 +314,19 @@ async function evaluateHybridEntailment(
   }
 }
 
+// The judge's per-evidence-item cap follows the operator's grounding excerpt limit: every excerpt the
+// answer model was shown was capped at `maxExcerptChars`, so a judge cap below that limit would make
+// every full-length excerpt undecidable. Never below the built-in default.
+function entailmentOptionsFor(deps: UiHandlerDeps): EntailmentOptions {
+  return {
+    ...DEFAULT_ENTAILMENT_OPTIONS,
+    maxExcerptChars: Math.max(
+      DEFAULT_ENTAILMENT_OPTIONS.maxExcerptChars,
+      currentGroundingLimits(deps).maxExcerptChars,
+    ),
+  };
+}
+
 /**
  * Build the entailment stage for a grounded ask, or `undefined` when it must stay inert (no judge
  * model configured, or a capsule policy denies answer synthesis). `modelId` is the model that
@@ -266,7 +339,7 @@ export function createEntailmentStage(
   modelId: string,
   observability: EntailmentStageObservability = {},
   signal?: AbortSignal,
-  options: EntailmentOptions = DEFAULT_ENTAILMENT_OPTIONS,
+  options: EntailmentOptions = entailmentOptionsFor(deps),
 ): EntailmentStage | undefined {
   if (capsules.length > 0 && !isScopeModelUseOperationAllowed(capsules, "answerSynthesis")) {
     return undefined;

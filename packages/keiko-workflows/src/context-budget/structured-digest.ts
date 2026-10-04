@@ -4,8 +4,13 @@ import type {
   ContextProvenanceRef,
   ContextUserConstraint,
 } from "@oscharko-dev/keiko-contracts";
-import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import {
+  stripUnsafeFormatChars,
+  containsPseudoRoleMarker,
+  containsAbsolutePath,
+} from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { redact } from "@oscharko-dev/keiko-security";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 
 import type { CompactionDigest } from "./compaction-helpers.js";
 
@@ -21,6 +26,7 @@ export interface StructuredCompactionDigestInput {
 }
 
 interface DigestBuckets {
+  readonly userStatements: ContextPreservedFact[];
   readonly preservedFacts: ContextPreservedFact[];
   readonly assumptions: ContextAssumption[];
   readonly userConstraints: ContextUserConstraint[];
@@ -79,6 +85,7 @@ export function buildStructuredCompactionDigest(
 
 function emptyBuckets(): DigestBuckets {
   return {
+    userStatements: [],
     preservedFacts: [],
     assumptions: [],
     userConstraints: [],
@@ -106,9 +113,31 @@ function consumeEntry(
   if (ABSOLUTE_PATH_PATTERN.test(entry.content)) {
     pushUnique(buckets.droppedCategories, "absolute-path-references-omitted");
   }
+  let fenced = false;
   for (const rawLine of entry.content.split(/\r?\n/u)) {
-    consumeLine(buckets, cleanLine(rawLine, redactionSecrets), sourceRef);
+    if (/^\s*```/u.test(rawLine)) fenced = !fenced;
+    const line = cleanLine(rawLine, redactionSecrets);
+    consumeLine(buckets, line, sourceRef);
+    if (entry.role === "user" && !fenced) collectUserStatement(buckets, line, sourceRef);
   }
+}
+
+// Preserve source-linked user statements in any language. These are quotations of what the user
+// said, not inferred facts about the world. Explicit categories retain their separate semantics.
+function collectUserStatement(
+  buckets: DigestBuckets,
+  line: string,
+  sourceRef: ContextProvenanceRef,
+): void {
+  if (classifyLine(line).kind !== "other" || !/\p{L}\s+\p{L}/u.test(line)) return;
+  if (containsPseudoRoleMarker(line) || containsAbsolutePath(line) || line.includes("```")) return;
+  const statement = boundText(`User statement: ${line}`);
+  if (buckets.userStatements.some((item) => item.statement === statement)) return;
+  if (buckets.userStatements.length === MAX_ITEMS_PER_BUCKET) {
+    buckets.userStatements.shift();
+    pushUnique(buckets.droppedCategories, "older-user-statements-require-rehydration");
+  }
+  buckets.userStatements.push({ statement, sourceRef });
 }
 
 function consumeLine(buckets: DigestBuckets, line: string, sourceRef: ContextProvenanceRef): void {
@@ -215,8 +244,13 @@ function safeFileRefs(
 ): readonly { readonly path: string; readonly line?: number; readonly summary: string }[] {
   const refs: { readonly path: string; readonly line?: number; readonly summary: string }[] = [];
   for (const match of line.matchAll(FILE_REF_PATTERN)) {
-    const path = match[1];
-    if (path === undefined || !SAFE_RELATIVE_PATH.test(path) || path.includes("..")) {
+    const matched = match[1];
+    const path = matched?.startsWith("./") ? matched.slice(2) : matched;
+    if (
+      path === undefined ||
+      !SAFE_RELATIVE_PATH.test(path) ||
+      !isValidScopePath(path, { mustBeRelative: true })
+    ) {
       continue;
     }
     const startLine = match[2] === undefined ? undefined : Number.parseInt(match[2], 10);
@@ -254,43 +288,43 @@ function collectSymbol(symbols: string[], value: string | undefined): void {
 }
 
 function pushFact(buckets: DigestBuckets, fact: ContextPreservedFact): void {
-  if (buckets.preservedFacts.length >= MAX_ITEMS_PER_BUCKET) {
-    return;
-  }
-  if (buckets.preservedFacts.some((entry) => entry.statement === fact.statement)) {
-    return;
-  }
-  buckets.preservedFacts.push(fact);
+  pushBoundedSignal(buckets, buckets.preservedFacts, fact, (item) => item.statement);
 }
 
 function pushAssumption(buckets: DigestBuckets, statement: string): void {
-  if (buckets.assumptions.length >= MAX_ITEMS_PER_BUCKET) {
-    return;
-  }
-  if (buckets.assumptions.some((entry) => entry.statement === statement)) {
-    return;
-  }
-  buckets.assumptions.push({
-    statement,
-    rationale: "Explicitly labeled as an assumption in compacted conversation text.",
-    confidence: "medium",
-  });
+  pushBoundedSignal(
+    buckets,
+    buckets.assumptions,
+    {
+      statement,
+      rationale: "Explicitly labeled as an assumption in compacted conversation text.",
+      confidence: "medium",
+    },
+    (item) => item.statement,
+  );
 }
 
 function pushConstraint(buckets: DigestBuckets, constraint: ContextUserConstraint): void {
-  if (buckets.userConstraints.length >= MAX_ITEMS_PER_BUCKET) {
-    return;
+  pushBoundedSignal(buckets, buckets.userConstraints, constraint, (item) => item.statement);
+}
+
+function pushBoundedSignal<T>(
+  buckets: DigestBuckets,
+  values: T[],
+  value: T,
+  key: (item: T) => string,
+): void {
+  if (values.some((entry) => key(entry) === key(value))) return;
+  if (values.length >= MAX_ITEMS_PER_BUCKET) {
+    values.splice(2, 1);
+    pushUnique(buckets.droppedCategories, "bounded-structured-signals-require-rehydration");
   }
-  if (buckets.userConstraints.some((entry) => entry.statement === constraint.statement)) {
-    return;
-  }
-  buckets.userConstraints.push(constraint);
+  values.push(value);
 }
 
 function pushUnique(values: string[], value: string): void {
-  if (values.length >= MAX_ITEMS_PER_BUCKET || values.includes(value)) {
-    return;
-  }
+  if (values.includes(value)) return;
+  if (values.length >= MAX_ITEMS_PER_BUCKET) values.splice(2, 1);
   values.push(value);
 }
 
@@ -343,8 +377,9 @@ function questionKey(text: string): string {
 }
 
 function compactBuckets(buckets: DigestBuckets): CompactionDigest {
+  const preservedFacts = [...buckets.preservedFacts, ...buckets.userStatements];
   return {
-    ...(buckets.preservedFacts.length > 0 ? { preservedFacts: buckets.preservedFacts } : {}),
+    ...(preservedFacts.length > 0 ? { preservedFacts } : {}),
     ...(buckets.assumptions.length > 0 ? { assumptions: buckets.assumptions } : {}),
     ...(buckets.userConstraints.length > 0 ? { userConstraints: buckets.userConstraints } : {}),
     ...(buckets.decisions.length > 0 ? { decisions: buckets.decisions } : {}),
@@ -355,4 +390,77 @@ function compactBuckets(buckets: DigestBuckets): CompactionDigest {
       ? { droppedCategories: buckets.droppedCategories }
       : {}),
   };
+}
+
+function boundedUnique<T>(values: readonly T[], key: (value: T) => string): T[] {
+  const seen = new Set<string>();
+  const unique = [...values]
+    .reverse()
+    .filter((value) => {
+      const id = key(value);
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .reverse();
+  return unique.length <= 16 ? unique : [...unique.slice(0, 4), ...unique.slice(-12)];
+}
+
+export function mergeHistoryDigests(
+  older: CompactionDigest,
+  newer: CompactionDigest,
+): CompactionDigest {
+  const merged = {
+    preservedFacts: boundedUnique(
+      [...(older.preservedFacts ?? []), ...(newer.preservedFacts ?? [])],
+      (item) => item.statement,
+    ),
+    userConstraints: boundedUnique(
+      [...(older.userConstraints ?? []), ...(newer.userConstraints ?? [])],
+      (item) => item.statement,
+    ),
+    assumptions: boundedUnique(
+      [...(older.assumptions ?? []), ...(newer.assumptions ?? [])],
+      (item) => item.statement,
+    ),
+    decisions: mergeStrings(older.decisions, newer.decisions),
+    openQuestions: mergeStrings(older.openQuestions, newer.openQuestions),
+    filesInspected: mergeStrings(older.filesInspected, newer.filesInspected),
+    filesChanged: mergeStrings(older.filesChanged, newer.filesChanged),
+    commandOutcomes: boundedUnique(
+      [...(older.commandOutcomes ?? []), ...(newer.commandOutcomes ?? [])],
+      (item) => JSON.stringify(item),
+    ),
+    failingTests: mergeStrings(older.failingTests, newer.failingTests),
+    droppedCategories: mergeStrings(older.droppedCategories, newer.droppedCategories),
+  };
+  const resolved = merged.decisions.filter((decision) => decision.startsWith("Resolved question:"));
+  merged.openQuestions = merged.openQuestions.filter(
+    (question) =>
+      !resolved.some((resolution) =>
+        sameQuestionKey(questionKey(question), questionKey(resolution)),
+      ),
+  );
+  if (Object.keys(merged).some((field) => mergedFieldLostItems(field, older, newer))) {
+    merged.droppedCategories = mergeStrings(merged.droppedCategories, [
+      "bounded-structured-signals-require-rehydration",
+    ]);
+  }
+  return merged;
+}
+
+function mergedFieldLostItems(
+  field: string,
+  older: CompactionDigest,
+  newer: CompactionDigest,
+): boolean {
+  const key = field as keyof CompactionDigest;
+  return (
+    new Set([...(older[key] ?? []), ...(newer[key] ?? [])].map((item) => JSON.stringify(item)))
+      .size > 16
+  );
+}
+
+function mergeStrings(older: readonly string[] = [], newer: readonly string[] = []): string[] {
+  return boundedUnique([...older, ...newer], (item) => item);
 }

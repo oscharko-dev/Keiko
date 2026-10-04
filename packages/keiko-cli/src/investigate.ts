@@ -70,7 +70,7 @@ hypotheses. At least one evidence source is required (--description, --output[-f
 write the fix and run verification through the safe tool + verification layers.
 
   --from-timeline PATH     Seed the report from a LogTimeline JSON file (the output of
-                            keiko support analyze --json --correlation-id ID). Combines with
+                            keiko support analyze REPORT --json --correlation-id ID). Combines with
                             --description/--output[-file]/--stack[-file]/--file, which take
                             precedence over the timeline-derived value for the same field.
   --no-evidence             Do not write an evidence manifest (written by default, matching

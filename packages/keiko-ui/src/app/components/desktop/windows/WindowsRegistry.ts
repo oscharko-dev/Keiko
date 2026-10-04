@@ -3,6 +3,7 @@ import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
   WorkspaceBinding,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   OpenEditorFileRequest,
@@ -104,7 +105,6 @@ interface ChatWindowCfg extends WindowCfgRecord {
   readonly title?: string;
   readonly modelId?: string;
   readonly projectPathPrivacy?: "omit";
-  readonly selectionHandoffId?: string;
   readonly newChatRequestId?: string;
 }
 
@@ -182,7 +182,7 @@ type ConfigFieldType = "text" | "select" | "textarea" | "perm" | "directory";
 
 /**
  * Issue: German locale coverage. A launcher field carries MESSAGE KEYS, never display copy — the
- * three surfaces that render these fields (window launcher, New Window dialog, quick-access
+ * three surfaces that render these fields (window launcher, New Window dialog, command
  * commands) all read this one table, so an English literal here reached the user untranslated no
  * matter which locale was selected. `def` stays a raw string for machine defaults (`""`, an enum
  * member such as `"empty"`, a provider name); `defKey` is for the one case where the default is
@@ -254,6 +254,8 @@ export interface WindowRenderContext {
   readonly activeRoot: string | null;
   /** Issue #446 — the derived active binding (taskId/boundSurfaces/activeRoot), or null when unbound. */
   readonly activeBinding: WorkspaceBinding | null;
+  /** The server-owned instance identifies local checkouts separately from private worktrees. */
+  readonly activeInstance?: WorkspaceInstance | null;
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   /**
    * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result
@@ -298,6 +300,10 @@ export interface WindowTypeDef {
 }
 
 export const CHAT_MINI_W = 430;
+// The compact node a Knowledge Pod becomes when it is dragged onto the canvas (Workspace.tsx). The
+// connector window's "too small" threshold must sit below it: the node used to be created at this
+// size and immediately rendered "Zu klein für Knowledge Pod" (customer screenshots, 1.1.11-1.1.13).
+export const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
 
 const DEFAULT_MIN: WindowSize = { w: 150, h: 110 };
 const DEFAULT_TINY: WindowSize = { w: 290, h: 190 };
@@ -717,6 +723,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 320,
     h: 380,
     min: { w: 220, h: 180 },
+    tiny: { w: 200, h: 140 },
     config: [],
   },
   localKnowledge: {
@@ -988,7 +995,7 @@ export const WIN_TYPES: Readonly<Record<WindowType, WindowTypeDef>> = buildAll()
 
 /**
  * The ONE place a window type turns into display copy. Every shell surface that shows a window's
- * name (launcher grid, New Window dialog, quick-access commands, window chrome, footer, inspector)
+ * name (launcher grid, New Window dialog, workspace commands, window chrome, footer, inspector)
  * routes through these four helpers, so a locale switch moves all of them together instead of
  * leaving the English literal that used to live in `WIN_TYPES[type].title`.
  */

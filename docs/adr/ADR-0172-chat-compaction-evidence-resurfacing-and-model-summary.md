@@ -65,6 +65,20 @@ at the boundary rather than sanitized in place.
 The bounds are hard caps, not budget hints. Resurfacing competes for the same prompt budget as
 everything else and must never be able to grow without limit as a chat's history accumulates.
 
+The chat continuity checkpoint is the canonical, revision-bound digest. A narrower deployment,
+a large current prompt, or the grounded continuity lane may require a smaller prompt projection;
+that projection must never replace the canonical digest or remove its valid model summary. The
+assembler first tries folding additional old turns with the complete summary, and trims the rendered
+projection only when no complete-summary candidate fits. Per-turn omissions are recorded in prompt
+text and body-free assembly diagnostics. A later roomy turn can render the full checkpoint again.
+Source messages remain stored; canonical digest and rehydration bounds still apply.
+
+A checkpoint stamped with a smaller context window must not stop a larger-window history scan,
+even when the complete conversation still exceeds the larger input budget. The visitor rebuilds
+that window's full bounded verbatim tail from canonical messages before folding older units.
+The overflow-based restoration fallback applies only to legacy checkpoints without a window stamp.
+This also prevents one bounded grounded turn from permanently shrinking subsequent plain-chat turns.
+
 ### D3 — Resurfacing surfaces invalidation; it does not evaluate it
 
 This is the explicit boundary against ADR-0053.
@@ -113,13 +127,15 @@ collapsing are applied but deliberately **not** counted, so a summary whose only
 rewritten for safety?", not "is this byte-identical to what the model returned?".
 
 A summary that cannot be brought into a valid state is **not silently dropped**. The failure is
-recorded: `failureModelSummary` persists a record with `validationState: "rejected"`, empty content,
-and the failure reason — `invalid` (schema or unsafe output), `timed-out`, or `unavailable` (no
-usable model). Only the rejected *content* is discarded; the fact that an enrichment was attempted
-and why it failed is retained.
+recorded with request-correlated, body-free diagnostics. If no valid summary exists,
+`failureModelSummary` persists `validationState: "rejected"`, empty content and the failure reason:
+`invalid`, `timed-out`, or `unavailable`. If a valid running summary already exists, a failed refresh
+retains that summary and its earlier `coveredItems`; it must not claim coverage of the newly folded
+turns. Later enrichment can retry those uncovered turns. Successful enrichment recounts the complete
+checkpoint through the shared gateway token-accounting path before persistence.
 
-This matters for D4's premise: because a rejected record is persisted, a reader can normally
-distinguish "enrichment was never attempted" from "enrichment ran and produced nothing usable".
+A reader can normally distinguish an attempted enrichment from an absent attempt using the
+persisted failure state or the correlated diagnostic when a valid earlier summary was retained.
 A record carrying only a rejected summary remains a complete, valid compaction record.
 
 That distinction is best-effort, not an audit guarantee. The rejected record is written through the

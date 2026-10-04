@@ -67,6 +67,14 @@ keeps enough analyzer headroom while leaving space for the concurrently required
 inside Docker Desktop's common 8 GiB VM; the scanner's automatic heap choice can otherwise exceed
 the VM limit and terminate the bridge before it reports findings.
 
+A whole-project scan — the fallback when a changed path such as a Next.js `[capsuleId]` route
+cannot be expressed as an exact inclusion — needs more than 4.5 GiB on this repository. On a
+machine whose Docker VM has the room, raise the bridge heap for that run:
+
+```bash
+KEIKO_LOCAL_SONAR_NODE_MAXSPACE=12288 npm run gates:sonar
+```
+
 If port 9234 is occupied by another local analyzer, select an unused loopback port. The port is
 part of the Compose-project identity, so this starts an isolated server and leaves the existing
 container and volumes untouched:

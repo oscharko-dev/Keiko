@@ -199,6 +199,13 @@ tagged fact union `known | unknown | unavailable | absent`; no `undefined`, empt
 default, or inferred trust is valid. Unknown, unavailable, absent, malformed, corrupt, stale, or
 mismatched state resolves to restricted.
 
+Opening a folder or file in the editor does not raise a trust dialog or mount a persistent
+restricted-mode banner. Ordinary navigation, reading, and editing stay available while execution
+metadata loads or is unavailable. Explicit trust management remains available through settings
+and editor commands; failures are reported in that requested action. Execution consumers continue
+to evaluate their server-owned authority and trust before acting. The editor's readiness attribute
+reports catalog completion only and never waits for an opening-time approval.
+
 A trust record is server-owned. Under
 [ADR-0155](ADR-0155-root-scoped-workspace-trust-binding.md), its dimensions split into two roles:
 
@@ -222,9 +229,12 @@ not resurrect the prior grant; a new explicit grant is required. Binding a repos
 task workspace registers BOTH roots as projects — the worktree and the repository it was bound from —
 because a root that is not registered cannot be a trust subject at all: script trust is resolved only
 for a registered root, and the trust surfaces list registered roots. Registration alone is never a
-grant; the repository stays restricted until the operator decides. Choosing a folder in the browser
-and a project selection explicitly attested by a trusted launcher are the two equivalent local-human
-selection paths that grant through the same trust service. An ambient process working directory may
+grant; the repository stays restricted until the operator decides. The first explicit browser
+selection of a newly registered folder supplies its initial grant through the trust service.
+Reopening an existing canonical project, including through a path alias, preserves its current
+trust decision; revocation or invalidation requires a new explicit Trust command. A project
+selection explicitly attested by a trusted launcher remains a local-human selection path through
+the same trust service. An ambient process working directory may
 seed the preferred project, but carries no grant; restoring a stored project row or opening an
 arbitrary URL does not grant either. A repository that CONTAINS the managed worktree is left
 unregistered, because that root also contains the UI database. A managed task worktree is a

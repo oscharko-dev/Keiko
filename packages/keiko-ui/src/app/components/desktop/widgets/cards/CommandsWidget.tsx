@@ -26,7 +26,7 @@ import type {
 import { secureRandomId } from "../../../../../lib/secure-random";
 import KeikoSelect from "../../KeikoSelect";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
-import { subscribeSharedEventSource } from "./sharedEventSource";
+import { withSharedEventSourceOpen } from "./sharedEventSource";
 import styles from "./TerminalWidget.module.css";
 import { useWorkspaceTrust } from "../../workspace-trust/useWorkspaceTrust";
 import { WorkspaceTrustBanner } from "../../workspace-trust/WorkspaceTrustSurfaces";
@@ -221,34 +221,30 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
 
   // Subscribe to the global command event channel. Cancel is only armed for the run that echoes the
   // current requestId, so a foreign run-started on the shared channel can never hijack ownership.
-  useEffect(() => {
-    if (!running) return;
-    const onMessage = (ev: MessageEvent<string>): void => {
-      let parsed: CommandRunnerEvent;
-      try {
-        parsed = JSON.parse(ev.data) as CommandRunnerEvent;
-      } catch {
-        return;
-      }
-      if (
-        parsed.kind === "run-started" &&
-        runningRef.current &&
-        isOwnEvent(parsed, pendingRequestIdRef.current)
-      ) {
-        setInFlightRunId((current) => current ?? parsed.runId);
-      }
-      if (parsed.kind !== "run-started" && isOwnEvent(parsed, pendingRequestIdRef.current)) {
-        setInFlightRunId((current) => (current === parsed.runId ? null : current));
-      }
-      // KEIKO-0204 — the channel stays global (ADR-0018 D7); a foreign run's events are still
-      // processed above for Cancel-arming/clearing, but the visible "Recent events" log is scoped
-      // to this widget's own in-flight request so another window's run never shows up here.
-      if (isOwnEvent(parsed, pendingRequestIdRef.current)) {
-        setEvents((current) => [parsed, ...current].slice(0, MAX_EVENT_LOG));
-      }
-    };
-    return subscribeSharedEventSource(commandEventsUrl(), COMMAND_EVENT_SOURCE_TYPES, onMessage);
-  }, [running]);
+  const onMessage = useCallback((ev: MessageEvent<string>): void => {
+    let parsed: CommandRunnerEvent;
+    try {
+      parsed = JSON.parse(ev.data) as CommandRunnerEvent;
+    } catch {
+      return;
+    }
+    if (
+      parsed.kind === "run-started" &&
+      runningRef.current &&
+      isOwnEvent(parsed, pendingRequestIdRef.current)
+    ) {
+      setInFlightRunId((current) => current ?? parsed.runId);
+    }
+    if (parsed.kind !== "run-started" && isOwnEvent(parsed, pendingRequestIdRef.current)) {
+      setInFlightRunId((current) => (current === parsed.runId ? null : current));
+    }
+    // KEIKO-0204 — the channel stays global (ADR-0018 D7); a foreign run's events are still
+    // processed above for Cancel-arming/clearing, but the visible "Recent events" log is scoped
+    // to this widget's own in-flight request so another window's run never shows up here.
+    if (isOwnEvent(parsed, pendingRequestIdRef.current)) {
+      setEvents((current) => [parsed, ...current].slice(0, MAX_EVENT_LOG));
+    }
+  }, []);
 
   // Return focus to Run when the Cancel button unmounts at run end so keyboard users keep their place.
   useEffect(() => {
@@ -257,6 +253,14 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
     }
     prevRunningRef.current = running;
   }, [running]);
+
+  const runAbort = useRef<AbortController | null>(null);
+  useEffect(
+    () => (): void => {
+      runAbort.current?.abort();
+    },
+    [],
+  );
 
   const onSubmit = useCallback(
     async (e: SubmitEvent<HTMLFormElement>): Promise<void> => {
@@ -269,19 +273,29 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
       pendingRequestIdRef.current = requestId;
       runningRef.current = true;
       setRunning(true);
+      const controller = new AbortController();
+      runAbort.current = controller;
       try {
-        const next = await createCommandRun({ projectId: projectInput, taskId, requestId });
+        const next = await withSharedEventSourceOpen(
+          commandEventsUrl(),
+          COMMAND_EVENT_SOURCE_TYPES,
+          onMessage,
+          () => createCommandRun({ projectId: projectInput, taskId, requestId }),
+          controller.signal,
+        );
         setResult(next);
       } catch (err: unknown) {
         setError(errorFromUnknown(err, t));
       } finally {
+        controller.abort();
+        runAbort.current = null;
         runningRef.current = false;
         setRunning(false);
         pendingRequestIdRef.current = null;
         setInFlightRunId(null);
       }
     },
-    [projectInput, runnableTaskSelected, running, taskId, t],
+    [onMessage, projectInput, runnableTaskSelected, running, taskId, t],
   );
 
   const onAbort = useCallback(async (): Promise<void> => {

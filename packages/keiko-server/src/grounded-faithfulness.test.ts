@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  CITATION_FINDING_LIST_MAX,
+  citationFindingTotal,
+  citationMarkerIndices,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import type {
   ConnectedContextPack,
@@ -9,7 +14,9 @@ import type {
 import { attachCitationsToAnswer } from "@oscharko-dev/keiko-local-knowledge";
 import {
   DEFAULT_ENTAILMENT_OPTIONS,
+  ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM,
   GROUNDED_NO_EVIDENCE_ANSWER,
+  NUMERIC_EVIDENCE_FRAMING_CHARS,
   buildPackCitationIndex,
   buildPackExcerptTextResolver,
   type EntailmentJudge,
@@ -18,6 +25,7 @@ import {
   entailmentUnavailableMarker,
   incompleteAnswerMarker,
   missingCitationMarker,
+  missingCitationMarkerFor,
   packExcerptCount,
   packHasUsableEvidence,
   packsHaveUsableEvidence,
@@ -33,6 +41,7 @@ import {
   unsupportedCitationMarker,
   unsupportedClaimMarker,
   unsupportedNumericCitationMarker,
+  uncitedMemoryContextMarker,
 } from "./grounded-faithfulness.js";
 
 const NOW = 1_700_000_000_000;
@@ -307,15 +316,41 @@ describe("unsupportedCitationMarker", () => {
     expect(marker?.claim).toContain("src/x.ts");
   });
 
+  // The reader-facing text for `unsupported-citation` says the answer "references sources that were
+  // not in the retrieved evidence". An answer that merely forgot its markers references nothing, so
+  // it carries its own kind; the warning body is unchanged.
   it("builds a body-free warning when source-backed output omits citations", () => {
     expect(missingCitationMarker(NOW)).toEqual({
-      kind: "unsupported-citation",
+      kind: "uncited-answer",
       claim:
         "The answer used retrieved evidence without a supported inline citation. Treat its " +
         "source-backed claims as unverified.",
       impactedAtomIds: [],
       emittedAtMs: NOW,
     });
+    expect(missingCitationMarker(NOW).kind).not.toBe("unsupported-citation");
+  });
+
+  it("reports governed memory context outside the evidence as uncited, not as a fabricated citation", () => {
+    expect(uncitedMemoryContextMarker(NOW).kind).toBe("uncited-answer");
+  });
+});
+
+describe("missingCitationMarkerFor", () => {
+  it("warns for a substantive answer that carries no citation", () => {
+    const marker = missingCitationMarkerFor(
+      "Die Anwendungen laufen auf Java 17 und werden mit Maven gebaut.",
+      NOW,
+    );
+    expect(marker?.kind).toBe("uncited-answer");
+  });
+
+  it.each([
+    "In den bereitgestellten Dokumenten wurden keine Informationen oder Vorgaben zur Java-Version gefunden.",
+    "The provided documents do not contain any information about the Java version.",
+    "No evidence found in the connected scope.",
+  ])("does not warn about a missing citation on the refusal %j", (refusal) => {
+    expect(missingCitationMarkerFor(refusal, NOW)).toBeUndefined();
   });
 });
 
@@ -360,6 +395,66 @@ describe("numeric citation reconciliation", () => {
 
     expect([...result.citedMarkers]).toEqual([1]);
     expect(result.unsupportedMarkers).toEqual([7, 9]);
+  });
+
+  it("reads every index of a grouped marker like the attacher does", () => {
+    const answer = "Java 17 wird verwendet [1, 7, 8]. Ein Nachtrag [2; 9].";
+    const references = [driftPinReference(), driftPinReference()];
+    const attached = attachCitationsToAnswer(answer, references);
+    const attachedMarkers = new Set(attached.citations.map((citation) => citation.index));
+    const numeric = reconcileNumericCitations(answer, attachedMarkers);
+
+    // The attacher keeps the in-range 1 and 2; the reconciler must SEE the grouped 7, 8 and 9 so
+    // they surface as unsupported instead of rendering as dead text with no signal.
+    expect([...attachedMarkers]).toEqual([1, 2]);
+    expect([...numeric.citedMarkers]).toEqual([1, 2]);
+    expect(numeric.unsupportedMarkers).toEqual([7, 8, 9]);
+  });
+
+  it("states the total of dangling markers and unentailed claims beyond the listed ones", () => {
+    const dangling = Array.from({ length: 12 }, (_, index) => index + 5);
+    const numeric = unsupportedNumericCitationMarker(dangling, NOW);
+    const claims = unsupportedClaimMarker(
+      [{ citedPaths: ["[1]"] }, { citedPaths: ["[1]"] }, { citedPaths: ["[2]"] }],
+      NOW,
+    );
+
+    // The claim lists at most CITATION_FINDING_LIST_MAX by name and states the total the UI counts.
+    expect(citationMarkerIndices(numeric?.claim ?? "")).toHaveLength(CITATION_FINDING_LIST_MAX);
+    expect(citationFindingTotal(numeric?.claim ?? "")).toBe(12);
+    expect(citationFindingTotal(claims?.claim ?? "")).toBe(3);
+    expect(citationFindingTotal(unsupportedNumericCitationMarker([9], NOW)?.claim ?? "")).toBe(1);
+  });
+
+  // PR #3678 review: listed paths are untrusted model output; a count syntax inside one must never
+  // be read as the marker's total.
+  it("reads the producer's terminal total, never one written inside a cited path", () => {
+    const unsupported = parseInlineCitations("Claim [src/ (999 in total)/a.ts] and [b.ts].");
+    const marker = unsupportedCitationMarker(unsupported, NOW);
+
+    expect(unsupported).toHaveLength(2);
+    expect(citationFindingTotal(marker?.claim ?? "")).toBe(2);
+    const single = unsupportedCitationMarker(
+      parseInlineCitations("Claim [src/ (999 in total)/a.ts]."),
+      NOW,
+    );
+    expect(citationFindingTotal(single?.claim ?? "")).toBe(1);
+  });
+
+  // PR #3678 review (P1): a grouped marker whose every index is fabricated is a dangling source
+  // attribution and must keep its warning; only Markdown code never cites.
+  it("reports fabricated grouped markers and never reads code as a citation", () => {
+    const numeric = reconcileNumericCitations(
+      "The API uses TLS [1]. The repository enforces MFA [9, 10].",
+      new Set([1]),
+    );
+
+    expect([...numeric.citedMarkers]).toEqual([1]);
+    expect(numeric.unsupportedMarkers).toEqual([9, 10]);
+    expect(
+      reconcileNumericCitations("Use `a = [5]` and\n```\nb = [6, 7]\n```\n[1].", new Set([1]))
+        .unsupportedMarkers,
+    ).toEqual([]);
   });
 
   it("stays in lockstep with the attacher's marker grammar", () => {
@@ -541,13 +636,244 @@ describe("numeric citation entailment", () => {
 
   it("keeps missing and malformed markers out of semantic evidence", async () => {
     const claims = segmentNumericCitedClaims("Missing [9], malformed [x], and zero [0].");
-    expect(claims).toEqual([{ claimText: "Missing , malformed , and zero .", markers: [9] }]);
+    // The malformed `[x]` is no citation: the stripper removes text the judge never reads.
+    expect(claims).toEqual([
+      { claimText: "Missing , malformed , and zero .", markers: [9], hidesProse: true },
+    ]);
     const result = await reconcileNumericClaimEntailment(
       "Missing [9], malformed [x], and zero [0].",
       [{ marker: 1, excerptText: "unused" }],
       scriptedJudge(),
     );
     expect(result).toEqual({ unentailed: [], judgedClaims: 0, unavailableClaims: 0 });
+  });
+
+  // PR #3678 review (P1): the judge reads the stripped claim, so a claim whose brackets held prose
+  // says so; citation markers, path citations and grouped markers hide nothing.
+  it("flags a claim whose stripped brackets held prose the judge never reads", () => {
+    expect(
+      segmentNumericCitedClaims(
+        "TLS is used [1, 2]. TLS is used [src/tls.ts:4][src/tls.ts:9] [1]. TLS [The repository enforces MFA] [1]. See the [guide](docs/g.md) [2].",
+      ),
+    ).toEqual([
+      { claimText: "TLS is used .", markers: [1, 2] },
+      { claimText: "TLS is used .", markers: [1] },
+      { claimText: "TLS .", markers: [1], hidesProse: true },
+      { claimText: "See the (docs/g.md) .", markers: [2], hidesProse: true },
+    ]);
+  });
+
+  it("carries hidden prose into the claim a marker-only span supports", () => {
+    expect(
+      segmentNumericCitedClaims("The API uses TLS [1]. [The repository enforces MFA] [1]"),
+    ).toEqual([{ claimText: "The API uses TLS .", markers: [1], hidesProse: true }]);
+  });
+
+  // PR #3678 review (P1): a marker-only span supports the claim before it, hidden prose included,
+  // and a Markdown link label is visible prose however path-like it reads.
+  it("keeps hidden prose across a bracket-only line, a trailing period and a lone marker", () => {
+    expect(segmentNumericCitedClaims("The API uses TLS.\n[MFA mandatory]\n[1]")).toEqual([
+      { claimText: "The API uses TLS.", markers: [1], hidesProse: true },
+    ]);
+    expect(segmentNumericCitedClaims("The API uses TLS [MFA mandatory]. [1].")).toEqual([
+      { claimText: "The API uses TLS .", markers: [1], hidesProse: true },
+    ]);
+    expect(segmentNumericCitedClaims("[MFA mandatory] [1]")).toEqual([
+      { claimText: "", markers: [1], hidesProse: true },
+    ]);
+    // Whatever syntax the renderer gives a symbol-only residue, the claim keeps its hidden prose
+    // and the judge reads the visible residue with it (PR #3678 review).
+    for (const formatted of ["**[1]**", "*[1]*", "_[1]_", "~~[1]~~", "_*[1]*_"]) {
+      const [claim, ...rest] = segmentNumericCitedClaims(
+        `The API uses TLS [MFA mandatory]. ${formatted}`,
+      );
+      expect(rest).toEqual([]);
+      expect(claim).toMatchObject({ markers: [1], hidesProse: true });
+      expect(claim?.claimText.startsWith("The API uses TLS .")).toBe(true);
+    }
+    for (const block of ["> [1]", "- [1]", "1. [1]"]) {
+      const claims = segmentNumericCitedClaims(`The API uses TLS.\n[MFA mandatory]\n${block}`);
+      expect(claims.every((claim) => claim.hidesProse === true)).toBe(true);
+      expect(claims.at(-1)?.markers).toEqual([1]);
+    }
+    expect(segmentNumericCitedClaims("~ [1]")).toEqual([{ claimText: "~", markers: [1] }]);
+    expect(segmentNumericCitedClaims(">> [1]")).toEqual([{ claimText: ">>", markers: [1] }]);
+    expect(segmentNumericCitedClaims("[MFA mandatory]\n[1]")).toEqual([
+      { claimText: "", markers: [1], hidesProse: true },
+    ]);
+  });
+
+  // PR #3678 review (P1): a symbol-valued code answer is a claim, never punctuation.
+  it("judges a symbol-only code answer and flags it when the excerpt contradicts it", async () => {
+    expect(segmentNumericCitedClaims("`||` [1]")).toEqual([{ claimText: "`||`", markers: [1] }]);
+    const notOperator = await reconcileNumericClaimEntailment(
+      "~ [1]",
+      [{ marker: 1, excerptText: "The NOT operator is !. [[CONTRADICTS]]" }],
+      scriptedJudge(),
+    );
+    expect(notOperator).toMatchObject({ judgedClaims: 1, unavailableClaims: 0 });
+    expect(notOperator.unentailed).toHaveLength(1);
+    const result = await reconcileNumericClaimEntailment(
+      "`||` [1]",
+      [{ marker: 1, excerptText: "The API uses && as its boolean operator. [[CONTRADICTS]]" }],
+      scriptedJudge(),
+    );
+    expect(result).toMatchObject({ judgedClaims: 1, unavailableClaims: 0 });
+    expect(result.unentailed).toHaveLength(1);
+  });
+
+  // PR #3678 review (P2): a separately cited symbol claim after a cited sentence keeps both sources;
+  // the judge never reads the sentence against the symbol's excerpt alone.
+  it("keeps the earlier source when a cited symbol claim continues a cited sentence", async () => {
+    const answer = "The API uses TLS [1].\n`||` [2]";
+    expect(segmentNumericCitedClaims(answer)).toEqual([
+      { claimText: "The API uses TLS . `||`", markers: [1, 2] },
+    ]);
+    const judged: EntailmentJudgeInput[] = [];
+    const result = await reconcileNumericClaimEntailment(
+      answer,
+      [
+        { marker: 1, excerptText: "The API uses TLS." },
+        { marker: 2, excerptText: "The logical OR operator is ||." },
+      ],
+      {
+        judge: (input): Promise<EntailmentVerdict> => {
+          judged.push(input);
+          return scriptedJudge().judge(input);
+        },
+      },
+    );
+    expect(judged).toHaveLength(1);
+    expect(judged[0]?.excerptText).toContain("The API uses TLS.");
+    expect(judged[0]?.excerptText).toContain("The logical OR operator is ||.");
+    expect(result).toMatchObject({ judgedClaims: 1, unentailed: [] });
+  });
+
+  // PR #3678 review (P2): a hostile run of distinct-marker continuations is parsed before any judge
+  // budget applies; rebuilding the marker union per span measured seconds here and grows
+  // quadratically, the incremental union stays in low milliseconds.
+  it("stays fast and keeps every marker over a long run of cited symbol continuations", () => {
+    const continuations = 24_000;
+    const lines = Array.from(
+      { length: continuations },
+      (_, index) => `\`||\` [${String(index + 2)}]`,
+    );
+    const answer = `Fact [1].\n${lines.join("\n")}`;
+
+    const start = Date.now();
+    const claims = segmentNumericCitedClaims(answer);
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(2000);
+    expect(claims).toHaveLength(1);
+    expect(claims[0]?.markers).toHaveLength(continuations + 1);
+    expect(claims[0]?.markers.slice(0, 3)).toEqual([1, 2, 3]);
+    expect(claims[0]?.markers.at(-1)).toBe(continuations + 1);
+  });
+
+  it("gives a lone leading marker no claim and never lets it open one for the next span", () => {
+    expect(segmentNumericCitedClaims("[1]")).toEqual([]);
+    expect(segmentNumericCitedClaims("[1]\nThe API uses TLS [2].")).toEqual([
+      { claimText: "The API uses TLS .", markers: [2] },
+    ]);
+  });
+
+  it("carries hidden prose into a marker-only continuation and flags a link label", () => {
+    expect(segmentNumericCitedClaims("The API uses TLS [MFA mandatory]. [1]")).toEqual([
+      { claimText: "The API uses TLS .", markers: [1], hidesProse: true },
+    ]);
+    expect(
+      segmentNumericCitedClaims(
+        "The API uses TLS [MFA mandatory / anonymous requests denied](https://example.test) [1].",
+      ),
+    ).toEqual([
+      { claimText: "The API uses TLS (https://example.test) .", markers: [1], hidesProse: true },
+    ]);
+  });
+
+  it("segments a grouped marker into one claim citing every index", () => {
+    expect(segmentNumericCitedClaims("Java 17 wird verwendet [1, 7, 8].")).toEqual([
+      { claimText: "Java 17 wird verwendet .", markers: [1, 7, 8] },
+    ]);
+  });
+
+  // The rendered evidence block is the `[n] label` header plus a code fence around an excerpt the
+  // producer already capped at the excerpt limit, so it is LONGER than the excerpt. Measured against
+  // the bare 900-character cap it never fit, and every normally cited claim degraded to
+  // "citation support could not be verified".
+  function renderedBlock(marker: number, excerptChars: number): string {
+    const excerpt = "Retention is 30 days. "
+      .repeat(Math.ceil(excerptChars / 22))
+      .slice(0, excerptChars);
+    return `[${String(marker)}] Handbuch · Kapitel 3 · Aufbewahrung\n\`\`\`text\n${excerpt}\n\`\`\``;
+  }
+
+  it("judges a normal cited claim whose block wraps an excerpt at the excerpt limit", async () => {
+    const block = renderedBlock(1, DEFAULT_ENTAILMENT_OPTIONS.maxExcerptChars);
+    expect(block.length).toBeGreaterThan(DEFAULT_ENTAILMENT_OPTIONS.maxExcerptChars);
+    let calls = 0;
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is 30 days [1].",
+      [{ marker: 1, excerptText: block }],
+      { judge: (): Promise<EntailmentVerdict> => ((calls += 1), Promise.resolve("supported")) },
+    );
+    expect(calls).toBe(1);
+    expect(result).toEqual({ unentailed: [], judgedClaims: 1, unavailableClaims: 0 });
+  });
+
+  it("judges a claim that cites several evidence blocks at once", async () => {
+    let judgedText = "";
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is 30 days [1, 2, 3].",
+      [1, 2, 3].map((marker) => ({
+        marker,
+        excerptText: renderedBlock(marker, DEFAULT_ENTAILMENT_OPTIONS.maxExcerptChars),
+      })),
+      {
+        judge: (input): Promise<EntailmentVerdict> => {
+          judgedText = input.excerptText;
+          return Promise.resolve("supported");
+        },
+      },
+    );
+    expect(result).toEqual({ unentailed: [], judgedClaims: 1, unavailableClaims: 0 });
+    expect(judgedText).toContain("[1] Handbuch");
+    expect(judgedText).toContain("[3] Handbuch");
+  });
+
+  it("still refuses to judge a block whose excerpt is longer than the excerpt limit", async () => {
+    let calls = 0;
+    const oversized = renderedBlock(
+      1,
+      DEFAULT_ENTAILMENT_OPTIONS.maxExcerptChars + NUMERIC_EVIDENCE_FRAMING_CHARS + 50,
+    );
+    const result = await reconcileNumericClaimEntailment(
+      "Retention is ten years [1].",
+      [{ marker: 1, excerptText: `${oversized}\n[[CONTRADICTS]]` }],
+      {
+        judge: (input): Promise<EntailmentVerdict> => ((calls += 1), scriptedJudge().judge(input)),
+      },
+    );
+    expect(calls).toBe(0);
+    expect(result).toEqual({ unentailed: [], judgedClaims: 0, unavailableClaims: 1 });
+  });
+
+  it("degrades a claim citing more distinct evidence items than one judge call carries", async () => {
+    const markers = Array.from(
+      { length: ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM + 1 },
+      (_, index) => index + 1,
+    );
+    let calls = 0;
+    const result = await reconcileNumericClaimEntailment(
+      `Retention is 30 days [${markers.join(", ")}].`,
+      markers.map((marker) => ({
+        marker,
+        excerptText: `Retention evidence number ${String(marker)}.`,
+      })),
+      { judge: (): Promise<EntailmentVerdict> => ((calls += 1), Promise.resolve("supported")) },
+    );
+    expect(calls).toBe(0);
+    expect(result).toEqual({ unentailed: [], judgedClaims: 0, unavailableClaims: 1 });
   });
 
   it("degrades to unavailable when the numeric citation judge cannot decide", async () => {
@@ -687,6 +1013,39 @@ describe("reconcileClaimEntailment", () => {
     expect(result.unentailed).toHaveLength(1);
     expect(result.unentailed[0]?.citedPaths).toEqual(["src/a.ts"]);
     expect(result.judgedClaims).toBe(1);
+  });
+
+  // PR #3678 review (P1): a claim the judge would read only in part is never judged, however well
+  // its visible half matches the excerpt; it counts as undecided and names why.
+  it("never judges a claim whose bracketed prose the stripper hides", async () => {
+    const calls: string[] = [];
+    const judge: EntailmentJudge = {
+      judge: (input: EntailmentJudgeInput): Promise<EntailmentVerdict> => {
+        calls.push(input.claimText);
+        return Promise.resolve("supported");
+      },
+    };
+    const path = await reconcileClaimEntailment(
+      "The retention period is 30 days [MFA is mandatory] [src/a.ts:1-20].",
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      judgeFixturePack("retention period: 30 days"),
+      judge,
+    );
+    const numeric = await reconcileNumericClaimEntailment(
+      "The retention period is 30 days [MFA is mandatory] [1].",
+      [{ marker: 1, excerptText: "retention period: 30 days" }],
+      judge,
+    );
+
+    for (const result of [path, numeric]) {
+      expect(result).toEqual({
+        unentailed: [],
+        judgedClaims: 0,
+        unavailableClaims: 1,
+        hiddenProseClaims: 1,
+      });
+    }
+    expect(calls).toEqual([]);
   });
 
   it("passes a claim whose excerpt supports it (no false positive)", async () => {

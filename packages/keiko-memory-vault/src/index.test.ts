@@ -5,10 +5,7 @@ import { describe, expect, it } from "vitest";
 import * as memoryVault from "./index.js";
 
 describe("public surface (Finding: Thread 6 — no write-capable vault entry points)", () => {
-  it("re-exports the read-only diagnostic seam used by keiko-server's fingerprint collector", () => {
-    expect(typeof memoryVault.resolveVaultKeyReadOnly).toBe("function");
-    expect(typeof memoryVault.openMemoryDatabaseReadOnly).toBe("function");
-    expect(typeof memoryVault.computeStoreFingerprint).toBe("function");
+  it("exposes createMemoryVault as the vault entry point", () => {
     expect(typeof memoryVault.createMemoryVault).toBe("function");
   });
 

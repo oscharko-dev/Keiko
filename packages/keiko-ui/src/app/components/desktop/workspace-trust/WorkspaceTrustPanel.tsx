@@ -114,7 +114,6 @@ function TrustRootCard({ project }: { readonly project: ProjectWithAvailability 
       {decision === undefined ? null : (
         <WorkspaceTrustDecisionDialog
           action={decision}
-          initialPrompt={false}
           mutating={trust.mutating}
           onCancel={() => setDecision(undefined)}
           onConfirm={confirm}

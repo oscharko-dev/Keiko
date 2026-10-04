@@ -31,8 +31,9 @@ mechanisms, not one shared engine — this shapes where the entailment stage lan
   verified entailment gap.
 - **System B — the connector path** (`grounded-qa` dispatches a lone connector to
   `local-knowledge-grounded-qa.ts` → `runGroundedAnswer`, `[n]` citations). Its
-  `citation-attacher.ts` already ships a deterministic **token-overlap** citation-support check
-  (`citationPassesFaithfulness`).
+  `citation-attacher.ts` ships a deterministic **token-overlap** citation-support signal: a weak
+  overlap flags the attached citation (`lexicalSupport: "weak"`) and never drops it (see the
+  2026-09 amendment below).
 
 The original issue text assumed `runGroundedAnswer` served all four topologies and named its
 `citationFaithfulness` seam as the wiring point; the code shows `runGroundedAnswer` is the
@@ -51,7 +52,7 @@ keeping the leaf dependency-light (contract types only):
   inside a `[routes.ts:5]` citation, pairing each claim span with its inline citations.
 - `reconcileClaimEntailment` — runs **strictly after** membership reconciliation and **only** over
   citations that passed membership (a fabricated citation is never double-reported), bounded by a
-  per-answer claim budget and a per-claim excerpt cap.
+  per-answer claim budget and a per-item excerpt cap.
 - `buildPackExcerptTextResolver` — resolves the bounded, already-redacted excerpt text for a cited
   `[path:line]` from the in-pack `ContextExcerpt.content` (no second excerpt reader).
 - `unsupportedClaimMarker` / `entailmentUnavailableMarker` — new `UncertaintyMarker` kinds
@@ -72,9 +73,9 @@ with the same shared claim/citation contract and resolved only against the exact
 candidate rendering that reached the answer model. The single-connector path contributes its
 prompt-capped `[n] label + excerpt` rendering; the hybrid path contributes only its post-rerank,
 prompt-selected connector candidates. Neither path performs a second search, consults a broader
-corpus, or promotes a malformed, missing, or unselected marker into semantic evidence. The former
-token-overlap check remains a conservative citation-attachment filter, not the semantic success
-criterion. The shared NLI stage supplies the existing bounded, unavailable-to-WARN behavior and
+corpus, or promotes a malformed, missing, or unselected marker into semantic evidence. The
+token-overlap check is a soft signal on an attached citation, never a filter and never the semantic
+success criterion. The shared NLI stage supplies the existing bounded, unavailable-to-WARN behavior and
 body-free diagnostics for System B and hybrid connector citations as well as path-and-line citations.
 
 ### D2 — The production judge is a Model-Gateway NLI pass over the same configured model
@@ -91,7 +92,7 @@ enforce the verdict JSON schema makes the stage inert.
 Token overlap was deliberately **not** chosen for the production judge: the motivating failure
 ("10 years" cited to a "30 days" excerpt) has high lexical overlap and opposite meaning, so only a
 semantic (NLI) judge catches it. Token overlap remains adequate for the deterministic gate (below)
-and for System B's existing check.
+and as System B's soft weak-support signal.
 
 ### D3 — Policy gating on the resolved `answerSynthesis` decision (no new contract operation)
 
@@ -142,8 +143,130 @@ unchanged at 1.0.
   is a separate downstream membership stage and is not itself the verification layer.
 - A richer `keiko-evidence` verdict-tally manifest (beyond the operator diagnostic and the persisted
   uncertainty markers) remains an explicit K M2 follow-up.
-- New contract surface is limited to two additive `UncertaintyMarkerKind` values; no capsule-store
-  schema, embedding identity, RRF fusion (ADR-0036), or connector change.
+- New contract surface is limited to two additive `UncertaintyMarkerKind` values (a third,
+  `uncited-answer`, followed later — see the amendment below); no capsule-store schema, embedding
+  identity, RRF fusion (ADR-0036), or connector change.
+
+## Amendment (2026-09-30) — one marker grammar, refusals, uncited answers and judge sizing
+
+A Knowledge Pod chat (German UI) exposed four defects in how this stage's inputs and outputs were
+shaped, all on the numeric `[n]` connector path. The recorded behaviour is corrected as follows.
+
+- **One marker grammar.** Numeric markers are parsed only by `findCitationMarkerGroups`
+  (`keiko-contracts` `runtime/citation-markers`): `[1]`, the grouped `[1, 7, 8]` / `[1,7]` / `[1; 2]`,
+  and the CJK/fullwidth bracket glyphs. The attacher, `reconcileNumericCitations`, the claim
+  segmentation, the answer renderer and the copy stripper all use it; the
+  private one-integer grammars that silently ignored every grouped marker are gone. Ranges (`[1-3]`) are deliberately not
+  markers (`[0-9]`, `[2020-2024]`). Markdown code (a fenced block or an inline code span) is never
+  scanned, so `const a = [1, 2, 3];` cites nothing. A fenced block is read where the renderer
+  shows one: its fences may be indented or quoted. An inline code span ends wherever the chat
+  renderer (`safe-markdown.ts`) ends an inline context: at every newline it does not join into one
+  paragraph (a blank line, a fence, a heading, a thematic break, a list item, a table row, a block
+  quote) and at every table cell pipe. Past the renderer's 16-level quote cap, which renders the
+  quoted body as one text node, the quoted lines read as one paragraph. A cross-check test holds
+  the grammar to the markers the renderer shows. Outside code, every index of every
+  group is reconciled: a fabricated
+  `[9, 10]` beside a real `[1]` dangles, because failing closed beats a quiet source attribution.
+  The copy stripper removes only a grounded answer's groups whose every index names one of its
+  references and leaves an ordinary answer's brackets untouched. Read-aloud text is the answer with
+  its markers stripped by the same rule in the UI before synthesis (`speakableAnswerText`); the
+  copy's repository-evidence tidy-up is not applied, so a bracketed path is spoken as written.
+  `client.answer.speech-prepared` records the removed and kept groups under the synthesis request's
+  correlation. The synthesis route sees only text, so it keeps grouped brackets as content.
+- **Token overlap is a soft signal, never a filter — and never a confirmation.**
+  `attachCitationsToAnswer` keeps every in-range marker attached so the reader can open its source.
+  A weak claim/excerpt overlap flags the entry (`lexicalSupport: "weak"`) and is counted on the
+  `search.citations.reconciled` activity line. When the numeric judge reads a weak citation's
+  claim, its verdict (`unsupported-claim`, or its own `entailment-unavailable` on failure) decides.
+  When no judge is available, or the judge read fewer claims for that marker than the answer uses
+  it (a bracketed claim leaves no text after the claim stripper, so a reused marker is no verdict
+  on it), or a claim citing it carried bracketed prose the stripper removed (the judge never read
+  that prose, `NumericCitedClaim.hidesProse`), the Knowledge Pod answer carries the fail-closed
+  `entailment-unavailable` caveat and the citation chip reads "unverified". A weakly supported
+  citation is never presented as confirmed support (`withWeakCitationCaveat`).
+- **A claim the judge would read only in part is undecidable.** The claim stripper removes every
+  bracket, so `The API uses TLS [MFA is mandatory] [1]` reaches the judge as its TLS half. Whatever
+  its lexical overlap, such a claim (path or numeric) is never judged: it counts as unavailable and
+  the answer carries `entailment-unavailable`. The same holds when no judge is available at all. A
+  marker-only span such as `[1]` in `The API uses TLS [MFA mandatory]. [1]` carries the hidden
+  prose of the claim before it. Any span without a letter or digit (punctuation, Markdown syntax, a
+  bare symbol such as `` `||` ``) continues the claim before it with its visible residue; a claim
+  already cited keeps its markers, so `The API uses TLS [1].` followed by `` `||` [2]`` is judged
+  against [1] and [2] together, never the TLS sentence against [2] alone. A Markdown link label is visible prose, however path-like it reads. `search.entailment.judged` records the count as
+  `hiddenProseClaimCount`, and `search.citations.support-settled` records why a Knowledge Pod
+  answer did or did not end with the caveat (`none`, `judge-undecided`, `no-judge`,
+  `unjudged-citation`), once that decision is made.
+- **Markers resolve only against the evidence the model was shown.** A window-fitted prompt keeps the
+  highest-ranked references under their original numbers. The generator reports the references it
+  sent (`AnswerGenerator.promptReferences`), and a marker beyond them is out of range, never attached.
+- **`uncited-answer` is a third additive kind.** An answer with source-backed claims and no supported
+  marker used to reuse `unsupported-citation`, which the UI reads as "references sources that were not
+  in the retrieved evidence" — false for a merely uncited answer. A refusal (one shared detector,
+  `runtime/no-evidence-answer`) makes no claim and carries neither kind. Only explicit "not enough
+  evidence/information" statements are refusals unconditionally. A negated verb ("does not contain",
+  "nicht erwähnt", "geht nicht hervor", "cannot answer") counts as a refusal only when its own
+  sentence names the evidence it searched (documents, sources, context, repository); an
+  attribution such as "according to the documentation", plain or as inline Markdown, with a
+  possessive, version or compound source word ("the project's documentation"), names a source, not
+  the place that lacks it. The attributed source is the noun phrase after the trigger, however long
+  ("the README of the repository"). It ends at a clause mark, at a word that opens the main clause,
+  or at a second article that does not follow a preposition, so "According to the search results
+  the retrieved documents do not mention X" is still a refusal. An
+  absent-information noun ("keine Angaben", "no details") also counts with a search outcome
+  ("gefunden", "available", "liegen … vor") in that sentence. Otherwise "The API does not provide
+  authentication." or "The API returns no details on errors." is a negative fact, not a refusal.
+- **The judge is sized per evidence item.** `maxExcerptChars` bounds each cited item, a numeric
+  evidence block gets a framing allowance for its `[n] label` header and code fence, and one claim may
+  cite up to `ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM` distinct items. Before this, the rendered block
+  of a single full-length excerpt already exceeded the 900-character cap, so almost every cited claim
+  degraded to `entailment-unavailable`. A single item longer than its cap still degrades (never judged
+  against a partial excerpt). The stage's default cap follows the operator's grounding excerpt limit.
+
+## Amendment (2026-09-30) — Keiko's own, labelled assessment
+
+A sources-only answer could not answer a question about Keiko's own view. For "Which Java version
+do you suggest?" after the documents set none, it could only repeat that the documents say nothing.
+A chat with Knowledge Pods attached must still be a conversation partner.
+
+- **Two parts, one boundary.** When the operator allows it, the Knowledge Pod prompt adds one short
+  rule (`OWN_ASSESSMENT_PROMPT_RULE`, keiko-contracts `runtime/grounded-assessment`). Whatever the
+  excerpts do not back (a recommendation, an opinion, general knowledge, small talk) goes after the
+  source-backed part inside one `<assessment>` block. The block opens by saying it is Keiko's own
+  assessment and carries no `[n]` markers. A plain text tag works with every model family,
+  open-weight models included, and needs no structured-output support.
+- **Only the source-backed part is checked.** The runner splits the block off right after
+  generation (`splitOwnAssessment`), so the following steps see only the text outside it:
+  - citation attachment and citation repair (an answer that is only the assessment is not
+    repaired);
+  - refusal detection and the entailment judge.
+
+  The assessment is never cited, judged or reported as evidence.
+- **The answer keeps the model's words.** The stored answer is the source-backed part followed by
+  the canonical block (`composeOwnAssessment`). With an assessment, Keiko does not replace the
+  model's own "the documents do not say" sentence with the generic no-evidence notice; the answer
+  still carries `noEvidence`. When retrieval finds nothing, the model is still asked, and the
+  assessment stands alone.
+- **The UI labels it.** The chat shows the block apart from the cited text as a note labelled
+  "Keiko's own assessment · not from the sources" / "Eigene Einschätzung von Keiko · nicht aus den
+  Quellen". Copying and reading aloud keep its words and drop the tags. Only grounded answers are
+  parsed, so an ordinary answer that mentions the tag is shown as written.
+- **The operator decides.** `groundedAnswers.ownAssessment` in `keiko.config.json` is `allowed` by
+  default and may be `disabled` to keep answers to the sources only.
+  - A value outside `allowed` / `disabled` fails the configuration load; it is never read as the
+    permissive default. The block survives setup saves.
+  - When the policy is disabled, the prompt carries no rule. A block the model writes anyway is
+    dropped (`neutralized`), never promoted to source-backed text that its citations and the judge
+    would not cover.
+- **Every block counts.** A second or a nested block is assessment too, by nesting depth; none of
+  its words reaches the source-backed part.
+- **Code stays literal.** Tags inside inline code or a fenced block, such as an XML example, are
+  content and never delimit. The tag grammar reads code through the same `markdownCodeRanges` as
+  the citation markers.
+- **Evidence.** `search.answer.assessed` records the policy, the outcome (`none`, `assessment`,
+  `assessment-only`, `neutralized`) and the character sizes of both parts per Knowledge Pod answer,
+  never the text. The note's own layout evidence posts under the message's correlation.
+- **Scope.** The rule applies to the single-scope Knowledge Pod path. The folder, multi-source and
+  hybrid prompts keep their own evidence rules.
 
 ## Related
 

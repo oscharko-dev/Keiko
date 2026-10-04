@@ -134,6 +134,14 @@ system chords, non-rebindable commands, and active collisions. M7 implementation
 registry to ADR-0028 `WorkspaceKeyboardShortcutBinding` and the existing command-palette/editor
 action surfaces rather than creating a parallel global bus.
 
+**Amendment (2026-09-29, owner decision):** header Quick Access and its file picker are retired
+(ADR-0028). The closed registry removes `quick-access.files` and renames the retained command
+palette command to `workspace.commands`. Parsing saved override arrays drops well-formed version-1
+file-picker records and maps `quick-access.commands` records to `workspace.commands` before applying
+the same chord, size, version, collision, and duplicate validation as current commands. Other
+records remain subject to the existing fail-closed validation. Fresh overrides cannot name either
+retired identifier. Serializing the parsed settings emits only current command identifiers.
+
 ### D6 — Snippets use a safe bounded TextMate subset
 
 Workspace snippets are versioned, bounded records. The permitted subset supports literal text,

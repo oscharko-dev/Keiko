@@ -48,6 +48,8 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 
 import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
+import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import { ClarificationNeededError } from "./grounded-orchestrator.js";
 import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
@@ -74,9 +76,14 @@ import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, RetrievalOnlyOutput } from "./grounded-orchestrator.js";
 import { mockRequest, mockResponse } from "./_support.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -179,6 +186,33 @@ function routeCtx(body: string, res: RouteContext["res"] = fakeRes()): RouteCont
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
   };
+}
+
+function seedGermanContinuity(chatId: string): string {
+  let correctionId = "";
+  for (let index = 0; index < 120; index += 1) {
+    const content =
+      index === 100
+        ? "Verbindliche Korrektur: Das Budget beträgt jetzt 60000 EUR."
+        : index === 118
+          ? "Welche Quellen erklären den Qwen-Ablauf zur Rechnungsextraktion?"
+          : "Wir prüfen die Dokumentation zur Rechnungsextraktion ohne neue Entscheidung. ".repeat(
+              20,
+            );
+    const message = store.createMessage({
+      chatId,
+      role: index % 2 === 0 ? "user" : "assistant",
+      content,
+      timestamp: NOW + index * 10,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    if (index === 100) correctionId = message.id;
+  }
+  return correctionId;
 }
 
 // ─── Deps builder ─────────────────────────────────────────────────────────────
@@ -615,6 +649,73 @@ function asLocalKnowledge(answer: GroundedAnswer): LocalKnowledgeGroundedAnswer 
   return answer as LocalKnowledgeGroundedAnswer;
 }
 
+// ─── Window fit: a folder path the prompt left out supports nothing ───────────
+
+describe("hybrid grounded ask — folder evidence the window fit left out", () => {
+  // PR #3678 review: path citations and their judgment used every retrieved folder excerpt, so a
+  // `[path:line]` could cite an excerpt the fitted prompt never carried and raise no warning.
+  it("reports a path citation to a folder excerpt the fitted prompt did not carry", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Window Folder Docs");
+    // A fresh chat per ask, so the second prompt carries no history of the first.
+    const newChat = (): string =>
+      makeHybridChat(
+        ["alpha", "beta"].map((name) => ({
+          kind: "directory" as const,
+          relativePaths: [`src/${name}.ts`],
+          connectedAtMs: NOW,
+          root: tempRoot(`${name}-window-repo`),
+        })),
+        [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }],
+      );
+    const packMap = new Map([
+      ["src/alpha.ts", folderPack("src/alpha.ts", 0.9, "alpha-window")],
+      ["src/beta.ts", folderPack("src/beta.ts", 0.8, "beta-window")],
+    ]);
+    const ask = (
+      deps: UiHandlerDeps,
+      answer: (user: string) => string,
+    ): ReturnType<typeof handleGroundedAsk> =>
+      handleGroundedAsk(
+        routeCtx(JSON.stringify({ chatId: newChat(), content: "What do alpha and beta do?" })),
+        deps,
+        undefined,
+        undefined,
+        {
+          folderRetriever: folderRetrieverFor(packMap),
+          connectorRetrieve: singleConnectorRetrieve(capId),
+          answer: (system: string, user: string): Promise<string> =>
+            Promise.resolve(answer(`${system}\u0000${user}`)),
+        },
+      );
+    let fullTokens = 0;
+    await ask(hybridDeps(), (prompt) => {
+      const [system = "", user = ""] = prompt.split("\u0000");
+      fullTokens = countGatewayPromptTokens({
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      });
+      return "Nothing.";
+    });
+    const window = deriveContextProfile({
+      maxInputTokens: fullTokens - 1 + 512 + 64,
+      reservedOutputTokens: 512,
+      safetyMarginTokens: 64,
+    });
+
+    const result = await ask(hybridDeps({ contextProfileForModel: () => window }), (prompt) => {
+      const omitted = ["src/alpha.ts", "src/beta.ts"].find((path) => !prompt.includes(path));
+      return `The service does this [${omitted ?? "src/none.ts"}:1-5].`;
+    });
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.content).not.toContain("src/none.ts");
+    expect(answer.uncertainty.map((marker) => marker.kind)).toContain("unsupported-citation");
+  });
+});
+
 // ─── Case 1: Mixed — 1 folder + 1 connector ──────────────────────────────────
 
 describe("hybrid grounded ask — 1 folder + 1 connector", () => {
@@ -706,6 +807,12 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(answer.contextPack.kind).toBe("hybrid");
     expect(answer.contextPack.folderSourceCount).toBe(1);
     expect(answer.contextPack.connectorSourceCount).toBe(1);
+    // PR #3678 review: the hybrid prompt's candidate share reaches the meter.
+    const { promptContext } = result.body as GroundedAnswer;
+    expect(promptContext?.sourceTokens).toBeGreaterThan(0);
+    expect(promptContext?.sentReferenceCount).toBe(
+      answer.citations.length + answer.knowledgeCitations.length,
+    );
     expect(answer.evidenceRunId).toBe(evidenceRunIds[0]);
     expect(answer.evidenceRunIds).toEqual(evidenceRunIds);
 
@@ -799,7 +906,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(answer.uncertainty).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          kind: "unsupported-citation",
+          kind: "uncited-answer",
           claim: expect.stringContaining("without a supported inline citation") as unknown,
         }),
       ]),
@@ -1228,6 +1335,72 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     expect(uniqueLabels.size).toBe(2);
   });
 
+  // PR #3678 review: the hybrid prompt was sent without fitting it to the model's window. The
+  // highest-ranked candidates that fit are kept, and the prompt share reports the trim.
+  it("keeps the highest-ranked candidates that fit the model's input budget", async () => {
+    const { capsuleId: capA } = await seedReadyCapsule("Window Beta Docs");
+    const { capsuleId: capB } = await seedReadyCapsule("Window Gamma Docs");
+    // A fresh chat per ask, so the second prompt carries no history of the first.
+    const newChat = (): string =>
+      makeHybridChat(
+        [],
+        [
+          { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+          { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+        ],
+      );
+    const manyReferences: ConnectorRetrieve = (_store, scope): Promise<RetrievalResult> => {
+      const cid = scope.kind === "capsule" ? scope.capsuleId : capA;
+      const base = cid === capA ? 10 : 20;
+      return Promise.resolve({
+        references: Array.from({ length: 4 }, (_, i) =>
+          connectorReference(cid, base + i, `doc-${String(base + i)}-${"x".repeat(200)}`),
+        ),
+        noEvidence: false,
+      });
+    };
+    const prompts: string[] = [];
+    const ask = (deps: UiHandlerDeps): ReturnType<typeof handleGroundedAsk> =>
+      handleGroundedAsk(
+        routeCtx(JSON.stringify({ chatId: newChat(), content: "What is beta and gamma?" })),
+        deps,
+        undefined,
+        undefined,
+        {
+          connectorRetrieve: manyReferences,
+          answer: (system: string, user: string): Promise<string> => {
+            prompts.push(user);
+            return Promise.resolve(
+              countGatewayPromptTokens({
+                messages: [
+                  { role: "system", content: system },
+                  { role: "user", content: user },
+                ],
+              }).toString(),
+            );
+          },
+        },
+      );
+    const full = await ask(hybridDeps());
+    const fullTokens = Number((full.body as GroundedAnswer).content);
+    const window = deriveContextProfile({
+      maxInputTokens: fullTokens - 1 + 512 + 64,
+      reservedOutputTokens: 512,
+      safetyMarginTokens: 64,
+    });
+
+    const trimmed = await ask(hybridDeps({ contextProfileForModel: () => window }));
+
+    expect(trimmed.status, JSON.stringify(trimmed.body)).toBe(200);
+    const answer = trimmed.body as GroundedAnswer;
+    expect(Number(answer.content)).toBeLessThanOrEqual(window.effectiveInputBudget);
+    expect(prompts[1]?.length).toBeLessThan(prompts[0]?.length ?? 0);
+    const sent = answer.promptContext?.sentReferenceCount ?? 0;
+    expect(sent).toBeGreaterThan(0);
+    expect(sent).toBeLessThan(answer.promptContext?.availableReferenceCount ?? 0);
+    expect(asHybrid(answer).knowledgeCitations.length).toBeLessThanOrEqual(sent);
+  });
+
   it("redacts an unsafe connector display name from the hybrid knowledge scope label", async () => {
     // The joined multi-connector scopeLabel previously had NO redaction or safe-text gate at
     // all — worse than the single-connector local-knowledge path, which at least ran the
@@ -1337,6 +1510,8 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
     // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
     expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
+    // A deterministic abstention sent no prompt, so it reports no prompt context.
+    expect((result.body as GroundedAnswer).promptContext).toBeUndefined();
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -1356,6 +1531,53 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     }
     expect(auditKindsFor(capA)).toEqual(["retrieval-performed"]);
     expect(auditKindsFor(capB)).toEqual(["retrieval-performed"]);
+  });
+
+  // PR #3678 review: the entailment verdict line minted its own correlation, so the displayed
+  // unsupported-claim total could not be joined to the grounded request it describes.
+  it("records the entailment verdict on the grounded request's correlation", async () => {
+    const { capsuleId: capA } = await seedReadyCapsule("Verdict A Docs");
+    const { capsuleId: capB } = await seedReadyCapsule("Verdict B Docs");
+    const chatId = makeHybridChat(
+      [],
+      [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+      ],
+    );
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new Error("expected hybrid chat");
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const result = await runHybridGroundedAsk({
+        chat,
+        content: "What package manager do I prefer?",
+        answerContent:
+          "User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm.",
+        answerOnlyContextAvailable: true,
+        modelId: ENTAILMENT_MODEL,
+        contextProfile: undefined,
+        correlationId: "corr-hybrid-verdict",
+        deps: hybridDeps({
+          config: entailmentGatewayConfig(),
+          configPresent: true,
+          modelPortFactory: (): ModelPort => ({
+            call: () => Promise.reject(new Error("judge unavailable")),
+          }),
+        }),
+        signal: new AbortController().signal,
+        connectorRetrieve: () =>
+          Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" }),
+        answer: () => Promise.resolve("You prefer pnpm [1]."),
+      });
+
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      const verdict = sink.events.find((event) => event.op === "search.entailment.judged");
+      expect(verdict?.correlationId).toBe("corr-hybrid-verdict");
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("answers from explicit personal context without projecting empty hybrid sources", async () => {
@@ -1407,6 +1629,11 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     expect(answer.evidenceRunId).toBeUndefined();
     expect(answer.evidenceRunIds).toEqual([]);
     expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(true);
+    // PR #3678 review: the answer-only request reached the model, so the context meter must see
+    // the prompt it sent, like the Knowledge Pod and folder paths report theirs.
+    const { promptContext } = result.body as GroundedAnswer;
+    expect(promptContext?.estimatedPromptTokens).toBeGreaterThan(0);
+    expect(promptContext?.sentReferenceCount).toBe(0);
   });
 });
 
@@ -2107,9 +2334,12 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
     // We provide a full config with the chat model + embedding model so capability resolution passes.
     const embeddingModelId = "text-embedding-3-small"; // matches seedCapsuleWithVectors default
     const adapter = scriptedAdapter();
+    const embeddingInputs: string[] = [];
+    const modelPrompts: string[] = [];
     const fakeModelPort: ModelPort = {
-      call: () =>
-        Promise.resolve({
+      call: (request) => {
+        modelPrompts.push(request.messages.map((message) => message.content).join("\n"));
+        return Promise.resolve({
           modelId: CHAT_MODEL,
           content: "Local knowledge answer [1].",
           finishReason: "stop" as const,
@@ -2122,10 +2352,17 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
             latencyMs: 5,
             costClass: "medium" as const,
           },
-        }),
+        });
+      },
     };
     const configuredDeps: UiHandlerDeps = {
-      ...hybridDeps({ localKnowledgeEmbeddingRequest: adapter.request }),
+      ...hybridDeps({
+        evidenceStore: createInMemoryEvidenceStore(),
+        localKnowledgeEmbeddingRequest: (request) => {
+          embeddingInputs.push(request.input);
+          return adapter.request(request);
+        },
+      }),
       config: {
         providers: [
           {
@@ -2170,9 +2407,11 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
       modelPortFactory: () => fakeModelPort,
     };
 
-    // Act
+    const correctionId = seedGermanContinuity(chatId);
+    const originalMessages = store.listMessages(chatId, 500);
+    const followUp = "Erkläre das.";
     const result = await handleGroundedAsk(
-      routeCtx(JSON.stringify({ chatId, content: "Solo question", modelId: CHAT_MODEL })),
+      routeCtx(JSON.stringify({ chatId, content: followUp, modelId: CHAT_MODEL })),
       configuredDeps,
       undefined,
       undefined,
@@ -2190,6 +2429,65 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
     // Type narrowing confirms we got the right answer shape (throws if wrong groundingKind)
     const lkAnswer = asLocalKnowledge(answer);
     expect(lkAnswer.contextPack.kind).toBe("local-knowledge");
+    expect(embeddingInputs).toContain(
+      `${followUp}\nWelche Quellen erklären den Qwen-Ablauf zur Rechnungsextraktion?`,
+    );
+    expect(modelPrompts.some((prompt) => prompt.includes("60000 EUR"))).toBe(true);
+    expect(store.listMessages(chatId, 500).slice(0, 120)).toEqual(originalMessages);
+    const firstCheckpoint = loadChatContinuityCheckpoint(
+      configuredDeps.evidenceStore,
+      chatId,
+      store.chatHistoryRevision(chatId),
+    );
+    expect(firstCheckpoint?.conversationCoverage?.contextWindowTokens).toBe(8000);
+    expect(firstCheckpoint?.itemsBefore).toBeGreaterThan(0);
+    const repeated = await handleGroundedAsk(
+      routeCtx(
+        JSON.stringify({ chatId, content: "Bitte erkläre das nochmal.", modelId: CHAT_MODEL }),
+      ),
+      configuredDeps,
+      undefined,
+      undefined,
+      hybrid,
+    );
+    expect(repeated.status, JSON.stringify(repeated.body)).toBe(200);
+    expect(store.findMessageById(correctionId)?.content).toContain("60000 EUR");
+    const previousRevision = store.chatHistoryRevision(chatId);
+    store.createMessage({
+      chatId,
+      role: "user",
+      content: "Verbindliche Korrektur: Das Budget beträgt jetzt 55000 EUR.",
+      timestamp: NOW + 1005,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(store.chatHistoryRevision(chatId)).toBeGreaterThan(previousRevision);
+    modelPrompts.length = 0;
+    const revised = await handleGroundedAsk(
+      routeCtx(
+        JSON.stringify({ chatId, content: "Welches Budget ist gültig?", modelId: CHAT_MODEL }),
+      ),
+      configuredDeps,
+      undefined,
+      undefined,
+      hybrid,
+    );
+    expect(revised.status, JSON.stringify(revised.body)).toBe(200);
+    expect(modelPrompts.some((prompt) => prompt.includes("55000 EUR"))).toBe(true);
+    const revisedPrompt = modelPrompts.find((prompt) => prompt.includes("55000 EUR")) ?? "";
+    expect(revisedPrompt.lastIndexOf("55000 EUR")).toBeGreaterThan(
+      revisedPrompt.lastIndexOf("60000 EUR"),
+    );
+    expect(
+      loadChatContinuityCheckpoint(
+        configuredDeps.evidenceStore,
+        chatId,
+        store.chatHistoryRevision(chatId),
+      )?.conversationCoverage?.historyRevision,
+    ).toBe(store.chatHistoryRevision(chatId));
   });
 
   // ADR-0173 D5: local-knowledge-grounded-qa.ts's StoreBackedAnswerGenerator.generate is the real
@@ -2290,6 +2588,56 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
 // ─── Case 4c: Configured model reranker over hybrid candidates ────────────────
 
 describe("hybrid model reranker", () => {
+  it("passes the resolved follow-up to real connector retrieval without answer-only memory", async () => {
+    const { capsuleId: first } = await seedReadyCapsule("Resolved Query A");
+    const { capsuleId: second } = await seedReadyCapsule("Resolved Query B");
+    const chatId = makeHybridChat(
+      [],
+      [first, second].map((capsuleId) => ({
+        kind: "capsule" as const,
+        capsuleId,
+        connectedAtMs: NOW,
+      })),
+    );
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new TypeError("Missing chat");
+    const embeddingInputs: string[] = [];
+    const adapter = scriptedAdapter();
+    const config = parseGatewayConfig({
+      providers: [
+        {
+          modelId: "text-embedding-3-small",
+          baseUrl: "https://provider.example/v1",
+          apiKey: "example-secret-token",
+        },
+      ],
+    });
+    const deps = hybridDeps({
+      config,
+      configPresent: true,
+      localKnowledgeEmbeddingRequest: (request) => {
+        embeddingInputs.push(request.input);
+        return adapter.request(request);
+      },
+    });
+    const retrievalContent = "Erkläre das.\nQwen invoice extraction";
+    const result = await runHybridGroundedAsk({
+      chat,
+      content: "Erkläre das.",
+      retrievalContent,
+      answerContent: "Erkläre das.\nANSWER_ONLY_PRIVATE_MEMORY",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps,
+      signal: new AbortController().signal,
+      answer: sentinelAnswerer(),
+    });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    // The shared embedding cache coalesces the identical query used by both real connectors.
+    expect(embeddingInputs.filter((input) => input === retrievalContent)).toHaveLength(1);
+    expect(embeddingInputs).not.toContain("Erkläre das.");
+    expect(embeddingInputs.join("\n")).not.toContain("ANSWER_ONLY_PRIVATE_MEMORY");
+  });
   it("keeps memory context out of retrieval and reranking while including it in generation", async () => {
     const { capsuleId } = await seedReadyCapsule("Memory Boundary Docs");
     const canonicalQuestion = "Where is the payment handler defined?";

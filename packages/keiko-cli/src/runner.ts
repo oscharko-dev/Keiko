@@ -59,7 +59,7 @@ Usage:
   keiko audit local-state [--state-dir PATH]
                            Audit a local .keiko tree against the at-rest contract (read-only).
   keiko support <export|analyze> [OPTIONS]
-                           Export a redacted support bundle, or analyze one by correlation id.
+                           Export a private support report, or validate and analyze one.
   keiko repair [OPTIONS]   Repair a broken local install (offline remediation pass).
   keiko uninstall [OPTIONS] Remove Keiko's runtime artifacts (state, shortcuts, scripts).
   keiko update <status|check|apply> Inspect or run governed updates (UI remains primary).

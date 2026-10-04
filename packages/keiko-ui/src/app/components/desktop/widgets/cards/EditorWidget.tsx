@@ -1,5 +1,30 @@
 "use client";
 
+import { discardEditorBufferSafetyFiles } from "./useEditorBufferSafety";
+import EditorSurfaceLoading from "./EditorSurfaceLoading";
+
+import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
+import { useTranslate } from "@/lib/i18n";
+import type {
+  EditorDirtyCloseIntent,
+  EditorLayoutNode,
+  EditorLayoutSplitNode,
+  EditorLayoutStateV2,
+  EditorPaneStateV2,
+  EditorSplitDirection,
+  EditorSplitDropZone,
+} from "@oscharko-dev/keiko-contracts";
+import type { ClientNavigationOutcome } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { createEditorDirtyCloseIntent } from "@oscharko-dev/keiko-contracts/runtime/editor-dirty-close";
+import {
+  activeEditorPane,
+  editorLayoutOpenFiles,
+  editorLayoutPaneIds,
+  editorLayoutReducer,
+  serializeEditorLayoutStateV2,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
+import { selectWorkspaceFileTarget } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
+import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 import dynamic from "next/dynamic";
 import {
   useCallback,
@@ -13,57 +38,13 @@ import {
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
-import type {
-  EditorDirtyCloseIntent,
-  EditorLayoutNode,
-  EditorLayoutSplitNode,
-  EditorLayoutStateV2,
-  EditorPaneStateV2,
-  EditorSplitDirection,
-  EditorSplitDropZone,
-  WorkspaceTrustStatus,
-} from "@oscharko-dev/keiko-contracts";
-import {
-  activeEditorPane,
-  editorLayoutOpenFiles,
-  editorLayoutPaneIds,
-  editorLayoutReducer,
-  serializeEditorLayoutStateV2,
-} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
-import { createEditorDirtyCloseIntent } from "@oscharko-dev/keiko-contracts/runtime/editor-dirty-close";
-import { selectWorkspaceFileTarget } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
-import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
-import { Icons } from "../../Icons";
-import { acquireGrabbingBodyStyle } from "../../interactionGuards";
-import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
-import { useModalInteractionLock } from "../../hooks/useModalInteractionLock";
-import {
-  dirtyFilesUnderPath,
-  reconcileEditorDirtyByPane,
-  type EditorDirtyByPane,
-} from "./editorDirtyState";
-import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
-import { editorPaneWindowId } from "./editorPaneWindowId";
-import editorWidgetStyles from "./EditorWidget.module.css";
-import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
-import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
-import { EditorOutlinePanel } from "./EditorOutlinePanel";
-import { EditorEmptyState } from "./EditorEmptyState";
 import { useRegisterEditorPaletteHost } from "../../EditorPaletteHostRegistryContext";
-import {
-  useEditorQuickAccessTrigger,
-  type EditorQuickAccessTrigger,
-} from "../../EditorQuickAccessTriggerContext";
-import {
-  sameEditorOutlineSnapshot,
-  type EditorOutlineRevealRequest,
-  type EditorOutlineSnapshot,
-} from "./editorOutlineModel";
-import { type EditorPaletteHost } from "./editorCommands";
+import { useEditorShellActions, type EditorShellActions } from "../../EditorShellActionsContext";
 import {
   EDITOR_SIDEBAR_MIN_WIDTH,
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
@@ -72,31 +53,36 @@ import {
   editorSidebarWidthFromPointer,
   editorWorkspaceLogicalWidth,
 } from "../../editorSidebarSizing";
-import {
-  useEditorVerificationRun,
-  type EditorVerificationRunControls,
-} from "./useEditorVerificationRun";
-import { useEditorSettings } from "./useEditorSettings";
-import {
-  WorkspaceTrustBanner,
-  WorkspaceTrustDecisionDialog,
-  type WorkspaceTrustDecision,
-} from "../../workspace-trust/WorkspaceTrustSurfaces";
-import trustStyles from "../../workspace-trust/WorkspaceTrust.module.css";
+import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
+import { useModalInteractionLock } from "../../hooks/useModalInteractionLock";
+import { Icons } from "../../Icons";
+import { acquireGrabbingBodyStyle } from "../../interactionGuards";
 import {
   bindingFromKeyboardEvent,
   dispatchableWorkspaceShortcutsForContext,
   resolveEffectiveKeyboardShortcuts,
   type EffectiveKeyboardShortcutRegistry,
 } from "../../keyboardShortcutsRegistry";
+import trustStyles from "../../workspace-trust/WorkspaceTrust.module.css";
 import {
-  completeEditorAgentReconciliation,
-  enqueueEditorAgentReconciliation,
-  pruneEditorAgentReconciliation,
-  type EditorAgentReconciliationEntry,
-  type EditorAgentReconciliationQueues,
-} from "./editorAgentReconciliationQueue";
+  WorkspaceTrustDecisionDialog,
+  type WorkspaceTrustDecision,
+} from "../../workspace-trust/WorkspaceTrustSurfaces";
 import { FileIcon } from "../shared/projectTree";
+import { type EditorPaletteHost } from "./editorCommands";
+import {
+  dirtyFilesUnderPath,
+  reconcileEditorDirtyByPane,
+  type EditorDirtyByPane,
+} from "./editorDirtyState";
+import { EditorEmptyState } from "./EditorEmptyState";
+import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
+import {
+  sameEditorOutlineSnapshot,
+  type EditorOutlineRevealRequest,
+  type EditorOutlineSnapshot,
+} from "./editorOutlineModel";
+import { EditorOutlinePanel } from "./EditorOutlinePanel";
 import {
   allDirtyFiles,
   clampNumber,
@@ -117,6 +103,16 @@ import {
   type PointerTabDrag,
   type TabInsertTarget,
 } from "./editorPaneGeometry";
+import { editorPaneWindowId } from "./editorPaneWindowId";
+import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
+import editorWidgetStyles from "./EditorWidget.module.css";
+import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
+import { useEditorProjectConnection } from "./useEditorProjectConnection";
+import { useEditorSettings } from "./useEditorSettings";
+import {
+  useEditorVerificationRun,
+  type EditorVerificationRunControls,
+} from "./useEditorVerificationRun";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const SplitIcon = Icons.split;
@@ -134,11 +130,16 @@ const EditorRuntimeWidget = dynamic<EditorRuntimeWidgetProps>(
   () => import("./EditorRuntimeWidget"),
   {
     ssr: false,
-    loading: () => <div className="ed-host-loading" aria-hidden="true" />,
+    loading: EditorSurfaceLoading,
   },
 );
 
+function normalizedEditorRoot(root: string): string | undefined {
+  return selectWorkspaceFileTarget(root, "__root_identity__")?.root;
+}
+
 export interface EditorWidgetWorkspacePatch {
+  readonly rootBinding?: "coding-repository" | undefined;
   readonly root?: string | undefined;
   readonly file?: string | undefined;
   readonly openFiles?: readonly string[] | undefined;
@@ -146,11 +147,15 @@ export interface EditorWidgetWorkspacePatch {
 }
 
 export interface EditorWidgetProps extends EditorRuntimeWidgetProps {
+  readonly rootSelectionLocked?: boolean | undefined;
   readonly layoutJson?: string | undefined;
   readonly onWorkspaceChange?: ((patch: EditorWidgetWorkspacePatch) => void) | undefined;
   readonly onOpenProblems?: ((projectPath: string) => void) | undefined;
-  readonly onOpenWorkspaceTrust?: (() => void) | undefined;
   readonly workspaceTrustUiAvailable?: boolean | undefined;
+  readonly initialWorkspaceNotice?:
+    | { readonly code: "trust-grant-failed"; readonly correlationId?: string | undefined }
+    | undefined;
+  readonly onWorkspaceNoticeConsumed?: (() => void) | undefined;
 }
 
 interface PendingDirtyClose {
@@ -168,6 +173,15 @@ interface PendingDirtyClose {
 interface WorkspaceRegistrationNoticeState {
   readonly root: string;
   readonly message: string;
+}
+
+function nextWorkspaceRegistrationNotice(
+  current: WorkspaceRegistrationNoticeState | null,
+  root: string,
+  warning: string | undefined,
+): WorkspaceRegistrationNoticeState | null {
+  if (warning !== undefined) return { root, message: warning };
+  return current?.root === root ? current : null;
 }
 
 // Reasons whose file list spans every pane rather than one pane's tabs. A root change and a window
@@ -251,10 +265,9 @@ export function editorShortcutCommandId(
 function dispatchEditorShortcut(
   commandId: string,
   host: EditorPaletteHost,
-  trigger: EditorQuickAccessTrigger | null,
+  trigger: EditorShellActions | null,
 ): boolean {
-  if (commandId === "quick-access.files") return dispatchQuickAccess(trigger, "files");
-  if (commandId === "quick-access.commands") return dispatchQuickAccess(trigger, "commands");
+  if (commandId === "workspace.commands") return dispatchCommands(trigger);
   if (commandId === "open-editor-settings") return dispatchOpenEditorSettings(trigger);
   if (commandId === "view.splitRight") host.splitActive("row");
   else if (commandId === "view.splitDown") host.splitActive("column");
@@ -268,20 +281,30 @@ function dispatchEditorShortcut(
   return true;
 }
 
-function dispatchOpenEditorSettings(trigger: EditorQuickAccessTrigger | null): boolean {
+function dispatchOpenEditorSettings(trigger: EditorShellActions | null): boolean {
   if (trigger === null) return false;
   trigger.openEditorSettings();
   return true;
 }
 
-function dispatchQuickAccess(
-  trigger: EditorQuickAccessTrigger | null,
-  mode: "files" | "commands",
-): boolean {
+function dispatchCommands(trigger: EditorShellActions | null): boolean {
   if (trigger === null) return false;
-  if (mode === "files") trigger.openFiles();
-  else trigger.openCommands();
+  trigger.openCommands();
   return true;
+}
+
+function requestOrDeferRootSelection(
+  pending: PendingDirtyClose | null,
+  deferred: RefObject<(() => void) | null>,
+  requestSelection: () => boolean,
+  correlationId?: string,
+): ClientNavigationOutcome {
+  if (pending === null) return requestSelection() ? "applied" : "deferred";
+  deferred.current = (): void => {
+    const settle = startFilesNavigationEvidence("editor project selection", correlationId);
+    settle(undefined, requestSelection() ? "applied" : "deferred");
+  };
+  return "deferred";
 }
 
 function DirtyCloseDialog(props: {
@@ -467,9 +490,6 @@ interface PaneBinding {
   readonly onSelectOpenFile: (file: string) => void;
   readonly onCloseOpenFile: (path: string) => Promise<boolean> | boolean | void;
   readonly onDirtyChange: (path: string, dirty: boolean) => void;
-  readonly onMoveTab: (fromPaneId: string, file: string, toPaneId: string) => void;
-  readonly onSplitPane: (paneId: string, direction: "row" | "column") => void;
-  readonly onAgentChangesetCommitted: (entries: readonly EditorAgentReconciliationEntry[]) => void;
   readonly toolbarExtras: ReactNode;
   readonly renderTabHandle: NonNullable<EditorRuntimeWidgetProps["renderTabHandle"]>;
 }
@@ -478,23 +498,11 @@ function nonEmptyRoot(value: string): string | undefined {
   return value.length > 0 ? value : undefined;
 }
 
-/**
- * #2696 — deterministic post-trust readiness signal for browser regression harnesses. Reports
- * `"true"` only once the workspace-trust status for the bound root has resolved (or definitively
- * failed to resolve) AND the initial-prompt decision has been committed, so an observer can read
- * the prompt's presence in that same commit instead of racing it with a timeout. Derived outside
- * the component so the widget's cognitive complexity is unaffected.
- */
+// Execution metadata readiness is independent of ordinary file opening.
 function resolveTrustSettledAttribute(
   verification: EditorVerificationRunControls,
-  promptedTrustRoot: string | null,
-  workspaceRoot: string,
 ): "true" | "false" {
-  if (!verification.catalogSettled) return "false";
-  const initialPromptPending =
-    verification.catalog?.workspaceTrust.trust === "restricted" &&
-    promptedTrustRoot !== workspaceRoot;
-  return initialPromptPending ? "false" : "true";
+  return verification.catalogSettled ? "true" : "false";
 }
 
 function WorkspaceRegistrationNotice({
@@ -513,45 +521,6 @@ function WorkspaceRegistrationNotice({
       <span className={trustStyles.cmpBannerCopy}>{notice.message}</span>
     </output>
   );
-}
-
-/**
- * Whether this binding still owes the human the one-per-binding "opening on an untrusted root"
- * question, and whether answering it means raising the prompt.
- *
- * The latch is consumed on the FIRST resolved trust state whatever it says. Consuming it only for
- * `restricted` left it unspent when the editor opened on a trusted root, so a later explicit
- * revocation re-raised the first-open prompt and asked the human to grant back what they had just
- * revoked. Lives outside the component, like `resolveTrustSettledAttribute` above, so the widget's
- * cognitive complexity is unaffected.
- */
-/**
- * What the editor trust banner should report, if anything.
- *
- * `catalog === null` alone is not a failed read: it is also the state before the first read returns
- * and right after a root switch resets it. Treating it as "load" made the banner assert "Workspace
- * Trust could not be read safely" on every editor open — including for a fully trusted root, where
- * it then vanished — inverting the #2625 requirement that a read FAILURE be distinguishable from
- * every other state. `catalogSettled` turns true only once the read resolved or definitively failed.
- *
- * Outside the component, like its neighbours, so the widget's cognitive complexity is unaffected.
- */
-function trustBannerIssue(
-  trustMutationIssue: "load" | "update" | undefined,
-  verification: EditorVerificationRunControls,
-): "load" | "update" | undefined {
-  if (trustMutationIssue !== undefined) return trustMutationIssue;
-  return verification.catalog === null && verification.catalogSettled ? "load" : undefined;
-}
-
-function initialTrustLatchDecision(
-  status: WorkspaceTrustStatus | undefined,
-  promptedTrustRoot: string | null,
-  workspaceRoot: string,
-): "skip" | "latch" | "latch-and-prompt" {
-  if (workspaceRoot.length === 0 || status === undefined) return "skip";
-  if (promptedTrustRoot === workspaceRoot) return "skip";
-  return status.trust === "restricted" ? "latch-and-prompt" : "latch";
 }
 
 // Issue #2747 — a line reveal is addressed to the file cfg named alongside it, and every pane below
@@ -634,13 +603,16 @@ export function EditorWidget({
   layoutJson,
   onWorkspaceChange,
   onOpenProblems,
-  onOpenWorkspaceTrust,
   workspaceTrustUiAvailable = true,
+  rootSelectionLocked = false,
+  initialWorkspaceNotice,
+  onWorkspaceNoticeConsumed,
   onOpenDebugPanel,
   sessionActive = true,
   windowId,
   ...props
 }: EditorWidgetProps): ReactNode {
+  const t = useTranslate();
   const initialRoot = root?.trim() ?? "";
   const initialConfiguredFile = normalizeEditorFile(initialRoot, file);
   const initialOpenFiles = normalizeEditorOpenFiles(
@@ -655,8 +627,30 @@ export function EditorWidget({
     layoutJson,
   });
   const [workspaceRoot, setWorkspaceRoot] = useState(initialRoot);
+  const [connectingProject, setConnectingProject] = useState(false);
   const [workspaceRegistrationNotice, setWorkspaceRegistrationNotice] =
     useState<WorkspaceRegistrationNoticeState | null>(null);
+  const setConnectionNotice = useCallback(
+    (message: string | null): void => {
+      setWorkspaceRegistrationNotice(message === null ? null : { root: workspaceRoot, message });
+    },
+    [workspaceRoot],
+  );
+  const connectProjectRoot = useEditorProjectConnection({
+    root: workspaceRoot,
+    onNotice: setConnectionNotice,
+    onBusy: setConnectingProject,
+  });
+  useEffect(() => {
+    if (initialWorkspaceNotice === undefined) return;
+    const id = initialWorkspaceNotice.correlationId;
+    const message =
+      id === undefined
+        ? t("editor.projectRestricted")
+        : `${t("editor.projectRestricted")} ${t("workspaceTrust.supportId", { correlationId: id })}`;
+    setWorkspaceRegistrationNotice({ root: workspaceRoot, message });
+    onWorkspaceNoticeConsumed?.();
+  }, [initialWorkspaceNotice, onWorkspaceNoticeConsumed, workspaceRoot, t]);
   const editorSettings = useEditorSettings(nonEmptyRoot(workspaceRoot));
   const editorShortcutRegistry = useMemo(
     () => resolveEffectiveKeyboardShortcuts(editorSettings.applied.keybindingOverrides),
@@ -692,16 +686,10 @@ export function EditorWidget({
   // the live root).
   const [trustDecision, setTrustDecision] = useState<{
     readonly action: WorkspaceTrustDecision;
-    readonly initialPrompt: boolean;
     readonly root: string;
   } | null>(null);
   const [trustMutationIssue, setTrustMutationIssue] = useState<"update">();
   const [trustMutationPending, setTrustMutationPending] = useState(false);
-  // The root whose initial trust prompt has already been raised. This is state rather than a ref
-  // because the `data-trust-settled` readiness attribute below is derived from it (#2696): the
-  // attribute has to flip in exactly the commit that mounts the initial prompt, so the value must
-  // participate in rendering.
-  const [promptedTrustRoot, setPromptedTrustRoot] = useState<string | null>(null);
   const [heldTab, setHeldTab] = useState<DraggedTab | null>(null);
   // GEN-PERF-EDITOR-003 — the tab-drag "held" visual is read from a ref inside the memoized
   // per-pane renderTabHandle closure, so that closure stays referentially stable (it no
@@ -720,10 +708,7 @@ export function EditorWidget({
     readonly nonce: number;
   } | null>(null);
   const fileHistoryRequestSeqRef = useRef(0);
-  const [agentReconciliationQueues, setAgentReconciliationQueues] =
-    useState<EditorAgentReconciliationQueues>({});
   const saveSeqRef = useRef(0);
-  const agentReconciliationSeqRef = useRef(0);
   const saveResolversRef = useRef(new Map<number, (ok: boolean) => void>());
   const lastPropRootRef = useRef(root?.trim() ?? "");
   const lastExternalLayoutInputsRef = useRef<EditorExternalLayoutInputs | null>(null);
@@ -753,14 +738,18 @@ export function EditorWidget({
   );
 
   const commitLayout = useCallback(
-    (nextLayout: EditorLayoutStateV2, nextRoot = workspaceRoot): void => {
+    (nextLayout: EditorLayoutStateV2, nextRoot = workspaceRoot, selectedRoot = false): void => {
       const normalized = normalizeEditorLayoutStructure(nextRoot, nextLayout);
       setLayout(normalized);
       // Re-home the per-pane dirty index onto the committed layout so a dirty tab
       // keeps its marker and unsaved-changes prompt as it moves between panes and
       // no orphaned flag survives on a collapsed pane (Issue #1375 AC3).
       setDirtyByPane((current) => reconcileEditorDirtyByPane(current, normalized));
-      if (nextRoot.length > 0) onWorkspaceChange?.(buildPatch(nextRoot, normalized));
+      if (nextRoot.length > 0)
+        onWorkspaceChange?.({
+          ...buildPatch(nextRoot, normalized),
+          ...(selectedRoot ? { rootBinding: "coding-repository" as const } : {}),
+        });
     },
     [buildPatch, onWorkspaceChange, workspaceRoot],
   );
@@ -789,14 +778,12 @@ export function EditorWidget({
       setDirtyByPane({});
       setOutlineByPane({});
       setOutlineRevealByPane({});
-      setAgentReconciliationQueues({});
       // A trust dialog opened for the previous root must not survive the
       // switch: `verification` is re-derived from the live root each render,
       // so confirming the stale dialog after a switch would grant/revoke on
       // the new root. Fail closed by dismissing everything trust-scoped.
       setTrustDecision(null);
       setTrustMutationIssue(undefined);
-      setPromptedTrustRoot(null);
     }
     if (nextRoot.length === 0 || onWorkspaceChange === undefined) return;
     const normalizedFileChanged = (file?.trim() ?? "") !== nextActivePane.activeFile;
@@ -875,36 +862,6 @@ export function EditorWidget({
     [markDirty],
   );
 
-  const queueAgentReconciliation = useCallback(
-    (sourcePaneId: string, entries: readonly EditorAgentReconciliationEntry[]): void => {
-      agentReconciliationSeqRef.current += 1;
-      const request = {
-        requestId: agentReconciliationSeqRef.current,
-        entries: entries.map((entry) => ({ file: entry.file, kind: entry.kind })),
-      };
-      setAgentReconciliationQueues((current) =>
-        enqueueEditorAgentReconciliation(
-          current,
-          Object.values(layoutRef.current.panes),
-          sourcePaneId,
-          request,
-        ),
-      );
-    },
-    [],
-  );
-
-  const completeAgentReconciliation = useCallback((requestId: number, paneId: string): void => {
-    setAgentReconciliationQueues((current) =>
-      completeEditorAgentReconciliation(current, paneId, requestId),
-    );
-  }, []);
-
-  useEffect(() => {
-    const paneIds = new Set(Object.keys(layout.panes));
-    setAgentReconciliationQueues((current) => pruneEditorAgentReconciliation(current, paneIds));
-  }, [layout.panes]);
-
   const requestDirtyClose = useCallback(
     (input: {
       readonly paneId: string;
@@ -966,6 +923,11 @@ export function EditorWidget({
 
   const discardPendingClose = useCallback((): void => {
     if (pendingClose === null || pendingClose.saving) return;
+    discardEditorBufferSafetyFiles(
+      Object.keys(dirtyByPane).map((paneId) => editorPaneWindowId(windowId, paneId)),
+      workspaceRoot,
+      pendingClose.dirtyFiles,
+    );
     for (const path of pendingClose.dirtyFiles) {
       for (const [paneId, files] of Object.entries(dirtyByPane)) {
         if (files[path] === true) markDirty(paneId, path, false);
@@ -979,7 +941,7 @@ export function EditorWidget({
     }
     pendingClose.apply();
     setPendingClose(null);
-  }, [dirtyByPane, markDirty, pendingClose, workspaceRoot]);
+  }, [dirtyByPane, markDirty, pendingClose, windowId, workspaceRoot]);
 
   const cancelPendingClose = useCallback((): void => {
     const pending = pendingCloseRef.current;
@@ -990,10 +952,20 @@ export function EditorWidget({
     setPendingClose(null);
   }, []);
 
-  const openRoot = useCallback(
-    (nextRoot: string): void => {
-      const normalizedRoot = nextRoot.trim();
-      if (normalizedRoot.length === 0) return;
+  const dirtyRootCloseRef = useRef({ requestDirtyClose, dirtyFiles: dirtyFileList });
+  dirtyRootCloseRef.current = { requestDirtyClose, dirtyFiles: dirtyFileList };
+
+  const deferredRootSelectionRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (pendingClose !== null) return;
+    const apply = deferredRootSelectionRef.current;
+    deferredRootSelectionRef.current = null;
+    apply?.();
+  }, [pendingClose]);
+
+  const selectConnectedRoot = useCallback(
+    (normalizedRoot: string, correlationId?: string, warning?: string): ClientNavigationOutcome => {
+      if (rootSelectionLocked && normalizedRoot !== workspaceRoot) return "dropped";
       const apply = (): void => {
         const nextLayout = editorLayoutReducer(layoutRef.current, {
           type: "replace-root",
@@ -1001,19 +973,40 @@ export function EditorWidget({
           sidebarWidth: layoutRef.current.sidebarWidth,
         });
         setWorkspaceRoot(normalizedRoot);
+        setWorkspaceRegistrationNotice((current) =>
+          nextWorkspaceRegistrationNotice(current, normalizedRoot, warning),
+        );
         setDirtyByPane({});
-        commitLayout(nextLayout, normalizedRoot);
+        commitLayout(nextLayout, normalizedRoot, true);
       };
-      const firstPaneId =
-        editorLayoutPaneIds(layoutRef.current)[0] ?? layoutRef.current.activePaneId;
-      requestDirtyClose({
-        paneId: firstPaneId,
-        files: dirtyFileList,
-        reason: "root-change",
-        apply,
-      });
+      const requestSelection = (): boolean => {
+        const firstPaneId =
+          editorLayoutPaneIds(layoutRef.current)[0] ?? layoutRef.current.activePaneId;
+        return dirtyRootCloseRef.current.requestDirtyClose({
+          paneId: firstPaneId,
+          files: dirtyRootCloseRef.current.dirtyFiles,
+          reason: "root-change",
+          apply,
+        });
+      };
+      return requestOrDeferRootSelection(
+        pendingCloseRef.current,
+        deferredRootSelectionRef,
+        requestSelection,
+        correlationId,
+      );
     },
-    [commitLayout, dirtyFileList, requestDirtyClose],
+    [commitLayout, rootSelectionLocked, workspaceRoot],
+  );
+
+  const openRoot = useCallback(
+    (nextRoot: string, alreadyConnected = false): void => {
+      const selectedRoot = nextRoot.trim();
+      if (selectedRoot.length === 0 || rootSelectionLocked) return;
+      if (alreadyConnected) selectConnectedRoot(selectedRoot);
+      else void connectProjectRoot(selectedRoot, selectConnectedRoot);
+    },
+    [connectProjectRoot, rootSelectionLocked, selectConnectedRoot],
   );
 
   const openFile = useCallback(
@@ -1023,16 +1016,54 @@ export function EditorWidget({
       // (AC3). An unresolvable candidate is dropped so the editor stays on its current usable state.
       const target = selectWorkspaceFileTarget(nextRoot, nextFile);
       if (target === null || target.file.length === 0) return;
-      const paneId = activeEditorPane(layoutRef.current).id;
-      const nextLayout = editorLayoutReducer(layoutRef.current, {
-        type: "open-file",
-        paneId,
-        file: target.file,
-      });
-      setWorkspaceRoot(target.root);
-      commitLayout(nextLayout, target.root);
+      const changesRoot = target.root !== normalizedEditorRoot(workspaceRoot);
+      if (changesRoot && rootSelectionLocked) return;
+      const apply = (connectedRoot = changesRoot ? target.root : workspaceRoot): void => {
+        const current = layoutRef.current;
+        const base = changesRoot
+          ? editorLayoutReducer(current, {
+              type: "replace-root",
+              root: connectedRoot,
+              sidebarWidth: current.sidebarWidth,
+            })
+          : current;
+        const nextLayout = editorLayoutReducer(base, {
+          type: "open-file",
+          paneId: activeEditorPane(base).id,
+          file: target.file,
+        });
+        setWorkspaceRoot(connectedRoot);
+        if (changesRoot) setDirtyByPane({});
+        commitLayout(nextLayout, connectedRoot, changesRoot);
+      };
+      if (!changesRoot) return apply();
+      void connectProjectRoot(
+        target.root,
+        (connectedRoot, correlationId, warning) => {
+          const applyConnectedRoot = (): void => {
+            apply(connectedRoot);
+            setWorkspaceRegistrationNotice(
+              warning === undefined ? null : { root: connectedRoot, message: warning },
+            );
+          };
+          const requestSelection = (): boolean =>
+            dirtyRootCloseRef.current.requestDirtyClose({
+              paneId: layoutRef.current.activePaneId,
+              files: dirtyRootCloseRef.current.dirtyFiles,
+              reason: "root-change",
+              apply: applyConnectedRoot,
+            });
+          return requestOrDeferRootSelection(
+            pendingCloseRef.current,
+            deferredRootSelectionRef,
+            requestSelection,
+            correlationId,
+          );
+        },
+        "file-navigation",
+      );
     },
-    [commitLayout],
+    [commitLayout, connectProjectRoot, rootSelectionLocked, workspaceRoot],
   );
 
   const selectOpenFile = useCallback(
@@ -1137,19 +1168,21 @@ export function EditorWidget({
   }, []);
 
   const closeOpenFile = useCallback(
-    async (paneId: string, path: string): Promise<boolean> =>
-      requestDirtyClose({
-        paneId,
-        files: [path],
-        reason: "tab-close",
-        apply: () => {
-          markDirty(paneId, path, false);
-          pushClosedTab(paneId, path);
-          commitLayout(
-            editorLayoutReducer(layoutRef.current, { type: "close-tab", paneId, file: path }),
-          );
-        },
-      }),
+    (paneId: string, path: string): Promise<boolean> =>
+      Promise.resolve(
+        requestDirtyClose({
+          paneId,
+          files: [path],
+          reason: "tab-close",
+          apply: () => {
+            markDirty(paneId, path, false);
+            pushClosedTab(paneId, path);
+            commitLayout(
+              editorLayoutReducer(layoutRef.current, { type: "close-tab", paneId, file: path }),
+            );
+          },
+        }),
+      ),
     [commitLayout, markDirty, pushClosedTab, requestDirtyClose],
   );
 
@@ -1655,16 +1688,6 @@ export function EditorWidget({
     [commitLayout, draggedTab],
   );
 
-  // Stable cross-pane tab move (used by the per-pane binding so it does not churn on every render).
-  const moveTabAction = useCallback(
-    (fromPaneId: string, toPaneId: string, file: string): void => {
-      commitLayout(
-        editorLayoutReducer(layoutRef.current, { type: "move-tab", fromPaneId, toPaneId, file }),
-      );
-    },
-    [commitLayout],
-  );
-
   // ── Command/keybinding/palette actions (Wave 2 items 2.3/2.4/2.5) ──────────────────────────────
   // All read the live layout from `layoutRef`, so they act on the active pane regardless of where
   // focus is, and route through the existing close/select/split/save callbacks.
@@ -1723,31 +1746,6 @@ export function EditorWidget({
     activeFile: activeFile.length > 0 ? activeFile : null,
   });
 
-  // The initial prompt answers one question — "this binding is opening on an untrusted root" — and
-  // it is answered once per binding. The latch used to be taken only when the FIRST resolved state
-  // was `restricted`, so opening on a trusted root left it unconsumed: a later explicit revocation
-  // by the human moved trust to `restricted` and re-raised the first-open prompt, asking them to
-  // grant what they had just deliberately revoked, and labelling it `initialPrompt`. Consuming the
-  // latch on the first resolved state whatever it says keeps the prompt for a genuine untrusted
-  // open and keeps a revoke a revoke.
-  useEffect(() => {
-    const decision = initialTrustLatchDecision(
-      verification.catalog?.workspaceTrust,
-      promptedTrustRoot,
-      workspaceRoot,
-    );
-    if (decision === "skip") return;
-    setPromptedTrustRoot(workspaceRoot);
-    if (decision === "latch-and-prompt" && workspaceTrustUiAvailable) {
-      setTrustDecision({ action: "grant", initialPrompt: true, root: workspaceRoot });
-    }
-  }, [
-    promptedTrustRoot,
-    verification.catalog?.workspaceTrust,
-    workspaceRoot,
-    workspaceTrustUiAvailable,
-  ]);
-
   useEffect(() => {
     if (workspaceTrustUiAvailable) return;
     setTrustDecision(null);
@@ -1805,10 +1803,14 @@ export function EditorWidget({
       runFileTests: verification.runFileTests,
       runWorkspaceVerification: verification.runWorkspaceVerification,
       cancelVerification: verification.cancelVerification,
-      trustWorkspaceScripts: () =>
-        setTrustDecision({ action: "grant", initialPrompt: false, root: workspaceRoot }),
-      revokeWorkspaceScriptTrust: () =>
-        setTrustDecision({ action: "revoke", initialPrompt: false, root: workspaceRoot }),
+      trustWorkspaceScripts: (): void => {
+        setTrustMutationIssue(undefined);
+        setTrustDecision({ action: "grant", root: workspaceRoot });
+      },
+      revokeWorkspaceScriptTrust: (): void => {
+        setTrustMutationIssue(undefined);
+        setTrustDecision({ action: "revoke", root: workspaceRoot });
+      },
       openProblems: () => onOpenProblems?.(workspaceRoot),
       openFileHistory: openActiveFileHistory,
       openDebugPanel: () => onOpenDebugPanel?.(),
@@ -1840,9 +1842,9 @@ export function EditorWidget({
   const commandHostRef = useRef(commandHost);
   commandHostRef.current = commandHost;
   useRegisterEditorPaletteHost(windowId, commandHost);
-  const quickAccessTrigger = useEditorQuickAccessTrigger();
-  const quickAccessTriggerRef = useRef(quickAccessTrigger);
-  quickAccessTriggerRef.current = quickAccessTrigger;
+  const shellActions = useEditorShellActions();
+  const shellActionsRef = useRef(shellActions);
+  shellActionsRef.current = shellActions;
 
   // Container-level capturing keydown for editor-chrome chords (mirrors the on-mount save backstop,
   // but scoped to the whole editor so it also fires from the sidebar/tab strip). Only browser-safe
@@ -1856,7 +1858,7 @@ export function EditorWidget({
       const dispatched = dispatchEditorShortcut(
         commandId,
         commandHostRef.current,
-        quickAccessTriggerRef.current,
+        shellActionsRef.current,
       );
       if (dispatched) {
         event.preventDefault();
@@ -1867,7 +1869,7 @@ export function EditorWidget({
     return () => node.removeEventListener("keydown", onKeyDown, true);
   }, [workspaceRoot]);
 
-  // Agent-pane snapshots, memoized by the pane SET. A split resize only changes a tree node's ratio,
+  // Pane safety snapshots, memoized by the pane SET. A split resize only changes a tree node's ratio,
   // leaving `layout.panes` untouched, so this stays referentially stable across a resize and does not
   // churn the per-pane editor-host props.
   const layoutPaneSnapshots = useMemo<readonly EditorAgentPaneSnapshot[]>(
@@ -1894,11 +1896,6 @@ export function EditorWidget({
         onSelectOpenFile: (file: string) => selectOpenFile(paneId, file),
         onCloseOpenFile: (path: string) => closeOpenFile(paneId, path),
         onDirtyChange: (path: string, dirty: boolean) => markDirty(paneId, path, dirty),
-        onMoveTab: (fromPaneId: string, file: string, toPaneId: string) =>
-          moveTabAction(fromPaneId, toPaneId, file),
-        onSplitPane: (targetPaneId: string, direction: "row" | "column") =>
-          splitPane(targetPaneId, direction),
-        onAgentChangesetCommitted: (entries) => queueAgentReconciliation(paneId, entries),
         toolbarExtras: renderPaneActions(pane, paneCount > 1, splitPane, closePane),
         // GEN-PERF-EDITOR-003 — the full drag-capable tab handle lives HERE (in the
         // pane-memoized closure) instead of as a per-render inline closure in renderPane,
@@ -1943,9 +1940,7 @@ export function EditorWidget({
     selectOpenFile,
     closeOpenFile,
     markDirty,
-    moveTabAction,
     splitPane,
-    queueAgentReconciliation,
     closePane,
     handleTabKeyDown,
     beginTabPointerDrag,
@@ -1956,7 +1951,10 @@ export function EditorWidget({
     // Unbound editor (opened without a project root, e.g. toggled from the left rail): offer the
     // native OS folder picker so the user can choose a project and start working (ADR-0118).
     return (
-      <EditorEmptyState onOpenRoot={openRoot} onWorkspaceNotice={setWorkspaceRegistrationNotice} />
+      <EditorEmptyState
+        onOpenRoot={(root) => openRoot(root, true)}
+        onWorkspaceNotice={setWorkspaceRegistrationNotice}
+      />
     );
   }
 
@@ -1976,17 +1974,12 @@ export function EditorWidget({
       layoutPanes: layoutPaneSnapshots,
       activePaneId: layout.activePaneId,
       onSelectOpenFile: binding.onSelectOpenFile,
-      onSplitPane: binding.onSplitPane,
-      onMoveTab: binding.onMoveTab,
       onCloseOpenFile: binding.onCloseOpenFile,
       onDirtyChange: binding.onDirtyChange,
       toolbarExtras: binding.toolbarExtras,
       externalSaveRequest:
         saveRequest !== null && saveRequest.paneId === pane.id ? saveRequest : undefined,
       onExternalSaveComplete,
-      agentReconciliationRequest: agentReconciliationQueues[pane.id]?.[0],
-      onAgentChangesetCommitted: binding.onAgentChangesetCommitted,
-      onAgentReconciliationComplete: completeAgentReconciliation,
       tabInsertTarget:
         tabInsertTargetState?.paneId === pane.id
           ? { file: tabInsertTargetState.file, edge: tabInsertTargetState.edge }
@@ -2092,7 +2085,8 @@ export function EditorWidget({
       loading: false,
     } satisfies EditorOutlineSnapshot);
 
-  const trustSettled = resolveTrustSettledAttribute(verification, promptedTrustRoot, workspaceRoot);
+  const trustSettled = resolveTrustSettledAttribute(verification);
+  const filesRootChangeProps = rootSelectionLocked ? {} : { onRootChange: openRoot };
 
   return (
     <div
@@ -2136,10 +2130,12 @@ export function EditorWidget({
               onReveal={revealOutlineSymbol}
             />
             <FilesWidget
+              presentation="project"
+              openingRoot={connectingProject}
               root={workspaceRoot}
               activeFilePath={activeFile.length > 0 ? activeFile : undefined}
               openFilesDirectly
-              onRootChange={openRoot}
+              {...filesRootChangeProps}
               onOpenFile={openFile}
               onFilesMutated={handleFilesMutated}
               onBeforeEntryMutation={confirmFilesEntryMutation}
@@ -2178,22 +2174,6 @@ export function EditorWidget({
           notice={workspaceRegistrationNotice}
           workspaceRoot={workspaceRoot}
         />
-        {workspaceTrustUiAvailable ? (
-          <WorkspaceTrustBanner
-            status={verification.catalog?.workspaceTrust}
-            // `catalog === null` alone is not a failed read: it is also the state before the first
-            // read returns, and the state right after a root switch resets it. Treating it as "load"
-            // made the banner assert "Workspace Trust could not be read safely" on every editor
-            // open — including for a fully trusted root, where it then vanished — which is the
-            // opposite of the #2625 requirement that a read FAILURE be distinguishable from every
-            // other state. `catalogSettled` is the fact that separates them: it turns true only once
-            // the read has resolved or definitively failed.
-            issue={trustBannerIssue(trustMutationIssue, verification)}
-            surface="editor"
-            onManage={onOpenWorkspaceTrust}
-            editor
-          />
-        ) : null}
         <div
           className={`ed-panes ed-panes-root ${trustStyles.cmpEditorPanes}${
             singlePane ? " single" : ""
@@ -2233,9 +2213,12 @@ export function EditorWidget({
       {workspaceTrustUiAvailable && trustDecision !== null && pendingClose === null ? (
         <WorkspaceTrustDecisionDialog
           action={trustDecision.action}
-          initialPrompt={trustDecision.initialPrompt}
+          failed={trustMutationIssue !== undefined}
           mutating={trustMutationPending}
-          onCancel={() => setTrustDecision(null)}
+          onCancel={(): void => {
+            setTrustDecision(null);
+            setTrustMutationIssue(undefined);
+          }}
           onConfirm={confirmTrustDecision}
         />
       ) : null}

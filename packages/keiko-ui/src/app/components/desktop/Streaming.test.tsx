@@ -29,6 +29,11 @@ import * as api from "@/lib/api";
 import type { Chat, ChatMessage, DesktopChatSendResponse, ModelCapability } from "@/lib/types";
 import type { StreamHandlers } from "@/lib/api";
 import { notifyGatewayConfigUpdated } from "./widgets/shared/gatewaySetupBus";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 
 afterEach(() => {
   resetConversationMemorySettingsForTests();
@@ -1417,6 +1422,41 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     // The user's prompt stays visible.
     const users = view.result.current.messages.filter((m) => m.role === "user");
     expect(users.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // PR #3678 review: the stalled-stream diagnostic joins the failed turn through the stream's own
+  // request correlation and carries its class as structured fields, not only in the message.
+  it("reports a stalled stream with the turn's correlation and a structured timeout class", async () => {
+    const reports: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      reports.push(meta);
+    });
+    try {
+      vi.spyOn(api, "sendDesktopChatStream").mockImplementation((): Promise<void> => {
+        const stalled = new api.ApiError(
+          "DESKTOP_CHAT_STREAM_STALLED",
+          "The connection to Keiko stopped delivering the answer. Retry the request.",
+          504,
+        );
+        stalled.correlationId = "ui_stream-stall-0001";
+        return Promise.reject(stalled);
+      });
+      const view = await bootStreamingHook();
+      act(() => view.result.current.setDraft("hello"));
+      await act(async () => {
+        await view.result.current.sendMessage();
+      });
+      expect(view.result.current.sendStatus).toBe("failed");
+      expect(reports).toContainEqual(
+        expect.objectContaining({
+          kind: "sse-error",
+          errorKind: "timeout",
+          correlationId: "ui_stream-stall-0001",
+        }),
+      );
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 
   // ST-L3-3 — non-streaming model: sendDesktopChatStream must NOT be called.

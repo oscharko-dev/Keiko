@@ -16,6 +16,7 @@ import {
 import {
   formatRegisteredServerLogLine,
   serverLogProcessIdentity,
+  type ServerLogEvent,
 } from "@oscharko-dev/keiko-activity-log";
 
 export interface FixtureProcess {
@@ -33,6 +34,7 @@ export interface FixtureEventInput {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
   readonly errorKind?: ActivityLogErrorKind | undefined;
+  readonly status?: number | undefined;
   readonly level?: "debug" | "info" | "warn" | "error" | undefined;
   readonly fields?: Readonly<Record<string, unknown>> | undefined;
 }
@@ -44,17 +46,29 @@ const DEFAULT_FIELDS: Readonly<Record<string, Readonly<Record<string, unknown>>>
   "client.diagnostic": { clientNoteDigest: DIGEST },
   "cli.lifecycle.stop-requested": { channel: "sigterm" },
   "indexing.detached-run.launched": { capsuleIdDigest: DIGEST, jobIdMinted: true },
+  "process.heartbeat": {
+    rssBytes: 1024,
+    heapUsedBytes: 512,
+    heapTotalBytes: 768,
+    externalBytes: 64,
+    eventLoopDelayP99Ms: 1.5,
+  },
+  "process.started": {
+    nodeVersion: "v24.18.0",
+    platform: "linux",
+    arch: "x64",
+    host: "127.0.0.1",
+    port: 1983,
+    stateDirSource: "default",
+    logLevel: "info",
+  },
 };
 
-/** One persisted line (no newline), exactly as the production file sink formats it. */
-export function fixtureLine(
-  process: FixtureProcess,
-  atMs: number,
-  input: FixtureEventInput,
-): string {
+/** One registered event with valid closed values, as its production emitter builds it. */
+export function fixtureEvent(input: FixtureEventInput): ServerLogEvent {
   const registration = activityLogOperationSchema(input.op);
   if (registration === undefined) throw new Error(`unregistered fixture operation ${input.op}`);
-  const event = attachActivityLogEventRegistration(
+  return attachActivityLogEventRegistration(
     {
       level: input.level ?? "info",
       category: registration.category,
@@ -64,6 +78,7 @@ export function fixtureLine(
         ? {}
         : { parentCorrelationId: input.parentCorrelationId }),
       ...(input.errorKind === undefined ? {} : { errorKind: input.errorKind }),
+      ...(input.status === undefined ? {} : { status: input.status }),
       extra: {
         completeness: "complete",
         loss: "none",
@@ -73,6 +88,15 @@ export function fixtureLine(
     },
     registration,
   );
+}
+
+/** One persisted line (no newline), exactly as the production file sink formats it. */
+export function fixtureLine(
+  process: FixtureProcess,
+  atMs: number,
+  input: FixtureEventInput,
+): string {
+  const event = fixtureEvent(input);
   process.seq += 1;
   const line = formatRegisteredServerLogLine(event, new Date(atMs), {
     ...serverLogProcessIdentity(),

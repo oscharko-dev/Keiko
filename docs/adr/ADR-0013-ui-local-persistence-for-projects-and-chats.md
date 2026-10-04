@@ -237,9 +237,20 @@ factory built alongside the real adapter) and never touches the filesystem.
    evidence, which is workspace-relative for co-location reasons — projects/chats are user-global,
    not per-repo).
 
-Explicit `--ui-db` values and `KEIKO_UI_DATA_DIR` must be absolute, must not resolve inside the
-current workspace, and must not point at a symlinked database file or symlinked data directory.
-The default app-data path remains `~/.keiko/keiko-ui.db`.
+Explicit `--ui-db` values and `KEIKO_UI_DATA_DIR` must be absolute, must stay outside the
+current workspace except for its `.keiko` runtime state root, and must not point at a symlinked
+database file or symlinked data directory.
+The default app-data path remains `~/.keiko/keiko-ui.db`. All precedence branches validate the
+joined database filename and SQLite's `-wal`, `-shm`, and `-journal` siblings. The shared
+`keiko-security/fs-hardening` preflight rejects symlinks, non-regular or multiply linked leaves,
+and symlinked ancestors before directory creation, SQLite open, or permission tightening. UI, memory and local-knowledge database factories recheck before each open, including corruption recovery, and emit a
+body-free `sqlite.state-path.refused` event when a configured sink is available. Production
+composition passes that sink into path resolution as well as initial and recovery opens, so an
+earlier path refusal cannot silently prevent the later logging stage from running. This prevents
+pre-existing repository-planted redirects; Node's pathname-only SQLite API does not provide an
+atomic guarantee against concurrent replacement by the same operating-system user. The fixed,
+root-owned macOS `/var` and `/tmp` aliases to `/private` are accepted; application-created links
+below them are still refused.
 
 ### D5 — Schema, PRAGMA user_version, and migration runner
 
@@ -382,6 +393,23 @@ open" pattern expected by the issue without trusting the browser clock.
 **Static-export compatibility.** All ten new routes use fixed path strings and query
 parameters — no `:param` path segments on mutable resources. The route matcher in
 `src/ui/routes.ts` can match them exactly, just as it matches the existing twelve routes.
+
+### Chat History deletion refinement (owner decision, 2026-09-29)
+
+Chat History deletes a conversation permanently with one explicit Delete action. Active chats no
+longer need to be archived first or pass through repeated inline confirmations. The Deleted tab
+remains available to restore or purge legacy archived chats.
+
+Native checkboxes support selecting individual conversations or all conversations in the current
+filtered tab. A shared Delete selected action snapshots only those visible selections. Changing
+project, tab or search clears selection; hidden conversations cannot enter the operation. The UI
+reuses the existing project-scoped DELETE request and its matching irreversible-confirmation
+contract, with at most four requests in flight. Attachment custody cleanup, serialized chat turns,
+and server access validation remain enforced. Each successful response publishes the existing
+chat-deleted mutation. Failed deletions remain visible and selected for explicit retry; successful
+deletions are not retried. Keyboard selection supports Escape to clear and restores focus after
+rows disappear. The existing Activity Log records correlated start/settlement counts and durations,
+with no titles, paths, chat content or response bodies.
 
 ### D8 — Security posture
 

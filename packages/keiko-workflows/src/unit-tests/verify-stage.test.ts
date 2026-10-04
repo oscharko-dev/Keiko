@@ -6,7 +6,7 @@
 // dependency only, so a governed-shaped deps object never degrades a network:"none" step to
 // inherited network.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import {
   detectWorkspace,
@@ -18,6 +18,12 @@ import { buildRunState, type RunState } from "./internal.js";
 import { runWorkflowVerification } from "./verify-stage.js";
 import type { UnitTestWorkflowDeps, UnitTestWorkflowInput } from "./types.js";
 import { recordingSpawn, scriptChildClose } from "./_support.js";
+
+vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-verification")>();
+  const { withConfinedVerificationFixture } = await import("./_support.js");
+  return withConfinedVerificationFixture(actual);
+});
 
 const ROOT = "/repo";
 
@@ -50,7 +56,7 @@ function runState(deps: Partial<UnitTestWorkflowDeps>): {
 
 // The production governed shape: the budget wrapper injects a spawn, and no caller anywhere sets an
 // explicit verification egress policy.
-function governedSpawn(): { fn: SpawnFn; calls: () => readonly unknown[] } {
+function governedSpawn(): { fn: SpawnFn; calls: ReturnType<typeof recordingSpawn>["calls"] } {
   const spawn = recordingSpawn();
   return {
     calls: spawn.calls,
@@ -87,11 +93,12 @@ describe("verification egress enforcement (ADR-0043 D8)", () => {
 
     expect(outcome.summary?.overallStatus).toBe("passed");
     expect(spawn.calls()).toHaveLength(1);
+    expect(spawn.calls()[0]?.args).toContain("--unshare-net");
+    expect(spawn.calls()[0]?.args).toContain("--bind");
   });
 
   it("still honours an explicitly requested degrade mode", async () => {
-    // The escape hatch stays available to callers that ask for it by name — a test harness with a
-    // fake spawn keeps working, it just has to say so instead of being inferred.
+    // Explicit network compatibility does not remove execution-root filesystem confinement.
     const spawn = governedSpawn();
     const { state, workspace, fs } = runState({
       spawn: spawn.fn,
@@ -102,5 +109,7 @@ describe("verification egress enforcement (ADR-0043 D8)", () => {
 
     expect(outcome.summary?.overallStatus).toBe("passed");
     expect(spawn.calls()).toHaveLength(1);
+    expect(spawn.calls()[0]?.args).toContain("--bind");
+    expect(spawn.calls()[0]?.args).not.toContain("--unshare-net");
   });
 });

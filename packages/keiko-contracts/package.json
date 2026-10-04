@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-contracts",
-  "version": "1.1.11",
+  "version": "1.1.13",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Keiko contracts. Not published independently.",
@@ -114,6 +114,10 @@
     "./runtime/bug-investigation-events": {
       "types": "./dist/bug-investigation-events.d.ts",
       "import": "./dist/bug-investigation-events.js"
+    },
+    "./runtime/citation-markers": {
+      "types": "./dist/citation-markers.d.ts",
+      "import": "./dist/citation-markers.js"
     },
     "./runtime/code-task-acceptance": {
       "types": "./dist/code-task-acceptance.d.ts",
@@ -542,6 +546,14 @@
     "./runtime/native-file-dialog": {
       "types": "./dist/native-file-dialog.d.ts",
       "import": "./dist/native-file-dialog.js"
+    },
+    "./runtime/grounded-assessment": {
+      "types": "./dist/grounded-assessment.d.ts",
+      "import": "./dist/grounded-assessment.js"
+    },
+    "./runtime/no-evidence-answer": {
+      "types": "./dist/no-evidence-answer.d.ts",
+      "import": "./dist/no-evidence-answer.js"
     },
     "./runtime/numeric": {
       "types": "./dist/numeric.d.ts",

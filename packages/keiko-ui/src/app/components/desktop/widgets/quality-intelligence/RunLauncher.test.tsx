@@ -20,6 +20,7 @@ import { fireEvent, render, screen, waitFor, act, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nativeFileDialogSupported, pickWithNativeDialog } from "@/lib/native-file-dialog";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import { RunLauncher, type RunLauncherProps } from "./RunLauncher";
 
 // Epic #1941 — Browse now opens the native OS dialog through the shared client; mock the module
@@ -1144,6 +1145,49 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     expect(
       screen.getByRole("combobox", { name: /knowledge pod set/i }),
     ).toHaveAccessibleDescription(/missing, failed, or unavailable/i);
+  });
+
+  // PR #3678 audit O3: the guidance is a closed code, worded from the Local Knowledge catalog.
+  it("words the selected Knowledge Pod Set guidance in German", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const user = userEvent.setup();
+    const setId = "set-warning-de" as CapsuleSetId;
+    render(
+      <I18nProvider>
+        <RunLauncher
+          fetchCapsulesImpl={fakeFetchCapsules([])}
+          fetchCapsuleSetsImpl={fakeFetchCapsuleSets(
+            [{ id: setId, displayName: "Warnset", capsuleCount: 2, composedAt: 1 }],
+            [
+              knowledgePodSetSummary(setId, "Warnset", {
+                readiness: "degraded",
+                setReadiness: {
+                  readyCount: 1,
+                  draftCount: 0,
+                  degradedCount: 0,
+                  unavailableCount: 1,
+                  deniedCount: 0,
+                  indexingCount: 0,
+                  staleCount: 0,
+                  errorCount: 0,
+                  missingCount: 1,
+                  reasonCodes: ["missing-member"],
+                },
+              }),
+            ],
+          )}
+        />
+      </I18nProvider>,
+    );
+
+    await user.click(await screen.findByRole("radio", { name: /Knowledge Pod Set/u }));
+
+    const guidance = await screen.findByTestId("qi-source-guidance");
+    await waitFor(() => {
+      expect(guidance).toHaveTextContent("Mitglieder nicht verfügbar");
+    });
+    expect(guidance).toHaveTextContent("fehlen, sind fehlgeschlagen oder nicht verfügbar");
+    expect(guidance).not.toHaveTextContent("Members unavailable");
   });
 
   it("passes the selected profileId to startImpl", async () => {

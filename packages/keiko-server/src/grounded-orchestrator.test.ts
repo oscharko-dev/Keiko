@@ -1430,8 +1430,12 @@ describe("runGroundedExploration", () => {
     if (observedPack === undefined)
       throw new Error("expected answerer to receive the context pack");
     expect({ ...out.pack, uncertainty: observedPack.uncertainty }).toStrictEqual(observedPack);
+    // The recording answerer cites nothing: that is an uncited answer, not a fabricated citation.
     expect(out.pack.uncertainty).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: "unsupported-citation" })]),
+      expect.arrayContaining([expect.objectContaining({ kind: "uncited-answer" })]),
+    );
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(
+      false,
     );
     expect(out.assistantContent).toBe("recorded");
   });
@@ -3278,11 +3282,32 @@ describe("runGroundedExploration", () => {
     expect(out.pack.uncertainty).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          kind: "unsupported-citation",
+          kind: "uncited-answer",
           claim: expect.stringContaining("without a supported inline citation") as unknown,
         }),
       ]),
     );
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(
+      false,
+    );
+  });
+
+  it("does not flag a refusal for lacking citations", async () => {
+    const out = await runGroundedExploration(input(), {
+      correlationId: undefined,
+      answerer: {
+        answer: () =>
+          Promise.resolve(
+            "In den bereitgestellten Dokumenten wurden keine Informationen zur Java-Version gefunden.",
+          ),
+      },
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+
+    expect(out.pack.files.length).toBeGreaterThan(0);
+    expect(out.pack.uncertainty.some((m) => m.kind === "uncited-answer")).toBe(false);
+    expect(out.pack.uncertainty.some((m) => m.kind === "unsupported-citation")).toBe(false);
   });
 
   it("RB-4 (GEN-AI-GATEWAY-001): surfaces an incomplete-answer marker for a truncated completion", async () => {
@@ -4953,7 +4978,7 @@ describe("retrieveConnectedContextPack (Epic #532 M1)", () => {
       retrieved.pack,
     );
     expect(explored.pack.uncertainty).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: "unsupported-citation" })]),
+      expect.arrayContaining([expect.objectContaining({ kind: "uncited-answer" })]),
     );
     expect(retrieved.plan).toStrictEqual(explored.plan);
     expect(retrieved.elapsedMs).toBeGreaterThanOrEqual(0);

@@ -1,6 +1,10 @@
 import { type Dirent, type FSWatcher, type Stats, watch } from "node:fs";
 import { readdir, realpath, stat, lstat } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import {
+  setImmediate as yieldToEventLoop,
+  setTimeout as pauseBackgroundWork,
+} from "node:timers/promises";
 import { isAbsolute, join, posix as pathPosix, relative, resolve } from "node:path";
 
 import type {
@@ -16,6 +20,7 @@ import { containsPath } from "@oscharko-dev/keiko-git";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 
 import { pathIsDenied } from "../../files-deny.js";
+import { recordWorkspaceWatchHealth } from "./workspaceWatchEvidence.js";
 import type { WorkspaceRootAccess } from "../../task-workspace/workspace-root-access.js";
 
 export interface WorkspaceWatchRawEvent {
@@ -64,6 +69,8 @@ interface WorkspaceWatchSubscribeArgs {
   readonly root: string;
   readonly lastSequence?: number | undefined;
   readonly onEvent: (event: EditorM7WatchEvent) => void;
+  readonly onSnapshot?: ((snapshot: EditorM7WatchSnapshot) => void) | undefined;
+  readonly correlationId?: string | undefined;
   readonly reproveRoot?: WorkspaceWatchRootReprover | undefined;
   readonly onAuthorityRevoked?: (() => void) | undefined;
   readonly additionalExclusions?: readonly string[] | undefined;
@@ -91,6 +98,7 @@ export interface WorkspaceWatchServiceOptions {
   readonly replayCapacity?: number | undefined;
   readonly maxSubscribersPerRoot?: number | undefined;
   readonly maxScanEntries?: number | undefined;
+  readonly onScanSettled?: (() => void) | undefined;
 }
 
 export interface WorkspaceWatchFileSystem {
@@ -126,6 +134,8 @@ interface WatchEffectFileSystem {
 interface WatchSubscriber {
   readonly id: number;
   readonly onEvent: (event: EditorM7WatchEvent) => void;
+  readonly onSnapshot: ((snapshot: EditorM7WatchSnapshot) => void) | undefined;
+  readonly correlationId: string | undefined;
   readonly reproveRoot: WorkspaceWatchRootReprover | undefined;
   readonly onAuthorityRevoked: (() => void) | undefined;
 }
@@ -144,6 +154,7 @@ interface PendingChange {
   readonly relativePath: string;
   readonly oldRelativePath?: string | undefined;
   readonly eventType: WorkspaceWatchRawEvent["eventType"];
+  readonly parentRefresh?: boolean;
 }
 
 interface FileMetadata {
@@ -178,6 +189,7 @@ interface WatchConfig {
   readonly replayCapacity: number;
   readonly maxSubscribersPerRoot: number;
   readonly maxScanEntries: number;
+  readonly onScanSettled: (() => void) | undefined;
 }
 
 const NODE_FILE_SYSTEM: WorkspaceWatchFileSystem = {
@@ -187,13 +199,14 @@ const NODE_FILE_SYSTEM: WorkspaceWatchFileSystem = {
   readdir: async (path): Promise<readonly Dirent[]> => readdir(path, { withFileTypes: true }),
 };
 
-// Keeps a synchronous throw from a capability filesystem on the promise path, so every call site
-// observes one failure mode instead of two.
-function deferred<T>(read: () => T): Promise<T> {
+// Capability reads are synchronous. A resolved promise alone keeps a whole scan inside the
+// microtask queue and starves HTTP requests; yield to libuv before each metadata read instead.
+async function deferred<T>(read: () => T): Promise<T> {
+  await yieldToEventLoop();
   try {
-    return Promise.resolve(read());
+    return read();
   } catch (error) {
-    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+    throw error instanceof Error ? error : new Error(String(error));
   }
 }
 
@@ -277,16 +290,27 @@ function proveRoot(
 
 const DEFAULT_CONFIG: Omit<WatchConfig, "adapter" | "fileSystem"> = {
   coalesceMs: 50,
-  idleTearDownMs: 3_000,
+  // Short browser stream leases can resume without rebuilding the same metadata baseline.
+  idleTearDownMs: 30_000,
   fallbackPollMs: 2_000,
   maxQueueDepth: 1_024,
   maxBatchSize: 128,
   replayCapacity: 256,
   maxSubscribersPerRoot: 64,
   maxScanEntries: 20_000,
+  onScanSettled: undefined,
 };
 
-const EXCLUDED_SEGMENTS = new Set(["node_modules", ".next", ".turbo", "dist", "build", "out"]);
+const EXCLUDED_SEGMENTS = new Set([
+  "node_modules",
+  ".next",
+  ".turbo",
+  "dist",
+  "build",
+  "out",
+  ".keiko",
+  ".git",
+]);
 const EXCLUDED_PREFIXES = [".git/objects", ".git/logs", ".codex", ".keiko/private"] as const;
 
 // User/workspace-configurable `watcherExclusions` (validated upstream by keiko-contracts'
@@ -351,6 +375,17 @@ function eventPathAllowed(relativePath: string, additional: WatchExclusions): bo
   return !pathIsDenied(relativePath) && !hardExcluded(relativePath, additional);
 }
 
+function unavailableEntryParent(
+  event: WorkspaceWatchRawEvent,
+  relativePath: string,
+  additional: WatchExclusions,
+): string | null {
+  if (event.eventType !== "rename") return null;
+  const parent = pathPosix.dirname(relativePath);
+  const normalizedParent = parent === "." ? "" : parent;
+  return eventPathAllowed(normalizedParent, additional) ? normalizedParent : null;
+}
+
 function relativePathFromNative(root: string, target: string): string {
   return relative(root, target).replaceAll("\\", "/");
 }
@@ -379,21 +414,29 @@ function confirmsAbsence(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
+type MetadataFileSystem = WatchEffectFileSystem | (() => Promise<WatchEffectFileSystem | null>);
+
+async function metadataFileSystem(source: MetadataFileSystem): Promise<WatchEffectFileSystem> {
+  const fileSystem = typeof source === "function" ? await source() : source;
+  if (fileSystem === null) throw new TypeError("Workspace watch authority unavailable");
+  return fileSystem;
+}
+
 async function metadataFor(
   root: string,
   relativePath: string,
   additional: WatchExclusions,
-  fileSystem: WatchEffectFileSystem,
+  fileSystem: MetadataFileSystem,
 ): Promise<MetadataResult> {
   if (!eventPathAllowed(relativePath, additional)) return { kind: "unsafe" };
   const candidate = relativePath.length === 0 ? root : resolve(root, ...relativePath.split("/"));
   try {
-    const linkStats = await fileSystem.lstat(candidate);
-    const real = await fileSystem.realpath(candidate);
+    const linkStats = await (await metadataFileSystem(fileSystem)).lstat(candidate);
+    const real = await (await metadataFileSystem(fileSystem)).realpath(candidate);
     if (!containsPath(root, real)) return { kind: "unsafe" };
     const realRelativePath = relativePathFromNative(root, real);
     if (!eventPathAllowed(realRelativePath, additional)) return { kind: "unsafe" };
-    const targetStats = await fileSystem.stat(real);
+    const targetStats = await (await metadataFileSystem(fileSystem)).stat(real);
     const kind = entryKind(linkStats, targetStats);
     return {
       kind: "present",
@@ -468,6 +511,7 @@ function configFromOptions(options: WorkspaceWatchServiceOptions): WatchConfig {
     replayCapacity: options.replayCapacity ?? DEFAULT_CONFIG.replayCapacity,
     maxSubscribersPerRoot: options.maxSubscribersPerRoot ?? DEFAULT_CONFIG.maxSubscribersPerRoot,
     maxScanEntries: options.maxScanEntries ?? DEFAULT_CONFIG.maxScanEntries,
+    onScanSettled: options.onScanSettled,
   };
 }
 
@@ -481,6 +525,10 @@ class WorkspaceWatchSession {
   private readonly known = new Map<string, FileMetadata>();
   private readonly replay: EditorM7WatchEvent[] = [];
   private readonly degradedReasons = new Set<EditorM7WatchDegradedReason>();
+  private readonly scanSubscriberWaiters = new Set<() => void>();
+  private loggedHealth: EditorM7WatchHealth = "healthy";
+  private loggedReasons = "";
+  private latestCorrelationId: string | undefined;
   private nextSubscriberId = 0;
   private sequence = 0;
   private eventCount = 0;
@@ -492,6 +540,8 @@ class WorkspaceWatchSession {
   private baselineReady: Promise<void> | null = null;
   private flushing = false;
   private scanning = false;
+  private scanYieldAt = 0;
+  private changeRevision = 0;
   private disposed = false;
   private additionalExclusions: WatchExclusions = NO_EXCLUSIONS;
   private exclusionsInitialized = false;
@@ -559,6 +609,7 @@ class WorkspaceWatchSession {
       return;
     }
     this.disposed = true;
+    this.resumeScan();
     this.clearTimers();
     this.handle?.close();
     this.handle = null;
@@ -566,6 +617,7 @@ class WorkspaceWatchSession {
     this.pending.clear();
     this.health = "stopped";
     this.degradedReasons.add("shutdown");
+    this.publishHealth();
   }
 
   // Exclusions are fixed at first-subscribe for the life of the session: the initial baseline scan
@@ -584,10 +636,14 @@ class WorkspaceWatchSession {
     const subscriber = {
       id: this.nextSubscriberId,
       onEvent: args.onEvent,
+      onSnapshot: args.onSnapshot,
+      correlationId: args.correlationId,
       reproveRoot: args.reproveRoot,
       onAuthorityRevoked: args.onAuthorityRevoked,
     };
     this.subscribers.set(subscriber.id, subscriber);
+    this.latestCorrelationId = args.correlationId;
+    this.resumeScan();
     return subscriber;
   }
 
@@ -597,7 +653,12 @@ class WorkspaceWatchSession {
   }
 
   private ensureStarted(): void {
-    if (this.disposed || this.handle !== null || this.pollTimer !== null) return;
+    if (this.disposed) return;
+    if (this.handle !== null || this.pollTimer !== null) {
+      this.startBaselineSeed();
+      if (this.needsReconciliation()) void this.scanAndEmitDiff();
+      return;
+    }
     // The native watcher has no WorkspaceFs equivalent, so it is gated by the same fresh re-proof
     // and bound to `this.root` — which proveRoot() has just confirmed is the capability's own
     // canonicalRoot, so the watch cannot be started on a root nobody proved.
@@ -633,6 +694,8 @@ class WorkspaceWatchSession {
 
   private handleRawEvent(event: WorkspaceWatchRawEvent): void {
     if (this.disposed) return;
+    if (this.isExcludedRawEvent(event)) return;
+    this.changeRevision += 1;
     const proof = this.currentAuthority();
     if (proof === null) {
       this.markUnattendedChange();
@@ -642,6 +705,10 @@ class WorkspaceWatchSession {
       this.revokeRoot();
       return;
     }
+    this.handleAuthorizedEvent(event);
+  }
+
+  private handleAuthorizedEvent(event: WorkspaceWatchRawEvent): void {
     if (event.eventType === "overflow") {
       this.emitRescan("event-overflow", "overflow");
       return;
@@ -653,7 +720,7 @@ class WorkspaceWatchSession {
       return;
     }
     if (!eventPathAllowed(relativePath, this.additionalExclusions)) {
-      this.enterDegraded("unsafe-path");
+      this.handleUnavailableEntry(event, relativePath);
       return;
     }
     this.queue({
@@ -661,6 +728,39 @@ class WorkspaceWatchSession {
       oldRelativePath: oldRelativePath ?? undefined,
       eventType: event.eventType,
     });
+  }
+
+  private handleUnavailableEntry(event: WorkspaceWatchRawEvent, relativePath: string): void {
+    const parent = unavailableEntryParent(event, relativePath, this.additionalExclusions);
+    if (parent === null) {
+      this.enterDegraded("unsafe-path");
+      return;
+    }
+    // Refresh only the authorized parent listing. Never stat, enter, or read the excluded entry.
+    this.queue({ relativePath: parent, eventType: "change", parentRefresh: true });
+  }
+
+  // Discarding excluded activity needs no authority proof or filesystem effect. In particular,
+  // recording a diagnostic in .keiko must not feed another expensive watch reconciliation.
+  // A move from a visible path still reaches authority and unsafe-path handling.
+  private isExcludedRawEvent(event: WorkspaceWatchRawEvent): boolean {
+    if (event.eventType === "overflow") return false;
+    const path = normalizeEventPath(event.filename);
+    const oldPath = normalizeEventPath(event.oldFilename);
+    return (
+      path !== null &&
+      this.discardExcludedPath(event, path) &&
+      (event.oldFilename === undefined ||
+        (oldPath !== null && hardExcluded(oldPath, this.additionalExclusions)))
+    );
+  }
+
+  private discardExcludedPath(event: WorkspaceWatchRawEvent, path: string): boolean {
+    if (unavailableEntryParent(event, path, this.additionalExclusions) !== null) return false;
+    if (hardExcluded(path, this.additionalExclusions)) return true;
+    return (
+      pathIsDenied(path) && !eventPathAllowed(pathPosix.dirname(path), this.additionalExclusions)
+    );
   }
 
   private queue(change: PendingChange): void {
@@ -701,6 +801,16 @@ class WorkspaceWatchSession {
 
   private async reconcileChange(change: PendingChange): Promise<void> {
     if (this.disposed) return;
+    if (change.parentRefresh === true) {
+      this.emit({
+        schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+        sequence: this.nextSequence(),
+        kind: "changed",
+        relativePath: change.relativePath,
+        entryKind: "directory",
+      });
+      return;
+    }
     if (change.oldRelativePath !== undefined) {
       await this.reconcileRename(change.oldRelativePath, change.relativePath);
       return;
@@ -733,6 +843,7 @@ class WorkspaceWatchSession {
       if (current.kind === "unavailable") this.startFallbackPolling();
       return;
     }
+    this.changeRevision += 1;
     this.known.delete(oldRelativePath);
     this.known.set(relativePath, current.metadata);
     this.emit(eventFromMetadata(this.nextSequence(), "renamed", current.metadata, oldRelativePath));
@@ -757,11 +868,13 @@ class WorkspaceWatchSession {
 
   private applyAbsent(relativePath: string): void {
     if (!this.known.has(relativePath)) return;
+    this.changeRevision += 1;
     this.known.delete(relativePath);
     this.emit(deletedEvent(this.nextSequence(), relativePath));
   }
 
   private applyPresent(metadata: FileMetadata): void {
+    this.changeRevision += 1;
     const previous = this.known.get(metadata.relativePath);
     this.known.set(metadata.relativePath, metadata);
     if (previous === undefined) {
@@ -772,6 +885,7 @@ class WorkspaceWatchSession {
   }
 
   private startBaselineSeed(): void {
+    if (this.scanning) return;
     this.baselineReady ??= this.seedBaseline();
   }
 
@@ -780,38 +894,87 @@ class WorkspaceWatchSession {
   }
 
   private async seedBaseline(): Promise<void> {
-    const next = await this.scanTree();
-    if (next === null || !next.complete || this.disposed || !this.ensureLiveRootAuthority()) {
-      return;
-    }
-    this.known.clear();
-    for (const metadata of next.entries.values()) this.known.set(metadata.relativePath, metadata);
-  }
-
-  private async scanAndEmitDiff(): Promise<void> {
-    if (this.scanning || !this.ensureLiveRootAuthority()) return;
     this.scanning = true;
     try {
       const next = await this.scanTree();
       if (next === null || !next.complete || this.disposed || !this.ensureLiveRootAuthority()) {
+        this.baselineReady = null;
         return;
       }
-      for (const [path, previous] of this.known)
-        if (!next.entries.has(path))
-          this.emit(deletedEvent(this.nextSequence(), previous.relativePath));
+      this.known.clear();
+      for (const metadata of next.entries.values()) this.known.set(metadata.relativePath, metadata);
+      if (this.health === "rescanRequired") this.announceBaselineGap();
+    } finally {
+      this.scanning = false;
+      this.config.onScanSettled?.();
+    }
+    if (this.health === "rescanRequired") void this.scanAndEmitDiff();
+  }
+
+  private announceBaselineGap(): void {
+    // The first seed has no complete pre-change baseline. Tell consumers to refresh instead of
+    // fabricating created/changed classifications for metadata absorbed while the lease paused.
+    this.emit({
+      schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+      sequence: this.nextSequence(),
+      kind: "rescan",
+      relativePath: "",
+      entryKind: "unknown",
+      health: "rescanRequired",
+      reason: "ambiguous-event",
+    });
+  }
+
+  private needsReconciliation(): boolean {
+    return (
+      this.degradedReasons.has("ambiguous-event") || this.degradedReasons.has("event-overflow")
+    );
+  }
+
+  private canStartDiffScan(): boolean {
+    if (this.scanning || !this.ensureLiveRootAuthority()) return false;
+    // An aborted first seed is not a baseline. Retry it before any caller can infer creations
+    // from the empty known map; a complete seed already announces the required client refresh.
+    if (this.baselineReady === null) {
+      this.startBaselineSeed();
+      return false;
+    }
+    return true;
+  }
+
+  private async scanAndEmitDiff(): Promise<void> {
+    if (!this.canStartDiffScan()) return;
+    this.scanning = true;
+    const revision = this.changeRevision;
+    let stale = false;
+    try {
+      const next = await this.scanTree();
+      if (!this.canApplyScan(next)) return;
+      stale = revision !== this.changeRevision;
+      if (stale) return;
+      for (const path of this.known.keys()) if (!next.entries.has(path)) this.applyAbsent(path);
       for (const metadata of next.entries.values()) this.applyPresent(metadata);
       this.recoverAfterCompleteScan();
     } finally {
       this.scanning = false;
+      this.config.onScanSettled?.();
+      // A scan spanning a native event or live reconciliation is not a coherent snapshot.
+      // Retain the complete baseline and retry on the bounded poll cadence, never a hot scan loop.
+      if (stale) this.startFallbackPolling();
     }
   }
 
+  private canApplyScan(scan: ScanResult | null): scan is ScanResult {
+    return scan !== null && scan.complete && !this.disposed && this.ensureLiveRootAuthority();
+  }
+
   private async scanTree(): Promise<ScanResult | null> {
+    this.scanYieldAt = performance.now() + 8;
     const fileSystem = this.effectFileSystem();
     if (fileSystem === null) return null;
     try {
       const rootStats = await fileSystem.stat(this.root);
-      if (!this.ensureLiveRootAuthority()) return null;
+      if (!(await this.awaitScanSubscriber()) || !this.ensureLiveRootAuthority()) return null;
       if (!rootStats.isDirectory) return this.rootReplaced();
       return await this.scanDirectory("");
     } catch (error) {
@@ -836,8 +999,8 @@ class WorkspaceWatchSession {
   private async scanDirectory(start: string): Promise<ScanResult> {
     const found = new Map<string, FileMetadata>();
     const queue = [start];
-    while (queue.length > 0) {
-      const current = queue.shift() ?? "";
+    for (const current of queue) {
+      if (!(await this.awaitScanSubscriber())) return { entries: found, complete: false };
       const result = await this.scanOneDirectory(current, found, queue);
       if (result === "complete") continue;
       this.emitRescan(
@@ -865,8 +1028,14 @@ class WorkspaceWatchSession {
     } catch {
       return "unavailable";
     }
-    if (!this.ensureLiveRootAuthority()) return "unavailable";
+    if (!(await this.awaitScanSubscriber()) || !this.ensureLiveRootAuthority())
+      return "unavailable";
     for (const name of names) {
+      if (performance.now() >= this.scanYieldAt) {
+        await pauseBackgroundWork(8);
+        this.scanYieldAt = performance.now() + 8;
+      }
+      if (!(await this.awaitScanSubscriber())) return "unavailable";
       const outcome = await this.scanDirectoryEntry(relativeDirectory, name, found, queue);
       if (outcome !== "continue") return outcome;
     }
@@ -882,15 +1051,17 @@ class WorkspaceWatchSession {
     const relativePath = relativeDirectory.length === 0 ? name : `${relativeDirectory}/${name}`;
     if (!eventPathAllowed(relativePath, this.additionalExclusions)) return "continue";
     if (found.size >= this.config.maxScanEntries) return "overflow";
-    const fileSystem = this.effectFileSystem();
-    if (fileSystem === null) return "unavailable";
     const result = await metadataFor(
       this.root,
       relativePath,
       this.additionalExclusions,
-      fileSystem,
+      async (): Promise<WatchEffectFileSystem | null> => {
+        if (!(await this.awaitScanSubscriber())) return null;
+        return this.effectFileSystem();
+      },
     );
-    if (!this.ensureLiveRootAuthority()) return "unavailable";
+    if (!(await this.awaitScanSubscriber()) || !this.ensureLiveRootAuthority())
+      return "unavailable";
     if (result.kind === "unavailable") return "unavailable";
     if (result.kind !== "present") return "continue";
     found.set(relativePath, result.metadata);
@@ -909,12 +1080,15 @@ class WorkspaceWatchSession {
   private enterDegraded(reason: EditorM7WatchDegradedReason): void {
     this.degradedReasons.add(reason);
     if (this.health === "healthy") this.health = "degraded";
+    this.publishHealth();
   }
 
   private emitRescan(reason: EditorM7WatchDegradedReason, kind: "rescan" | "overflow"): void {
+    if (this.disposed) return;
     const alreadyRequired = this.health === "rescanRequired" && this.degradedReasons.has(reason);
     this.degradedReasons.add(reason);
     this.health = "rescanRequired";
+    this.publishHealth();
     if (alreadyRequired) return;
     this.emit({
       schemaVersion: EDITOR_M7_SCHEMA_VERSION,
@@ -935,6 +1109,7 @@ class WorkspaceWatchSession {
     } else {
       this.health = this.degradedReasons.size === 0 ? "healthy" : "degraded";
     }
+    this.publishHealth();
     if (this.handle !== null && this.pollTimer !== null) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -1006,11 +1181,13 @@ class WorkspaceWatchSession {
   private markUnattendedChange(): void {
     this.degradedReasons.add("ambiguous-event");
     this.health = "rescanRequired";
+    this.publishHealth();
   }
 
   private revokeRoot(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.resumeScan();
     this.clearTimers();
     this.handle?.close();
     this.handle = null;
@@ -1031,6 +1208,7 @@ class WorkspaceWatchSession {
       subscriber.onEvent(event);
       subscriber.onAuthorityRevoked?.();
     }
+    this.publishHealth();
     // Authority is revoked and handles are closed above, but the reported health stays a
     // terminal, tombstoned "rescanRequired" (not "stopped" -- that means deliberate shutdown, see
     // dispose()) so a later snapshot still explains why the watch ended. Scheduling idle-dispose
@@ -1059,13 +1237,43 @@ class WorkspaceWatchSession {
     this.additionalExclusions = NO_EXCLUSIONS;
   }
 
+  // Keep one bounded scan across stream leases. While nobody is subscribed, no capability-backed
+  // filesystem work runs; the existing idle teardown releases both the scan and its metadata.
+  private async awaitScanSubscriber(): Promise<boolean> {
+    if (this.disposed) return false;
+    if (this.subscribers.size === 0) {
+      await new Promise<void>((resolve) => {
+        this.scanSubscriberWaiters.add(resolve);
+      });
+    }
+    return this.subscribers.size > 0 && !this.isDisposed();
+  }
+
+  private resumeScan(): void {
+    for (const resume of this.scanSubscriberWaiters) resume();
+    this.scanSubscriberWaiters.clear();
+  }
+
+  private publishHealth(): void {
+    const snapshot = this.snapshot();
+    const reasons = snapshot.degradedReasons.join(",");
+    if (this.loggedHealth === snapshot.health && this.loggedReasons === reasons) return;
+    recordWorkspaceWatchHealth(snapshot, this.loggedHealth, this.latestCorrelationId);
+    this.loggedHealth = snapshot.health;
+    this.loggedReasons = reasons;
+    for (const subscriber of this.subscribers.values()) {
+      if (proveRoot(subscriber.reproveRoot, this.root).granted) subscriber.onSnapshot?.(snapshot);
+    }
+  }
+
   private replayAfter(lastSequence: number | undefined): readonly EditorM7WatchEvent[] {
     if (lastSequence === undefined) return [];
     return this.replay.filter((event) => event.sequence > lastSequence);
   }
 
   private snapshotRequired(lastSequence: number | undefined): boolean {
-    if (lastSequence === undefined || this.replay.length === 0) return false;
+    if (lastSequence === undefined) return this.health === "rescanRequired";
+    if (lastSequence > this.sequence || this.replay.length === 0) return true;
     return lastSequence < (this.replay[0]?.sequence ?? 0) - 1;
   }
 

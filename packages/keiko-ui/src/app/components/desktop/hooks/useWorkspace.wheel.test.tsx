@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace } from "./useWorkspace";
 import type { AppWindow } from "../windows/types";
 
+const diagnostics = vi.hoisted(() => ({ report: vi.fn() }));
+vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: diagnostics.report }));
+afterEach(() => diagnostics.report.mockClear());
+
 const WORKSPACE_STORAGE_KEY = "keiko.workspace.v4";
 
 function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
@@ -44,11 +48,23 @@ function Harness({ cameraSmoothness = 0 }: { readonly cameraSmoothness?: number 
         <div data-testid="scroll-target" style={{ overflowY: "auto", width: 100, height: 80 }}>
           <div style={{ width: 100, height: 300 }} />
         </div>
+        <div className="monaco-editor" data-workspace-scroll-owner="virtual">
+          <div className="monaco-scrollable-element" style={{ overflow: "hidden" }}>
+            <div
+              data-testid="code-scroll-target"
+              className="view-lines"
+              role="textbox"
+              aria-label="Synthetic code input"
+              tabIndex={0}
+            />
+          </div>
+        </div>
       </section>
       <output data-testid="files-zoom">{files?.zoom ?? "missing"}</output>
       <output data-testid="view-zoom">{ws.view.zoom}</output>
       <output data-testid="view-x">{ws.view.x}</output>
       <output data-testid="view-y">{ws.view.y}</output>
+      <output data-testid="layout-locked">{String(ws.layoutLocked)}</output>
       <output data-testid="selected-window-ids">{ws.selection.selectedWindowIds.join(",")}</output>
       <output data-testid="wins-identity-changes">{winsIdentityChangesRef.current}</output>
       <button type="button" onClick={() => ws.api.activateWindow("files-1")}>
@@ -71,6 +87,9 @@ function Harness({ cameraSmoothness = 0 }: { readonly cameraSmoothness?: number 
       </button>
       <button type="button" onClick={ws.api.fitView}>
         Fit
+      </button>
+      <button type="button" onClick={ws.api.toggleLayoutLock}>
+        Toggle layout lock
       </button>
     </main>
   );
@@ -111,6 +130,89 @@ describe("useWorkspace wheel zoom routing", () => {
     cleanup();
     window.localStorage.clear();
     vi.restoreAllMocks();
+  });
+
+  it("lets unselected native and virtual windows own both wheel axes while locked", () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+    fireEvent.click(screen.getByRole("button", { name: "Toggle layout lock" }));
+    expect(screen.getByTestId("layout-locked")).toHaveTextContent("true");
+    expect(screen.getByTestId("selected-window-ids")).toBeEmptyDOMElement();
+    for (const target of ["scroll-target", "code-scroll-target"]) {
+      for (const delta of [{ deltaY: 120 }, { deltaY: -120 }, { deltaX: 120 }, { deltaX: -120 }]) {
+        const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...delta });
+        screen.getByTestId(target).dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+      }
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+    expect(screen.getByTestId("selected-window-ids")).toBeEmptyDOMElement();
+    expect(screen.getByTestId("view-x")).toHaveTextContent("0");
+    expect(screen.getByTestId("view-y")).toHaveTextContent("0");
+    expect(diagnostics.report).toHaveBeenCalledWith("[keiko] workspace layout lock changed.", {
+      composerActivity: "workspace-layout-locked",
+    });
+  });
+
+  it("freezes the camera on background wheel and pinch, then restores pan when unlocked", async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+    fireEvent.click(screen.getByRole("button", { name: "Toggle layout lock" }));
+    for (const options of [{ deltaY: 100 }, { deltaY: -100, ctrlKey: true }]) {
+      const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, ...options });
+      screen.getByTestId("workspace").dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Fit" }));
+    expect(screen.getByTestId("view-zoom")).toHaveTextContent("1");
+    expect(screen.getByTestId("view-y")).toHaveTextContent("0");
+    fireEvent.click(screen.getByRole("button", { name: "Toggle layout lock" }));
+    fireEvent.wheel(screen.getByTestId("workspace"), { deltaY: 100 });
+    await waitFor(() => expect(screen.getByTestId("view-y")).toHaveTextContent("-100"));
+    expect(diagnostics.report).toHaveBeenCalledWith("[keiko] workspace layout lock changed.", {
+      composerActivity: "workspace-layout-unlocked",
+    });
+  });
+
+  it("reports scroll readiness through the routine activity producer", () => {
+    render(<Harness />);
+    expect(diagnostics.report).toHaveBeenCalledWith(
+      "[keiko] workspace native and virtual scroll routing ready.",
+      { composerActivity: "workspace-scroll-ready" },
+    );
+  });
+
+  it("lets the active Monaco editor handle wheel events despite its virtual scroll surface", async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("files-1"),
+    );
+    for (const deltaY of [-120, 120]) {
+      const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY });
+      screen.getByTestId("code-scroll-target").dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(screen.getByTestId("view-y")).toHaveTextContent("0");
+    expect(screen.getByTestId("view-zoom")).toHaveTextContent("1");
+  });
+
+  it("keeps wheel input in a focused code editor before the window is selected", () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    mockWorkspaceRect();
+    const target = screen.getByTestId("code-scroll-target");
+    target.focus();
+    expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("");
+    const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -120 });
+    target.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.getByTestId("view-y")).toHaveTextContent("0");
   });
 
   it("routes Ctrl/Command wheel over a window to workspace zoom", async () => {

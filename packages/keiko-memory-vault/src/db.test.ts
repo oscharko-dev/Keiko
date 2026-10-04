@@ -10,17 +10,10 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
-import {
-  chmodIfPresent,
-  computeStoreFingerprint,
-  openMemoryDatabase,
-  openMemoryDatabaseReadOnly,
-  quarantineCorruptDb,
-} from "./db.js";
+import { chmodIfPresent, openMemoryDatabase, quarantineCorruptDb } from "./db.js";
 import { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
 import { insertMemoryRow } from "./memories.js";
 import { makeRecord, memId, TEST_CIPHER } from "./_support.js";
@@ -307,118 +300,6 @@ describe("openMemoryDatabase — memory-vault.store.encryption-migrated wiring",
     expect(events.some((event) => event.op === "memory-vault.store.encryption-migrated")).toBe(
       false,
     );
-  });
-});
-
-describe("computeStoreFingerprint", () => {
-  it("names no keySource for a plaintext or unreadable store, so the contract guard accepts it", () => {
-    // Regression (#3244 review + Wave 4a acceptance): a corrupt vault file read as schema 0 and
-    // was reported as `plaintext` WITH the resolved `keySource`; the contract rejects that pair,
-    // and the exporter then had no fingerprint and no unavailability entry for the store.
-    const dir = mkdtempSync(join(tmpdir(), "keiko-vault-fp-"));
-    const corruptPath = join(dir, "keiko-memory.db");
-    writeFileSync(corruptPath, "garbage that is not a sqlite header");
-    const db = new DatabaseSync(corruptPath, { readOnly: true });
-    try {
-      const fingerprint = computeStoreFingerprint(db, "env");
-      expect(fingerprint.encryptionMode).toBe("plaintext");
-      expect(fingerprint.quickCheckOk).toBe(false);
-      expect("keySource" in fingerprint).toBe(false);
-      expect(isStoreFingerprint(fingerprint)).toBe(true);
-    } finally {
-      db.close();
-      rmSync(dir, { force: true, recursive: true });
-    }
-  });
-
-  it("reports schemaVersion, table row counts, quickCheckOk, encryptionMode and keySource for a healthy vault", () => {
-    const dir = freshDir();
-    const dbPath = join(dir, "keiko-memory.db");
-    const db = openMemoryDatabase(dbPath, TEST_CIPHER);
-    db.prepare(
-      "INSERT INTO memory_vault_secrets (name, value) VALUES ('probe', 'kv1.probe-value')",
-    ).run();
-
-    const fingerprint = computeStoreFingerprint(db, "keychain");
-
-    expect(fingerprint.store).toBe("memory-vault");
-    expect(fingerprint.schemaVersion).toBe(MEMORY_VAULT_SCHEMA_VERSION);
-    expect(fingerprint.migrationsApplied).toContain("v1");
-    expect(fingerprint.migrationsApplied).toContain(`v${String(MEMORY_VAULT_SCHEMA_VERSION)}`);
-    expect(fingerprint.tableRowCounts.memory_vault_secrets).toBe(1);
-    expect(fingerprint.tableRowCounts.memories).toBe(0);
-    expect(fingerprint.quickCheckOk).toBe(true);
-    expect(fingerprint.encryptionMode).toBe("encrypted");
-    expect(fingerprint.keySource).toBe("keychain");
-    db.close();
-  });
-
-  it("omits keySource when the caller supplies none (an injected cipher/vaultKey test seam)", () => {
-    const dir = freshDir();
-    const dbPath = join(dir, "keiko-memory.db");
-    const db = openMemoryDatabase(dbPath, TEST_CIPHER);
-
-    const fingerprint = computeStoreFingerprint(db, undefined);
-
-    expect(fingerprint.keySource).toBeUndefined();
-    db.close();
-  });
-
-  it("never throws on a corrupt/garbage file and reports quickCheckOk:false", () => {
-    const dir = freshDir();
-    const dbPath = join(dir, "keiko-memory.db");
-    writeFileSync(dbPath, "garbage that is not a sqlite header, definitely not a real db file");
-    const raw = new DatabaseSync(dbPath);
-
-    let fingerprint: ReturnType<typeof computeStoreFingerprint> | undefined;
-    expect(() => {
-      fingerprint = computeStoreFingerprint(raw, undefined);
-    }).not.toThrow();
-
-    expect(fingerprint?.store).toBe("memory-vault");
-    expect(fingerprint?.quickCheckOk).toBe(false);
-    // Every fixed table read fails against a garbage file (not a database at all), so each
-    // reports the safe default of 0 rather than throwing or being omitted.
-    expect(Object.values(fingerprint?.tableRowCounts ?? {})).toEqual([0, 0, 0, 0, 0, 0]);
-    raw.close();
-  });
-
-  it("is read-only: computing a fingerprint does not change table row counts", () => {
-    const dir = freshDir();
-    const dbPath = join(dir, "keiko-memory.db");
-    const db = openMemoryDatabase(dbPath, TEST_CIPHER);
-    db.prepare("INSERT INTO memory_vault_secrets (name, value) VALUES ('a', 'kv1.a')").run();
-
-    computeStoreFingerprint(db, undefined);
-    computeStoreFingerprint(db, undefined);
-
-    const row = db.prepare("SELECT COUNT(*) AS n FROM memory_vault_secrets").get() as {
-      readonly n: number;
-    };
-    expect(row.n).toBe(1);
-    db.close();
-  });
-});
-
-describe("openMemoryDatabaseReadOnly (Finding 2 — busy_timeout on the read-only diagnostic open)", () => {
-  // RED (before fix): `node:sqlite`'s default busy_timeout is 0, so a reader started against a
-  // live production server can receive an immediate SQLITE_BUSY from a concurrent WAL checkpoint
-  // and spuriously report the vault `open-failed`, exactly the moment `keiko support export`
-  // needs the fingerprint to work.
-  it("sets the active PRAGMA busy_timeout, matching the production open path", () => {
-    const dir = freshDir();
-    const dbPath = join(dir, "keiko-memory.db");
-    openMemoryDatabase(dbPath, TEST_CIPHER).close();
-
-    const db = openMemoryDatabaseReadOnly(dbPath);
-    try {
-      const rows = db.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
-        timeout: number;
-      }[];
-      expect(rows[0]?.timeout).toBe(5000);
-    } finally {
-      db.close();
-    }
   });
 });
 

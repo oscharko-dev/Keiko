@@ -121,7 +121,7 @@ function fullProviderArgs(): Partial<WireEditorOnMountArgs> {
       streamId: "s",
       newRequestId: id,
     },
-    commands: { generateTests: () => undefined },
+    commands: { renameSymbol: () => undefined },
   };
 }
 
@@ -141,7 +141,7 @@ function buildMonaco(registry: LiveRegistry): MountMonaco {
   return {
     editor: { defineTheme: () => undefined, setModelMarkers: () => undefined },
     KeyMod: { CtrlCmd: 2048, Alt: 512 },
-    KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60 },
+    KeyCode: { KeyS: 49, F2: 60 },
     MarkerSeverity: { Hint: 1, Info: 2, Warning: 4, Error: 8 },
     languages,
   } as unknown as MountMonaco;

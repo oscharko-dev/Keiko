@@ -5,7 +5,12 @@
   block removed from the repository, no vitest configuration judges anything, so the derived
   `vitest.coverage.packages.shard.config.ts` was retired and the shards run against
   `vitest.coverage.packages.config.ts`. D1's property — a shard must not reach a verdict on its
-  partial view — is unchanged and now holds structurally. D2 through D5 below stand as written.
+  partial view — is unchanged and now holds structurally. D2 through D5 below stand as written,
+  D5 with the amendment below.
+- D5 amended 2026-10-03: every SonarCloud analysis of one pull request is serialized across its
+  code-head and metadata runs, because SonarCloud refuses the older of two overlapping reports and
+  a body edit right after a push left the required `SonarCloud Code Analysis` check `cancelled` on
+  an unchanged, clean head (PR #3679). The rest of D5 is unchanged.
 - Amends: [ADR-0131](ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md) (D1, the
   topology of the `coverage-sonar` job; every other ADR-0131 decision stands)
 - Extends: [ADR-0156](ADR-0156-measurement-and-verdict-separation.md) (D1, the producer/judge
@@ -152,6 +157,30 @@ window would have dropped the middle run's evidence. A run alone in its group ca
 another, which is the property this needs — a cancelled required check on `dev` is indistinguishable
 from a real defect, and that evidence binds an integration commit nothing else re-measures.
 
+**Amendment (2026-10-03) — one SonarCloud analysis per pull request at a time.** Each job above
+measures inside its own run except the scanner, which writes to state both classes share: it files
+its report under the SonarCloud pull request, and SonarCloud refuses a report whose analysis is
+older than one it has already processed for that pull request. The refused analysis fails its run's
+`Coverage and SonarCloud` job and leaves the head a `SonarCloud Code Analysis` check that ends
+`cancelled`; branch protection reads the newest check run of that name. On PR #3679 (head
+`a0964f336`) a body edit 48 seconds after a push started the metadata run next to the push run. The
+two scans began 54 seconds apart, the metadata run's report was processed first, the push run's was
+refused, and the required context stayed `cancelled` — quality gate OK, zero issues — until the
+failed jobs were re-run by hand.
+
+`coverage-sonar` therefore carries a job-level concurrency group keyed on the pull-request number,
+`ci-sonar-pr-<number>`, with `cancel-in-progress: false`. A scan starts only after the previous scan
+of that pull request has finished or been cancelled, so reports reach SonarCloud in the order of
+their analysis dates and none is refused for being older. The key is the pull request, not the
+head: a superseded run's scan files under the same SonarCloud pull request and could get the current
+head's report refused just as well. Nothing is cancelled by this group, because the waiting run
+still owes its own complete verdict — the property the first paragraph of this decision exists to
+keep. GitHub's default single pending slot is enough by construction: each workflow-level group
+holds one live run per pull request, so at most two of these jobs ever compete. A third
+workflow-level class would let GitHub cancel the older of two pending jobs, and it fails the pin in
+`scripts/__tests__/dev-quality-workflows.test.mjs`. A run that is not a pull request keeps a group
+of one, `ci-sonar-<run_id>`, for the reason the previous paragraph gives.
+
 ## Consequences
 
 The critical path is set by the slowest coverage job plus the finalizer, instead of by their sum.
@@ -189,6 +218,11 @@ The `.github/zizmor.yml` `cache-poisoning` ignores are line-anchored, as that fi
 workflow is scheduled to be edited by two further children of the same epic, so those anchors will
 need re-verifying — which is the documented, intended failure mode, not a regression.
 
+Serializing the scan (D5, 2026-10-03) costs waiting, not evidence. The run whose `coverage-sonar`
+queues second reports up to one scan (about ten minutes) later, and a metadata run on a superseded
+head can hold the slot that long ahead of the new head's code-head run. A body edit still scans the
+unchanged bytes a second time; that scan can no longer get the first one refused.
+
 ## Alternatives rejected
 
 - **Disable the thresholds in the shard runs from the command line.** Only the four global metrics
@@ -207,3 +241,21 @@ need re-verifying — which is the documented, intended failure mode, not a regr
 - **Cancel superseded `merge_group` or push-to-`dev` runs too.** Those runs are the only measurement
   of their integration commit, and a cancelled result is not distinguishable from a defect by
   anything downstream.
+- **Reuse the code-head run's SonarCloud verdict in a metadata run** (2026-10-03). ADR-0178 reuses
+  evidence that is complete. The metadata run needs the code-head verdict while that run is still in
+  flight — on PR #3679 the two runs reached `coverage-sonar` 57 seconds apart — so it would have to
+  wait on another run with a time-bounded poll, and fall back to its own scan whenever that run
+  failed, was cancelled or was superseded. The fallback races exactly as before unless it is
+  serialized, so serialization is needed either way; reuse would only save the second scan when the
+  metadata run happens to queue second, at the price of a cross-run lookup that can itself fail.
+- **Skip the scanner in metadata runs** (2026-10-03). The repository contract — 85 percent new-code
+  coverage, zero unresolved issues, complete hotspot review — is stricter than the native gate and
+  is enforced only by `check-sonar-pr-quality-gate.mjs` inside the required `ci` aggregate. A
+  metadata run that neither scans nor verifies could publish a green `ci` over a code-head run that
+  failed the contract, the masking D5 rejects. Verifying without scanning needs the code-head
+  analysis to be complete first, which is the waiting problem above.
+- **`queue: max` instead of the default pending slot** (2026-10-03). GitHub has accepted it since
+  2026-05-07 (up to 100 pending entries, first in, first out), but two contenders never need more
+  than one slot, and actionlint 1.7.12, pinned in the required `workflow hygiene` context, rejects
+  the key (`unexpected key "queue" for "concurrency" section`). Adopting it would need a linter
+  exception for no gain.

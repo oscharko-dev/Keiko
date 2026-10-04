@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runBugVerification, SKIP_UNRESOLVED } from "./verify-stage.js";
 import { buildBugRunState, type BugRunState } from "./internal.js";
 import { computeBugFingerprint } from "./emit.js";
@@ -11,6 +11,12 @@ import {
 import type { PatchFileChange, SpawnFn } from "@oscharko-dev/keiko-tools";
 import type { BugInvestigationInput } from "./types.js";
 import { recordingSpawn, scriptChildClose } from "./_support.js";
+
+vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@oscharko-dev/keiko-verification")>();
+  const { withConfinedVerificationFixture } = await import("../unit-tests/_support.js");
+  return withConfinedVerificationFixture(actual);
+});
 
 const ROOT = "/repo";
 
@@ -127,8 +133,13 @@ describe("runBugVerification (D11)", () => {
     const out = await runBugVerification(state, workspace, [changed("tests/buggy.test.ts")], fs);
     expect(out.skipReason).toBeUndefined();
     expect(out.summary?.overallStatus).toBe("passed");
-    expect(spawn.calls()[0]?.command).toContain("npx");
-    expect(spawn.calls()[0]?.args).toEqual(["vitest", "run", "tests/buggy.test.ts"]);
+    expect(spawn.calls()[0]?.args).toContain("--bind");
+    expect(spawn.calls()[0]?.args.slice(-4)).toEqual([
+      "/trusted-tools/npx",
+      "vitest",
+      "run",
+      "tests/buggy.test.ts",
+    ]);
   });
 
   it("runs a changed Node native regression file through the shared targeted planner", async () => {
@@ -143,7 +154,11 @@ describe("runBugVerification (D11)", () => {
     const out = await runBugVerification(state, workspace, [changed("test/buggy.test.js")], fs);
 
     expect(out.summary?.overallStatus).toBe("passed");
-    expect(spawn.calls()[0]?.command).toMatch(/(?:^|\/)node$/u);
-    expect(spawn.calls()[0]?.args).toEqual(["--test", "test/buggy.test.js"]);
+    expect(spawn.calls()[0]?.args).toContain("--bind");
+    expect(spawn.calls()[0]?.args.slice(-3)).toEqual([
+      "/trusted-tools/node",
+      "--test",
+      "test/buggy.test.js",
+    ]);
   });
 });

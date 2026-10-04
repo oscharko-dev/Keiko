@@ -14,6 +14,7 @@
  */
 
 import Image from "next/image";
+import { flushSync } from "react-dom";
 import {
   memo,
   useCallback,
@@ -25,7 +26,6 @@ import {
   type ChangeEvent,
   type CSSProperties,
   type Dispatch,
-  type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
   type Ref,
@@ -36,6 +36,18 @@ import {
 import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  citationMarkerIndices,
+  findCitationMarkerGroups,
+  type CitationMarkerGroup,
+} from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import { ownAssessmentPlainText } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import type {
+  ClientDiagnosticAnswerCopy,
+  ClientDiagnosticAnswerSpeech,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import {
   useChatSessionCatalog,
   useChatSessionComposer,
   useChatSessionContext,
@@ -43,6 +55,7 @@ import {
 } from "./context/ChatSessionContext";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
+import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
@@ -52,11 +65,8 @@ import {
   NATIVE_LIST_KEEP_PADDING_STYLE,
   NATIVE_LIST_STYLE,
 } from "./native-element-styles";
-import {
-  SafeMarkdownBoundary,
-  type AssistantCodeBlockApply,
-  type AssistantCodeBlockApplyOutcome,
-} from "./SafeMarkdown";
+import dynamic from "next/dynamic";
+import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import {
   repositoryReferenceRoots,
   sanitizeRepositoryEvidenceText,
@@ -138,21 +148,30 @@ import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { GitChangeScopePill } from "./GitChangeScopePill";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { ConnectorScopePill } from "./ConnectorScopePill";
-import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { useFollowNewest } from "@/lib/useFollowNewest";
-import { ComposerShell, composerEnterSubmits, useComposerAutoGrow } from "./composer/ComposerShell";
+import { ComposerShell, composerEnterSubmits } from "./composer/ComposerShell";
+import { MarkdownComposer } from "./composer/MarkdownComposer";
+import type { ComposerInputHandle, ComposerKeyEvent } from "./composer/composer-editor-types";
 import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
-import {
-  capsulesForKnowledgePodUi,
-  capsuleSetsForKnowledgePodUi,
-  fetchCapsules,
-  fetchCapsuleSets,
-  type CapsuleListEntry,
-  type CapsuleSetListEntry,
+import type {
+  CapsuleListEntry,
+  CapsuleSetListEntry,
+  KnowledgePodUiGuidance,
 } from "@/lib/local-knowledge-api";
+import {
+  knowledgePodGuidanceText,
+  useLocalKnowledgeTranslate,
+  type I18nTranslate as LocalKnowledgeTranslate,
+} from "@/app/local-knowledge/local-knowledge-i18n";
+import {
+  capsuleNameWithState,
+  isReadyCapsule,
+  useKnowledgeCatalog,
+  type KnowledgeCatalog,
+} from "./knowledge-catalog";
 import type {
   Chat,
   ChatMessage,
@@ -420,42 +439,166 @@ function modelList(models: readonly ModelCapability[]): readonly ModelCapability
   return models.filter((model) => model.kind === "chat");
 }
 
-// uiux-fix F042 (C208) — citation markers in grounded answers (ASCII [n], CJK
-// lenticular 【n】, fullwidth ［n］ — mirroring citation-attacher's tolerance) are
-// stripped together with their leading whitespace so copied prose stays clean.
+// uiux-fix F042 (C208) — citation markers in grounded answers (ASCII [n], grouped [1, 7, 8], CJK
+// lenticular 【n】, fullwidth ［n］ — the one grammar shared with the citation attacher and the
+// answer renderer via keiko-contracts) are stripped together with their leading whitespace so
+// copied prose stays clean. Only a grounded answer's markers are stripped, and only a group whose
+// every index names one of the answer's references: `[1, 2, 3]` in an ordinary answer, `[80, 443]`
+// beyond the references and any bracket inside Markdown code are content, not citations
+// (PR #3678 review).
 //
-// The marker atom is matched WITHOUT a leading `\s*` on purpose (SonarCloud S8786):
-// an unbounded quantifier directly followed by a mandatory, rarely-occurring atom is
-// the classic super-linear backtracking shape — for a long run of whitespace that
-// never resolves into a marker, a backtracking engine retries the whole run from
-// every offset inside it, which is O(n^2). Leading whitespace is instead trimmed by
-// a bounded backward scan in stripCitationMarkers below, which cannot backtrack.
-const CITATION_MARKER_PATTERN = /[[【［]\d+[\]】］]/g;
+// Leading whitespace is trimmed by a bounded backward scan in stripCitationMarkers below rather
+// than by a `\s*` in front of a marker pattern (SonarCloud S8786): an unbounded quantifier directly
+// followed by a mandatory, rarely-occurring atom is the classic super-linear backtracking shape —
+// for a long run of whitespace that never resolves into a marker, a backtracking engine retries the
+// whole run from every offset inside it, which is O(n^2).
 const CITATION_MARKER_WHITESPACE = /\s/u;
 const COLLAPSIBLE_ANSWER_MIN_CHARS = 1800;
 const COLLAPSIBLE_ANSWER_MIN_LINES = 32;
 const QUESTION_MAP_PREVIEW_MAX = 76;
 
-// Equivalent to `text.replace(/\s*<marker>/g, "")`, but as a single forward pass
-// (matchAll) plus a bounded backward whitespace scan per marker, so total work
-// stays O(n) regardless of how much whitespace precedes a marker.
-function stripCitationMarkers(text: string): string {
+// Equivalent to removing every marker group together with the whitespace before it, but as a single
+// forward pass plus a bounded backward whitespace scan per marker, so total work stays O(n)
+// regardless of how much whitespace precedes a marker.
+function citesWithin(group: CitationMarkerGroup, citationCeiling: number): boolean {
+  return group.indices.every((index) => index >= 1 && index <= citationCeiling);
+}
+
+function stripCitationMarkers(text: string, citationCeiling: number): string {
   let result = "";
   let cursor = 0;
-  for (const match of text.matchAll(CITATION_MARKER_PATTERN)) {
-    const matchStart = match.index ?? 0;
-    let markerStart = matchStart;
+  for (const group of findCitationMarkerGroups(text)) {
+    if (!citesWithin(group, citationCeiling)) continue;
+    let markerStart = group.start;
     while (markerStart > cursor && CITATION_MARKER_WHITESPACE.test(text.charAt(markerStart - 1))) {
       markerStart -= 1;
     }
     result += text.slice(cursor, markerStart);
-    cursor = matchStart + match[0].length;
+    cursor = group.end;
   }
   return result + text.slice(cursor);
 }
 
-export function copyableMessageText(content: string): string {
-  return stripCitationMarkers(sanitizeRepositoryEvidenceText(content));
+/**
+ * The copy text of an assistant message. `citationCeiling` is the highest reference index the
+ * message's grounded answer can cite; 0 (an ordinary answer) strips no marker at all.
+ */
+export function copyableMessageText(content: string, citationCeiling = 0): string {
+  return stripCitationMarkers(sanitizeRepositoryEvidenceText(content), citationCeiling);
+}
+
+/**
+ * The text read aloud for an assistant answer: the answer itself with its grounded citation markers
+ * removed by the same rule as the copy (every index names one of the answer's references), so
+ * `[1, 7, 8]` of a grounded answer is never spoken while an ordinary answer's `[1, 2]` stays content.
+ * The synthesis route sees only text and cannot tell the two apart (PR #3678 review). Only the
+ * markers go: the copy's repository-evidence tidy-up is no speech rule, so a bracketed path is
+ * spoken as the answer wrote it.
+ */
+export function speakableAnswerText(message: ChatMessage): string {
+  return stripCitationMarkers(
+    answerReadingText(message),
+    groundedCitationCeiling(message.groundedAnswer),
+  );
+}
+
+// A grounded answer stores Keiko's own assessment as a tagged block after its source-backed part
+// (ADR-0144, the server writes the canonical lowercase tag); every other message is shown exactly
+// as written, a literal tag included.
+function carriesOwnAssessment(message: ChatMessage): boolean {
+  return message.groundedAnswer !== undefined && message.content.includes("<assessment>");
+}
+
+/** The answer as reading text for copying and speech: a grounded answer's assessment tags go. */
+export function answerReadingText(message: ChatMessage): string {
+  return carriesOwnAssessment(message) ? ownAssessmentPlainText(message.content) : message.content;
+}
+
+// Only an answer with Keiko's own assessment needs the split renderer and its labelled note; they
+// load in their own chunk so the initial desktop paint stays under initialPageChunkGzipBytesCeiling.
+const AssessedAnswerBody = dynamic(
+  () => import("./OwnAssessment").then((mod) => mod.AssessedAnswerBody),
+  { ssr: false, loading: () => null },
+);
+
+/**
+ * The body-free evidence of `speakableAnswerText` by the same rule: whether the answer is grounded
+ * and how many marker groups the spoken text drops and keeps (PR #3678 review). Never the text.
+ */
+export function speechPreparationEvidence(message: ChatMessage): ClientDiagnosticAnswerSpeech {
+  const ceiling = groundedCitationCeiling(message.groundedAnswer);
+  const groups = findCitationMarkerGroups(answerReadingText(message));
+  const stripped = groups.filter((group) => citesWithin(group, ceiling)).length;
+  return {
+    grounded: message.groundedAnswer !== undefined,
+    strippedGroupCount: stripped,
+    keptGroupCount: groups.length - stripped,
+  };
+}
+
+// The copy's body-free evidence (PR #3678 review): whether it succeeded, whether the answer was
+// grounded, and how many marker groups the copy removed and kept — by the same rule as the copy
+// itself. Never the copied text.
+// `grounded` is whether the answer is grounded at all — a grounded refusal with no reference is
+// still grounded — independent of the reference count that decides what is stripped (PR #3678
+// review).
+interface AnswerCopySubject {
+  readonly content: string;
+  readonly citationCeiling: number;
+  readonly grounded: boolean;
+}
+
+function answerCopyEvidence(
+  subject: AnswerCopySubject,
+  outcome: ClientDiagnosticAnswerCopy["outcome"],
+): ClientDiagnosticAnswerCopy {
+  const groups = findCitationMarkerGroups(sanitizeRepositoryEvidenceText(subject.content));
+  const stripped = groups.filter((group) => citesWithin(group, subject.citationCeiling)).length;
+  return {
+    outcome,
+    grounded: subject.grounded,
+    strippedGroupCount: stripped,
+    keptGroupCount: groups.length - stripped,
+  };
+}
+
+function reportAnswerCopy(subject: AnswerCopySubject, error?: unknown): void {
+  if (error === undefined) {
+    reportClientDiagnostic("Keiko chat answer copied.", {
+      answerCopy: answerCopyEvidence(subject, "copied"),
+    });
+    return;
+  }
+  reportClientDiagnostic("Keiko chat answer copy failed.", {
+    answerCopy: answerCopyEvidence(subject, "failed"),
+    errorKind: "unavailable",
+    errorEvidence: clientErrorEvidence(error),
+  });
+}
+
+function highestCitedMarker(markers: readonly (string | number | undefined)[]): number {
+  let highest = 0;
+  for (const marker of markers) {
+    const indices = typeof marker === "number" ? [marker] : citationMarkerIndices(marker ?? "");
+    for (const index of indices) highest = Math.max(highest, index);
+  }
+  return highest;
+}
+
+/**
+ * The highest reference index a grounded answer can cite: the references its prompt carried, and
+ * never fewer than its attached citations or their own markers (answers that predate the prompt
+ * context). Undefined answer: 0, so an ordinary answer keeps every bracket.
+ */
+export function groundedCitationCeiling(answer: GroundedAnswerWire | undefined): number {
+  if (answer === undefined) return 0;
+  const knowledge = "knowledgeCitations" in answer ? answer.knowledgeCitations : [];
+  const citations = [...answer.citations, ...knowledge];
+  return Math.max(
+    answer.promptContext?.sentReferenceCount ?? 0,
+    citations.length,
+    highestCitedMarker(citations.map((citation) => citation.marker)),
+  );
 }
 
 function questionMapPreview(content: string): string {
@@ -474,14 +617,24 @@ function isCollapsibleAssistantAnswer(content: string): boolean {
 // uiux-fix F042 (C208) — quiet per-bubble copy affordance for assistant
 // responses. Mirrors SafeMarkdown's code-block CopyButton: clipboard guard for
 // non-secure contexts and announced status (WCAG 4.1.3).
-function MessageCopyButton({ content }: { readonly content: string }): ReactNode {
+function MessageCopyButton({
+  content,
+  citationCeiling,
+  grounded,
+}: {
+  readonly content: string;
+  readonly citationCeiling: number;
+  readonly grounded: boolean;
+}): ReactNode {
   const t = useTranslate();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [status, setStatus] = useState("");
 
   const handleCopy = useCallback(() => {
-    void copyTextToClipboard(copyableMessageText(content)).then(
+    const subject = { content, citationCeiling, grounded };
+    void copyTextToClipboard(copyableMessageText(content, citationCeiling)).then(
       () => {
+        reportAnswerCopy(subject);
         setCopyState("copied");
         setStatus(t("chat.copy.copiedStatus"));
         setTimeout(() => {
@@ -489,12 +642,13 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
           setStatus("");
         }, 1500);
       },
-      () => {
+      (error: unknown) => {
+        reportAnswerCopy(subject, error);
         setCopyState("failed");
         setStatus(t("chat.copy.failedStatus"));
       },
     );
-  }, [content, t]);
+  }, [citationCeiling, content, grounded, t]);
 
   const copied = copyState === "copied";
   const failed = copyState === "failed";
@@ -613,33 +767,60 @@ function useRegisterPdfCitationPreviewTarget(
   ]);
 }
 
-// Extracted from ChatBubbleImpl (SonarCloud S3776) — the message body: plain text
-// for the user, otherwise safe markdown, plus the streaming caret. A streaming
+// Extracted from ChatBubbleImpl (SonarCloud S3776) — both message roles use safe markdown
+// so sent Composer formatting remains visible. A streaming
 // assistant turn takes the SAME safe-markdown path as a settled one (#2404,
 // #2783); only code-fence highlighting is deferred while tokens arrive.
-function ChatBubbleContentArea({
-  message,
-  isUser,
-  streaming,
-  contentId,
-  collapsed,
-  canCollapse,
-  repositoryRoots,
-  openRepositoryReference,
-  citationPreview,
-  onApplyCodeBlock,
-}: {
+type ChatBubbleMarkdownProps = {
   readonly message: ChatMessage;
   readonly isUser: boolean;
   readonly streaming: boolean;
-  readonly contentId: string;
-  readonly collapsed: boolean;
-  readonly canCollapse: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly citationPreview: CitationPreviewController | undefined;
-  readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
+};
+
+// Streaming assistant turns use the same safe renderer as persisted answers; parser failures fall
+// back to plain-text raw source for this bubble. SM-1: wrapped in a per-message boundary so a
+// parser/render defect degrades this one bubble to plain text instead of crashing the view.
+function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
+  const { message, isUser, streaming } = props;
+  if (carriesOwnAssessment(message)) {
+    return (
+      <AssessedAnswerBody
+        content={message.content}
+        messageId={message.id}
+        repositoryRoots={props.repositoryRoots}
+        openRepositoryReference={props.openRepositoryReference}
+        citationPreview={props.citationPreview}
+      />
+    );
+  }
+  return (
+    <SafeMarkdownBoundary
+      source={message.content}
+      literalUserInput={isUser}
+      diagnosticCorrelationId={message.id}
+      repositoryRoots={props.repositoryRoots}
+      openRepositoryReference={props.openRepositoryReference}
+      citationPreview={props.citationPreview}
+      streaming={streaming}
+      trailing={streaming ? <span className="ai-stream-cursor" aria-hidden="true" /> : undefined}
+    />
+  );
+}
+
+function ChatBubbleContentArea({
+  contentId,
+  collapsed,
+  canCollapse,
+  ...markdown
+}: ChatBubbleMarkdownProps & {
+  readonly contentId: string;
+  readonly collapsed: boolean;
+  readonly canCollapse: boolean;
 }): ReactNode {
+  const { isUser } = markdown;
   return (
     <div
       id={isUser ? undefined : contentId}
@@ -647,29 +828,7 @@ function ChatBubbleContentArea({
       data-collapsed={!isUser && collapsed ? "true" : "false"}
       data-collapsible={canCollapse ? "true" : "false"}
     >
-      {isUser ? (
-        message.content
-      ) : (
-        // AC #1 / #2: assistant responses render as safe markdown.
-        // User messages remain plain text — no markdown interpretation.
-        // Streaming assistant turns use the same safe renderer as persisted
-        // answers; parser failures fall back to plain-text raw source for this bubble.
-        // SM-1: wrapped in a per-message boundary so a parser/render defect
-        // degrades this one bubble to plain text instead of crashing the view.
-        <SafeMarkdownBoundary
-          source={message.content}
-          diagnosticCorrelationId={message.id}
-          applyScopeId={`${message.chatId}:${message.id}`}
-          repositoryRoots={repositoryRoots}
-          openRepositoryReference={openRepositoryReference}
-          citationPreview={citationPreview}
-          onApplyCodeBlock={onApplyCodeBlock}
-          streaming={streaming}
-          trailing={
-            streaming ? <span className="ai-stream-cursor" aria-hidden="true" /> : undefined
-          }
-        />
-      )}
+      <ChatBubbleMarkdown {...markdown} />
     </div>
   );
 }
@@ -788,7 +947,11 @@ function ChatBubbleFooterActions({
           onCancel={onCancelRegenerate}
         />
       ) : null}
-      <MessageCopyButton content={message.content} />
+      <MessageCopyButton
+        content={answerReadingText(message)}
+        citationCeiling={groundedCitationCeiling(message.groundedAnswer)}
+        grounded={message.groundedAnswer !== undefined}
+      />
       {canCollapse ? (
         <button
           type="button"
@@ -848,7 +1011,6 @@ function ChatBubbleImpl({
   regenerating = false,
   repositoryRoots,
   openRepositoryReference,
-  onApplyCodeBlock,
   previewWindows,
   windowId,
   streaming = false,
@@ -862,7 +1024,6 @@ function ChatBubbleImpl({
   readonly regenerating?: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
-  readonly onApplyCodeBlock?: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
   readonly windowId: string | undefined;
   // Issue #1296 — true only for the live assistant turn while tokens are arriving,
@@ -928,12 +1089,14 @@ function ChatBubbleImpl({
   return (
     <article
       ref={bubbleRef}
-      className="chat-msg"
+      className={isUser ? `chat-msg ${styles.cmpUserMessage}` : "chat-msg"}
       data-role={message.role}
       data-layout={layout}
       tabIndex={isUser ? undefined : -1}
     >
-      <div className="chat-msg-bubble">
+      <div
+        className={isUser ? `chat-msg-bubble ${styles.cmpUserMessageBubble}` : "chat-msg-bubble"}
+      >
         {isUser ? <div className="chat-msg-role">{t("chat.role.user")}</div> : <KeikoMessageMark />}
         {terminalTurnLabel === undefined ? null : (
           <output className={styles.turnEndState} style={NATIVE_BLOCK_STYLE}>
@@ -950,7 +1113,6 @@ function ChatBubbleImpl({
           repositoryRoots={repositoryRoots}
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
-          onApplyCodeBlock={onApplyCodeBlock}
         />
         <ResponseVersionSelector
           message={message}
@@ -1045,7 +1207,6 @@ interface ConversationThreadProps {
   readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
-  readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
   readonly windowId: string | undefined;
   readonly sending: boolean;
@@ -1066,7 +1227,6 @@ function ConversationThreadImpl({
   onOpenRunResult,
   repositoryRoots,
   openRepositoryReference,
-  onApplyCodeBlock,
   previewWindows,
   windowId,
   sending,
@@ -1156,7 +1316,6 @@ function ConversationThreadImpl({
                   onOpenRunResult={onOpenRunResult}
                   repositoryRoots={repositoryRoots}
                   openRepositoryReference={openRepositoryReference}
-                  onApplyCodeBlock={onApplyCodeBlock}
                   previewWindows={previewWindows}
                   windowId={windowId}
                   layout="turn"
@@ -2093,6 +2252,13 @@ function composerModelOptions(
   return modelList(models).map((model) => ({ value: model.id, label: model.id }));
 }
 
+function composerModelSearch(
+  models: readonly ModelCapability[],
+  t: I18nTranslate,
+): string | undefined {
+  return models.length >= 10 ? t("chat.model.search") : undefined;
+}
+
 function ComposerContextControls({
   session,
   selectedModelCapability,
@@ -2107,13 +2273,7 @@ function ComposerContextControls({
 
   return (
     <div className="cmp-bar-model">
-      <AttachButton
-        model={selectedModelCapability}
-        onFiles={onAttachFiles}
-        anyModelSupportsAttachments={models.some(
-          (m) => m.supportsImageInput || m.supportsDocumentInput,
-        )}
-      />
+      <AttachButton model={selectedModelCapability} onFiles={onAttachFiles} />
       <div
         className={`cmp-model mono ui-tip${controlsNarrow ? " cmp-model-compact" : " cmp-pill-standard"}`}
         data-tip={controlsNarrow ? compactModelTip : undefined}
@@ -2129,6 +2289,11 @@ function ComposerContextControls({
             <CubeIcon size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
           }
           menuTitle={t("chat.model.menuTitle")}
+          menuPlacement="up"
+          attached={false}
+          menuPopoverMinWidth={300}
+          searchPlaceholder={composerModelSearch(models, t)}
+          searchEmptyLabel={t("chat.model.searchEmpty")}
           menuClassName="cmp-model-menu"
           menuMinWidth={controlsNarrow ? 118 : 280}
           mono
@@ -2146,6 +2311,7 @@ function ComposerContextControls({
           }}
         />
       </div>
+      <ChatContextMeterContainer session={session} />
     </div>
   );
 }
@@ -2479,6 +2645,7 @@ function SendLifecycleStatus({ status }: { readonly status: SendStatus }): React
 interface ComposerCoreProps {
   readonly ready: boolean;
   readonly placeholder: string;
+  readonly inputRef: RefObject<ComposerInputHandle | null>;
   readonly suspended?: boolean;
   readonly minimal?: boolean;
   readonly compact?: boolean;
@@ -2489,23 +2656,24 @@ interface ComposerCoreProps {
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — attachment intake: adds each dropped or
 // picked file via the session API and reports only the first rejection encountered, matching the
 // original loop's behavior (later rejections in the same batch don't overwrite the first).
-async function collectFirstAttachmentRejection(
+function collectFirstAttachmentRejection(
   files: readonly File[],
   addPendingAttachment: ChatSessionComposerApi["addPendingAttachment"],
 ): Promise<{
   readonly reason: AttachmentRejectionReason | undefined;
   readonly mime: string | undefined;
 }> {
-  let reason: AttachmentRejectionReason | undefined;
-  let mime: string | undefined;
-  for (const file of files) {
+  const initial: { reason: AttachmentRejectionReason | undefined; mime: string | undefined } = {
+    reason: undefined,
+    mime: undefined,
+  };
+  return files.reduce<Promise<typeof initial>>(async (previous, file) => {
+    const first = await previous;
     const result = await addPendingAttachment(file);
-    if (!result.ok && reason === undefined) {
-      reason = result.reason;
-      mime = file.type;
-    }
-  }
-  return { reason, mime };
+    return !result.ok && first.reason === undefined
+      ? { reason: result.reason, mime: file.type }
+      : first;
+  }, Promise.resolve(initial));
 }
 
 // Extracted from ComposerCoreImpl (SonarCloud S3776) — the realtime voice session's chat context
@@ -2545,7 +2713,7 @@ function syncVoiceDialogLayerFocus(params: {
 // the highlighted (or first) result. Returns true when the key was handled so the caller skips
 // the default composer key-down flow, matching the original if-chain's fall-through behavior.
 function handleRepositoryPickerKeyDown(
-  event: KeyboardEvent<HTMLTextAreaElement>,
+  event: ComposerKeyEvent,
   params: {
     readonly results: readonly FilesSearchResult[];
     readonly highlightedIndex: number;
@@ -3002,6 +3170,7 @@ function ComposerVoiceOverlay({
 function ComposerCoreImpl({
   ready,
   placeholder,
+  inputRef,
   suspended = false,
   minimal = false,
   compact = false,
@@ -3035,11 +3204,7 @@ function ComposerCoreImpl({
     activeProject,
     replaceChat,
   } = session;
-  // uiux-fix F009 C089 — auto-grow with the content (shared ComposerShell behaviour). Clearing
-  // the draft after a send collapses the textarea back to its rows={2} minimum. The mini composer
-  // (MiniChat) has its own textarea without this effect and stays height:100%.
-  const taRef = useRef<HTMLTextAreaElement>(null);
-  useComposerAutoGrow(taRef, draft);
+  const taRef = inputRef;
 
   // Rejection state for the inline alert (AC #2 / Part 2).
   const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
@@ -3092,7 +3257,7 @@ function ComposerCoreImpl({
       setDraft(draft.trim().length === 0 ? text : `${draft.trimEnd()} ${text}`);
       taRef.current?.focus();
     },
-    [draft, setDraft],
+    [draft, setDraft, taRef],
   );
   const dictation = useDictation({
     onInsert: insertTranscript,
@@ -3170,7 +3335,8 @@ function ComposerCoreImpl({
     // Only the canonical assistant answer produced after a spoken user turn is eligible. Typed chat and
     // pre-existing history remain silent, while synthesized speech is byte-for-byte the visible answer.
     enabled: voiceDialogActive && voiceAnswer !== undefined,
-    text: voiceAnswer?.content,
+    text: voiceAnswer === undefined ? undefined : speakableAnswerText(voiceAnswer),
+    preparation: voiceAnswer === undefined ? undefined : speechPreparationEvidence(voiceAnswer),
     messageId: voiceAnswer?.id,
     persona: voiceDialog.persona,
     onSettled: (assistantMessageId) => batchSpeechSettledRef.current?.(assistantMessageId),
@@ -3493,7 +3659,7 @@ function ComposerCoreImpl({
         setRepositoryPickingPath(null);
       }
     },
-    [activeChat, draft, replaceChat, repositoryMention, setDraft, t],
+    [activeChat, draft, replaceChat, repositoryMention, setDraft, t, taRef],
   );
 
   const removeRepositoryReference = useCallback(
@@ -3506,32 +3672,29 @@ function ComposerCoreImpl({
         taRef.current?.focus();
       });
     },
-    [draft, repositoryReferences, setDraft],
+    [draft, repositoryReferences, setDraft, taRef],
   );
 
   const handleDraftChange = useCallback(
-    (event: ChangeEvent<HTMLTextAreaElement>): void => {
-      const next = event.target.value;
+    (next: string, cursor: number): void => {
       setDraft(next);
-      updateRepositoryMentionFromTextarea(next, event.target.selectionStart ?? next.length);
+      if (cursor < 0) setRepositoryMention(null);
+      else updateRepositoryMentionFromTextarea(next, cursor);
     },
     [setDraft, updateRepositoryMentionFromTextarea],
   );
 
   const handleDraftSelect = useCallback(
-    (event: SyntheticEvent<HTMLTextAreaElement>): void => {
+    (value: string, cursor: number): void => {
       if (repositoryMention === null) return;
-      const target = event.currentTarget;
-      updateRepositoryMentionFromTextarea(
-        target.value,
-        target.selectionStart ?? target.value.length,
-      );
+      if (cursor < 0) setRepositoryMention(null);
+      else updateRepositoryMentionFromTextarea(value, cursor);
     },
     [repositoryMention, updateRepositoryMentionFromTextarea],
   );
 
   const handleDraftKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    (event: ComposerKeyEvent, value: string): void => {
       if (repositoryPickerOpen) {
         const handled = handleRepositoryPickerKeyDown(event, {
           results: repositorySearch.results,
@@ -3544,7 +3707,9 @@ function ComposerCoreImpl({
         });
         if (handled) return;
       }
-      if (composerEnterSubmits(event)) void sendMessage();
+      if (composerEnterSubmits(event)) {
+        void sendMessage({ text: value, clearDraftOnAdmission: true });
+      }
     },
     [
       insertRepositoryFileReference,
@@ -3598,25 +3763,31 @@ function ComposerCoreImpl({
         <ComposerShell
           value={draft}
           placeholder={placeholder}
-          textareaRef={taRef}
-          ariaLabel={t("chat.messageLabel")}
-          // KEIKO-0608: client-side parity with the voice admission path's size guard (enforced
-          // authoritatively by the server either way — see resolveSendMessageAdmission in
-          // useChatSession.ts and chat-handlers.ts). maxLength is a character count, consistent
-          // with MAX_DESKTOP_CHAT_INPUT_CHARS.
-          maxLength={MAX_DESKTOP_CHAT_INPUT_CHARS}
-          // The textarea remains a native textbox. When repository suggestions exist,
-          // aria-controls points to their visible semantic list; the adjacent polite status
-          // announces result-count changes. Arrow keys update the visible highlight and Enter
-          // activates it without claiming a listbox/combobox relationship that is not present.
-          ariaControls={repositoryResultsId}
-          onChange={handleDraftChange}
-          onSelect={handleDraftSelect}
-          onKeyDown={handleDraftKeyDown}
-          // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays fully
-          // editable while a send is in flight so the next message can be pre-typed during
-          // streaming. Re-submit stays blocked by the isInFlight guard in useChatSession, and the
-          // primary button is "Cancel" meanwhile.
+          input={
+            <MarkdownComposer
+              value={draft}
+              placeholder={placeholder}
+              inputRef={taRef}
+              documentKey={activeChat?.id ?? "new-chat"}
+              ariaLabel={t("chat.messageLabel")}
+              ariaControls={repositoryResultsId}
+              maxLength={MAX_DESKTOP_CHAT_INPUT_CHARS}
+              onChange={handleDraftChange}
+              onSelect={handleDraftSelect}
+              onKeyDown={handleDraftKeyDown}
+              labels={{
+                code: t("chat.composer.code"),
+                plainText: t("chat.composer.plainText"),
+                language: t("chat.composer.codeLanguage"),
+                continueText: t("chat.composer.continueText"),
+                loading: t("chat.composer.codeLoading"),
+                unavailable: t("chat.composer.codeUnavailable"),
+                limit: t("chat.composer.inputLimit"),
+                hint: t("chat.composer.markdownHint"),
+              }}
+            />
+          }
+          // Keep editing the next draft while the preceding answer streams.
           aboveInput={<AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />}
           belowInput={
             <>
@@ -3846,20 +4017,56 @@ interface ScopeOption {
 const UNAVAILABLE_CAPSULE_LABEL = "Knowledge Pod";
 const UNAVAILABLE_CAPSULE_SET_LABEL = "Knowledge Pod Set";
 
+// The bound Knowledge Pod that is not a selectable option (not ready, or hidden while the catalog
+// refreshes) keeps its name and real state whenever the catalog lists it; only a pod the catalog
+// does not list at all reads as unavailable.
+function boundCapsuleOption(
+  selectedValue: string,
+  knownCapsules: readonly CapsuleListEntry[],
+  t: I18nTranslate,
+): ScopeOption {
+  const known = knownCapsules.find((capsule) => `capsule:${capsule.id}` === selectedValue);
+  if (known === undefined) {
+    return {
+      value: selectedValue,
+      // uiux-fix F041 (C173) — "(unavailable)" matches the capsule-set degraded
+      // suffix; two different words previously named the same state.
+      label: t("chat.grounding.unavailable", {
+        label: UNAVAILABLE_CAPSULE_LABEL,
+      }),
+      disabled: true,
+    };
+  }
+  return {
+    value: selectedValue,
+    label: capsuleNameWithState(known, t, (name) => t("chat.grounding.capsule", { name })),
+    disabled: true,
+  };
+}
+
+// The option badge and description of a Knowledge Pod guidance, in the user's language. The wording
+// lives in the Local Knowledge catalog; the guidance itself is a closed code.
+function guidanceOption(
+  guidance: KnowledgePodUiGuidance | undefined,
+  lk: LocalKnowledgeTranslate,
+): Pick<ScopeOption, "badge" | "description"> {
+  if (guidance === undefined) return {};
+  const { label, description } = knowledgePodGuidanceText(guidance, lk);
+  return { badge: label, description };
+}
+
+// `capsules` are the selectable (ready) pods; `knownCapsules` is every listed pod in any state.
 function capsuleOptions(
   chat: Chat,
   capsules: readonly CapsuleListEntry[],
+  knownCapsules: readonly CapsuleListEntry[],
   t: I18nTranslate,
+  lk: LocalKnowledgeTranslate,
 ): readonly ScopeOption[] {
   const options = capsules.map((capsule) => ({
     value: `capsule:${capsule.id}`,
     label: t("chat.grounding.capsule", { name: capsule.displayName }),
-    ...(capsule.knowledgePod?.guidance !== undefined
-      ? {
-          badge: capsule.knowledgePod.guidance.label,
-          description: capsule.knowledgePod.guidance.description,
-        }
-      : {}),
+    ...guidanceOption(capsule.knowledgePod?.guidance, lk),
   }));
   const selectedValue = groundedModeValue(chat);
   if (!selectedValue.startsWith("capsule:")) {
@@ -3868,34 +4075,19 @@ function capsuleOptions(
   if (options.some((option) => option.value === selectedValue)) {
     return options;
   }
-  return [
-    ...options,
-    {
-      value: selectedValue,
-      // uiux-fix F041 (C173) — "(unavailable)" matches the capsule-set degraded
-      // suffix; two different words previously named the same state.
-      label: t("chat.grounding.unavailable", {
-        label: UNAVAILABLE_CAPSULE_LABEL,
-      }),
-      disabled: true,
-    },
-  ];
+  return [...options, boundCapsuleOption(selectedValue, knownCapsules, t)];
 }
 
 function capsuleSetOptions(
   chat: Chat,
   capsuleSets: readonly CapsuleSetListEntry[],
   t: I18nTranslate,
+  lk: LocalKnowledgeTranslate,
 ): readonly ScopeOption[] {
   const options = capsuleSets.map((capsuleSet) => ({
     value: `capsule-set:${capsuleSet.id}`,
     label: t("chat.grounding.capsuleSet", { name: capsuleSet.displayName }),
-    ...(capsuleSet.knowledgePod?.guidance !== undefined
-      ? {
-          badge: capsuleSet.knowledgePod.guidance.label,
-          description: capsuleSet.knowledgePod.guidance.description,
-        }
-      : {}),
+    ...guidanceOption(capsuleSet.knowledgePod?.guidance, lk),
   }));
   const selectedValue = groundedModeValue(chat);
   if (!selectedValue.startsWith("capsule-set:")) {
@@ -3917,153 +4109,9 @@ function capsuleSetOptions(
 }
 
 // uiux-fix F041 (C172) — the capsule/set catalog is loaded ONCE at the scope-header level and
-// shared by the grounding select.
-interface KnowledgeCatalog {
-  readonly capsules: readonly CapsuleListEntry[];
-  readonly capsuleSets: readonly CapsuleSetListEntry[];
-  readonly loading: boolean;
-  readonly loadError: string | null;
-  readonly refresh: () => void;
-}
-
-interface KnowledgeCatalogSnapshot {
-  readonly capsules: readonly CapsuleListEntry[];
-  readonly capsuleSets: readonly CapsuleSetListEntry[];
-  readonly loadError: unknown;
-}
-
-const EMPTY_KNOWLEDGE_CATALOG: KnowledgeCatalogSnapshot = {
-  capsules: [],
-  capsuleSets: [],
-  loadError: null,
-};
-const KNOWLEDGE_CATALOG_TTL_MS = 30_000;
-const KNOWLEDGE_CATALOG_ERROR_TTL_MS = 5_000;
-let knowledgeCatalogCache:
-  | {
-      readonly expiresAt: number;
-      readonly snapshot: KnowledgeCatalogSnapshot;
-    }
-  | undefined;
-let knowledgeCatalogPending: Promise<KnowledgeCatalogSnapshot> | undefined;
-
-function cachedKnowledgeCatalogSnapshot(now: number): KnowledgeCatalogSnapshot | undefined {
-  if (knowledgeCatalogCache === undefined || knowledgeCatalogCache.expiresAt <= now) {
-    return undefined;
-  }
-  return knowledgeCatalogCache.snapshot;
-}
-
-async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
-  const now = Date.now();
-  const cached = cachedKnowledgeCatalogSnapshot(now);
-  if (cached !== undefined) return cached;
-  if (knowledgeCatalogPending !== undefined) return knowledgeCatalogPending;
-
-  knowledgeCatalogPending = Promise.allSettled([
-    fetchCapsules({ includeKnowledgePods: true }),
-    fetchCapsuleSets({ includeKnowledgePods: true }),
-  ])
-    .then(([capsuleResult, capsuleSetResult]) => {
-      if (capsuleResult.status !== "fulfilled") {
-        return {
-          ...EMPTY_KNOWLEDGE_CATALOG,
-          loadError: capsuleResult.reason,
-        };
-      }
-      const capsules = capsulesForKnowledgePodUi(capsuleResult.value).filter(
-        (entry) => entry.lifecycleState === "ready",
-      );
-      const capsuleSets =
-        capsuleSetResult.status === "fulfilled"
-          ? capsuleSetsForKnowledgePodUi(capsuleSetResult.value)
-          : [];
-      const snapshot: KnowledgeCatalogSnapshot = {
-        capsules,
-        capsuleSets,
-        loadError: capsuleSetResult.status === "fulfilled" ? null : capsuleSetResult.reason,
-      };
-      return snapshot;
-    })
-    .then((snapshot) => {
-      const ttl =
-        snapshot.loadError === null ? KNOWLEDGE_CATALOG_TTL_MS : KNOWLEDGE_CATALOG_ERROR_TTL_MS;
-      knowledgeCatalogCache = { expiresAt: Date.now() + ttl, snapshot };
-      return snapshot;
-    })
-    .finally(() => {
-      knowledgeCatalogPending = undefined;
-    });
-  return knowledgeCatalogPending;
-}
-
-// A grounding-picker reopen is a deliberate catalog lifecycle event, distinct from gateway
-// configuration changes. It bypasses only this read-only catalog's TTL; simultaneous chat windows
-// still share the in-flight request above.
-function refreshKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
-  knowledgeCatalogCache = undefined;
-  return loadKnowledgeCatalogSnapshot();
-}
-
-export function clearKnowledgeCatalogCacheForTests(): void {
-  knowledgeCatalogCache = undefined;
-  knowledgeCatalogPending = undefined;
-}
-
-function useKnowledgeCatalog(): KnowledgeCatalog {
-  const t = useTranslate();
-  const initialSnapshotRef = useRef<KnowledgeCatalogSnapshot | undefined>(
-    cachedKnowledgeCatalogSnapshot(Date.now()),
-  );
-  const mountedRef = useRef(true);
-  const requestGenerationRef = useRef(0);
-  const [snapshot, setSnapshot] = useState<KnowledgeCatalogSnapshot>(
-    initialSnapshotRef.current ?? EMPTY_KNOWLEDGE_CATALOG,
-  );
-  const [loading, setLoading] = useState(initialSnapshotRef.current === undefined);
-
-  const applyCatalogSnapshot = useCallback(
-    (load: () => Promise<KnowledgeCatalogSnapshot>): void => {
-      const requestGeneration = requestGenerationRef.current + 1;
-      requestGenerationRef.current = requestGeneration;
-      setLoading(true);
-      // Do not present a cached catalog as current while a deliberate reopen is resolving. Any
-      // active scope is retained by capsuleOptions/capsuleSetOptions as a disabled unavailable row.
-      setSnapshot(EMPTY_KNOWLEDGE_CATALOG);
-      void load().then((next) => {
-        if (!mountedRef.current || requestGeneration !== requestGenerationRef.current) return;
-        setSnapshot(next);
-        setLoading(false);
-      });
-    },
-    [],
-  );
-
-  useEffect(() => {
-    if (initialSnapshotRef.current !== undefined) return;
-    applyCatalogSnapshot(loadKnowledgeCatalogSnapshot);
-  }, [applyCatalogSnapshot]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      requestGenerationRef.current += 1;
-    };
-  }, []);
-
-  const refresh = useCallback((): void => {
-    applyCatalogSnapshot(refreshKnowledgeCatalogSnapshot);
-  }, [applyCatalogSnapshot]);
-
-  return {
-    capsules: snapshot.capsules,
-    capsuleSets: snapshot.capsuleSets,
-    loading,
-    loadError: snapshot.loadError === null ? null : formatScopeUpdateError(snapshot.loadError, t),
-    refresh,
-  };
-}
+// shared by the grounding select and the connector pills; its cache, refresh policy and
+// diagnostics live in ./knowledge-catalog.
+export { clearKnowledgeCatalogCacheForTests } from "./knowledge-catalog";
 
 const SELECTABLE_CAPSULE_SET_READINESS: ReadonlySet<string> = new Set(["ready", "degraded"]);
 
@@ -4262,11 +4310,14 @@ function GroundingCatalogStatus({
   loading,
   empty,
   error,
+  onRetry,
   t,
 }: {
   readonly loading: boolean;
   readonly empty: boolean;
   readonly error: string | null;
+  /** Present only when the catalog itself failed to load: a failed load is retryable, not empty. */
+  readonly onRetry: (() => void) | undefined;
   readonly t: I18nTranslate;
 }): ReactNode {
   return (
@@ -4284,8 +4335,43 @@ function GroundingCatalogStatus({
           {error}
         </span>
       ) : null}
+      {onRetry !== undefined ? (
+        <button type="button" className="scope-connect-btn" onClick={onRetry}>
+          {t("chat.grounding.catalogRetry")}
+        </button>
+      ) : null}
     </>
   );
+}
+
+interface KnowledgeScopeChoices {
+  readonly capsuleChoices: readonly ScopeOption[];
+  readonly capsuleSetChoices: readonly ScopeOption[];
+  readonly catalogEmpty: boolean;
+}
+
+// While a deliberate refresh resolves, no cached pod reads as selectable: only the bound scope
+// stays visible (by name and real state) as a disabled row.
+function knowledgeScopeChoices(
+  chat: Chat,
+  catalog: KnowledgeCatalog,
+  t: I18nTranslate,
+  lk: LocalKnowledgeTranslate,
+): KnowledgeScopeChoices {
+  const { capsules, capsuleSets, loading, loadError } = catalog;
+  const readyCapsules = loading ? [] : capsules.filter(isReadyCapsule);
+  const selectableSets = loading ? [] : capsuleSets.filter(isSelectableGroundingCapsuleSet);
+  const capsuleSetChoices = capsuleSetOptions(chat, selectableSets, t, lk);
+  return {
+    capsuleChoices: capsuleOptions(chat, readyCapsules, capsules, t, lk),
+    capsuleSetChoices,
+    // "No ready pods" is only true when the load succeeded: a failed load is an error, not empty.
+    catalogEmpty:
+      !loading &&
+      loadError === null &&
+      capsules.every((capsule) => !isReadyCapsule(capsule)) &&
+      selectableSets.length === 0,
+  };
 }
 
 function LocalKnowledgeScopeControl({
@@ -4300,10 +4386,10 @@ function LocalKnowledgeScopeControl({
   readonly connected: boolean;
 }): ReactNode {
   const t = useTranslate();
-  const { capsules, capsuleSets, loading, loadError, refresh } = catalog;
+  const lk = useLocalKnowledgeTranslate();
+  const { loading, refresh, refreshOnPickerOpen } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const hasOpenedRef = useRef(false);
 
   async function handleChange(value: string): Promise<void> {
     setBusy(true);
@@ -4318,23 +4404,20 @@ function LocalKnowledgeScopeControl({
   }
 
   const value = groundedModeValue(chat);
-  const capsuleChoices = capsuleOptions(chat, capsules, t);
-  const capsuleSetChoices = capsuleSetOptions(
+  const { capsuleChoices, capsuleSetChoices, catalogEmpty } = knowledgeScopeChoices(
     chat,
-    capsuleSets.filter(isSelectableGroundingCapsuleSet),
+    catalog,
     t,
+    lk,
   );
   // Audit F-12 — a disabled option must say why: without a connected Files source the reason
   // for the greyed-out "Live Files context" entry is otherwise undiscoverable.
   const liveFilesAvailable = hasFolderGroundingScope(chat);
-  // C172 — a catalog load failure surfaces here too; an update error wins.
-  const displayedError = error ?? loadError;
-  const catalogEmpty = !loading && capsules.length === 0 && capsuleSetChoices.length === 0;
+  // C172 — a catalog load failure surfaces here too, with a retry; an update error wins.
+  const loadFailure =
+    catalog.loadError === null ? null : formatScopeUpdateError(catalog.loadError, t);
+  const displayedError = error ?? loadFailure;
   const controlsDisabled = busy || loading;
-  const handlePickerOpen = (): void => {
-    if (hasOpenedRef.current) refresh();
-    hasOpenedRef.current = true;
-  };
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
   // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
@@ -4348,12 +4431,18 @@ function LocalKnowledgeScopeControl({
         capsuleChoices={capsuleChoices}
         capsuleSetChoices={capsuleSetChoices}
         t={t}
-        onOpen={handlePickerOpen}
+        onOpen={refreshOnPickerOpen}
         onValueChange={(next) => {
           void handleChange(next);
         }}
       />
-      <GroundingCatalogStatus loading={loading} empty={catalogEmpty} error={displayedError} t={t} />
+      <GroundingCatalogStatus
+        loading={loading}
+        empty={catalogEmpty}
+        error={displayedError}
+        onRetry={error === null && loadFailure !== null ? refresh : undefined}
+        t={t}
+      />
     </div>
   );
 }
@@ -4361,9 +4450,15 @@ function LocalKnowledgeScopeControl({
 // uiux-fix F041 (C172) — the same catalog load that feeds the grounding select's option lists
 // also names the connector pills, so a connected capsule/capsule-set shows its display name
 // instead of a raw id (ConnectorScopePill falls back to the id when a key is absent).
-function connectorScopeLabels(catalog: KnowledgeCatalog): ReadonlyMap<string, string> {
+// A pod that is listed but not ready keeps its name and shows its real state.
+function connectorScopeLabels(
+  catalog: KnowledgeCatalog,
+  t: I18nTranslate,
+): ReadonlyMap<string, string> {
   const labels = new Map<string, string>();
-  for (const capsule of catalog.capsules) labels.set(`capsule:${capsule.id}`, capsule.displayName);
+  for (const capsule of catalog.capsules) {
+    labels.set(`capsule:${capsule.id}`, capsuleNameWithState(capsule, t));
+  }
   for (const capsuleSet of catalog.capsuleSets) {
     labels.set(`set:${capsuleSet.id}`, capsuleSet.displayName);
   }
@@ -4383,7 +4478,8 @@ function ChatScopeHeaderImpl({
 }): ReactNode {
   // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
   // names and the grounding select's option lists.
-  const catalog = useKnowledgeCatalog();
+  const t = useTranslate();
+  const catalog = useKnowledgeCatalog(currentConnectorScopes(chat));
   // uiux-fix F041 (C178/C179) — layout moved from inline styles to the
   // .chat-scope-header rule in globals.css (16px inset, themeable).
   const pendingGitChanges = pendingGitChangeComparisons ?? [];
@@ -4400,7 +4496,8 @@ function ChatScopeHeaderImpl({
       <ConnectorScopePill
         chat={chat}
         onDisconnect={onChatChanged}
-        labels={connectorScopeLabels(catalog)}
+        labels={connectorScopeLabels(catalog, t)}
+        labelsSettled={!catalog.loading && catalog.loadError === null}
       />
       {/* Issue #3400 — the git-change comparison connected via the Git window's "Connect to
           Chat" action renders here, alongside the grounding scope control, so its current /
@@ -5104,25 +5201,6 @@ function MemoryPanelImpl({
 // across a token flush, so the memo skips the per-frame re-render.
 const MemoryPanel = memo(MemoryPanelImpl);
 
-function assistantCodeBlockApplyOutcome(
-  outcome: ChatEditorApplyOutcome,
-): AssistantCodeBlockApplyOutcome {
-  if (outcome.kind === "conflict") return { kind: "conflict", code: outcome.code };
-  return { kind: outcome.kind };
-}
-
-// Extracted from ChatWindow (SonarCloud S3776) — the code-apply workspace root is only defined
-// when the active chat's project root matches the active project (same guard, now as ifs).
-function codeApplyWorkspaceRootFor(
-  activeChatRoot: string | undefined,
-  activeProjectRoot: string | undefined,
-): string | undefined {
-  if (activeChatRoot === undefined) return undefined;
-  if (activeChatRoot.trim().length === 0) return undefined;
-  if (activeChatRoot !== activeProjectRoot) return undefined;
-  return activeChatRoot;
-}
-
 // Extracted from ChatWindow (SonarCloud S3776) — AC #1: block ready when no model is available.
 function isComposerReadyToSend(
   draft: string,
@@ -5297,7 +5375,6 @@ function ChatWindowLog({
   onOpenRunResult,
   repositoryRoots,
   openRepositoryReference,
-  onApplyCodeBlock,
   previewWindows,
   windowId,
   sending,
@@ -5327,7 +5404,6 @@ function ChatWindowLog({
   readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
-  readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
   readonly windowId: string | undefined;
   readonly sending: boolean;
@@ -5373,7 +5449,6 @@ function ChatWindowLog({
               onOpenRunResult={onOpenRunResult}
               repositoryRoots={repositoryRoots}
               openRepositoryReference={openRepositoryReference}
-              onApplyCodeBlock={onApplyCodeBlock}
               previewWindows={previewWindows}
               windowId={windowId}
               sending={sending}
@@ -5500,7 +5575,8 @@ function ChatWindowComposerFooter({
   effectiveBarCompact,
   ready,
   loading,
-  sendMessage,
+  onSubmit,
+  inputRef,
   error,
   clearError,
   notice,
@@ -5518,7 +5594,8 @@ function ChatWindowComposerFooter({
   readonly effectiveBarCompact: boolean;
   readonly ready: boolean;
   readonly loading: boolean;
-  readonly sendMessage: () => Promise<void>;
+  readonly onSubmit: () => void;
+  readonly inputRef: RefObject<ComposerInputHandle | null>;
   readonly error: string | undefined;
   readonly clearError: (() => void) | undefined;
   readonly notice: string | undefined;
@@ -5536,12 +5613,13 @@ function ChatWindowComposerFooter({
             className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
             onSubmit={(event) => {
               event.preventDefault();
-              void sendMessage();
+              onSubmit();
             }}
           >
             <ComposerCore
               ready={ready}
               placeholder={composerPlaceholder(visible.length, loading, t)}
+              inputRef={inputRef}
               suspended={suspended}
               minimal={effectiveMinimal}
               compact={effectiveCompact}
@@ -5594,6 +5672,7 @@ export function ChatWindow({
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
+  const composerInputRef = useRef<ComposerInputHandle>(null);
   const optionalT = useOptionalWidgetTranslate();
   const {
     messages,
@@ -5627,33 +5706,21 @@ export function ChatWindow({
     rejectMemoryCandidate,
     forgetMemoryAction,
   } = session;
+  const submitComposer = (): void => {
+    const live = composerInputRef.current?.currentMarkdown;
+    if (live === undefined) {
+      void sendMessage();
+      return;
+    }
+    if (live !== draft) {
+      flushSync(() => session.setDraft(live));
+      reportClientDiagnostic("Keiko composer submitted the current editor draft.", {
+        composerActivity: "literal-input-preserved",
+      });
+    }
+    void sendMessage({ text: live, clearDraftOnAdmission: true });
+  };
   const displayedError = presentChatSessionError(error, optionalT);
-  const activeProjectRoot = activeProject?.path;
-  const activeChatRoot = activeChat?.projectPath;
-  const codeApplyWorkspaceRoot = codeApplyWorkspaceRootFor(activeChatRoot, activeProjectRoot);
-  const queueAssistantCodeBlockApply = useCallback<AssistantCodeBlockApply>(
-    async ({ codeBlockText, language }) => {
-      if (codeApplyWorkspaceRoot === undefined) {
-        return { kind: "rejected" };
-      }
-      const [{ queueChatEditorApply }, { queueLocalEditorAgentAction }] = await Promise.all([
-        import("@/lib/chat-editor-apply"),
-        import("./widgets/cards/editorAgentBridge"),
-      ]);
-      const outcome = await queueChatEditorApply(
-        {
-          codeBlockText,
-          language,
-          context: { workspaceRoot: codeApplyWorkspaceRoot },
-        },
-        { queueAction: queueLocalEditorAgentAction },
-      );
-      return assistantCodeBlockApplyOutcome(outcome);
-    },
-    [codeApplyWorkspaceRoot],
-  );
-  const onApplyCodeBlock =
-    codeApplyWorkspaceRoot === undefined ? undefined : queueAssistantCodeBlockApply;
   const ready =
     isComposerReadyToSend(draft, sending, loading, noEligibleModels) &&
     canonicalVoiceTurnRequiresRetry !== true;
@@ -5819,7 +5886,6 @@ export function ChatWindow({
         onOpenRunResult={onOpenRunResult}
         repositoryRoots={repositoryRoots}
         openRepositoryReference={openRepositoryReference}
-        onApplyCodeBlock={onApplyCodeBlock}
         previewWindows={previewWindows}
         windowId={windowId}
         sending={sending}
@@ -5853,7 +5919,8 @@ export function ChatWindow({
         effectiveBarCompact={effectiveBarCompact}
         ready={ready}
         loading={loading}
-        sendMessage={sendMessage}
+        onSubmit={submitComposer}
+        inputRef={composerInputRef}
         error={displayedError}
         clearError={session.clearError}
         notice={notice}

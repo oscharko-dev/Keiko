@@ -59,7 +59,7 @@ function stringValue(cfg: Record<string, unknown>, key: string): string | undefi
   return typeof value === "string" ? value : undefined;
 }
 
-function agentRootBinding(
+function safetyRootBinding(
   manifest: WorkspaceManifest,
   root: WorkspaceRootDescriptor,
 ): EditorAgentRootBinding | undefined {
@@ -411,7 +411,8 @@ export function MultiRootEditorHost({
                 {...baseProps}
                 {...initialSessionProps(root, sessions, cfg)}
                 root={root.canonicalRoot}
-                agentRootBinding={agentRootBinding(manifest, root)}
+                rootSelectionLocked
+                safetyRootBinding={safetyRootBinding(manifest, root)}
                 sessionActive={active}
                 windowId={editorPaneWindowId(baseProps.windowId, root.rootRef)}
                 onWorkspaceChange={sessionChangeHandlers.get(root.rootRef)}

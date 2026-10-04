@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CLIENT_NOTE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
 import {
+  projectSupportLogFields,
+  areSupportLogFieldsSafe,
   DROPPED_DEPTH,
   DROPPED_LENGTH,
   MAX_LOG_ARRAY_LENGTH,
@@ -48,6 +50,20 @@ describe("log field redaction", () => {
     resetActivityLogRouteRedactor();
   });
 
+  it.each([
+    REDACTED_KEY,
+    REDACTED_LENGTH,
+    REDACTED_PATH,
+    REDACTED_PERSONAL,
+    REDACTED_SECRET,
+    REDACTED_SHAPE,
+  ])("preserves the exact existing redaction marker %s on a second pass", (marker) => {
+    expect(redactLogString(marker)).toBe(marker);
+    expect(redactLogFields({ modelId: marker })).toEqual({ modelId: marker });
+  });
+  it("does not preserve a customer-shaped redaction marker", () => {
+    expect(redactLogString("[redacted:CustomerPayroll]")).toBe(REDACTED_SHAPE);
+  });
   it("keeps the evidence fields the instrumentation surface is built from", () => {
     const fields = redactLogFields({
       endpoint: "https://gateway.internal:8443",
@@ -1312,6 +1328,16 @@ describe("code-owned client diagnostic notes (F29)", () => {
 });
 
 describe("production browser frame redaction", () => {
+  it("preserves persisted browser coordinates when validating received support evidence", () => {
+    const raw = { frames: ["dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js:12:345"] };
+    const persisted = redactLogFields(raw);
+    if (persisted === undefined) throw new TypeError("missing reduced browser evidence");
+    expect(persisted.frames).toHaveLength(1);
+    expect(redactLogFields(persisted)).toEqual(persisted);
+    expect(areSupportLogFieldsSafe(persisted)).toBe(true);
+    expect(areSupportLogFieldsSafe(raw)).toBe(false);
+  });
+
   it("never persists an untrusted chunk basename even when it matches the wire grammar", () => {
     const basename = ["customer", "apikey", "1234"].join("");
     const frame = `dist/ui/static/_next/static/chunks/${basename}.js:1:2`;
@@ -1349,5 +1375,39 @@ describe("production browser frame redaction", () => {
     });
     expect(first).not.toEqual(different);
     expect(JSON.stringify(second)).toBe(JSON.stringify(first).replace(":1:2", ":3:4"));
+  });
+});
+
+describe("closed received-report projection", () => {
+  it("replaces producer-only prose and route hatches with explicit markers", () => {
+    const input = {
+      path: "/customer/private",
+      routeTemplate: "/api/customer/private",
+      clientNote: "customer narrative",
+      diagnosticSummary: "private operator narrative",
+      count: 7,
+    };
+    const projected = projectSupportLogFields(input);
+    expect(projected).toEqual({
+      path: REDACTED_PATH,
+      routeTemplate: REDACTED_PATH,
+      clientNote: REDACTED_SHAPE,
+      diagnosticSummary: REDACTED_SHAPE,
+      count: 7,
+    });
+    expect(areSupportLogFieldsSafe(input)).toBe(false);
+    expect(areSupportLogFieldsSafe(projected)).toBe(true);
+  });
+  it("uses the owning frame and cause reducers for received evidence", () => {
+    expect(
+      areSupportLogFieldsSafe({
+        frames: ["packages/keiko-cli/src/support.ts:10:2"],
+        causeChain: ["TypeError"],
+      }),
+    ).toBe(true);
+    expect(
+      areSupportLogFieldsSafe({ frames: ["packages/keiko-cli/src/../../customer.ts:10:2"] }),
+    ).toBe(false);
+    expect(areSupportLogFieldsSafe({ causeChain: ["customer secret body"] })).toBe(false);
   });
 });

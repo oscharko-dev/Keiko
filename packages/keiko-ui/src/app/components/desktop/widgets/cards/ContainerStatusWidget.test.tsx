@@ -29,6 +29,14 @@ vi.mock("../../../../../lib/container-api", () => ({
   containerEventsUrl: (): string => "/api/containers/events",
 }));
 
+vi.mock("../../../../../lib/browser-stream-capacity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../../lib/browser-stream-capacity")>()),
+  acquirePersistentBrowserStreamCapacity: (onGranted: () => void): (() => void) => {
+    onGranted();
+    return (): void => undefined;
+  },
+}));
+
 type EsListener = (ev: MessageEvent<string>) => void;
 
 class FakeEventSource {
@@ -36,10 +44,15 @@ class FakeEventSource {
   public readonly listeners = new Map<string, EsListener[]>();
   public closed = false;
   public static last: FakeEventSource | null = null;
+  public static autoOpen = true;
+  public readyState = 0;
 
   public constructor(url: string) {
     this.url = url;
     FakeEventSource.last = this;
+    queueMicrotask(() => {
+      if (FakeEventSource.autoOpen) this.dispatch("open", "");
+    });
   }
 
   public addEventListener(type: string, listener: EsListener): void {
@@ -53,6 +66,7 @@ class FakeEventSource {
   }
 
   public dispatch(type: string, data: string): void {
+    if (type === "open") this.readyState = 1;
     for (const h of this.listeners.get(type) ?? []) h(new MessageEvent(type, { data }));
   }
 }
@@ -122,6 +136,7 @@ beforeEach(() => {
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("crypto", { randomUUID: vi.fn(() => "req-own") });
   FakeEventSource.last = null;
+  FakeEventSource.autoOpen = true;
 });
 
 afterEach(() => {
@@ -129,6 +144,45 @@ afterEach(() => {
 });
 
 describe("ContainerStatusWidget", () => {
+  it("waits for the event channel before starting and retains an immediate start event", async () => {
+    FakeEventSource.autoOpen = false;
+    vi.mocked(fetchContainerCapability).mockResolvedValue(AVAILABLE);
+    vi.mocked(fetchContainerCatalog).mockResolvedValue(CATALOG);
+    vi.mocked(createContainerRun).mockImplementation(() => {
+      FakeEventSource.last?.dispatch(
+        "container:run-started",
+        JSON.stringify({
+          kind: "run-started",
+          runId: "own-live-run",
+          payload: {
+            requestId: "req-own",
+            projectId: "/proj",
+            command: "ls",
+            argCount: 0,
+            startedAt: 1,
+          },
+        }),
+      );
+      return new Promise<never>(() => undefined);
+    });
+    const view = render(<ContainerStatusWidget projectPath="/proj" />);
+    const runButton = await screen.findByRole("button", { name: /^run diagnostic$/i });
+    await waitFor(() => expect(runButton).toHaveAttribute("aria-disabled", "false"));
+    await userEvent.click(runButton);
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    expect(createContainerRun).not.toHaveBeenCalled();
+    FakeEventSource.last?.dispatch("open", "");
+    await waitFor(() => expect(createContainerRun).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /cancel|abort/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      ),
+    );
+    view.unmount();
+    expect(FakeEventSource.last?.closed).toBe(true);
+  });
+
   it("renders the structured unavailable state with role=status and the remediation hint, and NO run control (AC1/AC2)", async () => {
     vi.mocked(fetchContainerCapability).mockResolvedValue(UNAVAILABLE);
     render(<ContainerStatusWidget projectPath="/proj" />);
@@ -207,7 +261,7 @@ describe("ContainerStatusWidget", () => {
     fireEvent.click(runButton);
     fireEvent.click(runButton);
 
-    expect(createContainerRun).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(createContainerRun).toHaveBeenCalledTimes(1));
     // GEN-UI-FOCUS-014: the button stays HTML-enabled while running (aria-disabled only)
     // so a keyboard user who triggered it keeps focus; re-entry is guarded in onSubmit.
     expect(runButton).not.toBeDisabled();

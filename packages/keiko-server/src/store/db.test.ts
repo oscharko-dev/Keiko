@@ -5,6 +5,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import {
   mkdtempSync,
+  realpathSync,
   readFileSync,
   rmSync,
   statSync,
@@ -15,26 +16,20 @@ import {
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
-import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import {
-  buildUiStoreOverDatabase,
   createInMemoryUiStore,
   createNodeUiStore,
   openNodeUiDatabase,
-  openNodeUiDatabaseReadOnly,
   SCHEMA_VERSION,
   UI_DB_BUSY_TIMEOUT_MS,
   type GroundedAnswer,
   type NewChatMessage,
 } from "./index.js";
-// Not yet re-exported through the barrel (Wave 4a is scoped to db.ts/deps.ts) — imported directly
-// from the co-located module instead, same package, no boundary crossed.
-import { computeStoreFingerprint, UI_STORE_FINGERPRINT_TABLES } from "./db.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/index.js";
 
 // Narrows an array-index access (T | undefined) to T without a non-null assertion.
@@ -46,7 +41,7 @@ function must<T>(value: T | undefined): T {
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "keiko-uidb-"));
+  tmpDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-uidb-"));
 });
 
 afterEach(() => {
@@ -1086,168 +1081,6 @@ describe("UI DB busy_timeout (issue #639)", () => {
     expect(store.listProjects()).toEqual([]);
     store.close();
   });
-
-  // Finding 2: the read-only diagnostic open (`keiko support export`'s fingerprint collection)
-  // must set the same busy_timeout as the production open, so a reader started against a live
-  // production server does not spuriously report the store `open-failed` on an immediate
-  // SQLITE_BUSY from a concurrent WAL checkpoint. RED (before fix): `node:sqlite`'s default
-  // busy_timeout is 0, so this assertion fails against the un-pragma'd read-only open.
-  it("sets the active PRAGMA busy_timeout on the read-only node UI database open", () => {
-    const dbPath = join(tmpDir, "busy-readonly.db");
-    openNodeUiDatabase(dbPath).close();
-
-    const db = openNodeUiDatabaseReadOnly(dbPath);
-    try {
-      const rows = db.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
-        timeout: number;
-      }[];
-      expect(rows[0]?.timeout).toBe(UI_DB_BUSY_TIMEOUT_MS);
-    } finally {
-      db.close();
-    }
-  });
-});
-
-// Wave 4a, epic #3233 §6.2 — the redacted, point-in-time schema/integrity snapshot embedded in
-// the support bundle manifest.
-describe("computeStoreFingerprint (Wave 4a, epic #3233 §6.2)", () => {
-  it("computes a valid, fully-populated fingerprint for a freshly migrated store", () => {
-    const dbPath = join(tmpDir, "fingerprint-fresh.db");
-    const db = openNodeUiDatabase(dbPath);
-    try {
-      const fingerprint = computeStoreFingerprint(db);
-      // Validated against the real, independently-owned keiko-contracts guard rather than
-      // re-asserting each field by hand — the producer and the shape gate must agree.
-      expect(isStoreFingerprint(fingerprint)).toBe(true);
-      expect(fingerprint.store).toBe("ui");
-      expect(fingerprint.schemaVersion).toBe(SCHEMA_VERSION);
-      expect(fingerprint.migrationsApplied).toEqual(
-        Array.from({ length: SCHEMA_VERSION }, (_unused, index) => `v${String(index + 1)}`),
-      );
-      expect(Object.keys(fingerprint.tableRowCounts).sort()).toEqual(
-        [...UI_STORE_FINGERPRINT_TABLES].sort(),
-      );
-      // The assertion above compares the constant against itself, so a migration that adds a table
-      // and forgets to fingerprint it stays invisible — which is exactly what happened when schema
-      // v21 added `github_issue_reader_authorization`. This one asks the DATABASE instead: every
-      // persistent table the migrations actually created must be fingerprinted, or a support bundle
-      // silently omits a store an operator is trying to diagnose.
-      const liveTables = db
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-        )
-        .all()
-        .map((row) => String(row.name));
-      expect(
-        liveTables.filter((table) => !UI_STORE_FINGERPRINT_TABLES.includes(table as never)),
-      ).toEqual([]);
-      expect(Object.values(fingerprint.tableRowCounts).every((count) => count === 0)).toBe(true);
-      expect(fingerprint.quickCheckOk).toBe(true);
-      expect(fingerprint.encryptionMode).toBe("plaintext");
-      expect(fingerprint.keySource).toBeUndefined();
-    } finally {
-      db.close();
-    }
-  });
-
-  // Schema v22 (#3385) widened `coding_runtime_snapshots` with the issue-binding columns and created
-  // no table. V26 separately adds cumulative CI accounting; it must not become another issue-binding
-  // store. This pins both halves: the
-  // columns landed on the already-fingerprinted table (a support bundle keeps counting issue-bound
-  // runs through the same row count), and no second, unfingerprinted store appeared for them.
-  it("keeps the v22 issue-binding columns on the fingerprinted coding_runtime_snapshots table", () => {
-    const dbPath = join(tmpDir, "fingerprint-v22.db");
-    const db = openNodeUiDatabase(dbPath);
-    try {
-      const codingRuntimeTables = UI_STORE_FINGERPRINT_TABLES.filter((table) =>
-        table.startsWith("coding_runtime"),
-      );
-      expect(codingRuntimeTables).toEqual([
-        "coding_runtime_snapshots",
-        "coding_runtime_ci_repair_budgets",
-        // V29 (#3401): the deduplicated description-job register, content-free by the same
-        // forbidden-fields pin that governs the two tables above.
-        "coding_runtime_description_jobs",
-      ]);
-      const budgetColumns = (
-        db.prepare("PRAGMA table_info(coding_runtime_ci_repair_budgets)").all() as {
-          name: string;
-        }[]
-      ).map((row) => row.name);
-      expect(budgetColumns).toEqual([
-        "task_digest",
-        "remote_digest",
-        "pr_number",
-        "revision",
-        "record_json",
-      ]);
-      const columns = (
-        db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
-      ).map((row) => row.name);
-      for (const column of [
-        "issue_repository_id",
-        "issue_remote_digest",
-        "issue_number",
-        "issue_id_digest",
-        "issue_default_base_ref",
-        "issue_content_revision_digest",
-        "issue_binding_digest",
-      ]) {
-        expect(columns, column).toContain(column);
-      }
-      const liveTableCount = (
-        db
-          .prepare(
-            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-          )
-          .get() as { count: number }
-      ).count;
-      expect(liveTableCount).toBe(UI_STORE_FINGERPRINT_TABLES.length);
-      expect(computeStoreFingerprint(db).tableRowCounts.coding_runtime_snapshots).toBe(0);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("counts rows actually present in a table, independently per table", () => {
-    const dbPath = join(tmpDir, "fingerprint-counts.db");
-    const db = openNodeUiDatabase(dbPath);
-    try {
-      const store = buildUiStoreOverDatabase(db);
-      const projectA = mkdtempSync(join(tmpDir, "fingerprint-project-a-"));
-      const projectB = mkdtempSync(join(tmpDir, "fingerprint-project-b-"));
-      store.createProject(projectA, "Project A");
-      store.createProject(projectB, "Project B");
-      const fingerprint = computeStoreFingerprint(db);
-      expect(fingerprint.tableRowCounts.projects).toBe(2);
-      expect(fingerprint.tableRowCounts.chats).toBe(0);
-    } finally {
-      db.close();
-    }
-  });
-
-  // Regression pin: the manifest assembler this feeds must still produce a (degraded) fingerprint
-  // for the very store an operator is trying to diagnose — it must never throw and abort the
-  // whole support-bundle export over one unreadable store.
-  it("never throws against a corrupted file, and returns a degraded fingerprint instead", () => {
-    const dbPath = join(tmpDir, "fingerprint-corrupt.db");
-    writeFileSync(dbPath, Buffer.from("not a sqlite db"));
-    const db = new DatabaseSync(dbPath);
-    try {
-      let fingerprint: ReturnType<typeof computeStoreFingerprint> | undefined;
-      expect(() => {
-        fingerprint = computeStoreFingerprint(db);
-      }).not.toThrow();
-      const resolved = must(fingerprint);
-      expect(isStoreFingerprint(resolved)).toBe(true);
-      expect(resolved.quickCheckOk).toBe(false);
-      expect(resolved.schemaVersion).toBe(0);
-      expect(resolved.migrationsApplied).toEqual([]);
-      expect(resolved.tableRowCounts).toEqual({});
-    } finally {
-      db.close();
-    }
-  });
 });
 
 // Wave 4a, epic #3233 §8 — a `store.opened` activity-log event once per successful open.
@@ -1348,13 +1181,13 @@ describe("openNodeUiDatabase — store.opened activity log (Wave 4a, epic #3233 
     }
   });
 
-  // PR #3244 review, thread 15: `buildUiStoreOpenedEvent` used to call `computeStoreFingerprint`,
-  // which runs a SECOND full-database `PRAGMA quick_check` (the first already ran inside this same
-  // `openNodeUiDatabase` call, via `assertQuickCheckOk`) and a `COUNT(*)` scan over every one of
-  // `UI_STORE_FINGERPRINT_TABLES` — a cost that scales with database size, paid on every production
-  // server start. Neither is needed: the emitted event carries only `quickCheckOk` (a boolean) and
+  // PR #3244 review, thread 15: `buildUiStoreOpenedEvent` used to compute a full store snapshot,
+  // which ran a SECOND full-database `PRAGMA quick_check` (the first already ran inside this same
+  // `openNodeUiDatabase` call, via `assertQuickCheckOk`) and a `COUNT(*)` scan over every table —
+  // a cost that scales with database size, paid on every production server start. Neither is
+  // needed: the emitted event carries only `quickCheckOk` (a boolean) and
   // `storeSchemaVersion`/`migrationsAppliedCount` (from the already-cheap `PRAGMA user_version`),
-  // never `tableRowCounts`.
+  // never a row count.
   it("emits the store.opened event without re-running quick_check or scanning any table for a row count", () => {
     const dbPath = join(tmpDir, "opened-perf.db");
     const sink: ServerLogSink = { write: (): void => undefined };
@@ -1370,11 +1203,18 @@ describe("openNodeUiDatabase — store.opened activity log (Wave 4a, epic #3233 
       expect(quickCheckCalls).toHaveLength(1);
       // `runMigrations` legitimately issues its own single, unrelated `COUNT(*)` against
       // `workspace_manifests` (`migrateLegacyProjectManifests`'s post-migration trust-record
-      // cleanup check) — that is not what this test guards against. What must NOT happen is
-      // `computeStoreFingerprint`'s `readTableRowCounts`, which queries EVERY one of
-      // `UI_STORE_FINGERPRINT_TABLES` (13 tables). Fewer COUNT(*) calls than that full table list
-      // proves the whole-database row-count scan did not run for this event.
-      expect(countCalls.length).toBeLessThan(UI_STORE_FINGERPRINT_TABLES.length);
+      // cleanup check) — that is not what this test guards against. What must NOT happen is a
+      // per-table row-count scan, which queries EVERY table the migrations created. Fewer COUNT(*)
+      // calls than the live table count proves the whole-database row-count scan did not run for
+      // this event.
+      const liveTableCount = (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+          )
+          .get() as { count: number }
+      ).count;
+      expect(countCalls.length).toBeLessThan(liveTableCount);
     } finally {
       prepareSpy.mockRestore();
       db?.close();

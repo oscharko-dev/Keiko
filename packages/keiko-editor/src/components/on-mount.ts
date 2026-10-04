@@ -18,11 +18,6 @@ import type { EditorThemeVariant, MonacoThemeRegistrar } from "../monaco/theme.j
 import { buildSaveActionDescriptor } from "./keybindings.js";
 import { runtimeFailureNotice } from "./runtime-notice.js";
 import {
-  buildAskKeikoAboutSelectionActionDescriptor,
-  buildAskKeikoAboutSelectionRunHandler,
-  buildGenerateTestsActionDescriptor,
-} from "./command-actions.js";
-import {
   buildDebugCommandActionDescriptors,
   type EditorDebugCommandHandlers,
 } from "./debug-command-actions.js";
@@ -40,7 +35,6 @@ import {
 import { installDebugMonacoStyles } from "./debug-monaco-styles.js";
 import { buildRenameSymbolActionDescriptor } from "./rename-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
-import type { AskKeikoAboutSelectionHandler } from "./types.js";
 import {
   registerConflictBridge,
   type ConflictBridge,
@@ -193,11 +187,9 @@ export interface MountMonaco {
   readonly Uri?: { parse(value: string): MonacoUriLike };
   // `Alt` is needed for the host-owned command chords; `CtrlCmd` also backs save.
   readonly KeyMod: { readonly CtrlCmd: number; readonly Alt: number; readonly Shift: number };
-  // `KeyK` backs Ask Keiko, `KeyT` Generate Tests, `F2` Rename Symbol, and `KeyS` save.
+  // `F2` backs Rename Symbol and `KeyS` save.
   readonly KeyCode: {
     readonly KeyS: number;
-    readonly KeyK: number;
-    readonly KeyT: number;
     readonly F2: number;
     readonly F5: number;
     readonly F6: number;
@@ -264,10 +256,6 @@ export interface WireEditorDiagnostics {
  * register nothing, so a command whose host capability is off never appears (clean degradation).
  */
 export interface WireEditorCommands {
-  /** Run the governed test-generation flow (#1202); bound to `Cmd/Ctrl+Alt+T`. */
-  readonly generateTests?: (() => void) | undefined;
-  /** Hand the bounded active selection to the host chat flow (#2119); bound to Cmd/Ctrl+Alt+K. */
-  readonly askKeikoAboutSelection?: AskKeikoAboutSelectionHandler | undefined;
   /** Run the governed rename-symbol flow (#2105); bound to F2. */
   readonly renameSymbol?: (() => void) | undefined;
 }
@@ -1041,26 +1029,6 @@ function installCommandActions(args: WireEditorOnMountArgs): readonly monaco.IDi
     return [];
   }
   const disposables: monaco.IDisposable[] = [];
-  if (commands.generateTests !== undefined) {
-    disposables.push(
-      args.editor.addAction(
-        buildGenerateTestsActionDescriptor({
-          keys: { KeyMod: args.monaco.KeyMod, KeyCode: args.monaco.KeyCode },
-          run: commands.generateTests,
-        }),
-      ),
-    );
-  }
-  if (commands.askKeikoAboutSelection !== undefined) {
-    disposables.push(
-      args.editor.addAction(
-        buildAskKeikoAboutSelectionActionDescriptor({
-          keys: { KeyMod: args.monaco.KeyMod, KeyCode: args.monaco.KeyCode },
-          run: buildAskKeikoAboutSelectionRunHandler(commands.askKeikoAboutSelection),
-        }),
-      ),
-    );
-  }
   if (commands.renameSymbol !== undefined) {
     disposables.push(
       args.editor.addAction(

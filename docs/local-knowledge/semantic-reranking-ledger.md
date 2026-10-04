@@ -92,7 +92,7 @@ Post-merge audit note on 2026-07-06:
    (`GroundedAnswer.tsx` summary line).** `DEGRADED_RERANKER_STATUSES` and `rerankerDegradationNote` still
    treated `failureKind: "not-configured"` as a degradation on the UI summary line, rendering a "Ranking: no
    reranker configured — showing fused retrieval order." banner that read as a needs-review warning even
-   though a not-configured reranker is the default, fully-supported install state (see item 1 above, which
+   though a not-configured reranker is a fully-supported install state (see item 1 above, which
    fixed the equivalent backend `retrievalActivity` projection but left this UI-side check in place). Fix:
    `rerankerDegradationNote` now returns `undefined` whenever `reranker.failureKind === "not-configured"`,
    and `not-configured` was removed from `DEGRADED_RERANKER_STATUSES`, mirroring the backend

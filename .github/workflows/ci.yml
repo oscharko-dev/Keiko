@@ -64,7 +64,8 @@ permissions: {}
 concurrency:
   # Code-head and metadata events cannot displace one another before either starts. Each class
   # coalesces independently per PR; pushes supersede stale code evidence, while repeated metadata
-  # edits supersede stale metadata evidence. Non-PR integration runs remain groups of one.
+  # edits supersede stale metadata evidence. Non-PR integration runs remain groups of one. Both
+  # classes analyze the same SonarCloud pull request, so `coverage-sonar` serializes that per PR.
   group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -824,6 +825,19 @@ jobs:
       - coverage-scripts
       - coverage-ui
     runs-on: ubuntu-latest
+    # One SonarCloud analysis per pull request at a time (ADR-0157 D5). A title or body edit reruns
+    # the matrix on the unchanged head in the separate `metadata` group, and SonarCloud refuses a
+    # report whose analysis is older than one it has already processed for the pull request: on
+    # PR #3679 the push run's scan started first, finished last, was refused, and left the required
+    # `SonarCloud Code Analysis` check on the head `cancelled` with the quality gate OK. Serialized, a
+    # scan starts only after the previous one has submitted, so reports arrive in analysis order.
+    # Keyed on the pull request, not the head: a superseded run's scan files under the same pull
+    # request. Not cancelled: the waiting run still owes its own verdict. One pending slot suffices,
+    # because each workflow-level group holds one live run per pull request. Everything that is not
+    # a pull request keeps a group of one, for the reason the workflow-level `concurrency` records.
+    concurrency:
+      group: ci-sonar-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+      cancel-in-progress: false
     # One full hosted scan currently takes about 15 minutes. ADR-0139 D6 permits three attempts
     # with 30/60-second backoff, so 50 minutes bounds the designed worst case without killing the
     # final permitted attempt.
@@ -1075,6 +1089,7 @@ jobs:
       - secret-scan
       - semantic-duplication
       - ui
+      - sbom-provenance
     runs-on: ubuntu-latest
     permissions: {}
     steps:
@@ -1092,6 +1107,8 @@ jobs:
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
           UI_RESULT: ${{ needs.ui.result }}
+          SBOM_PROVENANCE_RESULT: ${{ needs.sbom-provenance.result }}
+          CI_EVENT_NAME: ${{ github.event_name }}
           TREE_VERIFIED: ${{ needs.verified-tree.outputs.tree-verified }}
           TREE_EVIDENCE_RUN_ID: ${{ needs.verified-tree.outputs.evidence-run-id }}
           TREE_EVIDENCE_HEAD_SHA: ${{ needs.verified-tree.outputs.evidence-head-sha }}
@@ -1122,7 +1139,8 @@ jobs:
                          "CORE_QUALITY:${CORE_QUALITY_RESULT:-}" "COVERAGE_SONAR:${COVERAGE_SONAR_RESULT:-}" \
                          "SECRET_SCAN:${SECRET_SCAN_RESULT:-}" "SEMANTIC_DUPLICATION:${SEMANTIC_DUPLICATION_RESULT:-}" \
                          "UI:${UI_RESULT:-}" "BUILD_SCAN_SBOM_SMOKE:${BUILD_SCAN_SBOM_SMOKE_RESULT:-}" \
-                         "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" "NODE_26:${NODE_26_COMPATIBILITY_RESULT:-}"; do
+                         "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" "NODE_26:${NODE_26_COMPATIBILITY_RESULT:-}" \
+                         "SBOM_PROVENANCE:${SBOM_PROVENANCE_RESULT:-}"; do
               state="${named#*:}"
               if [ "$state" != "skipped" ] && [ "$state" != "success" ]; then
                 echo "Gate did not skip or pass despite reusable tree evidence: ${named%%:*} ($state)"
@@ -1132,6 +1150,10 @@ jobs:
             echo "Tree ${TREE_EVIDENCE_TREE_SHA:-} already proven by run ${TREE_EVIDENCE_RUN_ID:-} on head ${TREE_EVIDENCE_HEAD_SHA:-}."
             echo "All required CI dependencies satisfied by that run's evidence."
             exit 0
+          fi
+          if [ "${CI_EVENT_NAME:-}" = "push" ] && [ "${SBOM_PROVENANCE_RESULT:-}" != "success" ]; then
+            echo "Trusted push SBOM provenance did not succeed (${SBOM_PROVENANCE_RESULT:-unset})."
+            exit 1
           fi
           for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
             if [ "$result" != "success" ]; then
@@ -1191,9 +1213,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      attestations: write
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -1269,27 +1289,12 @@ jobs:
           name: sbom-cyclonedx
           path: sbom.cdx.json
           retention-days: 90
-      # Build-provenance (not SBOM-predicate) attestation: this job has no single packed artifact
-      # to bind an SBOM-attestation subject to (no `npm pack` runs here), so this proves the SBOM
-      # document itself was produced by this exact workflow run/commit, not tampered or fabricated.
-      # Scoped to `push` only (dev/release branches) so PR and workflow_dispatch runs stay
-      # unverified-staging and do not add attestation noise for commits that never ship.
-      - name: Attest build provenance for root SBOM
-        if: github.event_name == 'push'
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
-        with:
-          subject-path: sbom.cdx.json
       - name: Upload workspace SBOMs (Issue #169 AC4)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: workspace-sboms-cyclonedx
           path: sbom/
           retention-days: 90
-      - name: Attest build provenance for workspace SBOMs
-        if: github.event_name == 'push'
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
-        with:
-          subject-path: sbom/workspace-*.cdx.json
 
   cross-platform-smoke:
     name: Cross-platform smoke (${{ matrix.os }})
@@ -1430,6 +1435,8 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          # The full test suite compares support registries with immutable release commits.
+          fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -1476,12 +1483,10 @@ jobs:
     name: ui
     needs: verified-tree
     if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     permissions:
-      attestations: write
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -1660,11 +1665,42 @@ jobs:
           name: ui-sbom-cyclonedx
           path: ui-sbom.cdx.json
           retention-days: 90
-      # Same build-provenance-of-the-document rationale as the root/workspace SBOM attestations in
-      # the build-scan-sbom-smoke job: no single packed UI artifact exists to bind an SBOM-predicate
-      # attestation subject to at this point, so this attests the SBOM document's own provenance.
-      - name: Attest build provenance for UI SBOM
-        if: github.event_name == 'push'
+
+  sbom-provenance:
+    name: Attest trusted SBOM provenance
+    if: ${{ github.event_name == 'push' }}
+    needs: [build-scan-sbom-smoke, ui]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    # Candidate npm processes never receive OIDC authority. This push-only job reads this run's
+    # completed SBOM artifacts and attests their document bytes; it executes no repository code.
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sbom-cyclonedx
+          path: root-sbom
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: workspace-sboms-cyclonedx
+          path: workspace-sboms
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ui-sbom-cyclonedx
+          path: ui-sbom
+      - name: Attest build provenance for root SBOM
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
-          subject-path: ui-sbom.cdx.json
+          subject-path: root-sbom/sbom.cdx.json
+      - name: Attest build provenance for workspace SBOMs
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: workspace-sboms/workspace-*.cdx.json
+      - name: Attest build provenance for UI SBOM
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ui-sbom/ui-sbom.cdx.json

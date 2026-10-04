@@ -411,10 +411,10 @@ describe("buildReproductionSeed — httpRequest, indexingJob, storeFingerprint",
       "rawSeed",
     );
     expect(rawSeed.storeFingerprint).toBeUndefined();
-    expect(rawSeed.warnings).toContain(
-      "a raw Activity Log file carries no store fingerprints — export a support bundle " +
-        "(`keiko support export`) to include them",
-    );
+    // A support report never carries store fingerprints either (#3534), so the warning names the gap
+    // without advising an export that could not fill it.
+    expect(rawSeed.warnings).toContain("a raw Activity Log file carries no store fingerprints");
+    expect(rawSeed.warnings.join("\n")).not.toContain("keiko support export");
   });
 
   it("stamps sourceArtifact with a stable sha256 of the exact bytes analyzed", () => {

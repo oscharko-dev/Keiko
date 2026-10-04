@@ -1,7 +1,4 @@
-import {
-  countContextTokens,
-  deriveContextProfileFromCapability,
-} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { GatewayCallRequest, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { splitUnifiedDiffSections } from "../gitDiffParser.js";
@@ -9,11 +6,7 @@ import { splitUnifiedDiffSections } from "../gitDiffParser.js";
 const OMITTED = "\n[Additional diff lines omitted for the model context budget.]\n";
 
 function requestTokens(request: GatewayCallRequest, capability: ModelCapability): number {
-  const schemaTokens =
-    request.responseFormat === undefined
-      ? 0
-      : countContextTokens(JSON.stringify(request.responseFormat), capability.tokenAccounting);
-  return countGatewayPromptTokens(request, capability.tokenAccounting) + schemaTokens;
+  return countGatewayPromptTokens(request, capability.tokenAccounting);
 }
 
 function excerpt(section: string, limit: number): string {

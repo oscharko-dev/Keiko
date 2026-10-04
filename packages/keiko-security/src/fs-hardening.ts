@@ -33,6 +33,11 @@ import {
   type SafeArtifactDirectoryMutationRequest,
 } from "./safe-artifact-directory-mutation-protocol.js";
 
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
 // Owner-only directory: rwx for the owner, nothing for group/other.
 export const DIR_MODE = 0o700;
 // Owner-only file: rw for the owner, nothing for group/other.
@@ -64,6 +69,136 @@ export function chmodIfPresent(path: string, mode: number): void {
     chmodSync(path, mode);
   } catch {
     // The sidecar (-wal/-shm) may not exist yet; best-effort.
+  }
+}
+
+type SqliteStatePathFailure = "unsafe-target" | "unsafe-ancestor" | "open-failed";
+
+export class SqliteStatePathError extends Error {
+  public override readonly name = "SqliteStatePathError";
+  public readonly code = "SQLITE_STATE_PATH_UNSAFE";
+  public constructor(public readonly kind: SqliteStatePathFailure) {
+    super(`SQLite state path refused: ${kind}`);
+  }
+}
+
+const SQLITE_STATE_PATH_REFUSED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "sqlite.state-path.refused",
+  category: "diagnostic",
+  owner: "keiko-security",
+  emitter: "fs-hardening.sqliteStatePathRefusedEvent",
+  fields: {
+    store: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ui", "memory-vault", "local-knowledge"],
+    },
+    failureKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["unsafe-target", "unsafe-ancestor", "open-failed"],
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["sqlite-state-path"],
+  proofIds: ["sqlite.state-path.refused.authority"],
+  releaseImpact: "patch",
+});
+
+interface SqliteStatePathFields {
+  readonly store: "ui" | "memory-vault" | "local-knowledge";
+  readonly failureKind: SqliteStatePathFailure;
+}
+type SqliteStatePathEvent = ReturnType<
+  typeof activityLogEvent<typeof SQLITE_STATE_PATH_REFUSED, SqliteStatePathFields>
+>;
+
+interface SqliteStatePathOptions {
+  readonly store: "ui" | "memory-vault" | "local-knowledge";
+  readonly sink?: { readonly write: (event: SqliteStatePathEvent) => void } | undefined;
+}
+
+function sqliteStatePathRefusedEvent(
+  options: SqliteStatePathOptions,
+  kind: SqliteStatePathFailure,
+): SqliteStatePathEvent {
+  return activityLogEvent(
+    SQLITE_STATE_PATH_REFUSED,
+    { level: "error", errorKind: "permission-denied" },
+    { store: options.store, failureKind: kind },
+  );
+}
+
+function sqlitePathStat(path: string): BigIntStats | undefined {
+  try {
+    return lstatSync(path, { bigint: true });
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return undefined;
+    throw new SqliteStatePathError("open-failed");
+  }
+}
+
+function verifySqliteAncestors(path: string): void {
+  for (const ancestor of directoryChain(dirname(resolve(path)))) {
+    const stat = sqlitePathStat(ancestor);
+    // macOS owns these fixed root aliases. Descendants are still checked individually;
+    // repository-created links (including links below the system temporary root) are refused.
+    if (isMacSystemAlias(ancestor, stat)) continue;
+    if (stat !== undefined && (!stat.isDirectory() || stat.isSymbolicLink())) {
+      throw new SqliteStatePathError("unsafe-ancestor");
+    }
+  }
+}
+
+function isMacSystemAlias(path: string, stat: BigIntStats | undefined): boolean {
+  return (
+    process.platform === "darwin" &&
+    (path === "/var" || path === "/tmp") &&
+    stat?.isSymbolicLink() === true &&
+    stat.uid === 0n &&
+    realpathSync(path) === `/private${path}`
+  );
+}
+
+function verifySqlitePath(path: string): void {
+  if (path.includes("\0")) throw new SqliteStatePathError("unsafe-target");
+  verifySqliteAncestors(path);
+  for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    const stat = sqlitePathStat(`${path}${suffix}`);
+    if (stat !== undefined && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n)) {
+      throw new SqliteStatePathError("unsafe-target");
+    }
+  }
+}
+
+function reportSqlitePathLogFailure(): void {
+  process.emitWarning("SQLite path refusal logging failed.", {
+    code: "KEIKO_LOG_SINK_FAILED",
+  });
+}
+
+/** Preflight SQLite-owned paths before mkdir/open/chmod. Node's pathname-only SQLite API cannot
+ * exclude a same-UID replacement after this check; this does not claim atomic containment. */
+export function assertSqliteStatePath(path: string, options?: SqliteStatePathOptions): void {
+  try {
+    verifySqlitePath(path);
+  } catch (error) {
+    const refusal =
+      error instanceof SqliteStatePathError ? error : new SqliteStatePathError("open-failed");
+    if (options?.sink !== undefined) {
+      try {
+        options.sink.write(sqliteStatePathRefusedEvent(options, refusal.kind));
+      } catch {
+        reportSqlitePathLogFailure();
+      }
+    }
+    throw refusal;
   }
 }
 
@@ -1083,6 +1218,7 @@ interface PublicationIntent {
 type PublicationReceiptState = "active" | "complete" | "consumed";
 
 const PUBLICATION_SLOT_PATTERN = /^[0-9a-f]{24}$/u;
+const PUBLICATION_STAGE_NAME_PATTERN = /^\.keiko-publish-[0-9a-f]{24}-(?:0|[1-9]\d?)\.stage$/u;
 const PUBLICATION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const PUBLICATION_OWNER_TOKEN_PATTERN = /^[0-9a-f]{24}$/u;
 // The owner file and in-process token identify one synchronous publish call, not a process. A peer
@@ -1094,6 +1230,14 @@ const MAX_PUBLICATION_ENTRIES = 16;
 export const MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES = 256 * 1024 * 1024;
 export const MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES = 512 * 1024 * 1024;
 const MAX_PUBLICATION_INTENT_BYTES = 64 * 1024;
+
+/**
+ * True for the private stage copy an interrupted publication can leave beside its destination:
+ * `.keiko-publish-<24 hex>-<entry index>.stage`. It is Keiko's own and never a published artifact.
+ */
+export function isSafeArtifactStageFileName(name: string): boolean {
+  return PUBLICATION_STAGE_NAME_PATTERN.test(name);
+}
 
 function validatePublicationSlot(slot: string, artifactClass: SafeArtifactClass): void {
   if (!PUBLICATION_SLOT_PATTERN.test(slot)) {

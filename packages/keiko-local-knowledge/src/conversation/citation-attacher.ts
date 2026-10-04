@@ -6,7 +6,16 @@
 // Tolerance rules (the markers are LLM output — never assume well-formed):
 //   * `[0]` and `[n]` for n > references.length are silently dropped. We do NOT mutate
 //     the answer text — keeping the original prose means the UI can still display the
-//     stray marker; the citations array just won't link it.
+//     stray marker; the citations array just won't link it. (The BFF reconciles them
+//     against the attached set and reports the dangling ones as unsupported citations.)
+//   * An in-range marker ALWAYS stays attached. The lexical claim/excerpt overlap check below is
+//     a soft signal (`lexicalSupport: "weak"`, counted in `weakOverlapCount`), never a filter: it
+//     is a token-equality heuristic with no stemming, so a faithful German or paraphrased
+//     citation regularly fails it, and dropping such a marker leaves it as dead text in the
+//     answer with no link and no footer count. Whether a citation truly SUPPORTS its claim is the
+//     entailment stage's question, answered by a judge, not by shared tokens.
+//   * Grouped markers (`[1, 7, 8]`, `[1;2]`) attach one entry per index; each entry's `marker` is
+//     the single-index literal (`[7]`) so it lines up with the per-marker link the UI renders.
 //   * Duplicate markers (`[1]` appearing twice) produce two entries in the citations
 //     array, in document order. The UI is responsible for de-duplicating if it wants a
 //     "unique footnotes" view.
@@ -16,16 +25,20 @@
 //     `［n］`. Some models (e.g. gpt-oss) emit these instead of ASCII brackets; without
 //     this tolerance their citations would be lost and the caller would fall back to
 //     attaching every reference. The original glyph is preserved in `marker`.
-//   * No regex backtracking traps — the pattern is `[bracket](\d+)[bracket]`, linear in the
-//     answer length, bounded by digit count (each class matches exactly one character).
+//   * The marker grammar itself lives in keiko-contracts (`findCitationMarkerGroups`), shared with
+//     the server-side reconciliation and the UI renderer so none of them can drift apart.
 
 import type { CitationReference, RetrievalReference } from "@oscharko-dev/keiko-contracts";
+import { findCitationMarkerGroups } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 
 import type { ConversationCitationReference } from "./types.js";
 
 export interface AttachCitationsResult {
   readonly text: string;
   readonly citations: readonly ConversationCitationReference[];
+  // In-range markers kept attached although their claim sentence shares little vocabulary with the
+  // cited excerpt. A count only — the answer is never altered by it.
+  readonly weakOverlapCount: number;
 }
 
 export interface CitationFaithfulnessOptions {
@@ -33,40 +46,30 @@ export interface CitationFaithfulnessOptions {
   readonly minOverlapTokens?: number;
 }
 
-// Linear scan; the pattern has no alternation or unbounded lookbehind so backtracking is
-// O(n) in the answer length. ECMAScript's `RegExp` with the `g` flag is the simplest
-// portable implementation; we cannot share a single static instance across calls because
-// `lastIndex` is mutated during iteration (a single shared instance would corrupt under
-// concurrent generator runs).
-// Open ∈ { [ , 【 (U+3010), ［ (U+FF3B) }; close ∈ { ] , 】 (U+3011), ］ (U+FF3D) }. Each
-// class matches exactly one character so the linear-scan / no-backtracking property holds.
-// Mismatched pairs (`[1】`) are accepted intentionally — markers are untrusted LLM output.
-const MARKER_PATTERN = /[[【［](\d+)[\]】］]/g;
-
-// eslint-disable-next-line complexity
 export function attachCitationsToAnswer(
   answer: string,
   references: readonly RetrievalReference[],
   options: CitationFaithfulnessOptions = {},
 ): AttachCitationsResult {
   if (answer.length === 0 || references.length === 0) {
-    return { text: answer, citations: [] };
+    return { text: answer, citations: [], weakOverlapCount: 0 };
   }
   const citations: ConversationCitationReference[] = [];
-  const re = new RegExp(MARKER_PATTERN.source, "g");
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(answer)) !== null) {
-    const marker = match[0];
-    const raw = match[1];
-    if (raw === undefined) continue;
-    const index = Number.parseInt(raw, 10);
-    if (!Number.isFinite(index) || index < 1 || index > references.length) continue;
-    const reference = references[index - 1];
-    if (reference === undefined) continue;
-    if (!citationPassesFaithfulness(answer, match.index, reference, index, options)) continue;
-    citations.push(buildCitationEntry(marker, index, reference));
+  let weakOverlapCount = 0;
+  for (const group of findCitationMarkerGroups(answer)) {
+    const claimTokens =
+      options.excerptForReference === undefined ? undefined : claimTokensAt(answer, group.start);
+    for (const entry of group.entries) {
+      const reference = references[entry.index - 1];
+      if (reference === undefined) continue;
+      const weak =
+        claimTokens !== undefined &&
+        !claimOverlapsExcerpt(claimTokens, reference, entry.index, options);
+      if (weak) weakOverlapCount += 1;
+      citations.push(buildCitationEntry(entry.marker, entry.index, reference, weak));
+    }
   }
-  return { text: answer, citations };
+  return { text: answer, citations, weakOverlapCount };
 }
 
 const CLAIM_STOPWORDS = new Set([
@@ -121,16 +124,18 @@ function isSentenceBoundary(answer: string, offset: number): boolean {
   return next === undefined || /\s/u.test(next);
 }
 
-function citationPassesFaithfulness(
-  answer: string,
-  markerOffset: number,
+// The significant tokens of the claim the marker at `markerOffset` supports.
+function claimTokensAt(answer: string, markerOffset: number): readonly string[] {
+  return significantTokens(stripMarkers(citationSentence(answer, markerOffset)));
+}
+
+function claimOverlapsExcerpt(
+  claimTokens: readonly string[],
   reference: RetrievalReference,
   index: number,
   options: CitationFaithfulnessOptions,
 ): boolean {
   if (options.excerptForReference === undefined) return true;
-  const sentence = citationSentence(answer, markerOffset);
-  const claimTokens = significantTokens(stripMarkers(sentence));
   if (claimTokens.length === 0) return false;
   const excerptTokens = new Set(significantTokens(options.excerptForReference(reference, index)));
   if (excerptTokens.size === 0) return false;
@@ -156,7 +161,7 @@ function citationSentence(answer: string, markerOffset: number): string {
     return { start, end };
   };
   const own = sentenceAround(markerOffset);
-  if (stripMarkers(answer.slice(own.start, own.end)).trim().length > 0) {
+  if (significantTokens(stripMarkers(answer.slice(own.start, own.end))).length > 0) {
     return answer.slice(own.start, own.end);
   }
   // Skip back over the boundary characters themselves, then take the sentence that ends there.
@@ -170,7 +175,13 @@ function citationSentence(answer: string, markerOffset: number): string {
 }
 
 function stripMarkers(value: string): string {
-  return value.replace(new RegExp(MARKER_PATTERN.source, "g"), " ");
+  let result = "";
+  let cursor = 0;
+  for (const group of findCitationMarkerGroups(value)) {
+    result += `${value.slice(cursor, group.start)} `;
+    cursor = group.end;
+  }
+  return result + value.slice(cursor);
 }
 
 function significantTokens(value: string): readonly string[] {
@@ -190,7 +201,14 @@ function buildCitationEntry(
   marker: string,
   index: number,
   reference: RetrievalReference,
+  weak: boolean,
 ): ConversationCitationReference {
   const citation: CitationReference = reference.citation;
-  return { marker, index, citation, reference };
+  return {
+    marker,
+    index,
+    citation,
+    reference,
+    ...(weak ? { lexicalSupport: "weak" as const } : {}),
+  };
 }

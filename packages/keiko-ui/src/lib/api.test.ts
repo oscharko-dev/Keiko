@@ -50,7 +50,7 @@ import {
   openPdfCitationPreviewSession,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
-  queueEditorAgentBridgeAction,
+  postEditorBufferSafetyRequest,
   pdfCitationPreviewDocumentUrl,
   prepareUpdateRemediationStatus,
   reconnectProject,
@@ -78,6 +78,7 @@ import {
   requestEditorSymbols,
   saveFilesContent,
   sendDesktopChatStream,
+  DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS,
   fetchWorkspaceSummary,
   transcribeDictation,
   synthesizeAssistantSpeech,
@@ -312,8 +313,7 @@ describe("editor agent bridge capability serialization", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ snapshot: null, bridgeDecisionCapability: capability }))
-      .mockResolvedValueOnce(jsonResponse({ result: { status: "succeeded" } }))
-      .mockResolvedValueOnce(jsonResponse({ result: { status: "queued" } }));
+      .mockResolvedValueOnce(jsonResponse({ result: { status: "succeeded" } }));
     vi.stubGlobal("fetch", fetchMock);
     const snapshot = {
       schemaVersion: "1",
@@ -344,16 +344,6 @@ describe("editor agent bridge capability serialization", () => {
         status: "succeeded",
       },
     });
-    const action = {
-      schemaVersion: "1",
-      actionId: "action-2",
-      idempotencyKey: "key-2",
-      sessionId: "session-1",
-      type: "applyPatch",
-      patch: "patch",
-    } as const;
-    await queueEditorAgentBridgeAction(action, capability);
-
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/api/editor/agent/snapshot",
@@ -383,18 +373,60 @@ describe("editor agent bridge capability serialization", () => {
         }),
       }),
     );
+  });
+});
+
+describe("passive editor buffer ownership serialization", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  it("uses the existing snapshot route without minting or supplying a bridge decision capability", async () => {
+    const capability = "A".repeat(43);
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse({ snapshot: null })));
+    vi.stubGlobal("fetch", fetchMock);
+    const request = {
+      schemaVersion: "1",
+      kind: "buffer-snapshot",
+      bufferSnapshotCapability: capability,
+      snapshot: {
+        schemaVersion: "1",
+        sessionId: "buffer:window:pane:root",
+        windowId: "window",
+        workspaceRoot: "/repo",
+        activePaneId: "pane",
+        panes: [],
+        dirtyFiles: [],
+        activeFile: null,
+        cursor: null,
+        selection: null,
+        diagnosticsSummary: null,
+        textMode: "none",
+        updatedAt: 1,
+      },
+    } as const;
+    await postEditorBufferSafetyRequest(request);
+    const release = {
+      schemaVersion: "1",
+      kind: "buffer-release",
+      sessionId: request.snapshot.sessionId,
+      bufferSnapshotCapability: capability,
+    } as const;
+    await postEditorBufferSafetyRequest(release);
     expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      "/api/editor/agent/actions",
+      1,
+      "/api/editor/agent/snapshot",
       expect.objectContaining({
-        body: JSON.stringify({
-          schemaVersion: "1",
-          kind: "action",
-          action,
-          bridgeDecisionCapability: capability,
-        }),
+        method: "POST",
+        body: JSON.stringify(request),
+        signal: expect.any(AbortSignal),
       }),
     );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/editor/agent/snapshot",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(release) }),
+    );
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("bridgeDecisionCapability");
   });
 });
 
@@ -1298,9 +1330,12 @@ describe("files API helpers", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await fetchFilesTree("/repo space", "src/app.ts");
-    await fetchFilesPreview("/repo space", "src/app.ts");
-    await fetchFilesContent("/repo space", "src/app.ts");
+    await fetchFilesTree("/repo space", "src/app.ts", "ui-directory-0001");
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      "X-Keiko-Correlation-Id": "ui-directory-0001",
+    });
+    await fetchFilesPreview("/repo space", "src/app.ts", "ui-preview-0001");
+    await fetchFilesContent("/repo space", "src/app.ts", "ui-content-0001");
     await saveFilesContent({
       root: "/repo space",
       path: "src/app.ts",
@@ -1319,14 +1354,20 @@ describe("files API helpers", () => {
       2,
       "/api/files/preview?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
-        headers: expect.objectContaining({ Accept: "application/json" }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "X-Keiko-Correlation-Id": "ui-preview-0001",
+        }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       3,
       "/api/files/content?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
-        headers: expect.objectContaining({ Accept: "application/json" }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "X-Keiko-Correlation-Id": "ui-content-0001",
+        }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -2440,6 +2481,24 @@ describe("cloneRepository", () => {
     vi.unstubAllGlobals();
   });
 
+  it("bounds folder registration so a stalled server cannot hold the launcher forever", async () => {
+    const controller = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    const fetchMock = vi.fn().mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const pending = createProject({ path: "/repo/app" });
+    const rejection = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+    controller.abort(new DOMException("Timed out", "TimeoutError"));
+    await rejection;
+    expect(timeout).toHaveBeenCalledWith(15_000);
+    timeout.mockRestore();
+  });
+
   it.each(["register", "clone"])(
     "preserves the %s attempt correlation and CSRF headers",
     async (operation) => {
@@ -2545,6 +2604,26 @@ describe("reconnectProject", () => {
 describe("delete helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("joins bulk deletion to its caller correlation while retaining scoped irreversible confirmation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await deleteChat("chat-123", "/repo/project", "ui_history-delete-0001");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/chats?id=chat-123",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          "X-Keiko-Correlation-Id": "ui_history-delete-0001",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          projectPath: "/repo/project",
+          confirmation: { chatId: "chat-123", irreversible: true },
+        }),
+      }),
+    );
   });
 
   it("treats 204 DELETE responses as success", async () => {
@@ -2712,6 +2791,214 @@ function makeSseResponse(stream: ReadableStream<Uint8Array>): Response {
     headers: { "Content-Type": "text/event-stream" },
   });
 }
+
+// Field report 1.1.13: when the process serving a streamed turn ended, the UI showed "Receiving
+// response" indefinitely. A stream silent for longer than four keep-alive intervals fails closed.
+describe("sendDesktopChatStream — stalled stream watchdog", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("fails with DESKTOP_CHAT_STREAM_STALLED when no byte arrives within the idle limit", async () => {
+    vi.useFakeTimers();
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(encoder.encode('event: token\ndata: {"text":"Hallo"}\n\n'));
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+    const outcome = expect(pending).rejects.toMatchObject({ code: "DESKTOP_CHAT_STREAM_STALLED" });
+    await vi.advanceTimersByTimeAsync(DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS + 1);
+    await outcome;
+    await expect(pending).rejects.toMatchObject({ correlationId: expect.any(String) as unknown });
+    expect(handlers.onToken).toHaveBeenCalledTimes(1);
+    expect(cancelled).toBe(true);
+  });
+
+  // PR #3678 audit: the idle limit also covers the response-header phase. A half-open proxy that
+  // never answers the POST left "Receiving response" up forever, because the watchdog only started
+  // once a body existed.
+  function hangingFetch(): {
+    readonly fetchMock: ReturnType<typeof vi.fn>;
+    readonly requestSignal: () => AbortSignal | undefined;
+  } {
+    let seen: AbortSignal | undefined;
+    const fetchMock = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          seen = init.signal ?? undefined;
+          // A real fetch rejects at once for a signal that is already aborted.
+          if (init.signal?.aborted === true) reject(init.signal.reason as unknown);
+          init.signal?.addEventListener("abort", () => {
+            reject(init.signal?.reason as unknown);
+          });
+        }),
+    );
+    return { fetchMock, requestSignal: () => seen };
+  }
+
+  it("fails with DESKTOP_CHAT_STREAM_STALLED when the response headers never arrive", async () => {
+    vi.useFakeTimers();
+    const { fetchMock, requestSignal } = hangingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const handlers = makeStreamHandlers();
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+    const outcome = expect(pending).rejects.toMatchObject({
+      code: "DESKTOP_CHAT_STREAM_STALLED",
+      correlationId: expect.any(String) as unknown,
+    });
+    await vi.advanceTimersByTimeAsync(DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS - 1);
+    expect(requestSignal()?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(2);
+    await outcome;
+    expect(requestSignal()?.aborted).toBe(true);
+    expect(handlers.onToken).not.toHaveBeenCalled();
+  });
+
+  it("reports a caller abort during the header phase as an abort, not a stall", async () => {
+    vi.useFakeTimers();
+    const { fetchMock, requestSignal } = hangingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const caller = new AbortController();
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      caller.signal,
+      makeStreamHandlers(),
+    );
+    const outcome = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    caller.abort();
+    await outcome;
+    expect(requestSignal()?.aborted).toBe(true);
+    // The idle timer was cleared: waiting past the limit raises nothing further.
+    await vi.advanceTimersByTimeAsync(DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS * 2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not start a request for a signal that is already aborted", async () => {
+    vi.useFakeTimers();
+    const { fetchMock } = hangingFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const caller = new AbortController();
+    caller.abort();
+    await expect(
+      sendDesktopChatStream(
+        { chatId: "c1", projectPath: "/repo", content: "hello" },
+        caller.signal,
+        makeStreamHandlers(),
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps the caller's abort wired to the response body once the headers arrived", async () => {
+    vi.useFakeTimers();
+    let seen: AbortSignal | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init: RequestInit) => {
+        seen = init.signal ?? undefined;
+        // A real fetch errors the response body when its signal aborts.
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller): void {
+            init.signal?.addEventListener("abort", () => {
+              controller.error(init.signal?.reason);
+            });
+          },
+        });
+        return Promise.resolve(makeSseResponse(stream));
+      }),
+    );
+    const caller = new AbortController();
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      caller.signal,
+      makeStreamHandlers(),
+    );
+    const outcome = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    caller.abort();
+    await outcome;
+    expect(seen?.aborted).toBe(true);
+  });
+
+  // PR #3678 review: a proxy may forward the terminal `done` event and keep the body half-open.
+  // The settled turn must not fail sixty seconds later.
+  it("stops reading after the terminal done event, even without EOF", async () => {
+    vi.useFakeTimers();
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(
+          encoder.encode(
+            `event: token\ndata: {"text":"Hallo"}\n\nevent: done\ndata: ${JSON.stringify({ chat: { id: "c1" }, messages: [] })}\n\n`,
+          ),
+        );
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+    await vi.advanceTimersByTimeAsync(DESKTOP_CHAT_STREAM_IDLE_LIMIT_MS * 2);
+    await expect(pending).resolves.toBeUndefined();
+    expect(handlers.onDone).toHaveBeenCalledTimes(1);
+    expect(cancelled).toBe(true);
+  });
+
+  it("keeps a stream alive while keep-alive comments arrive", async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controllerRef = controller;
+      },
+    });
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+    const pending = sendDesktopChatStream(
+      { chatId: "c1", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      handlers,
+    );
+    for (let beat = 0; beat < 6; beat += 1) {
+      await vi.advanceTimersByTimeAsync(15_000);
+      controllerRef?.enqueue(encoder.encode(": keep-alive\n\n"));
+    }
+    controllerRef?.enqueue(
+      encoder.encode(
+        `event: done\ndata: ${JSON.stringify({ chat: { id: "c1" }, messages: [] })}\n\n`,
+      ),
+    );
+    controllerRef?.close();
+    await expect(pending).resolves.toBeUndefined();
+    expect(handlers.onDone).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("sendDesktopChatStream — SSE residual lineBuffer flush", () => {
   afterEach(() => {
@@ -2976,6 +3263,19 @@ describe("synthesizeAssistantSpeech (Issue #1558)", () => {
       "/api/voice/speak",
       expect.objectContaining({ signal: controller.signal }),
     );
+  });
+
+  // PR #3678 review: the request carries the correlation its read-aloud preparation was reported with.
+  it("sends the caller's correlation so the spoken turn joins its preparation", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ audio: "QUJDRA==", mimeType: "audio/mpeg" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await synthesizeAssistantSpeech({ text: "answer" }, undefined, "ui_speech-turn-0001");
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(new Headers(request?.headers).get("X-Keiko-Correlation-Id")).toBe("ui_speech-turn-0001");
   });
 
   it("surfaces a content-free VOICE_UNAVAILABLE as an ApiError", async () => {
@@ -4770,6 +5070,21 @@ describe("streamAssistantSpeech correlation", () => {
       correlationId: new Headers(request?.headers).get("X-Keiko-Correlation-Id"),
     });
     expect(String(error)).not.toContain("private network detail");
+  });
+
+  it("streams under the caller's correlation when one is given", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(new TypeError("private network detail"));
+    vi.stubGlobal("fetch", fetchMock);
+    const error = await streamAssistantSpeech(
+      { text: "Synthetic test" },
+      undefined,
+      "ui_speech-turn-0002",
+    ).catch((cause: unknown) => cause);
+    const request = fetchMock.mock.calls[0]?.[1];
+    expect(new Headers(request?.headers).get("X-Keiko-Correlation-Id")).toBe("ui_speech-turn-0002");
+    expect(error).toMatchObject({ correlationId: "ui_speech-turn-0002" });
   });
 
   it("preserves cancellation so interruption does not trigger a fallback", async () => {

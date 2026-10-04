@@ -151,7 +151,7 @@ function runStep(spawn, root, label, executable, args) {
 
 /**
  * Writes the version into every manifest, pin and constant under `root`, refreshes the lockfile
- * and proves the result with check-version-consistency.
+ * and the support registry history, and proves the result with check-version-consistency.
  *
  * @param listWorkspaceDirs  (packagesDir) => absolute workspace directories
  * @param readOptionalText   (path) => text, or undefined when the file does not exist
@@ -191,6 +191,11 @@ export function applySetVersion({
     "install",
     "--package-lock-only",
     "--ignore-scripts",
+  ]);
+  // The support analyzer of this version must keep validating every older supported release, so
+  // the bump captures every supported release tag up to it into the shipped history (#3534).
+  runStep(spawn, root, "the support registry history", "node", [
+    "scripts/generate-support-registry-history.mjs",
   ]);
   runStep(spawn, root, "the version consistency check", "node", [
     "scripts/check-version-consistency.mjs",

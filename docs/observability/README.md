@@ -12,6 +12,24 @@ reader engine live in `@oscharko-dev/keiko-activity-log`; server routes and diag
 argument parsing, rendering, and publication remain their composition owners
 ([ADR-0179](../adr/ADR-0179-activity-log-package-boundary.md)).
 
+## Create a report in the browser
+
+Choose **Create error report** beside a failed editor load, window crash, file-tree load, or
+degraded local-history save. An uncaught browser failure also offers a compact footer action;
+a healthy workspace has none. Each action selects that failure's correlation and disappears
+after a successful download. Keiko downloads one canonical `keiko-support-v1-*.json` file.
+Attach it to your usual support channel; Keiko does not upload it or require a CLI command.
+
+The local paired app session authorizes the report endpoint. The browser cannot select a state
+directory. One worker performs bounded, read-only evidence scans with a 30-second deadline and a
+256 MiB heap ceiling. The existing Activity Log owner thread alone creates the incident and retention
+pin. Disconnecting cancels the worker. Incident resolution, query selection and canonical JSON
+validation are shared with CLI export; incomplete evidence stays explicitly incomplete.
+
+A downloaded report contains body-free evidence, build/registry identities, causal timelines and
+sufficiency reasons. It does not include file contents or raw workspace paths. The report requires
+the local server to respond; a stopped server cannot create an export through this endpoint.
+
 ## File location, segments, and retention
 
 Normal runtime activity lives in `<stateDir>/logs/`. `<stateDir>` is `./.keiko` by default, or
@@ -30,7 +48,7 @@ uninstall target. `keiko audit local-state` therefore cannot mutate the forensic
 result. If the primary control root overlaps the target or cannot be validated or opened, the
 command emits a body-free terminal refusal before any sink opens. It does not create an independent
 fallback log root inside an unproved trust boundary. Any Activity Log file from a control-state log
-directory can be passed directly to `keiko support analyze`.
+directory is read by the local query engine. Received reports use the strict canonical validator.
 
 One correlation id joins install-layout normalization to audit or uninstall start, subordinate
 forced-stop activity, and completion/failure. Audit and uninstall events carry SHA-256 identities
@@ -437,16 +455,18 @@ each count `seq` from their own start, so a `seq` value from one process is not 
 the same `seq` value from another by the tuple alone. The wall-clock `ts` field is a best-effort
 tiebreak hint only, never a guarantee, and should not be relied on to order lines across processes.
 
-`keiko support analyze` validates the complete identity tuple. It distinguishes supported, legacy,
+The local Activity Log reader validates the complete identity tuple. It distinguishes supported, legacy,
 unsupported, corrupt, truncated, and incomplete evidence and reports
 sequence gaps, duplicates, decreasing/reset values, and reorder deterministically for each
 `(pid, instanceId)` lifetime. These states are evidence, not warnings to ignore: an unsupported or
 incomplete input cannot be treated as a complete reconstruction.
 
-For current-registry records the analyzer also validates the operation, category, exact flattened
+For records matching the selected trusted registry, the analyzer also validates the operation, category, exact flattened
 field set, required fields, and closed error kind against the generated runtime schema. A complete
 but unknown operation or extra field is corrupt evidence; an absent required field is incomplete
-evidence; a mismatched registry/schema/catalog identity is unsupported.
+evidence; an unknown registry/schema/catalog identity is unsupported. Received reports must first pass the
+strict schema-1 validator; it selects the exact shipped historical registry and rejects raw/legacy
+input before rendering. The following matrix describes the local line reader.
 
 ### Closed evidence states
 
@@ -544,65 +564,60 @@ Read the log in this order for one failure:
    product version that produced it.
 5. For process-level events (`process.started`, `process.heartbeat`, `process.exiting`), which
    carry no `correlationId` and so never belong to a per-correlation timeline, read
-   `keiko support analyze`'s `processes[]` summary instead, keyed by `(pid, instanceId)`.
+   the validated view's `analysis.processes[]` summary instead, keyed by `(pid, instanceId)`.
 6. Before you trust an absence, read that process's `activity-log.readiness` and
    `activity-log.loss` lines. A missing line during a period with a non-zero loss count is lost
    evidence, not proof that nothing happened.
 
-## Worked example: `keiko support analyze`
+## Validating a received support report
 
-Given one raw Activity Log file (a segment or a legacy file from `<stateDir>/logs/`) or a full
-support bundle from `keiko support export` (the analyzer auto-detects either), reconstruct the
-timeline for one correlation id. An operation that spans several segments is complete only in the
-bundle, which joins every file in logical order:
+Export one canonical private report with `keiko support export --incident <id>` (or a correlation
+selector). The default is `<stateDir>/support-reports/keiko-support-v1-<incident prefix>-<UTC date>.json`.
+It contains the private incident and losslessly compacted, registered causal evidence. It never
+includes raw logs, config snapshots or arbitrary attachments; no `.sha256` sidecar is produced.
+`--max-bytes` lowers the fixed 10 MiB maximum. Missing or oversized evidence is explicitly
+insufficient, and a header that cannot fit is refused.
 
 ```bash
-keiko support analyze .keiko/logs/activity-20260821T090000000Z-4242-bbbbbbbb-000001.jsonl --correlation-id 3f9a2b7c-1e44-4d21-9a02-6b1c9e0a5f31
+keiko support analyze keiko-support-v1-0123456789ab-2026-09-30.json --json
+keiko support analyze keiko-support-v1-0123456789ab-2026-09-30.json --seed
 ```
 
-```text
-Analyzed log: /workspace/.keiko/logs/activity-20260821T090000000Z-4242-bbbbbbbb-000001.jsonl
-State directory: /workspace/.keiko
-Source: raw-log
-Newest event: 2026-08-21T09:14:02.901Z
-Newest instance: bbbbbbbb
-Freshness: current
-Process activity: apparently-active
+The entire untrusted file is bounded and validated before output. The versioned
+`keiko.support.report-analysis` envelope contains the incident, sufficiency, unknown authenticity,
+ordered timelines, process summaries, failure clusters and available deterministic seed. It uses
+the report's exact recorded registry. A report whose declared minimum analyzer version is newer
+names that version; an unknown schema or registry is unsupported. The reader never follows embedded references, accesses a
+network, executes content or tests a historical PID on the receiver's machine. Digests prove
+self-consistency, not sender authenticity.
 
-correlationId=3f9a2b7c-1e44-4d21-9a02-6b1c9e0a5f31 lines=4 durationMs=812
-  2026-08-21T09:14:02.118Z 118 info http request [812ms]
-  2026-08-21T09:14:02.204Z 119 info gateway gateway.chat.started
-  2026-08-21T09:14:02.887Z 121 error gateway gateway.chat.failed [GATEWAY_RATE_LIMIT] [683ms]
-  2026-08-21T09:14:02.901Z 122 info http request [812ms]
-```
+Legacy raw logs and open JSONL bundles are refused as received reports. Regenerate on the
+originating installation; do not copy legacy config/evidence sections into a new report. Local
+log exploration continues through `keiko support query`. See the [controlled support workspace
+guide](support-workspace.md) before sharing or giving an artifact to an agent.
 
-Each line orders by `seq` (the second column) within the process lifetime that wrote it — never
-by file position, for a v2 line. Reading top to bottom: the request line opens the timeline, the
-gateway call starts, the gateway call fails with a rate limit, and the request line's own record
-closes it out. `--json` emits the same reconstruction as a machine-readable `LogTimeline`
-(`lines`, `firstTs`, `lastTs`, `durationMs`, `errorKinds`, and — when any line in the timeline
-carried them — `frames`) instead of the human-rendered form above; omitting `--correlation-id`
-prints every timeline found in the file, plus the file-wide `processes[]`/`legacyLineCount`/
-`warnings` summary described above.
+### What a validated timeline shows
 
-The context header is part of the diagnostic contract, not decoration. For a raw
-`<state-dir>/logs/server*.log`, it reports the resolved input path and inferred state directory,
-the newest valid event timestamp, the instance id from the newest valid process observation, and a
-freshness/process-activity assessment. A raw log more than five minutes old — five expected
-heartbeat intervals — is marked `stale` and `inactive` with a machine-readable warning, so an old
-checkout log is not mistaken for the running instance. A fresh log is only
-`apparently-active` when its newest process has not recorded an exit and that PID still exists;
-otherwise the analyzer says `inactive` or `unknown`. Support bundles are historical artifacts, so
-their process activity is `not-applicable`. Missing or invalid observations remain `not reported`/
-`unknown`; file mtimes and guessed instance ids are never substituted.
+Chat context selection emits `chat.context.selected` before the provider call for buffered,
+streaming and regenerated turns. Its request correlation joins the compacted/retained history
+counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
+effective input budget and image reserve. This evidence survives generation timeout or
+cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
+not provider-measured usage, and no conversation or image content is recorded.
 
-A line successfully parsed but missing the full `(pid, instanceId, seq)` triple is a **legacy
-line** — one written before this envelope shipped, in a retained legacy `server.log` or
-`server-YYYY-MM-DD.log` file.
-It is never dropped or misordered; it is ordered by its own file position, counted in
-`legacyLineCount`, and named in exactly one `warnings[]` entry when that count is nonzero. Treat
-that warning as an instruction to read the file position ordering with less confidence for those
-specific lines, not as a defect.
+Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
+`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
+`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+replaces the image reserve even when the local text/tool/schema floor determines the final total;
+a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
+
+On retries, `reportedPromptTokens` always describes only the current counter response and is
+absent when that response has no count. `providerPromptTokens` adds the current response-schema
+cost to that raw count; `retainedPromptTokens` separately records the carried measurement floor
+plus schema cost. Admission preserves the maximum of local, current-provider and retained
+candidates. `counterSource` identifies a winning retained floor as `retained-measurement`, and
+`imageAccounting` uses that disposition when only the retained positive measurement replaces the
+image reserve. Neither retained value is presented as a new provider observation.
 
 Epic #3384's repository-delivery journey (intake, mutation authority, verified commit, push, draft
 PR, CI readiness — including the `pr-mark-ready` draft-to-ready transition (#3389) — description
@@ -616,7 +631,7 @@ coalesced, superseded, blocked, generated, failed — named in its own `event` e
 `git.journey-observation`/`git.journey-outcome.recorded`, `coding-context.github*` and
 `git-change.chat.*` lines simply appear on it like any other line, and `--clusters` groups them the
 same way. `keiko support
-analyze --seed --correlation-id <id>` additionally assembles an `issueToPrJourney` view onto the
+analyze <report.json> --seed --correlation-id <id>` additionally assembles an `issueToPrJourney` view onto the
 `ReproductionSeed`: one step per recognised line, tagged with a closed `phase`
 (`intake`/`authority`/`commit`/`push`/`pr`/`readiness`/`description`/`outcome`) and carrying the
 emitter's own `status`/`reason` and the digest/id fields (`runId`, `headSha`, `evidenceRef`,
@@ -645,6 +660,26 @@ A candidate is created in two ways:
   once per 60-second window so a storm cannot flood the log with one line per dropped evaluation.
 - **By you.** `keiko support incident report` records a problem Keiko did not detect. It needs no
   failure event; every report is its own occurrence.
+
+Client operation timeouts are persisted as `client.diagnostic` at `error`, so the existing automatic
+trigger can retain their window. Other client warnings keep their warning severity. A browser
+diagnostic whose POST never reaches the BFF cannot create a server-side candidate; the browser
+transport reports delivery failure and counts the lost evidence. Report export and offline analysis
+do not themselves add a desktop notification or recover a blocked server.
+
+Workspace metadata scans yield to the event loop before synchronous capability reads and pause
+between short work slices. Baseline and fallback scans share one in-progress guard. Closing the
+session or losing all subscribers stops traversal, and excluded native events (including internal
+`.keiko` activity) are discarded before repeated authority work. This keeps background observation
+from starving HTTP handling; authority is still re-proved at effect boundaries.
+
+The shared browser EventSource manager admits at most three persistent connections and rotates
+five-second leases when more streams are subscribed. Pending subscriptions retain their listeners
+and replay cursors; reconnect backoff, visibility suspension and interactive reservations still
+apply. A body-free budget diagnostic names saturation once per episode. Watch sessions retain their
+metadata baseline for a bounded 30-second idle period, and an interrupted baseline can be seeded
+again when a subscriber resumes. Finite file reads and diagnostic delivery can therefore use the
+remaining HTTP/1.1 connections instead of waiting indefinitely behind editor metadata streams.
 
 Each candidate pins the Activity Log from 15 minutes before to 5 minutes after the incident, across
 every process, including segments sealed later in that window. For the automatic trigger, that pin is
@@ -701,10 +736,17 @@ bounded memory. There are two kinds of question:
   `parentCorrelationId` and every descendant, such as a background job the request started.
   Unrelated correlations, siblings included, are never selected. A narrow context is added: the
   uncorrelated process signals (lifecycle, resource, loss, backpressure, disk) of the same process
-  lifetimes, within `--context-ms` (0 to 600000, default 5000) of the closure. An incident or
-  fingerprint is resolved through the local support incidents. A reported incident also selects its
-  whole pinned window and treats every correlation in it as a root. The three selectors exclude each
-  other and do not combine with the event filters.
+  lifetimes, within `--context-ms` (0 to 600000, default 5000) of the closure, and each of those
+  lifetimes' own `process.started` (its Node version, platform and architecture) wherever it lies,
+  even with `--context-ms 0`, so a long-running process keeps its runtime. A process without its
+  start whose segments no longer run unbroken from its first, each holding only supported records,
+  or whose process recorded losing its own evidence (a browser report the server refused does not
+  count), may have lost that start, before or after its first heartbeat, and is insufficient
+  (`evidence-not-retained`), with its first retained heartbeat as the proof; a one-shot command
+  writes no start, so with its segments intact nothing is missing and the first line of its first
+  segment shows that beginning. An incident or fingerprint is resolved through the local support
+  incidents. A reported incident also selects its whole pinned window and treats every correlation
+  in it as a root. The three selectors exclude each other and do not combine with the event filters.
 - **Matching events.** `--parent-correlation-id`, `--op`, `--error-kind`, `--failure-class`, `--from`
   and `--to` select single events and combine with AND. An operation, error kind or failure class
   must be one the registry declares.
@@ -781,21 +823,15 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   The empty-state baseline fell from about 0.85 s to about 0.16 s: the server module graph it no
   longer loads.
 
-- **Versioned output.** `--json` forms name themselves and their version: `keiko.support.query`,
-  `keiko.support.manifest`, the stored `keiko.activity-log.segment-manifest`, and the export
-  manifest line's `selection` member, `keiko.support.export-selection`, all at version 1.
-  `keiko support analyze --json` now carries `kind` and `schemaVersion` as well:
-  `keiko.support.analyze` for every timeline and `keiko.support.analyze-timeline` with
-  `--correlation-id`, both at version 1. Every field the earlier output had is unchanged, so an
-  existing reader such as `keiko investigate --from-timeline` keeps working; `--seed` already
-  carried `schemaVersion`. `--clusters --json` still prints the same bare, unversioned array
-  byte-for-byte — no existing reader breaks — but it is deprecated: every use prints a one-line
-  stderr notice naming its versioned replacement, the `clusters` member `keiko.support.analyze`
-  (schema version 1) now carries under plain `--json`, which holds exactly the same data inside a
-  versioned envelope.
-- **Analyze streams too.** `keiko support analyze` reads its file through the same bounded line
-  reader, including for `--seed` and `--emit-fixture`. A seed's `sourceArtifact.sha256` is the
-  SHA-256 of the file's bytes, the value `shasum -a 256` and a report's `.sha256` file state.
+- **Versioned output.** Query/manifest wire kinds stay at version 1. Canonical report analysis
+  emits `keiko.support.report-analysis`, version 1, including its full validated analysis and
+  available seed. `--clusters --json` uses that envelope too; scripts select `analysis.clusters`.
+  With `--correlation-id`, `--json` emits only that validated timeline as
+  `keiko.support.report-timeline`, version 1, the form `keiko investigate --from-timeline` reads.
+- **Bounded analysis.** Report file reads use bounded chunks; JSON and decompression have separate
+  hard byte, record and depth limits. Validation completes before any human or machine rendering.
+  A seed's `sourceArtifact.sha256` is the SHA-256 of the exact received file bytes; section and
+  overall report integrity are embedded in the report.
 - **Evidence.** `support.query.completed`, `support.query.failed` and `support.manifest.rebuilt`
   record the query class, candidate and result counts, selected bytes, truncation, integrity and
   loss, never the query text, an event body, a name or a path.
@@ -804,8 +840,23 @@ the integrity, coverage, loss and truncation of the selection. The human output 
 
 - [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md) — the full
   design record: why each envelope field is reserved, the ordering guarantee's exact limit, the
-  redaction escape hatches, and the support-bundle format.
+  redaction escape hatches, and the support report format.
 - [`reproduction-harness.md`](reproduction-harness.md) — turning one correlation id's evidence into
   a red-then-green regression test.
 - [Troubleshooting guide](../troubleshooting/README.md) — the `logs/` row in the
   "Log locations and debug mode" table, alongside the other operator-facing log files.
+
+### Folder navigation evidence
+
+The existing `client.stage.started` and `client.stage.settled` operations record
+`files-directory-load`, `files-directory-navigation`, `files-project-selection`,
+and `editor-project-selection`. Each pair shares a correlation id and opaque ordinal;
+the directory request sends that same correlation id to join its server evidence. A failed
+read emits a correlated, body-free client diagnostic and still settles its stage.
+Neither paths, filenames, Git details nor document bodies enter these reports.
+
+Desktop workspace manifests are scoped to the requested root immediately on navigation. A previous
+workspace cannot retarget a newly selected directory while its manifest fetch is pending. Workspace
+watch subscriptions reconcile unattended changes after resuming under fresh subscriber authority.
+Editor watch notices use the selected locale; local-history detail and correlation references remain
+available in a collapsed Details disclosure.

@@ -4,105 +4,38 @@ import type {
   ConversationDocumentContextWire,
   DiscussionMode,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  countContextTokens,
-  countContextTokensForSegments,
-} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { CONVERSATION_SYSTEM_PROMPT, composeConversationPrompt } from "./conversation-prompt.js";
 import {
-  CONVERSATION_CONTEXT_BLOCK_HEADER,
-  CONVERSATION_SYSTEM_PROMPT,
-  composeConversationPrompt,
-  renderConversationDocumentContextBlock,
-} from "./conversation-prompt.js";
-import type { GatewayConversationMessage } from "./conversation-gateway.js";
+  withGatewayConversationImages,
+  type GatewayConversationMessage,
+} from "./conversation-gateway.js";
 import type { ConversationCompactionOutcome } from "./conversation-compaction.js";
-
-export function textTokens(
-  text: string | undefined,
-  tokenAccounting: ContextTokenAccounting | undefined,
-): number {
-  return countContextTokensForSegments(text === undefined ? [] : [text], tokenAccounting);
-}
-
-export function renderMemoryContextText(
-  memories: readonly ConversationMemoryContextEntryWire[],
-  compactionContextText: string | undefined,
-): string | undefined {
-  if (memories.length === 0 && compactionContextText === undefined) {
-    return undefined;
-  }
-  const lines: string[] = [];
-  if (memories.length > 0) {
-    lines.push("# Relevant memories");
-    for (const memory of memories) {
-      lines.push(`- (${memory.inclusionReason}) ${memory.bodyExcerpt}`);
-    }
-  }
-  if (compactionContextText !== undefined) {
-    if (lines.length > 0) {
-      lines.push("");
-    }
-    lines.push(compactionContextText);
-  }
-  return lines.join("\n");
-}
-
-export function renderDocumentContextText(
-  documentContext: readonly ConversationDocumentContextWire[],
-): string | undefined {
-  if (documentContext.length === 0) {
-    return undefined;
-  }
-  const blocks = documentContext.map(renderConversationDocumentContextBlock);
-  return `${CONVERSATION_CONTEXT_BLOCK_HEADER}\n${blocks.join("\n")}`;
-}
-
-export function estimateUserTaskTokens(input: {
-  readonly content: string;
-  readonly discussionMode: DiscussionMode | undefined;
-  readonly tokenAccounting: ContextTokenAccounting | undefined;
-}): number {
-  return countContextTokensForSegments(
-    [composeConversationPrompt(input.content, [], undefined, input.discussionMode)],
-    input.tokenAccounting,
-  );
-}
 
 export function estimateFinalPromptTokens(
   finalMessages: readonly GatewayConversationMessage[],
   tokenAccounting: ContextTokenAccounting | undefined,
+  contextWindow?: number,
 ): number {
-  return countContextTokensForSegments(
-    finalMessages.map((message) => message.content),
-    tokenAccounting,
-  );
+  return countGatewayPromptTokens({ messages: finalMessages }, tokenAccounting, { contextWindow });
 }
 
-// The compaction summary is physically embedded in the retained system message (see
-// buildSystemScopedCompactionContent in conversation-compaction.ts), but its tokens are
-// deliberately attributed to the history-summary lane rather than system-contract: that lane
-// counts the summary as its "+1" included item and reports the compaction provenance (see
-// buildHistorySummaryLane in chat-prompt-budget-diagnostics.ts), while system-contract
-// intentionally reports only the bare canonical CONVERSATION_SYSTEM_PROMPT tokens. Subtracting
-// systemTokens here keeps each lane's item-count consistent with its token-count and keeps the
-// lane sum equal to totalEstimatedTokens.
 export function estimateHistoryLaneTokens(input: {
   readonly historyOutcome: ConversationCompactionOutcome;
   readonly systemTokens: number;
   readonly tokenAccounting: ContextTokenAccounting | undefined;
 }): number {
-  const historyMessageTokens = countContextTokensForSegments(
-    input.historyOutcome.messages.map((message) => message.content),
+  const historyMessageTokens = estimateFinalPromptTokens(
+    input.historyOutcome.messages,
     input.tokenAccounting,
   );
-  const systemPromptIsEmbedded = input.historyOutcome.messages.at(0)?.role === "system";
-  return systemPromptIsEmbedded
+  return input.historyOutcome.messages.at(0)?.role === "system"
     ? Math.max(0, historyMessageTokens - input.systemTokens)
     : historyMessageTokens;
 }
 
-export function buildPromptAssemblyTokenSummary(input: {
+interface TokenSummaryInput {
   readonly historyOutcome: ConversationCompactionOutcome;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly compactionContextText?: string | undefined;
@@ -113,7 +46,66 @@ export function buildPromptAssemblyTokenSummary(input: {
   };
   readonly finalMessages: readonly GatewayConversationMessage[];
   readonly profile: ContextProfile;
-}): {
+}
+
+function userProjectionTokens(input: TokenSummaryInput, includeMemory: boolean): number {
+  const memory =
+    includeMemory && input.memoryEntries.length > 0
+      ? [
+          "# Relevant memories",
+          ...input.memoryEntries.map(
+            (entry) => `- (${entry.inclusionReason}) ${entry.bodyExcerpt}`,
+          ),
+        ].join("\n")
+      : undefined;
+  const content = composeConversationPrompt(
+    input.request.content,
+    [],
+    memory,
+    input.request.discussionMode,
+  );
+  const images =
+    input.finalMessages.at(-1)?.contentParts?.filter((part) => part.type === "image_url") ?? [];
+  return estimateFinalPromptTokens(
+    withGatewayConversationImages([{ role: "user", content }], images),
+    input.profile.tokenAccounting,
+    input.profile.maxInputTokens,
+  );
+}
+
+function currentTurnLaneTokens(input: TokenSummaryInput): {
+  latestTurnTokens: number;
+  memoryTokens: number;
+  documentTokens: number;
+} {
+  const current = input.finalMessages.at(-1);
+  const total = estimateFinalPromptTokens(
+    current === undefined ? [] : [current],
+    input.profile.tokenAccounting,
+    input.profile.maxInputTokens,
+  );
+  // Attribute incremental serialization costs in assembly order. Bounds keep lane sums exact even
+  // when calibrated token estimates are not additive across the text blocks of one message.
+  const latestTurnTokens = Math.min(total, userProjectionTokens(input, false));
+  const memoryTokens = Math.min(
+    total - latestTurnTokens,
+    Math.max(0, userProjectionTokens(input, true) - latestTurnTokens),
+  );
+  const resurfacedTokens = estimateFinalPromptTokens(
+    input.compactionContextText === undefined
+      ? []
+      : [{ role: "system", content: input.compactionContextText }],
+    input.profile.tokenAccounting,
+    input.profile.maxInputTokens,
+  );
+  return {
+    latestTurnTokens,
+    memoryTokens: memoryTokens + resurfacedTokens,
+    documentTokens: total - latestTurnTokens - memoryTokens,
+  };
+}
+
+export function buildPromptAssemblyTokenSummary(input: TokenSummaryInput): {
   readonly historyTokens: number;
   readonly memoryTokens: number;
   readonly documentTokens: number;
@@ -122,30 +114,22 @@ export function buildPromptAssemblyTokenSummary(input: {
   readonly totalEstimatedTokens: number;
 } {
   const tokenAccounting = input.profile.tokenAccounting;
-  const systemTokens = countContextTokens(CONVERSATION_SYSTEM_PROMPT, tokenAccounting);
-  const historyTokens = estimateHistoryLaneTokens({
-    historyOutcome: input.historyOutcome,
-    systemTokens,
-    tokenAccounting,
-  });
-  const memoryTokens = textTokens(
-    renderMemoryContextText(input.memoryEntries, input.compactionContextText),
+  const systemTokens = estimateFinalPromptTokens(
+    [{ role: "system", content: CONVERSATION_SYSTEM_PROMPT }],
     tokenAccounting,
   );
-  const documentTokens = textTokens(
-    renderDocumentContextText(input.documentContext),
-    tokenAccounting,
-  );
-  const latestTurnTokens = estimateUserTaskTokens({
-    ...input.request,
-    tokenAccounting,
-  });
   return {
-    historyTokens,
-    memoryTokens,
-    documentTokens,
-    latestTurnTokens,
     systemTokens,
-    totalEstimatedTokens: estimateFinalPromptTokens(input.finalMessages, tokenAccounting),
+    historyTokens: estimateHistoryLaneTokens({
+      historyOutcome: input.historyOutcome,
+      systemTokens,
+      tokenAccounting,
+    }),
+    ...currentTurnLaneTokens(input),
+    totalEstimatedTokens: estimateFinalPromptTokens(
+      input.finalMessages,
+      tokenAccounting,
+      input.profile.maxInputTokens,
+    ),
   };
 }

@@ -30,7 +30,7 @@
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNodeUiStore } from "./index.js";
@@ -65,6 +65,8 @@ const ALLOWED_CHATS_COLUMNS = new Set([
   // V28 (issue #3400): the third, sibling Git-change scope list — server-issued snapshot
   // reference and safe metadata only (contract correction 2). No path, diff, or credential.
   "git_change_scope_json",
+  // V39: a body-free counter invalidating stale conversation compaction after history edits.
+  "history_revision",
   "created_at",
   "updated_at",
 ]);
@@ -268,7 +270,7 @@ let tmpDir: string;
 let projDir: string;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "keiko-forbidden-"));
+  tmpDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-forbidden-"));
   projDir = mkdtempSync(join(tmpDir, "proj-"));
 });
 

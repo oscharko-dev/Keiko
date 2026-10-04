@@ -782,12 +782,44 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
+  it("probes the embedding model every binder would bind, not the first one listed", async () => {
+    // Pod creation, re-embedding, repository search and memory all bind the CHEAPEST embedding
+    // model (the configured order breaks ties). The readiness probe used to take the first one
+    // listed, so a gateway with two engines was "verified" on a model nothing would ever use.
+    const base = gatewayConfig();
+    const config: GatewayConfig = {
+      ...base,
+      providers: [
+        ...base.providers,
+        { ...base.providers[1], modelId: "text-embedding-3-large" } as (typeof base.providers)[0],
+      ],
+      capabilities: [
+        ...(base.capabilities ?? []).filter((capability) => capability.kind !== "embedding"),
+        { ...embeddingCapability("text-embedding-3-small"), costClass: "medium" },
+        embeddingCapability("text-embedding-3-large"),
+      ],
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockResolvedValueOnce(jsonResponse(embeddingPayload())) as typeof fetch;
+    const deps = depsWith(config, fetchImpl);
+
+    const report = await runGatewayReadiness({ options: { probes: ["embedding"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    expect(requestBodyAt(fetchImpl, 1)).toMatchObject({ model: "text-embedding-3-large" });
+    deps.store.close();
+  });
+
   it("checks the optional reranker when requested", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      // Index 1 is the probe's matching document: it sits second, so only a real ranking gets it
+      // to the top.
       .mockResolvedValueOnce(
-        jsonResponse({ results: [{ index: 0, relevance_score: 0.99 }] }),
+        jsonResponse({ results: [{ index: 1, relevance_score: 0.99 }] }),
       ) as typeof fetch;
     const config: GatewayConfig = {
       ...gatewayConfig(),
@@ -815,6 +847,41 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
+  it.each([
+    { title: "returns the first document only", results: [{ index: 0 }] },
+    {
+      title: "returns every document in input order with no scores",
+      results: [{ index: 0 }, { index: 1 }],
+    },
+  ])("does not pass a reranker that $title", async ({ results }) => {
+    // An engine that ignores the query answers in input order. The probe must place the matching
+    // document anywhere but first, or that engine and a working one are indistinguishable.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockResolvedValueOnce(jsonResponse({ results })) as typeof fetch;
+    const config: GatewayConfig = {
+      ...gatewayConfig(),
+      reranker: {
+        modelId: "qwen3-reranker",
+        baseUrl: "https://reranker.internal/v1",
+        apiKey: "reranker-secret",
+        timeoutMs: 10_000,
+      },
+    };
+    const deps = depsWith(config, fetchImpl);
+    const report = await runGatewayReadiness({ options: { probes: ["reranker"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.probes).toEqual([
+      expect.objectContaining({ name: "chat", status: "passed" }),
+      expect.objectContaining({ name: "reranker", status: "unsupported" }),
+    ]);
+    expect(report.verifiedCapabilities.reranker).not.toBe(true);
+    deps.store.close();
+  });
+
   it("probes the reranker of the config generation the run started with", async () => {
     // The gateway-setup save route can replace the runtime config while a readiness run is in
     // flight, and feature probes execute concurrently after the awaited chat probe. Every probe in
@@ -835,7 +902,7 @@ describe("gateway readiness route", () => {
       const url = String(input instanceof Request ? input.url : input);
       if (url.includes("rerank")) {
         rerankUrls.push(url);
-        return Promise.resolve(jsonResponse({ results: [{ index: 0, relevance_score: 0.99 }] }));
+        return Promise.resolve(jsonResponse({ results: [{ index: 1, relevance_score: 0.99 }] }));
       }
       // Simulate a concurrent gateway-setup save landing while the chat probe is awaited.
       current = saved;

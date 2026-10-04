@@ -3,6 +3,7 @@
 import { useCallback, useState, type KeyboardEvent, type ReactNode } from "react";
 import { createProject, projectResponseWarningMessage } from "../../../../../lib/api";
 import { useTranslate } from "../../../../../lib/i18n";
+import { useOptionalWidgetTranslate } from "../../../../../lib/optional-widget-i18n";
 import { pickWithNativeDialog } from "../../../../../lib/native-file-dialog";
 import { useNativeFileDialogCapability } from "../../hooks/useNativeFileDialogCapability";
 import { Icons } from "../../Icons";
@@ -24,7 +25,8 @@ export function EditorEmptyState({
   readonly onWorkspaceNotice?:
     ((notice: { readonly root: string; readonly message: string }) => void) | undefined;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
+  const commonT = useTranslate();
   const nativeSupported = useNativeFileDialogCapability();
   const [path, setPath] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -35,7 +37,10 @@ export function EditorEmptyState({
       setNotice(null);
       setConnecting(true);
       try {
-        const response = await createProject({ path: selectedPath });
+        const response = await createProject({
+          path: selectedPath,
+          selectionIntent: "explicit-folder-selection",
+        });
         const warning = projectResponseWarningMessage(response);
         if (warning !== undefined) {
           setNotice(warning);
@@ -101,7 +106,7 @@ export function EditorEmptyState({
         data-testid="editor-empty-browse"
       >
         <FolderIcon size={16} />
-        {connecting ? t("editor.empty.opening") : t("editor.empty.selectFolder")}
+        {connecting ? commonT("editor.empty.opening") : t("editor.empty.selectFolder")}
       </button>
       <div className={styles.manual}>
         <input
@@ -120,7 +125,7 @@ export function EditorEmptyState({
           onClick={openManual}
           disabled={path.trim().length === 0 || connecting}
         >
-          {connecting ? t("editor.empty.opening") : t("editor.empty.open")}
+          {connecting ? commonT("editor.empty.opening") : t("editor.empty.open")}
         </button>
       </div>
       {notice !== null ? (
