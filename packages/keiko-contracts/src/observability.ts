@@ -20,7 +20,7 @@
 // bypasses the `extra` redaction path entirely: this shape gate is the only thing standing
 // between a provider's rejected-input message and a log line an operator will grep in the clear.
 
-import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-registry.generated.js";
+import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 import { containsAbsolutePath } from "./text-safety.js";
 
 export {
