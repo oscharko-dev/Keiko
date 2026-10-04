@@ -57,6 +57,51 @@ const matchingCatalogs = {
     'import type { MessageCatalog } from "./i18n-messages.en";\n\nexport const DE_MESSAGES = {\n  "feature.title": "Titel",\n} satisfies MessageCatalog;\n',
 };
 
+test.each([
+  ["locale", true],
+  ['"en"', false],
+  ["undefined", false],
+])(
+  "recognizes selected-locale number formatting, not fixed locale %s",
+  async (locale, accepted) => {
+    const file = "packages/keiko-ui/src/lib/format.ts";
+    await withFixture(
+      {
+        ...matchingCatalogs,
+        [file]: `export function formatMs(value, locale) {\n  return \`${"${"}new Intl.NumberFormat(${locale}, { maximumFractionDigits: 1 }).format(value)} s\`;\n}\n`,
+      },
+      (repoRoot) => {
+        const result = checkUiI18nGuard({
+          repoRoot,
+          changedFiles: [file, EN_CATALOG, DE_CATALOG],
+        });
+        expect(result.ok).toBe(accepted);
+        expect(result.problems.some((problem) => problem.includes("do not use the i18n API"))).toBe(
+          !accepted,
+        );
+      },
+    );
+  },
+);
+
+test("selected-locale number formatting does not excuse untranslated adjacent copy", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [UI_FILE]:
+        'const formatter = new Intl.NumberFormat(locale);\nexport const rows = [{ label: "Private status" }];\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [UI_FILE, EN_CATALOG, DE_CATALOG],
+      });
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toContain("Private status");
+    },
+  );
+});
+
 test("recognizes production UI source under the Keiko UI app tree", () => {
   expect(isUiProductionSource(UI_FILE)).toBe(true);
   expect(isUiProductionSource("packages/keiko-ui/src/app/components/NewFeature.test.tsx")).toBe(

@@ -59,6 +59,13 @@ const I18N_USAGE_APIS = [
   { name: "useFilesWidgetTranslate", pattern: /\buseFilesWidgetTranslate\s*\(/ },
   { name: "FilesWidgetTranslate-type", pattern: /\bFilesWidgetTranslate\b/ },
   { name: "translateFilesWidget", pattern: /\btranslateFilesWidget\s*\(/ },
+  // Pure numeric presenters receive the selected locale rather than a translate hook. A fixed
+  // language or omitted locale is not evidence of selected-locale formatting; literal copy is
+  // still independently checked by the shrinking untranslated-literal ledger.
+  {
+    name: "Intl.NumberFormat-locale",
+    pattern: /\bnew\s+Intl\.NumberFormat\s*\(\s*locale\s*[,)]/,
+  },
 ];
 const I18N_USAGE_PATTERNS = I18N_USAGE_APIS.map((api) => api.pattern);
 // Each quoted alternative used to open with an unbounded [^"]* that overlaps the required

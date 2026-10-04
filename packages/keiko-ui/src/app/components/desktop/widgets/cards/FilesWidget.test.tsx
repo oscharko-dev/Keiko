@@ -373,6 +373,7 @@ describe("FilesWidget", () => {
         "/repo space",
         "package.json",
         expect.any(String),
+        expect.any(AbortSignal),
       ),
     );
     expect(onActiveFileChange).toHaveBeenCalledWith("package.json", "/repo space");
@@ -2580,7 +2581,11 @@ describe("FilePreview", () => {
 
     await waitFor(() => expect(fetchFilesPreview).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(previewRegion).toHaveTextContent("new value"));
-    expect(screen.getByRole("status")).toHaveTextContent("Reloaded");
+    const refreshStatus = screen.getByText("Reloaded", {
+      selector: "output[data-state='refreshed']",
+    });
+    expect(screen.getAllByRole("status")).toContain(refreshStatus);
+    expect(refreshStatus).toHaveAttribute("aria-live", "polite");
     expect(previewRegion).not.toHaveTextContent("old value");
   });
 
