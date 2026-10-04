@@ -13,6 +13,7 @@ import {
   createExplorationPlan,
   directDefinitionSymbol,
   isDirectEvidenceLookup,
+  requiresRelationshipOrHistoryRings,
   type ExplorationPlan,
 } from "./plan.js";
 
@@ -219,6 +220,36 @@ describe("createExplorationPlan", () => {
     expect(isDirectEvidenceLookup(query, anchors)).toBe(true);
     expect(directDefinitionSymbol(query, anchors)).toBeUndefined();
     expect(directDefinitionSymbol(query, anchors.slice(0, 1))).toBe("windowframe");
+  });
+
+  it.each([
+    "Wo ist LateDefinitionProbe in den verbundenen Dateien implementiert? Erstelle eine vollständige Tabelle für alle 96 Dateien mit Dateinummer, tatsächlichem Rückgabewert und belegter Definitionszeile. Verwende nur gelesene Werte, keine Vermutungen. Lange Kommentarblöcke vor der Funktion sind keine Implementierung. Gib jeden Rückgabewert an und zitiere jede Definitionszeile.",
+    "Where is LateDefinitionProbe implemented? Create a complete table for all 96 files with their actual return values and cited definition lines. Use only read values, no guesses. Long comments before the function are not implementations.",
+  ])("treats evidence-only output directives as direct lookup: %s", (text) => {
+    const query = happyQuery({ text });
+    const p = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query,
+    });
+    expect(p.state).toBe("ready");
+    expect(requiresRelationshipOrHistoryRings(query)).toBe(false);
+    expect(isDirectEvidenceLookup(query, p.anchors)).toBe(true);
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
+  });
+
+  it.each([
+    "Wo ist LateDefinitionProbe implementiert und welche Funktionen verwenden LateDefinitionProbe? Verwende nur gelesene Werte, keine Vermutungen.",
+    "Where is LateDefinitionProbe defined and which callers use it? Use only read values, no guesses.",
+    "Where is LateDefinitionProbe defined and imported? Use only cited evidence.",
+    "Where is LateDefinitionProbe defined and when was it changed? Use only read values.",
+  ])("preserves real relationships alongside evidence directives: %s", (text) => {
+    const query = happyQuery({ text });
+    const p = plan({
+      scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+      query,
+    });
+    expect(requiresRelationshipOrHistoryRings(query)).toBe(true);
+    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical", "structural", "git-history"]);
   });
 
   it.each([

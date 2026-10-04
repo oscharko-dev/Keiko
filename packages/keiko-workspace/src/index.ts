@@ -110,7 +110,11 @@ export type {
   SearchPolicy,
   SearchPolicyMode,
 } from "./repoSearchPolicy.js";
-export { candidateBucketForPath, SYMBOL_RELATION_TERMS } from "./repoSearchPolicy.js";
+export {
+  candidateBucketForPath,
+  hasSymbolRelationshipQuery,
+  SYMBOL_RELATION_TERMS,
+} from "./repoSearchPolicy.js";
 export { requestedSourceInspectionExtensions } from "./repoSearchSourceInspection.js";
 export type {
   SemanticFusionSignals,

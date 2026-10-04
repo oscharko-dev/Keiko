@@ -299,6 +299,17 @@ export const SYMBOL_RELATION_TERMS: ReadonlySet<string> = new Set([
   "exportiert",
 ]);
 
+const EVIDENCE_ONLY_USE_DIRECTIVE_RE =
+  /\b(?:use\s+only\s+(?:read|verified|cited)\s+(?:values|evidence|sources)|verwende\s+nur\s+(?:gelesene|belegte|verifizierte)\s+(?:werte|evidenz|quellen))\b/giu;
+
+/** Output evidence instructions do not ask which source symbols use another symbol. */
+export function hasSymbolRelationshipQuery(text: string): boolean {
+  const relationshipText = text.replace(EVIDENCE_ONLY_USE_DIRECTIVE_RE, " ").toLowerCase();
+  return [...relationshipText.matchAll(/[\p{L}\p{N}_]+/gu)].some((match) =>
+    SYMBOL_RELATION_TERMS.has(match[0]),
+  );
+}
+
 function emptyBucketCounts(): Record<CandidateBucket, number> {
   return {
     "canonical-metadata": 0,
@@ -843,8 +854,7 @@ function prefersSourceOverProse(query: RetrievalQuery, terms: readonly string[])
     return true;
   }
   return (
-    terms.some((term) => SYMBOL_RELATION_TERMS.has(term)) &&
-    anchorIdentifierQueryTerms(query.text).length > 0
+    hasSymbolRelationshipQuery(query.text) && anchorIdentifierQueryTerms(query.text).length > 0
   );
 }
 

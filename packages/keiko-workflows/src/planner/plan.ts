@@ -16,7 +16,7 @@ import {
 // The symbol-relation vocabulary is owned by keiko-workspace (repoSearchPolicy.ts), where the
 // retrieval ranker applies the same source-over-prose bias to the same question shape. One
 // definition, imported inward, so planner classification and candidate ranking cannot drift.
-import { SYMBOL_RELATION_TERMS, type SearchLimits } from "@oscharko-dev/keiko-workspace";
+import { hasSymbolRelationshipQuery, type SearchLimits } from "@oscharko-dev/keiko-workspace";
 
 import { extractAnchors, type SearchAnchor, type SearchAnchorKind } from "./anchors.js";
 import {
@@ -260,7 +260,7 @@ function hasDefinitionLookup(text: string): boolean {
 }
 
 function hasSymbolRelation(text: string): boolean {
-  return hasQueryTerm(text, SYMBOL_RELATION_TERMS);
+  return hasSymbolRelationshipQuery(text);
 }
 
 function isTestIdentifier(text: string, normalizedSymbol: string): boolean {
