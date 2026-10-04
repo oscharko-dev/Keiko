@@ -1701,7 +1701,12 @@ interface ClientSupportReportPrepared {
   readonly completeness: ActivityLogCompletenessState;
   readonly loss: ActivityLogLossState;
   readonly availabilityReason?:
-    "session-unavailable" | "diagnostic-delivery-unavailable" | "service-unavailable" | undefined;
+    | "session-unavailable"
+    | "diagnostic-delivery-unavailable"
+    | "service-unavailable"
+    | "client-only-selected"
+    | "correlation-unavailable"
+    | undefined;
 }
 export type ClientSupportReportPreparation =
   | ClientSupportReportPrepared
@@ -1723,6 +1728,8 @@ const REPORT_AVAILABILITY = new Set([
   "session-unavailable",
   "diagnostic-delivery-unavailable",
   "service-unavailable",
+  "client-only-selected",
+  "correlation-unavailable",
 ]);
 function isSupportReportPreparationBytes(value: unknown): value is number {
   return (

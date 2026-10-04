@@ -12,6 +12,7 @@ import {
   supportIncidentPrivateProjection,
   SupportReportError,
   type SupportReport,
+  type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { prepareUnretainedUserReportDescriptor } from "../support-incident.js";
 import { createClientOnlySupportReport } from "./support-desktop-report.js";
@@ -69,13 +70,14 @@ async function browserDigest(text: string): Promise<string> {
 async function browserReport(
   reference: SupportReport,
   correlationId?: string,
+  availabilityReason: ClientOnlySupportReportInput["availabilityReason"] = "session-unavailable",
 ): Promise<SupportReport> {
   const sections = clientOnlySupportReportSections({
     incidentId: reference.incident.incidentId,
     nowMs: reference.incident.createdAtMs,
     build: reference.incident.build,
     defectFingerprint: reference.incident.defectFingerprint,
-    availabilityReason: "session-unavailable",
+    availabilityReason,
     ...(correlationId === undefined ? {} : { correlationId }),
   });
   const unsigned = buildSupportReportEnvelope(
@@ -112,13 +114,46 @@ describe("shared canonical browser report producer", () => {
     "session-unavailable",
     "diagnostic-delivery-unavailable",
     "service-unavailable",
-  ] as const)("admits only limited zero-server evidence for %s", (reason) => {
-    const report = parseSupportReport(createClientOnlySupportReport(undefined, reason).reportJson);
+    "client-only-selected",
+    "correlation-unavailable",
+  ] as const)("admits only limited zero-server evidence for %s", async (reason) => {
+    const node = createClientOnlySupportReport(undefined, reason);
+    const report = await browserReport(parseSupportReport(node.reportJson), undefined, reason);
+    const canonical = serializeSupportReport(report);
+    expect(canonical).toBe(node.reportJson);
+    expect(analyzeSupportReport(canonical).selection.status).toBe("insufficient");
     expect(parseSupportIncidentPrivateProjection(report.incident)).toBeDefined();
     expect(report.incident.clientReport?.availabilityReason).toBe(reason);
     expect(report.incident.segments).toEqual([]);
     expect(report.incident.lineCount).toBe(0);
     expect(report.selection.status).toBe("insufficient");
+  });
+
+  it("rejects an unknown reason even when its canonical section and envelope digests are recomputed", async () => {
+    const report = await browserReport(legacyClientOnlyReport());
+    const incident = {
+      ...report.incident,
+      clientReport: { serverEvidence: "unavailable", availabilityReason: "invented-choice" },
+    };
+    const { reportDigest: _original, ...integrity } = report.integrity;
+    const unsigned = {
+      ...report,
+      incident,
+      integrity: {
+        ...integrity,
+        incidentDigest: await browserDigest(canonicalSupportJson(incident)),
+      },
+    };
+    const hostile = canonicalSupportJson({
+      ...unsigned,
+      integrity: {
+        ...unsigned.integrity,
+        reportDigest: await browserDigest(canonicalSupportJson(unsigned)),
+      },
+    });
+    expect(parseSupportIncidentPrivateProjection(incident)).toBeUndefined();
+    expect(() => parseSupportReport(hostile)).toThrow(SupportReportError);
+    expect(() => analyzeSupportReport(hostile)).toThrow(SupportReportError);
   });
 
   it("rejects unsafe factory inputs without filtering or leaking them", () => {

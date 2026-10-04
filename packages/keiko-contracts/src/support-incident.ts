@@ -644,7 +644,11 @@ export interface SupportIncidentPrivateProjection extends SupportIncidentPublicP
     | {
         readonly serverEvidence: "unavailable";
         readonly availabilityReason:
-          "session-unavailable" | "diagnostic-delivery-unavailable" | "service-unavailable";
+          | "session-unavailable"
+          | "diagnostic-delivery-unavailable"
+          | "service-unavailable"
+          | "client-only-selected"
+          | "correlation-unavailable";
         /** Browser-observed facts, never a claim of registered server evidence. */
         readonly failure?:
           | {
@@ -895,7 +899,13 @@ function validClientReport(value: unknown, projection: PlainObject): boolean {
       value.serverEvidence === "unavailable" &&
       clientOnlyProjection(projection) &&
       isOneOf(
-        ["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"],
+        [
+          "session-unavailable",
+          "diagnostic-delivery-unavailable",
+          "service-unavailable",
+          "client-only-selected",
+          "correlation-unavailable",
+        ],
         value.availabilityReason,
       ))
   );

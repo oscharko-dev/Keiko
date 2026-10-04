@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "3d217d101b4afeb7fc59171f7dbf1a021f81242bbab4176f3b43cd5dfa6a342f",
+    "catalogDigest": "8146ad2d9da23c1bf63942aadffb4f9778d96222320b0474c6f38d5295863855",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -2497,7 +2497,7 @@
         "proofIds": ["client.answer.copied.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:1043",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1788"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1794"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2540,7 +2540,7 @@
         "proofIds": ["client.answer.speech-prepared.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:1090",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1810"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1816"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2613,7 +2613,7 @@
         "proofIds": ["client.binding.candidates-offered.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:751",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2218"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2224"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2682,7 +2682,7 @@
         "proofIds": ["client.binding.choice-kept.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:780",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2235"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2241"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2751,7 +2751,7 @@
         "proofIds": ["client.binding.choice-withdrawn.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:796",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2248"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2254"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2820,7 +2820,7 @@
         "proofIds": ["client.binding.resolved.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:715",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2176"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2182"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2889,7 +2889,7 @@
         "proofIds": ["client.binding.target-missing.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:731",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2272"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2278"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2939,7 +2939,7 @@
         "proofIds": ["client.citation.activated.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:1112",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1923"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1929"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2999,7 +2999,7 @@
         "proofIds": ["client.composer.activity.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:130",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2008"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2014"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3311,7 +3311,7 @@
         "proofIds": ["client.diagnostic.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:330",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1980"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1986"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3356,7 +3356,7 @@
         "proofIds": ["client.diagnostic.rate-limited.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:161",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1396"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1402"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3404,7 +3404,7 @@
         ],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:195",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1430"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1436"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3475,7 +3475,7 @@
         "proofIds": ["client.files-scope.decision.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:1170",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1893"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1899"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3515,7 +3515,7 @@
         "proofIds": ["client.git-operation.attempted.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:982",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2414"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2420"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3569,7 +3569,7 @@
         "proofIds": ["client.git-operation.settled.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:935",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1701"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1707"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3627,7 +3627,7 @@
         "proofIds": ["client.knowledge-catalog.unavailable.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:1014",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1757"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1763"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3707,7 +3707,7 @@
         "proofIds": ["client.markdown.layout.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:296",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1594"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1600"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3746,8 +3746,8 @@
         "failureClasses": ["client-select"],
         "proofIds": ["client.select.dismissed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:1272",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1725"]
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:1278",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1731"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3787,7 +3787,7 @@
         "proofIds": ["client.session-repair.acknowledged.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:863",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2342"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2348"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3833,7 +3833,7 @@
         "proofIds": ["client.session-repair.failed.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:894",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2370"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2376"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3879,7 +3879,7 @@
         "proofIds": ["client.session-repair.recovered.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:823",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2322"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2328"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3982,7 +3982,7 @@
         "proofIds": ["client.stage.settled.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:614",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2061"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2067"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4049,7 +4049,7 @@
         "proofIds": ["client.stage.started.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:598",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2029"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:2035"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4083,7 +4083,7 @@
         "proofIds": ["client.support-report.download-started.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:1145",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1825"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1831"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4142,7 +4142,7 @@
         "proofIds": ["client.support-report.preparation-failed.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:1204",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1845"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1851"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -4180,7 +4180,9 @@
             "values": [
               "session-unavailable",
               "diagnostic-delivery-unavailable",
-              "service-unavailable"
+              "service-unavailable",
+              "client-only-selected",
+              "correlation-unavailable"
             ]
           },
           "reportCompleteness": {
@@ -4201,7 +4203,7 @@
         "proofIds": ["client.support-report.prepared.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:1230",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1867"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1873"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26181,8 +26183,8 @@
         "failureClasses": ["connected-context-retrieval"],
         "proofIds": ["search.connected-context.completed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:241",
-        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:6678"]
+        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:242",
+        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:6710"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26386,8 +26388,8 @@
         "failureClasses": ["connected-context-retrieval"],
         "proofIds": ["search.connected-context.completion-details.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:356",
-        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:6671"]
+        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:357",
+        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:6703"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26637,8 +26639,8 @@
         "failureClasses": ["connected-context-retrieval"],
         "proofIds": ["search.connected-context.failed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:446",
-        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:6715"]
+        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:447",
+        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:6747"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -26760,8 +26762,8 @@
         "failureClasses": ["connected-context-retrieval"],
         "proofIds": ["search.connected-context.started.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:189",
-        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:6701"]
+        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:190",
+        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:6733"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30321,7 +30323,9 @@
             "values": [
               "session-unavailable",
               "diagnostic-delivery-unavailable",
-              "service-unavailable"
+              "service-unavailable",
+              "client-only-selected",
+              "correlation-unavailable"
             ]
           },
           "reportBytes": {
@@ -30390,7 +30394,7 @@
         },
         "proofIds": ["support.report.ui.completed.lifecycle"],
         "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:73",
-        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:345"]
+        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:351"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30445,8 +30449,8 @@
           }
         },
         "proofIds": ["support.report.ui.delivered.line"],
-        "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:117",
-        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:143"]
+        "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:123",
+        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:149"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30501,8 +30505,8 @@
           }
         },
         "proofIds": ["support.report.ui.delivery-released.line"],
-        "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:156",
-        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:186"]
+        "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:162",
+        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:192"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30540,8 +30544,8 @@
           }
         },
         "proofIds": ["support.report.ui.download-refused.line"],
-        "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:202",
-        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:227"]
+        "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:208",
+        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:233"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30611,8 +30615,8 @@
           }
         },
         "proofIds": ["support.report.ui.failed.lifecycle"],
-        "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:235",
-        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:366"]
+        "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:241",
+        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:372"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30652,7 +30656,7 @@
         },
         "proofIds": ["support.report.ui.started.lifecycle"],
         "registrationSite": "packages/keiko-server/src/support-report-evidence.ts:55",
-        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:285"]
+        "emitterSites": ["packages/keiko-server/src/support-report-evidence.ts:291"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -32493,7 +32497,7 @@
         "proofIds": ["voice.dialogue.stage.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:227",
-        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1566"]
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:1572"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -80815,19 +80819,19 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-contracts/src/support-incident.ts:684",
+      "site": "packages/keiko-contracts/src/support-incident.ts:688",
       "package": "keiko-contracts"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-contracts/src/support-incident.ts:757",
+      "site": "packages/keiko-contracts/src/support-incident.ts:761",
       "package": "keiko-contracts"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-contracts/src/observability.ts:1286",
+      "site": "packages/keiko-contracts/src/observability.ts:1288",
       "package": "keiko-contracts"
     },
     {
@@ -82585,7 +82589,7 @@
     {
       "op": "client.select.dismissed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:1275",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:1281",
       "package": "keiko-server"
     },
     {
@@ -84726,49 +84730,49 @@
     {
       "op": "search.connected-context.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:244",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:245",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:6624",
-      "package": "keiko-server"
-    },
-    {
-      "op": "search.connected-context.completion-details",
-      "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:359",
-      "package": "keiko-server"
-    },
-    {
-      "op": "search.connected-context.completion-details",
-      "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:6638",
-      "package": "keiko-server"
-    },
-    {
-      "op": "search.connected-context.failed",
-      "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:449",
-      "package": "keiko-server"
-    },
-    {
-      "op": "search.connected-context.failed",
-      "category": "search",
       "site": "packages/keiko-server/src/grounded-orchestrator.ts:6656",
       "package": "keiko-server"
     },
     {
-      "op": "search.connected-context.started",
+      "op": "search.connected-context.completion-details",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:192",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:360",
+      "package": "keiko-server"
+    },
+    {
+      "op": "search.connected-context.completion-details",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:6670",
+      "package": "keiko-server"
+    },
+    {
+      "op": "search.connected-context.failed",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:450",
+      "package": "keiko-server"
+    },
+    {
+      "op": "search.connected-context.failed",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:6688",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.started",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:6754",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:193",
+      "package": "keiko-server"
+    },
+    {
+      "op": "search.connected-context.started",
+      "category": "search",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:6786",
       "package": "keiko-server"
     },
     {
@@ -84904,25 +84908,25 @@
     {
       "op": "support.report.ui.delivered",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/support-report-evidence.ts:119",
+      "site": "packages/keiko-server/src/support-report-evidence.ts:125",
       "package": "keiko-server"
     },
     {
       "op": "support.report.ui.delivery-released",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/support-report-evidence.ts:158",
+      "site": "packages/keiko-server/src/support-report-evidence.ts:164",
       "package": "keiko-server"
     },
     {
       "op": "support.report.ui.download-refused",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/support-report-evidence.ts:204",
+      "site": "packages/keiko-server/src/support-report-evidence.ts:210",
       "package": "keiko-server"
     },
     {
       "op": "support.report.ui.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/support-report-evidence.ts:237",
+      "site": "packages/keiko-server/src/support-report-evidence.ts:243",
       "package": "keiko-server"
     },
     {

@@ -1632,6 +1632,17 @@ describe("browser support report preparation evidence", () => {
     loss: "none",
     availabilityReason: "service-unavailable",
   };
+  it.each(["client-only-selected", "correlation-unavailable"])(
+    "accepts the limited artifact reason without an outage claim: %s",
+    (availabilityReason) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          supportReportPreparation: { ...prepared, availabilityReason },
+        }),
+      ).toBe(true);
+    },
+  );
   it("rejects contradictory client-only integrity and server-unavailability claims", () => {
     for (const patch of [
       { completeness: "partial" },

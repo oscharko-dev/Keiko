@@ -207,6 +207,8 @@ const SUMMARY_AVAILABILITY = new Set([
   "session-unavailable",
   "diagnostic-delivery-unavailable",
   "service-unavailable",
+  "client-only-selected",
+  "correlation-unavailable",
 ]);
 const SUMMARY_COUNTS = ["recordCount", "manifestUnreadableCount", "manifestReusedCount"];
 function nonNegativeCount(value: unknown): boolean {

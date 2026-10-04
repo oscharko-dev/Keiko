@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "3d217d101b4afeb7fc59171f7dbf1a021f81242bbab4176f3b43cd5dfa6a342f" as const;
+  "8146ad2d9da23c1bf63942aadffb4f9778d96222320b0474c6f38d5295863855" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3998,7 +3998,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"],
+        values: [
+          "session-unavailable",
+          "diagnostic-delivery-unavailable",
+          "service-unavailable",
+          "client-only-selected",
+          "correlation-unavailable",
+        ],
       },
       reportCompleteness: {
         type: "string",
@@ -28969,7 +28975,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"],
+        values: [
+          "session-unavailable",
+          "diagnostic-delivery-unavailable",
+          "service-unavailable",
+          "client-only-selected",
+          "correlation-unavailable",
+        ],
       },
       reportBytes: {
         type: "integer",

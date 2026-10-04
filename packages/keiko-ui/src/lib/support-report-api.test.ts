@@ -59,6 +59,15 @@ describe("support report browser download", () => {
     await expect(createSupportReport()).resolves.toEqual(response.value);
   });
 
+  it.each(["client-only-selected", "correlation-unavailable"])(
+    "accepts the canonical non-outage summary reason %s",
+    async (availabilityReason) => {
+      const report = await canonicalSupportReportFixture();
+      response.value = { ...report, summary: { ...report.summary, availabilityReason } };
+      expect((await createSupportReport()).summary?.availabilityReason).toBe(availabilityReason);
+    },
+  );
+
   it("confirms only existing session projections before selecting report evidence", async () => {
     let confirm: ((value: { repaired: boolean; correlationId: string }) => void) | undefined;
     pairing.repair.mockReturnValueOnce(

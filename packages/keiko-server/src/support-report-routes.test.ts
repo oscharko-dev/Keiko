@@ -12,7 +12,10 @@ import {
   parseSupportIncidentPrivateProjection,
   supportReportFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type {
+  DesktopSupportReportResponse,
+  ClientOnlySupportReportInput,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { gunzipSync } from "node:zlib";
@@ -74,6 +77,30 @@ function proofLine(sink: ReturnType<typeof createBufferedServerLogSink>, index: 
   const event = sink.events[index];
   if (event === undefined) throw new Error("Expected report lifecycle event");
   return formatActivityLogProofLine(event);
+}
+
+async function assertLimitedGzipDownload(
+  report: DesktopSupportReportResponse,
+  owner: UiHandlerDeps,
+  reason: string,
+  failure: ClientOnlySupportReportInput["failure"],
+): Promise<void> {
+  const download: RouteContext = {
+    ...context(""),
+    params: { downloadId: report.downloadPath?.split("/").at(-1) ?? "" },
+  };
+  const end = vi.spyOn(download.res, "end").mockReturnValue(download.res);
+  vi.spyOn(download.res, "writeHead").mockReturnValue(download.res);
+  await handleDownloadSupportReport(download, owner);
+  const bytes: unknown = end.mock.calls[0]?.[0];
+  if (!Buffer.isBuffer(bytes)) throw new TypeError("Expected gzip attachment");
+  const canonical = gunzipSync(bytes).toString("utf8");
+  expect(canonical).toBe(report.reportJson);
+  const parsed = parseSupportReport(canonical);
+  expect(parsed.incident.clientReport?.availabilityReason).toBe(reason);
+  expect(parsed.incident.clientReport?.failure).toEqual(failure);
+  expect(analyzeSupportReport(canonical).selection.status).toBe("insufficient");
+  expect(parsed.evidence.recordCount).toBe(0);
 }
 
 const fixtureReportFileName = supportReportFileName(
@@ -473,19 +500,62 @@ describe("desktop support report transport", () => {
     expect(runSupportReportJob).toHaveBeenCalledOnce();
   });
 
-  it("honestly exports client-only availability when diagnostic delivery failed in a valid session", async () => {
-    const result = await handleCreateSupportReport(
-      context('{"correlationId":"undelivered-client-error","evidenceScope":"client-only"}'),
-      deps(),
-    );
-    expect(result.status).toBe(200);
-    const report = result.body as DesktopSupportReportResponse;
-    expect(parseSupportReport(report.reportJson).incident.clientReport).toEqual({
-      serverEvidence: "unavailable",
-      availabilityReason: "diagnostic-delivery-unavailable",
-    });
-    expect(runSupportReportJob).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["selected", "client-only-selected", "gzip"],
+    ["selected", "client-only-selected", "summary"],
+    ["selected", "client-only-selected", "completion"],
+    ["uncorrelated", "correlation-unavailable", "gzip"],
+    ["uncorrelated", "correlation-unavailable", "summary"],
+    ["uncorrelated", "correlation-unavailable", "completion"],
+    ["manual", "client-only-selected", "gzip"],
+    ["manual", "client-only-selected", "summary"],
+    ["manual", "client-only-selected", "completion"],
+  ] as const)(
+    "distinguishes %s client-only selection in %s (%s)",
+    async (selection, reason, projection) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const failure: NonNullable<ClientOnlySupportReportInput["failure"]> = {
+        errorKind: "unavailable",
+        context: [],
+      };
+      const request = {
+        evidenceScope: "client-only",
+        ...(selection === "manual" ? {} : { failure }),
+        ...(selection === "selected" ? { correlationId: "selected-client-cause" } : {}),
+      };
+      const owner = {
+        ...deps(),
+        get env(): never {
+          throw new Error("Private evidence cannot be read");
+        },
+      };
+      const result = await handleCreateSupportReport(context(JSON.stringify(request)), owner);
+      expect(result.status).toBe(200);
+      const report = result.body as DesktopSupportReportResponse;
+      if (projection === "summary") expect(report.summary?.availabilityReason).toBe(reason);
+      else if (projection === "completion") {
+        const index = sink.events.findIndex((event) => event.op === "support.report.ui.completed");
+        const completed = expectActivityLogProof(
+          "support.report.ui.completed.lifecycle",
+          proofLine(sink, index),
+        );
+        expect(completed).toMatchObject({
+          availabilityReason: reason,
+          loss: "none",
+          recordCount: 0,
+        });
+      } else {
+        await assertLimitedGzipDownload(
+          report,
+          owner,
+          reason,
+          selection === "manual" ? undefined : failure,
+        );
+      }
+      expect(runSupportReportJob).not.toHaveBeenCalled();
+    },
+  );
 
   it("releases the retained candidate only after the canonical report is prepared and cached", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-report-completed-"));

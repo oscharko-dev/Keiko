@@ -147,7 +147,13 @@ describe("desktop canonical support report", () => {
     expect(parseSupportReport(response.reportJson).evidence.recordCount).toBe(0);
   });
 
-  it.each(["session-unavailable", "diagnostic-delivery-unavailable"] as const)(
+  it.each([
+    "session-unavailable",
+    "diagnostic-delivery-unavailable",
+    "service-unavailable",
+    "client-only-selected",
+    "correlation-unavailable",
+  ] as const)(
     "exports an honest limited %s artifact without opening a private log",
     (availabilityReason) => {
       const localQuery = vi.spyOn(supportLocalQuery, "executeLocalSupportQuery");

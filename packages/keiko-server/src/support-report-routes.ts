@@ -2,6 +2,7 @@ import {
   isClientReportFailure,
   MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES,
   type DesktopSupportReportRequest,
+  type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createClientOnlySupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 import {
@@ -157,6 +158,16 @@ async function createReportResponse(
   }
 }
 
+function clientOnlyReportReason(
+  request: DesktopSupportReportRequest,
+  hasSession: boolean,
+): ClientOnlySupportReportInput["availabilityReason"] {
+  if (!hasSession) return "session-unavailable";
+  if (request.failure !== undefined && request.correlationId === undefined)
+    return "correlation-unavailable";
+  return "client-only-selected";
+}
+
 function clientOnlyReportResponse(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -171,7 +182,7 @@ function clientOnlyReportResponse(
   try {
     const report = createClientOnlySupportReport(
       request.correlationId ?? ctx.correlationId,
-      hasSession ? "diagnostic-delivery-unavailable" : "session-unavailable",
+      clientOnlyReportReason(request, hasSession),
       request.failure,
     );
     const delivery = cacheSupportReportDownload(deps, undefined, report, ctx.correlationId);

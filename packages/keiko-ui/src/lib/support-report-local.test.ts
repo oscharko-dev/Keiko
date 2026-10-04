@@ -200,7 +200,13 @@ it("does not declare transport loss for absent optional supplied and retained fa
   }
 });
 
-it.each(["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"] as const)(
+it.each([
+  "session-unavailable",
+  "diagnostic-delivery-unavailable",
+  "service-unavailable",
+  "client-only-selected",
+  "correlation-unavailable",
+] as const)(
   "seals the observed availability reason and preserves it through cached download retry: %s",
   async (availabilityReason) => {
     const context = { correlationId: "original-availability-cause", availabilityReason };
