@@ -258,15 +258,15 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: ["activity-log.pin.created"],
       state: [],
       end: ["activity-log.pin.expired"],
-      failure: [],
-      loss: ["activity-log.pin.quota-exhausted"],
+      failure: ["activity-log.pin.quota-exhausted"],
+      loss: [],
     },
     requiredCausalOperations: [
       "activity-log.pin.created",
       "activity-log.pin.expired",
       "activity-log.pin.quota-exhausted",
     ],
-    requiredLossOperations: ["activity-log.pin.quota-exhausted"],
+    requiredLossOperations: [],
     requiredProofOperations: [
       "activity-log.pin.created",
       "activity-log.pin.expired",

@@ -1443,7 +1443,7 @@ const ACTIVITY_LOG_PIN_QUOTA_EXHAUSTED_OPERATION = defineActivityLogOperation({
     activePinCount: { type: "integer", dataClass: "count", required: true },
   },
   causal: "correlation",
-  lifecycle: "loss",
+  lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["activity-log-pin"],
   proofIds: ["activity-log.pin.quota-exhausted.emitted-line"],
@@ -2270,7 +2270,7 @@ function pinQuotaExhaustedEvidence(
       unknownSpanSegmentCount: facts.unknownSpanSegmentCount,
       activePinCount: facts.pinCount,
       completeness: "partial",
-      loss: "event-dropped",
+      loss: "none",
     },
   );
 }
@@ -2632,7 +2632,7 @@ function unprotectedSpan(
   return { seqSpan, unknown };
 }
 
-// Exactly one loss marker per exhaustion episode: the first pass that finds pinned evidence the
+// Exactly one protection-failure marker per exhaustion episode: the first pass that finds pinned evidence the
 // quota cannot hold reports it — measured before retention may delete those segments — and later
 // passes stay quiet until the quota holds every pin again.
 function queueQuotaEvidence(
@@ -3528,7 +3528,7 @@ function persistPinEvidence(active: ActiveLog, cursor: WriteCursor, facts: PinEv
  * inside it) or an explicit set of segments against retention until `expiresAtMs`. Seals this
  * process's active segment, publishes one closed-grammar pin record, and evidences the request.
  * Pinned segments are protected only within the reserved pin quota; a pin the quota cannot hold is
- * still recorded, reports `quotaStatus: "exceeded"`, and produces one quota-exhaustion loss marker.
+ * still recorded, reports `quotaStatus: "exceeded"`, and produces one protection-failure marker.
  */
 export function pinActivityLogWindow(
   stateDir: string,

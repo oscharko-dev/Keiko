@@ -809,6 +809,52 @@ describe("support query causal closure (#3531)", () => {
     expect(eventCorrelations(result)).toEqual(new Set([IDS.parent, IDS.root]));
   });
 
+  it("keeps a retained beginning beside historical pin protection failure", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      signal(process, T0),
+      fixtureLine(process, T0 + 1, {
+        op: "activity-log.pin.created",
+        correlationId: IDS.root,
+        fields: {
+          pinStatus: "created",
+          pinKind: "window",
+          pinReason: "incident",
+          pinnedSegmentCount: 1,
+          pinnedBytes: 512,
+          expiresInSeconds: 3600,
+          quotaStatus: "exceeded",
+          completeness: "partial",
+        },
+      }),
+      fixtureLine(process, T0 + 2, {
+        op: "activity-log.pin.quota-exhausted",
+        correlationId: IDS.root,
+        fields: {
+          pinQuotaBytes: 1,
+          requestedPinnedBytes: 512,
+          protectedPinnedBytes: 0,
+          protectedSegmentCount: 0,
+          unprotectedSegmentCount: 1,
+          unprotectedBytes: 512,
+          unprotectedSeqSpan: 1,
+          unknownSpanSegmentCount: 0,
+          activePinCount: 1,
+          completeness: "partial",
+          loss: "event-dropped",
+        },
+      }),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 });
+    expect(result.lifetimes).toEqual([
+      { pid: process.pid, instanceId: process.instanceId, start: "absent" },
+    ]);
+    expect(result.diagnosticSufficiency).toMatchObject({
+      status: "degraded",
+      reasons: ["evidence-partial"],
+    });
+  });
+
   it("selects a user-reported window and the closure of every diagnostic correlation inside it", () => {
     writeGraph(stateDir);
     const files = listActivityLogStoreFiles(stateDir);

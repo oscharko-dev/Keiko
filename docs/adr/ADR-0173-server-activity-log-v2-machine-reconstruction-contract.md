@@ -1441,7 +1441,14 @@ At most 64 pins are active. The pin record is published before the current segme
 the next retention pass honors it. Pinned sealed segments count against `KEIKO_LOG_PIN_QUOTA_BYTES`,
 oldest pin first, and only while the quota lasts. A pin the quota cannot hold is still recorded with
 `quotaStatus: "exceeded"`. Its unprotected remainder produces one `activity-log.pin.quota-exhausted`
-loss marker with segment counts, bytes and the seq span. Expired and invalid pin records are removed with `activity-log.pin.expired`. `releaseActivityLogPin` removes a pin before its expiry, for example once its incident was reported or dismissed; the same line records it with `expiryReason: "released"`. Neither pin function ever throws: an unlistable directory or a failed removal is a closed, evidenced rejection, because both are reachable from a sink's own write path. #3530 provides the primitive; #3533 decides when and what to pin.
+protection-failure record with segment counts, bytes and the seq span. It declares partial protection
+and `loss: "none"`: the marker is emitted before retention may delete the unprotected segments, so
+it cannot claim an event was dropped. The pin class remains degraded by `evidence-partial`;
+unrelated retained process evidence is not classified as lost. Historical registered quota records
+that declared `event-dropped` retain their exact bytes and are interpreted as this same protection
+failure. Derived manifests are rebuilt under version 3 so their process-loss count reflects this
+distinction. Confirmed write/drop counters, corrupt beginnings and missing retained segments still
+fail the existing evidence checks. Expired and invalid pin records are removed with `activity-log.pin.expired`. `releaseActivityLogPin` removes a pin before its expiry, for example once its incident was reported or dismissed; the same line records it with `expiryReason: "released"`. Neither pin function ever throws: an unlistable directory or a failed removal is a closed, evidenced rejection, because both are reachable from a sink's own write path. #3530 provides the primitive; #3533 decides when and what to pin.
 The legacy update-audit import pins its durable batch (`reason: "durable-batch"`).
 
 **Pressure and health.** `activity-log.pressure` records transitions between these closed states:

@@ -363,7 +363,7 @@ describe("Activity Log storage evidence proofs (#3532)", () => {
       "activity-log.pin.quota-exhausted.emitted-line",
       quotaLine ?? "",
     );
-    expect(quota).toMatchObject({ pinQuotaBytes: 1 });
+    expect(quota).toMatchObject({ pinQuotaBytes: 1, completeness: "partial", loss: "none" });
     expect((quota.unprotectedSegmentCount as number) > 0).toBe(true);
   });
 

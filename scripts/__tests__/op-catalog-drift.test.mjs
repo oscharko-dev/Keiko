@@ -1139,10 +1139,11 @@ describe("op catalog drift", () => {
     () => {
       const coverage = generateCurrentTypedRegistry().failureClassCoverage;
       const byFailureClass = new Map(coverage.classes.map((entry) => [entry.failureClass, entry]));
-      // A state-only class projects no loss signal; the pin class projects exactly its one
-      // registered loss marker (#3530 retired the capacity class this pin first sat on).
+      // Protection failure is evidenced by its own failure lifecycle, without claiming deletion.
+      // Confirmed process drops keep their independently required loss signals.
       expect(byFailureClass.get("activity-log-retention")?.lossSignals).toEqual([]);
-      expect(byFailureClass.get("activity-log-pin")?.lossSignals).toEqual([
+      expect(byFailureClass.get("activity-log-pin")?.lossSignals).toEqual([]);
+      expect(byFailureClass.get("activity-log-pin")?.lifecycleOperations.failure).toEqual([
         "activity-log.pin.quota-exhausted",
       ]);
       expect(byFailureClass.get("activity-log-contract")?.lossSignals).toEqual([

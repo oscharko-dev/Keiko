@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "bf1df9d9f6db6be2bc411288499684a078659eef6219c6d6d991f677c131cdc7" as const;
+  "bcb487086f4fdc997d8bb0efba326c891070c632cfe2e4999abb0c9a43959807" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -323,7 +323,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       },
     },
     causal: "correlation",
-    lifecycle: "loss",
+    lifecycle: "failure",
     analyzerProjection: "failure-cluster",
     failureClasses: ["activity-log-pin"],
     proofIds: ["activity-log.pin.quota-exhausted.emitted-line"],
@@ -31211,13 +31211,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "activity-log-pin",
       requirementContract: "activity-log-pin",
       productSurfaces: ["keiko-activity-log"],
-      lifecycleTransitions: ["end", "loss", "start"],
+      lifecycleTransitions: ["end", "failure", "start"],
       lifecycleOperations: {
         start: ["activity-log.pin.created"],
         state: [],
         end: ["activity-log.pin.expired"],
-        failure: [],
-        loss: ["activity-log.pin.quota-exhausted"],
+        failure: ["activity-log.pin.quota-exhausted"],
+        loss: [],
       },
       causalEdges: [
         {
@@ -31233,7 +31233,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
       ],
-      lossSignals: ["activity-log.pin.quota-exhausted"],
+      lossSignals: [],
       resourceSignals: ["activity-log.pin.created", "activity-log.pin.expired"],
       replayReferences: [],
       operations: [
@@ -31379,7 +31379,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "activity-log.pin.quota-exhausted",
           owner: "keiko-activity-log",
           category: "diagnostic",
-          lifecycle: "loss",
+          lifecycle: "failure",
           causal: "correlation",
           analyzerProjection: "failure-cluster",
           safeContextFields: [

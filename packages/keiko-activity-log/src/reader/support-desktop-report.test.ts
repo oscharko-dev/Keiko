@@ -61,6 +61,66 @@ function writeFailures(): void {
 }
 
 describe("desktop canonical support report", () => {
+  it("exports historical pin protection failure without inventing missing process evidence", () => {
+    const now = Date.now() - 100;
+    const process = fixtureProcess(4242, "aabbccdd");
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, { op: "cli.lifecycle.stop-requested" }),
+      fixtureLine(process, now + 1, {
+        op: "activity-log.pin.created",
+        correlationId: "pin-protection-failure",
+        fields: {
+          pinStatus: "created",
+          pinKind: "window",
+          pinReason: "incident",
+          pinnedSegmentCount: 1,
+          pinnedBytes: 512,
+          expiresInSeconds: 3600,
+          quotaStatus: "exceeded",
+          completeness: "partial",
+        },
+      }),
+      fixtureLine(process, now + 2, {
+        op: "activity-log.pin.quota-exhausted",
+        correlationId: "pin-protection-failure",
+        fields: {
+          pinQuotaBytes: 1,
+          requestedPinnedBytes: 512,
+          protectedPinnedBytes: 0,
+          protectedSegmentCount: 0,
+          unprotectedSegmentCount: 1,
+          unprotectedBytes: 512,
+          unprotectedSeqSpan: 1,
+          unknownSpanSegmentCount: 0,
+          activePinCount: 1,
+          completeness: "partial",
+          loss: "event-dropped",
+        },
+      }),
+      fixtureLine(process, now + 3, {
+        op: "client.diagnostic",
+        correlationId: "pin-protection-failure",
+      }),
+    ]);
+    const response = createDesktopSupportReport(stateDir);
+    const report = parseSupportReport(response.reportJson);
+    const analyzed = analyzeSupportReport(response.reportJson);
+    expect(report.selection.lifetimes).toEqual(
+      expect.arrayContaining([
+        { pid: process.pid, instanceId: process.instanceId, start: "absent" },
+      ]),
+    );
+    expect(report.selection.lifetimes.some((lifetime) => lifetime.start === "lost")).toBe(false);
+    for (const reason of ["activity-log-loss", "evidence-not-retained"])
+      expect(report.selection.reasons).not.toContain(reason);
+    expect(report.selection.status).not.toBe("insufficient");
+    expect(
+      analyzed.analysis.sufficiency.classes.find(
+        (entry) => entry.failureClass === "activity-log-pin",
+      ),
+    ).toMatchObject({ status: "degraded", reasons: ["evidence-partial"] });
+  });
+
   it("describes an empty budget-rejected manual export instead of its unexported complete window", () => {
     writeFailures();
     const record = prepareUnretainedUserReportIncident(stateDir, "manual-report");
