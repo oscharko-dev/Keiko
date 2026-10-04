@@ -2409,7 +2409,6 @@ const DEFAULT_EXCERPT_WINDOW: LineWindow = { startLine: 1, endLine: 200 };
 const MAX_EXCERPT_WINDOW_BYTES = 8192;
 const SINGLE_LINE_EXCERPT_CONTEXT_LINES = 3;
 const DISCOVERED_DEFINITION_CONTEXT_AFTER = 24;
-const MAX_EXCERPT_WINDOWS_PER_FILE = 8;
 const PROJECT_METADATA_QUERY_TERMS = [
   "abhängigkeit",
   "abhängigkeiten",
@@ -4579,21 +4578,30 @@ interface ExcerptWindowStrength {
   readonly score: number;
 }
 
-function windowsOverlap(a: LineWindow, b: LineWindow): boolean {
-  return a.startLine <= b.endLine && b.startLine <= a.endLine;
-}
-
 function mergeWindowsByTracePriority(atomsForPath: readonly EvidenceAtom[]): readonly LineWindow[] {
-  const selected: LineWindow[] = [];
+  let selected: readonly LineWindow[] = [];
   for (const priority of [2, 1, 0]) {
     const windows = mergeLineWindows(
       atomsForPath.filter((atom) => tracePriority(atom) === priority).map(lineWindowForAtom),
     );
-    selected.push(
-      ...windows.filter((window) => !selected.some((kept) => windowsOverlap(kept, window))),
-    );
+    selected = selected
+      .concat(nonOverlappingExcerptWindows(windows, selected))
+      .sort((a, b) => a.startLine - b.startLine);
   }
   return selected;
+}
+
+function nonOverlappingExcerptWindows(
+  windows: readonly LineWindow[],
+  selected: readonly LineWindow[],
+): readonly LineWindow[] {
+  const retained: LineWindow[] = [];
+  let index = 0;
+  for (const window of windows) {
+    while ((selected[index]?.endLine ?? Infinity) < window.startLine) index += 1;
+    if ((selected[index]?.startLine ?? Infinity) > window.endLine) retained.push(window);
+  }
+  return retained;
 }
 
 function strongerExcerptWindow(
@@ -4606,33 +4614,49 @@ function strongerExcerptWindow(
   return candidate.score > current.score ? candidate : current;
 }
 
-function strongestAtomStrengthForWindow(
-  window: LineWindow,
-  atomsForPath: readonly EvidenceAtom[],
-): ExcerptWindowStrength {
-  let strength: ExcerptWindowStrength = { tracePriority: 0, score: 0 };
-  for (const atom of atomsForPath) {
-    if (windowContainsAtom(window, atom)) {
-      strength = strongerExcerptWindow(
-        { tracePriority: tracePriority(atom), score: atom.score },
-        strength,
-      );
-    }
+function windowIndexContainingLine(windows: readonly LineWindow[], line: number): number {
+  let low = 0;
+  let high = windows.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if ((windows[middle]?.startLine ?? Infinity) <= line) low = middle + 1;
+    else high = middle;
   }
-  return strength;
+  return low - 1;
 }
 
-function compareExcerptWindows(
-  a: LineWindow,
-  b: LineWindow,
-  atomsForPath: readonly EvidenceAtom[],
-): number {
-  const aStrength = strongestAtomStrengthForWindow(a, atomsForPath);
-  const bStrength = strongestAtomStrengthForWindow(b, atomsForPath);
-  const priorityDelta = bStrength.tracePriority - aStrength.tracePriority;
-  if (priorityDelta !== 0) return priorityDelta;
-  const scoreDelta = bStrength.score - aStrength.score;
-  return scoreDelta === 0 ? a.startLine - b.startLine : scoreDelta;
+function rankedExcerptWindows(
+  windows: readonly LineWindow[],
+  atoms: readonly EvidenceAtom[],
+): readonly LineWindow[] {
+  const sorted = [...windows].sort((a, b) => a.startLine - b.startLine);
+  const strengths = sorted.map((): ExcerptWindowStrength => ({ tracePriority: 0, score: 0 }));
+  let unlocated: ExcerptWindowStrength = { tracePriority: 0, score: 0 };
+  for (const atom of atoms) {
+    const strength = { tracePriority: tracePriority(atom), score: atom.score };
+    const range = atom.lineRange;
+    if (range === undefined) {
+      unlocated = strongerExcerptWindow(strength, unlocated);
+      continue;
+    }
+    const index = windowIndexContainingLine(sorted, range.startLine);
+    const window = sorted[index];
+    const current = strengths[index];
+    if (window !== undefined && current !== undefined && windowContainsAtom(window, atom))
+      strengths[index] = strongerExcerptWindow(strength, current);
+  }
+  return sorted
+    .map((window, index) => ({
+      window,
+      strength: strongerExcerptWindow(strengths[index] ?? unlocated, unlocated),
+    }))
+    .sort(
+      (a, b) =>
+        b.strength.tracePriority - a.strength.tracePriority ||
+        b.strength.score - a.strength.score ||
+        a.window.startLine - b.window.startLine,
+    )
+    .map(({ window }) => window);
 }
 
 interface ExcerptWindowSelection {
@@ -4647,9 +4671,7 @@ function excerptLineWindows(
     return { windows: [DEFAULT_EXCERPT_WINDOW], omittedWindowCount: 0 };
   }
   const merged = mergeWindowsByTracePriority(atomsForPath);
-  const selected = [...merged]
-    .sort((a, b) => compareExcerptWindows(a, b, atomsForPath))
-    .slice(0, MAX_EXCERPT_WINDOWS_PER_FILE);
+  const selected = rankedExcerptWindows(merged, atomsForPath);
   return {
     windows: selected,
     omittedWindowCount: Math.max(0, merged.length - selected.length),
@@ -4681,51 +4703,6 @@ interface ReadPathExcerptTaskResult {
   readonly omissionReason?: CandidateOmissionReason | undefined;
 }
 
-function isQualifiedWholeFileWindow(
-  scopePath: string,
-  window: LineWindow,
-  inputs: ExcerptInputs,
-): boolean {
-  return (
-    inputs.knownFitFileBytes?.has(scopePath) === true &&
-    (inputs.atomsByPath.get(scopePath) ?? []).some(
-      (atom) =>
-        atom.provenance.kind === "file-listing" &&
-        atom.provenance.tool === "repo.findFiles" &&
-        atom.lineRange !== undefined &&
-        windowContainsAtom(window, atom),
-    )
-  );
-}
-
-function readExcerptWindow(
-  scopePath: string,
-  window: LineWindow,
-  maxBytes: number,
-  maxTotalBytes: number,
-  maxWindows: number,
-  inputs: ExcerptInputs,
-): Promise<ReadExcerptResult> {
-  return readExcerpt(
-    inputs.searchScope,
-    {
-      scopePath,
-      startLine: window.startLine,
-      endLine: window.endLine,
-      maxBytes,
-      ...(isQualifiedWholeFileWindow(scopePath, window, inputs) ? {} : { anchors: inputs.anchors }),
-      maxTotalBytes,
-      maxWindows,
-    },
-    {
-      fs: inputs.fs,
-      nowMs: inputs.nowMs,
-      deadlineAtMs: inputs.deadlineAtMs,
-      ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
-    },
-  );
-}
-
 function appendReadExcerptWindows(
   result: ReadExcerptResult,
   windows: ExcerptWindow[],
@@ -4733,6 +4710,7 @@ function appendReadExcerptWindows(
   let bytes = 0;
   let truncated = 0;
   let anchored = 0;
+  const seen = new Set(windows.map(excerptWindowKey));
   for (const read of result.windows ?? [result]) {
     const range = read.atom.lineRange;
     if (range === undefined) continue;
@@ -4743,15 +4721,9 @@ function appendReadExcerptWindows(
           read.content,
         ])
       : undefined;
-    if (
-      windows.some(
-        (window) =>
-          window.startLine === range.startLine &&
-          window.endLine === range.endLine &&
-          window.identity === identity,
-      )
-    )
-      continue;
+    const key = excerptWindowKey({ ...range, content: "", identity });
+    if (seen.has(key)) continue;
+    seen.add(key);
     windows.push({
       ...range,
       content: read.content,
@@ -4762,6 +4734,10 @@ function appendReadExcerptWindows(
     anchored += Number(read.anchoredWindowApplied === true);
   }
   return { bytes, truncated, anchored };
+}
+
+function excerptWindowKey(window: ExcerptWindow): string {
+  return JSON.stringify([window.startLine, window.endLine, window.identity ?? null]);
 }
 
 function remainingExcerptWindowBytes(
@@ -4775,57 +4751,87 @@ function remainingExcerptWindowBytes(
   );
 }
 
+function qualifiedWholeFileRanges(
+  scopePath: string,
+  windows: readonly LineWindow[],
+  inputs: ExcerptInputs,
+): boolean {
+  if (inputs.knownFitFileBytes?.has(scopePath) !== true) return false;
+  const wholeFile = (inputs.atomsByPath.get(scopePath) ?? []).find(
+    (atom) =>
+      atom.provenance.kind === "file-listing" &&
+      atom.provenance.tool === "repo.findFiles" &&
+      atom.lineRange !== undefined,
+  );
+  return (
+    wholeFile !== undefined && windows.every((window) => windowContainsAtom(window, wholeFile))
+  );
+}
+
 async function readPathExcerptWindows(
   scopePath: string,
   inputs: ExcerptInputs,
   remainingBytes: number,
 ): Promise<ReadPathExcerptWindowsResult> {
   const windows: ExcerptWindow[] = [];
-  let bytesConsumed = 0;
-  let truncatedWindowCount = 0;
-  let anchoredWindowCount = 0;
-  let deadlineReached = false;
-  let readSelectedWindowCount = 0;
   const selection = excerptLineWindows(inputs.atomsByPath.get(scopePath));
-  for (const window of selection.windows) {
-    throwIfCancelled(inputs.signal);
-    if (inputs.nowMs() >= inputs.deadlineAtMs) {
-      deadlineReached = true;
-      break;
-    }
-    const availableBytes = remainingBytes - bytesConsumed;
-    if (availableBytes <= 0 || windows.length >= MAX_EXCERPT_WINDOWS_PER_FILE) break;
-    const maxBytes = remainingExcerptWindowBytes(scopePath, availableBytes, inputs);
-    const result = await readExcerptWindow(
+  const containingRange = containingExcerptRange(selection.windows);
+  throwIfCancelled(inputs.signal);
+  if (inputs.nowMs() >= inputs.deadlineAtMs || remainingBytes <= 0)
+    return unreadExcerptWindows(selection, inputs.nowMs() >= inputs.deadlineAtMs);
+  const result = await readExcerpt(
+    inputs.searchScope,
+    {
       scopePath,
-      window,
-      maxBytes,
-      availableBytes,
-      MAX_EXCERPT_WINDOWS_PER_FILE - windows.length,
-      inputs,
-    );
-    throwIfCancelled(inputs.signal);
-    if (inputs.nowMs() >= inputs.deadlineAtMs) {
-      // The absolute deadline is authoritative (#3347 P1). A read that only came back after it is
-      // dropped whole — the window is not appended and its bytes are not charged — so a late
-      // completion can neither enter the evidence pack nor spend an excerpt budget the request no
-      // longer has. Recording `deadlineReached` while keeping the content did both.
-      deadlineReached = true;
-      break;
-    }
-    const appended = appendReadExcerptWindows(result, windows);
-    readSelectedWindowCount += 1;
-    truncatedWindowCount += appended.truncated;
-    anchoredWindowCount += appended.anchored;
-    bytesConsumed += appended.bytes;
-  }
+      ...containingRange,
+      ranges: selection.windows,
+      maxBytes: remainingExcerptWindowBytes(scopePath, remainingBytes, inputs),
+      anchors: qualifiedWholeFileRanges(scopePath, selection.windows, inputs)
+        ? undefined
+        : inputs.anchors,
+      maxTotalBytes: remainingBytes,
+      maxWindows: Math.max(1, remainingBytes),
+    },
+    {
+      fs: inputs.fs,
+      nowMs: inputs.nowMs,
+      deadlineAtMs: inputs.deadlineAtMs,
+      ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
+    },
+  );
+  throwIfCancelled(inputs.signal);
+  if (inputs.nowMs() >= inputs.deadlineAtMs) return unreadExcerptWindows(selection, true);
+  const appended = appendReadExcerptWindows(result, windows);
   return {
     windows,
-    bytesConsumed,
-    omittedWindowCount:
-      selection.omittedWindowCount + selection.windows.length - readSelectedWindowCount,
-    truncatedWindowCount,
-    anchoredWindowCount,
+    bytesConsumed: appended.bytes,
+    truncatedWindowCount: appended.truncated,
+    anchoredWindowCount: appended.anchored,
+    deadlineReached: false,
+    omittedWindowCount: selection.omittedWindowCount + (result.omittedRangeCount ?? 0),
+  };
+}
+
+function containingExcerptRange(windows: readonly LineWindow[]): LineWindow {
+  let startLine = Infinity;
+  let endLine = 1;
+  for (const window of windows) {
+    startLine = Math.min(startLine, window.startLine);
+    endLine = Math.max(endLine, window.endLine);
+  }
+  return { startLine, endLine };
+}
+
+function unreadExcerptWindows(
+  selection: ExcerptWindowSelection,
+  deadlineReached: boolean,
+): ReadPathExcerptWindowsResult {
+  return {
+    windows: [],
+    bytesConsumed: 0,
+    truncatedWindowCount: 0,
+    anchoredWindowCount: 0,
+    omittedWindowCount: selection.omittedWindowCount + selection.windows.length,
     deadlineReached,
   };
 }

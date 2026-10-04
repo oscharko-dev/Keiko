@@ -33,9 +33,6 @@ export function certifiedContentPaths(
 }
 
 const MIN_RELATIVE_CANDIDATE_SCORE = 0.55;
-const MAX_EVIDENCE_ATOMS_PER_FILE = 12;
-const TRACE_RANGE_SLOTS_PER_FILE = 4;
-const CONTEXT_RANGE_SLOTS_PER_FILE = 2;
 
 export interface GroundedCandidateSelectionInput {
   readonly kept: readonly CandidateFile[];
@@ -160,14 +157,6 @@ function compareByScore(a: EvidenceAtom, b: EvidenceAtom): number {
   return b.score - a.score || rangeSpan(b) - rangeSpan(a) || a.stableId.localeCompare(b.stableId);
 }
 
-function compareByContextRange(a: EvidenceAtom, b: EvidenceAtom): number {
-  return rangeSpan(b) - rangeSpan(a) || compareByScore(a, b);
-}
-
-function compareByTracePriority(a: EvidenceAtom, b: EvidenceAtom): number {
-  return tracePriority(b) - tracePriority(a) || compareByScore(a, b);
-}
-
 function withoutRedundantDiscoveryHeaders(
   atoms: readonly EvidenceAtom[],
   preferLocatedDefinitions: boolean,
@@ -196,24 +185,7 @@ function selectAtomsForPath(
   const unique = deduplicateRanges(
     withoutRedundantDiscoveryHeaders(atoms, preferLocatedDefinitions),
   );
-  const selected = new Map<string, EvidenceAtom>();
-  for (const atom of [...unique]
-    .filter((entry) => tracePriority(entry) > 0)
-    .sort(compareByTracePriority)
-    .slice(0, TRACE_RANGE_SLOTS_PER_FILE)) {
-    selected.set(atom.stableId, atom);
-  }
-  for (const atom of [...unique]
-    .sort(compareByContextRange)
-    .slice(0, CONTEXT_RANGE_SLOTS_PER_FILE)) {
-    if (selected.size >= MAX_EVIDENCE_ATOMS_PER_FILE) break;
-    selected.set(atom.stableId, atom);
-  }
-  for (const atom of [...unique].sort(compareByScore)) {
-    if (selected.size >= MAX_EVIDENCE_ATOMS_PER_FILE) break;
-    selected.set(atom.stableId, atom);
-  }
-  return [...deduplicateRanges([...selected.values()])].sort(compareByScore);
+  return [...unique].sort(compareByScore);
 }
 
 function atomsByPath(atoms: readonly EvidenceAtom[]): ReadonlyMap<string, readonly EvidenceAtom[]> {
@@ -235,7 +207,8 @@ export function selectGroundedEvidenceAtoms(
   const grouped = atomsByPath(atoms);
   const selected: EvidenceAtom[] = [];
   for (const scopePath of selectedPaths) {
-    selected.push(...selectAtomsForPath(grouped.get(scopePath) ?? [], preferLocatedDefinitions));
+    for (const atom of selectAtomsForPath(grouped.get(scopePath) ?? [], preferLocatedDefinitions))
+      selected.push(atom);
   }
   return selected;
 }

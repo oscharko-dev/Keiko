@@ -217,6 +217,12 @@ omission sampling depends on which concurrent read finishes first. Explicit fini
 are read in bounded concurrent waves; unused byte grants are recycled after a wave settles, while
 the actual accepted byte/token budgets determine which evidence fits. A large matching set therefore
 does not force every excerpt to a one-byte allocation. Unread budget tails remain budget omissions.
+Selected files retain every distinct, already-admitted evidence range rather than independent
+per-file atom or window quotas. The existing safe excerpt reader batches those ranges from one
+freshly classified, decoded and redacted file snapshot, preserves original line coordinates, and
+charges every returned fragment against the accepted cumulative byte grant. Remaining ranges are
+reported when that grant is spent; cancellation or a changed source prevents publication. Global
+retained-result and model-context budgets remain authoritative.
 Successful primary literal-content matches survive incidental filename/output-count relevance
 boosts; vague, diagnostic, relational, and semantic evidence retains ordinary relevance filtering.
 A completed eligible scan with only a retained-match limit reports omitted matching evidence,

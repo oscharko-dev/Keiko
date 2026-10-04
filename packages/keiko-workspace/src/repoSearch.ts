@@ -35,6 +35,7 @@ import {
   nodeWorkspaceFs,
   WorkspaceDescriptorReadError,
   type WorkspaceFs,
+  type WorkspaceStat,
 } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -175,6 +176,8 @@ export interface SearchResult {
 }
 
 export interface ReadExcerptRequest {
+  // Trusted batched ranges share one fresh, classified and redacted source snapshot.
+  readonly ranges?: readonly { readonly startLine: number; readonly endLine: number }[] | undefined;
   // Trusted query anchors reposition a clipped view without widening the returned byte cap.
   readonly anchors?: readonly string[] | undefined;
   readonly maxWindows?: number | undefined;
@@ -194,6 +197,7 @@ interface ReadExcerptWindowResult {
 
 export interface ReadExcerptResult extends ReadExcerptWindowResult {
   readonly windows?: readonly ReadExcerptWindowResult[] | undefined;
+  readonly omittedRangeCount?: number | undefined;
 }
 
 interface FacadeDeps {
@@ -3608,6 +3612,43 @@ function assertExcerptRange(request: ReadExcerptRequest): void {
   if (!isValidScopePath(request.scopePath, { mustBeRelative: true })) {
     throw new RepoSearchInvalidRangeError(`invalid scopePath: ${request.scopePath}`);
   }
+  assertExcerptBatchRanges(request);
+}
+
+function assertExcerptBatchRanges(request: ReadExcerptRequest): void {
+  if (request.ranges === undefined) return;
+  if (!nonEmptyExcerptRanges(request.ranges))
+    throw new RepoSearchInvalidRangeError("invalid excerpt ranges");
+  for (const range of request.ranges) {
+    if (!validExcerptBatchRange(range, request))
+      throw new RepoSearchInvalidRangeError("invalid excerpt ranges");
+  }
+}
+
+function validExcerptBatchRange(value: unknown, request: ReadExcerptRequest): boolean {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("startLine" in value) ||
+    !("endLine" in value)
+  )
+    return false;
+  const { startLine, endLine } = value;
+  return (
+    validExcerptLineNumber(startLine) &&
+    validExcerptLineNumber(endLine) &&
+    startLine >= request.startLine &&
+    endLine <= request.endLine &&
+    endLine >= startLine
+  );
+}
+
+function validExcerptLineNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value);
+}
+
+function nonEmptyExcerptRanges(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
 }
 
 // The single "this excerpt cannot be served, skip it" outcome of the excerpt read lane. Every
@@ -3844,6 +3885,63 @@ function excerptResultForWindow(
   };
 }
 
+interface BatchedExcerptResults {
+  readonly results: readonly ReadExcerptWindowResult[];
+  readonly omittedRangeCount: number;
+}
+
+function excerptBatchCapacity(
+  request: ReadExcerptRequest,
+  rangeCount: number,
+): { readonly bytes: number; readonly windows: number } {
+  const bytes = request.maxTotalBytes ?? request.maxBytes;
+  return { bytes, windows: Math.min(request.maxWindows ?? rangeCount, Math.max(1, bytes)) };
+}
+
+async function batchedExcerptResults(
+  scope: SearchScope,
+  request: ReadExcerptRequest,
+  lines: readonly string[],
+  nowMs: () => number,
+  control: StructuralExecutionControl,
+): Promise<BatchedExcerptResults> {
+  if (request.ranges === undefined)
+    return {
+      results: excerptWindows(request, lines).map((window) =>
+        excerptResultForWindow(scope, request, window, nowMs),
+      ),
+      omittedRangeCount: 0,
+    };
+  const ranges = request.ranges;
+  const results: ReadExcerptWindowResult[] = [];
+  const capacity = excerptBatchCapacity(request, ranges.length);
+  const encoder = new TextEncoder();
+  let remainingBytes = capacity.bytes;
+  let remainingWindows = capacity.windows;
+  let processed = 0;
+  for (const range of ranges) {
+    if (processed > 0 && (remainingBytes <= 0 || remainingWindows <= 0)) break;
+    if (processed > 0 && processed % SCAN_YIELD_INTERVAL === 0)
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    assertStructuralExecutionActive(control);
+    const bounded = {
+      ...request,
+      ...range,
+      maxBytes: Math.min(request.maxBytes, remainingBytes),
+      maxTotalBytes: remainingBytes,
+      maxWindows: Math.max(1, remainingWindows),
+    };
+    assertExcerptStartWithinLines(bounded, lines);
+    for (const window of excerptWindows(bounded, lines)) {
+      results.push(excerptResultForWindow(scope, bounded, window, nowMs));
+      remainingBytes -= encoder.encode(window.content).byteLength;
+      remainingWindows -= 1;
+    }
+    processed += 1;
+  }
+  return { results, omittedRangeCount: ranges.length - processed };
+}
+
 async function readExcerptWithControl(
   scope: SearchScope,
   request: ReadExcerptRequest,
@@ -3885,13 +3983,27 @@ async function readExcerptWithControl(
   }
   assertStructuralExecutionActive(control);
   assertExcerptStartWithinLines(request, allLines);
-  const results = excerptWindows(request, allLines).map((window) =>
-    excerptResultForWindow(scope, request, window, nowMs),
-  );
+  const batch = await batchedExcerptResults(scope, request, allLines, nowMs, control);
   assertStructuralExecutionActive(control);
+  return completedExcerptBatch(batch, request, fs, target.path, stat);
+}
+
+function completedExcerptBatch(
+  batch: BatchedExcerptResults,
+  request: ReadExcerptRequest,
+  fs: WorkspaceFs,
+  path: string,
+  stat: WorkspaceStat,
+): ReadExcerptResult {
+  if (request.ranges !== undefined && !isWorkspacePathSnapshotCurrent(fs, path, path, stat))
+    throw new RepoSearchUnsupportedFileError("file changed during excerpt read", "io-error");
+  const results = batch.results;
   const first = results[0];
   if (first === undefined) throw excerptUnreadable(request.scopePath);
-  return results.length === 1 ? first : { ...first, windows: results };
+  const result = results.length === 1 ? first : { ...first, windows: results };
+  return request.ranges === undefined
+    ? result
+    : { ...result, omittedRangeCount: batch.omittedRangeCount };
 }
 
 export async function readExcerpt(

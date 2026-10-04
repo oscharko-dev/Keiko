@@ -394,10 +394,10 @@ describe("selectGroundedEvidenceAtoms", () => {
 
     const selected = selectGroundedEvidenceAtoms(atoms, new Set(["src/target.ts"]), "scope");
 
-    expect(selected).toHaveLength(12);
+    expect(selected).toHaveLength(19);
     expect(selected.some((entry) => entry.lineRange?.startLine === 1)).toBe(true);
     expect(selected.filter((entry) => entry.lineRange?.startLine === 40)).toHaveLength(1);
-    expect(selected.some((entry) => entry.lineRange === undefined)).toBe(false);
+    expect(selected.some((entry) => entry.lineRange === undefined)).toBe(true);
     expect(selected.some((entry) => entry.scopePath === "src/decoy.ts")).toBe(false);
   });
 
@@ -405,7 +405,7 @@ describe("selectGroundedEvidenceAtoms", () => {
     ["structural", "discovered-symbol-definition"],
     ["lexical-search", "repo.symbolFileDiscovery"],
   ] as const)(
-    "reserves the %s definition when high-score decoys exhaust the normal slots",
+    "retains the %s definition alongside all admitted higher-score ranges",
     (kind, tool) => {
       const definition = {
         ...atom("src/target.ts", 0.1, 400, 426, "definition"),
@@ -426,7 +426,7 @@ describe("selectGroundedEvidenceAtoms", () => {
 
       const selected = selectGroundedEvidenceAtoms(atoms, new Set(["src/target.ts"]), "scope");
 
-      expect(selected).toHaveLength(12);
+      expect(selected).toHaveLength(23);
       expect(selected.some((entry) => entry.provenance.tool === tool)).toBe(true);
     },
   );
