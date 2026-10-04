@@ -218,3 +218,40 @@ test("saves a canonical limited causal report when the loaded browser loses the 
   expect(artifact.analysis.evidence.supportedLineCount).toBe(0);
   expect(artifact.selection.status).toBe("insufficient");
 });
+
+test("saves an HTTP limited report preserving the displayed cause without a paired session @smoke", async ({
+  page,
+  request,
+}, info): Promise<void> => {
+  const { notice, supportId } = await failChat(page, request);
+  await page.context().clearCookies();
+  const producing = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" && response.url().endsWith("/api/diagnostics/report"),
+  );
+  await prepareReport(notice);
+  const produced = await producing;
+  expect(produced.ok()).toBe(true);
+  expect(produced.request().postDataJSON()).toHaveProperty("correlationId", supportId);
+  const href = await notice
+    .getByRole("link", { name: "Download report", exact: true })
+    .getAttribute("href");
+  const downloadUrl = new URL(href ?? "", produced.url());
+  expect(downloadUrl.origin).toBe(new URL(produced.url()).origin);
+  expect(downloadUrl.pathname.split("/").slice(1, -1)).toEqual([
+    "api",
+    "diagnostics",
+    "report",
+    "download",
+  ]);
+  expect(await produced.json()).toHaveProperty("downloadPath", href);
+  const { artifact } = await saveClickedReport(page, notice, info, "unpaired");
+  expect(artifact.incident.correlation.rootCorrelationId).toBe(supportId);
+  expect(artifact.incident.clientReport?.availabilityReason).toBe("session-unavailable");
+  expect(artifact.incident.clientReport?.failure?.errorEvidence?.errorClass).toBe("ApiError");
+  expect(artifact.incident.clientReport?.failure?.context).toContain("kind:sse-error");
+  expect(artifact.incident.op).toBe("unattributed");
+  expect(artifact.incident.frameCount).toBe(0);
+  expect(artifact.analysis.evidence.supportedLineCount).toBe(0);
+  expect(artifact.selection.status).toBe("insufficient");
+});
