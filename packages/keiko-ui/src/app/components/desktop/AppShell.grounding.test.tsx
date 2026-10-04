@@ -1064,6 +1064,44 @@ describe("AppShell grounding connections", () => {
     );
   });
 
+  it("gives the one canonical conflict retry a fresh mutation budget", async (): Promise<void> => {
+    const conflictReady = deferred<void>();
+    const persisted = deferred<{ readonly chat: Chat }>();
+    const nextScope = fileScope("/retry-budget");
+    const updated = chat({ connectedScopes: [nextScope], updatedAt: 2 });
+    mocks.updateChatConnectedScopes
+      .mockImplementationOnce(async (): Promise<never> => {
+        await conflictReady.promise;
+        throw new ApiError("GROUNDING_SCOPE_CHANGED", "Sources changed", 409);
+      })
+      .mockReturnValueOnce(persisted.promise);
+    await renderMounted();
+    vi.useFakeTimers();
+    const binding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeBind?.("chat-window", nextScope),
+    );
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS - 1000);
+    await act(async (): Promise<void> => {
+      conflictReady.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(2000);
+    await act(async (): Promise<void> => {
+      persisted.resolve({ chat: updated });
+      await persisted.promise;
+    });
+    await expect(binding).resolves.toBe(true);
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+    expect(reportedDiagnostics).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          filesScopeDecision: { decision: "timeout-blocked" },
+        }),
+      ]),
+    );
+  });
+
   it("compensates a timed-out bind and blocks later mutations", async (): Promise<void> => {
     const reportError = vi.fn();
     vi.stubGlobal("reportError", reportError);

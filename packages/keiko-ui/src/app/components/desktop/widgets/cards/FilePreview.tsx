@@ -476,6 +476,32 @@ function updateManualRefreshStatus(
   if (manual) setStatus(status);
 }
 
+function PreviewFailure({
+  error,
+  onRetry,
+  t,
+}: {
+  readonly error: PreviewError | null;
+  readonly onRetry: () => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (error === null) return null;
+  return (
+    <div className="fpv-state fpv-error" role="alert">
+      <span>{error.denied ? deniedPreviewMessage(t) : t("filePreview.error.unreadable")}</span>
+      {/* Denied is a deliberate safety invariant, not a transient failure — no Retry. */}
+      {!error.denied ? (
+        <>
+          <button type="button" className="fpv-retry" onClick={onRetry}>
+            {t("filePreview.retry")}
+          </button>
+          <SupportReportButton correlationId={error.correlationId} />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export function FilePreview({
   root,
   path,
@@ -703,20 +729,7 @@ export function FilePreview({
           {t("filePreview.loadingState")}
         </output>
       ) : null}
-      {error !== null ? (
-        <div className="fpv-state fpv-error" role="alert">
-          <span>{error.denied ? deniedPreviewMessage(t) : t("filePreview.error.unreadable")}</span>
-          {/* Denied is a deliberate safety invariant, not a transient failure — no Retry. */}
-          {!error.denied ? (
-            <>
-              <button type="button" className="fpv-retry" onClick={refreshPreview}>
-                {t("filePreview.retry")}
-              </button>
-              <SupportReportButton correlationId={error.correlationId} />
-            </>
-          ) : null}
-        </div>
-      ) : null}
+      <PreviewFailure error={error} onRetry={refreshPreview} t={t} />
 
       <PreviewKindContent
         preview={activePreview}

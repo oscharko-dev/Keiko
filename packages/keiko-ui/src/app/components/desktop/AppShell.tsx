@@ -778,6 +778,7 @@ interface FilesScopeRequest {
 interface ChatMutationAttempt {
   readonly correlationId: string;
   readonly isCurrent: () => boolean;
+  readonly renewBudget: () => void;
 }
 
 type ChatLookupTarget = ChatBindingTarget | ChatUnbindTarget;
@@ -873,14 +874,14 @@ function isGroundingScopeConflict(error: unknown): boolean {
 
 async function retryGroundingScopeIntent(
   mutation: () => Promise<boolean>,
-  correlationId?: string,
+  attempt: ChatMutationAttempt,
 ): Promise<boolean> {
   try {
     return await mutation();
   } catch (error: unknown) {
-    if (!isGroundingScopeConflict(error)) throw error;
-    if (correlationId !== undefined)
-      reportFilesScopeDecision(correlationId, { decision: "conflict-retried" });
+    if (!isGroundingScopeConflict(error) || !attempt.isCurrent()) throw error;
+    attempt.renewBudget();
+    reportFilesScopeDecision(attempt.correlationId, { decision: "conflict-retried" });
     return mutation();
   }
 }
@@ -928,14 +929,24 @@ async function mutationWithTimeout<T>(
 ): Promise<T> {
   let timeoutId: number | undefined;
   let current = true;
-  const attempt: ChatMutationAttempt = { correlationId, isCurrent: (): boolean => current };
+  let renewBudget = (): void => undefined;
   const timeout = new Promise<never>((_resolve, reject): void => {
-    timeoutId = window.setTimeout((): void => {
-      current = false;
-      onTimeout();
-      reject(new ChatMutationTimeoutFailure());
-    }, CHAT_MUTATION_TIMEOUT_MS);
+    renewBudget = (): void => {
+      if (!current) return;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout((): void => {
+        current = false;
+        onTimeout();
+        reject(new ChatMutationTimeoutFailure());
+      }, CHAT_MUTATION_TIMEOUT_MS);
+    };
+    renewBudget();
   });
+  const attempt: ChatMutationAttempt = {
+    correlationId,
+    isCurrent: (): boolean => current,
+    renewBudget,
+  };
   const pending = mutation(attempt);
   void pending.then(
     (): void => {
@@ -1621,7 +1632,7 @@ function AppShellInner(): ReactNode {
             connectionId,
             input.automatic,
           ),
-        attempt.correlationId,
+        attempt,
       );
       if (accepted && attempt.isCurrent() && edgeKey !== undefined) {
         return acknowledgeFilesScope({
@@ -1770,7 +1781,7 @@ function AppShellInner(): ReactNode {
           (attempt) =>
             retryGroundingScopeIntent(
               () => unbindFilesScopeNow({ chatWindowId, scope, target, connectionId }, attempt),
-              attempt.correlationId,
+              attempt,
             ),
           true,
         );
