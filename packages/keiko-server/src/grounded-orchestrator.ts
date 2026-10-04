@@ -16,6 +16,7 @@ import {
   connectedContextOmittedCount,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
+  MAX_OMITTED_CONTEXT_ENTRIES,
   isValidScopePath,
   type CandidateFile,
   type CandidateOmissionReason,
@@ -116,6 +117,8 @@ import {
 } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { CancelledError, ERROR_CODES } from "@oscharko-dev/keiko-model-gateway";
 import { mapWithConcurrency } from "./bounded-concurrency.js";
+import { BoundedMetadataPaths, MetadataRetention } from "./grounded-metadata-retention.js";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   isWorkspacePathSnapshotCurrent,
   nodeWorkspaceFs,
@@ -2919,14 +2922,6 @@ function safeReadDir(
   }
 }
 
-// Directory breadth is streamed independently of the bounded evidence retained for the model.
-function retainMetadataPath(paths: string[], path: string, limit: number): void {
-  if (paths.includes(path)) return;
-  paths.push(path);
-  paths.sort((left, right) => left.localeCompare(right));
-  if (paths.length > limit) paths.pop();
-}
-
 function metadataDirectoryPath(
   searchScope: SearchScope,
   fs: WorkspaceFs,
@@ -2988,9 +2983,10 @@ async function canonicalManifestScopePathsInDir(
   maxResults: number,
   control: MetadataTraversalControl,
   existsCache?: FileExistenceCache,
-  cacheAbsentNames = false,
+  policy: { readonly cacheAbsentNames?: boolean; readonly rememberDirectory?: boolean } = {},
 ): Promise<readonly string[]> {
-  const paths: string[] = [];
+  if (!beginMetadataDirectory(existsCache, dir, policy.rememberDirectory !== false)) return [];
+  const paths = new BoundedMetadataPaths(maxResults);
   const present = new Set<string>();
   const complete = await visitMetadataDirectory(
     searchScope,
@@ -3000,19 +2996,54 @@ async function canonicalManifestScopePathsInDir(
     existsCache,
     (entry): void => {
       if (entry.isSymbolicLink || !entry.isFile) return;
-      if (cacheAbsentNames && PROJECT_METADATA_FILENAMES.includes(entry.name))
+      if (policy.cacheAbsentNames === true && PROJECT_METADATA_FILENAMES.includes(entry.name))
         present.add(entry.name);
       const path = joinScopePath(dir, entry.name);
-      if (!isCanonicalMetadataFile(path) || isDenied(path)) return;
-      if (fileExistsByContainedStat(searchScope, fs, path))
-        retainMetadataPath(paths, path, maxResults);
+      retainCanonicalMetadataPath(path, searchScope, fs, paths, existsCache);
     },
   );
-  if (complete && cacheAbsentNames) {
-    for (const name of PROJECT_METADATA_FILENAMES)
-      if (!present.has(name)) existsCache?.files.set(joinScopePath(dir, name), false);
-  }
-  return paths;
+  if (complete && policy.cacheAbsentNames === true)
+    cacheAbsentMetadataNames(existsCache, dir, present);
+  return paths.sorted();
+}
+
+function beginMetadataDirectory(
+  cache: FileExistenceCache | undefined,
+  dir: string,
+  remember: boolean,
+): boolean {
+  if (cache === undefined) return true;
+  if (cache.metadataDirectories.has(dir)) return false;
+  if (remember && cache.metadataWildcardBases.has(dirname(dir))) return false;
+  if (remember) cache.metadataDirectories.add(dir);
+  return true;
+}
+
+function cacheAbsentMetadataNames(
+  cache: FileExistenceCache | undefined,
+  dir: string,
+  present: ReadonlySet<string>,
+): void {
+  if (cache === undefined) return;
+  for (const name of PROJECT_METADATA_FILENAMES)
+    if (!present.has(name)) cache.files.set(joinScopePath(dir, name), false);
+}
+
+function retainCanonicalMetadataPath(
+  path: string,
+  scope: SearchScope,
+  fs: WorkspaceFs,
+  paths: BoundedMetadataPaths,
+  cache: FileExistenceCache | undefined,
+): void {
+  if (
+    !isCanonicalMetadataFile(path) ||
+    isDenied(path) ||
+    !fileExistsByContainedStat(scope, fs, path)
+  )
+    return;
+  cache?.metadataRetention?.observe(path);
+  paths.retain(path);
 }
 
 async function expandWorkspacePattern(
@@ -3057,7 +3088,9 @@ async function workspacePatternServiceManifests(
   maxResults: number,
   existsCache?: FileExistenceCache,
 ): Promise<readonly string[]> {
-  const manifests: string[] = [];
+  if (existsCache?.metadataWildcardBases.has(base) === true) return [];
+  existsCache?.metadataWildcardBases.add(base);
+  const manifests = new BoundedMetadataPaths(maxResults);
   await visitMetadataDirectory(
     searchScope,
     fs,
@@ -3075,11 +3108,12 @@ async function workspacePatternServiceManifests(
         maxResults,
         control,
         existsCache,
+        { rememberDirectory: false },
       ))
-        retainMetadataPath(manifests, path, maxResults);
+        manifests.retain(path);
     },
   );
-  return manifests;
+  return manifests.sorted();
 }
 
 async function workspacePackageManifestPaths(
@@ -3094,8 +3128,8 @@ async function workspacePackageManifestPaths(
   if (!metadataTraversalCanContinue(control)) return [];
   const patterns = new Set<string>(readWorkspacePatterns(searchScope, fs, control, existsCache));
   for (const dir of WORKSPACE_PACKAGE_DIRS) patterns.add(`${dir}/*`);
-  const paths: string[] = [];
-  for (const pattern of [...patterns].sort((a, b) => a.localeCompare(b))) {
+  const paths = new BoundedMetadataPaths(maxResults);
+  for (const pattern of [...patterns].sort(compareStrings)) {
     if (!metadataTraversalCanContinue(control)) break;
     for (const path of await expandWorkspacePattern(
       pattern,
@@ -3105,9 +3139,9 @@ async function workspacePackageManifestPaths(
       maxResults,
       existsCache,
     ))
-      retainMetadataPath(paths, path, maxResults);
+      paths.retain(path);
   }
-  return paths;
+  return paths.sorted();
 }
 
 function metadataAtom(
@@ -3783,6 +3817,9 @@ interface FileExistenceCache {
   readonly directories: Map<string, BoundedDirectoryRead>;
   unavailableDirectoryInspections: number;
   readonly metadataCoverageIssues: Map<MetadataCoverageIssue, number>;
+  readonly metadataDirectories: Set<string>;
+  readonly metadataWildcardBases: Set<string>;
+  metadataRetention?: MetadataRetention;
 }
 
 function createFileExistenceCache(): FileExistenceCache {
@@ -3791,6 +3828,8 @@ function createFileExistenceCache(): FileExistenceCache {
     directories: new Map(),
     unavailableDirectoryInspections: 0,
     metadataCoverageIssues: new Map(),
+    metadataDirectories: new Set(),
+    metadataWildcardBases: new Set(),
   };
 }
 
@@ -3888,7 +3927,7 @@ async function rootGlobManifestPaths(
     maxResults,
     control,
     existsCache,
-    true,
+    { cacheAbsentNames: true },
   );
   return paths.filter((path) => acceptInjectionScopePath(path, seen));
 }
@@ -3946,6 +3985,7 @@ async function projectMetadataRootAtoms(
       (globPaths.includes(scopePath) || acceptInjectionScopePath(scopePath, seen)) &&
       fileExistsInSearchScope(searchScope, fs, scopePath, existsCache)
     ) {
+      existsCache.metadataRetention?.observeRootFallback(scopePath);
       atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
     }
   }
@@ -3988,11 +4028,6 @@ async function workspacePackageMetadataAtoms(
   return atoms;
 }
 
-function retainMetadataAtom(atoms: EvidenceAtom[], atom: EvidenceAtom, limit: number): void {
-  if (atoms.some((existing) => existing.scopePath === atom.scopePath)) return;
-  if (atoms.length < limit) atoms.push(atom);
-}
-
 async function projectMetadataAtoms(
   inputs: MetadataDiscoveryInputs,
 ): Promise<readonly EvidenceAtom[]> {
@@ -4000,16 +4035,22 @@ async function projectMetadataAtoms(
   if (!wantsProjectMetadata(input, intent) || !metadataTraversalCanContinue(control)) {
     return [];
   }
-  const atoms: EvidenceAtom[] = [];
   const context: MetadataAtomCollectionContext = { ...inputs, seen: new Set<string>() };
+  const retained = new MetadataRetention(
+    inputs.maxResults,
+    MAX_OMITTED_CONTEXT_ENTRIES,
+    metadataRootsForScope(input.scope),
+    PROJECT_METADATA_FILENAMES,
+  );
+  inputs.existsCache.metadataRetention = retained;
   for (const root of metadataRootsForScope(input.scope)) {
     if (!metadataTraversalCanContinue(control)) break;
-    for (const atom of await projectMetadataRootAtoms(root, context))
-      retainMetadataAtom(atoms, atom, inputs.maxResults);
+    await projectMetadataRootAtoms(root, context);
   }
-  for (const atom of await workspacePackageMetadataAtoms(context))
-    retainMetadataAtom(atoms, atom, inputs.maxResults);
-  return atoms;
+  await workspacePackageMetadataAtoms(context);
+  return retained
+    .retainedPaths()
+    .map((path) => metadataAtom(input.scope, path, inputs.queryFingerprint, inputs.nowMs));
 }
 
 function repositoryOverviewAtoms(inputs: MetadataDiscoveryInputs): readonly EvidenceAtom[] {
@@ -4038,6 +4079,7 @@ function repositoryOverviewAtoms(inputs: MetadataDiscoveryInputs): readonly Evid
 interface DeterministicContextEvidence {
   readonly atoms: readonly EvidenceAtom[];
   readonly uncertainty: readonly UncertaintyMarker[];
+  readonly omitted?: readonly OmittedContextEntry[];
 }
 
 function mergeDeterministicEvidence(
@@ -4046,6 +4088,7 @@ function mergeDeterministicEvidence(
   return {
     atoms: sources.flatMap((source) => source.atoms),
     uncertainty: sources.flatMap((source) => source.uncertainty),
+    omitted: sources.flatMap((source) => source.omitted ?? []),
   };
 }
 
@@ -4115,11 +4158,43 @@ async function deterministicMetadataEvidence(
   const emittedAtMs = nowMs();
   return {
     atoms,
+    omitted: metadataRetentionOmissions(existsCache, emittedAtMs),
     uncertainty: [
       ...metadataDirectoryCoverageUncertainty(existsCache, emittedAtMs),
       ...metadataManifestCoverageUncertainty(existsCache, emittedAtMs),
+      ...metadataRetentionUncertainty(existsCache, emittedAtMs),
     ],
   };
+}
+
+function metadataRetentionOmissions(
+  cache: FileExistenceCache,
+  nowMs: number,
+): readonly OmittedContextEntry[] {
+  return (cache.metadataRetention?.omittedPaths() ?? []).map((scopePath) => ({
+    scopePath,
+    reason: "budget-exhausted",
+    omittedAtMs: nowMs,
+  }));
+}
+
+function metadataRetentionUncertainty(
+  cache: FileExistenceCache,
+  nowMs: number,
+): readonly UncertaintyMarker[] {
+  const count = cache.metadataRetention?.discardedCount ?? 0;
+  return count === 0
+    ? []
+    : [
+        {
+          kind: "budget-clipped",
+          claim:
+            `project metadata retention omitted ${String(count)} observed manifest candidates; ` +
+            `canonical omission paths are bounded representative details, not an unfinished traversal`,
+          impactedAtomIds: [],
+          emittedAtMs: nowMs,
+        },
+      ];
 }
 
 type ParallelDeterministicEvidence = readonly [
@@ -4220,6 +4295,7 @@ async function withDeterministicContextAtoms(
   return {
     ...rings,
     atoms: [...rings.atoms, ...deterministic.atoms],
+    omitted: [...rings.omitted, ...(deterministic.omitted ?? [])],
     uncertainty: [...rings.uncertainty, ...deterministic.uncertainty],
   };
 }
@@ -5307,6 +5383,8 @@ interface FinalContextPackInputs {
   readonly excerptReads: ExcerptReadSummary;
   readonly documentEvidence: DocumentEvidenceResult;
   readonly cacheIdentity: PackCacheIdentity | undefined;
+  readonly cacheKey: string | undefined;
+  readonly signal: AbortSignal | undefined;
   readonly assembleOptions: AssembleOptionsForGroundedPack;
 }
 
@@ -5354,7 +5432,7 @@ async function assembleEmptyGroundedPack({
   return assemble.pack;
 }
 
-function cachedGroundedPack({
+function groundedPackCacheKey({
   input,
   plan,
   rings,
@@ -5363,7 +5441,7 @@ function cachedGroundedPack({
   cacheIdentity,
   initialUsage,
   assembleOptions,
-}: GroundedPackCacheLookupInputs): ConnectedContextPack | undefined {
+}: GroundedPackCacheLookupInputs): string | undefined {
   if (assembleOptions.microIndex === undefined || cacheIdentity === undefined) {
     return undefined;
   }
@@ -5379,10 +5457,11 @@ function cachedGroundedPack({
       cacheIdentity,
       initialUsage,
       diagnostics: rings.diagnostics,
+      initialUncertainty: rings.uncertainty,
     },
     knownFitAssembleOptions(assembleOptions, rings),
   );
-  return assembleOptions.microIndex.get(key);
+  return key;
 }
 
 function selectPackAtoms(
@@ -5482,25 +5561,25 @@ function afterExcerptReadOmissions(
   };
 }
 
-async function assemblePackFromReads({
-  input,
-  plan,
-  rings,
-  prepared,
-  excerptReads,
-  documentEvidence,
-  cacheIdentity,
-  assembleOptions,
-}: FinalContextPackInputs): Promise<ConnectedContextPack> {
+async function assemblePackFromReads(
+  inputs: FinalContextPackInputs,
+): Promise<ConnectedContextPack> {
+  const {
+    input,
+    plan,
+    rings,
+    prepared,
+    excerptReads,
+    documentEvidence,
+    cacheIdentity,
+    assembleOptions,
+  } = inputs;
   const excerpts = mergeExcerptSources(excerptReads.excerpts, documentEvidence.excerpts);
   const ordered = afterExcerptReadOmissions(
     prepared.ordered,
     excerptReads,
     assembleOptions.nowMs(),
   );
-  const needsNoEvidenceMarker =
-    excerpts.size === 0 &&
-    !prepared.evidenceUncertainty.some((marker) => marker.kind === "no-evidence");
   // Connected documents are owned exclusively by the bounded document-extraction path: they either
   // surface as document evidence or as a precise document diagnostic. The code-first lexical scan
   // also sees them as binary candidates, so strip any document-path omission it produced to avoid a
@@ -5532,12 +5611,46 @@ async function assemblePackFromReads({
         ...excerptReads.uncertainty,
         ...prepared.evidenceUncertainty,
         ...documentEvidence.uncertainty,
-        ...(needsNoEvidenceMarker ? [noEvidence(assembleOptions.nowMs())] : []),
+        ...missingExcerptEvidence(prepared, excerpts.size, assembleOptions.nowMs()),
       ],
     },
-    knownFitAssembleOptions(assembleOptions, rings),
+    withoutMicroIndex(knownFitAssembleOptions(assembleOptions, rings)),
   );
+  cacheAssembledGroundedPack(inputs, assemble.pack);
   return assemble.pack;
+}
+
+function missingExcerptEvidence(
+  prepared: PreparedPackAssembly,
+  count: number,
+  nowMs: number,
+): readonly UncertaintyMarker[] {
+  return count === 0 &&
+    !prepared.evidenceUncertainty.some((marker) => marker.kind === "no-evidence")
+    ? [noEvidence(nowMs)]
+    : [];
+}
+
+function cacheAssembledGroundedPack(
+  inputs: FinalContextPackInputs,
+  pack: ConnectedContextPack,
+): void {
+  throwIfCancelled(inputs.signal);
+  if (
+    inputs.cacheIdentity === undefined ||
+    inputs.cacheKey === undefined ||
+    inputs.excerptReads.elapsedBudgetBlocked ||
+    (inputs.excerptReads.omitted?.length ?? 0) !== 0
+  )
+    return;
+  inputs.assembleOptions.microIndex?.set(inputs.cacheKey, pack);
+}
+
+function withoutMicroIndex(
+  options: AssembleOptionsForGroundedPack,
+): AssembleOptionsForGroundedPack {
+  const { microIndex, ...uncached } = options;
+  return microIndex === undefined ? options : uncached;
 }
 
 function finishAugmentationBudget(
@@ -5666,6 +5779,7 @@ interface GroundedAssemblyContext {
   readonly documentEvidence: DocumentEvidenceResult;
   readonly cached: ConnectedContextPack | undefined;
   readonly cacheIdentity: PackCacheIdentity | undefined;
+  readonly cacheKey: string | undefined;
   readonly assembleOptions: AssembleOptionsForGroundedPack;
 }
 
@@ -5718,9 +5832,9 @@ async function prepareGroundedAssembly(
   );
   // The micro-index cache key does not model request-local document evidence, so a scope that
   // carried documents this run must not be served from (or written to) the shared cache.
-  const cached = hasDocumentEvidence
+  const cacheKey = hasDocumentEvidence
     ? undefined
-    : cachedGroundedPack({
+    : groundedPackCacheKey({
         input,
         plan,
         rings: augmentedRings,
@@ -5730,7 +5844,8 @@ async function prepareGroundedAssembly(
         initialUsage: prepared.initialUsage,
         assembleOptions,
       });
-  return { documentEvidence, cached, cacheIdentity, assembleOptions };
+  const cached = cacheKey === undefined ? undefined : assembleOptions.microIndex?.get(cacheKey);
+  return { documentEvidence, cached, cacheIdentity, cacheKey, assembleOptions };
 }
 
 // PR4-W1 (ADR-0055 D1): conditional diagnostics observer. When a ContextProfile is threaded
@@ -5802,6 +5917,8 @@ async function assembleGroundedPack(
     excerptReads,
     documentEvidence: ctx.documentEvidence,
     cacheIdentity: await excerptBoundCacheIdentity(args, prepared.keptPaths, ctx.cacheIdentity),
+    cacheKey: ctx.cacheKey,
+    signal: deps.signal,
     assembleOptions: ctx.assembleOptions,
   });
   return {

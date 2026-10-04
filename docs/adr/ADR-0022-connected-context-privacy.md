@@ -114,6 +114,9 @@ selected files, and excerpt content. The server registry is in-memory only and b
 entries use the workflow micro-index TTL, the server keeps at most 32 scoped indexes
 with at most 8 cached packs per scope, expired entries are swept on an unref'd
 background interval and before reuse, and evicted entries call `index.clear()`.
+The orchestration read-bypass lookup and publication share the pre-read candidate identity even
+when byte admission omits excerpts. Publication still revalidates every candidate's file state,
+refuses cancelled or failed reads, and includes current uncertainty independently of file identity.
 
 Chat/project lifecycle hooks clear this state deterministically: deleting a project
 clears indexes for that workspace root, deleting or closing a chat clears indexes for
@@ -227,7 +230,11 @@ filename batches; they do not schedule unrelated graph or history traversal. Exp
 caller, import, test, integration, history, and diagnostic questions retain their structural routing.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
-the accepted file-read budget, preserving primary root manifests before nested services. Workspace
+the accepted file-read budget or retained query-result allowance, preserving primary root manifests
+before nested services. A bounded worst-first heap makes retention logarithmic per observation;
+overlapping declared patterns do not count the same directory twice. Dropped manifest candidates
+produce an exact retention count and bounded representative budget-omission paths; they do not
+make complete corpus traversal incomplete. Workspace
 manifests share the inclusive 2 MiB eligibility ceiling. Explicit deadlines, cancellation, unavailable
 streaming ports, and failed enumeration remain visible; iterators close on interruption.
 The shared size-admitted decoder accepts UTF-8, BOM or recognizable-pattern UTF-16LE/BE, and declared

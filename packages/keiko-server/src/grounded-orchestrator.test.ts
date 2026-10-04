@@ -5331,7 +5331,7 @@ describe("runGroundedExploration", () => {
       microIndex: microIndex.index,
     });
     expect(microIndex.sets()).toBe(1);
-    expect(microIndex.gets()).toBe(3);
+    expect(microIndex.gets()).toBe(2);
     expect(second.pack.stableId).toBe(first.pack.stableId);
     expect(second.pack.files).toStrictEqual(first.pack.files);
     expect(second.pack.usage).toStrictEqual(first.pack.usage);
@@ -5357,7 +5357,7 @@ describe("runGroundedExploration", () => {
       detectWorkspace: () => fakeWorkspace(),
       microIndex: microIndex.index,
     });
-    expect(microIndex.gets()).toBe(2);
+    expect(microIndex.gets()).toBe(1);
 
     const second = await runGroundedExploration(input(), {
       correlationId: undefined,
@@ -5369,7 +5369,7 @@ describe("runGroundedExploration", () => {
     });
 
     expect(microIndex.sets()).toBe(1);
-    expect(microIndex.gets()).toBe(3);
+    expect(microIndex.gets()).toBe(2);
     expect(second.pack.stableId).toBe(first.pack.stableId);
     expect(second.pack.files).toStrictEqual(first.pack.files);
   });

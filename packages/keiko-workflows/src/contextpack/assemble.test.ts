@@ -274,6 +274,38 @@ describe("assembleContextPack", () => {
     expect(r2.pack).toBe(r1.pack);
   });
 
+  it("does not reuse stale uncertainty when supplied file-state identity is unchanged", async () => {
+    const microIndex = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
+    const base = { ...baseInput(), cacheIdentity: ["same-file-state"] };
+    await assembleContextPack(base, { nowMs: fixedNow, microIndex });
+    const marker = {
+      kind: "scope-incomplete" as const,
+      claim: "one metadata directory unavailable",
+      impactedAtomIds: [],
+      emittedAtMs: FIXED_NOW,
+    };
+    const marked = {
+      ...base,
+      initialUncertainty: [marker],
+    };
+    const result = await assembleContextPack(marked, { nowMs: fixedNow, microIndex });
+    expect(result.fromIndex).toBe(false);
+    expect(result.pack.uncertainty).toContainEqual(marker);
+    const refreshed = await assembleContextPack(
+      {
+        ...marked,
+        initialUncertainty: [
+          {
+            ...marker,
+            emittedAtMs: FIXED_NOW + 1000,
+          },
+        ],
+      },
+      { nowMs: fixedNow, microIndex },
+    );
+    expect(refreshed.fromIndex).toBe(true);
+  });
+
   it("respects a reranker that reverses the candidate order when budget allows", async () => {
     const reverse: RerankerSeam = {
       name: "reverse-fake",

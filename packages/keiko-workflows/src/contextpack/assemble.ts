@@ -964,8 +964,8 @@ function cacheExcerptIdentity(input: AssembleInput): readonly object[] | readonl
 
 // Compile-time exhaustiveness guard (KEIKO-0998): every AssembleInput key must be listed below,
 // mapped to a short note on how buildCacheAtomIds' fingerprint covers it (directly as a same-named
-// fingerprint key, or indirectly — cacheIdentity and excerpts both feed cacheExcerptIdentity, and
-// cacheIdentity additionally gates whether initialUncertainty is folded in). `satisfies
+// fingerprint key, or indirectly — cacheIdentity and excerpts both feed cacheExcerptIdentity).
+// Current uncertainty contributes independently of the supplied file-state identity. `satisfies
 // Record<keyof AssembleInput, string>` makes TypeScript reject this object if AssembleInput gains,
 // loses, or renames a field without a matching update here, instead of relying solely on
 // docs/context-engineering/decision-log.md's "Critical gotchas" note and code review to catch the
@@ -992,10 +992,7 @@ function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): rea
     atoms: input.atoms.map(cacheAtom),
     budget: input.budget,
     initialUsage: cacheUsage(input.initialUsage),
-    initialUncertainty:
-      input.cacheIdentity === undefined
-        ? input.initialUncertainty?.map(cacheUncertainty)
-        : undefined,
+    initialUncertainty: input.initialUncertainty?.map(cacheUncertainty),
     ranked: input.ranked.map(cacheCandidate),
     omittedFromRanking: mergeOmittedEntries(input.omittedFromRanking, []).map(cacheOmitted),
     diagnostics: cacheDiagnostics(input.diagnostics),
