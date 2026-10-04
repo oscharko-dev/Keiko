@@ -213,9 +213,14 @@ describe("connected-context evidence", () => {
     expect(validateContextAssemblyDiagnostics(diagnostics).ok).toBe(true);
   });
 
-  it.each([null, 32])(
-    "retains explicit boundedness for nullable read/time budget dimensions: %s",
-    (cap) => {
+  it.each([
+    [null, null],
+    [null, 30_000],
+    [32, null],
+    [32, 30_000],
+  ] as const)(
+    "retains independent read/time boundedness: files=%s, time=%s",
+    (filesReadMax, elapsedMsMax) => {
       const source = pack();
       const store = createInMemoryEvidenceStore();
       const result = persistConnectedContextEvidence(
@@ -227,8 +232,8 @@ describe("connected-context evidence", () => {
             ...source,
             budget: {
               ...source.budget,
-              filesReadMax: cap,
-              elapsedMsMax: cap === null ? null : 30_000,
+              filesReadMax,
+              elapsedMsMax,
             },
           },
           citationCount: 1,
@@ -240,10 +245,11 @@ describe("connected-context evidence", () => {
       );
       const budget = requireConnectedContext(result.manifest).budget;
       expect(budget).toMatchObject({
-        filesReadBounded: cap !== null,
-        elapsedMsBounded: cap !== null,
+        filesReadBounded: filesReadMax !== null,
+        elapsedMsBounded: elapsedMsMax !== null,
       });
-      expect(budget.limits.filesReadMax).toBe(cap ?? undefined);
+      expect(budget.limits.filesReadMax).toBe(filesReadMax ?? undefined);
+      expect(budget.limits.elapsedMsMax).toBe(elapsedMsMax ?? undefined);
     },
   );
 

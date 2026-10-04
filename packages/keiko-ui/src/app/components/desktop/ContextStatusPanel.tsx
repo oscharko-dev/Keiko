@@ -41,7 +41,7 @@ function pressureLabel(pressure: ContextBudgetPressure, t: I18nTranslate): strin
 }
 
 function populatedLaneCount(laneCounts: GroundedAnswerContextSummary["laneCounts"]): number {
-  return Object.values(laneCounts).filter((count) => count > 0).length;
+  return CONTEXT_LANE_IDS.filter((lane) => laneCounts[lane] > 0).length;
 }
 
 function contextSummaryMeta(

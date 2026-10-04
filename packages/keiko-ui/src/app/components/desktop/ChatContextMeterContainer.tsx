@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -20,9 +21,14 @@ import type { ChatSessionApi } from "./hooks/useChatSession";
 
 type ContextSession = Pick<
   ChatSessionApi,
-  "activeChat" | "selectedModel" | "messages" | "sending" | "regeneratingMessageId" | "loading"
-> &
-  Partial<Pick<ChatSessionApi, "models">>;
+  | "activeChat"
+  | "selectedModel"
+  | "messages"
+  | "sending"
+  | "regeneratingMessageId"
+  | "loading"
+  | "models"
+>;
 
 interface ContextState {
   readonly key: string;
@@ -42,7 +48,7 @@ interface ContextRequestRef {
 }
 
 function selectedModelContextGeometry(session: ContextSession): readonly unknown[] {
-  const model = session.models?.find((candidate) => candidate.id === session.selectedModel);
+  const model = session.models.find((candidate) => candidate.id === session.selectedModel);
   if (model === undefined) return [];
   const accounting = model.tokenAccounting;
   return [
@@ -108,7 +114,7 @@ function useChatContext(session: ContextSession): {
   const authorityKey = contextAuthorityKey(session);
   const key = JSON.stringify([authorityKey, selectedModelContextGeometry(session)]);
   const busy = session.sending || session.regeneratingMessageId !== undefined;
-  const historyKey = JSON.stringify(session.messages.map((message) => message.id));
+  const historyKey = useHistoryKey(session.messages);
   const [state, setState] = useState<ContextState>({ key, compacting: false, error: false });
   const [revision, setRevision] = useState(0);
   const controller = useContextRequestRef();
@@ -144,6 +150,10 @@ function useChatContext(session: ContextSession): {
       setRevision((value) => value + 1);
     },
   };
+}
+
+function useHistoryKey(messages: ContextSession["messages"]): string {
+  return useMemo(() => JSON.stringify(messages.map((message) => message.id)), [messages]);
 }
 
 function useContextRefresh(

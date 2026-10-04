@@ -1459,7 +1459,7 @@ export const DE_MESSAGES = {
   "context.pressure.exceeded": "Überschritten",
   "context.meta.tokens": "{tokens} geschätzte Quellen-Tokens",
   "context.meta.pressure": "Budgetdruck: {pressure}",
-  "context.meta.lanes": "Quellengruppen: {count}",
+  "context.meta.lanes": "Kontextbereiche: {count}",
   "context.compaction.active": "Verlaufskompaktierung verwendet",
   "context.compaction.inactive": "Keine Verlaufskompaktierung",
   "context.metric.estimator": "Schätzer",

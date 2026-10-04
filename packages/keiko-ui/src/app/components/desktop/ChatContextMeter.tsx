@@ -255,7 +255,10 @@ function ContextSummary({ status }: { readonly status: ChatContextStatusWire }):
 function DeclaredInputLimit({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
   const t = useTranslate();
   const locale = useLocale();
-  return status.inputLimitTokens === undefined ? null : (
+  const restricted = status.segments?.some(
+    (segment) => segment.id === "input-capacity-unavailable" && segment.tokens > 0,
+  );
+  return status.inputLimitTokens === undefined || restricted !== true ? null : (
     <p className={styles.cmpHelp}>
       {t("chat.context.declaredInputLimit", {
         tokens: status.inputLimitTokens.toLocaleString(locale),

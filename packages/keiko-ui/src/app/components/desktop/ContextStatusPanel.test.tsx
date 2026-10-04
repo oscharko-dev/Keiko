@@ -45,6 +45,23 @@ function summary(
 }
 
 describe("ContextStatusPanel", () => {
+  it("counts only rendered lanes and does not call instructions and tasks sources", () => {
+    const counts = {
+      ...laneCounts(0),
+      "system-contract": 1,
+      "user-task": 1,
+      "repo-evidence": 7,
+      "future-unrecognized-lane": 1,
+    };
+    const { container } = render(
+      <ContextStatusPanel contextSummary={summary({ laneCounts: counts })} />,
+    );
+    expect(container.querySelector(".grounded-evidence-summary-meta")).toHaveTextContent(
+      "Context lanes: 3",
+    );
+    expect(container.textContent).not.toContain("Source groups");
+  });
+
   it("identifies source-context estimates and names the repository excerpt count", () => {
     const counts = laneCounts(0);
     counts["repo-evidence"] = 5;
@@ -53,7 +70,7 @@ describe("ContextStatusPanel", () => {
     );
     expect(container.textContent).toContain("Source context");
     expect(container.textContent).toContain("Repository excerpts");
-    expect(container.textContent).toContain("Source groups: 1");
+    expect(container.textContent).toContain("Context lanes: 1");
   });
 
   it("renders null when contextSummary is undefined (legacy / non-profiled turn)", () => {
@@ -95,7 +112,7 @@ describe("ContextStatusPanel", () => {
     expect(title).toHaveTextContent("Source context");
     expect(meta).toHaveTextContent("34.0k est. source tokens");
     expect(meta).toHaveTextContent("Moderate pressure");
-    expect(meta).toHaveTextContent("Source groups: 2");
+    expect(meta).toHaveTextContent("Context lanes: 2");
     expect(meta).toHaveTextContent("Conversation history compaction used");
   });
 

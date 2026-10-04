@@ -4,6 +4,7 @@
 // on top of these.
 
 import { describe, it, expect } from "vitest";
+import { DEFAULT_CONTEXT_PROFILE } from "./context-engineering.js";
 import {
   CANDIDATE_OMISSION_REASONS,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -174,6 +175,12 @@ describe("DEFAULT_EXPLORATION_BUDGET", () => {
       expect(Number.isInteger(value)).toBe(true);
       expect(value).toBeGreaterThanOrEqual(0);
     }
+  });
+
+  it("uses the default profile's actual admissible model input budget", () => {
+    expect(DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax).toBe(
+      DEFAULT_CONTEXT_PROFILE.effectiveInputBudget,
+    );
   });
 
   it("rerankCallsMax defaults to 1 (one bounded rerank pass enabled)", () => {

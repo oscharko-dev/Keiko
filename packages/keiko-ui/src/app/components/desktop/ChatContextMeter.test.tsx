@@ -38,6 +38,7 @@ function contextSession(): Parameters<typeof ChatContextMeterContainer>[0]["sess
       updatedAt: 1,
     },
     selectedModel: "fixture",
+    models: [],
     messages: [],
     sending: false,
     regeneratingMessageId: undefined,
@@ -810,6 +811,20 @@ it("stops reading after the polling cap while the window probe stays pending", a
 afterEach(() => vi.useRealTimers());
 
 describe("independent model input ceilings", () => {
+  it.each([16_384, 32_768])(
+    "does not present a nonbinding input ceiling of %s as another restriction",
+    (inputLimitTokens) => {
+      const panel = openGroundedPanel({ ...groundedStatus(), inputLimitTokens });
+      expect(within(panel).queryByText(/Model input limit:/)).toBeNull();
+      expect(panel.textContent).toContain("context window 16,384");
+    },
+  );
+
+  it("does not infer a binding ceiling from an unsegmented legacy estimate", () => {
+    const panel = openGroundedPanel({ ...status(2_000), inputLimitTokens: 8_000 });
+    expect(within(panel).queryByText(/Model input limit:/)).toBeNull();
+  });
+
   it("shows the physical window, usable input and unavailable share without inventing free capacity", () => {
     render(
       <ChatContextMeter
@@ -846,6 +861,19 @@ describe("independent model input ceilings", () => {
     expect(panel.textContent).toContain("32,000");
     expect(screen.getByRole("button", { name: /approximately 25% used/ })).toBeInTheDocument();
   });
+});
+
+it("does not walk unchanged history again for an unrelated container render", async () => {
+  contextApi.fetch.mockResolvedValue(status(1_000));
+  const session = contextSession();
+  const historyWalk = vi.spyOn(session.messages, "map");
+  const view = render(<ChatContextMeterContainer session={session} />);
+  await screen.findByRole("button", { name: /Conversation context:/ });
+  const walksAfterSettlement = historyWalk.mock.calls.length;
+  expect(walksAfterSettlement).toBeGreaterThan(0);
+  view.rerender(<ChatContextMeterContainer session={{ ...session }} />);
+  expect(historyWalk).toHaveBeenCalledTimes(walksAfterSettlement);
+  expect(contextApi.fetch).toHaveBeenCalledOnce();
 });
 
 function meterCapability(id: string, window: number): ModelCapability {
@@ -898,7 +926,8 @@ it("refreshes an idle selected alias when its catalog geometry changes", async (
   fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
   const panel = screen.getByRole("region", { name: "Conversation context" });
   expect(within(panel).getByText("48,000")).toBeInTheDocument();
-  expect(within(panel).getByText("Model input limit: 24,000 tokens.")).toBeInTheDocument();
+  expect(within(panel).getByText("24,000")).toBeInTheDocument();
+  expect(within(panel).queryByText(/Model input limit:/)).toBeNull();
 });
 
 it("ignores catalog geometry changes for an unselected alias", async () => {

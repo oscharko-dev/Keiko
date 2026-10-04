@@ -1414,7 +1414,7 @@ export const EN_MESSAGES = {
   "context.pressure.exceeded": "Exceeded",
   "context.meta.tokens": "{tokens} est. source tokens",
   "context.meta.pressure": "{pressure} pressure",
-  "context.meta.lanes": "Source groups: {count}",
+  "context.meta.lanes": "Context lanes: {count}",
   "context.compaction.active": "Conversation history compaction used",
   "context.compaction.inactive": "No conversation history compaction",
   "context.metric.estimator": "Estimator",
