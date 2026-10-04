@@ -43,32 +43,36 @@ CLI control state instead.
 
 ## Desktop export and recovery
 
-Use **Create error report** on a visible error to download the canonical report for that error's
-Support ID. Chat, Files, Editor loading failures, window and shell boundaries use the same action;
-uncaught browser failures expose it in the desktop footer. Creation has one bounded deadline, blocks
-duplicate clicks and remains retryable after failure. After generation it initiates a local download
-and keeps **Download report** available as a real browser link to the same report, so a dismissed or
-blocked download can be retried without regenerating evidence. "Download started" reports an
-initiation; a browser cannot confirm an operating-system save. The shared cache holds at most 10 MiB
-of report bytes. HTTP attachments retain the same canonical output for at most 15 minutes and
-require the original authenticated local session on every attempt. Expiry restores report creation;
-the reference alone cannot download anything. Older-server object URLs are released on eviction.
-Global errors remain until the person dismisses them; successful generation alone never dismisses
-the only recovery action. A failed export keeps the original error and
-Support ID visible; its own reporting failure never replaces that selection. Keiko does not upload
-or send the download. Share it manually through your approved support channel.
+Use **Create error report** on a visible error, then **Download report** to save the report for
+that error's Support ID. Chat, Files, Editor loading failures, window and shell boundaries use the
+same action. Uncaught browser failures expose the action in the existing shell alert area. The
+footer retains the centered product version; there is no separate Diagnosis window or incident
+counter for customers.
 
-The footer shows retained diagnostic cases as a neutral count whenever any are stored. Its detail
-explains that these are diagnostic candidates, not confirmed or open defects. Writer degradation
-remains a separate warning. Health inspection counts readable, unexpired candidates without
-expiring files or claiming writer ownership; report creation remains available at full capacity.
-Count changes emit body-free `support.diagnostics.capacity` evidence with counts only.
+Creation has a bounded deadline, blocks duplicate clicks and remains retryable after failure.
+Generation keeps a real browser download link available so the customer can retry a blocked
+save without regenerating evidence. The UI reports that the report is ready; it does not claim
+that the operating system has saved the file. Desktop downloads use a standard `.json.gz`
+attachment whose decompressed bytes are the canonical report. The analyzer accepts that transport
+without changing the report schema or integrity rules.
 
-The diagnostic candidate store holds at most 32 retained candidates. That internal capacity is not a
-count of unresolved product defects. A full store does not prevent an explicit desktop or CLI export of
-retained log evidence: the report can use a transient incident descriptor without adding a candidate
-or evicting existing candidates. Its rejected retention pin is recorded honestly. Report size,
-selection, redaction and validation bounds still apply; unknown selections still fail closed.
+Prepared reports remain in the existing bounded, transient download cache for at most fifteen
+minutes, without a persistent report archive. The browser cache holds at most 10 MiB of canonical
+report bytes. Server attachments require the original authenticated local session on every
+attempt; a download reference alone grants no authority. Expired downloads can be prepared again.
+Global errors remain until the person dismisses them; successful preparation alone never dismisses
+the only recovery action. A failed preparation keeps the original error and Support ID visible.
+Keiko neither uploads nor sends the file. Share it manually through an approved support channel.
+
+The internal diagnostic candidate store uses the Activity Log retention-byte policy, rather than
+an independent fixed candidate-count limit. Unreported candidates expire after twenty-four hours.
+Under byte pressure, the oldest eligible candidate rolls out and its owned pin and claims are
+released. Successfully preparing an export completes the selected candidate and releases its owned
+artifacts. The retained Activity Log remains subject to its existing byte and age policy. These
+control records support causal reconstruction; they are not a customer-facing count of unresolved
+product defects. Read-only health inspection counts readable, unexpired candidates without
+expiring files or claiming writer ownership. Capacity changes emit body-free
+`support.diagnostics.capacity` evidence with counts only.
 
 If the report action says to open Keiko from the launcher, the local application session was refused.
 Open Keiko through its trusted launcher and retry the **same** error's report. Refreshing an old tab
@@ -105,7 +109,7 @@ of claiming a complete reconstruction.
 
    ```bash
    umask 077
-   keiko support analyze ./received-report.json --json > ./analyzed-report.json
+   keiko support analyze ./received-report.json.gz --json > ./analyzed-report.json
    ```
 
 3. Require exit status 0 before using the generated machine view. A rejected input exits 1 and

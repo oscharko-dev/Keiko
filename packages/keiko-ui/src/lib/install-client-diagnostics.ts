@@ -65,6 +65,7 @@ import {
   restoreClientDiagnosticLoss,
   setClientDiagnosticWriter,
   setClientDiagnosticDeliveryRetry,
+  clientDiagnosticFailureFacts,
   CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS,
   takeClientDiagnosticLoss,
 } from "./client-diagnostics";
@@ -617,7 +618,10 @@ function fanOutClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): v
   postClientDiagnosticToServer(message, meta);
 }
 
-setClientDiagnosticDeliveryRetry(retryReportDelivery);
+setClientDiagnosticDeliveryRetry(retryReportDelivery, (correlationId) => {
+  const retained = reportDeliveries.get(correlationId);
+  return retained === undefined ? undefined : clientDiagnosticFailureFacts(retained.body);
+});
 setClientDiagnosticWriter(fanOutClientDiagnostic);
 
 export { writeToBrowserConsole, fanOutClientDiagnostic };

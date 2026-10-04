@@ -64,7 +64,11 @@ import {
   type ClientComposerCodeStage,
   type ClientChatHistoryDeletionCounts,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
-import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  clientDefectContext,
+  type ActivityLogErrorKind,
+  type ClientOnlySupportReportInput,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 // Routine desktop-window stage evidence (`useWindowStageEvidence`) rides `meta.stageReport` instead
 // of the `kind`/`gitChangeDescription`/`workspaceTrustBinding` fields above, which all describe a
@@ -183,10 +187,37 @@ export type ClientDiagnosticDeliveryRetry = (
 ) => Promise<boolean | undefined>;
 
 let deliveryRetry: ClientDiagnosticDeliveryRetry | undefined;
+let failureLookup: ((correlationId: string) => ClientOnlySupportReportInput["failure"]) | undefined;
 
 /** The installed transport owns delivery; the sink and report UI do not choose a transport. */
-export function setClientDiagnosticDeliveryRetry(retry: ClientDiagnosticDeliveryRetry): void {
+export function setClientDiagnosticDeliveryRetry(
+  retry: ClientDiagnosticDeliveryRetry,
+  lookup?: (correlationId: string) => ClientOnlySupportReportInput["failure"],
+): void {
   deliveryRetry = retry;
+  failureLookup = lookup;
+}
+
+/** The existing transport cache supplies only closed failure facts, never its diagnostic message. */
+export function retainedClientDiagnosticFailure(
+  correlationId: string,
+): ClientOnlySupportReportInput["failure"] {
+  return failureLookup?.(correlationId);
+}
+
+export function clientDiagnosticFailureFacts(
+  meta: ClientDiagnosticMeta,
+): NonNullable<ClientOnlySupportReportInput["failure"]> {
+  return {
+    ...(meta.errorEvidence === undefined ? {} : { errorEvidence: meta.errorEvidence }),
+    errorKind: meta.errorKind ?? "unknown",
+    context: clientDefectContext({
+      clientKind: meta.kind,
+      renderFailure: meta.renderFailure,
+      moduleLoadFailure: meta.moduleLoadFailure,
+      stage: meta.stageReport?.stage,
+    }),
+  };
 }
 
 /** Undefined means this selector is not a retained browser-only diagnostic. */
@@ -254,6 +285,7 @@ let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
 export interface GlobalClientFailure {
   readonly ordinal: number;
   readonly correlationId: string | undefined;
+  readonly failure?: ClientOnlySupportReportInput["failure"];
 }
 
 let globalFailure: GlobalClientFailure | null = null;
@@ -280,7 +312,11 @@ export function dismissGlobalClientFailure(ordinal: number): void {
 function publishGlobalClientFailure(meta: ClientDiagnosticMeta | undefined): void {
   if (meta?.globalFailure !== true) return;
   if (meta.kind !== "window-error" && meta.kind !== "unhandled-rejection") return;
-  globalFailure = { ordinal: ++globalFailureOrdinal, correlationId: meta.correlationId };
+  globalFailure = {
+    ordinal: ++globalFailureOrdinal,
+    correlationId: meta.correlationId,
+    failure: clientDiagnosticFailureFacts(meta),
+  };
   for (const listener of globalFailureListeners) listener();
 }
 

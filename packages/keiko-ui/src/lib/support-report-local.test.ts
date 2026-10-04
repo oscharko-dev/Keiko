@@ -67,3 +67,27 @@ it("rejects a cancelled digest completion before constructing a download URL", a
   await expect(prepareLocalSupportReport(controller.signal)).rejects.toThrow();
   expect(objectUrl).not.toHaveBeenCalled();
 });
+
+it("retains the original support ID and closed failure facts without private error text", async () => {
+  const prepared = await prepareLocalSupportReport(new AbortController().signal, {
+    correlationId: "failed-request-original-123",
+    failure: {
+      errorKind: "permission-denied",
+      errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+      context: ["stage:files-directory-load"],
+    },
+  });
+  try {
+    const report = JSON.parse(prepared.report.reportJson) as SupportReport;
+    expect(report.incident.correlation.rootCorrelationId).toBe("failed-request-original-123");
+    expect(report.incident.clientReport?.failure).toEqual({
+      errorKind: "permission-denied",
+      errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+      context: ["stage:files-directory-load"],
+    });
+    expect(report.incident.sufficiencyStatus).toBe("insufficient");
+    expect(report.evidence.recordCount).toBe(0);
+  } finally {
+    prepared.download.dispose();
+  }
+});

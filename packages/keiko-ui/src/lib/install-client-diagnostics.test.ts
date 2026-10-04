@@ -27,6 +27,7 @@ import {
 import {
   recordClientDiagnosticLoss,
   reportClientDiagnostic,
+  retainedClientDiagnosticFailure,
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
   takeClientDiagnosticLoss,
@@ -1307,4 +1308,21 @@ it("posts report download initiation through the routine budget and preserves fa
   fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
   expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
   expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});
+
+it("reuses the existing retained original failure while exposing no diagnostic message", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(jsonResponse()));
+  fanOutClientDiagnostic("registered static diagnostic", {
+    correlationId: "retained-original-failure-123",
+    kind: "window-error",
+    errorKind: "internal",
+    errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+  });
+  expect(retainedClientDiagnosticFailure("retained-original-failure-123")).toEqual({
+    errorKind: "internal",
+    errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+    context: ["kind:window-error"],
+  });
+  expect(retainedClientDiagnosticFailure("unrelated-request-123")).toBeUndefined();
 });

@@ -96,7 +96,10 @@ describe("desktop canonical support report", () => {
       expect(report.incident.segments).toEqual([]);
       expect(report.incident.sufficiencyStatus).toBe("insufficient");
       expect(analyzeSupportReport(response.reportJson).selection.status).toBe("insufficient");
-      expect(response.reportJson).not.toContain("original-client-support-id");
+      expect(report.incident.correlation.rootCorrelationId).toBe("original-client-support-id");
+      expect(analyzeSupportReport(response.reportJson).incident.correlation.rootCorrelationId).toBe(
+        "original-client-support-id",
+      );
       expect(() =>
         parseSupportReport(response.reportJson.replace(availabilityReason, "tampered")),
       ).toThrow();

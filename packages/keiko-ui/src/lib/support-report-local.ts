@@ -10,9 +10,13 @@ import {
   supportReportFileName,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   type DesktopSupportReportResponse,
+  type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { SupportReportDownload } from "./support-report-api";
+import { retainedClientDiagnosticFailure } from "./client-diagnostics";
+
+type LocalFailureContext = Pick<ClientOnlySupportReportInput, "correlationId" | "failure">;
 
 export interface PreparedLocalSupportReport {
   readonly report: DesktopSupportReportResponse;
@@ -24,7 +28,32 @@ async function browserDigest(text: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function localReport(signal: AbortSignal): Promise<DesktopSupportReportResponse> {
+function mergeFailure(
+  retained: NonNullable<ClientOnlySupportReportInput["failure"]>,
+  original: ClientOnlySupportReportInput["failure"],
+): NonNullable<ClientOnlySupportReportInput["failure"]> {
+  const fallback: NonNullable<ClientOnlySupportReportInput["failure"]> = original ?? {
+    errorKind: "unknown",
+    context: [],
+  };
+  const errorEvidence = retained.errorEvidence ?? fallback.errorEvidence;
+  return {
+    ...(errorEvidence === undefined ? {} : { errorEvidence }),
+    errorKind: retained.errorKind === "unknown" ? fallback.errorKind : retained.errorKind,
+    context: retained.context.length === 0 ? fallback.context : retained.context,
+  };
+}
+
+function originalFailure(context: LocalFailureContext): ClientOnlySupportReportInput["failure"] {
+  if (context.correlationId === undefined) return context.failure;
+  const retained = retainedClientDiagnosticFailure(context.correlationId);
+  return retained === undefined ? context.failure : mergeFailure(retained, context.failure);
+}
+
+async function localReport(
+  signal: AbortSignal,
+  context: LocalFailureContext,
+): Promise<DesktopSupportReportResponse> {
   signal.throwIfAborted();
   const sections = clientOnlySupportReportSections({
     incidentId: crypto.randomUUID().replaceAll("-", ""),
@@ -34,6 +63,8 @@ async function localReport(signal: AbortSignal): Promise<DesktopSupportReportRes
       defectFingerprintPreimage(UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT),
     ),
     availabilityReason: "service-unavailable",
+    ...context,
+    failure: originalFailure(context),
   });
   const [incidentDigest, selectionDigest, evidenceDigest] = await Promise.all([
     browserDigest(canonicalSupportJson(sections.incident)),
@@ -93,6 +124,7 @@ export async function prepareCachedSupportReport(
 
 export async function prepareLocalSupportReport(
   signal: AbortSignal,
+  context: LocalFailureContext = {},
 ): Promise<PreparedLocalSupportReport> {
-  return prepareCachedSupportReport(await localReport(signal), signal);
+  return prepareCachedSupportReport(await localReport(signal, context), signal);
 }

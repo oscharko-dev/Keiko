@@ -6,6 +6,9 @@ import { Icons } from "./Icons";
 import { toUserErrorNotice, type UserErrorNotice } from "./format-error";
 import { SupportReportButton } from "./SupportReportButton";
 import { useTranslate } from "@/lib/i18n";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { bffRequestErrorKind } from "@/lib/http";
+import type { ClientOnlySupportReportInput } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CloseIcon = Icons.close;
@@ -42,14 +45,47 @@ function ErrorNoticeDismiss({
   );
 }
 
+function ErrorNoticeReportAction({
+  notice,
+  noticeKey,
+  failure,
+}: {
+  readonly notice: UserErrorNotice;
+  readonly noticeKey: string;
+  readonly failure: ClientOnlySupportReportInput["failure"];
+}): ReactNode {
+  return (
+    <SupportReportButton
+      key={noticeKey}
+      correlationId={notice.correlationId}
+      errorKey={noticeKey}
+      failure={failure}
+    />
+  );
+}
+
+function noticeFailure(
+  error: unknown,
+  notice: UserErrorNotice,
+): ClientOnlySupportReportInput["failure"] {
+  const kind = bffRequestErrorKind(error);
+  return {
+    errorEvidence: clientErrorEvidence(error),
+    errorKind: kind === "unknown" && notice.code === "BAD_REQUEST" ? "invalid-request" : kind,
+    context: [],
+  };
+}
+
 function ErrorNotice({
   notice,
+  failure,
   className = "ui-error-notice",
   id,
   onDismiss,
   dismissible = true,
 }: {
   readonly notice: UserErrorNotice;
+  readonly failure: ClientOnlySupportReportInput["failure"];
   readonly className?: string | undefined;
   readonly id?: string | undefined;
   readonly onDismiss?: (() => void) | undefined;
@@ -87,7 +123,7 @@ function ErrorNotice({
           {t("chat.error.supportId", { correlationId: notice.correlationId })}
         </div>
       ) : null}
-      <SupportReportButton key={noticeKey} correlationId={notice.correlationId} errorKey={noticeKey} />
+      <ErrorNoticeReportAction notice={notice} noticeKey={noticeKey} failure={failure} />
     </div>
   );
 }
@@ -100,11 +136,13 @@ export function ErrorNoticeFromError({
   onDismiss,
   dismissible,
 }: ErrorNoticeProps): ReactNode {
+  const notice = toUserErrorNotice(error, fallback);
   return (
     <ErrorNotice
       id={id}
       className={className}
-      notice={toUserErrorNotice(error, fallback)}
+      notice={notice}
+      failure={noticeFailure(error, notice)}
       onDismiss={onDismiss}
       dismissible={dismissible}
     />

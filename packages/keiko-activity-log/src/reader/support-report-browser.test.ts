@@ -165,3 +165,85 @@ describe("shared canonical browser report producer", () => {
     );
   });
 });
+
+describe("client-only original failure attribution", () => {
+  it("preserves a real original correlation and closed client failure through the strict parser", () => {
+    const reference = legacyClientOnlyReport();
+    const input = {
+      incidentId: reference.incident.incidentId,
+      nowMs: reference.incident.createdAtMs,
+      build: reference.incident.build,
+      defectFingerprint: reference.incident.defectFingerprint,
+      availabilityReason: "service-unavailable" as const,
+      correlationId: "failed-request-original-123",
+      failure: {
+        errorKind: "permission-denied" as const,
+        errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+        context: ["stage:files-directory-load"],
+      },
+    };
+    const sections = clientOnlySupportReportSections(input);
+    const unsigned = buildSupportReportEnvelope(
+      sections.incident,
+      sections.selection,
+      sections.evidence,
+      {
+        incidentDigest: supportReportDigest(canonicalSupportJson(sections.incident)),
+        selectionDigest: supportReportDigest(canonicalSupportJson(sections.selection)),
+        evidenceDigest: supportReportDigest(canonicalSupportJson(sections.evidence)),
+      },
+    );
+    const sealed = sealSupportReportEnvelope(
+      unsigned,
+      supportReportDigest(canonicalSupportJson(unsigned)),
+    );
+    const parsed = parseSupportReport(serializeSupportReport(sealed));
+    expect(parsed.incident.correlation.rootCorrelationId).toBe(input.correlationId);
+    expect(parsed.incident.clientReport?.failure).toEqual(input.failure);
+    const analyzed = analyzeSupportReport(serializeSupportReport(sealed));
+    expect(analyzed.incident.correlation.rootCorrelationId).toBe(input.correlationId);
+    expect(analyzed.incident.clientReport?.failure).toEqual(input.failure);
+    expect(analyzed.selection.status).toBe("insufficient");
+    expect(analyzed.analysis.evidence.supportedLineCount).toBe(0);
+    expect(parsed.incident.sufficiencyStatus).toBe("insufficient");
+    expect(parsed.evidence.recordCount).toBe(0);
+  });
+});
+
+it("rejects private or malformed client failure fields instead of filtering them", () => {
+  const reference = legacyClientOnlyReport().incident;
+  const base = {
+    incidentId: reference.incidentId,
+    nowMs: reference.createdAtMs,
+    build: reference.build,
+    defectFingerprint: reference.defectFingerprint,
+    availabilityReason: "service-unavailable" as const,
+  };
+  const evidence = { errorClass: "ApiError", frames: [], causeChain: [] };
+  for (const failure of [
+    {
+      errorKind: "permission-denied" as const,
+      errorEvidence: evidence,
+      context: ["/private/customer"],
+    },
+    {
+      errorKind: "permission-denied" as const,
+      errorEvidence: { ...evidence, errorClass: "PrivateCustomerClass" },
+      context: [],
+    },
+    {
+      errorKind: "permission-denied" as const,
+      errorEvidence: { ...evidence, frames: ["/private/customer/file.ts:1:2"] },
+      context: [],
+    },
+    {
+      errorKind: "permission-denied" as const,
+      errorEvidence: { ...evidence, message: "private customer text" },
+      context: [],
+    },
+  ])
+    expect(() => clientOnlySupportReportSections({ ...base, failure })).toThrow(SupportReportError);
+  expect(() =>
+    clientOnlySupportReportSections({ ...base, correlationId: "/private/customer" }),
+  ).toThrow(SupportReportError);
+});

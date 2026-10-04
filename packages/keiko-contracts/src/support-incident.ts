@@ -44,6 +44,7 @@
 
 import { parseActivityLogSegmentId, ACTIVITY_LOG_PIN_ID_PATTERN } from "./activity-log-files.js";
 import { isClientDefectContext, normalizeClientDefectFrames } from "./client-defect-signature.js";
+import { isClientDiagnosticIngestRequest, type ClientErrorEvidence } from "./diagnostics.js";
 export { clientDefectContext } from "./client-defect-signature.js";
 import {
   ACTIVITY_LOG_CATALOG_DIGEST,
@@ -644,6 +645,14 @@ export interface SupportIncidentPrivateProjection extends SupportIncidentPublicP
         readonly serverEvidence: "unavailable";
         readonly availabilityReason:
           "session-unavailable" | "diagnostic-delivery-unavailable" | "service-unavailable";
+        /** Browser-observed facts, never a claim of registered server evidence. */
+        readonly failure?:
+          | {
+              readonly errorEvidence?: ClientErrorEvidence | undefined;
+              readonly errorKind: ActivityLogErrorKind;
+              readonly context: readonly string[];
+            }
+          | undefined;
       }
     | undefined;
   readonly state: SupportIncidentState;
@@ -846,11 +855,40 @@ function clientOnlyManualHeader(value: PlainObject): boolean {
   );
 }
 
+function validClientReportErrorEvidence(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (isPlainObject(value) && hasOnlyKeys(value, ["errorClass", "frames", "causeChain"]))
+  );
+}
+
+function validClientReportFailure(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isPlainObject(value) || !hasOnlyKeys(value, ["errorKind", "context"], ["errorEvidence"]))
+    return false;
+  if (!validClientReportErrorEvidence(value.errorEvidence)) return false;
+  if (
+    !Array.isArray(value.context) ||
+    !value.context.every((token: unknown): token is string => typeof token === "string") ||
+    !isClientDefectContext(value.context)
+  )
+    return false;
+  return (
+    isActivityLogErrorKind(value.errorKind) &&
+    isClientDiagnosticIngestRequest({
+      message: "Client-only report failure",
+      clientTs: "1970-01-01T00:00:00.000Z",
+      errorEvidence: value.errorEvidence,
+    })
+  );
+}
+
 function validClientReport(value: unknown, projection: PlainObject): boolean {
   return (
     value === undefined ||
     (isPlainObject(value) &&
-      hasOnlyKeys(value, ["serverEvidence", "availabilityReason"]) &&
+      hasOnlyKeys(value, ["serverEvidence", "availabilityReason"], ["failure"]) &&
+      validClientReportFailure(value.failure) &&
       value.serverEvidence === "unavailable" &&
       clientOnlyProjection(projection) &&
       isOneOf(

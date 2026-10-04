@@ -738,23 +738,33 @@ reader first place it in a private directory and file according to the receiving
 Report creation is reported as readiness, never as download initiation or an acknowledged
 operating-system save. The report action exposes a persistent **Download report** link for a real
 user gesture; it performs no asynchronous synthetic-anchor download. The same link retries the
-prepared bytes without a second report request. The BFF serves those canonical
-bytes as an HTTP attachment at `/api/diagnostics/report/download/:downloadId`. Full reports always
-require the exact existing session that generated the artifact; their opaque reference conveys no
-authority. If the local session is absent, forged or expired, or browser diagnostic delivery cannot
-be acknowledged, the same canonical producer can return an explicitly insufficient client-only
-availability artifact. This branch never resolves private state, reads a log, creates an incident
-or retention pin, or attributes a registered failure. Its manual header remains unattributed with
-unknown error kind and zero frames; its evidence is empty. The optional closed `clientReport`
-projection contains only `serverEvidence: unavailable` and the availability reason
-`session-unavailable` or `diagnostic-delivery-unavailable`. No original messages, paths, stacks,
-credentials or claimed error facts are collected. The UI labels the report as limited and names the
-absence of server evidence. Only these validated limited bytes can be served under a client-only
-attachment reference without a session; a limited token never grants access to a full report.
-The report remains schema v1 with canonical integrity hashes. Older strict consumers may reject
-the new optional projection, rather than silently claim compatibility; receiving operators use the
-current canonical validator/analyzer. A completely unavailable BFF cannot prepare or deliver this
-artifact, and the UI must report that limitation rather than claim an operating-system save.
+prepared bytes without a second report request. The BFF serves a standard gzip HTTP attachment
+at `/api/diagnostics/report/download/:downloadId`; decompression yields the exact canonical report
+bytes. The response has `application/gzip` content type and an attachment filename ending in
+`.json.gz`, without `Content-Encoding` that would cause transparent decoding during download.
+Full reports require the exact existing session that generated the artifact; their opaque
+reference conveys no authority. Failure to acknowledge browser diagnostic delivery does not
+remove access to retained server evidence under an already valid session.
+
+If the local session is absent, forged or expired, an explicitly insufficient client-only report
+can be produced without reading private server state. An explicit client-only privacy selection
+uses the same branch. It never reads a log, creates an incident or retention pin, or attributes a
+registered server failure. The manual header remains unattributed with unknown error kind and zero
+frames; server evidence is empty. The optional closed `clientReport` projection records
+`serverEvidence: unavailable` and the availability reason. A browser-produced report also preserves
+the validated original Support-ID and available closed client failure descriptors. Those
+unverified client descriptors remain separate from registered server attribution. Original
+messages, paths, stacks and credentials are excluded. The UI presents ordinary report readiness
+and a download action; detailed evidence availability belongs inside the report.
+
+Only validated limited bytes can be served under a client-only attachment reference without a
+session; that reference never grants access to a full report. Reports remain schema v1 with
+canonical integrity hashes. Older strict consumers may reject the new optional projection rather
+than silently claim compatibility; receiving operators use the current canonical validator and
+analyzer. If the BFF or the report module is unavailable, the resident shared canonical producer
+can compose a bounded client report locally. Local download bytes use the same standard gzip
+transport, and existing fulfilled reports preserve their canonical content during transport
+recovery. Readiness and a manual initiation never claim an operating-system save.
 Process-local delivery caching is bounded by 10 MiB of UTF-8 report bytes, 128 entries and a
 15-minute lifetime; expiry makes report creation available again. The response uses `no-store`,
 `nosniff`, and the closed canonical filename. Older-server local object URLs are released on

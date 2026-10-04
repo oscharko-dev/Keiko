@@ -2,6 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
+import { ErrorNoticeFromError } from "./ErrorNotice";
 import { createSupportReport, createSupportReportDownload } from "@/lib/support-report-api";
 import { prepareCachedSupportReport, prepareLocalSupportReport } from "@/lib/support-report-local";
 import { SupportReportButton, resetSupportReportOutcomesForTests } from "./SupportReportButton";
@@ -53,7 +54,7 @@ it("reuses full canonical bytes locally after an attachment expires and the serv
     expect.any(AbortSignal),
   );
   expect(prepareLocalSupportReport).not.toHaveBeenCalled();
-  expect(screen.queryByText(/Download it and send it to support/u)).toBeNull();
+  expect(screen.getAllByRole("status")).toHaveLength(1);
 });
 
 it.each([new TypeError("private network failure"), new ApiError("INTERNAL", "private", 502)])(
@@ -66,9 +67,12 @@ it.each([new TypeError("private network failure"), new ApiError("INTERNAL", "pri
     const link = await screen.findByRole("link", { name: "Download report" });
     expect(link).toHaveAttribute("href", local.download.href);
     expect(link).toHaveAttribute("download", local.download.fileName);
-    expect(screen.getByText("Report ready. Download it and send it to support.")).toBeVisible();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
     expect(screen.queryByText(/private/u)).toBeNull();
-    expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal));
+    expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {
+      correlationId: "original-offline-error",
+      failure: undefined,
+    });
   },
 );
 
@@ -104,4 +108,44 @@ it("disposes a late local artifact after the reporting control is unmounted", as
   view.unmount();
   await act(async () => deliver(local));
   expect(local.download.dispose).toHaveBeenCalledOnce();
+});
+
+it("passes the original error correlation and safe class to the offline producer", async () => {
+  const error = new ApiError("FORBIDDEN", "private /customer/file.html Bearer private-secret", 403);
+  error.correlationId = "original-denied-request-123";
+  vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("offline"));
+  vi.mocked(prepareLocalSupportReport).mockResolvedValueOnce(local);
+  render(<ErrorNoticeFromError error={error} fallback="Cannot read the file" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {
+    correlationId: error.correlationId,
+    failure: {
+      errorKind: "authority-denied",
+      errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+      context: [],
+    },
+  });
+  expect(screen.getAllByRole("status")).toHaveLength(1);
+});
+
+it("preserves the normal Chat string Support-ID and its known BAD_REQUEST classification", async () => {
+  vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("offline"));
+  vi.mocked(prepareLocalSupportReport).mockResolvedValueOnce(local);
+  render(
+    <ErrorNoticeFromError
+      error="Cannot read the selected folder. (BAD_REQUEST) [correlationId:original-chat-request-123]"
+      fallback="Search failed"
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {
+    correlationId: "original-chat-request-123",
+    failure: {
+      errorKind: "invalid-request",
+      errorEvidence: { errorClass: "string", frames: [], causeChain: [] },
+      context: [],
+    },
+  });
 });

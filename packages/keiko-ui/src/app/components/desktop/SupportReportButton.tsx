@@ -13,6 +13,7 @@ import type { MessageKey } from "@/lib/i18n-messages.en";
 import {
   MAX_SUPPORT_REPORT_BYTES,
   type DesktopSupportReportResponse,
+  type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SupportReportDownload } from "@/lib/support-report-api";
 import { prepareCachedSupportReport, prepareLocalSupportReport } from "@/lib/support-report-local";
@@ -139,6 +140,7 @@ interface SupportReportButtonProps {
   readonly correlationId?: string | undefined;
   readonly errorKey?: string | undefined;
   readonly compact?: boolean;
+  readonly failure?: ClientOnlySupportReportInput["failure"];
 }
 
 type ReportFailure = "error" | "session-denied" | "service-unavailable" | "rate-limited";
@@ -208,6 +210,7 @@ async function recoverLocalReport(
   controller: AbortController,
   error: unknown,
   api: typeof import("@/lib/support-report-api") | undefined,
+  context: Pick<ClientOnlySupportReportInput, "correlationId" | "failure">,
 ): Promise<boolean> {
   const previous = outcomes.get(key);
   if (
@@ -222,7 +225,7 @@ async function recoverLocalReport(
     const prepared =
       previous !== undefined && !(previous instanceof AbortController)
         ? await prepareCachedSupportReport(previous.report, localSignal)
-        : await prepareLocalSupportReport(localSignal);
+        : await prepareLocalSupportReport(localSignal, context);
     if (controller.signal.aborted) {
       prepared.download.dispose();
       return false;
@@ -268,7 +271,7 @@ function readyReportStatus(ready: ReadyReport, feedback: ReportFeedback["state"]
   return ready.download === undefined ? "expired" : "saved";
 }
 
-function useSupportReportAction({ correlationId, errorKey }: SupportReportButtonProps): {
+function useSupportReportAction({ correlationId, errorKey, failure }: SupportReportButtonProps): {
   readonly status: ReportStatus;
   readonly create: () => Promise<void>;
   readonly regenerate: () => Promise<void>;
@@ -288,8 +291,10 @@ function useSupportReportAction({ correlationId, errorKey }: SupportReportButton
   });
   const request = useReportCancellation(key);
   const currentFeedback = feedback.key === key ? feedback.state : "idle";
-  const create = (): Promise<void> => runReport(key, correlationId, request, setFeedback, false);
-  const regenerate = (): Promise<void> => runReport(key, correlationId, request, setFeedback, true);
+  const create = (): Promise<void> =>
+    runReport(key, correlationId, request, setFeedback, false, failure);
+  const regenerate = (): Promise<void> =>
+    runReport(key, correlationId, request, setFeedback, true, failure);
   if (outcome !== undefined && !(outcome instanceof AbortController)) {
     return {
       status: readyReportStatus(outcome, currentFeedback),
@@ -308,6 +313,7 @@ async function runReport(
   request: ReportRequestRef,
   setFeedback: (feedback: ReportFeedback) => void,
   regenerate: boolean,
+  failure: ClientOnlySupportReportInput["failure"],
 ): Promise<void> {
   const controller = beginReport(key, regenerate);
   if (controller === undefined) return;
@@ -325,7 +331,7 @@ async function runReport(
     setFeedback({ key, state: "saved" });
   } catch (error) {
     if (!reportRequestIsCurrent(request, pending)) return;
-    if (await recoverLocalReport(key, controller, error, api)) {
+    if (await recoverLocalReport(key, controller, error, api, { correlationId, failure })) {
       setFeedback({ key, state: "saved" });
       return;
     }
@@ -407,9 +413,6 @@ export function SupportReportButton(props: SupportReportButtonProps): ReactNode 
           regenerate={regenerate}
         />
       ) : null}
-      {ready?.report.evidenceScope === "client-only" ? (
-        <output className={styles.cmpFeedback}>{t("supportReport.limited")}</output>
-      ) : null}
       {feedbackKey !== undefined ? (
         <output className={styles.cmpFeedback}>{t(feedbackKey)}</output>
       ) : null}
@@ -474,6 +477,7 @@ export function GlobalSupportReportAction({
         compact
         correlationId={failure.correlationId}
         errorKey={`global-error-${failure.ordinal}`}
+        failure={failure.failure}
       />
       <button
         className={`ft-seg ${styles.cmpAction}`}

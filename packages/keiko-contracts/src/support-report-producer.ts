@@ -70,6 +70,8 @@ export interface ClientOnlySupportReportInput {
   readonly nowMs: number;
   readonly build: SupportIncidentBuild;
   readonly defectFingerprint: string;
+  readonly correlationId?: string | undefined;
+  readonly failure?: NonNullable<SupportIncidentPrivateProjection["clientReport"]>["failure"];
   readonly availabilityReason: NonNullable<
     SupportIncidentPrivateProjection["clientReport"]
   >["availabilityReason"];
@@ -90,7 +92,7 @@ function clientOnlyIncident(input: ClientOnlySupportReportInput): SupportInciden
     errorKind: "unknown",
     frameCount: 0,
     build: input.build,
-    correlation: { rootCorrelationId: "id000001", childCorrelationIds: [] },
+    correlation: { rootCorrelationId: input.correlationId ?? "id000001", childCorrelationIds: [] },
     window: supportIncidentWindow(input.nowMs),
     pin: {
       status: "rejected",
@@ -114,11 +116,15 @@ function clientOnlyIncident(input: ClientOnlySupportReportInput): SupportInciden
     },
     createdAtMs: input.nowMs,
     expiresAtMs: input.nowMs + SUPPORT_INCIDENT_TTL_MS,
-    clientReport: { serverEvidence: "unavailable", availabilityReason: input.availabilityReason },
+    clientReport: {
+      serverEvidence: "unavailable",
+      availabilityReason: input.availabilityReason,
+      ...(input.failure === undefined ? {} : { failure: input.failure }),
+    },
   };
 }
 
-/** No log, filesystem, endpoint, customer text or correlation enters this limited artifact. */
+/** Only validated original correlation and closed browser facts enter this limited artifact. */
 export function clientOnlySupportReportSections(
   input: ClientOnlySupportReportInput,
 ): Pick<SupportReport, "incident" | "selection" | "evidence"> {
