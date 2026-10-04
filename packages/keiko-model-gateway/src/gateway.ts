@@ -1211,7 +1211,10 @@ export class Gateway {
         streamRequestBudgetMs(route.provider),
       );
     } catch (error) {
-      return this.failStream(ids, route, 0, elapsed(), error);
+      attachGatewayRequestId(error, ids.requestId);
+      this.logStreamFailed(ids, route, 0, elapsed(), error);
+      this.reportContextWindow(route, ids, error);
+      throw error;
     }
   }
 

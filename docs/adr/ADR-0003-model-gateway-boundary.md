@@ -593,7 +593,8 @@ platform timer ceiling. Retryable `ProviderError` responses (including HTTP 503)
 optional `retryAfterMs` duration. OpenAI-compatible adapters parse both delay-seconds and HTTP-date
 forms of `Retry-After`; malformed values use the normal backoff. Provider cooldowns are never
 shortened to the exponential backoff cap: an overloaded LiteLLM queue may legitimately request
-a two-minute wait. The delay uses cancellation-aware `clock.sleep()`. The
+a two-minute wait. Gateway calls add positive backoff jitter after that minimum, within the same
+remaining request budget. The delay uses cancellation-aware `clock.sleep()`. The
 following error types are never retried: `AuthenticationError`, `ModelRefusalError`,
 `ContextOverflowError`, `CancelledError`, `CircuitOpenError`, `ConfigInvalidError`,
 `UnknownModelError`.
@@ -659,11 +660,20 @@ States:
   coding runtime reports that one as `turn-rejected` and keeps its error-level diagnostic. A `TimeoutError` DOES count: with the silence and budget floors of #3591 a
   timeout is a multi-minute silence, which is the outage signal the breaker exists for. When counter
   reaches `failureThreshold`, transition to **Open** and record `openedAt = clock.now()`.
-- **Open**: any call immediately throws `CircuitOpenError` without contacting the provider.
+- **Open**: a fresh call without an announced provider cooldown immediately throws
+  `CircuitOpenError` without contacting the provider. The existing per-model breaker retains an
+  announced cooldown, so later calls wait for that minimum before requesting admission. Retry
+  callers recovering from an announced cooldown also wait out the remaining breaker cooldown
+  inside their original request budget; if admission cannot fit, they retain their own original
+  provider error rather than replacing it with `CircuitOpenError`.
   When `clock.now() - openedAt >= cooldownMs`, transition to **Half-Open**.
 - **Half-Open**: the next `halfOpenProbes` calls are forwarded as probes. Each success decrements the
   probe counter. When the counter reaches zero, transition to **Closed** and reset all counters. Any
   failure transitions back to **Open** immediately and resets `openedAt`.
+  Recovering cooldown callers wait for a saturated probe slot instead of failing immediately.
+  Cancellation, expiry and settlement dispose the wait timer and notification subscription.
+  Generation checks still prevent an older admission from changing a later circuit generation;
+  waiting and its outcome emit body-free `gateway.circuit.wait` lifecycle evidence.
 
 Circuit state is observable via `gateway.circuitStatus(modelId): CircuitBreakerStatus`.
 
