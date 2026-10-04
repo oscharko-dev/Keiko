@@ -47,7 +47,12 @@ import {
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 
-vi.mock("@oscharko-dev/keiko-security/fs-hardening", { spy: true });
+vi.mock("@oscharko-dev/keiko-security/fs-hardening", async (importOriginal) => {
+  const actual = await importOriginal<typeof artifactFiles>();
+  // Preserve the production error class identity: a class spy would make real primitive errors
+  // fail the consumer's instanceof guard while only synthetic errors passed it.
+  return { ...actual, removeSafeArtifactFile: vi.fn(actual.removeSafeArtifactFile) };
+});
 
 const actualArtifactFiles = await vi.importActual<typeof artifactFiles>(
   "@oscharko-dev/keiko-security/fs-hardening",

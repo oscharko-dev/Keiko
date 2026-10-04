@@ -235,7 +235,8 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
         sending: true,
       }),
     );
-    const status = screen.getByRole("status");
+    const status = document.querySelector('[data-send-status="queued"]');
+    expect(status).toHaveAttribute("role", "status");
     expect(status).toHaveTextContent("Submitting your message…");
   });
 
@@ -248,7 +249,8 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
         sending: false,
       }),
     );
-    const status = screen.getByRole("status");
+    const status = document.querySelector('[data-send-status="cancelled"]');
+    expect(status).toHaveAttribute("role", "status");
     expect(status).toHaveTextContent("Response cancelled.");
   });
 
@@ -261,10 +263,11 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
         sending: true,
       }),
     );
-    const status = screen.getByRole("status");
+    const status = document.querySelector('[data-send-status="contacting"]');
+    expect(status).toHaveAttribute("role", "status");
     expect(status).toBeInTheDocument();
     expect(status).toHaveTextContent("Preparing response…");
-    expect(status.getAttribute("aria-live")).toBe("polite");
+    expect(status).toHaveAttribute("aria-live", "polite");
   });
 
   it("renders the streaming label for non-streaming-style waits → AC#4 stable wait still maps to a polite announcement", () => {
@@ -276,7 +279,8 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
         sending: true,
       }),
     );
-    const status = screen.getByRole("status");
+    const status = document.querySelector('[data-send-status="streaming"]');
+    expect(status).toHaveAttribute("role", "status");
     expect(status).toHaveTextContent("Receiving response…");
   });
 
