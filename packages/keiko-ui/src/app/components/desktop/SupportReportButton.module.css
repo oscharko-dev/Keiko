@@ -1,6 +1,7 @@
 .cmpControl {
   border: 0;
   min-inline-size: 0;
+  max-inline-size: 100%;
   margin: 0;
   padding: 0;
   display: inline-flex;
@@ -12,11 +13,17 @@
 .cmpFeedback {
   color: var(--text-secondary);
   font-size: var(--text-sm, 12px);
+  min-inline-size: 0;
+  flex: 1 1 18rem;
+  overflow-wrap: anywhere;
 }
 
-.cmpAction {
+.cmpControl .cmpAction {
   flex: none;
   width: auto;
+  max-inline-size: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
   min-height: 28px;
   padding: 4px 8px;
   font-size: var(--text-sm, 12px);

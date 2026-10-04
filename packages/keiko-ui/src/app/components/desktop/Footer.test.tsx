@@ -9,6 +9,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { Footer } from "./Footer";
+import footerStyles from "./Footer.module.css";
+import { I18nProvider } from "@/lib/i18n";
 import { HEALTH_POLL_INTERVAL_MS } from "./hooks/useBackendHealth";
 import type { AppWindow } from "./windows/types";
 import { fetchHealth } from "@/lib/api";
@@ -21,17 +23,25 @@ import {
 import { createSupportReport, downloadSupportReport } from "@/lib/support-report-api";
 import { resetSupportReportOutcomesForTests } from "./SupportReportButton";
 
-vi.mock("@/lib/support-report-api", () => ({
+vi.mock("@/lib/support-report-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/support-report-api")>()),
   createSupportReport: vi.fn(),
   downloadSupportReport: vi.fn(),
   createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
 }));
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
   fetchHealth: vi.fn(),
 }));
 
 const fetchHealthMock = vi.mocked(fetchHealth);
+
+function requiredFooterStyle(name: "cmpDiagnostics" | "cmpBrand" | "cmpFooter"): string {
+  const value = footerStyles[name];
+  if (value === undefined) throw new TypeError("Missing scoped footer style");
+  return value;
+}
 
 function footerWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -52,15 +62,17 @@ function renderFooter(
 ): ReturnType<typeof render> {
   fetchHealthMock.mockResolvedValue({ status: "ok", version: "0.2.0-test" });
   return render(
-    <Footer
-      winCount={0}
-      windows={[]}
-      windowPaletteOpen={false}
-      onToggleWindowPalette={vi.fn()}
-      onSelectWindow={vi.fn()}
-      onCloseWindowPalette={vi.fn()}
-      {...patch}
-    />,
+    <I18nProvider>
+      <Footer
+        winCount={0}
+        windows={[]}
+        windowPaletteOpen={false}
+        onToggleWindowPalette={vi.fn()}
+        onSelectWindow={vi.fn()}
+        onCloseWindowPalette={vi.fn()}
+        {...patch}
+      />
+    </I18nProvider>,
   );
 }
 
@@ -69,6 +81,7 @@ afterEach(() => {
   resetClientDiagnosticWriter();
   resetSupportReportOutcomesForTests();
   vi.useRealTimers();
+  window.localStorage.removeItem("keiko.locale");
 });
 
 describe("Footer — window status trigger", () => {
@@ -132,6 +145,47 @@ describe("Footer — window status trigger", () => {
       "report.json",
     );
     expect(currentGlobalClientFailure()).toBeNull();
+  });
+
+  it("groups retained diagnostics and the complete German reporting failure in a wrapping footer region", async () => {
+    window.localStorage.setItem("keiko.locale", "de");
+    fetchHealthMock.mockResolvedValueOnce({
+      status: "ok",
+      version: "0.2.0-test",
+      diagnostics: {
+        readiness: "ready",
+        reasons: [],
+        writer: "production-file",
+        lostEvents: 0,
+        retainedDiagnosticCount: 32,
+        diagnosticCapacity: 32,
+      },
+    });
+    vi.mocked(createSupportReport).mockResolvedValueOnce({
+      fileName: "report.json",
+      reportJson: "{}",
+    });
+    const view = renderFooter({ winCount: 6 });
+    await userEvent.click(await screen.findByRole("button", { name: "Fehlerbericht erstellen" }));
+    vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("private offline details"));
+    await userEvent.click(screen.getByRole("button", { name: "Bericht erneut erstellen" }));
+    const link = screen.getByRole("link", { name: "Bericht herunterladen" });
+    const region = link.parentElement?.parentElement;
+    expect(region).toHaveClass(requiredFooterStyle("cmpDiagnostics"));
+    expect(region).toContainElement(screen.getByText("32/32 gespeicherte Diagnosefälle"));
+    expect(region).toContainElement(
+      screen.getByRole("button", { name: "Bericht erneut erstellen" }),
+    );
+    expect(region).toContainElement(screen.getByRole("status"));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Bericht nicht verfügbar. Prüfen, ob Keiko lokal läuft, dann erneut versuchen.",
+    );
+    const version = screen.getByText("Keiko | 0.2.0-test");
+    expect(region).not.toContainElement(version);
+    expect(version).toHaveClass(requiredFooterStyle("cmpBrand"));
+    expect(screen.getByRole("contentinfo")).toHaveClass(requiredFooterStyle("cmpFooter"));
+    expect(screen.getByRole("button", { name: /6 Fenster/u })).toBeEnabled();
+    expect(view.container).not.toHaveTextContent("private offline details");
   });
 
   it("keeps the global report downloadable until the person dismisses it", async () => {

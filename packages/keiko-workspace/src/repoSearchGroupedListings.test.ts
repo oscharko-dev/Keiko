@@ -160,26 +160,32 @@ describe("trusted grouped filename listings", () => {
   it.each(["REJECTED_CALLBACK_CONTENT_MUST_STAY_PRIVATE", undefined])(
     "fails closed for a malformed matcher rejection %s without exposing its value",
     async (unexpected) => {
-    const test = vi.spyOn(RegExp.prototype, "test").mockImplementation(function (
-      this: RegExp,
-      value: string,
-    ): boolean {
-      if (this.source.includes("FairBetaProbe") && value.endsWith("FairBetaProbe.ts")) {
-        // eslint-disable-next-line @typescript-eslint/only-throw-error -- Deliberately malformed callback tests the collector's Error boundary.
-        throw unexpected;
+      const test = vi.spyOn(RegExp.prototype, "test").mockImplementation(function (
+        this: RegExp,
+        value: string,
+      ): boolean {
+        if (this.source.includes("FairBetaProbe") && value.endsWith("FairBetaProbe.ts")) {
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- Deliberately malformed callback tests the collector's Error boundary.
+          throw unexpected;
+        }
+        return this.exec(value) !== null;
+      });
+      try {
+        await expect(
+          findFiles(scope(), query, limits, {
+            filePatternGroups: groups(["**/FairBetaProbe.*"]),
+          }),
+        ).rejects.toSatisfy(
+          (error: unknown): boolean =>
+            error instanceof Error &&
+            error.name === "WorkspaceReadError" &&
+            !error.message.includes("REJECTED_CALLBACK_CONTENT_MUST_STAY_PRIVATE"),
+        );
+      } finally {
+        test.mockRestore();
       }
-      return this.exec(value) !== null;
-    });
-    try {
-      await expect(
-        findFiles(scope(), query, limits, {
-          filePatternGroups: groups(["**/FairBetaProbe.*"]),
-        }),
-      ).rejects.toMatchObject({ name: "WorkspaceReadError", message: expect.not.stringContaining("REJECTED_CALLBACK_CONTENT_MUST_STAY_PRIVATE") });
-    } finally {
-      test.mockRestore();
-    }
-  });
+    },
+  );
 
   it("rejects unbounded group inputs before filesystem work", async () => {
     let touches = 0;
