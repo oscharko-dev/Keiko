@@ -7,6 +7,7 @@ import {
   CITATION_FINDING_LIST_MAX,
   citationFindingTotalSuffix,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { I18N_STORAGE_KEY, I18nProvider, resetLoadedMessageCatalogs } from "@/lib/i18n";
 import activityBadgeStyles from "./GroundedAnswer.module.css";
@@ -163,6 +164,44 @@ function contextPack(
     elapsedMs: 1_812,
     ...overrides,
   };
+}
+
+function producedEmptyScopeSummary(
+  summary: GroundedAnswerContextPackSummary,
+): GroundedAnswerContextPackSummary {
+  return buildGroundedAnswerContextPackSummary(
+    {
+      schemaVersion: "1",
+      stableId: "empty-search-pack",
+      scope: {
+        schemaVersion: "1",
+        scopeId: "selected-workspace",
+        workspaceRoot: "/repo",
+        kind: "workspace-root",
+        relativePaths: [],
+        conversationId: "chat-1",
+        connectedAtMs: 0,
+        explicitConnection: true,
+      },
+      query: {
+        kind: "exact-symbol",
+        text: "ABSENT_SEARCH_MARKER",
+        caseSensitive: true,
+        maxResults: 50,
+        emittedAtMs: 0,
+      },
+      budget: summary.budget,
+      usage: summary.usage,
+      files: [],
+      omitted: [],
+      uncertainty: [],
+      emittedAtMs: 0,
+      ledgerRef: undefined,
+      diagnostics: { rankedCandidates: [], coverage: summary.coverage },
+    },
+    0,
+    summary.elapsedMs,
+  );
 }
 
 function answer(overrides: Partial<GroundedAnswerType> = {}): GroundedAnswerType {
@@ -1503,28 +1542,35 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
         "No answer is given because there is nothing to ground it in.",
       citations: [],
       uncertainty: [{ kind: "no-evidence", claim: "No evidence matched." }],
-      contextPack: contextPack({
-        queryKind: "exact-symbol",
-        fileCount: 0,
-        citationCount: 0,
-        usage: { ...contextPack().usage, modelInputTokens: 0, modelOutputTokens: 0 },
-        coverage: {
-          incomplete: false,
-          reasons: [],
-          filesDiscovered: 200_005,
-          filesAfterPolicy: 200_002,
-          filesScanned: 200_002,
-          filesSkipped: 0,
-          truncated: false,
-          ignoredByDiscovery: 3,
-          deniedByDiscovery: 0,
-          depthPrunedByDiscovery: 0,
-          maxFilesPrunedByDiscovery: 0,
-          matchesReturned: 0,
-          elapsedMs: 34_000,
-          limits: { maxFilesScanned: null, maxMatchesReturned: 50, elapsedMsMax: null },
-        },
-      }),
+      contextPack: producedEmptyScopeSummary(
+        contextPack({
+          queryKind: "exact-symbol",
+          citationCount: 0,
+          usage: {
+            ...contextPack().usage,
+            filesRead: 0,
+            excerptBytes: 0,
+            modelInputTokens: 0,
+            modelOutputTokens: 0,
+          },
+          coverage: {
+            incomplete: false,
+            reasons: [],
+            filesDiscovered: 200_005,
+            filesAfterPolicy: 200_002,
+            filesScanned: 200_002,
+            filesSkipped: 0,
+            truncated: false,
+            ignoredByDiscovery: 3,
+            deniedByDiscovery: 0,
+            depthPrunedByDiscovery: 0,
+            maxFilesPrunedByDiscovery: 0,
+            matchesReturned: 0,
+            elapsedMs: 34_000,
+            limits: { maxFilesScanned: null, maxMatchesReturned: 50, elapsedMsMax: null },
+          },
+        }),
+      ),
     });
   }
 
@@ -1581,6 +1627,19 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
         ...pack,
         coverage,
         ...(caseName === "omissions" ? { omittedCount: 1 } : {}),
+      },
+    });
+    expect(container.querySelector(".grounded-uncertainty[role='alert']")).not.toBeNull();
+  });
+
+  it("retains review warnings when a canonical empty answer includes selected file reads", () => {
+    const a = emptySearchAnswer();
+    if (a.groundingKind !== "connected-context") throw new TypeError("expected connected fixture");
+    const { container } = renderInLocale("en", {
+      ...a,
+      contextPack: {
+        ...a.contextPack,
+        usage: { ...a.contextPack.usage, filesRead: 1 },
       },
     });
     expect(container.querySelector(".grounded-uncertainty[role='alert']")).not.toBeNull();

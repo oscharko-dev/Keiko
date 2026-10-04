@@ -1185,7 +1185,14 @@ function recordMultiSourceAnswer(
   );
 }
 
+function withAnswerDuration(answer: GroundedAnswer, startedAtMs: number): GroundedAnswer {
+  if (answer.groundingKind !== "connected-context") return answer;
+  const elapsedMs = Math.max(0, Date.now() - startedAtMs);
+  return { ...answer, elapsedMs, contextPack: { ...answer.contextPack, elapsedMs } };
+}
+
 export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<RouteResult> {
+  const startedAtMs = Date.now();
   const query = buildQuery(ctx.retrievalContent ?? ctx.content, () => Date.now());
   const labels = sourceLabels(ctx.scopes);
   const perScopeBudgets = splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, ctx.scopes, query);
@@ -1220,8 +1227,9 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     !abstained || ctx.answerOnlyContextAvailable === true,
   );
   ensureNotCancelled(ctx.signal);
-  recordMultiSourceAnswer(ctx, retrieved, answer, persisted.assistantMessageId, abstained);
-  return { status: 200, body: answer };
+  const completedAnswer = withAnswerDuration(answer, startedAtMs);
+  recordMultiSourceAnswer(ctx, retrieved, completedAnswer, persisted.assistantMessageId, abstained);
+  return { status: 200, body: completedAnswer };
 }
 
 function isRouteResult(

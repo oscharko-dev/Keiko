@@ -4,7 +4,7 @@
 // scope must produce the same answer shape as the legacy single-source runner — is asserted by
 // routing one scope through both seams and comparing the wire object minus volatile ids.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -272,6 +272,24 @@ function packPerScope(byPath: ReadonlyMap<string, ConnectedContextPack>): Ground
     const pack = byPath.get(key);
     if (pack === undefined) throw new Error(`no fixture pack for ${key}`);
     return Promise.resolve({ pack, elapsedMs: 11, plan: { state: "ready" } as never });
+  };
+}
+
+function concurrentTimedRetriever(clock: { now: number }): GroundedRetriever {
+  const ready = deferred<boolean>();
+  let started = 0;
+  return async (input) => {
+    started += 1;
+    if (started === 2) {
+      clock.now += 1_000;
+      ready.resolve(true);
+    }
+    await ready.promise;
+    return {
+      pack: scopePack(input.scope.relativePaths[0] ?? "src/fallback.ts", 0.8, "evidence"),
+      elapsedMs: 1_000,
+      plan: { state: "ready" } as never,
+    };
   };
 }
 
@@ -1146,6 +1164,36 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(serialized).toContain("Connected scope root is not accessible.");
     expect(serialized).not.toContain(sensitivePath);
     expect(serialized).not.toContain(".aws");
+  });
+
+  it("measures total answer wall time across concurrent retrieval and delayed model response", async () => {
+    const scopes: ChatConnectedScope[] = ["a", "b"].map((name) => ({
+      kind: "directory",
+      relativePaths: [`src/${name}.ts`],
+      connectedAtMs: NOW,
+      root: tempRoot(name),
+    }));
+    const clock = { now: NOW };
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock.now);
+    try {
+      const answerer: MultiSourceAnswerer = () => {
+        clock.now += 35_000;
+        return Promise.resolve("evidence [src/a.ts:1-5] [src/b.ts:1-5]");
+      };
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId: makeChat(scopes), content: "explain both" })),
+        recordingDeps([]),
+        undefined,
+        seam(concurrentTimedRetriever(clock), answerer),
+      );
+      expect(result.status).toBe(200);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.elapsedMs).toBe(36_000);
+      expect(answer.contextPack.elapsedMs).toBe(36_000);
+      expect(answer.contextPack.usage.elapsedMs).toBe(14);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("merges two sources: citations carry BOTH labels, omitted/usage/budget are summed", async () => {

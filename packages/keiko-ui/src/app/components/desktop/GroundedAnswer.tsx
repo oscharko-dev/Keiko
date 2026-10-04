@@ -1421,7 +1421,7 @@ function isCanonicalEmptySearch(answer: ConnectedGroundedAnswer): boolean {
 
 function hasEmptyUninvokedSearchSummary(pack: GroundedAnswerContextPackSummary): boolean {
   return (
-    pack.fileCount === 0 &&
+    pack.usage.filesRead === 0 &&
     pack.citationCount === 0 &&
     pack.omittedCount === 0 &&
     Object.values(pack.omittedCounts).every((count) => count === 0) &&
