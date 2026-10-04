@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -61,7 +62,8 @@ const REPOSITORY_REFERENCE_PATH_CORE = String.raw`(?:${REPOSITORY_REFERENCE_SEGM
 const REFERENCE_HORIZONTAL_SPACE = String.raw`[ \t\u00a0\u202f]{0,64}`;
 function referenceLineRange(capture: boolean): string {
   const digits = capture ? String.raw`(\d{1,7})` : String.raw`\d{1,7}`;
-  return String.raw`${REFERENCE_HORIZONTAL_SPACE}:${REFERENCE_HORIZONTAL_SPACE}${digits}(?:${REFERENCE_HORIZONTAL_SPACE}[-\u2010-\u2014\u2212]${REFERENCE_HORIZONTAL_SPACE}${digits})?`;
+  // Nonbreaking typographic spacing belongs to a citation; ordinary ': 5 files' is prose.
+  return String.raw`${REFERENCE_HORIZONTAL_SPACE}:[\u00a0\u202f]{0,64}${digits}(?:${REFERENCE_HORIZONTAL_SPACE}[-\u2010-\u2014\u2212]${REFERENCE_HORIZONTAL_SPACE}${digits})?`;
 }
 const REFERENCE_LINE_RANGE = referenceLineRange(true);
 const FOLLOWING_REFERENCE_LINE_RANGE = new RegExp(`^${REFERENCE_LINE_RANGE}`, "u");
@@ -155,13 +157,13 @@ const KNOWN_REPOSITORY_EXTENSIONS = new Set([
 function boundaryBefore(value: string, index: number): boolean {
   if (index <= 0) return true;
   const previous = value.slice(Math.max(0, index - 2), index);
-  return !/[\p{L}\p{N}\p{M}\p{S}_./:@-]$/u.test(previous);
+  return !/[\p{L}\p{N}\p{M}_./:@-]$/u.test(previous);
 }
 
 function boundaryAfter(value: string, index: number): boolean {
   if (index >= value.length) return true;
   const next = value.slice(index, index + 2);
-  return !/^[\p{L}\p{N}\p{M}\p{S}_/:+\u2010-\u2014\u2212-]/u.test(next);
+  return !/^[\p{L}\p{N}\p{M}_/:+\u2010-\u2014\u2212-]/u.test(next);
 }
 
 // Plain string scans (not regexes) for leading/trailing slash trimming: an unanchored-at-start
@@ -248,6 +250,7 @@ function isSafeRawReferencePath(path: string): boolean {
 
 function validRepositoryPath(path: string): boolean {
   if (!isSafeRawReferencePath(path)) return false;
+  if (/[*?{}<>|"$^~]/u.test(path)) return false;
   if (path.startsWith(".") || path.includes("..")) return false;
   if (!path.includes(".")) return false;
   const filename = path.split("/").at(-1) ?? "";
@@ -271,8 +274,11 @@ function validMatchedLineRange(
 }
 
 function incompleteReferenceLineSuffix(source: string, offset: number): boolean {
-  const tail = source.slice(offset, offset + 65).replace(/^[ \t\u00a0\u202f]{0,64}/u, "");
-  return /^[:\u2010-\u2014\u2212-]/u.test(tail);
+  const tail = source.slice(offset, offset + 131);
+  return (
+    /^[:\u2010-\u2014\u2212-]/u.test(tail) ||
+    /^[ \t\u00a0\u202f]{1,64}[:\u2010-\u2014\u2212-][ \t\u00a0\u202f]{0,64}\d/u.test(tail)
+  );
 }
 
 function validReferenceMatchBoundary(match: RegExpExecArray, source: string): boolean {
@@ -559,6 +565,15 @@ interface RepositoryReferenceInlineProps {
   readonly displayPath?: string | undefined;
   readonly sourceLabel?: string | undefined;
   readonly requireRootChoice?: boolean | undefined;
+  readonly rootRelative?: boolean | undefined;
+}
+
+function sourceChoiceLabel(
+  root: RepositoryReferenceRoot,
+  roots: readonly RepositoryReferenceRoot[],
+): string {
+  const sameLabel = roots.filter((candidate) => candidate.label === root.label).length > 1;
+  return sameLabel ? `${root.label} · ${repositoryReferenceDisplayPath(root.root)}` : root.label;
 }
 
 const OPENED_CONFIRMATION_MS = 1800;
@@ -588,6 +603,13 @@ function useClearedTimeout(callback: () => void): (delayMs: number) => void {
   );
 }
 
+function referenceAccessiblePath(path: string, sourceLabel: string | undefined): string {
+  const displayPath = repositoryReferenceDisplayPath(path);
+  return sourceLabel === undefined
+    ? displayPath
+    : `${repositoryReferenceDisplayPath(sourceLabel)} · ${displayPath}`;
+}
+
 export function RepositoryReferenceInline({
   reference,
   roots,
@@ -596,8 +618,11 @@ export function RepositoryReferenceInline({
   displayPath,
   sourceLabel,
   requireRootChoice = false,
+  rootRelative,
 }: RepositoryReferenceInlineProps): ReactNode {
   const t = useTranslate();
+  const pickerId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [status, setStatus] = useState<"idle" | "choosing" | "opening" | "opened" | "failed">(
     "idle",
   );
@@ -624,10 +649,10 @@ export function RepositoryReferenceInline({
   }, [roots]);
   const rankedRootOptions = useMemo(
     () =>
-      requireRootChoice
+      requireRootChoice || rootRelative
         ? rootOptions.map((root) => ({ ...root, openPath: normalizeReferencePath(reference.path) }))
         : rankedRootsForReference(reference, rootOptions),
-    [reference, requireRootChoice, rootOptions],
+    [reference, requireRootChoice, rootOptions, rootRelative],
   );
   const bestRootOptions = useMemo(() => {
     const best = rankedRootOptions[0];
@@ -702,6 +727,16 @@ export function RepositoryReferenceInline({
     [activate],
   );
 
+  const onPickerKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>): void => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      resetToIdle();
+      triggerRef.current?.focus();
+    },
+    [resetToIdle],
+  );
+
   if (openReference === undefined) {
     return (
       <span title={repositoryReferenceDisplayPath(reference.label)}>
@@ -714,18 +749,17 @@ export function RepositoryReferenceInline({
   return (
     <span className="repo-ref">
       <button
+        ref={triggerRef}
         type="button"
         className={className}
         aria-label={t("chat.repository.openInEditor", {
-          path:
-            sourceLabel === undefined
-              ? repositoryReferenceDisplayPath(reference.path)
-              : `${repositoryReferenceDisplayPath(sourceLabel)} · ${repositoryReferenceDisplayPath(reference.path)}`,
+          path: referenceAccessiblePath(reference.path, sourceLabel),
           range: referenceRangeLabel(reference, t),
         })}
         aria-expanded={
           bestRootOptions.length > 1 || requireRootChoice ? status === "choosing" : undefined
         }
+        aria-controls={status === "choosing" ? pickerId : undefined}
         data-state={status}
         title={repositoryReferenceDisplayPath(reference.label)}
         onClick={activate}
@@ -737,14 +771,22 @@ export function RepositoryReferenceInline({
         <span>{referenceVisibleLabel(reference, displayPath)}</span>
       </button>
       {status === "choosing" ? (
-        <span className="repo-ref-picker">
+        <span
+          id={pickerId}
+          role="group"
+          aria-label={t("chat.repository.chooseSource")}
+          className="repo-ref-picker"
+        >
           {bestRootOptions.map((root) => (
             <button
               key={root.root}
               type="button"
               className="repo-ref-root"
-              aria-label={t("chat.repository.selectSource", { label: root.label })}
+              aria-label={t("chat.repository.selectSource", {
+                label: sourceChoiceLabel(root, bestRootOptions),
+              })}
               onClick={() => openForRoot(root)}
+              onKeyDown={onPickerKeyDown}
             >
               <span>{root.label}</span>
               {repositoryRootSuffix(root.root) === root.label ? null : (

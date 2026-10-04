@@ -517,6 +517,7 @@ function CitationReference({
             reference={citationRepositoryReference(citation)}
             roots={options.roots}
             requireRootChoice={options.requireRootChoice}
+            rootRelative
             sourceLabel={sourceLabel}
             openReference={openRepositoryReference}
             className="repo-ref-link grounded-citation-open"

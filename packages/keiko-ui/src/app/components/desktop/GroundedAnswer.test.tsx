@@ -920,6 +920,43 @@ describe("GroundedAnswer", () => {
     });
   });
 
+  it.each([false, true])(
+    "preserves an exact citation path inside a same-named root (identity: %s)",
+    (identified) => {
+      const scope = {
+        kind: "workspace-root" as const,
+        root: "/repo/src",
+        relativePaths: [],
+        connectedAtMs: 1,
+      };
+      const fingerprint = scopeFingerprint(scope);
+      const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+      const { container } = render(
+        <GroundedAnswer
+          answer={answer({
+            citations: [
+              citation({
+                scopePath: "src/foo.ts",
+                ...(identified ? { sourceScopeFingerprint: fingerprint } : {}),
+              }),
+            ],
+          })}
+          busy={false}
+          repositoryRoots={[{ root: scope.root, label: "src", scopeFingerprints: [fingerprint] }]}
+          openRepositoryReference={openReference}
+        />,
+      );
+      openEvidenceDisclosure(container);
+      fireEvent.click(screen.getByRole("button", { name: /Open src\/foo.ts/ }));
+      expect(openReference).toHaveBeenCalledWith({
+        root: "/repo/src",
+        path: "src/foo.ts",
+        lineStart: 10,
+        lineEnd: 25,
+      });
+    },
+  );
+
   it("requires an explicit source for legacy relative paths that resemble a root label", () => {
     const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
     const { container } = render(
@@ -1039,7 +1076,7 @@ describe("GroundedAnswer", () => {
       );
       expect(openReference).not.toHaveBeenCalled();
       expect(
-        screen.getAllByRole("button", { name: "Select repository source: manual" }),
+        screen.getAllByRole("button", { name: /^Select repository source: manual/u }),
       ).toHaveLength(roots.length);
     },
   );
