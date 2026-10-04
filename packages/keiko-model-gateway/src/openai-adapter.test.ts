@@ -1,6 +1,7 @@
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpenAiAdapter, ResponseRedactionError, STREAM_IDLE_TIMEOUT_MS } from "./openai-adapter.js";
+import { MAX_TIMER_DELAY_MS } from "./config.js";
 import {
   AuthenticationError,
   CancelledError,
@@ -431,6 +432,40 @@ describe("OpenAiAdapter.call", () => {
       vi.restoreAllMocks();
     }
   });
+
+  it.each(["99999999999999999999", String(Math.ceil(MAX_TIMER_DELAY_MS / 1000))])(
+    "keeps finite oversized provider cooldowns representable at the actual timer bound (%s)",
+    async (retryAfter) => {
+      const adapter = adapterWith(() =>
+        Promise.resolve(jsonResponse({}, { status: 503, headers: { "retry-after": retryAfter } })),
+      );
+      await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({
+        retryAfterMs: MAX_TIMER_DELAY_MS,
+        retryable: true,
+      });
+    },
+  );
+
+  it.each(["Saturday, 03-Oct-26 20:02:00 GMT", "Sat Oct  3 20:02:00 2026"])(
+    "interprets supported obsolete HTTP-date %s in UTC in a non-UTC process",
+    async (retryAfter) => {
+      vi.stubEnv("TZ", "Etc/GMT-2");
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-03T20:00:00Z"));
+      try {
+        const adapter = adapterWith(() =>
+          Promise.resolve(
+            jsonResponse({}, { status: 429, headers: { "retry-after": retryAfter } }),
+          ),
+        );
+        await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({
+          retryAfterMs: 120_000,
+        });
+      } finally {
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it.each(["", " ", "Mon, 03 Not 2026 20:02:00 GMT", "9".repeat(400)])(
     "rejects an empty, malformed, or overflowing Retry-After header (%#)",

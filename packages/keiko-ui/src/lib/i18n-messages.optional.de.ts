@@ -1318,7 +1318,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.lastRequestMeasured":
     "Letzte Wissensanfrage: {tokens} Tokens (vom Anbieter gemessen).",
   "chat.context.lastRequestMeasuredWithEstimate":
-    "Letzte Wissensanfrage: {tokens} Tokens (vom Anbieter gemessen). Keiko hat {estimated} geschätzt; die Aufteilung oben nutzt diese Schätzung.",
+    "Letzte Wissensanfrage: {tokens} Tokens (vom Anbieter gemessen). Keiko hatte diese Anfrage auf {estimated} Tokens geschätzt. Die Aufteilung oben schätzt die nächste Anfrage.",
   "chat.context.lastRequestEstimated":
     "Letzte Wissensanfrage: ungefähr {tokens} Tokens (geschätzt).",
   "chat.context.untilCompaction": "Noch {tokens} Tokens bis zur automatischen Kompaktierung.",

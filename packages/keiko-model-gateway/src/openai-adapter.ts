@@ -777,18 +777,29 @@ function rawToolCalls(accumulator: ToolCallAccumulator): readonly Record<string,
     }));
 }
 
+function boundedRetryAfterMs(milliseconds: number): number | null {
+  return Number.isFinite(milliseconds)
+    ? Math.max(0, Math.min(milliseconds, MAX_TIMER_DELAY_MS))
+    : null;
+}
+
+function retryAfterDate(header: string): number {
+  // RFC 9110 section 5.6.7: obsolete asctime HTTP dates omit the zone but still represent UTC.
+  const asctime =
+    /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) [A-Za-z]{3} (?:\d{2}| \d) \d{2}:\d{2}:\d{2} \d{4}$/;
+  return Date.parse(asctime.test(header) ? `${header} GMT` : header);
+}
+
 function retryAfterMs(response: Response): number | null {
   const header = response.headers.get("retry-after");
   if (header === null) {
     return null;
   }
   if (/^\d+$/.test(header.trim())) {
-    const milliseconds = Number(header) * 1000;
-    return Number.isFinite(milliseconds) ? milliseconds : null;
+    return boundedRetryAfterMs(Number(header) * 1000);
   }
   if (!/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)/i.test(header)) return null;
-  const date = Date.parse(header);
-  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+  return boundedRetryAfterMs(retryAfterDate(header) - Date.now());
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

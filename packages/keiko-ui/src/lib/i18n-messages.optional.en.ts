@@ -1267,7 +1267,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.lastRequestMeasured":
     "Last knowledge request: {tokens} tokens (measured by the provider).",
   "chat.context.lastRequestMeasuredWithEstimate":
-    "Last knowledge request: {tokens} tokens (measured by the provider). Keiko estimated {estimated}; the breakdown above uses that estimate.",
+    "Last knowledge request: {tokens} tokens (measured by the provider). Keiko estimated that request at {estimated} tokens. The breakdown above estimates the next request.",
   "chat.context.lastRequestEstimated": "Last knowledge request: about {tokens} tokens (estimated).",
   "chat.context.untilCompaction": "{tokens} tokens until automatic compaction.",
   "chat.context.sourcesPolicy":

@@ -185,8 +185,8 @@ function ContextBreakdown({
   );
 }
 
-// A provider measurement differs from Keiko's admission estimate, the unit of every share above;
-// stating both keeps the breakdown and the measured request comparable.
+// Compare the last provider measurement with that request's admission estimate.
+// The current breakdown estimates the next request separately.
 function lastRequestText(
   t: I18nTranslate,
   number: (value: number) => string,
@@ -252,7 +252,6 @@ function ContextSummary({ status }: { readonly status: ChatContextStatusWire }):
   );
 }
 
-// Savings, pending compaction and the assumed-window hint, shared by both presentations.
 function DeclaredInputLimit({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
   const t = useTranslate();
   const locale = useLocale();
@@ -265,6 +264,7 @@ function DeclaredInputLimit({ status }: { readonly status: ChatContextStatusWire
   );
 }
 
+// Savings, pending compaction and the assumed-window hint, shared by both presentations.
 function ContextFootnotes({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
   const t = useTranslate();
   const locale = useLocale();

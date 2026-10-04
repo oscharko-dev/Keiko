@@ -195,14 +195,14 @@ describe("Chat context window breakdown", () => {
     expect(within(panel).getByText(/never summarized/u)).toBeInTheDocument();
   });
 
-  it("states Keiko's estimate beside a differing provider measurement", () => {
+  it("distinguishes the previous request estimate from the next request's breakdown", () => {
     const panel = openGroundedPanel({
       ...groundedStatus(),
       lastRequest: { promptTokens: 5_901, measured: true, estimatedTokens: 6_420 },
     });
     expect(
       within(panel).getByText(
-        "Last knowledge request: 5,901 tokens (measured by the provider). Keiko estimated 6,420; the breakdown above uses that estimate.",
+        "Last knowledge request: 5,901 tokens (measured by the provider). Keiko estimated that request at 6,420 tokens. The breakdown above estimates the next request.",
       ),
     ).toBeInTheDocument();
   });
@@ -353,7 +353,7 @@ describe("Chat context meter presentation details", () => {
     );
     expect(
       within(panel).getByText(
-        "Letzte Wissensanfrage: 5.901 Tokens (vom Anbieter gemessen). Keiko hat 6.420 geschätzt; die Aufteilung oben nutzt diese Schätzung.",
+        "Letzte Wissensanfrage: 5.901 Tokens (vom Anbieter gemessen). Keiko hatte diese Anfrage auf 6.420 Tokens geschätzt. Die Aufteilung oben schätzt die nächste Anfrage.",
       ),
     ).toBeInTheDocument();
   });
@@ -517,6 +517,63 @@ describe("Chat context request diagnostics", () => {
     contextApi.compact.mockReset().mockResolvedValue(status(1_000));
     contextApi.report.mockClear();
   });
+
+  it("keeps a requested compaction pending when selected model metadata refreshes", async () => {
+    const session = contextSession();
+    const initial = meterCapability("fixture", 12_000);
+    const updated = meterCapability("fixture", 48_000);
+    contextApi.fetch.mockResolvedValue({ ...meterModelStatus(initial), canCompact: true });
+    let finish: ((value: ChatContextStatusWire) => void) | undefined;
+    contextApi.compact.mockImplementation(
+      () => new Promise<ChatContextStatusWire>((resolve) => (finish = resolve)),
+    );
+    const view = render(<ChatContextMeterContainer session={{ ...session, models: [initial] }} />);
+    const ring = await screen.findByRole("button", { name: /Conversation context:/ });
+    fireEvent.click(ring);
+    fireEvent.click(screen.getByRole("button", { name: "Compact context now" }));
+    await waitFor(() => expect(contextApi.compact).toHaveBeenCalledOnce());
+    const signal: unknown = contextApi.compact.mock.calls[0]?.[3];
+    if (!(signal instanceof AbortSignal)) throw new TypeError("missing compaction signal");
+    contextApi.fetch.mockResolvedValue({ ...meterModelStatus(updated), canCompact: true });
+    view.rerender(<ChatContextMeterContainer session={{ ...session, models: [updated] }} />);
+    expect(signal.aborted).toBe(false);
+    expect(screen.getByRole("button", { name: "Compacting context…" })).toBeDisabled();
+    expect(contextApi.compact).toHaveBeenCalledOnce();
+    await act(async () => finish?.(meterModelStatus(initial)));
+    await waitFor(() => expect(contextApi.fetch).toHaveBeenCalledTimes(2));
+    expect(contextApi.report).not.toHaveBeenCalled();
+  });
+
+  it.each(["model", "scope", "chat"])(
+    "cancels pending compaction when its actual %s authority changes",
+    async (changed) => {
+      const session = contextSession();
+      if (session.activeChat === undefined) throw new TypeError("missing fixture chat");
+      let finish: ((value: ChatContextStatusWire) => void) | undefined;
+      contextApi.compact.mockImplementation(
+        () => new Promise<ChatContextStatusWire>((resolve) => (finish = resolve)),
+      );
+      const view = render(<ChatContextMeterContainer session={session} />);
+      fireEvent.click(await screen.findByRole("button", { name: /Conversation context:/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Compact context now" }));
+      const signal: unknown = contextApi.compact.mock.calls[0]?.[3];
+      if (!(signal instanceof AbortSignal)) throw new TypeError("missing compaction signal");
+      const next = {
+        ...session,
+        selectedModel: changed === "model" ? "other-model" : session.selectedModel,
+        activeChat: {
+          ...session.activeChat,
+          ...(changed === "chat" ? { id: "other-chat" } : {}),
+          ...(changed === "scope" ? { groundingScopeIdentity: "changed-scope-identity" } : {}),
+        },
+      };
+      view.rerender(<ChatContextMeterContainer session={next} />);
+      expect(signal.aborted).toBe(true);
+      await act(async () => finish?.(status(1_000)));
+      expect(contextApi.compact).toHaveBeenCalledOnce();
+      expect(contextApi.report).not.toHaveBeenCalled();
+    },
+  );
 
   it("refreshes a newly persisted user turn while the answer is pending without per-token requests", async () => {
     const session = contextSession();
