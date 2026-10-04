@@ -340,6 +340,89 @@ describe("recursive text search in ordinary folders", () => {
     expect(excerpt.content).toContain("café réparation");
   });
 
+  it.each([
+    '<META CONTENT="text/html; CHARSET=ISO-8859-1" HTTP-EQUIV="Content-Type">',
+    '<meta charset="iso_8859-1">',
+  ])(
+    "decodes supported legacy HTML declaration variants through search and both reads: %s",
+    async (header) => {
+      put("legacy.html", Buffer.from(`${header}\n<p>Ölwechsel 750 Stunden</p>\n`, "latin1"));
+      const selected = scope();
+      const result = await searchText(selected, query("Ölwechsel"));
+      expect(result.atoms).toHaveLength(1);
+      expect(result.atoms[0]?.lineRange).toEqual({ startLine: 2, endLine: 2 });
+      expect(result.coverage.incomplete).toBe(false);
+      const read = { scopePath: "legacy.html", startLine: 2, endLine: 2, maxBytes: 512 };
+      expect((await readExcerpt(selected, read)).content).toContain("Ölwechsel 750 Stunden");
+      const coding = await executeCodingRepositoryRequest(selected.workspace, {
+        kind: "read",
+        path: "legacy.html",
+        startLine: 2,
+        endLine: 2,
+        maxBytes: 512,
+      });
+      expect(coding.ok && coding.kind === "read" && coding.excerpt.snippet).toContain(
+        "Ölwechsel 750 Stunden",
+      );
+    },
+  );
+
+  it("keeps unsupported declared codecs outside the accepted text scope without guessing", async () => {
+    put("unsupported.html", '<meta charset="shift-jis">\n<p>UnsupportedProbe</p>\n');
+    const selected = scope();
+    const result = await searchText(selected, query("UnsupportedProbe"));
+    expect(result.atoms).toEqual([]);
+    expect(result.coverage.filesSkipped).toBe(1);
+    expect(result.coverage.incomplete).toBe(false);
+    expect(result.candidates.find((file) => file.scopePath === "unsupported.html")?.omitted).toBe(
+      "binary",
+    );
+    await expect(
+      readExcerpt(selected, {
+        scopePath: "unsupported.html",
+        startLine: 2,
+        endLine: 2,
+        maxBytes: 512,
+      }),
+    ).rejects.toMatchObject({ reason: "binary" });
+    await expect(
+      executeCodingRepositoryRequest(selected.workspace, {
+        kind: "read",
+        path: "unsupported.html",
+        startLine: 2,
+        endLine: 2,
+        maxBytes: 512,
+      }),
+    ).rejects.toMatchObject({ reason: "file-unreadable" });
+  });
+
+  it.each(["\0", "\u0001".repeat(1000)])(
+    "rejects binary payloads behind supported legacy HTML declarations",
+    async (payload) => {
+      const header = '<META CONTENT="text/html; CHARSET=iso_8859-1" HTTP-EQUIV="Content-Type">';
+      put("legacy.html", Buffer.from(`${header}\n<p>Ölwechsel</p>${payload}`, "latin1"));
+      const selected = scope();
+      expect((await searchText(selected, query("Ölwechsel"))).atoms).toEqual([]);
+      await expect(
+        readExcerpt(selected, {
+          scopePath: "legacy.html",
+          startLine: 2,
+          endLine: 2,
+          maxBytes: 512,
+        }),
+      ).rejects.toMatchObject({ reason: "binary" });
+      await expect(
+        executeCodingRepositoryRequest(selected.workspace, {
+          kind: "read",
+          path: "legacy.html",
+          startLine: 2,
+          endLine: 2,
+          maxBytes: 512,
+        }),
+      ).rejects.toMatchObject({ reason: "file-unreadable" });
+    },
+  );
+
   it("omits files above 2 MiB even when a match exists in their prefix", async () => {
     put("too-large.html", `manualNeedle\n${"x".repeat(2_097_152)}`);
     const selected = scope();

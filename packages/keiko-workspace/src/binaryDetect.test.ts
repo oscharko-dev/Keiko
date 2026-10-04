@@ -109,15 +109,24 @@ describe("looksBinary", () => {
 
 describe("declared HTML character encoding", () => {
   const legacy = (markup: string): Uint8Array => Buffer.from(markup, "latin1");
-  it.each(["windows-1252", "ISO-8859-1", "latin1"])("decodes declared %s", (encoding) => {
-    const bytes = legacy(`<meta charset="${encoding}"><p>Ölwechsel</p>`);
-    expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.html" })?.text).toContain(
-      "Ölwechsel",
-    );
-  });
+  it.each(["windows-1252", "ISO-8859-1", "iso_8859-1", "latin1"])(
+    "decodes declared %s",
+    (encoding) => {
+      const bytes = legacy(`<meta charset="${encoding}"><p>Ölwechsel</p>`);
+      expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.html" })?.text).toContain(
+        "Ölwechsel",
+      );
+    },
+  );
   it("accepts an http-equiv declaration with reordered attributes", () => {
     const bytes = legacy(
       '<META content="text/html; charset=ISO-8859-1" HTTP-EQUIV="Content-Type"><p>Öl</p>',
+    );
+    expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.htm" })?.text).toContain("Öl");
+  });
+  it("matches the http-equiv charset parameter case-insensitively", () => {
+    const bytes = legacy(
+      '<META content="text/html; CHARSET=ISO-8859-1" HTTP-EQUIV="Content-Type"><p>Öl</p>',
     );
     expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.htm" })?.text).toContain("Öl");
   });
@@ -132,13 +141,16 @@ describe("declared HTML character encoding", () => {
     const bytes = legacy('<!-- <meta charset="windows-1252"> --><p>Öl</p>');
     expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.html" })).toBeUndefined();
   });
-  it("does not guess an unsupported declared encoding", () => {
-    expect(
-      decodeTextBytes(legacy('<meta charset="shift-jis"><p>Öl</p>'), undefined, {
-        scopePath: "manual.html",
-      }),
-    ).toBeUndefined();
-  });
+  it.each(["shift-jis", "utf-16", "unknown-encoding"])(
+    "does not guess declared %s outside the codec allowlist",
+    (charset) => {
+      expect(
+        decodeTextBytes(legacy(`<meta charset="${charset}"><p>Öl</p>`), undefined, {
+          scopePath: "manual.html",
+        }),
+      ).toBeUndefined();
+    },
+  );
   it("limits character declaration prescan to the first 1024 bytes", () => {
     const bytes = legacy(`${" ".repeat(1024)}<meta charset="windows-1252"><p>Öl</p>`);
     expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.html" })).toBeUndefined();

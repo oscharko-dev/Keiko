@@ -119,7 +119,7 @@ export function completeTextBytePrefix(bytes: Uint8Array, encoding: TextByteEnco
   return encoding === "windows-1252" ? bytes : bytes.subarray(0, bytes.length - (bytes.length % 2));
 }
 
-function htmlMetaCharset(tag: string): string | undefined {
+function htmlMetaAttributes(tag: string): ReadonlyMap<string, string> {
   const attributes = new Map<string, string>();
   const pattern = /([^\s/>=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gu;
   for (const match of tag.matchAll(pattern)) {
@@ -127,10 +127,24 @@ function htmlMetaCharset(tag: string): string | undefined {
     if (name !== undefined && !attributes.has(name))
       attributes.set(name, match[2] ?? match[3] ?? match[4] ?? "");
   }
+  return attributes;
+}
+
+function htmlMetaCharset(tag: string): string | undefined {
+  const attributes = htmlMetaAttributes(tag);
   const direct = attributes.get("charset");
   if (direct !== undefined) return direct;
   if (attributes.get("http-equiv")?.toLowerCase() !== "content-type") return undefined;
-  return /\bcharset\s*=\s*([a-zA-Z0-9_-]+)/u.exec(attributes.get("content") ?? "")?.[1];
+  return /\bcharset\s*=\s*([a-zA-Z0-9_-]+)/iu.exec(attributes.get("content") ?? "")?.[1];
+}
+
+function supportedDeclaredHtmlEncoding(charset: string): TextByteEncoding | false {
+  try {
+    const encoding = new TextDecoder(charset).encoding;
+    return encoding === "utf-8" || encoding === "windows-1252" ? encoding : false;
+  } catch {
+    return false;
+  }
 }
 
 function declaredHtmlEncoding(
@@ -144,10 +158,7 @@ function declaredHtmlEncoding(
   for (const match of prefix.matchAll(/<meta\b[^>]*>/giu)) {
     const charset = htmlMetaCharset(match[0])?.trim().toLowerCase();
     if (charset === undefined) continue;
-    if (charset === "utf-8" || charset === "utf8") return "utf-8";
-    if (charset === "windows-1252" || charset === "iso-8859-1" || charset === "latin1")
-      return "windows-1252";
-    return false;
+    return supportedDeclaredHtmlEncoding(charset);
   }
   return undefined;
 }
