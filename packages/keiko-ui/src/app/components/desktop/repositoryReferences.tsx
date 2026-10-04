@@ -508,11 +508,47 @@ function shortestReferenceSuffix(root: ReferenceSuffixNode, parts: readonly stri
 export function repositoryReferencePathLabels(
   paths: readonly string[],
 ): ReadonlyMap<string, string> {
-  const partsByPath = new Map([...new Set(paths)].map((path) => [path, path.split("/")]));
+  const visibleByPath = new Map(
+    [...new Set(paths)].map((path) => [path, referenceLabelPath(path, false)]),
+  );
+  const visibleCounts = new Map<string, number>();
+  for (const visible of visibleByPath.values()) {
+    visibleCounts.set(visible, (visibleCounts.get(visible) ?? 0) + 1);
+  }
+  const partsByPath = new Map(
+    [...visibleByPath].map(([path, visible]) => [path, visible.split("/")]),
+  );
   const root: ReferenceSuffixNode = { count: 0, children: new Map() };
   for (const parts of partsByPath.values()) insertReferenceSuffix(root, parts);
   return new Map(
-    [...partsByPath].map(([path, parts]) => [path, shortestReferenceSuffix(root, parts)]),
+    [...partsByPath].map(([path, parts]) => [
+      path,
+      (visibleCounts.get(visibleByPath.get(path) ?? "") ?? 0) > 1
+        ? escapedUnsafeReferencePath(path)
+        : shortestReferenceSuffix(root, parts),
+    ]),
+  );
+}
+
+function escapedUnsafeReferencePath(path: string): string {
+  return referenceLabelPath(path, true);
+}
+
+function referenceLabelCharacter(character: string, includeUnsafe: boolean): string {
+  const reserved = character === "⟦" || character === "⟧";
+  const unsafe =
+    includeUnsafe && (stripUnsafeFormatChars(character) !== character || /\p{Cc}/u.test(character));
+  if (!reserved && !unsafe) return character;
+  const codePoint = character.codePointAt(0);
+  if (codePoint === undefined) throw new TypeError("Missing reference label code point");
+  return `⟦U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}⟧`;
+}
+
+function referenceLabelPath(path: string, includeUnsafe: boolean): string {
+  return repositoryReferenceDisplayPath(
+    Array.from(path, (character): string => referenceLabelCharacter(character, includeUnsafe)).join(
+      "",
+    ),
   );
 }
 
@@ -632,8 +668,16 @@ function useClearedTimeout(callback: () => void): (delayMs: number) => void {
   );
 }
 
-function referenceAccessiblePath(path: string, sourceLabel: string | undefined): string {
-  const displayPath = repositoryReferenceDisplayPath(path);
+function referenceAccessiblePath(
+  path: string,
+  sourceLabel: string | undefined,
+  visibleLabel: string | undefined,
+): string {
+  let displayPath = repositoryReferenceDisplayPath(path);
+  if (stripUnsafeFormatChars(path) !== path && visibleLabel !== undefined) {
+    const safeLabel = repositoryReferenceDisplayPath(visibleLabel);
+    if (safeLabel !== displayPath) displayPath += ` · ${safeLabel}`;
+  }
   return sourceLabel === undefined
     ? displayPath
     : `${repositoryReferenceDisplayPath(sourceLabel)} · ${displayPath}`;
@@ -782,7 +826,7 @@ export function RepositoryReferenceInline({
         type="button"
         className={className}
         aria-label={t("chat.repository.openInEditor", {
-          path: referenceAccessiblePath(reference.path, sourceLabel),
+          path: referenceAccessiblePath(reference.path, sourceLabel, displayPath),
           range: referenceRangeLabel(reference, t),
         })}
         aria-expanded={

@@ -47,6 +47,72 @@ describe("current repository scope navigation identities", () => {
 });
 
 describe("repository source path labels", () => {
+  it("does not confuse encoded controls with literal glyphs or codepoint notation", () => {
+    const paths = ["policy\u202e.ts", "policy.ts", "policy⟦U+202E⟧.ts", "tab\t.ts", "tab␉.ts"];
+    const labels = repositoryReferencePathLabels(paths);
+    expect(new Set(labels.values()).size).toBe(paths.length);
+    for (const label of labels.values()) expect(label).not.toMatch(/[\u202e\t]/u);
+  });
+
+  it("compares safe visible suffixes and keeps the original navigation paths", () => {
+    const paths = ["alpha/policy\u202e.ts", "beta/policy.ts"];
+    const labels = repositoryReferencePathLabels(paths);
+    const openReference = vi.fn().mockReturnValue({ ok: true, windowId: "source" });
+    render(
+      <>
+        {paths.map((path) => (
+          <RepositoryReferenceInline
+            key={path}
+            reference={{ path, label: path }}
+            roots={[{ root: "/repo", label: "repo" }]}
+            rootRelative
+            displayPath={labels.get(path)}
+            openReference={openReference}
+          />
+        ))}
+      </>,
+    );
+    const first = screen.getByRole("button", { name: /alpha\/policy\.ts/u });
+    const second = screen.getByRole("button", { name: /beta\/policy\.ts/u });
+    expect(first).toHaveTextContent("alpha/policy.ts");
+    expect(second).toHaveTextContent("beta/policy.ts");
+    fireEvent.click(first);
+    fireEvent.click(second);
+    expect(openReference.mock.calls.map((call) => call[0])).toEqual(
+      paths.map((path) => ({ root: "/repo", path })),
+    );
+  });
+
+  it("visibly distinguishes identical safe paths without leaking controls or changing targets", () => {
+    const paths = ["src/policy\u202e.ts", "src/policy.ts"];
+    const labels = repositoryReferencePathLabels(paths);
+    const openReference = vi.fn().mockReturnValue({ ok: true, windowId: "source" });
+    const { container } = render(
+      <>
+        {paths.map((path) => (
+          <RepositoryReferenceInline
+            key={path}
+            reference={{ path, label: path }}
+            roots={[{ root: "/repo", label: "repo" }]}
+            rootRelative
+            displayPath={labels.get(path)}
+            openReference={openReference}
+          />
+        ))}
+      </>,
+    );
+    const buttons = screen.getAllByRole("button");
+    expect(new Set(buttons.map((button) => button.textContent)).size).toBe(2);
+    expect(buttons[0]).toHaveTextContent("src/policy⟦U+202E⟧.ts");
+    expect(buttons[0]).toHaveAccessibleName(/U\+202E/u);
+    expect(buttons[1]).toHaveTextContent("src/policy.ts");
+    expect(container.innerHTML).not.toContain("\u202e");
+    buttons.forEach((button) => fireEvent.click(button));
+    expect(openReference.mock.calls.map((call) => call[0])).toEqual(
+      paths.map((path) => ({ root: "/repo", path })),
+    );
+  });
+
   it("uses the shortest distinguishing suffix while keeping unique filenames short", () => {
     expect(
       repositoryReferencePathLabels([
