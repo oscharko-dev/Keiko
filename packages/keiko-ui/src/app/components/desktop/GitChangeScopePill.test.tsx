@@ -810,3 +810,15 @@ describe("GitChangeScopePill — description apply affordance (#3400 final-audit
     expect(results).toHaveNoViolations();
   });
 });
+
+it("sends the canonical scope baseline when disconnecting from a stale tab", async () => {
+  const identity = "gsi-v1:" + "a".repeat(64);
+  const chat = makeChat({
+    groundingScopeIdentity: identity,
+    gitChangeScopes: [makeGitChangeScope()],
+  });
+  const updateScopes = vi.fn().mockResolvedValue({ chat: makeChat() } satisfies ChatResponse);
+  render(<GitChangeScopePill chat={chat} updateScopes={updateScopes} refreshScope={vi.fn()} />);
+  await userEvent.setup().click(screen.getByRole("button", { name: /^Disconnect/ }));
+  await waitFor(() => expect(updateScopes).toHaveBeenCalledWith(chat.id, null, identity));
+});

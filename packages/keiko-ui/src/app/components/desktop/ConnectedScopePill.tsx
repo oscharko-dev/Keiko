@@ -1,5 +1,7 @@
 "use client";
 
+import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
+
 // Issue #184 / Epic #532 — chat-header connected-scope pills. A chat may bind 1+N sources
 // (connectedScopes); this renders ONE pill per connected source and renders nothing when the chat
 // has no binding so the header stays clean. Each pill's trailing × detaches just THAT source via
@@ -164,7 +166,6 @@ export function restoreScopeHeaderFocus(header: Element | null | undefined): voi
 interface ScopePillItemProps {
   readonly chat: Chat;
   readonly scope: ChatConnectedScope;
-  readonly index: number;
   readonly allScopes: readonly ChatConnectedScope[];
   readonly onDisconnect?: ((chat: Chat) => void) | undefined;
   readonly updateScopes: typeof updateChatConnectedScopes;
@@ -174,7 +175,6 @@ interface ScopePillItemProps {
 function ScopePillItem({
   chat,
   scope,
-  index,
   allScopes,
   onDisconnect,
   updateScopes,
@@ -198,9 +198,14 @@ function ScopePillItem({
     // Capture the stable header ancestor before this pill unmounts (C169).
     const header = disconnectRef.current?.closest(".chat-scope-header");
     try {
-      // Remove THIS source by position; clear the binding entirely when it was the last one.
-      const remaining = allScopes.filter((_, i) => i !== index);
-      const response = await updateScopes(chat.id, remaining.length > 0 ? remaining : null);
+      // The selected object belongs to this versioned snapshot; display reordering cannot retarget it.
+      const remaining = allScopes.filter((candidate) => candidate !== scope);
+      const response = await replaceGroundingScopeList(
+        chat,
+        remaining.length > 0 ? remaining : null,
+        updateScopes,
+        onDisconnect,
+      );
       onDisconnect?.(response.chat);
       restoreScopeHeaderFocus(header);
     } catch (error_) {
@@ -327,7 +332,6 @@ export function ConnectedScopePill({
           key={`${scope.root ?? scope.kind}-${String(scope.connectedAtMs)}-${String(index)}`}
           chat={chat}
           scope={scope}
-          index={index}
           allScopes={scopes}
           onDisconnect={onDisconnect}
           updateScopes={updateScopes}

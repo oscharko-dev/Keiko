@@ -1,5 +1,7 @@
 "use client";
 
+import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
+
 // Issue #3400 (epic #3384) — git-change scope pills for the chat header.
 //
 // A chat connects at most one Git-change comparison in V1 practice (gitChangeScopes); this
@@ -719,7 +721,12 @@ function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillAc
       // Capture the stable header ancestor before this pill unmounts (mirrors ConnectedScopePill).
       const header = disconnectRef.current?.closest(".chat-scope-header");
       const remaining = otherScopes(allScopes, scope.relationshipId);
-      const response = await updateScopes(chat.id, remaining.length > 0 ? remaining : null);
+      const response = await replaceGroundingScopeList(
+        chat,
+        remaining.length > 0 ? remaining : null,
+        updateScopes,
+        onDisconnect,
+      );
       onDisconnect?.(response.chat);
       restoreScopeHeaderFocus(header);
     });

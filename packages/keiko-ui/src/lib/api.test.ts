@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
   updateChatConnectedScopes,
+  updateChatLocalKnowledgeScopes,
+  updateChatGitChangeScopes,
   streamAssistantSpeech,
   applyWorkspaceReplace,
   applyGatewayVerifiedCapabilities,
@@ -138,6 +140,21 @@ const MANAGED_LSP_VALIDATORS_SOURCE = readFileSync(
 );
 
 describe("connected source update preconditions", () => {
+  it.each([
+    ["localKnowledgeScopes", updateChatLocalKnowledgeScopes],
+    ["gitChangeScopes", updateChatGitChangeScopes],
+  ] as const)("guards %s against stale source replacement", async (field, update) => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ chat: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+    const identity = "gsi-v1:" + "b".repeat(64);
+    await update("chat-source", null, identity);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(init.body as string)).toEqual({
+      [field]: null,
+      expectedGroundingScopeIdentity: identity,
+    });
+  });
+
   afterEach(() => vi.unstubAllGlobals());
 
   it.each([undefined, "gsi-v1:" + "a".repeat(64)])(
@@ -3170,17 +3187,15 @@ describe("sendDesktopChatStream — correlation id threading", () => {
     [422, "BAD_REQUEST"],
     [503, "GATEWAY_UNAVAILABLE"],
   ] as const)("does not replay pre-stream %s %s as a capability fallback", async (status, code) => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ error: { code, message: "Request refused." } }), {
-          status,
-          headers: {
-            "Content-Type": "application/json",
-            [CORRELATION_HEADER]: "stream-refusal-correlation",
-          },
-        }),
-      );
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { code, message: "Request refused." } }), {
+        status,
+        headers: {
+          "Content-Type": "application/json",
+          [CORRELATION_HEADER]: "stream-refusal-correlation",
+        },
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const outcome = sendDesktopChatStream(
       { chatId: "c6", projectPath: "/repo", content: "hello" },

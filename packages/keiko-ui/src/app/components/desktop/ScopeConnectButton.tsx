@@ -1,5 +1,7 @@
 "use client";
 
+import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
+
 // Issue #184 — small connector button that binds a Files-window selection (one or more
 // workspace-relative paths) onto a chat via PATCH /api/chats. The button is purely a wire
 // trigger: it does not own the file selection (the parent does) and it does not own the
@@ -159,7 +161,10 @@ export function ScopeConnectButton({
       // De-dupe by full scope identity: root is part of the key for external-folder binds.
       const filtered = currentScopes.filter((s) => !sameScopeIdentity(s, newScope));
       const next = [...filtered, newScope];
-      const response = await updateScope(chatId, next);
+      const response =
+        chat === undefined
+          ? await updateScope(chatId, next)
+          : await replaceGroundingScopeList(chat, next, updateScope, onConnected);
       onConnected?.(response.chat);
     } catch (error_) {
       setError(formatErrorMessage(error_, t));

@@ -1,5 +1,7 @@
 "use client";
 
+import { updateGroundingScopes } from "@/lib/chat-grounding-mutation";
+
 /**
  * ChatWindow — the desktop chat surface (composer + conversation thread + voice/attachment controls).
  *
@@ -144,13 +146,7 @@ import type {
   OpenEditorFileResult,
   WorkspaceLinkedGitChangeComparison,
 } from "./hooks/useWorkspace.types";
-import {
-  ApiError,
-  fetchChats,
-  fetchFilesSearch,
-  updateChat,
-  type UpdateChatInput,
-} from "@/lib/api";
+import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { GitChangeScopePill } from "./GitChangeScopePill";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { ConnectorScopePill } from "./ConnectorScopePill";
@@ -4135,31 +4131,6 @@ function isSelectableGroundingCapsuleSet(capsuleSet: CapsuleSetListEntry): boole
     capsuleSet.capsuleCount > 0 &&
     (readiness === undefined || SELECTABLE_CAPSULE_SET_READINESS.has(readiness))
   );
-}
-
-// A stale source mutation must not replace changes made in another tab. Refresh the visible
-// canonical sources after a conflict; the user can review them before repeating the action.
-async function updateGroundingScopes(
-  chat: Chat,
-  patch: UpdateChatInput,
-  onChatChanged: (chat: Chat) => void,
-): Promise<Chat> {
-  try {
-    const response = await updateChat(chat.id, {
-      ...patch,
-      ...(chat.groundingScopeIdentity === undefined
-        ? {}
-        : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
-    });
-    return response.chat;
-  } catch (error) {
-    if (error instanceof ApiError && error.code === "GROUNDING_SCOPE_CHANGED") {
-      const response = await fetchChats(chat.projectPath).catch(() => undefined);
-      const current = response?.chats.find((candidate) => candidate.id === chat.id);
-      if (current !== undefined) onChatChanged(current);
-    }
-    throw error;
-  }
 }
 
 // The "Model only" branch clears active sources after explicit confirmation.

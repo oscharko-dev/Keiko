@@ -1,5 +1,7 @@
 "use client";
 
+import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
+
 // Epic #189 Slice 3 M4 — connector-scope pills for the chat header.
 //
 // A chat may bind 1+N Local Knowledge connector sources (localKnowledgeScopes); this renders
@@ -99,7 +101,12 @@ function ConnectorPillItem({
     const header = disconnectRef.current?.closest(".chat-scope-header");
     try {
       const remaining = allScopes.filter((s) => scopeKey(s) !== key);
-      const response = await updateScopes(chat.id, remaining.length > 0 ? remaining : null);
+      const response = await replaceGroundingScopeList(
+        chat,
+        remaining.length > 0 ? remaining : null,
+        updateScopes,
+        onDisconnect,
+      );
       onDisconnect?.(response.chat);
       restoreScopeHeaderFocus(header);
     } catch (error_) {

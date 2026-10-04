@@ -270,7 +270,7 @@
   },
   "src/app/components/desktop/hooks/useChatSession.ts": {
     "complexity": {
-      "count": 10
+      "count": 9
     },
     "max-lines-per-function": {
       "count": 11

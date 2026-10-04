@@ -1,5 +1,7 @@
 "use client";
 
+import { withGroundingScopeRefresh } from "@/lib/chat-grounding-mutation";
+
 import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, SyntheticEvent } from "react";
@@ -911,11 +913,22 @@ async function persistCurrentChatScopes<T>(
   confirmation: {
     readonly remember: (chat: Chat) => void;
     readonly expectedIdentity?: string | undefined;
+    readonly chat?: Chat;
+    readonly refreshed?: (chat: Chat) => void;
   },
 ): Promise<Chat | undefined> {
   const { remember, expectedIdentity } = confirmation;
   if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return undefined;
-  const response = await persistScopeSnapshot(persist, chatId, next, expectedIdentity);
+  const mutation = (): Promise<{ readonly chat: Chat }> =>
+    persistScopeSnapshot(persist, chatId, next, expectedIdentity);
+  const refresh = (chat: Chat): void => {
+    remember(chat);
+    if (attempt.isCurrent() && chatLookupTargetIsCurrent(target)) confirmation.refreshed?.(chat);
+  };
+  const response =
+    confirmation.chat === undefined
+      ? await mutation()
+      : await withGroundingScopeRefresh(confirmation.chat, mutation, refresh);
   remember(response.chat);
   if (attempt.isCurrent() && chatLookupTargetIsCurrent(target)) return response.chat;
   try {
@@ -1846,7 +1859,12 @@ function AppShellInner(): ReactNode {
         current,
         next,
         updateChatLocalKnowledgeScopes,
-        { remember: rememberGroundingChat },
+        {
+          remember: rememberGroundingChat,
+          expectedIdentity: chat.groundingScopeIdentity,
+          chat,
+          refreshed: session.replaceChat,
+        },
       );
       if (persisted === undefined) return false;
       session.replaceChat(persisted);
@@ -1911,7 +1929,12 @@ function AppShellInner(): ReactNode {
               current,
               next,
               updateChatLocalKnowledgeScopes,
-              { remember: rememberGroundingChat },
+              {
+                remember: rememberGroundingChat,
+                expectedIdentity: chat.groundingScopeIdentity,
+                chat,
+                refreshed: session.replaceChat,
+              },
             );
             if (persisted === undefined) return false;
             session.replaceChat(persisted);
@@ -2012,7 +2035,12 @@ function AppShellInner(): ReactNode {
               current,
               next,
               updateChatGitChangeScopes,
-              { remember: rememberGroundingChat },
+              {
+                remember: rememberGroundingChat,
+                expectedIdentity: chat.groundingScopeIdentity,
+                chat,
+                refreshed: session.replaceChat,
+              },
             );
             if (persisted === undefined) return false;
             session.replaceChat(persisted);

@@ -2488,7 +2488,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       );
     });
     expect(updateChatMock).toHaveBeenCalledTimes(1);
-    expect(fetchChats).toHaveBeenCalledWith(original.projectPath);
+    expect(fetchChats).toHaveBeenCalledWith(original.projectPath, expect.any(String), original.id);
     confirmSpy.mockRestore();
   });
 
