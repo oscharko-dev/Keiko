@@ -345,13 +345,28 @@ describe("AppShell canonical workspace scope synchronization", () => {
   it("still reports explicit teardown of an unresolved legacy edge after dismissal", async () => {
     await mountAmbiguousFiles();
     vi.mocked(reportClientDiagnostic).mockClear();
+    vi.mocked(reportFilesScopeDecision).mockClear();
     await act(async () => mocks.workspace?.api.removeConn("edge-0"));
     await waitFor(() =>
       expect(reportClientDiagnostic).toHaveBeenCalledWith(
         expect.stringContaining("Files scope ownership unavailable"),
-        undefined,
+        expect.objectContaining({
+          correlationId: expect.any(String),
+          kind: "other",
+          errorKind: "unknown",
+          errorEvidence: expect.objectContaining({ errorClass: "Error" }),
+        }),
       ),
     );
+    const refusal = vi
+      .mocked(reportClientDiagnostic)
+      .mock.calls.find(([message]) => message.includes("Files scope ownership unavailable"));
+    const decision = vi
+      .mocked(reportFilesScopeDecision)
+      .mock.calls.find(([, meta]) => meta.decision === "blocked-ambiguous");
+    if (refusal === undefined || decision === undefined)
+      throw new Error("Missing teardown evidence.");
+    expect(refusal[1]?.correlationId).toBe(decision[0]);
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
   });
 
@@ -390,6 +405,12 @@ describe("AppShell canonical workspace scope synchronization", () => {
         "/manuals/Distinct",
       ]),
     );
+    expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
+      decision: "acknowledged",
+      sourceCount: 2,
+      candidateCount: 1,
+      bindingFingerprint: connectedScopeFingerprint(scope("/manuals/Scale")),
+    });
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
     expect(mocks.serverChat?.connectedScopes).toEqual(mocks.initialChat.connectedScopes);
@@ -538,6 +559,7 @@ describe("AppShell canonical workspace scope synchronization", () => {
     persist(initial.wins, sanitizePersistedWorkspace(initial.wins, initial.conns).conns);
     render(<AppShell />);
     await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Scale"));
+    vi.mocked(reportFilesScopeDecision).mockClear();
     mocks.serverChat = chat([scope("/manuals/Changed")], 2);
     const changed = fixture(["/manuals/Changed"]);
     await storageReplay(
@@ -548,6 +570,11 @@ describe("AppShell canonical workspace scope synchronization", () => {
     await act(async (): Promise<void> => mocks.workspace?.api.removeConn("edge-0"));
     await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(0));
     expect(mocks.serverChat?.connectedScopes).toEqual([]);
+    expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
+      decision: "ack-invalidated",
+      candidateCount: 1,
+      bindingFingerprint: connectedScopeFingerprint(scope("/manuals/Changed")),
+    });
   });
   it("adopts a changed persisted ownership digest without deleting the former manual source", async (): Promise<void> => {
     const initial = fixture(["/manuals/Scale"]);

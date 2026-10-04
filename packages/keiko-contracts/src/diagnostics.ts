@@ -1754,6 +1754,8 @@ export const CLIENT_FILES_SCOPE_DECISIONS = [
   "fingerprint-absent",
   "conflict-retried",
   "ack-missing",
+  "acknowledged",
+  "ack-invalidated",
   "automatic-suppressed",
   "timeout-blocked",
   "timeout-recovered",

@@ -1628,18 +1628,21 @@ describe("browser support report preparation evidence", () => {
 });
 
 describe("Files scope ownership decision evidence", () => {
-  it.each(["timeout-blocked", "timeout-recovered", "request-superseded"])(
-    "accepts the closed queue lifecycle decision %s",
-    (decision) => {
-      expect(
-        isClientDiagnosticIngestRequest({
-          ...validRequest(),
-          correlationId: "scope-decision-123",
-          filesScopeDecision: { decision },
-        }),
-      ).toBe(true);
-    },
-  );
+  it.each([
+    "timeout-blocked",
+    "timeout-recovered",
+    "request-superseded",
+    "acknowledged",
+    "ack-invalidated",
+  ])("accepts the closed queue lifecycle decision %s", (decision) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        correlationId: "scope-decision-123",
+        filesScopeDecision: { decision },
+      }),
+    ).toBe(true);
+  });
   const decision = {
     decision: "blocked-ambiguous",
     sourceCount: 1,

@@ -129,6 +129,12 @@ interface CapturedClientDiagnostic {
 
 const reportedDiagnostics: CapturedClientDiagnostic[] = [];
 
+function recordedFilesScopeDecision(decision: string): CapturedClientDiagnostic | undefined {
+  return reportedDiagnostics.find(
+    (record) => record.meta?.filesScopeDecision?.decision === decision,
+  );
+}
+
 function appShellCssClass(name: keyof typeof appShellStyles): string {
   const value = appShellStyles[name];
   if (value === undefined) throw new Error(`missing AppShell CSS module class ${name}`);
@@ -2050,6 +2056,17 @@ describe("AppShell grounding connections", () => {
     expect(mocks.state.session?.replaceChat).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: active.id, title: "Saved history" }),
     );
+    expect(recordedFilesScopeDecision("restored")?.meta?.filesScopeDecision).toEqual({
+      decision: "restored",
+      sourceCount: 2,
+      candidateCount: 1,
+      bindingFingerprint: connectedScopeFingerprint(oldScope),
+    });
+    await waitFor(() => expect(recordedFilesScopeDecision("acknowledged")).toBeDefined());
+    expect(recordedFilesScopeDecision("acknowledged")?.meta?.correlationId).toBe(
+      recordedFilesScopeDecision("restored")?.meta?.correlationId,
+    );
+    expect(JSON.stringify(reportedDiagnostics)).not.toContain("/manuals/");
   });
 
   it("does not append a new root when a legacy edge cannot identify its existing source", async (): Promise<void> => {
@@ -2104,6 +2121,9 @@ describe("AppShell grounding connections", () => {
       oldScope,
       expect.objectContaining({ root: "/manuals/Distinct" }),
     ]);
+    expect(recordedFilesScopeDecision("owned-elsewhere")?.meta?.filesScopeDecision).toEqual({
+      decision: "owned-elsewhere",
+    });
   });
 
   it.each(["BAD-DIGEST"])(

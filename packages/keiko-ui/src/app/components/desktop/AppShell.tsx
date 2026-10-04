@@ -501,6 +501,7 @@ function reportMissingTeardownOwnership(
     reportGroundingMutationFailure(
       "Files scope ownership unavailable",
       new Error("Scope ownership is not proven"),
+      attempt.correlationId,
     );
   return released;
 }
@@ -542,6 +543,12 @@ function acknowledgeFilesScope(input: {
     return false;
   }
   input.scopes.set(input.edgeKey, acknowledged);
+  reportFilesScopeDecision(input.correlationId, {
+    decision: "acknowledged",
+    sourceCount: input.chat === undefined ? 0 : effectiveScopes(input.chat).length,
+    candidateCount: 1,
+    bindingFingerprint: connectedScopeFingerprint(acknowledged),
+  });
   if (input.connectionId !== undefined) {
     input.fingerprints.set(
       input.connectionId,
@@ -673,13 +680,24 @@ function invalidateChangedFilesAcknowledgements(
   connection: Connection,
   acknowledgements: Map<string, ChatConnectedScope>,
 ): void {
+  let invalidated = 0;
   for (const [key, scope] of acknowledgements) {
     if (
       key.startsWith(`${connection.id}\u0000`) &&
       connectedScopeFingerprint(scope) !== connection.boundScopeFingerprint
     ) {
       acknowledgements.delete(key);
+      invalidated += 1;
     }
+  }
+  if (invalidated > 0) {
+    reportFilesScopeDecision(newClientCorrelationId(), {
+      decision: "ack-invalidated",
+      candidateCount: invalidated,
+      ...(isConnectedScopeFingerprint(connection.boundScopeFingerprint)
+        ? { bindingFingerprint: connection.boundScopeFingerprint }
+        : {}),
+    });
   }
 }
 
@@ -804,12 +822,24 @@ function runtimeProjectPathForChat(chatWindowId: string, chatId: string): string
 
 export const CHAT_MUTATION_TIMEOUT_MS = 15_000;
 
-function reportGroundingMutationFailure(message: string, error: unknown): void {
-  const correlationId = correlationIdOf(error);
-  reportClientDiagnostic(
-    `[keiko] ${message}: ${clientErrorSummary(error)}`,
-    correlationId === undefined ? undefined : { correlationId },
-  );
+function reportGroundingMutationFailure(
+  message: string,
+  error: unknown,
+  originalCorrelationId?: string,
+): void {
+  const correlationId = originalCorrelationId ?? correlationIdOf(error);
+  const metadata =
+    originalCorrelationId === undefined
+      ? correlationId === undefined
+        ? undefined
+        : { correlationId }
+      : {
+          correlationId,
+          kind: "other" as const,
+          errorKind: bffRequestErrorKind(error),
+          errorEvidence: clientErrorEvidence(error),
+        };
+  reportClientDiagnostic(`[keiko] ${message}: ${clientErrorSummary(error)}`, metadata);
 }
 
 class ChatLookupFailure extends Error {
