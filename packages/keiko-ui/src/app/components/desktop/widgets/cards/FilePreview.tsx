@@ -42,10 +42,11 @@ function deniedPreviewMessage(t: I18nTranslate): string {
   return t("filePreview.deniedMessage");
 }
 const MAX_HIGHLIGHT_BYTES = 200_000;
-// GEN-PERF-WIDGET-005 — the server caps a text preview at ~1 MB (~25k lines). Rendering every
-// line eagerly produced ~75k–100k DOM nodes in one synchronous commit. Window the initial
-// render to this many lines and reveal more on demand; the full content stays reachable.
+// GEN-PERF-WIDGET-005 — a 2 MiB preview can contain over a million short lines. Keep plain
+// lines un-tokenized until visible and bound the initial DOM to one batch; all content stays
+// reachable through explicit expansion.
 const PREVIEW_LINE_BATCH = 500;
+type PreviewLine = string | readonly Token[];
 // Issue #1285 — Repository Search now extracts bounded text from small DOCX/XLSX/text-layer-PDF
 // documents that are explicitly connected to a chat. The preview pane still shows no inline preview
 // for these binary formats, but the copy reflects that they are searchable (within limits) rather
@@ -231,12 +232,13 @@ function refreshStatusLabel(status: PreviewRefreshStatus, t: I18nTranslate): str
 }
 
 function previewTokenLines(
-  preview: FilesPreviewResponse | null,
+  content: string | null,
+  name: string,
   shouldHighlight: boolean,
-): readonly (readonly Token[])[] {
-  if (preview?.kind !== "text") return [];
-  if (shouldHighlight) return highlightLines(preview.content, langOf(preview.name));
-  return preview.content.split("\n").map((line): readonly Token[] => [["id", line]]);
+): readonly PreviewLine[] {
+  if (content === null) return [];
+  if (shouldHighlight) return highlightLines(content, langOf(name));
+  return content.split("\n");
 }
 
 function canOpenPreviewInEditor(
@@ -267,7 +269,7 @@ function highlightedTokenSpans(tokens: readonly Token[]): ReactNode {
 interface TextFilePreviewProps {
   readonly preview: Extract<FilesPreviewResponse, { readonly kind: "text" }>;
   readonly shouldHighlight: boolean;
-  readonly lines: readonly (readonly Token[])[];
+  readonly lines: readonly PreviewLine[];
   readonly visibleLineRows: readonly {
     readonly lineNumber: number;
     readonly tokens: readonly Token[];
@@ -410,7 +412,7 @@ function BinaryFilePreview({
 interface PreviewKindContentProps {
   readonly preview: FilesPreviewResponse | null;
   readonly shouldHighlight: boolean;
-  readonly lines: readonly (readonly Token[])[];
+  readonly lines: readonly PreviewLine[];
   readonly visibleLineRows: readonly {
     readonly lineNumber: number;
     readonly tokens: readonly Token[];
@@ -434,14 +436,21 @@ function PreviewKindContent(props: PreviewKindContentProps): ReactNode {
   }
 }
 
-function initialPreviewLineWindow(
-  lineCount: number,
-  revealLineStart?: number,
-): { readonly start: number; readonly end: number } {
+interface PreviewLineWindow {
+  readonly start: number;
+  readonly end: number;
+}
+
+function initialPreviewLineWindow(lineCount: number, revealLineStart?: number): PreviewLineWindow {
   const validLine =
     revealLineStart !== undefined && Number.isSafeInteger(revealLineStart) && revealLineStart > 0;
   const start = validLine ? Math.max(0, Math.min(lineCount - 1, revealLineStart - 1) - 5) : 0;
   return { start, end: Math.min(lineCount, start + PREVIEW_LINE_BATCH) };
+}
+
+function clampPreviewLineWindow(window: PreviewLineWindow, lineCount: number): PreviewLineWindow {
+  const start = Math.min(window.start, Math.max(0, lineCount - 1));
+  return { start, end: Math.max(start, Math.min(lineCount, window.end)) };
 }
 
 function validatedPreview(
@@ -604,42 +613,46 @@ export function FilePreview({
     activePreview?.kind === "text" && activePreview.content.length <= MAX_HIGHLIGHT_BYTES;
   const canOpenInEditor = canOpenPreviewInEditor(activePreview, onOpenInEditor);
   const refreshStatusText = refreshStatusLabel(refreshStatus, t);
-  const lines: readonly (readonly Token[])[] = useMemo(
-    () => previewTokenLines(activePreview, shouldHighlight),
-    [activePreview, shouldHighlight],
+  const previewText = activePreview?.kind === "text" ? activePreview.content : null;
+  const lines: readonly PreviewLine[] = useMemo(
+    () => previewTokenLines(previewText, headerName, shouldHighlight),
+    [previewText, headerName, shouldHighlight],
   );
 
-  // GEN-PERF-WIDGET-005 — bounded initial render window over `lines`. Reset whenever the
-  // underlying content changes so a new file always starts at the first batch.
-  const [lineWindow, setLineWindow] = useState(() =>
-    initialPreviewLineWindow(
-      Math.max(PREVIEW_LINE_BATCH, revealLineStart ?? 0) + PREVIEW_LINE_BATCH,
-      revealLineStart,
-    ),
-  );
-  useEffect(() => {
-    if (lines.length > 0) setLineWindow(initialPreviewLineWindow(lines.length, revealLineStart));
-  }, [lines, revealLineStart]);
+  // A response object is not a navigation: refreshing the current file preserves expansion.
+  const lineWindowKey = JSON.stringify([root, path, revealLineStart]);
+  const [expandedWindow, setExpandedWindow] = useState<{
+    readonly key: string;
+    readonly window: PreviewLineWindow;
+  } | null>(null);
+  const requestedWindow =
+    expandedWindow?.key === lineWindowKey
+      ? expandedWindow.window
+      : initialPreviewLineWindow(lines.length, revealLineStart);
+  const lineWindow = clampPreviewLineWindow(requestedWindow, lines.length);
   const visibleLines = useMemo(
     () => lines.slice(lineWindow.start, lineWindow.end),
-    [lines, lineWindow],
+    [lines, lineWindow.start, lineWindow.end],
   );
   const visibleLineRows = useMemo(
     () =>
-      visibleLines.map((tokens, index) => ({ lineNumber: lineWindow.start + index + 1, tokens })),
+      visibleLines.map((line, index): { lineNumber: number; tokens: readonly Token[] } => ({
+        lineNumber: lineWindow.start + index + 1,
+        tokens: typeof line === "string" ? [["id", line]] : line,
+      })),
     [visibleLines, lineWindow.start],
   );
   const hiddenLineCount = Math.max(0, lines.length - lineWindow.end);
   const showMoreLines = (): void =>
-    setLineWindow((window) => ({
-      ...window,
-      end: Math.min(lines.length, window.end + PREVIEW_LINE_BATCH),
-    }));
+    setExpandedWindow({
+      key: lineWindowKey,
+      window: { ...lineWindow, end: Math.min(lines.length, lineWindow.end + PREVIEW_LINE_BATCH) },
+    });
   const showPreviousLines = (): void =>
-    setLineWindow((window) => ({
-      ...window,
-      start: Math.max(0, window.start - PREVIEW_LINE_BATCH),
-    }));
+    setExpandedWindow({
+      key: lineWindowKey,
+      window: { ...lineWindow, start: Math.max(0, lineWindow.start - PREVIEW_LINE_BATCH) },
+    });
 
   return (
     // The keydown listener is a keyboard shortcut for the Back/Close buttons inside this

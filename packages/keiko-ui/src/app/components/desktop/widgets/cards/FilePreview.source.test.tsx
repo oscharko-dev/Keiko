@@ -39,6 +39,43 @@ afterEach(() => {
 });
 
 describe("read-only cited source preview", () => {
+  it("keeps expanded source lines when a manual refresh returns identical content", async () => {
+    const content = Array.from(
+      { length: 1_200 },
+      (_, index) => `row ${index + 1} ${"detail ".repeat(30)}`,
+    ).join("\n");
+    vi.mocked(fetchFilesPreview).mockImplementation(async () =>
+      textPreview("/repo", "manual.html", content),
+    );
+    render(<FilePreview root="/repo" path="manual.html" onClose={() => undefined} />);
+    const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+    fireEvent.click(screen.getByRole("button", { name: "Show 500 more lines" }));
+    expect(region.querySelectorAll(".fpv-line")).toHaveLength(1_000);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh preview" }));
+    await waitFor(() => expect(fetchFilesPreview).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByText("Reloaded")).toBeInTheDocument());
+    expect(region.querySelectorAll(".fpv-line")).toHaveLength(1_000);
+    expect(region).toHaveTextContent("row 1000");
+  });
+
+  it("does not allocate a token array for every short line in a two MiB source", async () => {
+    const content = "x\n".repeat(1_048_576);
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce(
+      textPreview("/repo", "manual.html", content),
+    );
+    const mapped = vi.spyOn(Array.prototype, "map");
+    try {
+      render(<FilePreview root="/repo" path="manual.html" onClose={() => undefined} />);
+      const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+      expect(region.querySelectorAll(".fpv-line")).toHaveLength(500);
+      expect(mapped.mock.contexts.some((rows) => Array.isArray(rows) && rows.length > 500)).toBe(
+        false,
+      );
+    } finally {
+      mapped.mockRestore();
+    }
+  });
+
   it("reveals a deep cited line with a bounded initial viewport and accessible preceding lines", async () => {
     const content = Array.from({ length: 60_000 }, (_, index) =>
       index === 0 ? "UNIQUE_EARLY_SOURCE_SENTINEL" : `source line ${String(index + 1)}`,
