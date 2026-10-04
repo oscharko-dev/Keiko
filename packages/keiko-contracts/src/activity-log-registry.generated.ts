@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "ccb0d26d8c2237142fb7deb7136cd7b4f8bf76f76591ea08a0cf1649f6ac7989" as const;
+  "e709776f68d67cc8b362299f61f8559115fcc70cecd7f3ca433bf35611b502da" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -28978,6 +28978,60 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["support-report"],
     proofIds: ["support.report.ui.delivered.line"],
+    releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "support.report.ui.delivery-released",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "support-report-evidence.emitSupportReportDeliveryReleased",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["expired", "byte-pressure", "entry-pressure"],
+      },
+      reportBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      retainedBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      evidenceScope: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["server", "client-only"],
+      },
+      deliveryAuthority: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["session-bound", "client-only"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["support-report"],
+    proofIds: ["support.report.ui.delivery-released.line"],
     releaseImpact: "minor",
   },
   {
@@ -64291,6 +64345,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           "client.support-report.prepared",
           "support.report.degraded",
           "support.report.ui.delivered",
+          "support.report.ui.delivery-released",
           "support.report.ui.download-refused",
         ],
         end: ["support.report.completed", "support.report.ui.completed"],
@@ -64335,6 +64390,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "support.report.ui.delivery-released",
+          mode: "correlation",
+        },
+        {
           op: "support.report.ui.download-refused",
           mode: "correlation",
         },
@@ -64357,6 +64416,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "support.report.started",
         "support.report.ui.completed",
         "support.report.ui.delivered",
+        "support.report.ui.delivery-released",
         "support.report.ui.download-refused",
         "support.report.ui.started",
       ],
@@ -64866,6 +64926,54 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["support.report.ui.delivered.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "support.report.ui.delivery-released",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "deliveryAuthority",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "evidenceScope",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "reportBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "retainedBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["support.report.ui.delivery-released.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -69167,6 +69275,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "support.report.started": "runtime-packages",
     "support.report.ui.completed": "bff",
     "support.report.ui.delivered": "bff",
+    "support.report.ui.delivery-released": "bff",
     "support.report.ui.download-refused": "bff",
     "support.report.ui.failed": "bff",
     "support.report.ui.started": "bff",

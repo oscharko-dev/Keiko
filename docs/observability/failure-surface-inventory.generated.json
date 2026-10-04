@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ccb0d26d8c2237142fb7deb7136cd7b4f8bf76f76591ea08a0cf1649f6ac7989"
+    "catalogDigest": "e709776f68d67cc8b362299f61f8559115fcc70cecd7f3ca433bf35611b502da"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 511,
-    "proofCount": 518,
-    "resolvedProofCount": 518,
+    "operationCount": 512,
+    "proofCount": 519,
+    "resolvedProofCount": 519,
     "failureClassCount": 335,
     "scenarioCount": 31,
     "resolvedScenarioCount": 31
@@ -117,6 +117,7 @@
         "support.diagnostics.capacity",
         "support.report.ui.completed",
         "support.report.ui.delivered",
+        "support.report.ui.delivery-released",
         "support.report.ui.download-refused",
         "support.report.ui.failed",
         "support.report.ui.started"
@@ -2316,6 +2317,9 @@
       "packages/keiko-server/src/support-report-routes.test.ts"
     ],
     "support.report.ui.delivered.line": [
+      "packages/keiko-server/src/support-report-download.test.ts"
+    ],
+    "support.report.ui.delivery-released.line": [
       "packages/keiko-server/src/support-report-download.test.ts"
     ],
     "support.report.ui.download-refused.line": [
