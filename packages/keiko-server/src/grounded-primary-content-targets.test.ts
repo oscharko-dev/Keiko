@@ -145,6 +145,58 @@ describe("primary content evidence is independent of presentation wording", () =
     },
   );
 
+  it.each(["ns::missing", "absentFn()", "@MissingDecorator"])(
+    "preserves missing punctuation-bearing code target %s in both quote forms",
+    async (target): Promise<void> => {
+      writeFileSync(join(root, "facts", "related.txt"), "Unrelated value 81234\n");
+      const provider: SemanticSearchProvider = {
+        name: "unrelated approximate evidence",
+        search: () => Promise.resolve([{ scopePath: "facts/related.txt", line: 1, score: 0.99 }]),
+      };
+      for (const quote of ["`", '"']) {
+        const { pack } = await retrieve(`Find ${quote}${target}${quote} exactly.`, provider);
+        expect(pack.files).toEqual([]);
+        expect(pack.diagnostics?.coverage?.matchesReturned).toBe(0);
+      }
+    },
+  );
+
+  it.each(["ns::sym", "fn()", "@Decorator", "dir/file.ts"])(
+    "retains actual punctuation-bearing code target %s with literal provenance",
+    async (target): Promise<void> => {
+      writeFileSync(join(root, "facts", "target.txt"), `${target} observed value 81234\n`);
+      writeFileSync(join(root, "facts", "related.txt"), "Unrelated value 81235\n");
+      let semanticCalls = 0;
+      const provider: SemanticSearchProvider = {
+        name: "unrelated approximate evidence",
+        search: () => {
+          semanticCalls += 1;
+          return Promise.resolve([{ scopePath: "facts/related.txt", line: 1, score: 0.99 }]);
+        },
+      };
+      for (const quote of ["`", '"']) {
+        const { pack } = await retrieve(`Find ${quote}${target}${quote} exactly.`, provider);
+        expect(pack.files.map((file) => file.scopePath)).toEqual(["facts/target.txt"]);
+        expect(
+          pack.files[0]?.excerpts.some(
+            (excerpt) =>
+              excerpt.atom.provenance.kind === "lexical-search" && excerpt.content.includes(target),
+          ),
+        ).toBe(true);
+      }
+      expect(semanticCalls).toBe(0);
+    },
+  );
+
+  it("keeps denied files unread when the code target resembles a sensitive path", async (): Promise<void> => {
+    writeFileSync(join(root, ".env"), "SensitivePathOnlyProbe=81234\n");
+    for (const quote of ["`", '"']) {
+      const { pack } = await retrieve(`Find ${quote}SensitivePathOnlyProbe${quote} exactly.`);
+      expect(pack.files).toEqual([]);
+      expect(pack.diagnostics?.coverage?.deniedByDiscovery).toBeGreaterThan(0);
+    }
+  });
+
   it("does not turn exact identifier absence into a fuzzy related-word hit", async (): Promise<void> => {
     writeFileSync(join(root, "facts", "related.txt"), "Absent target probe values\n");
     const { pack } = await retrieve(

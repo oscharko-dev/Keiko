@@ -269,6 +269,37 @@ function contextWindowsForAtom(
     : [];
 }
 
+interface CompactedContextWindows {
+  readonly excerpts: ContextExcerpt[];
+  readonly seen: Set<string>;
+  readonly bodies: Map<string, ContextExcerpt>;
+  truncatedExcerpts: number;
+}
+
+function appendCompactContextWindow(
+  state: CompactedContextWindows,
+  atom: EvidenceAtom,
+  window: ExcerptWindow,
+  maxBytes: number,
+  scopeId: string,
+): void {
+  const bodyIdentity = JSON.stringify([window.startLine, window.endLine, window.identity]);
+  const identity = JSON.stringify([bodyIdentity, atom.edge]);
+  if (state.seen.has(identity)) return;
+  state.seen.add(identity);
+  const shared = state.bodies.get(bodyIdentity);
+  const excerpt =
+    shared === undefined
+      ? compactContextWindow(atom, window, maxBytes, scopeId)
+      : metadataForSharedWindow(atom, window, shared, scopeId);
+  if (shared === undefined && excerpt.contentBytes === 0) return;
+  if (shared === undefined) {
+    state.truncatedExcerpts += Number(Buffer.byteLength(window.content) > excerpt.contentBytes);
+    state.bodies.set(bodyIdentity, excerpt);
+  }
+  state.excerpts.push(excerpt);
+}
+
 function compactIdentifiedContextWindows(
   atoms: readonly EvidenceAtom[],
   source: ExcerptSource,
@@ -280,35 +311,23 @@ function compactIdentifiedContextWindows(
   readonly truncatedExcerpts: number;
   readonly incompatibleWindows: number;
 } {
-  const excerpts: ContextExcerpt[] = [];
-  const seen = new Set<string>();
-  const bodies = new Map<string, ContextExcerpt>();
-  let truncatedExcerpts = 0;
+  const state: CompactedContextWindows = {
+    excerpts: [],
+    seen: new Set(),
+    bodies: new Map(),
+    truncatedExcerpts: 0,
+  };
   const merged = mergeContextWindows(normalizeExcerptWindows(source));
   const windows = merged.windows;
   for (const atom of atoms) {
     for (const window of contextWindowsForAtom(windows, atom)) {
-      const bodyIdentity = JSON.stringify([window.startLine, window.endLine, window.identity]);
-      const identity = JSON.stringify([bodyIdentity, atom.edge]);
-      if (seen.has(identity)) continue;
-      seen.add(identity);
-      const shared = bodies.get(bodyIdentity);
-      const excerpt =
-        shared === undefined
-          ? compactContextWindow(atom, window, maxBytes, scopeId)
-          : metadataForSharedWindow(atom, window, shared, scopeId);
-      if (shared === undefined && excerpt.contentBytes === 0) continue;
-      if (shared === undefined) {
-        truncatedExcerpts += Number(Buffer.byteLength(window.content) > excerpt.contentBytes);
-        bodies.set(bodyIdentity, excerpt);
-      }
-      excerpts.push(excerpt);
+      appendCompactContextWindow(state, atom, window, maxBytes, scopeId);
     }
   }
   return {
-    excerpts,
-    totalBytes: excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0),
-    truncatedExcerpts,
+    excerpts: state.excerpts,
+    totalBytes: state.excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0),
+    truncatedExcerpts: state.truncatedExcerpts,
     incompatibleWindows: merged.incompatibleWindows,
   };
 }

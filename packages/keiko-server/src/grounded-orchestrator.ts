@@ -48,6 +48,7 @@ import {
   canContinue,
   complete,
   contextPackIndexKey,
+  extractAnchors,
   DEFAULT_FILTER_OPTIONS,
   planAndGovern,
   rankCandidates,
@@ -1572,12 +1573,7 @@ function primaryLexicalAnchors(
       (anchor) => anchor.kind === "identifier" && /(?:Test|Tests|Spec)$/iu.test(anchor.term),
     );
   const direct = isDirectEvidenceLookup(query, anchors);
-  const sourceTerms = new Set(
-    query.text
-      .toLowerCase()
-      .split(/[^\p{L}\p{N}_.$-]+/u)
-      .map(trimAnchorEdgeDots),
-  );
+  const sourceTerms = originalQueryAnchorTerms(query);
   return anchors.filter(
     (anchor) =>
       anchor.kind === "quoted" ||
@@ -1586,6 +1582,20 @@ function primaryLexicalAnchors(
         sourceTerms.has(anchor.term) &&
         (factual || direct || anchor.term.includes("_"))),
   );
+}
+
+function originalQueryAnchorTerms(query: RetrievalQuery): ReadonlySet<string> {
+  const words = query.text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}_.$-]+/u)
+    .map(trimAnchorEdgeDots);
+  // Reuse the original anchor grammar, including punctuation inside code quotes. Rewritten
+  // retrieval anchors cannot create a target absent from the human's query.
+  const original = extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors;
+  return new Set([
+    ...words,
+    ...original.filter((anchor) => anchor.kind === "identifier").map((anchor) => anchor.term),
+  ]);
 }
 
 function trimAnchorEdgeDots(value: string): string {
@@ -1652,8 +1662,14 @@ function lexicalSemanticProvider(
     (anchor) =>
       anchor.kind === "quoted" || (anchor.kind === "identifier" && anchor.term.includes("_")),
   );
+  const explicitCodeTarget = primaryLexicalAnchors(
+    inputs.query,
+    inputs.anchors,
+    inputs.retrievalIntent,
+  ).some((anchor) => anchor.kind === "identifier" && /[^\p{L}\p{N}_.$-]/u.test(anchor.term));
   return definitionSymbol === undefined &&
     !explicitLiteral &&
+    !explicitCodeTarget &&
     !isDirectEvidenceLookup(inputs.query, inputs.anchors)
     ? inputs.repoSemanticSearchProvider
     : undefined;
