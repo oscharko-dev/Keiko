@@ -454,6 +454,7 @@ interface DismissalFacts {
   readonly correlationId: string;
   readonly openIncidentCount: number;
   readonly pinRelease: SupportIncidentPinRelease;
+  readonly claimsReleased: boolean;
   readonly reason?: "abandoned" | undefined;
 }
 
@@ -476,7 +477,9 @@ function dismissedEvidence(
         pinRelease: facts.pinRelease,
         openIncidentCount: facts.openIncidentCount,
         ...(facts.reason === undefined ? {} : { reason: facts.reason }),
-        ...(facts.pinRelease === "rejected" ? { completeness: "partial" as const } : {}),
+        ...(facts.pinRelease === "rejected" || !facts.claimsReleased
+          ? { completeness: "partial" as const }
+          : {}),
       },
     ),
   );
@@ -1342,7 +1345,18 @@ function releaseClaims(
   incidentId: string,
 ): void {
   if (defectFingerprint !== undefined) {
-    releaseSupportIncidentFingerprintClaim(stateDir, defectFingerprint, incidentId);
+    try {
+      releaseSupportIncidentFingerprintClaim(stateDir, defectFingerprint, incidentId);
+    } catch (error) {
+      try {
+        releaseSupportIncidentSlot(stateDir, slotIndex, incidentId);
+      } catch (slotError) {
+        throw new AggregateError([error, slotError], "Support incident claim cleanup failed", {
+          cause: slotError,
+        });
+      }
+      throw error;
+    }
   }
   releaseSupportIncidentSlot(stateDir, slotIndex, incidentId);
 }
@@ -1363,13 +1377,19 @@ function releaseRecordClaims(stateDir: string, record: SupportIncidentRecord): v
   );
 }
 
-function releaseEntryClaims(stateDir: string, record: SupportIncidentRecord): boolean {
+function releaseEntryClaims(
+  stateDir: string,
+  record: SupportIncidentRecord,
+  op:
+    | "support.incident.expired"
+    | "support.incident.dismissed" = SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
+): boolean {
   try {
     releaseRecordClaims(stateDir, record);
     return true;
   } catch (error) {
     reportServerLogFailure(error, {
-      op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
+      op,
       correlationId: incidentLifecycleCorrelation(record),
     });
     return false;
@@ -1513,8 +1533,8 @@ export type SupportIncidentDismissal = "dismissed" | "not-found" | "failed";
 
 // Shared by dismissal (an existing record's own pin) and by a candidate outcome other than
 // "created" that must release a pin it published pre-emptively (releasePrePinned above). Never
-// throws: an absent pin id is `not-pinned`, and `releaseActivityLogPin` closes every other outcome
-// into `released` or a rejection on its own.
+// throws: an absent pin id or a pin already removed by a peer is `not-pinned`;
+// other failed releases remain rejected, preserving their partial-cleanup evidence.
 function releaseWindowPin(
   stateDir: string,
   pinId: string | undefined,
@@ -1526,7 +1546,8 @@ function releaseWindowPin(
     { pinId, correlationId: context.correlationId },
     context.env,
   );
-  return result.status === "released" ? "released" : "rejected";
+  if (result.status === "released") return "released";
+  return result.reason === "not-found" ? "not-pinned" : "rejected";
 }
 
 function releaseIncidentPin(
@@ -1558,7 +1579,11 @@ function retireSupportIncident(
     reportServerLogFailure(error, { op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op, correlationId });
     return "failed";
   }
-  releaseRecordClaims(stateDir, record);
+  const claimsReleased = releaseEntryClaims(
+    stateDir,
+    record,
+    SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
+  );
   const pinRelease = releaseIncidentPin(stateDir, record, {
     correlationId: incidentLifecycleCorrelation(record, correlationId),
     env: options.env ?? process.env,
@@ -1570,10 +1595,11 @@ function retireSupportIncident(
       correlationId,
       openIncidentCount: open.length - 1,
       pinRelease,
+      claimsReleased,
       reason: options.retirementReason,
     },
   );
-  return "dismissed";
+  return claimsReleased ? "dismissed" : "failed";
 }
 
 /** Explicit withdrawal of one retained candidate, including an owner's abandoned preparation. */

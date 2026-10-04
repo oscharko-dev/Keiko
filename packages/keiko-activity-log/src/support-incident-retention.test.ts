@@ -2,6 +2,7 @@ import {
   chmodSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -127,6 +128,135 @@ function persistFreshFailure(): void {
 }
 
 describe("rolling diagnostic candidate retention", () => {
+  it.each(["dismissal", "expiry"] as const)(
+    "treats an already released owned pin as complete during %s",
+    (action) => {
+      const created = recordUserReportedIncident(stateDir, { correlationId: "peer-pin-owner" });
+      if (created.status !== "created" || created.record.pin.pinId === undefined)
+        throw new TypeError("Expected pinned candidate");
+      expect(
+        serverLog.releaseActivityLogPin(stateDir, {
+          pinId: created.record.pin.pinId,
+          correlationId: "peer-pin-release",
+        }).status,
+      ).toBe("released");
+      if (action === "dismissal")
+        expect(dismissSupportIncident(stateDir, created.incidentId)).toBe("dismissed");
+      else
+        expect(listSupportIncidents(stateDir, { nowMs: created.record.expiresAtMs + 1 })).toEqual(
+          [],
+        );
+      const op = action === "dismissal" ? "support.incident.dismissed" : "support.incident.expired";
+      const ended = persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
+      expect(ended).toHaveLength(1);
+      expect(JSON.parse(ended[0] ?? "{}")).toMatchObject({
+        incidentId: created.incidentId,
+        pinRelease: "not-pinned",
+        completeness: "complete",
+      });
+      expect(listSupportIncidentClaims(stateDir)).toEqual([]);
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+    },
+  );
+
+  it.each(["dismissal", "preparation"] as const)(
+    "releases its pin and records partial %s after an unsafe owned slot claim",
+    (action) => {
+      const created = recordUserReportedIncident(stateDir, { correlationId: "unsafe-claim-owner" });
+      if (created.status !== "created") throw new TypeError("Expected pinned candidate");
+      const slot = join(
+        incidentStore.supportIncidentDirectory(stateDir),
+        supportIncidentSlotClaimFileName(created.record.slotIndex),
+      );
+      rmSync(slot);
+      mkdirSync(slot);
+      const retire =
+        action === "dismissal" ? dismissSupportIncident : completePreparedSupportIncident;
+      expect(retire(stateDir, created.incidentId, { correlationId: "unsafe-claim-retire" })).toBe(
+        "failed",
+      );
+      expect(lstatSync(slot).isDirectory()).toBe(true);
+      expect(incidentStore.readSupportIncidentRecord(stateDir, created.incidentId)).toBeUndefined();
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+      const ended = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.dismissed",
+      );
+      expect(ended).toHaveLength(1);
+      expect(JSON.parse(ended[0] ?? "{}")).toMatchObject({
+        correlationId: "unsafe-claim-retire",
+        incidentState: action === "dismissal" ? "candidate" : "reported",
+        pinRelease: "released",
+        completeness: "partial",
+      });
+    },
+  );
+
+  it("still releases its owned slot after fingerprint-claim cleanup fails", () => {
+    const created = recordRegisteredFailureIncident(stateDir, {
+      op: "coding-runtime.readiness.failed",
+      errorKind: "unavailable",
+      correlationId: "failed-fingerprint-cleanup",
+    });
+    if (created?.status !== "created") throw new TypeError("Expected registered failure candidate");
+    const failure = new artifactFiles.SafeArtifactFileError("manifest", "permission-unsafe");
+    vi.spyOn(incidentStore, "releaseSupportIncidentFingerprintClaim").mockImplementationOnce(() => {
+      throw failure;
+    });
+    const slot = vi.spyOn(incidentStore, "releaseSupportIncidentSlot");
+    const notice = vi.spyOn(serverLog, "reportServerLogFailure");
+    expect(completePreparedSupportIncident(stateDir, created.incidentId)).toBe("failed");
+    expect(notice).toHaveBeenCalledWith(failure, {
+      op: "support.incident.dismissed",
+      correlationId: "failed-fingerprint-cleanup",
+    });
+    expect(slot).toHaveBeenCalledExactlyOnceWith(
+      stateDir,
+      created.record.slotIndex,
+      created.incidentId,
+    );
+    expect(listSupportIncidentClaims(stateDir).map((claim) => claim.fileName)).not.toContain(
+      supportIncidentSlotClaimFileName(created.record.slotIndex),
+    );
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+    const ended = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.dismissed",
+    );
+    expect(JSON.parse(ended[0] ?? "{}")).toMatchObject({
+      pinRelease: "released",
+      completeness: "partial",
+    });
+  });
+
+  it("retains both actual claim errors while releasing the owned pin", () => {
+    const created = recordRegisteredFailureIncident(stateDir, {
+      op: "coding-runtime.readiness.failed",
+      errorKind: "unavailable",
+      correlationId: "two-claim-cleanup-errors",
+    });
+    if (created?.status !== "created") throw new TypeError("Expected registered failure candidate");
+    const fingerprintError = new artifactFiles.SafeArtifactFileError(
+      "manifest",
+      "permission-unsafe",
+    );
+    const slotError = new artifactFiles.SafeArtifactFileError("manifest", "unsafe-target");
+    vi.spyOn(incidentStore, "releaseSupportIncidentFingerprintClaim").mockImplementationOnce(() => {
+      throw fingerprintError;
+    });
+    vi.spyOn(incidentStore, "releaseSupportIncidentSlot").mockImplementationOnce(() => {
+      throw slotError;
+    });
+    const notice = vi.spyOn(serverLog, "reportServerLogFailure");
+    expect(completePreparedSupportIncident(stateDir, created.incidentId)).toBe("failed");
+    expect(notice.mock.calls[0]?.[0]).toBeInstanceOf(AggregateError);
+    expect(notice.mock.calls[0]?.[0]).toMatchObject({
+      errors: [fingerprintError, slotError],
+      cause: slotError,
+    });
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+  });
+
   it.each(["replacement", "symlink"] as const)(
     "never removes a %s replacing its own failed publication inode",
     (substitution) => {

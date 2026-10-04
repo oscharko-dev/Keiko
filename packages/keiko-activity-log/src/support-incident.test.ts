@@ -865,7 +865,7 @@ describe("SupportIncident candidates", () => {
       expect(record.pin.status).toBe("pinned");
       vi.spyOn(serverLogModule, "releaseActivityLogPin").mockReturnValueOnce({
         status: "rejected",
-        reason: "not-found",
+        reason: "removal-failed",
       });
 
       expect(dismissSupportIncident(stateDir, record.incidentId)).toBe("dismissed");
