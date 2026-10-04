@@ -747,6 +747,7 @@ export function createMultiSourceAnswerer(
 const MAX_RETRIEVAL_CONCURRENCY = 4;
 
 interface RetrievedSource {
+  readonly sourceScopeFingerprint: string;
   readonly label: string;
   readonly pack: ConnectedContextPack;
   readonly elapsedMs: number;
@@ -766,6 +767,7 @@ interface RetrievalOutcome {
 }
 
 export interface MultiSourceAskInput {
+  readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
   readonly retrievalContent?: string | undefined;
   readonly chat: Chat;
   readonly scopes: readonly ChatConnectedScope[];
@@ -860,7 +862,14 @@ async function retrieveOneSource(
     acc.firstError ??= internalError("Grounded answer context pack failed validation.");
     return;
   }
-  acc.retrieved[i] = { label, pack: out.pack, elapsedMs: out.elapsedMs, scope, plan: out.plan };
+  acc.retrieved[i] = {
+    label,
+    pack: out.pack,
+    elapsedMs: out.elapsedMs,
+    scope,
+    plan: out.plan,
+    sourceScopeFingerprint: groundedSourceScopeFingerprint(scope, cs, ctx.sourceScopeFingerprints),
+  };
 }
 
 async function retrieveAllSources(
@@ -901,7 +910,17 @@ interface SourceCitationBundle {
   readonly labeledCitations: readonly GroundedEvidenceCitation[];
 }
 
-export function groundedSourceScopeFingerprint(scope: SelectedScope): string {
+export function groundedSourceScopeFingerprint(
+  scope: SelectedScope,
+  connectedScope?: ChatConnectedScope,
+  selectedFingerprints?: ReadonlyMap<ChatConnectedScope, string>,
+): string {
+  if (connectedScope !== undefined && selectedFingerprints !== undefined) {
+    const fingerprint = selectedFingerprints.get(connectedScope);
+    if (fingerprint === undefined)
+      throw new TypeError("Selected source attribution is unavailable");
+    return fingerprint;
+  }
   const input = chatConnectedScopeFingerprintInput({
     root: scope.workspaceRoot,
     kind: scope.kind,
@@ -960,7 +979,7 @@ function sourceCitationBundles(
         citations,
         source.label,
         redactor,
-        groundedSourceScopeFingerprint(source.scope),
+        source.sourceScopeFingerprint,
       ),
     };
   });

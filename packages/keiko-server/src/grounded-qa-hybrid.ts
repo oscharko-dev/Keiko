@@ -193,6 +193,7 @@ export type ConnectorRetrieve = (
 export type HybridAnswerer = (system: string, user: string) => Promise<GroundedAnswerPayload>;
 
 export interface HybridGroundedAskCtx {
+  readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
   /** Canonical closed omission counts from retrieved folders; no excluded paths or contents. */
   readonly folderOmissionMetadata?: readonly string[];
   readonly retrievalContent?: string | undefined;
@@ -228,6 +229,7 @@ export interface HybridGroundedAskCtx {
 // ─── Retrieved-source records ─────────────────────────────────────────────────
 
 interface RetrievedFolder {
+  readonly sourceScopeFingerprint: string;
   readonly label: string;
   readonly pack: ConnectedContextPack;
   readonly elapsedMs: number;
@@ -298,7 +300,7 @@ function folderRerankInputs(
   redactor: Redactor,
 ): RerankInput<HybridPayload>[] {
   return folders.flatMap((src) => {
-    const sourceScopeFingerprint = groundedSourceScopeFingerprint(src.scope);
+    const sourceScopeFingerprint = src.sourceScopeFingerprint;
     return src.pack.files.flatMap((file) =>
       file.excerpts.map((excerpt) => ({
         kind: "folder" as const,
@@ -520,6 +522,30 @@ type FolderSlot =
   | { readonly kind: "skipped"; readonly value: SkippedConnector }
   | undefined;
 
+function retrievedFolderSlot(
+  ctx: HybridGroundedAskCtx,
+  cs: ChatConnectedScope,
+  label: string,
+  scope: SelectedScope,
+  out: RetrievalOnlyOutput,
+): FolderSlot {
+  return {
+    kind: "retrieved",
+    value: {
+      label,
+      pack: out.pack,
+      elapsedMs: out.elapsedMs,
+      scope,
+      plan: out.plan,
+      sourceScopeFingerprint: groundedSourceScopeFingerprint(
+        scope,
+        cs,
+        ctx.sourceScopeFingerprints,
+      ),
+    },
+  };
+}
+
 async function retrieveFolderIntoSlot(
   ctx: HybridGroundedAskCtx,
   retriever: FolderRetriever,
@@ -570,10 +596,7 @@ async function retrieveFolderIntoSlot(
       value: { label, reason: "pack-validation-failed", message: "Pack validation failed." },
     };
   }
-  return {
-    kind: "retrieved",
-    value: { label, pack: out.pack, elapsedMs: out.elapsedMs, scope, plan: out.plan },
-  };
+  return retrievedFolderSlot(ctx, cs, label, scope, out);
 }
 
 async function retrieveFolderPacks(

@@ -111,6 +111,7 @@ import {
   buildConnectedScopes,
   createMultiSourceAnswerer,
   defaultRetriever,
+  groundedSourceScopeFingerprint,
   runMultiSourceAsk,
   type GroundedRetriever,
   type MultiSourceAnswerer,
@@ -626,6 +627,7 @@ interface SkippedFolderScope {
 interface CanonicalizedFolderScopes {
   readonly canonical: readonly ChatConnectedScope[];
   readonly skipped: readonly SkippedFolderScope[];
+  readonly sourceScopeFingerprints: ReadonlyMap<ChatConnectedScope, string>;
 }
 
 function skippedFolderMessage(result: RouteResult): string {
@@ -644,6 +646,7 @@ function canonicalizeGroundedFolderScopes(
 ): CanonicalizedFolderScopes {
   const canonical: ChatConnectedScope[] = [];
   const skipped: SkippedFolderScope[] = [];
+  const sourceScopeFingerprints = new Map<ChatConnectedScope, string>();
   for (const scope of scopes) {
     const rootInput = scope.root ?? chat.projectPath;
     const access = groundedRootAccess(rootInput, deps, request, correlationId);
@@ -652,9 +655,15 @@ function canonicalizeGroundedFolderScopes(
       skipped.push({ label, message: skippedFolderMessage(access), reason: access });
       continue;
     }
-    canonical.push(scopeWithWorkspaceAccess(scope, access));
+    const admittedScope = scopeWithWorkspaceAccess(scope, access);
+    canonical.push(admittedScope);
+    // Attribution retains the human-selected identity; canonical roots govern filesystem access.
+    sourceScopeFingerprints.set(
+      admittedScope,
+      groundedSourceScopeFingerprint(buildSelectedScopeFrom(chat, scope, "source-attribution")),
+    );
   }
-  return { canonical, skipped };
+  return { canonical, skipped, sourceScopeFingerprints };
 }
 
 // The canonical list is authoritative even when it is EMPTY. With every folder denied or
@@ -1554,6 +1563,7 @@ interface AskWorkerCtx {
 }
 
 interface PreparedGroundedAsk {
+  readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
   readonly messageCountBeforeTurn?: number;
   readonly continuityStartedAt?: number;
   readonly continuity?: GroundedConversationContinuity | undefined;
@@ -2039,6 +2049,9 @@ async function dispatchMultiSourceAsk(
   return runMultiSourceAsk({
     chat,
     scopes,
+    ...(args.sourceScopeFingerprints === undefined
+      ? {}
+      : { sourceScopeFingerprints: args.sourceScopeFingerprints }),
     content: input.content,
     retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
@@ -2194,6 +2207,9 @@ async function dispatchHybridAsk(
   const modelId = groundedModelId(prepared);
   return runHybridGroundedAsk({
     chat,
+    ...(prepared.sourceScopeFingerprints === undefined
+      ? {}
+      : { sourceScopeFingerprints: prepared.sourceScopeFingerprints }),
     content: input.content,
     retrievalContent: input.retrievalContent,
     answerContent: input.answerContent ?? input.content,
@@ -2245,11 +2261,15 @@ async function dispatchPreparedGroundedAsk(
   // Fail-soft: inaccessible/denied folders are skipped; only effective (canonical) counts drive
   // dispatch. A chat with ONLY denied/inaccessible sources still returns the original 400 so the
   // user sees a clear rejection (security preserved).
-  const { canonical: canonicalFolderScopes, skipped: skippedFolders } =
-    canonicalizePreparedFolderScopes(prepared, deps);
+  const {
+    canonical: canonicalFolderScopes,
+    skipped: skippedFolders,
+    sourceScopeFingerprints,
+  } = canonicalizePreparedFolderScopes(prepared, deps);
   const preparedWithCanonicalFolders: PreparedGroundedAsk = {
     ...prepared,
     chat: withCanonicalFolderScopes(chat, canonicalFolderScopes),
+    sourceScopeFingerprints,
   };
   const connectorCount = buildLocalKnowledgeScopes(chat).length;
   const effectiveFolders = canonicalFolderScopes.length;

@@ -6,7 +6,7 @@ import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-cont
 // missing `.source` tag, a dropped skip-uncertainty — must make at least one assertion fail.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -49,7 +49,13 @@ import {
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 
-import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
+import {
+  buildSelectedScopeFrom,
+  handleGroundedAsk,
+  type GroundedRunner,
+  type HybridSeam,
+} from "./grounded-qa.js";
+import { groundedSourceScopeFingerprint } from "./grounded-qa-multi-source.js";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
@@ -721,6 +727,49 @@ describe("hybrid grounded ask — folder evidence the window fit left out", () =
 // ─── Case 1: Mixed — 1 folder + 1 connector ──────────────────────────────────
 
 describe("hybrid grounded ask — 1 folder + 1 connector", () => {
+  it("keeps selected alias attribution while hybrid folder access uses the canonical root", async () => {
+    const { capsuleId } = await seedReadyCapsule("Alias documents");
+    const canonicalRoot = tempRoot("canonical-folder");
+    const selectedRoot = join(tmp, "selected-folder");
+    symlinkSync(canonicalRoot, selectedRoot, "dir");
+    const scope: ChatConnectedScope = {
+      root: selectedRoot,
+      kind: "directory",
+      relativePaths: ["src/alpha.ts"],
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([scope], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+    const chat = store.findChatById(chatId);
+    if (chat === undefined) throw new TypeError("Missing hybrid alias fixture chat");
+    const observed: string[] = [];
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Explain alpha" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: (input) => {
+          observed.push(input.scope.workspaceRoot);
+          return folderRetrieverFor(
+            new Map([["src/alpha.ts", folderPack("src/alpha.ts", 1, "alias")]]),
+          )(input);
+        },
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer(HYBRID_ANSWER_SENTINEL, { count: 0 }),
+      },
+    );
+    expect(result.status).toBe(200);
+    expect(observed).toEqual([realpathSync(canonicalRoot)]);
+    expect(store.findChatById(chatId)?.connectedScopes).toEqual([scope]);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.citations).not.toHaveLength(0);
+    expect(answer.citations.map((citation) => citation.sourceScopeFingerprint)).toEqual(
+      answer.citations.map(() =>
+        groundedSourceScopeFingerprint(buildSelectedScopeFrom(chat, scope, "selected-alias")),
+      ),
+    );
+  });
+
   it("returns groundingKind 'hybrid' with source-tagged citations, correct contextPack counts, and the answerer's content", async () => {
     // Arrange
     const { capsuleId: capId, label: connectorLabel } = await seedReadyCapsule("Alpha Docs");

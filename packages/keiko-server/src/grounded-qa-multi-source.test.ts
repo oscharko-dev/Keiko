@@ -8,7 +8,7 @@ import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-cont
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -34,6 +34,7 @@ import type {
 
 import {
   buildAnswerCitations,
+  buildSelectedScopeFrom,
   handleGroundedAsk,
   modelWindowAwareBudget,
   promptByteLength,
@@ -44,6 +45,7 @@ import { sentPromptContext } from "./grounded-prompt-context.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
   buildLabeledAnswerCitations,
+  groundedSourceScopeFingerprint,
   buildConnectedScopes,
   buildMultiSourceGatewayMessages,
   fittedMultiSourcePrompt,
@@ -318,6 +320,11 @@ function tempRoot(name: string): string {
   const root = join(tmp, name);
   mkdirSync(root, { recursive: true });
   return root;
+}
+
+function aliasRelativePaths(kind: ChatConnectedScope["kind"], index: number): readonly string[] {
+  if (kind === "workspace-root") return [];
+  return kind === "files" ? [index === 0 ? "src/a.ts" : "src/b.ts"] : ["src"];
 }
 
 function modelBudgetDeps(configured: boolean): UiHandlerDeps {
@@ -856,6 +863,59 @@ describe("mergeContextPackSummaries", () => {
 // ─── Handler branch ───────────────────────────────────────────────────────────
 
 describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
+  it.each(["workspace-root", "directory", "files"] as const)(
+    "attributes %s citations to selected aliases while reads use the canonical root",
+    async (kind): Promise<void> => {
+      const canonicalRoot = tempRoot("canonical-source");
+      const scopes = ["FirstAlias", "second-alias"].map((name, index): ChatConnectedScope => {
+        const root = join(tmp, name);
+        symlinkSync(canonicalRoot, root, "dir");
+        return {
+          root,
+          kind,
+          relativePaths: aliasRelativePaths(kind, index),
+          connectedAtMs: NOW,
+        };
+      });
+      const chatId = makeChat(scopes);
+      const chat = store.findChatById(chatId);
+      if (chat === undefined) throw new TypeError("Missing alias fixture chat");
+      const observed: string[] = [];
+      const retriever: GroundedRetriever = (input) => {
+        observed.push(input.scope.workspaceRoot);
+        const path = observed.length === 1 ? "src/a.ts" : "src/b.ts";
+        return Promise.resolve({
+          pack: scopePack(path, 1, path),
+          elapsedMs: 1,
+          plan: { state: "ready" } as never,
+        });
+      };
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: "Explain both definitions" })),
+        recordingDeps([]),
+        undefined,
+        seam(
+          retriever,
+          constAnswerer("First [src/a.ts:1-5]. Second [src/b.ts:1-5].", { count: 0 }),
+        ),
+      );
+      expect(result.status).toBe(200);
+      expect(observed).toEqual([realpathSync(canonicalRoot), realpathSync(canonicalRoot)]);
+      expect(store.findChatById(chatId)?.connectedScopes).toEqual(scopes);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.citations.map((citation) => citation.sourceScopeFingerprint)).toEqual(
+        scopes.map((scope, index) =>
+          groundedSourceScopeFingerprint(
+            buildSelectedScopeFrom(chat, scope, `selected-${String(index)}`),
+          ),
+        ),
+      );
+      expect(
+        new Set(answer.citations.map((citation) => citation.sourceScopeFingerprint)).size,
+      ).toBe(2);
+    },
+  );
+
   it.each([false, true])(
     "projects the active model budget through two source allocations (configured=%s)",
     async (configured): Promise<void> => {
