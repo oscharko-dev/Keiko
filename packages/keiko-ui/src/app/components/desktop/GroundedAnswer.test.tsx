@@ -811,6 +811,81 @@ describe("GroundedAnswer", () => {
     });
   });
 
+  it("uses all 96 evidence paths to disambiguate same basenames before and after disclosure", () => {
+    const paths = Array.from(
+      { length: 96 },
+      (_, index) =>
+        `packages/entry-${String(index + 1).padStart(3, "0")}/src/LateDefinitionProbe.ts`,
+    );
+    const citations = paths.map((path) =>
+      citation({ scopePath: path, stableId: path, lineRange: { startLine: 301, endLine: 302 } }),
+    );
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    const { container } = render(
+      <GroundedAnswer
+        answer={answer({ citations })}
+        busy={false}
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+    const expected = paths.map((path) => `${path.split("/").slice(-3).join("/")}:301-302`);
+    expect(
+      [...container.querySelectorAll(".grounded-citation-open")].map(
+        (button) => button.textContent,
+      ),
+    ).toEqual(expected.slice(0, 8));
+    openEvidenceDisclosure(container);
+    fireEvent.click(screen.getByRole("button", { name: "Show all 96 citations" }));
+    expect(
+      [...container.querySelectorAll(".grounded-citation-open")].map(
+        (button) => button.textContent,
+      ),
+    ).toEqual(expected);
+  });
+
+  it("distinguishes identical citation paths from different attributed sources", () => {
+    const citations = ["ManualA", "ManualB"].map((source) =>
+      citation({ source, stableId: source }),
+    );
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    const { container } = render(
+      <GroundedAnswer
+        answer={answer({ citations })}
+        busy={false}
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+    expect(
+      [...container.querySelectorAll(".grounded-citation-open")].map(
+        (button) => button.textContent,
+      ),
+    ).toEqual(["ManualA · foo.ts:10-25", "ManualB · foo.ts:10-25"]);
+    openEvidenceDisclosure(container);
+    const first = screen.getAllByRole("button", {
+      name: "Open src/foo.ts at lines 10-25 in editor",
+    })[0];
+    if (first === undefined) throw new Error("citation missing");
+    fireEvent.click(first);
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "src/foo.ts",
+      lineStart: 10,
+      lineEnd: 25,
+    });
+  });
+
+  it("keeps source attribution for identical paths without an editor callback", () => {
+    const citations = ["ManualA", "ManualB"].map((source) =>
+      citation({ source, stableId: source }),
+    );
+    const { container } = render(<GroundedAnswer answer={answer({ citations })} busy={false} />);
+    expect(
+      [...container.querySelectorAll(".grounded-citation-range")].map((range) => range.textContent),
+    ).toEqual(["ManualA · src/foo.ts:10-25", "ManualB · src/foo.ts:10-25"]);
+  });
+
   it("renders the scopePath alone when the citation has no lineRange", () => {
     const a = answer({
       citations: [citation({ lineRange: undefined, scopePath: "src/qux.ts", stableId: "q" })],

@@ -14,6 +14,7 @@ import {
   citationMarkerIndices,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import { isCanonicalConnectedSearchAbstention } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { formatBytes, formatMs } from "@/lib/format";
 import {
@@ -23,8 +24,10 @@ import {
 import type { OptionalWidgetMessageKey as MessageKey } from "@/lib/i18n-messages.optional.en";
 import {
   RepositoryReferenceInline,
+  repositoryReferencePathLabels,
   type OpenRepositoryReference,
   type RepositoryReferenceRoot,
+  type RepositoryReference,
 } from "./repositoryReferences";
 import type {
   GroundedAnswer,
@@ -446,14 +449,35 @@ function CitationScore({ score }: { readonly score: number }): ReactNode {
   );
 }
 
+function citationRepositoryReference(citation: GroundedEvidenceCitation): RepositoryReference {
+  return {
+    label: formatRange(citation),
+    path: citation.scopePath,
+    ...(citation.lineRange === undefined
+      ? {}
+      : {
+          lineStart: citation.lineRange.startLine,
+          lineEnd: citation.lineRange.endLine,
+        }),
+  };
+}
+
+function attributedCitationLabel(label: string, sourceLabel: string | undefined): string {
+  return sourceLabel === undefined ? label : `${sourceLabel} · ${label}`;
+}
+
 function CitationReference({
   citation,
   repositoryRoots,
   openRepositoryReference,
+  displayPath,
+  sourceLabel,
 }: {
   readonly citation: GroundedEvidenceCitation;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
+  readonly displayPath: string;
+  readonly sourceLabel: string | undefined;
 }): ReactNode {
   const t = useTranslate();
   const documentFormat = citation.documentFormat?.toUpperCase();
@@ -472,22 +496,14 @@ function CitationReference({
       <span className="grounded-citation-range">
         {canOpenRepositoryCitation ? (
           <RepositoryReferenceInline
-            reference={{
-              label: formatRange(citation),
-              path: citation.scopePath,
-              ...(citation.lineRange === undefined
-                ? {}
-                : {
-                    lineStart: citation.lineRange.startLine,
-                    lineEnd: citation.lineRange.endLine,
-                  }),
-            }}
+            reference={citationRepositoryReference(citation)}
             roots={repositoryRoots}
             openReference={openRepositoryReference}
             className="repo-ref-link grounded-citation-open"
+            displayPath={attributedCitationLabel(displayPath, sourceLabel)}
           />
         ) : (
-          formatRange(citation)
+          attributedCitationLabel(formatRange(citation), sourceLabel)
         )}
       </span>
       <CitationScore score={citation.score} />
@@ -575,6 +591,27 @@ function ActivityDisclosureButton({
   );
 }
 
+function attributedCitationCollisions(
+  citations: readonly GroundedEvidenceCitation[],
+): ReadonlySet<string> {
+  const sources = new Map<string, Set<string | undefined>>();
+  for (const citation of citations) {
+    const group = sources.get(citation.scopePath) ?? new Set<string | undefined>();
+    group.add(citation.source);
+    sources.set(citation.scopePath, group);
+  }
+  return new Set([...sources].filter(([, group]) => group.size > 1).map(([path]) => path));
+}
+
+function citationSourceLabel(
+  citation: GroundedEvidenceCitation,
+  collisions: ReadonlySet<string>,
+): string | undefined {
+  return collisions.has(citation.scopePath) && citation.source !== undefined
+    ? stripUnsafeFormatChars(citation.source)
+    : undefined;
+}
+
 function CitationList({
   citations,
   repositoryRoots,
@@ -590,6 +627,8 @@ function CitationList({
   // Defensive re-sort: the wire delivers folder citations score-sorted already, but the cap
   // must never hide a stronger citation behind a weaker one.
   const sorted = uniqueByCitationIdentity([...citations].sort((a, b) => b.score - a.score));
+  const labels = repositoryReferencePathLabels(sorted.map((citation) => citation.scopePath));
+  const collisions = attributedCitationCollisions(sorted);
   const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
   // Copilot PR #258 finding: the prior "Evidence" label was a direct child of role="list"
   // which is invalid (only listitem children allowed). Lift the label OUT of the list and
@@ -604,6 +643,8 @@ function CitationList({
               citation={citation}
               repositoryRoots={repositoryRoots}
               openRepositoryReference={openRepositoryReference}
+              displayPath={labels.get(citation.scopePath) ?? citation.scopePath}
+              sourceLabel={citationSourceLabel(citation, collisions)}
             />
           </li>
         ))}

@@ -366,8 +366,50 @@ function referenceRangeLabel(reference: RepositoryReference): string {
   return ` at lines ${String(reference.lineStart)}-${String(reference.lineEnd)}`;
 }
 
-function referenceVisibleLabel(reference: RepositoryReference): string {
-  const fileName = reference.path.split("/").filter(Boolean).pop() ?? reference.path;
+interface ReferenceSuffixNode {
+  count: number;
+  readonly children: Map<string, ReferenceSuffixNode>;
+}
+
+function insertReferenceSuffix(root: ReferenceSuffixNode, parts: readonly string[]): void {
+  let node = root;
+  for (const part of [...parts].reverse()) {
+    const child = node.children.get(part) ?? {
+      count: 0,
+      children: new Map<string, ReferenceSuffixNode>(),
+    };
+    child.count += 1;
+    node.children.set(part, child);
+    node = child;
+  }
+}
+
+function shortestReferenceSuffix(root: ReferenceSuffixNode, parts: readonly string[]): string {
+  let node: ReferenceSuffixNode | undefined = root;
+  const suffix: string[] = [];
+  for (const part of [...parts].reverse()) {
+    suffix.push(part);
+    node = node?.children.get(part);
+    if (node === undefined || node.count === 1) break;
+  }
+  return suffix.reverse().join("/");
+}
+
+// A reversed segment trie finds the shortest distinct suffix in linear work over source paths.
+// Repeated line references to the same path do not make that file ambiguous.
+export function repositoryReferencePathLabels(
+  paths: readonly string[],
+): ReadonlyMap<string, string> {
+  const partsByPath = new Map([...new Set(paths)].map((path) => [path, path.split("/")]));
+  const root: ReferenceSuffixNode = { count: 0, children: new Map() };
+  for (const parts of partsByPath.values()) insertReferenceSuffix(root, parts);
+  return new Map(
+    [...partsByPath].map(([path, parts]) => [path, shortestReferenceSuffix(root, parts)]),
+  );
+}
+
+function referenceVisibleLabel(reference: RepositoryReference, displayPath?: string): string {
+  const fileName = displayPath ?? reference.path.split("/").filter(Boolean).pop() ?? reference.path;
   if (reference.lineStart === undefined) return fileName;
   if (reference.lineEnd === undefined || reference.lineEnd === reference.lineStart) {
     return `${fileName}:${String(reference.lineStart)}`;
@@ -430,6 +472,7 @@ interface RepositoryReferenceInlineProps {
   readonly roots: readonly RepositoryReferenceRoot[];
   readonly openReference: OpenRepositoryReference | undefined;
   readonly className?: string | undefined;
+  readonly displayPath?: string | undefined;
 }
 
 const OPENED_CONFIRMATION_MS = 1800;
@@ -464,6 +507,7 @@ export function RepositoryReferenceInline({
   roots,
   openReference,
   className = "repo-ref-link",
+  displayPath,
 }: RepositoryReferenceInlineProps): ReactNode {
   const [status, setStatus] = useState<"idle" | "choosing" | "opening" | "opened" | "failed">(
     "idle",
@@ -559,7 +603,7 @@ export function RepositoryReferenceInline({
   );
 
   if (openReference === undefined) {
-    return <span title={reference.label}>{referenceVisibleLabel(reference)}</span>;
+    return <span title={reference.label}>{referenceVisibleLabel(reference, displayPath)}</span>;
   }
 
   const alert = status === "failed";
@@ -578,7 +622,7 @@ export function RepositoryReferenceInline({
         <span className="repo-ref-file-icon" aria-hidden="true">
           <FileIcon name={reference.path} />
         </span>
-        <span>{referenceVisibleLabel(reference)}</span>
+        <span>{referenceVisibleLabel(reference, displayPath)}</span>
       </button>
       {status === "choosing" ? (
         <span className="repo-ref-picker" role="dialog" aria-label="Select repository source">

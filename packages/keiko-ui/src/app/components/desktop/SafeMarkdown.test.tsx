@@ -261,6 +261,50 @@ describe("SafeMarkdown — repository references", () => {
     expect(jsonReference.querySelector(".fi-img")).toHaveAttribute("src", "/assets/icons/json.svg");
   });
 
+  it("disambiguates all 96 same-basename references across Markdown table cells", () => {
+    const paths = Array.from(
+      { length: 96 },
+      (_, index) =>
+        `packages/entry-${String(index + 1).padStart(3, "0")}/src/LateDefinitionProbe.ts`,
+    );
+    const source =
+      "| Source |\n| --- |\n" + paths.map((path) => `| [${path}:301-302] |`).join("\n");
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <SafeMarkdown
+        source={source}
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+    const references = screen.getAllByRole("button", { name: /^Open / });
+    expect(references.map((button) => button.textContent)).toEqual(
+      paths.map((path) => `${path.split("/").slice(-3).join("/")}:301-302`),
+    );
+    const last = references[95];
+    if (last === undefined) throw new Error("last citation missing");
+    fireEvent.click(last);
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/repo",
+      path: paths[95],
+      lineStart: 301,
+      lineEnd: 302,
+    });
+  });
+
+  it("uses one path set across prose and inline code without lengthening repeated file references", () => {
+    render(
+      <SafeMarkdown
+        source="[alpha/src/foo.ts:1] and `beta/src/foo.ts:2`, then [alpha/src/foo.ts:3]."
+        repositoryRoots={[{ root: "/repo", label: "Keiko" }]}
+        openRepositoryReference={() => ({ ok: true, windowId: "editor-1" })}
+      />,
+    );
+    expect(
+      screen.getAllByRole("button", { name: /^Open / }).map((button) => button.textContent),
+    ).toEqual(["alpha/src/foo.ts:1", "beta/src/foo.ts:2", "alpha/src/foo.ts:3"]);
+  });
+
   it.each([
     "src/überprüfung/status.ts",
     "src/u\u0308berpru\u0308fung/status.ts",

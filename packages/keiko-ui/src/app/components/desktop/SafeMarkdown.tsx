@@ -41,6 +41,7 @@ import {
   parseExactRepositoryReference,
   RepositoryReferenceInline,
   repositoryReferenceTextParts,
+  repositoryReferencePathLabels,
   sanitizeRepositoryEvidenceText,
   type OpenRepositoryReference,
   type RepositoryReferenceRoot,
@@ -67,6 +68,7 @@ interface RenderOptions {
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly streaming: boolean;
+  readonly repositoryPathLabels: ReadonlyMap<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -618,6 +620,7 @@ function renderRepositoryText(
             reference={reference}
             roots={options.repositoryRoots}
             openReference={options.openRepositoryReference}
+            displayPath={options.repositoryPathLabels.get(reference.path)}
           />
         );
       })}
@@ -644,6 +647,7 @@ function renderInlineCode(
           reference={reference}
           roots={options.repositoryRoots}
           openReference={options.openRepositoryReference}
+          displayPath={options.repositoryPathLabels.get(reference.path)}
           className="repo-ref-link repo-ref-link-inline-code"
         />
       )}
@@ -778,6 +782,27 @@ function useMarkdownListEvidence(
   }, [tree, streaming, correlationId, messageId]);
 }
 
+function referencePathsInNode(node: SafeMarkdownNode): readonly string[] {
+  const text = node.text ?? "";
+  if (node.kind === "inline-code") {
+    const reference = parseExactRepositoryReference(text);
+    return reference === null ? [] : [reference.path];
+  }
+  if (node.kind !== "text") return [];
+  return repositoryReferenceTextParts(sanitizeRepositoryEvidenceText(text)).flatMap((part) =>
+    part.reference === undefined ? [] : [part.reference.path],
+  );
+}
+
+function referencePathsInTree(tree: readonly SafeMarkdownNode[]): readonly string[] {
+  const paths: string[] = [];
+  for (const node of tree) {
+    paths.push(...referencePathsInNode(node));
+    if (node.children !== undefined) paths.push(...referencePathsInTree(node.children));
+  }
+  return paths;
+}
+
 function SafeMarkdownImpl({
   source,
   literalUserInput = false,
@@ -794,6 +819,10 @@ function SafeMarkdownImpl({
     [source, literalUserInput],
   );
   useMarkdownListEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
+  const repositoryPathLabels = useMemo(
+    () => repositoryReferencePathLabels(referencePathsInTree(tree)),
+    [tree],
+  );
   const options = useMemo<RenderOptions>(
     () => ({
       literalUserInput,
@@ -801,8 +830,16 @@ function SafeMarkdownImpl({
       streaming,
       repositoryRoots,
       openRepositoryReference,
+      repositoryPathLabels,
     }),
-    [literalUserInput, citationPreview, openRepositoryReference, repositoryRoots, streaming],
+    [
+      literalUserInput,
+      citationPreview,
+      openRepositoryReference,
+      repositoryRoots,
+      repositoryPathLabels,
+      streaming,
+    ],
   );
   return (
     <div className="sm-root" style={literalUserInput ? { whiteSpace: "pre-wrap" } : undefined}>

@@ -22,9 +22,49 @@ import {
   normalizeReferencePath,
   parseExactRepositoryReference,
   repositoryReferenceTextParts,
+  repositoryReferencePathLabels,
   repositoryRootLabel,
   sanitizeRepositoryEvidenceText,
 } from "./repositoryReferences";
+
+describe("repository source path labels", () => {
+  it("uses the shortest distinguishing suffix while keeping unique filenames short", () => {
+    expect(
+      repositoryReferencePathLabels([
+        "packages/alpha/src/überprüfung.ts",
+        "packages/beta/src/überprüfung.ts",
+        "docs/unique manual.html",
+        "packages/alpha/src/überprüfung.ts",
+      ]),
+    ).toEqual(
+      new Map([
+        ["packages/alpha/src/überprüfung.ts", "alpha/src/überprüfung.ts"],
+        ["packages/beta/src/überprüfung.ts", "beta/src/überprüfung.ts"],
+        ["docs/unique manual.html", "unique manual.html"],
+      ]),
+    );
+  });
+
+  it("preserves root files, nested suffix collisions, NFD spelling, and repeated paths", () => {
+    const decomposed = "u\u0308ber.ts";
+    expect(
+      repositoryReferencePathLabels([
+        "foo.ts",
+        "src/foo.ts",
+        `alpha/${decomposed}`,
+        `beta/${decomposed}`,
+        "foo.ts",
+      ]),
+    ).toEqual(
+      new Map([
+        ["foo.ts", "foo.ts"],
+        ["src/foo.ts", "src/foo.ts"],
+        [`alpha/${decomposed}`, `alpha/${decomposed}`],
+        [`beta/${decomposed}`, `beta/${decomposed}`],
+      ]),
+    );
+  });
+});
 
 describe("parseExactRepositoryReference / repositoryReferenceTextParts (S8786 regression)", () => {
   it("completes within budget for a slash-run with no valid extension", () => {
