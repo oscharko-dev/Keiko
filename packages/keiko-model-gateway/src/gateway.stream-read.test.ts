@@ -554,6 +554,7 @@ describe("stream startup resilience", () => {
   });
 
   it("never replays text after a proxy drops a partially delivered answer", async () => {
+    vi.useFakeTimers();
     let calls = 0;
     const gateway = new Gateway(config(true), {
       clock: createScriptedGatewayClock(),
@@ -569,11 +570,18 @@ describe("stream startup resilience", () => {
     const received: string[] = [];
     const consume = async (): Promise<void> => {
       for await (const chunk of gateway.chatStream(REQUEST)) {
-        if (chunk.type === "delta") received.push(chunk.token);
+        if (chunk.type === "delta") {
+          received.push(chunk.token);
+          expect(vi.getTimerCount()).toBeGreaterThan(0);
+        }
       }
     };
     await expect(consume()).rejects.toThrow();
     expect(received).toEqual(["partial answer"]);
+    expect(calls).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(providerRequestBudgetMs(PROVIDER));
+    expect(vi.getTimerCount()).toBe(0);
     expect(calls).toBe(1);
   });
 });

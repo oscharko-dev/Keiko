@@ -5319,7 +5319,7 @@ async function candidateModelIdsForSetup(
   validationConfig: GatewayConfig,
 ): Promise<SetupCandidateModels> {
   if (input.deploymentNames.length > 0) {
-    return candidateModelsFromDeploymentNames(input.deploymentNames, {
+    const selected = candidateModelsFromDeploymentNames(input.deploymentNames, {
       storedEmbeddingModelIds: input.storedEmbeddingModelIds,
       submittedEmbeddingModelIds: input.submittedEmbeddingModelIds,
       restoredVerbatimModelIds: [
@@ -5330,6 +5330,7 @@ async function candidateModelIdsForSetup(
         ...input.storedVoiceModelIds,
       ],
     });
+    return enrichSelectedDeploymentMetadata(input, validationConfig, selected);
   }
   return withStoredEmbeddingOrder(
     normalizeDiscoveryResult(
@@ -5343,6 +5344,47 @@ async function candidateModelIdsForSetup(
     ),
     input.stored,
   );
+}
+
+function selectedDeploymentMetadata(
+  selected: SetupCandidateModels,
+  discovered: SetupCandidateModels,
+): Readonly<Record<string, GatewayDiscoveredModelMetadata>> {
+  const chat = new Set(discovered.chatModelIds);
+  const embedding = new Set(discovered.embeddingModelIds);
+  const compatible = [
+    ...selected.chatModelIds.filter((id) => chat.has(id)),
+    ...selected.embeddingModelIds.filter((id) => embedding.has(id)),
+  ];
+  return Object.fromEntries(
+    compatible.flatMap((id) => {
+      const metadata = discovered.modelMetadata[id];
+      return metadata === undefined ? [] : [[id, metadata]];
+    }),
+  );
+}
+
+async function enrichSelectedDeploymentMetadata(
+  input: SetupVerificationInput,
+  validationConfig: GatewayConfig,
+  selected: SetupCandidateModels,
+): Promise<SetupCandidateModels> {
+  try {
+    const discovered = normalizeDiscoveryResult(
+      await input.discovery(
+        input.baseUrl,
+        input.apiKey,
+        input.apiKeyHeaderName,
+        validationConfig.egress,
+        input.correlationId,
+      ),
+    );
+    return { ...selected, modelMetadata: selectedDeploymentMetadata(selected, discovered) };
+  } catch {
+    // Explicit deployments remain usable on gateways without a discovery endpoint. Their
+    // existing smoke probes validate credentials and callable roles; discovery cannot add ids.
+    return selected;
+  }
 }
 
 function finalRawConfigForSetup(
@@ -6216,7 +6258,9 @@ function verifiedSetupFromChatAdmission(
   chatAdmission: ChatAdmission,
 ): VerifiedSetup {
   const { testResult } = chatAdmission;
-  assertImageInputModelsWereTested(input.imageInputModelIds, chatAdmission.configuredModelIds);
+  if (input.imageInputModelIdsProvided) {
+    assertImageInputModelsWereTested(input.imageInputModelIds, chatAdmission.configuredModelIds);
+  }
   const rawConfigWithOptionalBlocks = finalRawConfigForTestedSetup(
     input,
     testResult,

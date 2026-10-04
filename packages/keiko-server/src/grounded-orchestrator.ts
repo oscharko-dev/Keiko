@@ -161,6 +161,7 @@ import {
   tracePriority,
 } from "./grounded-evidence-selection.js";
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
+import { KnownFitScopeContext } from "./grounded-scope-context.js";
 import {
   attachContextBudgetDiagnostics,
   deriveGroundedContextAssembly,
@@ -293,6 +294,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
     usageElapsedMs: { type: "integer", dataClass: "duration", required: false },
     usageRerankCalls: { type: "integer", dataClass: "count", required: false },
     selectedFileCount: { type: "integer", dataClass: "count", required: false },
+    scopeContextSelectedFileCount: { type: "integer", dataClass: "count", required: false },
     contextSelectedExcerptCount: { type: "integer", dataClass: "count", required: false },
     contextSelectedExcerptEstimatedTokens: { type: "integer", dataClass: "count", required: false },
     contextBudgetPressure: {
@@ -692,6 +694,7 @@ export function clarificationUserMessage(error: ClarificationNeededError): strin
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 interface SearchInputs {
+  readonly scopeContextBytesMax: number;
   readonly tryReserveAdditionalSearchCall?: (() => boolean) | undefined;
   readonly hasGitMetadata: boolean;
   readonly searchScope: SearchScope;
@@ -1590,18 +1593,18 @@ function certifiedLexicalContent(
   result: SearchResult,
   inputs: SearchInputs,
 ): readonly ContentEvidenceIdentity[] {
-  if (
-    requiresRelationshipOrHistoryRings(inputs.query) ||
-    (anchoredLexicalTargets(inputs).length === 0 &&
-      directDefinitionSymbol(inputs.query, inputs.anchors) === undefined &&
-      inputs.query.kind !== "exact-symbol")
-  )
-    return [];
+  const literal =
+    !requiresRelationshipOrHistoryRings(inputs.query) &&
+    (anchoredLexicalTargets(inputs).length > 0 ||
+      directDefinitionSymbol(inputs.query, inputs.anchors) !== undefined ||
+      inputs.query.kind === "exact-symbol");
   return result.atoms
     .filter(
       (atom) =>
-        atom.provenance.kind === "lexical-search" &&
-        atom.provenance.tool === "repo.searchText" &&
+        ((literal &&
+          atom.provenance.kind === "lexical-search" &&
+          atom.provenance.tool === "repo.searchText") ||
+          (atom.provenance.kind === "file-listing" && atom.provenance.tool === "repo.findFiles")) &&
         atom.lineRange !== undefined,
     )
     .map((atom) => ({
@@ -1666,12 +1669,33 @@ async function searchLexicalTerms(
       ? { ...inputs.query, text: terms.length === 0 ? inputs.query.text : terms.join(" ") }
       : { ...inputs.query, kind: "exact-symbol" as const, text: definitionSymbol };
   const semanticSearchProvider = lexicalSemanticProvider(inputs, definitionSymbol);
-  return searchText(inputs.searchScope, query, ring.searchLimits, {
+  const context = knownFitContextFor(inputs);
+  const result = await searchText(inputs.searchScope, query, ring.searchLimits, {
     ...options,
+    ...(context === undefined ? {} : { onEligibleTextFile: context.observe }),
     ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
     ...(terms.length === 0 ? {} : { queryInterpretation: { kind: "literal" as const, terms } }),
     ...(semanticSearchProvider === undefined ? {} : { semanticSearchProvider }),
   });
+  if (context === undefined || result.coverage.incomplete) return result;
+  return {
+    ...result,
+    atoms: [...result.atoms, ...context.atoms()],
+  };
+}
+
+function knownFitContextFor(inputs: SearchInputs): KnownFitScopeContext | undefined {
+  return inputs.query.kind === "natural-language" &&
+    inputs.retrievalIntent !== "diagnostic-search" &&
+    !requiresRelationshipOrHistoryRings(inputs.query) &&
+    !inputs.anchors.some((anchor) => anchor.kind !== "literal")
+    ? new KnownFitScopeContext(
+        inputs.scopeContextBytesMax,
+        inputs.searchScope.scopeId,
+        projectMetadataQueryFingerprint(inputs.query),
+        inputs.nowMs(),
+      )
+    : undefined;
 }
 
 async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Promise<SearchResult> {
@@ -6121,6 +6145,14 @@ function completionActivityExtra(
     usageElapsedMs: pack.usage.elapsedMs,
     usageRerankCalls: pack.usage.rerankCalls,
     selectedFileCount: pack.files.length,
+    scopeContextSelectedFileCount: pack.files.filter((file) =>
+      file.excerpts.some(
+        (excerpt) =>
+          excerpt.atom.provenance.kind === "file-listing" &&
+          excerpt.atom.provenance.tool === "repo.findFiles" &&
+          excerpt.atom.lineRange !== undefined,
+      ),
+    ).length,
     ...contextObservationActivityExtra(pack),
     omittedCount: connectedContextOmittedCount(pack),
     uncertaintyCount: pack.uncertainty.length,
@@ -6421,6 +6453,7 @@ function connectedContextSearchInputs(
 ): SearchInputs {
   const { workspaceIndex } = context;
   return {
+    scopeContextBytesMax: Math.min(plan.budget.excerptBytesMax, plan.budget.modelInputTokensMax),
     hasGitMetadata: context.hasGitMetadata,
     searchScope: context.searchScope,
     query: input.query,

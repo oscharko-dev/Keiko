@@ -699,6 +699,13 @@ export async function probeBinary(fs: WorkspaceFs, abs: string, size: number): P
 }
 
 export interface SearchTextRunner {
+  readonly onEligibleTextFile?:
+    | ((file: {
+        readonly scopePath: string;
+        readonly contentBytes: number;
+        readonly lineCount: number;
+      }) => void)
+    | undefined;
   readonly scope: ScopeShape;
   readonly limits: LimitsShape;
   readonly fs: WorkspaceFs;
@@ -1322,6 +1329,7 @@ function canUseCachedLexicalMatches(runner: SearchTextRunner): boolean {
   // Hashed natural-language records cannot prove atomic phrase/alternative matching.
   return (
     runner.literalTerms === undefined &&
+    runner.onEligibleTextFile === undefined &&
     runner.semantic === undefined &&
     runner.sourceInspection !== true
   );
@@ -1500,6 +1508,11 @@ function textFileMatches(
   order: number,
   text: string,
 ): FileMatches | undefined {
+  runner.onEligibleTextFile?.({
+    scopePath: file.relativePath,
+    contentBytes: Math.max(file.sizeBytes, new TextEncoder().encode(text).length),
+    lineCount: Math.max(1, text.split(/\r?\n/u).length - Number(text.endsWith("\n"))),
+  });
   collectRankedSemanticDocument(runner, file, text);
   if (runner.sourceInspection !== true && !shouldScoreContent(runner.query, text, runner.policy)) {
     return undefined;

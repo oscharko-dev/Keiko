@@ -147,6 +147,13 @@ Repository orientation retains the user's lexical terms and repository semantic 
 file discovery is a zero-evidence fallback after a complete term search, within the same search-call
 budget, alongside metadata and overview documents; a source-only folder must produce actual source
 evidence. A targeted module overview must not be replaced by an unrelated shallow file listing.
+Unanchored natural-language questions may additionally use the complete eligible folder text when
+the same lexical traversal proves that its actual decoded/redacted bytes and transient evidence
+metadata fit the accepted byte/token capacity. Only successful safe reads enter this body-free
+context collector; overflow irreversibly discards the enrichment, and incomplete traversal disables
+it. Actual full-file ranges use file-listing provenance rather than synthetic lexical matches, and
+fresh excerpt reads still enforce the accepted source and model budgets. Named targets, exact
+absence checks, diagnostic questions, and relationship/history requests retain their existing routes.
 Recursive lexical search and file discovery visit the accepted scope without a default file-count
 or elapsed-time cutoff. Final source reads likewise have no default file-count cutoff: `filesReadMax: null`
 retains eligible requested facts under the actual excerpt-byte and model-input budgets. Explicit finite

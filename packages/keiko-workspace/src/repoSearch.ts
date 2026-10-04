@@ -196,6 +196,14 @@ export interface ReadExcerptResult extends ReadExcerptWindowResult {
 }
 
 interface FacadeDeps {
+  // Trusted context callers may observe successful text reads without retaining file bodies.
+  readonly onEligibleTextFile?:
+    | ((file: {
+        readonly scopePath: string;
+        readonly contentBytes: number;
+        readonly lineCount: number;
+      }) => void)
+    | undefined;
   readonly queryInterpretation?: LiteralQueryInterpretation | undefined;
   // Trusted auxiliary filename batches keep independent bounded target buckets on one traversal.
   readonly filePatternGroups?:
@@ -546,6 +554,7 @@ type SearchTextRunnerDeps = Required<Pick<FacadeDeps, "fs" | "nowMs">> &
     | "deadlineAtMs"
     | "candidateContentFor"
     | "queryInterpretation"
+    | "onEligibleTextFile"
   >;
 
 function sourceInspectionCandidateSelection(
@@ -591,6 +600,9 @@ function buildSearchTextRunner(
     query,
     ...sourceInspectionCandidateSelection(query, deps),
     contentLane: deps.contentLane ?? "evidence",
+    ...(deps.onEligibleTextFile === undefined
+      ? {}
+      : { onEligibleTextFile: deps.onEligibleTextFile }),
     ...(deps.candidatePathGlobs === undefined
       ? {}
       : { candidatePathGlobs: deps.candidatePathGlobs }),
@@ -2126,6 +2138,7 @@ function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResul
 
 function buildSearchTextDeps(deps: FacadeDeps): SearchTextRunnerDeps {
   return {
+    onEligibleTextFile: deps.onEligibleTextFile,
     queryInterpretation: deps.queryInterpretation,
     fs: deps.fs ?? nodeWorkspaceFs,
     nowMs: deps.nowMs ?? Date.now,

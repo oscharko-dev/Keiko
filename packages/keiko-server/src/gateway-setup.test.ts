@@ -79,7 +79,17 @@ const handlerDeps: UiHandlerDeps[] = [];
 function buildUiHandlerDeps(
   options: Parameters<typeof createUiHandlerDeps>[0],
 ): ReturnType<typeof createUiHandlerDeps> {
-  const deps = createUiHandlerDeps(options);
+  // Smoke-only unit fixtures do not leave optional metadata enrichment doing real network I/O.
+  // Tests of the actual discovery transport use the real tester or inject discovery explicitly.
+  const isolatedOptions =
+    options.gatewaySetupTester !== undefined && options.gatewayModelDiscovery === undefined
+      ? {
+          ...options,
+          gatewayModelDiscovery: (): Promise<readonly string[]> =>
+            Promise.reject(new Error("Fixture has no discovery endpoint")),
+        }
+      : options;
+  const deps = createUiHandlerDeps(isolatedOptions);
   handlerDeps.push(deps);
   return deps;
 }
@@ -171,6 +181,16 @@ function fakeEmbeddingProbeResponse(
       headers: { "content-type": "application/json" },
     }),
   );
+}
+
+function fakeAzureNonChatResponse(
+  url: Parameters<typeof fetch>[0],
+  init: Parameters<typeof fetch>[1],
+): Promise<Response> | undefined {
+  if (init?.method === "GET") {
+    return Promise.resolve(new Response("{}", { status: 404 }));
+  }
+  return fakeEmbeddingProbeResponse(url);
 }
 
 // Reads the first provider's resolved apiKey from the in-memory runtime config (Issue #1320 keeps the
@@ -824,6 +844,7 @@ describe("handleGatewaySetup", () => {
       env: { ...MOCK_FETCH_EGRESS_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       diagnostics: { record: (record): void => void diagnostics.push(record) },
+      gatewayModelDiscovery: () => Promise.reject(new Error("Fixture has no discovery endpoint")),
     });
     try {
       const result = await handleGatewaySetup(
@@ -1072,6 +1093,7 @@ describe("handleGatewaySetup", () => {
       env: { ...MOCK_FETCH_EGRESS_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       diagnostics: { record: (record): void => void diagnostics.push(record) },
+      gatewayModelDiscovery: () => Promise.reject(new Error("Fixture has no discovery endpoint")),
     });
     try {
       const result = await handleGatewaySetup(
@@ -8267,7 +8289,7 @@ describe("handleGatewaySetup", () => {
     const fakeFetch: typeof fetch = (url, init) => {
       // Setup probes the declared embedding models with a real request (LiteLLM field incident).
       // A gateway that rejects chat for an embedding model still answers /embeddings.
-      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+      const embeddingProbeResponse = fakeAzureNonChatResponse(url, init);
       if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
       const href = fetchInputUrl(url);
       expect(href).not.toContain("api/projects/proj-oscharko-dev");
@@ -8735,146 +8757,150 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("uses LiteLLM model info to persist embeddings while smoke-testing only chat models", async () => {
-    const uiDir = await tempDir("keiko-gw-ui-litellm-");
-    const evidenceDir = await tempDir("keiko-gw-ev-litellm-");
-    const originalFetch = globalThis.fetch;
-    const seenUrls: string[] = [];
-    const seenModels: string[] = [];
-    const seenAuthHeaders: { auth: string | null; custom: string | null }[] = [];
-    const fakeFetch: typeof fetch = (url, init) => {
-      // Setup probes the declared embedding models with a real request (LiteLLM field incident).
-      // A gateway that rejects chat for an embedding model still answers /embeddings.
-      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
-      if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
-      const href = fetchInputUrl(url);
-      seenUrls.push(href);
-      const headers = new Headers(init?.headers);
-      seenAuthHeaders.push({
-        auth: headers.get("authorization"),
-        custom: headers.get("x-litellm-key"),
-      });
-      if (href.endsWith("/model/info")) {
+  it.each([false, true])(
+    "uses LiteLLM model info while preserving explicit deployments=%s",
+    async (explicit) => {
+      const uiDir = await tempDir("keiko-gw-ui-litellm-");
+      const evidenceDir = await tempDir("keiko-gw-ev-litellm-");
+      const originalFetch = globalThis.fetch;
+      const seenUrls: string[] = [];
+      const seenModels: string[] = [];
+      const seenAuthHeaders: { auth: string | null; custom: string | null }[] = [];
+      const fakeFetch: typeof fetch = (url, init) => {
+        // Setup probes the declared embedding models with a real request (LiteLLM field incident).
+        // A gateway that rejects chat for an embedding model still answers /embeddings.
+        const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+        if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
+        const href = fetchInputUrl(url);
+        seenUrls.push(href);
+        const headers = new Headers(init?.headers);
+        seenAuthHeaders.push({
+          auth: headers.get("authorization"),
+          custom: headers.get("x-litellm-key"),
+        });
+        if (href.endsWith("/model/info")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                data: [
+                  {
+                    model_name: "litellm-chat-large",
+                    model_info: {
+                      mode: "chat",
+                      max_input_tokens: 1_050_000,
+                      max_output_tokens: 128_000,
+                      supports_function_calling: false,
+                    },
+                  },
+                  {
+                    model_name: "litellm-vision-chat",
+                    model_info: { mode: "chat", supports_vision: true },
+                  },
+                  { model_name: "litellm-embedding", model_info: { mode: "embedding" } },
+                  { model_name: "litellm-image", model_info: { mode: "image_generation" } },
+                  { model_name: "litellm-unknown-mode" },
+                ],
+              }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          );
+        }
+        expect(href).toContain("/chat/completions");
+        if (init?.body !== undefined && typeof init.body !== "string") {
+          throw new Error("expected JSON string request body");
+        }
+        const body = JSON.parse(init?.body ?? "{}") as { model?: string };
+        if (body.model !== undefined) {
+          seenModels.push(body.model);
+        }
         return Promise.resolve(
           new Response(
             JSON.stringify({
-              data: [
-                {
-                  model_name: "litellm-chat-large",
-                  model_info: {
-                    mode: "chat",
-                    max_input_tokens: 1_050_000,
-                    max_output_tokens: 128_000,
-                    supports_function_calling: false,
-                  },
-                },
-                {
-                  model_name: "litellm-vision-chat",
-                  model_info: { mode: "chat", supports_vision: true },
-                },
-                { model_name: "litellm-embedding", model_info: { mode: "embedding" } },
-                { model_name: "litellm-image", model_info: { mode: "image_generation" } },
-                { model_name: "litellm-unknown-mode" },
-              ],
+              choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 3, completion_tokens: 1 },
             }),
             { status: 200, headers: { "content-type": "application/json" } },
           ),
         );
-      }
-      expect(href).toContain("/chat/completions");
-      if (init?.body !== undefined && typeof init.body !== "string") {
-        throw new Error("expected JSON string request body");
-      }
-      const body = JSON.parse(init?.body ?? "{}") as { model?: string };
-      if (body.model !== undefined) {
-        seenModels.push(body.model);
-      }
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({
-            choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
-            usage: { prompt_tokens: 3, completion_tokens: 1 },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        ),
-      );
-    };
-    globalThis.fetch = fakeFetch;
-    const deps = buildUiHandlerDeps({
-      configPath: undefined,
-      evidenceDir,
-      env: { ...MOCK_FETCH_EGRESS_ENV },
-      uiDbPath: join(uiDir, "keiko-ui.db"),
-    });
-    try {
-      const apiKey = ["example-secret-token"].join("");
-      const result = await handleGatewaySetup(
-        ctx({
-          baseUrl: "https://llm-gateway.example.com/v1",
-          apiKey,
-          apiKeyHeaderName: "X-Litellm-Key",
-        }),
-        deps,
-      );
-      expect(result.status).toBe(200);
-      expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model/info");
-      expect(seenUrls).not.toContain("https://llm-gateway.example.com/model/info");
-      expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(false);
-      expect(seenModels).toEqual([
-        "litellm-chat-large",
-        "litellm-vision-chat",
-        "litellm-unknown-mode",
-        "litellm-chat-large",
-        "litellm-vision-chat",
-        "litellm-unknown-mode",
-        "litellm-chat-large",
-        "litellm-vision-chat",
-        "litellm-unknown-mode",
-      ]);
-      expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
-        "litellm-chat-large",
-        "litellm-vision-chat",
-        "litellm-unknown-mode",
-      ]);
-      expect(
-        seenAuthHeaders.every(
-          (headers) => headers.auth === null && headers.custom === `Bearer ${apiKey}`,
-        ),
-      ).toBe(true);
-      expect(
-        currentGatewayConfig(deps)?.providers.map((provider) => provider.apiKeyHeaderName),
-      ).toEqual(["x-litellm-key", "x-litellm-key", "x-litellm-key", "x-litellm-key"]);
-      const config = currentGatewayConfig(deps);
-      expect(config?.providers.map((provider) => provider.modelId)).toEqual([
-        "litellm-chat-large",
-        "litellm-vision-chat",
-        "litellm-unknown-mode",
-        "litellm-embedding",
-      ]);
-      expect(
-        config?.capabilities?.find((capability) => capability.id === "litellm-vision-chat")
-          ?.supportsImageInput,
-      ).toBe(true);
-      expect(
-        config?.capabilities?.find((capability) => capability.id === "litellm-chat-large"),
-      ).toMatchObject({
-        contextWindow: 1_050_000,
-        maxOutputTokens: 128_000,
-        toolCalling: false,
+      };
+      globalThis.fetch = fakeFetch;
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir,
+        env: { ...MOCK_FETCH_EGRESS_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
       });
-      expectLiteLlmCounter(config);
-      expect(selectEmbeddingModelId(config)).toBe("litellm-embedding");
-      const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
-      expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');
-      expect(saved).toContain("litellm-embedding");
-      expect(saved).toContain('"kind": "embedding"');
-      expect(saved).not.toContain("litellm-image");
-      expect(saved).toContain('"tokenCounter": "litellm"');
-    } finally {
-      globalThis.fetch = originalFetch;
-      deps.store.close();
-    }
-  });
+      try {
+        const apiKey = ["example-secret-token"].join("");
+        const result = await handleGatewaySetup(
+          ctx({
+            baseUrl: "https://llm-gateway.example.com/v1",
+            apiKey,
+            apiKeyHeaderName: "X-Litellm-Key",
+            ...explicitLiteLlmDeploymentFields(explicit),
+          }),
+          deps,
+        );
+        expect(result.status).toBe(200);
+        expect(seenUrls).toContain("https://llm-gateway.example.com/v1/model/info");
+        expect(seenUrls).not.toContain("https://llm-gateway.example.com/model/info");
+        expect(seenUrls.some((url) => url.endsWith("/models"))).toBe(false);
+        expect(seenModels).toEqual([
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+        ]);
+        expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+        ]);
+        expect(
+          seenAuthHeaders.every(
+            (headers) => headers.auth === null && headers.custom === `Bearer ${apiKey}`,
+          ),
+        ).toBe(true);
+        expect(
+          currentGatewayConfig(deps)?.providers.map((provider) => provider.apiKeyHeaderName),
+        ).toEqual(["x-litellm-key", "x-litellm-key", "x-litellm-key", "x-litellm-key"]);
+        const config = currentGatewayConfig(deps);
+        expect(config?.providers.map((provider) => provider.modelId)).toEqual([
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+          "litellm-embedding",
+        ]);
+        expect(
+          config?.capabilities?.find((capability) => capability.id === "litellm-vision-chat")
+            ?.supportsImageInput,
+        ).toBe(true);
+        expect(
+          config?.capabilities?.find((capability) => capability.id === "litellm-chat-large"),
+        ).toMatchObject({
+          contextWindow: 1_050_000,
+          maxOutputTokens: 128_000,
+          toolCalling: false,
+        });
+        expectLiteLlmCounter(config);
+        expect(selectEmbeddingModelId(config)).toBe("litellm-embedding");
+        const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+        expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');
+        expect(saved).toContain("litellm-embedding");
+        expect(saved).toContain('"kind": "embedding"');
+        expect(saved).not.toContain("litellm-image");
+        expect(saved).toContain('"tokenCounter": "litellm"');
+      } finally {
+        globalThis.fetch = originalFetch;
+        deps.store.close();
+      }
+    },
+  );
 
   it("falls back to OpenAI-compatible model discovery when LiteLLM model info is unavailable", async () => {
     const uiDir = await tempDir("keiko-gw-ui-litellm-fallback-");
@@ -11453,6 +11479,20 @@ function expectLiteLlmCounter(config: GatewayConfig | undefined): void {
   );
 }
 
+function explicitLiteLlmDeploymentFields(explicit: boolean): Record<string, unknown> {
+  return explicit
+    ? {
+        deploymentNames: [
+          "litellm-chat-large",
+          "litellm-vision-chat",
+          "litellm-unknown-mode",
+          "litellm-embedding",
+        ],
+        imageInputModelIds: ["litellm-vision-chat"],
+      }
+    : {};
+}
+
 it("bounds discovery evidence by selected aliases instead of raw replica count", () => {
   const sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "info" }));
@@ -11601,5 +11641,176 @@ describe("model-specific LiteLLM conversation geometry", () => {
       ).maxInputTokens,
     );
     deps.store.close();
+  });
+});
+
+function selectedDeploymentMetadata(): ReturnType<typeof parseModelDiscovery> {
+  return parseModelDiscovery({
+    data: [
+      {
+        model_name: "selected-small",
+        model_info: {
+          mode: "chat",
+          context_window: 4_096,
+          max_input_tokens: 3_000,
+          max_output_tokens: 512,
+        },
+      },
+      {
+        model_name: "selected-large",
+        model_info: { mode: "chat", context_window: 128_000, max_output_tokens: 8_000 },
+      },
+      { model_name: "not-selected", model_info: { mode: "chat", context_window: 1_000_000 } },
+    ],
+  });
+}
+
+function seedSelectedDeployments(deps: UiHandlerDeps, removedVision: boolean): void {
+  const store = deps.gatewayConfig;
+  if (store === undefined) throw new TypeError("Missing fixture gateway store");
+  const ids = ["selected-small", "selected-large", ...(removedVision ? ["old-vision"] : [])];
+  const raw = {
+    providers: ids.map((modelId) => ({
+      modelId,
+      baseUrl: "https://previous.example.invalid/v1",
+      apiKey: "synthetic-previous-key",
+      capability: {
+        ...createDefaultChatCapability(modelId),
+        supportsImageInput: modelId === "old-vision",
+        contextWindowAssumed: true,
+      },
+    })),
+  };
+  store.set(parseGatewayConfig(raw), true);
+  writeFileSync(store.storagePath, JSON.stringify(raw), "utf8");
+}
+
+function expectSelectedDeploymentMetadata(deps: UiHandlerDeps): void {
+  const config = requiredGatewayConfig(deps);
+  expect(config.providers.map((provider) => provider.modelId)).toEqual([
+    "selected-small",
+    "selected-large",
+  ]);
+  const small = requiredCapability(config, "selected-small");
+  expect(small).toMatchObject({
+    contextWindow: 4_096,
+    maxInputTokens: 3_000,
+    maxOutputTokens: 512,
+  });
+  expect(small.contextWindowAssumed).toBeUndefined();
+  expect(requiredCapability(config, "selected-large").contextWindow).toBe(128_000);
+  const profile = deriveContextProfileFromCapability(small);
+  expect(modelWindowAwareBudget(deps, "selected-small")).toMatchObject({
+    modelInputTokensMax: profile.effectiveInputBudget,
+    modelOutputTokensMax: profile.reservedOutputTokens,
+  });
+  expect(config.capabilities?.every((capability) => !capability.supportsImageInput)).toBe(true);
+  const persisted = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+    readonly providers?: readonly {
+      readonly modelId: string;
+      readonly capability?: ModelCapability;
+    }[];
+  };
+  expect(
+    persisted.providers?.find((provider) => provider.modelId === "selected-small")?.capability,
+  ).toMatchObject({ contextWindow: 4_096, maxInputTokens: 3_000, maxOutputTokens: 512 });
+}
+
+describe("selected deployment discovery metadata", () => {
+  it.each(["explicit", "preserved", "replacement"] as const)(
+    "persists discovered model geometry without widening %s deployment selection",
+    async (selection) => {
+      const directory = await tempDir("keiko-selected-metadata-");
+      const discovery = vi.fn(() => Promise.resolve(selectedDeploymentMetadata()));
+      const deps = buildUiHandlerDeps({
+        configPath: join(directory, "keiko.config.json"),
+        evidenceDir: await tempDir("keiko-selected-metadata-evidence-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(directory, "ui.db"),
+        gatewayModelDiscovery: discovery,
+        gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+      });
+      if (selection !== "explicit") seedSelectedDeployments(deps, selection === "replacement");
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://selected.example.invalid/v1",
+          apiKey: "synthetic-selected-key",
+          preserveExisting: selection !== "explicit",
+          deploymentNames: selection === "preserved" ? [] : ["selected-small", "selected-large"],
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expectSelectedDeploymentMetadata(deps);
+      expect(discovery).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["unavailable", "legacy", "different-role"] as const)(
+    "keeps explicit deployment ownership when discovery is %s",
+    async (discoveryState) => {
+      const directory = await tempDir("keiko-selected-metadata-control-");
+      const deps = buildUiHandlerDeps({
+        configPath: join(directory, "keiko.config.json"),
+        evidenceDir: await tempDir("keiko-selected-metadata-control-evidence-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(directory, "ui.db"),
+        gatewayModelDiscovery: () => {
+          if (discoveryState === "unavailable") return Promise.reject(new Error("No discovery"));
+          if (discoveryState === "legacy") return Promise.resolve(["not-selected"]);
+          return Promise.resolve(
+            parseModelDiscovery({
+              data: [{ model_name: "selected-small", model_info: { mode: "embedding" } }],
+            }),
+          );
+        },
+        gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+      });
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://selected.example.invalid/v1",
+          apiKey: "synthetic-selected-key",
+          deploymentNames: ["selected-small"],
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      const config = requiredGatewayConfig(deps);
+      expect(config.providers.map((provider) => provider.modelId)).toEqual(["selected-small"]);
+      expect(requiredCapability(config, "selected-small")).toMatchObject({
+        kind: "chat",
+        contextWindowAssumed: true,
+        maxOutputTokens: 0,
+      });
+    },
+  );
+
+  it("still rejects an explicitly asserted image model omitted from replacement deployments", async () => {
+    const directory = await tempDir("keiko-selected-metadata-image-guard-");
+    const deps = buildUiHandlerDeps({
+      configPath: join(directory, "keiko.config.json"),
+      evidenceDir: await tempDir("keiko-selected-metadata-image-evidence-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(directory, "ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(selectedDeploymentMetadata()),
+      gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+    });
+    seedSelectedDeployments(deps, true);
+    const before = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+        preserveExisting: true,
+        deploymentNames: ["selected-small", "selected-large"],
+        imageInputModelIds: ["old-vision"],
+      }),
+      deps,
+    );
+    expect(result.status).toBe(502);
+    expect(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")).toBe(before);
+    expect(requiredCapability(requiredGatewayConfig(deps), "old-vision").supportsImageInput).toBe(
+      true,
+    );
   });
 });

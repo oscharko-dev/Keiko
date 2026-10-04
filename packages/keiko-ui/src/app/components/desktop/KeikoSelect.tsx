@@ -100,6 +100,10 @@ const OVERFLOW_TOOLTIP_EDGE_OFFSET_PX = 8;
 const OVERFLOW_TOOLTIP_VERTICAL_OFFSET_PX = 6;
 const SELECT_OPEN_EVENT = "keiko:select-open";
 
+function selectPortalRoot(anchor: HTMLElement | null): HTMLElement {
+  return anchor?.closest<HTMLDialogElement>("dialog[open]") ?? document.body;
+}
+
 function isTextEntryTarget(target: EventTarget | null): boolean {
   return (
     target instanceof HTMLElement &&
@@ -342,7 +346,7 @@ function OverflowOptionButton({
             >
               {option.label}
             </div>,
-            document.body,
+            selectPortalRoot(optionRef.current),
           )
         : null}
     </button>
@@ -469,8 +473,10 @@ function KeikoSelectMenu({
   menuRef,
   menuTitle,
   onCommit,
+  onKeyDownCapture,
   onOptionKeyDown,
   placeholder,
+  portalRoot,
   position,
   selectedIndex,
   sections,
@@ -488,8 +494,10 @@ function KeikoSelectMenu({
   readonly menuRef: RefObject<HTMLDivElement | null>;
   readonly menuTitle: string | undefined;
   readonly onCommit: (option: FlatOption) => void;
+  readonly onKeyDownCapture: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
   readonly onOptionKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => void;
   readonly placeholder: string | undefined;
+  readonly portalRoot: HTMLElement;
   readonly position: MenuPosition;
   readonly selectedIndex: number;
   readonly sections: readonly KeikoSelectSection[];
@@ -500,6 +508,7 @@ function KeikoSelectMenu({
   return createPortal(
     <div
       ref={menuRef}
+      onKeyDownCapture={onKeyDownCapture}
       className={[
         "ksel-menu",
         styles.cmpViewportMenu,
@@ -555,7 +564,7 @@ function KeikoSelectMenu({
         <KeikoSelectNoMatches search={search} visible={flatOptions.length === 0} />
       </div>
     </div>,
-    document.body,
+    portalRoot,
   );
 }
 
@@ -808,16 +817,20 @@ export default function KeikoSelect({
     }
   }
 
+  function captureMenuEscape(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== "Escape") return;
+    const focus = event.target instanceof HTMLInputElement ? "search" : "option";
+    consumeEscape(focus, event);
+  }
+
   function onOptionKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void {
     if (event.key === "Escape") {
       consumeEscape("option", event);
       return;
     }
     if (event.key === "Tab") {
-      // The options portal to document.body, outside any containing dialog. On
-      // Tab we must both close the menu AND return focus to the trigger (which
-      // lives inside the dialog) and preventDefault, otherwise focus escapes the
-      // modal's focus trap into the page behind it (mirrors Escape/commit).
+      // Consume Tab and restore the trigger so modal focus containment and the
+      // select's existing dismissal behavior remain stable (mirrors Escape/commit).
       event.preventDefault();
       closeMenu();
       triggerRef.current?.focus();
@@ -907,8 +920,10 @@ export default function KeikoSelect({
         menuRef={menuRef}
         menuTitle={menuTitle}
         onCommit={commit}
+        onKeyDownCapture={captureMenuEscape}
         onOptionKeyDown={onOptionKeyDown}
         placeholder={placeholder}
+        portalRoot={selectPortalRoot(triggerRef.current)}
         position={position}
         selectedIndex={selectedIndex}
         sections={visibleSections}
@@ -953,6 +968,9 @@ export default function KeikoSelect({
           else openMenu();
         }}
         onKeyDown={onTriggerKeyDown}
+        onKeyDownCapture={(event) => {
+          if (open && event.key === "Escape") consumeEscape("trigger", event);
+        }}
         role="combobox"
         style={triggerStyle}
         type="button"

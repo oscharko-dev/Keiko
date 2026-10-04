@@ -1187,7 +1187,64 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     // One alert is shown at a time: the retryable failure must not be swallowed by the condition.
-    expect(screen.getByRole("alert")).toHaveTextContent("Workspace could not be refreshed.");
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Workspace could not be refreshed.");
+    expect(
+      within(alert).queryByRole("button", { name: "Create error report" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each([
+    "",
+    "bad correlation id",
+    "unknown-correlation-id",
+    "123-45-6789",
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzeW50aGV0aWMifQ.c2lnbmF0dXJl",
+  ])(
+    "keeps an unsafe or unattributed refresh id %s out of error-specific reporting",
+    (correlationId) => {
+      const base = liveState();
+      renderWorkbench(
+        liveState({
+          workspace: {
+            ...base.workspace,
+            status: "error",
+            error: {
+              code: "TASK_WORKSPACE_UNAVAILABLE",
+              message: "unavailable",
+              retryable: true,
+              correlationId,
+            },
+          },
+        }),
+      );
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("Workspace could not be refreshed.");
+      expect(
+        within(alert).queryByRole("button", { name: "Create error report" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps a safe originating support id available for error-specific reporting", () => {
+    const base = liveState();
+    renderWorkbench(
+      liveState({
+        workspace: {
+          ...base.workspace,
+          status: "error",
+          error: {
+            code: "TASK_WORKSPACE_UNAVAILABLE",
+            message: "unavailable",
+            retryable: true,
+            correlationId: "aa318591-f552-4c0c-919e-0e9357b50491",
+          },
+        },
+      }),
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent("Workspace could not be refreshed.");
+    expect(within(alert).getByRole("button", { name: "Create error report" })).toBeInTheDocument();
   });
 
   it("keeps the unpaired browser state out of the standing workbench banner", (): void => {

@@ -21,8 +21,10 @@ export function certifiedContentPaths(
     atoms
       .filter(
         (atom) =>
-          atom.provenance.kind === "lexical-search" &&
-          atom.provenance.tool === "repo.searchText" &&
+          ((atom.provenance.kind === "lexical-search" &&
+            atom.provenance.tool === "repo.searchText") ||
+            (atom.provenance.kind === "file-listing" &&
+              atom.provenance.tool === "repo.findFiles")) &&
           atom.lineRange !== undefined &&
           certified.get(atom.stableId) === atom.provenance.queryFingerprint,
       )

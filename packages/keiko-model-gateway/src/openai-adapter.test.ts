@@ -432,6 +432,36 @@ describe("OpenAiAdapter.call", () => {
     }
   });
 
+  it.each(["", " ", "Mon, 03 Not 2026 20:02:00 GMT", "9".repeat(400)])(
+    "rejects an empty, malformed, or overflowing Retry-After header (%#)",
+    async (retryAfter) => {
+      const adapter = adapterWith(() =>
+        Promise.resolve(jsonResponse({}, { status: 429, headers: { "retry-after": retryAfter } })),
+      );
+      await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({ retryAfterMs: null });
+    },
+  );
+
+  it("clamps a past HTTP-date provider cooldown to zero", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-03T20:00:00Z"));
+    try {
+      const adapter = adapterWith(() =>
+        Promise.resolve(
+          jsonResponse(
+            {},
+            {
+              status: 429,
+              headers: { "retry-after": "Sat, 03 Oct 2026 19:58:00 GMT" },
+            },
+          ),
+        ),
+      );
+      await expect(adapter.call(REQUEST, CONFIG)).rejects.toMatchObject({ retryAfterMs: 0 });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("throws ProviderError carrying the http status on a 500", async () => {
     const adapter = adapterWith(() => Promise.resolve(jsonResponse({}, { status: 503 })));
     try {

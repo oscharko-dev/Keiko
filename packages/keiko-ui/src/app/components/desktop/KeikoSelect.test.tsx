@@ -53,6 +53,7 @@ describe("KeikoSelect menu geometry", () => {
     vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(new DOMRect(280, 300, 110, 36));
     await user.click(trigger);
     const menu = document.querySelector(".ksel-menu");
+    expect(menu?.parentElement).toBe(document.body);
     expect(menu).toHaveClass("ksel-menu-open-up");
     expect(menu).toHaveStyle({ left: "104px", top: "16px", width: "300px" });
     expect(screen.getAllByRole("option")).toHaveLength(20);
@@ -795,5 +796,48 @@ describe("KeikoSelect interactions", () => {
     await user.click(trigger);
     fireEvent.blur(window);
     expect(screen.queryByRole("option", { name: "Model only" })).toBeNull();
+  });
+});
+
+describe("KeikoSelect native modal ownership", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    resetClientDiagnosticWriter();
+  });
+
+  it("keeps overflow tooltips inside the active native modal", async () => {
+    const diagnostics = captureDiagnostics();
+    const user = userEvent.setup();
+    render(
+      <dialog open aria-label="Modal choice">
+        <KeikoSelect
+          ariaLabel="Long choice"
+          value="long"
+          onValueChange={vi.fn()}
+          sections={[{ options: [{ value: "long", label: "A long selectable option" }] }]}
+        />
+      </dialog>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Modal choice" });
+    await user.click(screen.getByRole("combobox", { name: "Long choice" }));
+    vi.useFakeTimers();
+    const option = screen.getByRole("option", { name: "A long selectable option" });
+    const label = option.querySelector(".ksel-option-label");
+    if (label === null) throw new Error("Missing option label");
+    Object.defineProperties(label, {
+      clientWidth: { configurable: true, value: 80 },
+      scrollWidth: { configurable: true, value: 240 },
+    });
+    fireEvent.pointerEnter(option);
+    act(() => vi.advanceTimersByTime(1_500));
+    expect(screen.getByRole("tooltip").closest("dialog")).toBe(dialog);
+    expect(diagnostics).toEqual([]);
+    fireEvent.keyDown(option, { key: "Escape" });
+    expect(diagnostics).toEqual([
+      {
+        message: "[keiko] select menu dismissed by Escape (focus=option)",
+        meta: { kind: "other", selectDismissal: { reason: "escape", focus: "option" } },
+      },
+    ]);
   });
 });

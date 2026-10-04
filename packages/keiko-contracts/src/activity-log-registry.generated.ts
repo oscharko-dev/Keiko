@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f935f872587f125e3399ecd1f1c8078c1f057bd4e53db8e0ed92b53444fc16a8" as const;
+  "25b5363e08d9d8cf656c408fe3d7c9904617284dc94cb2405457ebc8718ff734" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -24324,6 +24324,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      scopeContextSelectedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       contextSelectedExcerptCount: {
         type: "integer",
         dataClass: "count",
@@ -41180,6 +41185,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "ringSkipReasons",
               type: "string-array",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "scopeContextSelectedFileCount",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
