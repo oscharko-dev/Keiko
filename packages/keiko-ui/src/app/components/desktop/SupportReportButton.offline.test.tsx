@@ -75,6 +75,7 @@ it("reuses full canonical bytes locally after an attachment expires and the serv
     report,
     expect.any(AbortSignal),
   );
+  expect(vi.mocked(prepareCachedSupportReport).mock.calls.at(-1)?.[1].aborted).toBe(false);
   expect(prepareLocalSupportReport).not.toHaveBeenCalled();
   expect(diagnostic).toHaveBeenCalledWith("Keiko support report prepared locally.", {
     correlationId: "expired-full-offline",

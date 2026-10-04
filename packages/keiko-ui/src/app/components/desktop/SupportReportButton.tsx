@@ -122,14 +122,17 @@ function fulfillReport(
     throw new TypeError("Support report cache budget exceeded");
   }
   const prior = outcomes.get(key);
-  if (prior !== undefined && !(prior instanceof AbortController)) disposeReadyReport(prior);
+  if (prior !== undefined && !(prior instanceof AbortController)) prior.download?.dispose();
+  outcomes.delete(key);
   outcomes.set(key, { report, download, bytes });
-  let retainedBytes = fulfilledReports().reduce((total, [, ready]) => total + ready.bytes, 0);
   const ready = fulfilledReports();
+  let retainedBytes = ready.reduce((total, [, entry]) => total + entry.bytes, 0);
+  let retainedCount = ready.length;
   for (const [expired, entry] of ready) {
-    if (retainedBytes <= MAX_SUPPORT_REPORT_BYTES && outcomes.size <= MAX_FULFILLED_REPORTS) break;
+    if (retainedBytes <= MAX_SUPPORT_REPORT_BYTES && retainedCount <= MAX_FULFILLED_REPORTS) break;
     if (expired === key) continue;
     retainedBytes -= entry.bytes;
+    retainedCount -= 1;
     disposeReadyReport(entry);
     outcomes.delete(expired);
   }
@@ -161,6 +164,7 @@ type ReportStatus = "idle" | "busy" | "saved" | "expired" | ReportFailure;
 interface ReportFeedback {
   readonly key: string;
   readonly state: "idle" | "saved" | ReportFailure;
+  readonly download?: SupportReportDownload | undefined;
 }
 
 interface ReportRequestRef {
@@ -346,10 +350,15 @@ function useReportExpiry(key: string, outcome: ReportOutcome | undefined): void 
   }, [key, outcome]);
 }
 
-function readyReportStatus(ready: ReadyReport, feedback: ReportFeedback["state"]): ReportStatus {
+function readyReportStatus(ready: ReadyReport, feedback: ReportFeedback): ReportStatus {
   if (ready.pending !== undefined) return "busy";
+  if (
+    feedback.state !== "idle" &&
+    feedback.state !== "saved" &&
+    feedback.download === ready.download
+  )
+    return feedback.state;
   if (ready.download === undefined) return "expired";
-  if (feedback !== "idle" && feedback !== "saved") return feedback;
   return "saved";
 }
 
@@ -378,7 +387,7 @@ function useSupportReportAction({
     state: "idle",
   });
   const request = useReportCancellation(key, disposeOnUnmount);
-  const currentFeedback = feedback.key === key ? feedback.state : "idle";
+  const currentFeedback: ReportFeedback = feedback.key === key ? feedback : { key, state: "idle" };
   const create = (): Promise<void> =>
     runReport(key, correlationId, request, setFeedback, false, failure, clientOnly);
   const regenerate = (): Promise<void> =>
@@ -391,7 +400,7 @@ function useSupportReportAction({
       ready: outcome,
     };
   }
-  const idleFeedback = currentFeedback === "saved" ? "idle" : currentFeedback;
+  const idleFeedback = currentFeedback.state === "saved" ? "idle" : currentFeedback.state;
   return { status: outcome === undefined ? idleFeedback : "busy", create, regenerate };
 }
 
@@ -433,7 +442,9 @@ async function reportPreparationFailure(
   }
   if (!reportRequestIsCurrent(request, pending)) return;
   releaseReport(key, controller);
-  setFeedback({ key, state: availabilityFallback ? reportFailure(error) : "error" });
+  const outcome = outcomes.get(key);
+  const download = outcome instanceof AbortController ? undefined : outcome?.download;
+  setFeedback({ key, state: availabilityFallback ? reportFailure(error) : "error", download });
   // Transport loss is already counted; artifact failures remain diagnosable under their parent.
   if (signal.aborted || (availabilityFallback && isReportDeliveryUnavailable(error, api, signal)))
     return;
