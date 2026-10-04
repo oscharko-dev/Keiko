@@ -101,14 +101,17 @@ interface HtmlAttributeCursor {
 }
 
 function skipHtmlAttributeSeparators(cursor: HtmlAttributeCursor, slash = false): void {
-  const separator = slash ? /[\s/]/u : /\s/u;
+  const separator = slash ? /[\t\n\f\r /]/u : /[\t\n\f\r ]/u;
   while (cursor.offset < cursor.tag.length && separator.test(cursor.tag.charAt(cursor.offset)))
     cursor.offset += 1;
 }
 
 function htmlAttributeName(cursor: HtmlAttributeCursor): string {
   const start = cursor.offset;
-  while (cursor.offset < cursor.tag.length && !/[\s/>=]/u.test(cursor.tag.charAt(cursor.offset)))
+  while (
+    cursor.offset < cursor.tag.length &&
+    !/[\t\n\f\r />=]/u.test(cursor.tag.charAt(cursor.offset))
+  )
     cursor.offset += 1;
   return cursor.tag.slice(start, cursor.offset).toLowerCase();
 }
@@ -123,9 +126,48 @@ function htmlAttributeValue(cursor: HtmlAttributeCursor): string | undefined {
     return end < 0 ? undefined : cursor.tag.slice(start, end);
   }
   const start = cursor.offset;
-  while (cursor.offset < cursor.tag.length && !/[\s/>]/u.test(cursor.tag.charAt(cursor.offset)))
+  while (
+    cursor.offset < cursor.tag.length &&
+    !/[\t\n\f\r >]/u.test(cursor.tag.charAt(cursor.offset))
+  )
     cursor.offset += 1;
-  return cursor.offset === start ? undefined : cursor.tag.slice(start, cursor.offset);
+  // Preserve the existing compact self-closing declaration tolerance only at the tag terminator.
+  // Interior slashes belong to the unquoted value, including text/html in http-equiv content.
+  const end =
+    cursor.tag.charAt(cursor.offset) === ">" && cursor.tag.charAt(cursor.offset - 1) === "/"
+      ? cursor.offset - 1
+      : cursor.offset;
+  return end === start ? undefined : cursor.tag.slice(start, end);
+}
+
+function htmlMetaTagEnd(prefix: string, offset: number): number | undefined {
+  const cursor = { tag: prefix, offset };
+  while (cursor.offset < prefix.length) {
+    skipHtmlAttributeSeparators(cursor, true);
+    if (prefix.charAt(cursor.offset) === ">") return cursor.offset + 1;
+    const name = htmlAttributeName(cursor);
+    skipHtmlAttributeSeparators(cursor);
+    if (prefix.charAt(cursor.offset) === "=") {
+      cursor.offset += 1;
+      htmlAttributeValue(cursor);
+    } else if (name === "") cursor.offset += 1;
+  }
+  return undefined;
+}
+
+function* htmlMetaTags(prefix: string): Generator<string> {
+  const folded = prefix.toLowerCase();
+  let offset = 0;
+  while (offset < prefix.length) {
+    const start = folded.indexOf("<meta", offset);
+    if (start < 0) return;
+    offset = start + 5;
+    if (!/[\t\n\f\r />]/u.test(prefix.charAt(offset))) continue;
+    const end = htmlMetaTagEnd(prefix, offset);
+    if (end === undefined) return;
+    offset = end;
+    yield prefix.slice(start, end);
+  }
 }
 
 function htmlMetaAttributes(tag: string): ReadonlyMap<string, string> {
@@ -172,8 +214,8 @@ function declaredHtmlEncoding(
   const prefix = new TextDecoder("windows-1252")
     .decode(bytes.subarray(0, 1024))
     .replace(/<!--[\s\S]*?(?:-->|$)/gu, "");
-  for (const match of prefix.matchAll(/<meta\b[^>]*>/giu)) {
-    const charset = htmlMetaCharset(match[0])?.trim().toLowerCase();
+  for (const tag of htmlMetaTags(prefix)) {
+    const charset = htmlMetaCharset(tag)?.trim().toLowerCase();
     if (charset === undefined) continue;
     return supportedDeclaredHtmlEncoding(charset);
   }

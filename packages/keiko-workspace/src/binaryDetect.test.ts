@@ -133,6 +133,38 @@ describe("declared HTML character encoding", () => {
     );
     expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.htm" })?.text).toContain("Öl");
   });
+  it.each(["\u00a0", "\v"])(
+    "does not promote a charset separated by non-HTML whitespace %j",
+    (separator) => {
+      const markup = `<meta data=a${separator}charset=windows-1252><p>Öl</p>`;
+      expect(
+        decodeTextBytes(legacy(markup), undefined, { scopePath: "manual.html" }),
+      ).toBeUndefined();
+    },
+  );
+  it.each(["\t", "\n", "\f", "\r", " "])(
+    "recognizes HTML whitespace %j between metadata attributes",
+    (separator) => {
+      const markup = `<meta data=a${separator}charset=windows-1252><p>Öl</p>`;
+      expect(decodeTextFileBytes(legacy(markup), { scopePath: "manual.html" })?.encoding).toBe(
+        "windows-1252",
+      );
+    },
+  );
+  it("preserves slashes inside an unquoted http-equiv content value", () => {
+    const markup = "<META HTTP-EQUIV=Content-Type CONTENT=text/html;charset=iso-8859-1><p>Öl</p>";
+    expect(decodeTextFileBytes(legacy(markup), { scopePath: "manual.html" })).toEqual({
+      encoding: "windows-1252",
+      text: markup,
+    });
+  });
+  it.each(['"', "'"])("keeps a quoted tag terminator inside an attribute using %s", (quote) => {
+    const markup = `<meta name=${quote}x${quote} content=${quote}a>b${quote} charset=${quote}windows-1252${quote}><p>Öl</p>`;
+    expect(decodeTextFileBytes(legacy(markup), { scopePath: "manual.html" })).toEqual({
+      encoding: "windows-1252",
+      text: markup,
+    });
+  });
   it.each([
     '<meta/charset="windows-1252">',
     '<meta http-equiv="Content-Type"content="text/html; charset=windows-1252">',
@@ -149,6 +181,9 @@ describe("declared HTML character encoding", () => {
     "<meta data='unfinished charset=windows-1252>",
     '<meta data="/charset=windows-1252">',
     "<meta data='charset=windows-1252'>",
+    '<meta data="a>charset=windows-1252">',
+    "<meta data='a>charset=windows-1252'>",
+    "<meta data=unquoted/charset=windows-1252>",
   ])("does not promote quoted attribute contents into a declaration: %s", (declaration) => {
     expect(
       decodeTextFileBytes(legacy(`${declaration}<p>Ölwechsel</p>`), { scopePath: "manual.html" }),
