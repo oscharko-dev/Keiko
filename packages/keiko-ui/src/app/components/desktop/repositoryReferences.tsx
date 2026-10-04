@@ -1,6 +1,11 @@
 "use client";
 
 import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
+import {
   useCallback,
   useEffect,
   useId,
@@ -17,7 +22,7 @@ import type { ClientDiagnosticCitationActivation } from "@oscharko-dev/keiko-con
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import type { ChatConnectedScope } from "@/lib/types";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 

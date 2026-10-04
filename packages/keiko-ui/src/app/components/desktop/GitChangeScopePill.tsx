@@ -1,5 +1,11 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+  type WidgetMessageKey as MessageKey,
+} from "@/lib/optional-widget-i18n";
+
 import { canonicalGroundingChat, replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
 
 // Issue #3400 (epic #3384) — git-change scope pills for the chat header.
@@ -31,8 +37,7 @@ import {
   reviewGitChangeChatDescription,
   updateChatGitChangeScopes,
 } from "@/lib/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { restoreScopeHeaderFocus } from "./ConnectedScopePill";

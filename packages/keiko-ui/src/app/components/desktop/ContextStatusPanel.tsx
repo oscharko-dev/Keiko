@@ -1,5 +1,11 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+  type WidgetMessageKey as MessageKey,
+} from "@/lib/optional-widget-i18n";
+
 // ADR-0057 D2 — a quiet, collapsed-by-default aggregate "Context" panel for a grounded answer.
 // It surfaces ONLY the path-free context-assembly aggregate: total estimated tokens, the budget
 // pressure enum, per-lane SOURCE COUNTS (counts, never paths), and a compaction on/off indicator.
@@ -12,8 +18,8 @@
 import type { ReactNode } from "react";
 import { CONTEXT_LANE_IDS } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { formatTokens } from "@/lib/format";
-import { useLocale, useTranslate, type I18nTranslate, type Locale } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+import { useLocale, type Locale } from "@/lib/i18n";
+
 import { MetricRow } from "./GroundedAnswer";
 import {
   DEFAULT_TOKEN_ESTIMATOR_ID,

@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   Dispatch,
@@ -32,7 +37,7 @@ import type {
   GitRepositoryStatusResponse,
 } from "../../../../../lib/types";
 import { isExpandableDirectory } from "../../../../../lib/types";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import { Icons } from "../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";

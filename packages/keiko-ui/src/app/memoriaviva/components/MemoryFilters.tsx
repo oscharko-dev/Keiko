@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 // Issue #211 — MemoriaViva filter chips.
 // Each axis (scope / type / status / sensitivity) renders as a row of toggle buttons.
 // Active filters are pushed to URL search params so the view is deep-linkable.
@@ -21,7 +26,6 @@ import {
   MEMORY_STATUSES,
   MEMORY_SENSITIVITIES,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 export interface MemoryFilterState {
   readonly query: string;

@@ -1274,7 +1274,9 @@ describe("FilesWidget", () => {
         stageReport: { stage: "files directory load", phase: "settled" },
       });
       await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-      expect(report).toHaveBeenCalledWith(correlationId, expect.any(AbortSignal));
+      await waitFor(() =>
+        expect(report).toHaveBeenCalledWith(correlationId, expect.any(AbortSignal)),
+      );
       expect(JSON.stringify(writer.mock.calls)).not.toContain("private customer body");
     } finally {
       resetClientDiagnosticWriter();
@@ -2511,7 +2513,9 @@ describe("FilePreview", () => {
           expect.objectContaining({ correlationId, errorEvidence: expect.any(Object) }),
         );
         await userEvent.click(screen.getByRole("button", { name: "Fehlerbericht erstellen" }));
-        expect(report).toHaveBeenCalledWith(correlationId, expect.any(AbortSignal));
+        await waitFor(() =>
+          expect(report).toHaveBeenCalledWith(correlationId, expect.any(AbortSignal)),
+        );
         expect(JSON.stringify(writer.mock.calls)).not.toContain("private customer body");
       } finally {
         resetClientDiagnosticWriter();

@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
+
 // Issue #211 — Destructive confirmation dialog for forget and delete flows.
 //
 // WCAG: aria-modal dialog, focus trapped to the dialog (cancel button focuses first),
@@ -10,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { deleteMemory, forgetMemory } from "@/lib/memory-api";
-import { useTranslate } from "@/lib/i18n";
+
 import { formatError } from "./format-error";
 
 const FOCUSABLE_SELECTOR =

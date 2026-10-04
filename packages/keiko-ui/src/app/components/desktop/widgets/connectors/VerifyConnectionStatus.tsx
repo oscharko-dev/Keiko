@@ -6,7 +6,7 @@
 // "Verifying…" state.
 
 import type { ReactNode } from "react";
-import { useTranslate } from "@/lib/i18n";
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type { AtlassianConnectorVerifyStatus } from "@/lib/atlassian-connectors-api";
 import { verifyStatusCopyKey, verifyStatusLabelKey, verifyStatusTone } from "./connector-labels";
 

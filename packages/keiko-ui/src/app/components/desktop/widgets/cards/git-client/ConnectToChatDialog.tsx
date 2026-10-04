@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 // Issue #3400 (epic #3384) — "Connect to Chat" affordance for the Git window.
 //
 // Frozen Decision 5: the Git window only CONNECTS a comparison to a Chat; every refinement of the
@@ -19,7 +24,7 @@ import { createPortal } from "react-dom";
 import { connectGitChangeToChat, fetchChats } from "@/lib/api";
 import { canonicalGroundingChat } from "@/lib/chat-grounding-mutation";
 import type { ConnectGitChangeInput, GitChangeConnectResponse } from "@/lib/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import type { Chat } from "@/lib/types";
 import { gitChangeBlockedReasonMessage } from "../../../GitChangeScopePill";
 import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";

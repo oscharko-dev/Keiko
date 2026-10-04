@@ -1,3 +1,9 @@
+"use client";
+
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type WidgetMessageKey as MessageKey,
+} from "@/lib/optional-widget-i18n";
 // Issue #2245 (Epic #2238, ADR-0128 D2/D3) — the add-connector flow with a WRITE-ONLY token field.
 //
 // Security-critical (AC): the API token is held only in transient component state, rides the create
@@ -7,14 +13,11 @@
 // (`isSafeAtlassianConnectorBaseUrl`) with immediate inline feedback. After save, an inline
 // verify-connection step renders the closed status union as actionable copy.
 
-"use client";
-
 import { useId, useState, type ReactNode, type SubmitEvent } from "react";
 import type { AtlassianConnectorProvider } from "@oscharko-dev/keiko-contracts";
 import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { ApiError } from "@/lib/api";
-import { useTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+
 import type {
   AtlassianConnectorMetadata,
   AtlassianConnectorsClient,

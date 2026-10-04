@@ -3,8 +3,8 @@
 // caller; the label is a catalog key. `role` defaults to "status" so outcomes are announced.
 
 import type { ReactNode } from "react";
-import { useTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
+import type { WidgetMessageKey as MessageKey } from "@/lib/optional-widget-i18n";
 import type { ConnectorTone } from "./connector-labels";
 
 export interface NoticeProps {

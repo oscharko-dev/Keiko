@@ -735,7 +735,7 @@ describe("ChatHistoryPanel localized failure messages (KEIKO-0820)", () => {
     // and the VISIBLE button copy (t("chat.history.action.renameLabel")) are both German now — a
     // sighted user and a screen-reader user see/hear the same language (WCAG 2.5.3 Label in
     // Name), so this asserts both rather than only the accessible name the query happens to match.
-    const renameButton = screen.getByRole("button", { name: /umbenennen/i });
+    const renameButton = await screen.findByRole("button", { name: /umbenennen/i });
     expect(renameButton).toHaveTextContent("Umbenennen");
     await user.click(renameButton);
     const renameInput = screen.getByDisplayValue("Sprint triage");

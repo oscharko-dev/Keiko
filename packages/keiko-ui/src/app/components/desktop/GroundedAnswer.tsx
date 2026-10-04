@@ -24,7 +24,7 @@ import {
   type OptionalWidgetTranslate,
 } from "@/lib/optional-widget-i18n";
 import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
-import type { OptionalWidgetMessageKey as MessageKey } from "@/lib/i18n-messages.optional.en";
+import type { WidgetMessageKey as MessageKey } from "@/lib/optional-widget-i18n";
 import {
   RepositoryReferenceInline,
   repositoryReferencePathLabels,

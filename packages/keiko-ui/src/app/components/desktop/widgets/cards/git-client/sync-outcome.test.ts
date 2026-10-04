@@ -4,8 +4,12 @@
 
 import { describe, expect, it } from "vitest";
 import { GIT_SYNC_OUTCOMES } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
-import { translate, loadLocaleMessages, type I18nTranslate } from "@/lib/i18n";
-import { DE_MESSAGES } from "@/lib/i18n-messages.de";
+import {
+  translateOptionalWidget as translate,
+  loadOptionalWidgetMessages as loadLocaleMessages,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+import { OPTIONAL_WIDGET_DE_MESSAGES as DE_MESSAGES } from "@/lib/i18n-messages.optional.de";
 import type { GitDeliveryMutationStatus } from "@/lib/api";
 import { pushOutcomePresentation, syncOutcomePresentation } from "./sync-outcome";
 

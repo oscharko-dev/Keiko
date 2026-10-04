@@ -28,7 +28,11 @@ import {
   rootDisplayName,
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
-import { I18N_STORAGE_KEY, I18nProvider, translate, type I18nTranslate } from "@/lib/i18n";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+import {
+  translateOptionalWidget as translate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";

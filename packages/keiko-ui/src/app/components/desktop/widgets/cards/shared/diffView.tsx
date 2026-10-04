@@ -1,5 +1,7 @@
 "use client";
 
+import type { OptionalWidgetTranslate as I18nTranslate } from "@/lib/optional-widget-i18n";
+
 // Shared parsed-diff view (generalized from ReviewWidget, Epic #1571 / Issue #1574). Renders the
 // unified-diff line/hunk/file structure produced by parseUnifiedDiff. Both the agent run-report
 // Review surface and the live Git client diff pane consume these components, so the diff rendering
@@ -9,7 +11,7 @@
 
 import type { ReactNode } from "react";
 import { reportClientDiagnostic } from "../../../../../../lib/client-diagnostics";
-import type { I18nTranslate } from "../../../../../../lib/i18n";
+
 import type { ChangedFile } from "../../../../../../lib/types";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 import { langOf, highlightLines } from "./syntaxHighlight";

@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
+
 import { useCallback, useState, type ReactNode } from "react";
 import { useAutonomyModePolicy } from "@/app/components/desktop/hooks/useAutonomyModePolicy";
 import {
@@ -10,7 +12,7 @@ import {
   type fetchRecentCaptures,
   type forgetMemory,
 } from "@/lib/memory-api";
-import { useTranslate } from "@/lib/i18n";
+
 import { HealthScanFindings } from "./HealthScanFindings";
 import { MemoryConsolidation } from "./MemoryConsolidation";
 import { MemoryDetail } from "./MemoryDetail";

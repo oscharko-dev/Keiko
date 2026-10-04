@@ -152,12 +152,17 @@ import { GitChangeScopePill } from "./GitChangeScopePill";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { ConnectorScopePill } from "./ConnectorScopePill";
 import { copyTextToClipboard } from "@/lib/clipboard";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { useFollowNewest } from "@/lib/useFollowNewest";
 import { ComposerShell, composerEnterSubmits } from "./composer/ComposerShell";
 import { MarkdownComposer } from "./composer/MarkdownComposer";
 import type { ComposerInputHandle, ComposerKeyEvent } from "./composer/composer-editor-types";
-import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import {
+  presentChatSessionError,
+  useOptionalWidgetTranslate,
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
 import type {
   CapsuleListEntry,

@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 // Issue #211 — Memory action buttons: approve / reject / correct / pin / unpin / archive / forget / delete.
 // Governance gating: pin/unpin are mutually exclusive based on record.pinned.
 // approve/reject only appear for proposed status.
@@ -21,7 +26,7 @@ import {
   rejectMemoryProposal,
   unpinMemory,
 } from "@/lib/memory-api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { formatError } from "./format-error";
 import { EditMemoryDialog } from "./EditMemoryDialog";
 import { ForgetConfirmDialog } from "./ForgetConfirmDialog";

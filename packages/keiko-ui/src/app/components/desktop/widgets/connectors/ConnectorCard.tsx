@@ -1,12 +1,13 @@
+"use client";
+
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 // Issue #2245 (Epic #2238) — one configured connector: identity, health (last verify), verify /
 // manage-sync / delete controls, and the expandable scope+sync surface. The token is never part of
 // the metadata this card renders (ADR-0128 D2), so nothing here can echo a secret.
 
-"use client";
-
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ApiError } from "@/lib/api";
-import { useTranslate } from "@/lib/i18n";
+
 import { toSafeIsoString } from "@/lib/format";
 import type {
   AtlassianConnectorMetadata,

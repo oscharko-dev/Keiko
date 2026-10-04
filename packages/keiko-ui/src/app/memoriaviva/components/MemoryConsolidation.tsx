@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 import { Fragment, useCallback, useEffect, useId, useMemo, useState } from "react";
 import type { ChangeEvent, ReactNode, WheelEvent } from "react";
 import Link from "next/link";
@@ -18,7 +23,7 @@ import {
   type StartMemoryConsolidationInput,
 } from "@/lib/memory-api";
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { formatError } from "./format-error";
 
 type FormSubmitEvent = { preventDefault: () => void };

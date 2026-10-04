@@ -1,3 +1,4 @@
+import type { WidgetMessageKey as MessageKey } from "@/lib/optional-widget-i18n";
 // Issue #2245 (Epic #2238) — pure enum → catalog-key mappings for the Atlassian connector surfaces.
 //
 // Every function returns a typed `MessageKey`, so the compiler proves each mapped key exists in the
@@ -16,7 +17,7 @@ import type {
   AtlassianSyncJobStatus,
   CodingWorkbenchApprovalRisk,
 } from "@oscharko-dev/keiko-contracts";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+
 import type { AtlassianConnectorVerifyStatus } from "@/lib/atlassian-connectors-api";
 
 // The `lk-badge` global design-system class (globals.css, never edited) renders these `data-state`

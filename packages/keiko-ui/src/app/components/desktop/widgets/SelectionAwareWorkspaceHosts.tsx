@@ -1,3 +1,4 @@
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { disposeEditorModelRegistryRoot } from "@oscharko-dev/keiko-editor";
@@ -7,7 +8,7 @@ import type { ClientBindingReferenceShape } from "@oscharko-dev/keiko-contracts/
 import { updateChat } from "@/lib/api";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { newClientCorrelationId } from "@/lib/http";
-import { useTranslate } from "@/lib/i18n";
+
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 

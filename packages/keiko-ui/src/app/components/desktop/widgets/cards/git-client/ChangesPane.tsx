@@ -8,8 +8,11 @@ import type {
   GitHistoryResponse,
   GitRepositoryStatusResponse,
 } from "@/lib/types";
-import { useTranslate } from "@/lib/i18n";
-import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
+import {
+  useOptionalWidgetTranslate,
+  useOptionalWidgetTranslate as useTranslate,
+} from "@/lib/optional-widget-i18n";
 import { Icons } from "../../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 import type { GitMutationOutcome } from "./git-client-seam";

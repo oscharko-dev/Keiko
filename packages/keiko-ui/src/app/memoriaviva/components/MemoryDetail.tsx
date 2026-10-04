@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 // Issue #211 — MemoriaViva detail panel.
 // Shows provenance, validity interval, tags, scope, sensitivity, stale reason.
 // Fetches by id on mount; id comes from the URL segment passed by the page.
@@ -12,7 +17,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 import { fetchMemory, type MemoryDetailResponse } from "@/lib/memory-api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { formatError } from "./format-error";
 import { MemoryActions } from "./MemoryActions";
 

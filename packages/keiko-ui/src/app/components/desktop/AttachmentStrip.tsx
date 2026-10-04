@@ -23,10 +23,12 @@ import {
 import { Icons } from "./Icons";
 import { NATIVE_LIST_KEEP_PADDING_STYLE } from "./native-element-styles";
 import { formatBytes } from "@/lib/format";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
 } from "@/lib/optional-widget-i18n";
 import type {
   AttachmentRejectionReason,

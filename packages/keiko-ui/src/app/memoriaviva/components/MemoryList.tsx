@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 // Issue #211 — MemoriaViva list content. Filter state is owned by the caller (a desktop window,
 // e.g. MemoriaVivaWindow.tsx, which holds it in local React state) and passed in as `filters` /
 // `onFilterChange` props — this file has no URL-state sync of its own (KEIKO-0650: the earlier
@@ -14,7 +19,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "@/lib/memory-api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { NATIVE_BLOCK_STYLE } from "../../components/desktop/native-element-styles";
 import { formatError } from "./format-error";
 import {

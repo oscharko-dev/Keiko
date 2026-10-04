@@ -11,8 +11,11 @@ import {
 } from "react";
 import type { Chat } from "@/lib/types";
 import { updateChat } from "@/lib/api";
-import { useTranslate } from "@/lib/i18n";
-import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
+import {
+  useOptionalWidgetTranslate,
+  useOptionalWidgetTranslate as useTranslate,
+} from "@/lib/optional-widget-i18n";
 import { Icons } from "../../Icons";
 import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
 import { effectiveLocalKnowledgeScopes, effectiveScopes } from "../../hooks/workspaceActions";

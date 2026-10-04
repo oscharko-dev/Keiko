@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
+
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
@@ -8,7 +10,7 @@ import type {
   GitEditorDiffScope,
 } from "@oscharko-dev/keiko-contracts";
 import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
-import { useTranslate } from "@/lib/i18n";
+
 import type { GitDiffScope, GitHistoryEntry } from "@/lib/types";
 import { DiffFileSection } from "../shared/diffView";
 import type { GitClientSeam } from "./git-client-seam";

@@ -1,3 +1,6 @@
+"use client";
+
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 // Issue #2245 (Epic #2238, ADR-0128) — the Atlassian connector management surface.
 //
 // Top-level composition: lists configured connectors (provider, label, base URL, added-at, health
@@ -6,11 +9,9 @@
 // client is injectable (`client` prop) so tests substitute a mock; production binds the real
 // same-origin BFF client.
 
-"use client";
-
 import { useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "@/lib/api";
-import { useTranslate } from "@/lib/i18n";
+
 import {
   defaultAtlassianConnectorsClient,
   type AtlassianConnectorMetadata,

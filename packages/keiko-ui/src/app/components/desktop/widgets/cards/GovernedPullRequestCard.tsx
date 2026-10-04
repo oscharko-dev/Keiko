@@ -1,5 +1,11 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+  type WidgetMessageKey as MessageKey,
+} from "@/lib/optional-widget-i18n";
+
 // Governed GitHub pull request command center (Issue #477, Epic #470, ADR-0064). A per-project card,
 // launched from the Publish section of the governed Git flow, that turns a published branch into a
 // review-ready GitHub pull request through the governed PR gateway exposed by the BFF.
@@ -41,8 +47,7 @@ import {
 // drags `pr-description`'s validator module into the eager chunk (epic #3384 final-audit F18) —
 // this card is already behind the `next/dynamic({ ssr: false })` boundary in widgets/index.tsx.
 import { PR_DESCRIPTION_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+
 import { Icons } from "../../Icons";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).

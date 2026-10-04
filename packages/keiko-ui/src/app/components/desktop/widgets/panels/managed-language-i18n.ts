@@ -1,5 +1,8 @@
-import type { I18nTranslate, MessageValues } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+import type {
+  OptionalWidgetTranslate as I18nTranslate,
+  WidgetMessageKey as MessageKey,
+} from "@/lib/optional-widget-i18n";
+import type { MessageValues } from "@/lib/i18n";
 
 const MANAGED_LANGUAGE_MESSAGE_KEYS = {
   title: "managedLanguage.title",

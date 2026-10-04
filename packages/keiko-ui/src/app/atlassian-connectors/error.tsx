@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
+
 // F3 — /atlassian-connectors had no error.tsx and no boundary anywhere above
 // AtlassianConnectorsApp: an unvalidated persisted connector record (e.g. a malformed
 // `createdAt`) threw during render with nothing to catch it, taking the whole route down to a
@@ -10,7 +12,7 @@
 // #1300 — and must not grow for this).
 
 import { useEffect, type ReactNode } from "react";
-import { useTranslate } from "@/lib/i18n";
+
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 

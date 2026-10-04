@@ -1,5 +1,10 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate as useTranslate,
+  type OptionalWidgetTranslate as I18nTranslate,
+} from "@/lib/optional-widget-i18n";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
@@ -9,7 +14,7 @@ import {
   forgetMemory,
   type MemoryRecentCapture,
 } from "@/lib/memory-api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+
 import { MemoryListState, MemoryRowScaffold, StatusBadge } from "./MemoryList";
 import { formatError } from "./format-error";
 import styles from "./MemoryJournal.module.css";

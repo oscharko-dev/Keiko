@@ -1,3 +1,6 @@
+"use client";
+
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 // Issue #540 (Epic #532) — Relationships workspace surface.
 //
 // Rendered as the body of the singleton `relationships` Workspace window (registered in
@@ -20,8 +23,6 @@
 //
 // No new third-party dependency. No new @keyframes. No new CSS variables.
 
-"use client";
-
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
@@ -33,7 +34,7 @@ import { RelationshipInspectorPanel } from "../components/desktop/widgets/panels
 import { useRelationshipActivityStream } from "../components/desktop/widgets/panels/useRelationshipActivityStream";
 import { RelationshipHealthPanel } from "../components/desktop/widgets/panels/RelationshipHealthPanel";
 import { RelationshipCreateDialog } from "../components/desktop/modals/RelationshipCreateDialog";
-import { useTranslate } from "@/lib/i18n";
+
 import type { ApiRelationship } from "./api";
 
 const EMPTY_FILTERS: RelationshipFilters = {};

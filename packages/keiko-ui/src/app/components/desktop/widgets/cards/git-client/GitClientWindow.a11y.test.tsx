@@ -774,7 +774,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
         </I18nProvider>,
       );
 
-      const dialog = screen.getByRole("dialog", { name: "Repository hinzufügen" });
+      const dialog = await screen.findByRole("dialog", { name: "Repository hinzufügen" });
       expect(within(dialog).getAllByRole("button", { name: "Repository klonen" })).toHaveLength(2);
       expect(
         within(dialog).getByRole("button", { name: "Lokales Repository öffnen" }),
