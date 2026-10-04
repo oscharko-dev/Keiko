@@ -16,6 +16,7 @@
 // few percent proves nothing (a prior revision of these tests had exactly that problem).
 
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   RepositoryReferenceInline,
@@ -49,6 +50,71 @@ describe("current repository scope navigation identities", () => {
       scopes.map((scope) => connectedScopeFingerprint({ ...scope, root: "/repo" })),
     );
     expect(new Set(roots[0]?.scopeFingerprints).size).toBe(2);
+  });
+});
+
+describe("explicit repository source choice", () => {
+  it("requires an accessible keyboard choice even when only one source remains", async () => {
+    const user = userEvent.setup();
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "source" }));
+    render(
+      <RepositoryReferenceInline
+        reference={{ path: "manual/chapter.txt", label: "chapter.txt:9", lineStart: 9 }}
+        roots={[{ root: "/repo/manual", label: "Manual" }]}
+        sourceLabel={"Archived manual\u202e"}
+        requireRootChoice
+        openReference={openReference}
+      />,
+    );
+    const trigger = screen.getByRole("button", {
+      name: "Open Archived manual · manual/chapter.txt at line 9 in editor",
+    });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    trigger.focus();
+    await user.keyboard("{Enter}");
+    expect(openReference).not.toHaveBeenCalled();
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const option = screen.getByRole("button", { name: "Select repository source: Manual" });
+    expect(option.parentElement).toHaveAttribute("id", trigger.getAttribute("aria-controls"));
+    await user.tab();
+    expect(option).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).not.toHaveAttribute("aria-controls");
+    expect(option).not.toBeInTheDocument();
+    expect(openReference).not.toHaveBeenCalled();
+    await user.keyboard("{Enter}");
+    await user.tab();
+    await user.keyboard("{Enter}");
+    expect(openReference).toHaveBeenCalledExactlyOnceWith({
+      root: "/repo/manual",
+      path: "manual/chapter.txt",
+      lineStart: 9,
+    });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("dismisses a forced picker from the trigger without opening a source", async () => {
+    const user = userEvent.setup();
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "source" }));
+    render(
+      <RepositoryReferenceInline
+        reference={{ path: "README.md", label: "README.md" }}
+        roots={[{ root: "/repo", label: "Repo" }]}
+        requireRootChoice
+        openReference={openReference}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Open README.md in editor" });
+    trigger.focus();
+    await user.keyboard(" ");
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await user.keyboard("{Escape}");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Select repository source: Repo" })).toBeNull();
+    expect(openReference).not.toHaveBeenCalled();
   });
 });
 

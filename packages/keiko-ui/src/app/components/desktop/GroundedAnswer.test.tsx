@@ -15,6 +15,7 @@ import {
   type ClientDiagnosticWriter,
 } from "@/lib/client-diagnostics";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
+import { repositoryReferenceRootsForScopes } from "./repositoryReferences";
 import { I18N_STORAGE_KEY, I18nProvider, resetLoadedMessageCatalogs } from "@/lib/i18n";
 import activityBadgeStyles from "./GroundedAnswer.module.css";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
@@ -2902,6 +2903,103 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
 });
 
 describe("attributed citation activation evidence", () => {
+  it.each(["x", "A1".repeat(32)])(
+    "requires explicit choice for malformed identity %s even if a root repeats it",
+    (fingerprint) => {
+      const openReference = vi.fn(() => ({ ok: true as const, windowId: "source" }));
+      render(
+        <GroundedAnswer
+          answer={answer({ citations: [citation({ sourceScopeFingerprint: fingerprint })] })}
+          busy={false}
+          repositoryRoots={[{ root: "/repo", label: "Repo", scopeFingerprints: [fingerprint] }]}
+          openRepositoryReference={openReference}
+        />,
+      );
+      openEvidenceDisclosure(document.body);
+      fireEvent.click(screen.getByRole("button", { name: /Open src\/foo.ts/ }));
+      expect(openReference).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Select repository source: Repo" }));
+      expect(openReference).toHaveBeenCalledExactlyOnceWith({
+        root: "/repo",
+        path: "src/foo.ts",
+        lineStart: 10,
+        lineEnd: 25,
+      });
+    },
+  );
+
+  it.each(["/repo", "/repo/manuals"])(
+    "opens the attributed ancestor or descendant %s without preferring path depth",
+    (selectedRoot) => {
+      const scopes = ["/repo", "/repo/manuals"].map((root) => ({
+        kind: "workspace-root" as const,
+        root,
+        relativePaths: [],
+        connectedAtMs: 1,
+      }));
+      const roots = repositoryReferenceRootsForScopes(scopes, "");
+      const selected = roots.find((root) => root.root === selectedRoot);
+      expect(selected?.scopeFingerprints).toHaveLength(1);
+      const openReference = vi.fn(() => ({ ok: true as const, windowId: "source" }));
+      render(
+        <GroundedAnswer
+          answer={answer({
+            citations: [citation({ sourceScopeFingerprint: selected?.scopeFingerprints?.[0] })],
+          })}
+          busy={false}
+          repositoryRoots={roots}
+          openRepositoryReference={openReference}
+        />,
+      );
+      openEvidenceDisclosure(document.body);
+      fireEvent.click(screen.getByRole("button", { name: /Open src\/foo.ts/ }));
+      expect(openReference).toHaveBeenCalledExactlyOnceWith({
+        root: selectedRoot,
+        path: "src/foo.ts",
+        lineStart: 10,
+        lineEnd: 25,
+      });
+      expect(screen.queryByRole("button", { name: /Select repository source:/ })).toBeNull();
+    },
+  );
+
+  it("requires manual choice for normalized-equal root aliases produced from connected scopes", () => {
+    const scopes = ["/repo", "/repo/", "\\repo"].map((root) => ({
+      kind: "workspace-root" as const,
+      root,
+      relativePaths: [],
+      connectedAtMs: 1,
+    }));
+    const roots = repositoryReferenceRootsForScopes(scopes, "");
+    expect(roots).toHaveLength(3);
+    expect(new Set(roots.flatMap((root) => root.scopeFingerprints ?? [])).size).toBe(1);
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "source" }));
+    render(
+      <GroundedAnswer
+        answer={answer({
+          citations: [citation({ sourceScopeFingerprint: roots[0]?.scopeFingerprints?.[0] })],
+        })}
+        busy={false}
+        repositoryRoots={roots}
+        openRepositoryReference={openReference}
+      />,
+    );
+    openEvidenceDisclosure(document.body);
+    fireEvent.click(screen.getByRole("button", { name: /Open src\/foo.ts/ }));
+    expect(openReference).not.toHaveBeenCalled();
+    const options = screen.getAllByRole("button", { name: /Select repository source:/ });
+    expect(options).toHaveLength(3);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select repository source: repo · /repo/" }),
+    );
+    expect(openReference).toHaveBeenCalledExactlyOnceWith({
+      root: "/repo/",
+      path: "src/foo.ts",
+      lineStart: 10,
+      lineEnd: 25,
+    });
+  });
+
   it.each(["absent", "malformed", "matched", "unmatched", "ambiguous"] as const)(
     "records %s identity separately from the actual picker/open outcome",
     (reason) => {
