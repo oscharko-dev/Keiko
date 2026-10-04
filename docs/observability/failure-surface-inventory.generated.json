@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e709776f68d67cc8b362299f61f8559115fcc70cecd7f3ca433bf35611b502da"
+    "catalogDigest": "feebc0439c9075f4d8439dd357984f2356826fca7e9e07c25a8d0172a6cfe44a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1179,7 +1179,10 @@
     "client.session-repair.recovered.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
     ],
-    "client.stage.settled.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
+    "client.stage.settled.line": [
+      "packages/keiko-server/src/client-diagnostics-loss.test.ts",
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
+    ],
     "client.stage.started.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "client.support-report.download-started.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"
