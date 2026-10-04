@@ -361,6 +361,12 @@ function inspectionMetrics(
   ];
 }
 
+function SearchCoverageDetail({ coverage }: { readonly coverage: SearchCoverage }): ReactNode {
+  const t = useTranslate();
+  const detail = searchCoverageDetail(coverage, t);
+  return detail === undefined ? null : <p className="grounded-meta">{detail}</p>;
+}
+
 function ContextPackSummary({
   contextPack,
 }: {
@@ -378,6 +384,7 @@ function ContextPackSummary({
       {contextPack.coverage === undefined ? null : (
         <p className="grounded-meta">{t("grounded.inspection.scopeCountHint")}</p>
       )}
+      <SearchCoverageDetail coverage={contextPack.coverage} />
       <p className="grounded-meta">
         {contextPack.budget.filesReadMax === null
           ? t("grounded.inspection.readHintUncapped")
@@ -1105,20 +1112,15 @@ function uncertaintyKindLabel(kind: string, t: I18nTranslate): string {
   return key === undefined ? humanizeToken(kind) : t(key);
 }
 
-function scopeIncompleteDetail(coverage: SearchCoverage, t: I18nTranslate): string {
+function searchCoverageDetail(coverage: SearchCoverage, t: I18nTranslate): string | undefined {
   if (coverage?.reasons.includes("io-error") === true) return t("grounded.detail.scopeReadError");
   if (coverage !== undefined && hasOnlyOmittedMatches(coverage)) {
     return t("grounded.detail.scopeMatchesOmitted");
   }
-  return t("grounded.detail.scopeIncomplete");
+  return undefined;
 }
 
-function uncertaintyLineText(
-  marker: GroundedUncertainty,
-  t: I18nTranslate,
-  coverage: SearchCoverage,
-): string {
-  if (marker.kind === "scope-incomplete") return scopeIncompleteDetail(coverage, t);
+function uncertaintyLineText(marker: GroundedUncertainty, t: I18nTranslate): string {
   const detailKey = UNCERTAINTY_KIND_DETAIL_KEYS.get(marker.kind);
   if (detailKey === undefined) return marker.claim;
   const detail = t(detailKey);
@@ -1176,17 +1178,15 @@ function uncertaintyDisplayGroups(
 function UncertaintyItem({
   markers,
   t,
-  coverage,
 }: {
   readonly markers: readonly GroundedUncertainty[];
   readonly t: I18nTranslate;
-  readonly coverage: SearchCoverage;
 }): ReactNode {
   const first = markers[0];
   if (first === undefined) return null;
   return (
     <li>
-      <span>{`${uncertaintyKindLabel(first.kind, t)}: ${uncertaintyLineText(first, t, coverage)}`}</span>
+      <span>{`${uncertaintyKindLabel(first.kind, t)}: ${uncertaintyLineText(first, t)}`}</span>
       <OriginalUncertaintyDetails markers={markers} t={t} />
     </li>
   );
@@ -1194,10 +1194,8 @@ function UncertaintyItem({
 
 function UncertaintyLine({
   markers,
-  coverage,
 }: {
   readonly markers: readonly GroundedUncertainty[];
-  readonly coverage?: SearchCoverage;
 }): ReactNode {
   const t = useTranslate();
   if (markers.length === 0) return null;
@@ -1207,7 +1205,7 @@ function UncertaintyLine({
       <div>{t("grounded.uncertainty.summary", { count: markers.length, kinds })}</div>
       <ul className="grounded-uncertainty-list">
         {uncertaintyDisplayGroups(markers).map((group, index) => (
-          <UncertaintyItem key={index} markers={group} t={t} coverage={coverage} />
+          <UncertaintyItem key={index} markers={group} t={t} />
         ))}
       </ul>
     </div>
@@ -1678,10 +1676,7 @@ export function GroundedAnswer({
             unverifiedSupport={supportUnverified(answer.uncertainty)}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
-          <UncertaintyLine
-            markers={answer.uncertainty}
-            coverage={answer.contextPack.folder.coverage}
-          />
+          <UncertaintyLine markers={answer.uncertainty} />
           <OmittedLine
             omittedCount={answer.omittedCount}
             omittedCounts={answer.contextPack.folder.omittedCounts}
@@ -1706,7 +1701,7 @@ export function GroundedAnswer({
           repositoryRoots={repositoryRoots}
           openRepositoryReference={openRepositoryReference}
         />
-        <UncertaintyLine markers={answer.uncertainty} coverage={answer.contextPack.coverage} />
+        <UncertaintyLine markers={answer.uncertainty} />
         <OmittedLine
           omittedCount={answer.contextPack.omittedCount}
           omittedCounts={answer.contextPack.omittedCounts}

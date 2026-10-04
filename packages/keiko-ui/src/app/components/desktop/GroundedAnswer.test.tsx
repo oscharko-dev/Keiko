@@ -2092,6 +2092,46 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     },
   );
 
+  it.each(["de", "en"] as const)(
+    "keeps independent structural uncertainty distinct from search match coverage in %s",
+    async (locale) => {
+      const claim = "Structural source inspection could not read the requested line range.";
+      const { container } = renderInLocale(
+        locale,
+        answer({
+          uncertainty: [{ kind: "scope-incomplete", claim }],
+          contextPack: { ...contextPack(), coverage: fullMatchLimitedCoverage() },
+        }),
+      );
+      await screen.findAllByText(locale === "de" ? "Evidenz" : "Evidence");
+      openEvidenceDisclosure(container);
+      const uncertainty = container.querySelector(".grounded-uncertainty-list");
+      const summary = container.querySelector(".grounded-context-pack");
+      expect(uncertainty).toHaveTextContent(
+        locale === "de"
+          ? "Die ausgewählten Belege sind unvollständig."
+          : "The selected evidence is incomplete.",
+      );
+      expect(uncertainty).not.toHaveTextContent(
+        locale === "de"
+          ? "Alle zugelassenen Dateien je Suchbereich wurden durchsucht."
+          : "All eligible files in each search scope were searched.",
+      );
+      expect(summary).toHaveTextContent(
+        locale === "de"
+          ? "Weitere passende Treffer wurden nicht in die Antwortbelege aufgenommen."
+          : "Additional matching results were not included in the answer evidence.",
+      );
+      expect(screen.getByText(claim)).not.toBeVisible();
+      fireEvent.click(
+        screen.getByText(
+          locale === "de" ? "Technische Originaldetails" : "Technical original details",
+        ),
+      );
+      expect(screen.getByText(claim)).toBeVisible();
+    },
+  );
+
   it.each([
     { filesScanned: 111 },
     { filesSkipped: 1 },

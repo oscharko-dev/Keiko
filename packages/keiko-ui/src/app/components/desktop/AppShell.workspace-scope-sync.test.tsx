@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState, type ReactNode, type RefObject } from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import type { Chat, ChatConnectedScope } from "@/lib/types";
@@ -7,6 +7,7 @@ import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
 import { sanitizePersistedWorkspace } from "./hooks/workspace-persistence";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { AppWindow, Connection } from "./windows/types";
 
 const mocks = vi.hoisted(() => ({
@@ -175,6 +176,21 @@ async function storageReplay(
   });
 }
 
+async function mountAmbiguousFiles(): Promise<{ wins: AppWindow[]; conns: Connection[] }> {
+  const initial = fixture(["/manuals/New"]);
+  initial.wins.push(windowRecord("unconnected-files", "files", { root: "/unrelated" }));
+  const conns: Connection[] = [
+    { id: "edge-0", a: "files-0", b: "chat-window", boundScopeElided: true },
+  ];
+  mocks.initialChat = chat([scope("/manuals/Old")]);
+  mocks.serverChat = mocks.initialChat;
+  persist(initial.wins, conns);
+  render(<AppShell />);
+  await screen.findByText(/cannot be restored uniquely/u);
+  fireEvent.click(screen.getByRole("button", { name: "Dismiss workspace notice" }));
+  return { wins: initial.wins, conns };
+}
+
 beforeEach((): void => {
   vi.clearAllMocks();
   window.localStorage.clear();
@@ -210,6 +226,107 @@ afterEach((): void => {
 });
 
 describe("AppShell canonical workspace scope synchronization", () => {
+  it("does not reannounce a dismissed unchanged automatic scope ambiguity on unrelated changes", async () => {
+    await mountAmbiguousFiles();
+    const initialReports = vi.mocked(reportClientDiagnostic).mock.calls.length;
+    const refreshed = deferred<{ chats: Chat[] }>();
+    mocks.fetchChats.mockReturnValueOnce(refreshed.promise);
+    mocks.fetchChats.mockClear();
+    await act(async () => {
+      mocks.workspace?.api.update("unconnected-files", { cfg: { root: "/unrelated/new" } });
+    });
+    await waitFor(() => expect(mocks.fetchChats).toHaveBeenCalledOnce());
+    await act(async () => {
+      refreshed.resolve({ chats: [mocks.serverChat!] });
+      await refreshed.promise;
+    });
+    expect(screen.queryByText(/cannot be restored uniquely/u)).not.toBeInTheDocument();
+    expect(reportClientDiagnostic).toHaveBeenCalledTimes(initialReports);
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
+    expect(mocks.workspace?.conns[0]?.boundScopeFingerprint).toBeUndefined();
+  });
+
+  it.each(["requested scope", "canonical GSI", "ownership digest"] as const)(
+    "reports a new automatic ambiguity when %s changes",
+    async (change) => {
+      const initial = await mountAmbiguousFiles();
+      const initialReports = vi.mocked(reportClientDiagnostic).mock.calls.length;
+      if (change === "canonical GSI") mocks.serverChat = chat([scope("/manuals/Old")], 2);
+      await act(async () => {
+        if (change === "ownership digest")
+          await storageReplay(
+            initial.wins,
+            initial.conns.map((edge) => ({
+              ...edge,
+              boundScopeFingerprint: "a".repeat(64),
+            })),
+          );
+        else
+          mocks.workspace?.api.update(
+            change === "requested scope" ? "files-0" : "unconnected-files",
+            {
+              cfg: {
+                root: "/manuals/Changed",
+                resolvedRoot: "/manuals/Changed",
+                rootBinding: "coding-repository",
+              },
+            },
+          );
+      });
+      await screen.findByText(/cannot be restored uniquely/u);
+      expect(vi.mocked(reportClientDiagnostic).mock.calls.length).toBeGreaterThan(initialReports);
+      expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+      expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
+    },
+  );
+
+  it("forgets the ambiguity after an edge is removed and recreated", async () => {
+    const initial = await mountAmbiguousFiles();
+    await act(async () => mocks.workspace?.api.removeConn("edge-0", { unbind: false }));
+    await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(0));
+    await storageReplay(
+      initial.wins.map((win) => ({ ...win, x: win.x + 1 })),
+      initial.conns,
+    );
+    await screen.findByText(/cannot be restored uniquely/u);
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+  });
+
+  it("resets the warning after canonical ownership is successfully restored", async () => {
+    const initial = await mountAmbiguousFiles();
+    mocks.serverChat = chat([scope("/manuals/New")], 2);
+    await act(async () =>
+      mocks.workspace?.api.update("unconnected-files", { cfg: { root: "/changed" } }),
+    );
+    await waitFor(() =>
+      expect(mocks.workspace?.conns[0]?.boundScopeFingerprint).toBe(
+        connectedScopeFingerprint(scope("/manuals/New")),
+      ),
+    );
+    mocks.serverChat = mocks.initialChat;
+    await storageReplay(
+      initial.wins.map((win) => ({ ...win, x: win.x + 1 })),
+      initial.conns,
+    );
+    await screen.findByText(/cannot be restored uniquely/u);
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
+  });
+
+  it("still reports explicit teardown of an unresolved legacy edge after dismissal", async () => {
+    await mountAmbiguousFiles();
+    vi.mocked(reportClientDiagnostic).mockClear();
+    await act(async () => mocks.workspace?.api.removeConn("edge-0"));
+    await waitFor(() =>
+      expect(reportClientDiagnostic).toHaveBeenCalledWith(
+        expect.stringContaining("Files scope ownership unavailable"),
+        undefined,
+      ),
+    );
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+  });
+
   it("acknowledges an unchanged sanitized storage replay without scope writes or relationships", async (): Promise<void> => {
     const initial = fixture(["/manuals/Scale", "/manuals/Distinct"]);
     mocks.initialChat = chat([scope("/manuals/Scale"), scope("/manuals/Distinct")]);

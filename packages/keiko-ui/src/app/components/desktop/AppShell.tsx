@@ -458,13 +458,40 @@ function canonicalAcknowledgedScope(
     : effectiveScopes(chat).find((scope) => isScopeConnected([scope], nextScope));
 }
 
-function pruneFilesAcknowledgements(
-  acknowledgements: Map<string, ChatConnectedScope>,
+function pruneFilesAcknowledgements<T>(
+  acknowledgements: Map<string, T>,
   liveEdges: ReadonlySet<string>,
 ): void {
   for (const key of acknowledgements.keys()) {
     if (!liveEdges.has(key.split("\u0000")[0] ?? "")) acknowledgements.delete(key);
   }
+}
+
+function shouldReportAutomaticFilesAmbiguity(
+  warnings: Map<string, string>,
+  connection: Connection | undefined,
+  chat: Chat,
+  nextScope: ChatConnectedScope,
+  automatic: boolean,
+): boolean {
+  if (!automatic || connection === undefined) return true;
+  const identity = JSON.stringify([
+    connection.a,
+    connection.b,
+    connection.boundChatWindowId,
+    connection.boundRoot,
+    connection.boundScopeKind,
+    connection.boundRelativePath,
+    connection.boundScopeElided,
+    connection.boundScopeFingerprint,
+    chat.id,
+    chat.groundingScopeIdentity,
+    connectedScopeKey(nextScope),
+    effectiveScopes(chat).map((scope) => [scope.kind, scope.root, scope.relativePaths]),
+  ]);
+  if (warnings.get(connection.id) === identity) return false;
+  warnings.set(connection.id, identity);
+  return true;
 }
 
 function reconcileFilesAcknowledgementFingerprints(
@@ -1039,6 +1066,7 @@ function AppShellInner(): ReactNode {
   const wsConnectionsForBindingRef = useRef<readonly Connection[]>([]);
   const acknowledgedFilesScopesRef = useRef(new Map<string, ChatConnectedScope>());
   const acknowledgedFilesFingerprintsRef = useRef(new Map<string, string | undefined>());
+  const automaticFilesAmbiguitiesRef = useRef(new Map<string, string>());
   const releasedFilesConnectionsRef = useRef(new Set<string>());
   const filesScopeOwnedElsewhere = useCallback(
     (scope: ChatConnectedScope, conversationId: string, excludedConnectionId?: string): boolean =>
@@ -1173,6 +1201,7 @@ function AppShellInner(): ReactNode {
       previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
       connectionId?: string,
+      automatic = false,
     ): Promise<boolean> => {
       const observedFingerprint = wsConnectionsForBindingRef.current.find(
         (edge) => edge.id === connectionId,
@@ -1193,12 +1222,24 @@ function AppShellInner(): ReactNode {
         canonicalScopes,
       );
       if (missingFilesScopeOwnership(connection, ownedScope, nextScope, canonicalScopes)) {
-        reportGroundingMutationFailure(
-          "Files scope ownership unavailable",
-          new Error("Scope ownership is not proven"),
-        );
-        return rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
+        if (
+          shouldReportAutomaticFilesAmbiguity(
+            automaticFilesAmbiguitiesRef.current,
+            connection,
+            chat,
+            nextScope,
+            automatic,
+          )
+        ) {
+          reportGroundingMutationFailure(
+            "Files scope ownership unavailable",
+            new Error("Scope ownership is not proven"),
+          );
+          rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
+        }
+        return false;
       }
+      if (connectionId !== undefined) automaticFilesAmbiguitiesRef.current.delete(connectionId);
       if (
         isScopeConnected(canonicalScopes, nextScope) &&
         (ownedScope === null || isScopeConnected([ownedScope], nextScope))
@@ -1296,6 +1337,7 @@ function AppShellInner(): ReactNode {
       previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
       connectionId?: string,
+      automatic = false,
     ): Promise<boolean> => {
       try {
         const chatKey = groundingMutationKey(chatWindowId, target);
@@ -1314,6 +1356,7 @@ function AppShellInner(): ReactNode {
                 confirmed ?? previousScope,
                 target,
                 connectionId,
+                automatic,
               ),
             );
             if (accepted && attempt.isCurrent() && edgeKey !== undefined) {
@@ -1735,6 +1778,7 @@ function AppShellInner(): ReactNode {
       if (!liveEdges.has(id)) releasedFilesConnectionsRef.current.delete(id);
     }
     pruneFilesAcknowledgements(acknowledgedFilesScopesRef.current, liveEdges);
+    pruneFilesAcknowledgements(automaticFilesAmbiguitiesRef.current, liveEdges);
     for (const conn of ws.conns) {
       const a = ws.winsById.get(conn.a);
       const b = ws.winsById.get(conn.b);
@@ -1761,7 +1805,7 @@ function AppShellInner(): ReactNode {
           (chatIdFromWindow(wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId)) ??
             chatWindowRuntimeTarget(chatWindowId)?.conversationId) === conversationId,
       };
-      void replaceFilesScope(chatWindowId, nextScope, previousScope, target, conn.id).then(
+      void replaceFilesScope(chatWindowId, nextScope, previousScope, target, conn.id, true).then(
         (accepted) => {
           const acknowledged = acknowledgedFilesScopesRef.current.get(
             `${conn.id}\u0000${conversationId}`,
