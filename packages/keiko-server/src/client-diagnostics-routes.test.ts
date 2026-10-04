@@ -132,6 +132,37 @@ describe("POST /api/diagnostics/client", () => {
     resetClientDiagnosticsIngestStateForTests();
   });
 
+  it.each([
+    "scope-refusal-restored",
+    "scope-refusal-skipped-owner",
+    "scope-refusal-skipped-draft",
+    "scope-refusal-skipped-unproven",
+  ])("records %s as correlated body-free composer evidence", async (composerActivity) => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "PRIVATE_REFUSED_DRAFT_CANARY",
+          clientTs: CLIENT_TS,
+          composerActivity,
+          correlationId: "scope-refusal-correlation",
+        }),
+      ),
+    );
+    const event = sink.events.find((entry) => entry.op === "client.composer.activity");
+    expect(event).toMatchObject({
+      level: "info",
+      correlationId: "scope-refusal-correlation",
+      extra: { activity: composerActivity, completeness: "complete", loss: "none" },
+    });
+    expectActivityLogProof(
+      "client.composer.activity.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expect(JSON.stringify(sink.events)).not.toContain("PRIVATE_REFUSED_DRAFT_CANARY");
+  });
+
   it("projects routine Composer evidence separately and keeps code failure stages reconstructible", async () => {
     const sink = captureServerLog();
     for (let index = 0; index < 30; index += 1) {

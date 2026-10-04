@@ -59,6 +59,8 @@ import {
   updateChatLocalKnowledgeScopes,
 } from "@/lib/api";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { bffRequestErrorKind } from "@/lib/http";
 import { reportClientDiagnostic, reportFilesScopeDecision } from "@/lib/client-diagnostics";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
@@ -818,6 +820,15 @@ class ChatLookupFailure extends Error {
   }
 }
 
+function reportChatLookupFailure(error: ChatLookupFailure): void {
+  reportClientDiagnostic("[keiko] Chat lookup failed: ChatLookupFailure", {
+    kind: "other",
+    correlationId: error.correlationId ?? newClientCorrelationId(),
+    errorKind: bffRequestErrorKind(error.cause),
+    errorEvidence: clientErrorEvidence(error.cause),
+  });
+}
+
 function chatLookupTargetIsCurrent(target: ChatLookupTarget | undefined): boolean {
   return target === undefined || !("isCurrent" in target) || target.isCurrent();
 }
@@ -835,7 +846,7 @@ function groundingMutationFailureKey(
     | "scope.disconnectError",
 ): "chat.grounding.recoveryRequired" | "chat.grounding.timeoutBlocked" | typeof mutationFailedKey {
   if (error instanceof ChatLookupFailure) {
-    reportGroundingMutationFailure("Chat lookup failed", error);
+    reportChatLookupFailure(error);
     return mutationFailedKey;
   }
   if (error instanceof ChatBindingCompensationFailure) {

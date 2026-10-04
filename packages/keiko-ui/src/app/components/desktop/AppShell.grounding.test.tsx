@@ -1007,10 +1007,53 @@ describe("AppShell grounding connections", () => {
     expect(reportedDiagnostics).toEqual([
       {
         message: "[keiko] Chat lookup failed: ChatLookupFailure",
-        meta: { correlationId: "scope-lookup-test" },
+        meta: {
+          correlationId: "scope-lookup-test",
+          kind: "other",
+          errorKind: "unavailable",
+          errorEvidence: { errorClass: "ApiError", causeChain: [], frames: [] },
+        },
       },
     ]);
   });
+
+  it.each([
+    {
+      error: new ApiError("STALE_SESSION", "private cause canary", 403),
+      errorKind: "authority-denied",
+      errorClass: "ApiError",
+    },
+    {
+      error: new DOMException("private cause canary", "TimeoutError"),
+      errorKind: "timeout",
+      errorClass: "TimeoutError",
+    },
+    {
+      error: new TypeError("private cause canary"),
+      errorKind: "unavailable",
+      errorClass: "TypeError",
+    },
+  ])(
+    "records $errorKind for the actual scoped lookup cause",
+    async ({ error, errorKind, errorClass }) => {
+      mocks.state.workspaceResult = workspaceResult([
+        win("chat", { chatId: "chat-private", projectPath: "/private" }, "private-window"),
+      ]);
+      mocks.fetchChats.mockRejectedValueOnce(error);
+      await renderMounted();
+      await mocks.state.workspaceOptions?.onScopeBind?.("private-window", fileScope("/repo"));
+      expect(reportedDiagnostics).toEqual([
+        expect.objectContaining({
+          meta: expect.objectContaining({
+            correlationId: expect.any(String),
+            errorKind,
+            errorEvidence: expect.objectContaining({ errorClass }),
+          }),
+        }),
+      ]);
+      expect(JSON.stringify(reportedDiagnostics)).not.toContain("private cause canary");
+    },
+  );
 
   it("surfaces a redacted client diagnostic when a private chat lookup fails", async (): Promise<void> => {
     mocks.state.workspaceResult = workspaceResult([
@@ -1027,7 +1070,15 @@ describe("AppShell grounding connections", () => {
     expect(accepted).toBe(false);
     expect(await screen.findByText(/Keiko could not connect that source/u)).toBeInTheDocument();
     expect(reportedDiagnostics).toEqual([
-      { message: "[keiko] Chat lookup failed: ChatLookupFailure" },
+      {
+        message: "[keiko] Chat lookup failed: ChatLookupFailure",
+        meta: {
+          correlationId: expect.any(String),
+          kind: "other",
+          errorKind: "unknown",
+          errorEvidence: { errorClass: "Error", causeChain: [], frames: [] },
+        },
+      },
     ]);
   });
 
@@ -1554,7 +1605,15 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(await screen.findByText("Unable to disconnect scope.")).toBeInTheDocument();
     expect(reportedDiagnostics).toEqual([
-      { message: "[keiko] Chat lookup failed: ChatLookupFailure" },
+      {
+        message: "[keiko] Chat lookup failed: ChatLookupFailure",
+        meta: {
+          correlationId: expect.any(String),
+          kind: "other",
+          errorKind: "unknown",
+          errorEvidence: { errorClass: "Error", causeChain: [], frames: [] },
+        },
+      },
     ]);
   });
 

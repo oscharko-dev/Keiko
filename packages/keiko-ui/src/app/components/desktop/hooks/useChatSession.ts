@@ -959,6 +959,7 @@ interface FailedSendOutcome {
   readonly identityConflict?: true;
   readonly scopeChanged?: true;
   readonly scopeChangeStatus?: number;
+  readonly correlationId?: string | undefined;
   readonly chatClosed?: true;
 }
 
@@ -2311,24 +2312,26 @@ function handleStreamUngroundedTransportFailure(
 }
 
 function canonicalTurnInProgressFailure(error: unknown): FailedSendOutcome {
-  if (error instanceof ApiError && error.code === "CHAT_TURN_IN_PROGRESS") {
+  if (!(error instanceof ApiError)) return { status: "failed" };
+  if (error.code === "CHAT_TURN_IN_PROGRESS") {
     return { status: "failed", canonicalTurnInProgress: true };
   }
-  if (error instanceof ApiError && error.code === "CHAT_TURN_IDEMPOTENCY_CONFLICT") {
+  if (error.code === "CHAT_TURN_IDEMPOTENCY_CONFLICT") {
     return { status: "failed", permanentFailure: true, identityConflict: true };
   }
-  if (error instanceof ApiError && error.code === "GROUNDING_SCOPE_CHANGED") {
+  if (error.code === "GROUNDING_SCOPE_CHANGED") {
     return {
       status: "failed",
       permanentFailure: true,
       scopeChanged: true,
       scopeChangeStatus: error.status,
+      correlationId: error.correlationId,
     };
   }
-  if (error instanceof ApiError && error.code === "CHAT_CLOSED") {
+  if (error.code === "CHAT_CLOSED") {
     return { status: "failed", permanentFailure: true, chatClosed: true };
   }
-  return error instanceof ApiError && [400, 404, 413, 422].includes(error.status)
+  return [400, 404, 413, 422].includes(error.status)
     ? { status: "failed", permanentFailure: true }
     : { status: "failed" };
 }
@@ -2424,6 +2427,15 @@ function settledSendMessageOutcome(input: {
       ? { status: "failed", retryable: false, userPersisted: true }
       : { status: "failed", retryable: false };
   }
+  if (
+    settled.status === "failed" &&
+    terminal.status === "failed" &&
+    terminal.scopeChanged === true
+  ) {
+    return persistence === "persisted"
+      ? { status: "failed", retryable: false, userPersisted: true }
+      : { status: "failed", retryable: false };
+  }
   if (settled.status === "failed" && persistence === "persisted") {
     return { status: "in-progress" };
   }
@@ -2484,6 +2496,7 @@ interface FailedSendPresentation {
 interface CanonicalTurnReconciliation {
   readonly persistence: UserPersistenceProof;
   readonly completedAssistantMessageId?: string;
+  readonly failedCanonicalTurn?: boolean | undefined;
 }
 
 interface SendAttemptSettlementRequest {
@@ -2499,9 +2512,11 @@ interface SendAttemptSettlementRequest {
 interface SettledSendAttempt {
   readonly settled: SendAttemptOutcome;
   readonly persistence: UserPersistenceProof;
+  readonly failedCanonicalTurn?: boolean | undefined;
 }
 
 interface TypedDraftRecovery {
+  readonly failedCanonicalTurn?: boolean | undefined;
   readonly terminal: SendAttemptOutcome;
   readonly persistence: UserPersistenceProof;
   readonly chatId: string;
@@ -2511,13 +2526,39 @@ interface TypedDraftRecovery {
   readonly text: string;
 }
 
-function isUnpersistedScopeRefusal(input: TypedDraftRecovery): boolean {
+function isScopeChangeRefusal(terminal: SendAttemptOutcome): terminal is FailedSendOutcome {
+  return (
+    terminal.status === "failed" &&
+    terminal.scopeChanged === true &&
+    terminal.scopeChangeStatus === 409
+  );
+}
+
+function isRecoverableScopeRefusal(input: TypedDraftRecovery): boolean {
   return (
     input.terminal.status === "failed" &&
     input.terminal.scopeChanged === true &&
     input.terminal.scopeChangeStatus === 409 &&
-    input.persistence === "missing"
+    (input.persistence === "missing" || input.failedCanonicalTurn === true)
   );
+}
+
+async function refreshScopeRefusedChat(
+  input: TypedDraftRecovery,
+  correlationId: string,
+): Promise<Chat | undefined> {
+  try {
+    const payload = await fetchChats(input.projectPath, correlationId, input.chatId);
+    return payload.chats.find((chat) => chat.id === input.chatId);
+  } catch (error) {
+    reportClientDiagnostic("Scope-refused chat refresh failed.", {
+      correlationId,
+      kind: "other",
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+    return undefined;
+  }
 }
 
 function clearsComposerDraft(options: SendMessageOptions | undefined): boolean {
@@ -3014,6 +3055,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           ? "persisted"
           : "missing";
         const assistant = exactCanonicalAssistant(payload.messages, canonicalTurnRef);
+        const exactUser = payload.messages.find((message) =>
+          isExactCanonicalUserMessage(message, canonicalTurnRef),
+        );
+        const failedCanonicalTurn =
+          assistant === undefined &&
+          (exactUser?.turnState === "failed" || exactUser?.turnState === "cancelled");
         if (
           mountedRef.current &&
           activeChatIdRef.current === chatId &&
@@ -3039,6 +3086,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }
         return {
           persistence,
+          failedCanonicalTurn,
           ...(assistant === undefined ? {} : { completedAssistantMessageId: assistant.id }),
         };
       } catch {
@@ -3951,7 +3999,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         reconciliation.persistence !== "persisted" ||
         reconciliation.completedAssistantMessageId === undefined
       ) {
-        return { settled, persistence };
+        return { settled, persistence, failedCanonicalTurn: reconciliation.failedCanonicalTurn };
       }
       settled = {
         status: "completed",
@@ -4055,23 +4103,56 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [setDraft],
   );
 
+  const ownsRefusedDraft = useCallback(
+    (input: TypedDraftRecovery): boolean =>
+      mountedRef.current &&
+      !input.signal.aborted &&
+      activeChatIdRef.current === input.chatId &&
+      activeProjectPathRef.current === input.projectPath &&
+      latestSendSignalRef.current === input.signal,
+    [],
+  );
+
   const recoverUnsentTypedDraft = useCallback(
-    (input: TypedDraftRecovery): void => {
-      if (
-        input.draftRevision === undefined ||
-        !mountedRef.current ||
-        input.signal.aborted ||
-        activeChatIdRef.current !== input.chatId ||
-        activeProjectPathRef.current !== input.projectPath ||
-        latestSendSignalRef.current !== input.signal ||
-        draftRevisionRef.current !== input.draftRevision ||
-        !isUnpersistedScopeRefusal(input)
-      ) {
+    async (input: TypedDraftRecovery): Promise<void> => {
+      if (!isScopeChangeRefusal(input.terminal)) return;
+      const correlationId = input.terminal.correlationId ?? newClientCorrelationId();
+      const report = (
+        composerActivity:
+          | "scope-refusal-restored"
+          | "scope-refusal-skipped-owner"
+          | "scope-refusal-skipped-draft"
+          | "scope-refusal-skipped-unproven",
+      ): void =>
+        reportClientDiagnostic("Keiko scope-refused composer recovery.", {
+          correlationId,
+          composerActivity,
+        });
+      if (input.draftRevision === undefined || !ownsRefusedDraft(input)) {
+        report("scope-refusal-skipped-owner");
+        return;
+      }
+      if (!isRecoverableScopeRefusal(input)) {
+        report("scope-refusal-skipped-unproven");
+        return;
+      }
+      const refreshingChat = sessionStateRef.current.activeChat;
+      const refreshed = await refreshScopeRefusedChat(input, correlationId);
+      if (!ownsRefusedDraft(input)) {
+        report("scope-refusal-skipped-owner");
+        return;
+      }
+      if (refreshed !== undefined && sessionStateRef.current.activeChat === refreshingChat) {
+        notifyChatUpsert(refreshed);
+      }
+      if (draftRevisionRef.current !== input.draftRevision) {
+        report("scope-refusal-skipped-draft");
         return;
       }
       setDraft(input.text);
+      report("scope-refusal-restored");
     },
-    [setDraft],
+    [setDraft, ownsRefusedDraft],
   );
 
   const sendMessage = useCallback(
@@ -4132,7 +4213,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           clientTurnId,
           ...(options?.correlationId === undefined ? {} : { correlationId: options.correlationId }),
         });
-        const { settled, persistence } = await settleSendAttempt({
+        const { settled, persistence, failedCanonicalTurn } = await settleSendAttempt({
           terminal,
           chat,
           projectPath: project.path,
@@ -4141,7 +4222,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           signal: controller.signal,
           preserveUserOnMissing: options?.clientTurnId !== undefined,
         });
-        recoverUnsentTypedDraft({
+        await recoverUnsentTypedDraft({
+          failedCanonicalTurn,
           terminal,
           persistence,
           chatId: chat.id,

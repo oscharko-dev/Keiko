@@ -1806,11 +1806,6 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     expect(askGrounded).not.toHaveBeenCalled();
   });
 
-  // GEN-PERF-CHAT-008 (keiko-ui side) — a grounded turn must issue EXACTLY ONE messages fetch and
-  // EXACTLY ONE chats fetch to reconcile after the ask (no duplicate refetch storm). The deeper fix
-  // (server returning the {chat, messages} delta so the client applies it locally with zero
-  // refetch) is a cross-package follow-up in keiko-server/keiko-contracts; this pins the client
-  // never regresses to more than one of each per grounded turn.
   it.each([false, true])(
     "recovers an unpersisted scope-refused typed draft (live text: %s)",
     async (live) => {
@@ -1828,6 +1823,107 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
       expect(result.current.messages).toHaveLength(0);
       expect(askGrounded).toHaveBeenCalledOnce();
       expect(result.current.error).toContain("GROUNDING_SCOPE_CHANGED");
+    },
+  );
+
+  it.each(["failed", "cancelled"] as const)(
+    "recovers an exact persisted %s scope refusal and refreshes the next send",
+    async (turnState) => {
+      const { result } = await setupGroundedSession();
+      const refreshed = {
+        ...result.current.activeChat!,
+        groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+      };
+      vi.mocked(fetchChats).mockResolvedValue({ chats: [refreshed] });
+      vi.mocked(fetchChatMessages).mockResolvedValueOnce({
+        messages: [
+          await canonicalMessage("typed-recoverable-scope", { chatId: "chat-grounded", turnState }),
+        ],
+      });
+      vi.mocked(askGrounded).mockRejectedValueOnce(
+        new ApiError("GROUNDING_SCOPE_CHANGED", "Scope changed.", 409),
+      );
+      act(() => result.current.setDraft("Keep my refused question"));
+      await act(async () => {
+        await result.current.sendMessage({ clientTurnId: "typed-recoverable-scope" });
+      });
+      expect(result.current.draft).toBe("Keep my refused question");
+      expect(result.current.activeChat?.groundingScopeIdentity).toBe(
+        refreshed.groundingScopeIdentity,
+      );
+      await act(async () => {
+        await result.current.sendMessage();
+      });
+      expect(askGrounded).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          expectedGroundingScopeIdentity: refreshed.groundingScopeIdentity,
+        }),
+        expect.any(AbortSignal),
+        undefined,
+      );
+    },
+  );
+
+  it.each(["newer chat", "new draft", "cancel"] as const)(
+    "preserves %s while the refused chat refresh is pending",
+    async (change) => {
+      const { result } = await setupGroundedSession();
+      const original = result.current.activeChat!;
+      const refresh = deferred<Awaited<ReturnType<typeof fetchChats>>>();
+      vi.mocked(fetchChats).mockReturnValueOnce(refresh.promise);
+      vi.mocked(fetchChats).mockClear();
+      const refusal = new ApiError("GROUNDING_SCOPE_CHANGED", "Scope changed.", 409);
+      refusal.correlationId = "scope-refusal-test";
+      vi.mocked(askGrounded).mockRejectedValueOnce(refusal);
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      try {
+        act(() => result.current.setDraft("Private draft canary"));
+        let sending: Promise<unknown> | undefined;
+        act(() => {
+          sending = result.current.sendMessage();
+        });
+        await waitFor(() => expect(fetchChats).toHaveBeenCalledOnce());
+        const newer = {
+          ...original,
+          title: "New title",
+          updatedAt: original.updatedAt + 1,
+          groundingScopeIdentity: `gsi-v1:${"c".repeat(64)}`,
+        };
+        act(() => {
+          if (change === "newer chat") notifyChatUpsert(newer);
+          else if (change === "new draft") result.current.setDraft("New question");
+          else result.current.cancelSend();
+        });
+        await act(async () => {
+          refresh.resolve({
+            chats: [{ ...original, groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}` }],
+          });
+          await sending;
+        });
+        if (change === "newer chat") expect(result.current.activeChat).toEqual(newer);
+        const expectedDraft = {
+          "newer chat": "Private draft canary",
+          "new draft": "New question",
+          cancel: "",
+        };
+        expect(result.current.draft).toBe(expectedDraft[change]);
+        const activities = {
+          "newer chat": "scope-refusal-restored",
+          "new draft": "scope-refusal-skipped-draft",
+          cancel: "scope-refusal-skipped-owner",
+        };
+        expect(diagnostic).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({
+            correlationId: "scope-refusal-test",
+            composerActivity: activities[change],
+          }),
+        );
+        expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private draft canary");
+      } finally {
+        resetClientDiagnosticWriter();
+      }
     },
   );
 
@@ -1953,6 +2049,11 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     expect(result.current.activeChat?.connectedScopes).toEqual(persisted.connectedScopes);
   });
 
+  // GEN-PERF-CHAT-008 (keiko-ui side) — a grounded turn must issue EXACTLY ONE messages fetch and
+  // EXACTLY ONE chats fetch to reconcile after the ask (no duplicate refetch storm). The deeper fix
+  // (server returning the {chat, messages} delta so the client applies it locally with zero
+  // refetch) is a cross-package follow-up in keiko-server/keiko-contracts; this pins the client
+  // never regresses to more than one of each per grounded turn.
   it("issues exactly one messages fetch and one chats fetch per grounded turn", async () => {
     const { result } = await setupGroundedSession();
 

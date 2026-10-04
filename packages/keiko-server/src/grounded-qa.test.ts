@@ -2217,6 +2217,7 @@ describe("handleGroundedAsk", () => {
             JSON.stringify({
               chatId,
               content: "private-scope-refusal-canary",
+              clientTurnId: "scope-refusal-regression",
               expectedGroundingScopeIdentity,
             }),
           ),
@@ -2235,6 +2236,9 @@ describe("handleGroundedAsk", () => {
         status: 409,
         body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
       });
+      expect(store.listMessages(chatId)).toMatchObject([
+        { role: "user", turnState: "failed", canonicalTurnRef: expect.any(String) },
+      ]);
       expect(scopedRunner).not.toHaveBeenCalled();
       expect(seenRequests).toEqual([]);
       expect(diagnostics).toHaveLength(1);
