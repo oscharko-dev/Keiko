@@ -41,7 +41,7 @@ import {
   boundGitChangeRelationshipIdOf,
   boundConnectorScopeOf,
   connectorChatBind,
-  boundScopeOf,
+  connectionTeardownScope,
   chatUnbindTarget,
   filesChatBindScope,
   isWorkspaceWindowSelectable,
@@ -58,6 +58,7 @@ import {
 import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLayoutLock";
 
 export type { AppWindow, View };
@@ -1914,15 +1915,15 @@ function connectionChatWindowId(conn: Connection, win: AppWindow, other: AppWind
   return null;
 }
 
-function connectionUnbindScope(
-  conn: Connection,
-  win: AppWindow,
-  other: AppWindow,
-): ChatConnectedScope | null {
-  const bound = boundScopeOf(conn);
-  if (bound !== null) return bound;
-  if (conn.boundScopeElided === true) return null;
-  return filesChatBindScope(win, other, Date.now());
+function acknowledgedConnection(conn: Connection, scope: ChatConnectedScope): Connection {
+  const next = { ...conn, boundScopeKind: scope.kind };
+  delete next.boundScopeElided;
+  delete next.boundRelativePath;
+  next.boundScopeFingerprint = connectedScopeFingerprint(scope);
+  if (scope.root !== undefined) next.boundRoot = scope.root;
+  else delete next.boundRoot;
+  if (scope.relativePaths[0] !== undefined) next.boundRelativePath = scope.relativePaths[0];
+  return next;
 }
 
 function connectionOtherWindow(
@@ -2020,7 +2021,7 @@ async function unbindClosedWindowConnection(
   const chatWindowId = connectionChatWindowId(conn, closedWin, other);
   const chatWindow = chatWindowId === closedWin.id ? closedWin : winsById.get(chatWindowId ?? "");
   const target = chatUnbindTarget(chatWindow);
-  const scope = connectionUnbindScope(conn, closedWin, other);
+  const scope = connectionTeardownScope(conn, closedWin, other);
   const connectorScope = boundConnectorScopeOf(conn) ?? connectorChatBind(closedWin, other);
   const gitChangeRelationshipId = boundGitChangeRelationshipIdOf(conn);
   if (chatWindowId === null) return true;
@@ -2569,18 +2570,7 @@ export function useWorkspace(
   const updateConnBoundScope = useCallback<WorkspaceApi["updateConnBoundScope"]>(
     (connId, scope) => {
       setConns((cs) =>
-        cs.map((conn) =>
-          conn.id === connId
-            ? {
-                ...conn,
-                boundScopeKind: scope.kind,
-                ...(scope.root !== undefined ? { boundRoot: scope.root } : {}),
-                ...(scope.relativePaths[0] !== undefined
-                  ? { boundRelativePath: scope.relativePaths[0] }
-                  : {}),
-              }
-            : conn,
-        ),
+        cs.map((conn) => (conn.id === connId ? acknowledgedConnection(conn, scope) : conn)),
       );
     },
     [setConns],

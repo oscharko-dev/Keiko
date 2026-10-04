@@ -14,16 +14,16 @@ Wave 4 implementation must not introduce a new persistence store. The current wo
 
 Workspace state is partitioned into the classes below. Each class has exactly one owner package and exactly one storage backend.
 
-| State class                                                                                                        | Owner package                  | Backend                                                    | Lifetime                                                            |
-| ------------------------------------------------------------------------------------------------------------------ | ------------------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------- |
-| Browser UI transient state (window position, focus, selection, palette open, hover, in-flight stream, modal stack) | `keiko-ui` hooks               | React in-memory                                            | Tab session                                                         |
-| UI durable layout (per-project window arrangement, last focused panel, current wins/conns/view snapshot)           | `keiko-ui` `useWorkspace` hook | browser `localStorage`                                     | Browser-local; restored on next session in the same browser profile |
-| Server runtime state (BFF cache, in-flight run state, WebSocket session)                                           | `keiko-server`                 | In-memory                                                  | Process lifetime                                                    |
-| Workspace FS state (project files)                                                                                 | `keiko-workspace` + OS         | OS file system                                             | OS-managed                                                          |
-| Durable local config (model gateway config, paired devices, user preferences)                                      | `keiko-server` config seam     | JSON config file                                           | User-managed                                                        |
+| State class                                                                                                        | Owner package                  | Backend                                                    | Lifetime                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Browser UI transient state (window position, focus, selection, palette open, hover, in-flight stream, modal stack) | `keiko-ui` hooks               | React in-memory                                            | Tab session                                                                                                               |
+| UI durable layout (per-project window arrangement, last focused panel, current wins/conns/view snapshot)           | `keiko-ui` `useWorkspace` hook | browser `localStorage`                                     | Browser-local; restored on next session in the same browser profile                                                       |
+| Server runtime state (BFF cache, in-flight run state, WebSocket session)                                           | `keiko-server`                 | In-memory                                                  | Process lifetime                                                                                                          |
+| Workspace FS state (project files)                                                                                 | `keiko-workspace` + OS         | OS file system                                             | OS-managed                                                                                                                |
+| Durable local config (model gateway config, paired devices, user preferences)                                      | `keiko-server` config seam     | JSON config file                                           | User-managed                                                                                                              |
 | Evidence manifests (run ledger, redacted evidence)                                                                 | `keiko-evidence`               | Atomic file writes, realpath-contained, redacted           | Independent `chat-rag` and `regulated` caps of 50 runs via `maxRunsByPartition`; always-keep-newest within each partition |
-| Memory state (capture envelopes, governance, vault)                                                                | `keiko-memory-vault`           | `node:sqlite` memory vault                                 | Governance policy                                                   |
-| Object registry (window-type definitions, renderers)                                                               | `keiko-ui` build-time registry | TypeScript constant + in-memory `registerWindowRender` map | Build-time + module-evaluation                                      |
+| Memory state (capture envelopes, governance, vault)                                                                | `keiko-memory-vault`           | `node:sqlite` memory vault                                 | Governance policy                                                                                                         |
+| Object registry (window-type definitions, renderers)                                                               | `keiko-ui` build-time registry | TypeScript constant + in-memory `registerWindowRender` map | Build-time + module-evaluation                                                                                            |
 
 The `/api/workspace/state` revision cache is memory-only, including when the launcher sets
 `KEIKO_UI_DATA_DIR`. It never reads, writes, or quarantines a second layout file. Browser-local
@@ -52,6 +52,14 @@ The undo Action type in `keiko-contracts` declares variants only for `ui.*` stat
 ### Cross-class references
 
 Workspace objects often reference state owned by another class (e.g., a `review` window references an evidence manifest). The descriptor names the reference class via `persistence: "evidence-reference"`. The descriptor's persisted form holds only the reference (manifest id), never the referenced content. The UI fetches the referenced content on demand via the BFF route owned by the corresponding package.
+
+Files-to-Chat connections retain a domain-separated SHA-256 digest of their acknowledged scope
+identity (normalized root, scope kind, and relative paths) while raw bind paths remain elided from
+the persisted connection. This digest records ownership provenance; it grants no file authority.
+Restoration and immediate teardown resolve only a unique matching canonical Chat scope and retain
+sources still owned by another edge. An ambiguous legacy or unmatched reference refuses source
+addition or deletion with a localized source-review notice. An already connected visible scope or
+an empty canonical source list may be adopted without deleting unrelated sources.
 
 ## Consequences
 

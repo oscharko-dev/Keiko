@@ -33,6 +33,7 @@ import type {
 import {
   buildAnswerCitations,
   handleGroundedAsk,
+  modelWindowAwareBudget,
   promptByteLength,
   type GroundedRunner,
   type MultiSourceSeam,
@@ -315,6 +316,39 @@ function tempRoot(name: string): string {
   const root = join(tmp, name);
   mkdirSync(root, { recursive: true });
   return root;
+}
+
+function modelBudgetDeps(configured: boolean): UiHandlerDeps {
+  if (!configured) return recordingDeps([]);
+  return recordingDeps([], {
+    configPresent: true,
+    config: parseGatewayConfig({
+      providers: [
+        {
+          modelId: CHAT_MODEL,
+          baseUrl: "https://provider.example.invalid/v1",
+          apiKey: "fixture-only-key",
+          timeoutMs: 30_000,
+          maxRetries: 0,
+          retryBaseDelayMs: 1,
+        },
+      ],
+      capabilities: [
+        { ...assumedChatCapability(CHAT_MODEL), contextWindow: 128_000, maxOutputTokens: 8_000 },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+    }),
+  });
+}
+
+function budgetReflectingRetriever(observed: ConnectedContextPack["budget"][]): GroundedRetriever {
+  return (input) => {
+    if (input.budget === undefined) throw new Error("Expected an allocated source budget");
+    observed.push(input.budget);
+    const path = input.scope.relativePaths[0] ?? "src/fallback.ts";
+    const pack = { ...scopePack(path, 0.8, path), budget: input.budget };
+    return Promise.resolve({ pack, elapsedMs: 1, plan: { state: "ready" } as never });
+  };
 }
 
 beforeEach(() => {
@@ -756,6 +790,37 @@ describe("mergeContextPackSummaries", () => {
 // ─── Handler branch ───────────────────────────────────────────────────────────
 
 describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
+  it.each([false, true])(
+    "projects the active model budget through two source allocations (configured=%s)",
+    async (configured): Promise<void> => {
+      const scopes: ChatConnectedScope[] = [
+        { kind: "directory", relativePaths: ["src/a.ts"], connectedAtMs: NOW, root: tempRoot("a") },
+        { kind: "directory", relativePaths: ["src/b.ts"], connectedAtMs: NOW, root: tempRoot("b") },
+      ];
+      const chat = store.findChatById(makeChat(scopes));
+      if (chat === undefined) throw new Error("Expected a fixture chat");
+      const deps = modelBudgetDeps(configured);
+      const expected = modelWindowAwareBudget(deps, CHAT_MODEL);
+      const observed: ConnectedContextPack["budget"][] = [];
+      const result = await runMultiSourceAsk({
+        chat,
+        scopes,
+        content: "Explain both files",
+        modelId: CHAT_MODEL,
+        contextProfile: undefined,
+        deps,
+        retriever: budgetReflectingRetriever(observed),
+        answerer: constAnswerer("The first file [src/a.ts:1-5].", { count: 0 }),
+        signal: new AbortController().signal,
+      });
+      expect(result.status).toBe(200);
+      expect(observed).toHaveLength(2);
+      expect.soft(budgetSum(observed)).toEqual(expected);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.contextPack.budget).toEqual(expected);
+    },
+  );
+
   // PR #3678 review: a local window refusal reached the error mapping without the request's
   // correlation, so its structured diagnostic fell back to the unknown correlation.
   it("joins an answer overflow's diagnostic to the ask's correlation", async () => {

@@ -36,9 +36,12 @@ import {
   appendConnectedScope,
   isRootConnected,
   isScopeConnected,
+  hasOtherFilesScopeOwner,
+  restoredConnectionScope,
   toggleWorkspaceSelection,
   totalSourceCap,
 } from "./workspaceActions";
+import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 import type { AppWindow, Connection, ConnectingState, View } from "../windows/types";
 import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
@@ -1082,6 +1085,71 @@ describe("scope normalization helpers", () => {
       }),
     ).toMatchObject({ kind: "files", root: "/repo", relativePaths: ["src/main.ts"] });
     expect(boundScopeOf({ boundRoot: "/repo", boundScopeKind: "files" })).toBeNull();
+  });
+
+  it("restores only an exact canonical scope from its timestamp-independent private digest", () => {
+    const canonical: ChatConnectedScope = {
+      kind: "files",
+      root: "C:/repo",
+      relativePaths: ["src/main.ts"],
+      connectedAtMs: 1,
+    };
+    const normalized: ChatConnectedScope = {
+      ...canonical,
+      root: "C:\\repo\\",
+      relativePaths: ["/src\\main.ts/"],
+      connectedAtMs: 999,
+    };
+    const digest = connectedScopeFingerprint(normalized);
+    expect(digest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(connectedScopeFingerprint(canonical)).toBe(digest);
+    expect(restoredConnectionScope({ boundScopeFingerprint: digest }, [canonical])).toBe(canonical);
+    expect(
+      restoredConnectionScope({ boundScopeFingerprint: digest }, [
+        { ...canonical, kind: "directory" },
+      ]),
+    ).toBeNull();
+    expect(
+      restoredConnectionScope({ boundScopeFingerprint: digest?.toUpperCase() }, [canonical]),
+    ).toBeNull();
+    expect(
+      restoredConnectionScope({ boundScopeFingerprint: "0".repeat(64) }, [canonical]),
+    ).toBeNull();
+    expect(
+      restoredConnectionScope({ boundScopeFingerprint: digest }, [canonical, canonical]),
+    ).toBeNull();
+  });
+
+  it("preserves another restored scope owner even when its visible root is unavailable", () => {
+    const owned = scope("/manuals/Scale");
+    const edge: Connection = {
+      id: "other-edge",
+      a: "files-other",
+      b: "chat-owner",
+      boundScopeElided: true,
+      boundScopeFingerprint: connectedScopeFingerprint(owned),
+    };
+    const input = {
+      windows: [
+        win("files", {}, "files-other"),
+        win("chat", { chatId: "saved-chat" }, "chat-owner"),
+      ],
+      connections: [edge],
+      scope: owned,
+      conversationId: "saved-chat",
+      excludedConnectionId: "current-edge",
+      releasedConnections: new Set<string>(),
+      acknowledgedScopes: new Map<string, ChatConnectedScope>(),
+      conversationForWindow: (): string => "saved-chat",
+    };
+    expect(hasOtherFilesScopeOwner(input)).toBe(true);
+    expect(hasOtherFilesScopeOwner({ ...input, scope: scope("/manuals/Distinct") })).toBe(false);
+    expect(hasOtherFilesScopeOwner({ ...input, releasedConnections: new Set([edge.id]) })).toBe(
+      false,
+    );
+    expect(
+      hasOtherFilesScopeOwner({ ...input, conversationForWindow: (): string => "another-chat" }),
+    ).toBe(false);
   });
 });
 
@@ -2816,6 +2884,9 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     expect(store.conns).toHaveLength(1);
     expect(store.conns[0]?.boundRoot).toBe("/data/docs");
     expect(store.conns[0]?.boundScopeKind).toBe("workspace-root");
+    expect(store.conns[0]?.boundScopeFingerprint).toBe(
+      connectedScopeFingerprint(scope("/data/docs")),
+    );
     expect(store.conns[0]?.boundRelativePath).toBeUndefined();
   });
 
@@ -3216,6 +3287,43 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
 // Release 0.2.0 — unbind must remove the source the edge BOUND, not whatever the window's cfg
 // points at NOW (the user may have navigated the Files window / re-selected another capsule).
 describe("removeConn — unbinds the bind-time snapshot, not the current cfg", () => {
+  it.each(["/manuals/Distinct", undefined])(
+    "routes an elided owned edge through teardown before removing it locally (%s)",
+    async (visibleRoot) => {
+      const edge: Connection = {
+        id: "owned-edge",
+        a: "files-1",
+        b: "chat-1",
+        boundScopeElided: true,
+        boundScopeFingerprint: connectedScopeFingerprint(scope("/manuals/Scale")),
+      };
+      const store = { conns: [edge] };
+      const onScopeUnbind = vi.fn(() => false);
+      const harness = makeConnectHarness(
+        [
+          win("files", { root: visibleRoot, rootBinding: "coding-repository" }, "files-1"),
+          win("chat", { chatId: "saved-chat" }, "chat-1"),
+        ],
+        [edge],
+        {
+          onScopeUnbind,
+          setConns: (action): void => {
+            store.conns = typeof action === "function" ? action(store.conns) : action;
+          },
+        },
+      );
+      harness.removeConn(edge.id);
+      await vi.waitFor(() => expect(onScopeUnbind).toHaveBeenCalledOnce());
+      expect(onScopeUnbind).toHaveBeenCalledWith(
+        "chat-1",
+        expect.objectContaining({ kind: "workspace-root" }),
+        expect.anything(),
+        edge.id,
+      );
+      expect(store.conns).toEqual([edge]);
+    },
+  );
+
   it("retains the edge when an asynchronous server unbind is rejected", async () => {
     const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
     const chat = win("chat", { chatId: "chat-private", projectPath: "/private" }, "chat-1");

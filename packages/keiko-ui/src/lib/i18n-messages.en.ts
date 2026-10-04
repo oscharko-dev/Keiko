@@ -645,6 +645,8 @@ export const EN_MESSAGES = {
     "Source limit reached — this chat already has {connectedCount} of {cap} connected sources. Disconnect a source before connecting another.",
   "chat.grounding.readyChatRequired": "Open a ready chat window before connecting a source.",
   "chat.grounding.localFolderRequired": "Choose a local folder before connecting it to chat.",
+  "chat.grounding.scopeOwnershipMissing":
+    "This source connection cannot be restored uniquely. Review the chat’s sources, then reconnect the Files window.",
   "chat.grounding.recoveryRequired":
     "Chat grounding recovery failed. Reload the chat before connecting another source.",
   "chat.grounding.timeoutBlocked":

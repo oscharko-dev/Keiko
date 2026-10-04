@@ -16,6 +16,7 @@ import {
 import { subText } from "../windows/connectionUtils";
 import { isSecretShapedString } from "./isSecretShapedString";
 import { chatReferenceFingerprint } from "../widgets/chatReferenceFingerprint";
+import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 
 function win(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -1040,6 +1041,59 @@ describe("workspace-persistence", () => {
       { id: "c-1", a: "review-1", b: "files-1" },
     ]);
   });
+
+  it("preserves only the acknowledged scope digest across workspace hydration", () => {
+    const scope = {
+      kind: "directory",
+      root: "/private/manuals",
+      relativePaths: ["chapters"],
+      connectedAtMs: 1,
+    } as const;
+    const digest = connectedScopeFingerprint(scope);
+    const snapshot = sanitizePersistedWorkspace(
+      [
+        win({ id: "files-1", type: "files" }),
+        win({ id: "chat-1", type: "chat", cfg: { chatId: "saved-chat" } }),
+      ],
+      [
+        {
+          id: "owned-edge",
+          a: "files-1",
+          b: "chat-1",
+          boundRoot: scope.root,
+          boundScopeKind: scope.kind,
+          boundRelativePath: "chapters",
+          boundScopeFingerprint: digest,
+        },
+      ],
+    );
+    expect(snapshot.conns[0]).toMatchObject({
+      boundScopeElided: true,
+      boundScopeFingerprint: digest,
+    });
+    expect(JSON.stringify(snapshot.conns)).not.toContain("/private/manuals");
+    expect(JSON.stringify(snapshot.conns)).not.toContain("chapters");
+  });
+
+  it.each(["A".repeat(64), "f".repeat(63), "/private/manuals", "[REDACTED]"])(
+    "drops a malformed persisted ownership digest %s",
+    (digest) => {
+      const snapshot = sanitizePersistedWorkspace(
+        [win({ id: "files-1", type: "files" }), win({ id: "chat-1", type: "chat" })],
+        [
+          {
+            id: "owned-edge",
+            a: "files-1",
+            b: "chat-1",
+            boundScopeElided: true,
+            boundScopeFingerprint: digest,
+          },
+        ],
+      );
+      expect(snapshot.conns[0]?.boundScopeFingerprint).toBeUndefined();
+      expect(snapshot.conns[0]?.boundScopeElided).toBe(true);
+    },
+  );
 
   it("omits raw path bind snapshots from browser-local connection persistence", () => {
     const wins = [

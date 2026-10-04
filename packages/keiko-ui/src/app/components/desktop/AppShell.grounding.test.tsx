@@ -16,7 +16,8 @@ import type {
   GroundingLimits,
 } from "@/lib/types";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
-import { MAX_WORKSPACE_WINDOWS } from "./hooks/workspace-persistence";
+import { MAX_WORKSPACE_WINDOWS, sanitizePersistedWorkspace } from "./hooks/workspace-persistence";
+import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 import type { AppWindow, Connection } from "./windows/types";
 import appShellStyles from "./AppShell.module.css";
 import { registerChatWindowRuntime } from "./windows/chatWindowActivity";
@@ -465,6 +466,38 @@ function fileScope(root: string, index = 0): ChatConnectedScope {
     root,
     connectedAtMs: index,
   };
+}
+
+function restoredTeardownFixture(digest: string | undefined): {
+  readonly oldScope: ChatConnectedScope;
+  readonly otherScope: ChatConnectedScope;
+  readonly api: WorkspaceApi;
+} {
+  const oldScope = fileScope("/manuals/Scale");
+  const otherScope = fileScope("/manuals/ManualOther");
+  const active = chat({ connectedScopes: [oldScope, otherScope], updatedAt: 1 });
+  const api = workspaceApi();
+  mocks.state.session = { ...mocks.state.session!, activeChat: active, chats: [active] };
+  mocks.state.workspaceResult = workspaceResult(
+    [
+      win("files", {}, "files-owner"),
+      win("chat", { chatId: active.id, projectPath: "/repo" }, "chat-owner"),
+    ],
+    [
+      {
+        id: "owned-edge",
+        a: "files-owner",
+        b: "chat-owner",
+        boundScopeElided: true,
+        ...(digest === undefined ? {} : { boundScopeFingerprint: digest }),
+      },
+    ],
+    api,
+  );
+  mocks.updateChatConnectedScopes.mockImplementation(async (id, scopes) => ({
+    chat: chat({ ...active, id, connectedScopes: scopes ?? [], updatedAt: 2 }),
+  }));
+  return { oldScope, otherScope, api };
 }
 
 function capsuleScope(id: string): ChatLocalKnowledgeScope {
@@ -1687,6 +1720,196 @@ describe("AppShell grounding connections", () => {
       projectRoot: "/repo/git-bound",
     });
   });
+
+  it("replaces only the acknowledged restored Files source while preserving chat history", async (): Promise<void> => {
+    const oldScope = fileScope("/manuals/Scale");
+    const otherScope = fileScope("/manuals/ManualOther");
+    const active = chat({
+      connectedScopes: [oldScope, otherScope],
+      title: "Saved history",
+      updatedAt: 1,
+    });
+    mocks.state.session = { ...mocks.state.session!, activeChat: active, chats: [active] };
+    const snapshot = sanitizePersistedWorkspace(
+      [
+        win(
+          "files",
+          { root: "/manuals/Distinct", rootBinding: "coding-repository" },
+          "files-owner",
+        ),
+        win("chat", { chatId: active.id, projectPath: "/repo" }, "chat-owner"),
+      ],
+      [
+        {
+          id: "owned-edge",
+          a: "files-owner",
+          b: "chat-owner",
+          boundRoot: oldScope.root,
+          boundScopeKind: oldScope.kind,
+          boundScopeFingerprint: connectedScopeFingerprint(oldScope),
+        },
+      ],
+    );
+    mocks.state.workspaceResult = workspaceResult(snapshot.wins, snapshot.conns);
+    mocks.updateChatConnectedScopes.mockImplementation(async (id, scopes) => ({
+      chat: chat({ ...active, id, connectedScopes: scopes ?? [], updatedAt: 2 }),
+    }));
+    await renderMounted();
+    await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalled());
+    expect(mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[1]).toEqual([
+      otherScope,
+      expect.objectContaining({ root: "/manuals/Distinct" }),
+    ]);
+    expect(mocks.state.session?.replaceChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: active.id, title: "Saved history" }),
+    );
+  });
+
+  it("does not append a new root when a legacy edge cannot identify its existing source", async (): Promise<void> => {
+    const active = chat({ connectedScopes: [fileScope("/manuals/Scale")] });
+    mocks.state.session = { ...mocks.state.session!, activeChat: active, chats: [active] };
+    mocks.state.workspaceResult = workspaceResult(
+      [
+        win(
+          "files",
+          { root: "/manuals/Distinct", rootBinding: "coding-repository" },
+          "files-owner",
+        ),
+        win("chat", { chatId: active.id, projectPath: "/repo" }, "chat-owner"),
+      ],
+      [{ id: "legacy-edge", a: "files-owner", b: "chat-owner", boundScopeElided: true }],
+    );
+    await renderMounted();
+    await waitFor(() => expect(screen.getByText(/cannot be restored uniquely/u)).toBeVisible());
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+  });
+
+  it("keeps a restored old source while another Files edge still owns it", async (): Promise<void> => {
+    const oldScope = fileScope("/manuals/Scale");
+    const active = chat({ connectedScopes: [oldScope], updatedAt: 1 });
+    mocks.state.session = { ...mocks.state.session!, activeChat: active, chats: [active] };
+    const snapshot = sanitizePersistedWorkspace(
+      [
+        win(
+          "files",
+          { root: "/manuals/Distinct", rootBinding: "coding-repository" },
+          "files-moving",
+        ),
+        win("files", {}, "files-other"),
+        win("chat", { chatId: active.id, projectPath: "/repo" }, "chat-owner"),
+      ],
+      ["files-moving", "files-other"].map((id) => ({
+        id: `${id}-edge`,
+        a: id,
+        b: "chat-owner",
+        boundScopeElided: true,
+        boundScopeFingerprint: connectedScopeFingerprint(oldScope),
+      })),
+    );
+    mocks.state.workspaceResult = workspaceResult(snapshot.wins, snapshot.conns);
+    mocks.updateChatConnectedScopes.mockImplementation(async (id, scopes) => ({
+      chat: chat({ ...active, id, connectedScopes: scopes ?? [], updatedAt: 2 }),
+    }));
+    await renderMounted();
+    await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalled());
+    expect(mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[1]).toEqual([
+      oldScope,
+      expect.objectContaining({ root: "/manuals/Distinct" }),
+    ]);
+  });
+
+  it.each(["0".repeat(64), "BAD-DIGEST"])(
+    "never deletes canonical sources for an unmatched ownership digest %s",
+    async (digest): Promise<void> => {
+      const active = chat({ connectedScopes: [fileScope("/manuals/Unowned")] });
+      mocks.state.session = { ...mocks.state.session!, activeChat: active, chats: [active] };
+      mocks.state.workspaceResult = workspaceResult(
+        [
+          win("files", { root: "/manuals/Distinct" }, "files-owner"),
+          win("chat", { chatId: active.id, projectPath: "/repo" }, "chat-owner"),
+        ],
+        [
+          {
+            id: "owned-edge",
+            a: "files-owner",
+            b: "chat-owner",
+            boundScopeElided: true,
+            boundScopeFingerprint: digest,
+          },
+        ],
+      );
+      await renderMounted();
+      await waitFor(() => expect(screen.getByText(/cannot be restored uniquely/u)).toBeVisible());
+      expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    },
+  );
+
+  it("adopts a legacy edge already matching a canonical source without deleting other sources", async (): Promise<void> => {
+    const visible = fileScope("/manuals/Scale");
+    const active = chat({ connectedScopes: [fileScope("/manuals/Unowned"), visible] });
+    const api = workspaceApi();
+    mocks.state.session = { ...mocks.state.session!, activeChat: active, chats: [active] };
+    mocks.state.workspaceResult = workspaceResult(
+      [
+        win("files", { root: visible.root }, "files-owner"),
+        win("chat", { chatId: active.id, projectPath: "/repo" }, "chat-owner"),
+      ],
+      [{ id: "legacy-edge", a: "files-owner", b: "chat-owner", boundScopeElided: true }],
+      api,
+    );
+    await renderMounted();
+    await waitFor(() =>
+      expect(api.updateConnBoundScope).toHaveBeenCalledWith("legacy-edge", visible),
+    );
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])(
+    "resolves canonical ownership for immediate teardown before a replay acknowledgement (rootless=%s)",
+    async (rootless): Promise<void> => {
+      const digest = connectedScopeFingerprint(fileScope("/manuals/Scale"));
+      const { otherScope, api } = restoredTeardownFixture(digest);
+      await renderMounted();
+      expect(api.updateConnBoundScope).not.toHaveBeenCalled();
+      const trigger: ChatConnectedScope = rootless
+        ? { kind: "workspace-root", relativePaths: [], connectedAtMs: 0 }
+        : fileScope("/manuals/Distinct");
+      await act(async (): Promise<void> => {
+        expect(
+          await mocks.state.workspaceOptions?.onScopeUnbind?.(
+            "chat-owner",
+            trigger,
+            undefined,
+            "owned-edge",
+          ),
+        ).toBe(true);
+      });
+      expect(mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[1]).toEqual([otherScope]);
+    },
+  );
+
+  it.each([undefined, "0".repeat(64)])(
+    "refuses immediate teardown with unproven ownership %s",
+    async (digest): Promise<void> => {
+      restoredTeardownFixture(digest);
+      await renderMounted();
+      await act(async (): Promise<void> => {
+        expect(
+          await mocks.state.workspaceOptions?.onScopeUnbind?.(
+            "chat-owner",
+            fileScope("/manuals/Distinct"),
+            undefined,
+            "owned-edge",
+          ),
+        ).toBe(false);
+      });
+      expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+      expect(screen.getByText(/cannot be restored uniquely/u)).toBeVisible();
+      expect(JSON.stringify(reportedDiagnostics)).not.toContain("/manuals/");
+    },
+  );
 
   it("retains another Files edge's source when one shared folder binding moves", async (): Promise<void> => {
     const oldScope = fileScope("/manual-shared");

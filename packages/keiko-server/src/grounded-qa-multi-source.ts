@@ -96,6 +96,7 @@ import {
   isValidGroundedPack,
   mappedGatewayError,
   mappedWorkspaceError,
+  modelWindowAwareBudget,
   modelInputPromptByteLimit,
   packBudgetSummary,
   promptExcerptCount,
@@ -1195,7 +1196,11 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   const startedAtMs = Date.now();
   const query = buildQuery(ctx.retrievalContent ?? ctx.content, () => Date.now());
   const labels = sourceLabels(ctx.scopes);
-  const perScopeBudgets = splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, ctx.scopes, query);
+  const perScopeBudgets = splitExplorationBudgets(
+    modelWindowAwareBudget(ctx.deps, ctx.modelId),
+    ctx.scopes,
+    query,
+  );
   let outcome: RetrievalOutcome | RouteResult;
   try {
     outcome = await retrieveAllSources(ctx, query, perScopeBudgets, labels);

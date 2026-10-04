@@ -37,9 +37,11 @@ import {
   boundScopeOf,
   filesChatBindScope,
   hasOtherFilesScopeOwner,
+  restoredConnectionScope,
   totalSourceCap,
   type GitChangeBindSelection,
 } from "./hooks/workspaceActions";
+import { connectedScopeIdentity } from "./hooks/workspaceScopeIdentity";
 import {
   connectGitChangeToChat,
   fetchChats,
@@ -413,14 +415,35 @@ function isOnlySlashes(value: string): boolean {
 }
 
 function connectedScopeKey(scope: ChatConnectedScope | null): string | null {
-  if (scope?.root === undefined) return null;
-  return [
-    stripTrailingSlashRun(scope.root.replaceAll("\\", "/")),
-    scope.kind,
-    ...scope.relativePaths.map((path) =>
-      stripTrailingSlashRun(stripLeadingSlashRun(path.replaceAll("\\", "/"))),
-    ),
-  ].join("\u0000");
+  return connectedScopeIdentity(scope);
+}
+
+function missingFilesScopeOwnership(
+  connection: Connection | undefined,
+  previousScope: ChatConnectedScope | null,
+  nextScope: ChatConnectedScope,
+  canonicalScopes: readonly ChatConnectedScope[],
+): boolean {
+  return (
+    connection?.boundScopeElided === true &&
+    previousScope === null &&
+    canonicalScopes.length > 0 &&
+    !isScopeConnected(canonicalScopes, nextScope)
+  );
+}
+
+function ownedTeardownScope(
+  connection: Connection | undefined,
+  conversationId: string,
+  canonicalScopes: readonly ChatConnectedScope[],
+  trigger: ChatConnectedScope,
+  acknowledgements: ReadonlyMap<string, ChatConnectedScope>,
+): ChatConnectedScope | null {
+  if (connection?.boundScopeElided !== true) return trigger;
+  return (
+    acknowledgements.get(`${connection.id}\u0000${conversationId}`) ??
+    restoredConnectionScope(connection, canonicalScopes)
+  );
 }
 
 // S3358 — prefer the bind-time snapshot on the Connection; fall back to whichever
@@ -478,6 +501,13 @@ class ChatMutationTimeoutFailure extends Error {}
 interface ChatMutationQueue {
   readonly blocked: Set<string>;
   readonly tails: Map<string, Promise<void>>;
+}
+
+interface FilesScopeUnbindInput {
+  readonly chatWindowId: string;
+  readonly scope: ChatConnectedScope;
+  readonly target: ChatUnbindTarget | undefined;
+  readonly connectionId: string | undefined;
 }
 
 interface ChatMutationAttempt {
@@ -1032,13 +1062,26 @@ function AppShellInner(): ReactNode {
         return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
       if ((target?.conversationId ?? chat.id) !== chat.id) return false;
+      const canonicalScopes = effectiveScopes(chat);
+      const connection = wsConnectionsForBindingRef.current.find(
+        (edge) => edge.id === connectionId,
+      );
+      const ownedScope = previousScope ?? restoredConnectionScope(connection, canonicalScopes);
+      if (missingFilesScopeOwnership(connection, ownedScope, nextScope, canonicalScopes)) {
+        reportGroundingMutationFailure(
+          "Files scope ownership unavailable",
+          new Error("Scope ownership is not proven"),
+        );
+        return rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
+      }
       const current =
-        previousScope === null || filesScopeOwnedElsewhere(previousScope, chat.id, connectionId)
-          ? effectiveScopes(chat)
-          : removeConnectedScope(effectiveScopes(chat), previousScope);
+        ownedScope === null || filesScopeOwnedElsewhere(ownedScope, chat.id, connectionId)
+          ? canonicalScopes
+          : removeConnectedScope(canonicalScopes, ownedScope);
       const lkScopes = effectiveLocalKnowledgeScopes(chat);
       if (isScopeConnected(current, nextScope)) {
-        if (previousScope !== null) {
+        rememberGroundingChat(chat);
+        if (ownedScope !== null) {
           const persisted = await persistCurrentChatScopes(
             target,
             attempt,
@@ -1136,7 +1179,15 @@ function AppShellInner(): ReactNode {
               connectionId,
             );
             if (accepted && attempt.isCurrent() && edgeKey !== undefined) {
-              acknowledgedFilesScopesRef.current.set(edgeKey, nextScope);
+              const canonicalChat = confirmedGroundingChatsRef.current.get(chatKey);
+              const acknowledged =
+                canonicalChat === undefined
+                  ? undefined
+                  : effectiveScopes(canonicalChat).find((scope) =>
+                      isScopeConnected([scope], nextScope),
+                    );
+              if (acknowledged === undefined) return false;
+              acknowledgedFilesScopesRef.current.set(edgeKey, acknowledged);
             }
             return accepted;
           },
@@ -1157,6 +1208,63 @@ function AppShellInner(): ReactNode {
     ): Promise<boolean> => replaceFilesScope(chatWindowId, scope, null, target),
     [replaceFilesScope],
   );
+  const unbindFilesScopeNow = useCallback(
+    async (input: FilesScopeUnbindInput, attempt: ChatMutationAttempt): Promise<boolean> => {
+      const { chatWindowId, scope, target, connectionId } = input;
+      const chat = await resolveChatForWindow(chatWindowId, target);
+      if (chat === undefined) {
+        return rejectForConnectionFailure(t("scope.disconnectError"));
+      }
+      const current = effectiveScopes(chat);
+      const connection = wsConnectionsForBindingRef.current.find(
+        (edge) => edge.id === connectionId,
+      );
+      const ownedScope = ownedTeardownScope(
+        connection,
+        chat.id,
+        current,
+        scope,
+        acknowledgedFilesScopesRef.current,
+      );
+      if (ownedScope === null) {
+        if (current.length === 0) return true;
+        reportGroundingMutationFailure(
+          "Files scope ownership unavailable",
+          new Error("Scope ownership is not proven"),
+        );
+        return rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
+      }
+      if (connectionId !== undefined) releasedFilesConnectionsRef.current.add(connectionId);
+      const next = filesScopeOwnedElsewhere(ownedScope, chat.id, connectionId)
+        ? current
+        : removeConnectedScope(current, ownedScope);
+      const persisted = await persistCurrentChatScopes(
+        target,
+        attempt,
+        chat.id,
+        current,
+        next,
+        updateChatConnectedScopes,
+        rememberGroundingChat,
+      );
+      if (persisted === undefined) {
+        if (connectionId !== undefined) releasedFilesConnectionsRef.current.delete(connectionId);
+        return false;
+      }
+      session.replaceChat(persisted);
+      setSourceConnectionNotice(null);
+      return true;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
+    [
+      resolveChatForWindow,
+      rejectForConnectionFailure,
+      t,
+      filesScopeOwnedElsewhere,
+      rememberGroundingChat,
+      session.replaceChat,
+    ],
+  );
   const handleScopeUnbind = useCallback(
     async (
       chatWindowId: string,
@@ -1168,34 +1276,7 @@ function AppShellInner(): ReactNode {
         return await serializeChatMutation(
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
-          async (attempt): Promise<boolean> => {
-            const chat = await resolveChatForWindow(chatWindowId, target);
-            if (chat === undefined) {
-              return rejectForConnectionFailure(t("scope.disconnectError"));
-            }
-            const current = effectiveScopes(chat);
-            if (connectionId !== undefined) releasedFilesConnectionsRef.current.add(connectionId);
-            const next = filesScopeOwnedElsewhere(scope, chat.id, connectionId)
-              ? current
-              : removeConnectedScope(current, scope);
-            const persisted = await persistCurrentChatScopes(
-              target,
-              attempt,
-              chat.id,
-              current,
-              next,
-              updateChatConnectedScopes,
-              rememberGroundingChat,
-            );
-            if (persisted === undefined) {
-              if (connectionId !== undefined)
-                releasedFilesConnectionsRef.current.delete(connectionId);
-              return false;
-            }
-            session.replaceChat(persisted);
-            setSourceConnectionNotice(null);
-            return true;
-          },
+          (attempt) => unbindFilesScopeNow({ chatWindowId, scope, target, connectionId }, attempt),
         );
       } catch (error: unknown) {
         if (connectionId !== undefined) releasedFilesConnectionsRef.current.delete(connectionId);
@@ -1204,16 +1285,7 @@ function AppShellInner(): ReactNode {
         );
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [
-      groundingMutationKey,
-      filesScopeOwnedElsewhere,
-      rememberGroundingChat,
-      rejectForConnectionFailure,
-      resolveChatForWindow,
-      session.replaceChat,
-      t,
-    ],
+    [groundingMutationKey, rejectForConnectionFailure, unbindFilesScopeNow, t],
   );
   // Epic #189 Slice 3 M3 — a Connector↔Chat relationship edge binds/unbinds the connector scope
   // on the active chat's localKnowledgeScopes, so the gesture grounds the chat via vector search.
@@ -1545,7 +1617,11 @@ function AppShellInner(): ReactNode {
       };
       void replaceFilesScope(chatWindowId, nextScope, previousScope, target, conn.id).then(
         (accepted) => {
-          if (accepted) ws.api.updateConnBoundScope(conn.id, nextScope);
+          const acknowledged = acknowledgedFilesScopesRef.current.get(
+            `${conn.id}\u0000${conversationId}`,
+          );
+          if (accepted && target.isCurrent() && acknowledged !== undefined)
+            ws.api.updateConnBoundScope(conn.id, acknowledged);
         },
       );
     }

@@ -41,6 +41,11 @@ import {
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
 import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
+import {
+  connectedScopeFingerprint,
+  connectedScopeIdentity,
+  isConnectedScopeFingerprint,
+} from "./workspaceScopeIdentity";
 
 function addPosition(
   vp: ViewportWorld,
@@ -1377,6 +1382,7 @@ function connectionScopeFields(
     | "boundChatWindowId"
     | "boundRoot"
     | "boundScopeKind"
+    | "boundScopeFingerprint"
     | "boundRelativePath"
     | "boundConnectorKind"
     | "boundConnectorId"
@@ -1391,6 +1397,7 @@ function connectionScopeFields(
       ? {
           boundRoot: boundScope.root,
           boundScopeKind: boundScope.kind,
+          boundScopeFingerprint: connectedScopeFingerprint(boundScope),
           boundRelativePath: boundScope.relativePaths[0],
         }
       : {}),
@@ -1996,9 +2003,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const bothLive = a !== undefined && b !== undefined;
     const chatWindowId = conn.boundChatWindowId ?? (bothLive ? chatWindowIdInPair(a, b) : null);
     const target = chatUnbindTarget(chatWindowId === null ? undefined : winById(chatWindowId));
-    const boundScope =
-      boundScopeOf(conn) ??
-      (conn.boundScopeElided === true || !bothLive ? null : filesChatBindScope(a, b, Date.now()));
+    const boundScope = bothLive ? connectionTeardownScope(conn, a, b) : boundScopeOf(conn);
     const connectorScope =
       boundConnectorScopeOf(conn) ?? (bothLive ? connectorChatBind(a, b) : null);
     const gitChangeRelationshipId = boundGitChangeRelationshipIdOf(conn);
@@ -2296,14 +2301,19 @@ function normaliseRelativePath(path: string): string {
 }
 
 function scopeMatches(a: ChatConnectedScope, b: ChatConnectedScope): boolean {
-  if (a.root === undefined || b.root === undefined) return false;
-  if (normaliseRoot(a.root) !== normaliseRoot(b.root)) return false;
-  if (a.kind !== b.kind) return false;
-  if (a.relativePaths.length !== b.relativePaths.length) return false;
-  return a.relativePaths.every(
-    (path, index) =>
-      normaliseRelativePath(path) === normaliseRelativePath(b.relativePaths[index] ?? ""),
-  );
+  const identity = connectedScopeIdentity(a);
+  return identity !== null && identity === connectedScopeIdentity(b);
+}
+
+/** Only canonical Chat scopes can restore a private persisted edge snapshot. */
+export function restoredConnectionScope(
+  connection: Pick<Connection, "boundScopeFingerprint"> | undefined,
+  canonicalScopes: readonly ChatConnectedScope[],
+): ChatConnectedScope | null {
+  const digest = connection?.boundScopeFingerprint;
+  if (!isConnectedScopeFingerprint(digest)) return null;
+  const matching = canonicalScopes.filter((scope) => connectedScopeFingerprint(scope) === digest);
+  return matching.length === 1 ? (matching[0] ?? null) : null;
 }
 
 export function filesVisibleScope(w: AppWindow, connectedAtMs: number): ChatConnectedScope | null {
@@ -2394,6 +2404,20 @@ export function boundScopeOf(conn: {
   };
 }
 
+/** A rootless trigger carries no authority; the shell must resolve elided ownership. */
+export function connectionTeardownScope(
+  connection: Connection,
+  a: AppWindow,
+  b: AppWindow,
+): ChatConnectedScope | null {
+  if (windowOfType(a, b, "files") === null || windowOfType(a, b, "chat") === null) return null;
+  const known = boundScopeOf(connection) ?? filesChatBindScope(a, b, Date.now());
+  if (known !== null) return known;
+  return connection.boundScopeElided === true
+    ? { kind: "workspace-root", relativePaths: [], connectedAtMs: Date.now() }
+    : null;
+}
+
 /** True when `root` (after trailing-separator normalisation) is already in the scopes list. */
 export function isRootConnected(current: readonly ChatConnectedScope[], root: string): boolean {
   const normRoot = normaliseRoot(root);
@@ -2407,7 +2431,7 @@ export function isScopeConnected(
   return current.some((candidate) => scopeMatches(candidate, scope));
 }
 
-export function hasOtherFilesScopeOwner(input: {
+interface FilesScopeOwnershipInput {
   readonly windows: readonly AppWindow[];
   readonly connections: readonly Connection[];
   readonly scope: ChatConnectedScope;
@@ -2416,26 +2440,44 @@ export function hasOtherFilesScopeOwner(input: {
   readonly releasedConnections: ReadonlySet<string>;
   readonly acknowledgedScopes: ReadonlyMap<string, ChatConnectedScope>;
   readonly conversationForWindow: (windowId: string) => string | undefined;
-}): boolean {
+}
+
+function connectionScopeMatches(
+  input: FilesScopeOwnershipInput,
+  connection: Connection,
+  a: AppWindow,
+  b: AppWindow,
+): boolean {
+  const scope =
+    input.acknowledgedScopes.get(`${connection.id}\u0000${input.conversationId}`) ??
+    boundScopeOf(connection);
+  if (scope !== null) return scopeMatches(scope, input.scope);
+  if (isConnectedScopeFingerprint(connection.boundScopeFingerprint))
+    return connection.boundScopeFingerprint === connectedScopeFingerprint(input.scope);
+  const visible = filesChatBindScope(a, b, 0);
+  return (
+    connection.boundScopeElided !== true && visible !== null && scopeMatches(visible, input.scope)
+  );
+}
+
+function isFilesScopeOwner(input: FilesScopeOwnershipInput, connection: Connection): boolean {
+  const a = input.windows.find((window) => window.id === connection.a);
+  const b = input.windows.find((window) => window.id === connection.b);
+  if (a === undefined || b === undefined) return false;
+  const chatWindowId = chatWindowIdInPair(a, b);
+  if (chatWindowId === null || input.conversationForWindow(chatWindowId) !== input.conversationId)
+    return false;
+  return windowOfType(a, b, "files") !== null && connectionScopeMatches(input, connection, a, b);
+}
+
+export function hasOtherFilesScopeOwner(input: FilesScopeOwnershipInput): boolean {
   return input.connections.some((connection) => {
     if (
       connection.id === input.excludedConnectionId ||
       input.releasedConnections.has(connection.id)
     )
       return false;
-    const a = input.windows.find((window) => window.id === connection.a);
-    const b = input.windows.find((window) => window.id === connection.b);
-    if (a === undefined || b === undefined) return false;
-    const chatWindowId = chatWindowIdInPair(a, b);
-    if (chatWindowId === null || input.conversationForWindow(chatWindowId) !== input.conversationId)
-      return false;
-    const visible = filesChatBindScope(a, b, 0);
-    if (visible === null) return false;
-    const scope =
-      input.acknowledgedScopes.get(`${connection.id}\u0000${input.conversationId}`) ??
-      boundScopeOf(connection) ??
-      visible;
-    return scopeMatches(scope, input.scope);
+    return isFilesScopeOwner(input, connection);
   });
 }
 
