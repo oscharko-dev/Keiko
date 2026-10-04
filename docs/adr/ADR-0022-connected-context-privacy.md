@@ -280,8 +280,10 @@ question contains an anaphoric word such as "there"; named CamelCase targets rem
 even when a request also says "for that". Primary typed identifiers in factual lookups, including
 CamelCase and snake-case identifiers, and quoted targets match whole terms without stemming them
 into generic fragments. A named literal fact with no actual content match cannot be replaced by
-semantic-only evidence; diagnostic/relationship lookup and augmentation of actual primary evidence
-remain available. Multiple targets share the same
+semantic-only evidence. Diagnostic requests retain the original question and semantic provider,
+including questions with quoted errors or snake-case identifiers; they cannot take ordinary-document
+or literal-absence augmentation shortcuts. Relationship lookup and augmentation of actual primary
+evidence remain available. Multiple targets share the same
 recursive scan. Their literal interpretation participates in the query fingerprint and uses live
 matching rather than fuzzy hashed lexical records; approximate semantic evidence cannot substitute
 for a requested exact occurrence. Internal literal query text and aggregate unique target characters
@@ -297,8 +299,10 @@ evidence. When distinct explicit anchors identify different candidate paths, bou
 prioritizes coverage of those paths before additional alternatives for an already covered anchor.
 Ordinary-folder factual
 HTML/text lookups and complete literal absences avoid unrelated code-graph augmentation;
-complete explicit exact fact lookups also avoid optional graph/history work in Git folders,
-including facts stored in source-code files. Incomplete lexical evidence and explicitly requested
+complete typed `exact-symbol` lookups and explicit literal search commands also avoid optional
+graph/history work in Git folders, including facts stored in source-code files. Words such as
+"exactly" in an explanatory or diagnostic question do not establish that the lookup is complete.
+Incomplete lexical evidence and explicitly requested
 definitions, relationships, and history retain their existing retrieval and uncertainty behavior.
 The existing connected-context completion event records executed/skipped ring kinds, closed skip
 reasons, and whether optional augmentation was skipped. Planned rings are never presented as

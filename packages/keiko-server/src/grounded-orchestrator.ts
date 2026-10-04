@@ -1568,10 +1568,14 @@ function primaryLexicalAnchors(
   anchors: readonly SearchAnchor[],
   retrievalIntent: RetrievalIntent,
 ): readonly SearchAnchor[] {
-  if (query.kind !== "natural-language" || retrievalIntent === "repository-overview") return [];
+  if (
+    query.kind !== "natural-language" ||
+    retrievalIntent === "repository-overview" ||
+    retrievalIntent === "diagnostic-search"
+  )
+    return [];
   const factual =
     !requiresRelationshipOrHistoryRings(query) &&
-    retrievalIntent !== "diagnostic-search" &&
     !anchors.some((anchor) => anchor.kind === "path") &&
     !anchors.some(
       (anchor) => anchor.kind === "identifier" && /(?:Test|Tests|Spec)$/iu.test(anchor.term),
@@ -1665,6 +1669,8 @@ function lexicalSemanticProvider(
   inputs: SearchInputs,
   definitionSymbol: string | undefined,
 ): SemanticSearchProvider | undefined {
+  if (inputs.query.kind === "exact-symbol") return undefined;
+  if (inputs.retrievalIntent === "diagnostic-search") return inputs.repoSemanticSearchProvider;
   const explicitLiteral = inputs.anchors.some(
     (anchor) =>
       anchor.kind === "quoted" || (anchor.kind === "identifier" && anchor.term.includes("_")),
@@ -2143,6 +2149,24 @@ function elapsedDeadlineStop(
 const DOCUMENT_EVIDENCE_PATH_RE = /\.(?:html?|txt|rst|adoc|xml)$/iu;
 const EXPLICIT_LITERAL_LOOKUP_RE =
   /\b(?:exact(?:ly)?|literal(?:ly)?|exakt(?:e[nmrs]?)?|wörtlich(?:e[nmrs]?)?)\b/iu;
+const LITERAL_LOOKUP_REQUEST_RE =
+  /^(?:(?:please|bitte)\s+)?(?:find|search|locate|suche|finde|lokalisiere)\b/iu;
+
+function isExplicitLiteralRequest(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+): boolean {
+  return (
+    query.kind === "exact-symbol" ||
+    (LITERAL_LOOKUP_REQUEST_RE.test(query.text.trim()) &&
+      EXPLICIT_LITERAL_LOOKUP_RE.test(query.text) &&
+      anchors.some(
+        (anchor) =>
+          anchor.kind === "quoted" ||
+          (anchor.kind === "identifier" && anchor.weight >= 0.85 && anchor.term.includes("_")),
+      ))
+  );
+}
 
 function isCompleteExactLiteralLookup(
   query: RetrievalQuery,
@@ -2150,14 +2174,8 @@ function isCompleteExactLiteralLookup(
   diagnostics: ContextPackDiagnostics | undefined,
 ): boolean {
   const coverage = diagnostics?.coverage;
-  const hasLiteralTarget = anchors.some(
-    (anchor) =>
-      anchor.kind === "quoted" ||
-      (anchor.kind === "identifier" && anchor.weight >= 0.85 && anchor.term.includes("_")),
-  );
   return (
-    (query.kind === "exact-symbol" ||
-      (EXPLICIT_LITERAL_LOOKUP_RE.test(query.text) && hasLiteralTarget)) &&
+    isExplicitLiteralRequest(query, anchors) &&
     coverage?.incomplete === false &&
     coverage.matchesReturned > 0 &&
     !requiresRelationshipOrHistoryRings(query) &&
@@ -2205,7 +2223,9 @@ function lookupAugmentationSkipReason(
   anchors: readonly SearchAnchor[],
   hasGitMetadata: boolean,
   diagnostics: ContextPackDiagnostics | undefined,
+  retrievalIntent: RetrievalIntent,
 ): RingSkipReason | undefined {
+  if (retrievalIntent === "diagnostic-search") return undefined;
   if (isCompleteExactLiteralLookup(query, anchors, diagnostics)) return "complete-exact-lookup";
   if (isOrdinaryDocumentLookup(query, hasGitMetadata, diagnostics)) return "ordinary-document";
   if (isOrdinaryLiteralAbsence(query, hasGitMetadata, anchors, diagnostics))
@@ -2219,7 +2239,10 @@ function optionalRingSkipReason(
   diagnostics: ContextPackDiagnostics | undefined,
 ): RingSkipReason | undefined {
   if (requiresRelationshipOrHistoryRings(inputs.query) || ring.kind === "lexical") return undefined;
-  if (isCompleteExactLiteralLookup(inputs.query, inputs.anchors, diagnostics))
+  if (
+    inputs.retrievalIntent !== "diagnostic-search" &&
+    isCompleteExactLiteralLookup(inputs.query, inputs.anchors, diagnostics)
+  )
     return "complete-exact-lookup";
   if (ring.kind === "git-history") return inputs.hasGitMetadata ? undefined : "no-git-metadata";
   return lookupAugmentationSkipReason(
@@ -2227,6 +2250,7 @@ function optionalRingSkipReason(
     inputs.anchors,
     inputs.hasGitMetadata,
     diagnostics,
+    inputs.retrievalIntent,
   );
 }
 
@@ -5789,6 +5813,7 @@ function recordAugmentationSkip(args: AssembleGroundedPackInputs, rings: RingRun
     args.plan.anchors,
     args.hasGitMetadata,
     rings.diagnostics,
+    args.plan.retrievalIntent,
   );
   if (reason === undefined) return false;
   markAugmentationSkipped(rings, reason);
