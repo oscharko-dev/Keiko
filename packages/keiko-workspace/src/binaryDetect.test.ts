@@ -133,6 +133,15 @@ describe("declared HTML character encoding", () => {
     );
     expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.htm" })?.text).toContain("Öl");
   });
+  it.each([
+    '<meta/charset="windows-1252">',
+    '<meta http-equiv="Content-Type"content="text/html; charset=windows-1252">',
+    "<meta http-equiv='Content-Type'content='text/html; charset=windows-1252'>",
+  ])("decodes compact HTML attributes in %s", (declaration) => {
+    expect(
+      decodeTextFileBytes(legacy(`${declaration}<p>Ölwechsel</p>`), { scopePath: "manual.html" }),
+    ).toEqual({ encoding: "windows-1252", text: `${declaration}<p>Ölwechsel</p>` });
+  });
   it("matches the http-equiv charset parameter case-insensitively", () => {
     const bytes = legacy(
       '<META content="text/html; CHARSET=ISO-8859-1" HTTP-EQUIV="Content-Type"><p>Öl</p>',

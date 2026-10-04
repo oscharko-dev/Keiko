@@ -97,7 +97,7 @@ export function detectTextByteEncoding(
 
 function htmlMetaAttributes(tag: string): ReadonlyMap<string, string> {
   const attributes = new Map<string, string>();
-  const pattern = /(?<=\s)([^\s/>=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gu;
+  const pattern = /(?<=[\s/"'])([^\s/>=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gu;
   for (const match of tag.matchAll(pattern)) {
     const name = match[1]?.toLowerCase();
     if (name !== undefined && !attributes.has(name))

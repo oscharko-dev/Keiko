@@ -1835,16 +1835,40 @@ async function runAdapterQueries(
   requestContext: StructuralAdapterRequestContext | undefined,
 ): Promise<readonly RunRingStructuralResult[]> {
   if (inputs.nowMs() >= inputs.deadlineAtMs) return [];
-  return Promise.all(
-    queries.map((query) =>
-      runStructuralAdapters(registry, inputs.searchScope, query, ring.searchLimits, inputs.fs, {
-        nowMs: inputs.nowMs,
-        deadlineAtMs: inputs.deadlineAtMs,
-        ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
-        ...(requestContext === undefined ? {} : { requestContext }),
-      }),
-    ),
+  const controller = new AbortController();
+  const signal = parallelStageSignal(controller, inputs.signal);
+  const pending = queries.map((query) =>
+    runStructuralAdapters(registry, inputs.searchScope, query, ring.searchLimits, inputs.fs, {
+      nowMs: inputs.nowMs,
+      deadlineAtMs: inputs.deadlineAtMs,
+      signal,
+      ...(requestContext === undefined ? {} : { requestContext }),
+    }),
   );
+  return settleParallelStage(Promise.all(pending), pending, controller);
+}
+
+function parallelStageSignal(
+  controller: AbortController,
+  parent: AbortSignal | undefined,
+): AbortSignal {
+  return parent === undefined ? controller.signal : AbortSignal.any([parent, controller.signal]);
+}
+
+async function settleParallelStage<T>(
+  result: Promise<T>,
+  pending: readonly Promise<unknown>[],
+  controller: AbortController,
+): Promise<T> {
+  try {
+    return await result;
+  } catch (error) {
+    // Cancel stage siblings without aborting the caller's authority. Wait for admitted resources
+    // to close before exposing the original failure or allowing a retry to start another walk.
+    controller.abort();
+    await Promise.allSettled(pending);
+    throw error;
+  }
 }
 
 async function runNonLexicalAdapters(
@@ -4128,8 +4152,10 @@ async function collectParallelDeterministicEvidence(
   fileSearchContext: StructuralAdapterRequestContext,
   traceContext: StructuralAdapterRequestContext,
 ): Promise<ParallelDeterministicEvidence> {
-  const { input, plan, searchScope, fs, nowMs, signal, deadlineAtMs, budget } = inputs;
-  return Promise.all([
+  const controller = new AbortController();
+  const signal = parallelStageSignal(controller, inputs.signal);
+  const { input, plan, searchScope, fs, nowMs, deadlineAtMs, budget } = inputs;
+  const pending = [
     collectFollowSymbolTraceEvidence({
       scope: input.scope,
       query: input.query,
@@ -4143,9 +4169,10 @@ async function collectParallelDeterministicEvidence(
       deadlineAtMs,
       tryReserveSearchCall: budget.tryReserveSearchCall,
     }),
-    symbolFileAtoms(inputs, fileSearchContext),
+    symbolFileAtoms({ ...inputs, signal }, fileSearchContext),
     documentReferenceAtoms(input, plan, nowMs, signal, fileSearchContext, budget),
-  ]);
+  ] as const;
+  return settleParallelStage(Promise.all(pending), pending, controller);
 }
 
 // Project metadata streams the admitted filesystem directly, retaining only the accepted evidence

@@ -44,6 +44,29 @@ function manual(charset: string, encodedText: Uint8Array): Buffer {
 
 describe("explicitly declared legacy HTML codecs", () => {
   it.each([
+    '<meta/charset="windows-1252">',
+    '<meta http-equiv="Content-Type"content="text/html; charset=windows-1252">',
+  ])("searches and reads compact encoding declaration %s", async (declaration) => {
+    put(
+      path,
+      Buffer.from(`${declaration}\n<p>CodecServiceProbe Ölwechsel 750 hours</p>\n`, "latin1"),
+    );
+    const selected = scope();
+    const result = await searchText(selected, query);
+    expect(result.coverage.incomplete).toBe(false);
+    expect(result.atoms).toContainEqual(
+      expect.objectContaining({ scopePath: path, lineRange: { startLine: 2, endLine: 2 } }),
+    );
+    const excerpt = await readExcerpt(selected, {
+      scopePath: path,
+      startLine: 2,
+      endLine: 2,
+      maxBytes: 512,
+    });
+    expect(excerpt.content).toBe("<p>CodecServiceProbe Ölwechsel 750 hours</p>");
+  });
+
+  it.each([
     ["Shift_JIS", [0x82, 0xa0], "あ"],
     ["Big5", [0xa4, 0xa4, 0xa4, 0xe5], "中文"],
     ["ISO-2022-JP", [0x1b, 0x24, 0x42, 0x24, 0x22, 0x1b, 0x28, 0x42], "あ"],
