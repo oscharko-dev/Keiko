@@ -14,6 +14,7 @@ interface EligibleTextFile {
 // the enrichment; normal lexical/semantic evidence continues unchanged.
 export class KnownFitScopeContext {
   private retained: EvidenceAtom[] = [];
+  private readonly bytesByPath = new Map<string, number>();
   private chargedBytes = 0;
   private overflowed = false;
 
@@ -24,17 +25,24 @@ export class KnownFitScopeContext {
     private readonly emittedAtMs: number,
   ) {}
 
-  public observe = (file: EligibleTextFile): void => {
-    if (this.overflowed) return;
+  public observe = (file: EligibleTextFile): boolean => {
+    if (this.overflowed) return false;
     const atom = this.atom(file);
     this.chargedBytes += file.contentBytes + new TextEncoder().encode(JSON.stringify(atom)).length;
     if (this.chargedBytes > this.capacityBytes) {
       this.retained = [];
+      this.bytesByPath.clear();
       this.overflowed = true;
-      return;
+      return false;
     }
     this.retained.push(atom);
+    this.bytesByPath.set(file.scopePath, Math.max(1, file.contentBytes));
+    return true;
   };
+
+  public fileBytes(): ReadonlyMap<string, number> {
+    return this.bytesByPath;
+  }
 
   public atoms(): readonly EvidenceAtom[] {
     return this.retained;

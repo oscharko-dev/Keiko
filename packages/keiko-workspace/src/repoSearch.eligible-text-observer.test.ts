@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { Buffer } from "node:buffer";
 import { join } from "node:path";
@@ -29,6 +29,19 @@ const query = {
 } as const;
 
 describe("successful text read observation", () => {
+  it("stops producing observation metadata after its bounded consumer has completed", async () => {
+    const root = rootFixture();
+    for (let index = 0; index < 40; index += 1)
+      writeFileSync(join(root, `file-${String(index)}.txt`), "observer\n");
+    const observe = vi.fn(() => false);
+    const result = await searchText(scope(root), query, DEFAULT_SEARCH_LIMITS, {
+      onEligibleTextFile: observe,
+    });
+    expect(result.coverage.filesScanned).toBe(40);
+    expect(result.coverage.incomplete).toBe(false);
+    expect(result.atoms).toHaveLength(40);
+    expect(observe).toHaveBeenCalledTimes(1);
+  });
   it("observes whole admitted decoded text without bypassing binary, sensitive or size exclusions", async () => {
     const root = rootFixture();
     writeFileSync(join(root, "manual.html"), "<p>observer</p>\n<p>actual value</p>\n");

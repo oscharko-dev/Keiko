@@ -197,12 +197,13 @@ export interface ReadExcerptResult extends ReadExcerptWindowResult {
 
 interface FacadeDeps {
   // Trusted context callers may observe successful text reads without retaining file bodies.
+  // Returning false stops observation; matching and scope traversal continue unchanged.
   readonly onEligibleTextFile?:
     | ((file: {
         readonly scopePath: string;
         readonly contentBytes: number;
         readonly lineCount: number;
-      }) => void)
+      }) => unknown)
     | undefined;
   readonly queryInterpretation?: LiteralQueryInterpretation | undefined;
   // Trusted auxiliary filename batches keep independent bounded target buckets on one traversal.
@@ -602,7 +603,7 @@ function buildSearchTextRunner(
     contentLane: deps.contentLane ?? "evidence",
     ...(deps.onEligibleTextFile === undefined
       ? {}
-      : { onEligibleTextFile: deps.onEligibleTextFile }),
+      : { eligibleTextObserver: { active: true, observe: deps.onEligibleTextFile } }),
     ...(deps.candidatePathGlobs === undefined
       ? {}
       : { candidatePathGlobs: deps.candidatePathGlobs }),

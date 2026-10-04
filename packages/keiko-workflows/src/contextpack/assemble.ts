@@ -60,6 +60,7 @@ export interface ExcerptWindow {
 export type ExcerptSource = string | ExcerptWindow | readonly ExcerptWindow[];
 
 export interface AssembleOptions {
+  readonly maxBytesPerExcerptByPath?: ReadonlyMap<string, number>;
   readonly maxBytesPerExcerpt?: number;
   readonly includeSurroundingContext?: boolean;
   readonly editablePaths?: ReadonlySet<string>;
@@ -80,6 +81,7 @@ const DEFAULT_MAX_BYTES_PER_EXCERPT = 8 * 1024;
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 interface ResolvedOptions {
+  readonly maxBytesPerExcerptByPath: ReadonlyMap<string, number>;
   readonly includeSurroundingContext: boolean;
   readonly maxBytesPerExcerpt: number;
   readonly editablePaths: ReadonlySet<string>;
@@ -91,6 +93,7 @@ interface ResolvedOptions {
 function resolveOptions(options: AssembleOptions | undefined): ResolvedOptions {
   const supplied = options ?? {};
   return {
+    maxBytesPerExcerptByPath: supplied.maxBytesPerExcerptByPath ?? new Map(),
     includeSurroundingContext: supplied.includeSurroundingContext ?? false,
     maxBytesPerExcerpt: supplied.maxBytesPerExcerpt ?? DEFAULT_MAX_BYTES_PER_EXCERPT,
     editablePaths: supplied.editablePaths ?? new Set<string>(),
@@ -387,6 +390,7 @@ function appendUsage(usage: ExplorationUsage, addedBytes: number): ExplorationUs
 }
 
 interface ProcessContext {
+  readonly maxBytesPerExcerptByPath: ReadonlyMap<string, number>;
   readonly includeSurroundingContext: boolean;
   readonly scopeId: string;
   readonly atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>;
@@ -489,6 +493,13 @@ function recordUnavailableAtomRanges(
   });
 }
 
+function candidateExcerptByteLimit(candidate: CandidateFile, ctx: ProcessContext): number {
+  const qualified = ctx.maxBytesPerExcerptByPath.get(candidate.scopePath);
+  return qualified === undefined
+    ? ctx.maxBytesPerExcerpt
+    : Math.min(qualified, ctx.budget.excerptBytesMax);
+}
+
 function processCandidate(
   plan: BuildPlan,
   candidate: CandidateFile,
@@ -517,7 +528,7 @@ function processCandidate(
   const { excerpts, totalBytes } = compactAtomsForCandidate(
     atomsForPath,
     excerptSource,
-    ctx.maxBytesPerExcerpt,
+    candidateExcerptByteLimit(candidate, ctx),
     ctx,
   );
   if (excerpts.length === 0) {
@@ -852,6 +863,9 @@ function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): rea
     diagnostics: cacheDiagnostics(input.diagnostics),
     excerpts: cacheExcerptIdentity(input),
     maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
+    maxBytesPerExcerptByPath: [...resolved.maxBytesPerExcerptByPath].sort(([left], [right]) =>
+      left.localeCompare(right),
+    ),
     includeSurroundingContext: resolved.includeSurroundingContext,
     editablePaths: [...resolved.editablePaths].sort((left, right) => left.localeCompare(right)),
     rerankerName: resolved.reranker.name,
@@ -898,6 +912,7 @@ export async function assembleContextPack(
       excerpts: input.excerpts,
       budget: input.budget,
       maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
+      maxBytesPerExcerptByPath: resolved.maxBytesPerExcerptByPath,
       editablePaths: resolved.editablePaths,
       nowMs: now,
     },

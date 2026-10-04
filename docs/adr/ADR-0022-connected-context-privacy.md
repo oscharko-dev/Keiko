@@ -149,11 +149,15 @@ budget, alongside metadata and overview documents; a source-only folder must pro
 evidence. A targeted module overview must not be replaced by an unrelated shallow file listing.
 Unanchored natural-language questions may additionally use the complete eligible folder text when
 the same lexical traversal proves that its actual decoded/redacted bytes and transient evidence
-metadata fit the accepted byte/token capacity. Only successful safe reads enter this body-free
-context collector; overflow irreversibly discards the enrichment, and incomplete traversal disables
-it. Actual full-file ranges use file-listing provenance rather than synthetic lexical matches, and
-fresh excerpt reads still enforce the accepted source and model budgets. Named targets, exact
-absence checks, diagnostic questions, and relationship/history requests retain their existing routes.
+metadata fit the accepted excerpt-byte capacity. The model token capacity is checked separately
+when fitting the actual gateway prompt; tokens are never treated as a source-byte ceiling. Only
+successful safe reads enter this body-free context collector; overflow irreversibly discards the enrichment, and incomplete traversal disables
+it. Actual full-file ranges use file-listing provenance rather than synthetic lexical matches.
+Fresh reads reserve each qualified file's observed byte requirement within the aggregate source
+budget, and only those qualified paths may exceed the ordinary 8 KiB excerpt window. The pack
+cache fingerprints these per-path limits. Once the collector overflows, later files perform no
+collector byte-counting or line-counting work. Gateway fitting still enforces the model input
+budget independently. Named targets, exact absence checks, diagnostic questions, and relationship/history requests retain their existing routes.
 Recursive lexical search and file discovery visit the accepted scope without a default file-count
 or elapsed-time cutoff. Final source reads likewise have no default file-count cutoff: `filesReadMax: null`
 retains eligible requested facts under the actual excerpt-byte and model-input budgets. Explicit finite

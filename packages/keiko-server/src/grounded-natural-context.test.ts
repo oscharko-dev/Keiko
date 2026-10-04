@@ -8,6 +8,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { nodeWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { detectWorkspaceAt, searchText } from "@oscharko-dev/keiko-workspace";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { fittedGroundedGatewayPrompt } from "./grounded-qa.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
   retrieveConnectedContextPack,
@@ -213,6 +215,78 @@ describe("natural connected-folder context", () => {
       ?.excerpts.find((entry) => entry.content.includes("SAPPHIRE"));
     expect(excerpt).toBeDefined();
     expect(excerpt?.atom.lineRange?.endLine).toBeGreaterThanOrEqual(261);
+  });
+
+  it("retains an uneven known-fit file beyond the ordinary excerpt-window byte cap", async () => {
+    const root = ordinaryApp();
+    const text = `<!doctype html>\n${"<!-- filler -->\n".repeat(5_000)}<p>actual service marker: TRILLIUM; collection deadline: 18:30</p>\n`;
+    writeFileSync(join(root, "handbook/services/parcel.html"), text);
+    expect(new TextEncoder().encode(text).length).toBeGreaterThan(70_000);
+    const out = await retrieve(root);
+    const excerpt = out.pack.files
+      .find((file) => file.scopePath === "handbook/services/parcel.html")
+      ?.excerpts.find((entry) => entry.content.includes("TRILLIUM"));
+    expect(excerpt).toBeDefined();
+    expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
+    expect(
+      out.pack.uncertainty.filter((entry) => entry.claim.includes("excerpt byte limit")),
+    ).toEqual([]);
+  });
+
+  it("uses the accepted byte capacity independently of the model token capacity", async () => {
+    const root = ordinaryApp();
+    const text = `${"<!-- source material -->\n".repeat(5_000)}<p>actual final fact: AZALEA</p>\n`;
+    const bytes = Buffer.byteLength(text);
+    expect(bytes).toBeGreaterThan(DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax);
+    expect(bytes).toBeLessThan(DEFAULT_EXPLORATION_BUDGET.excerptBytesMax);
+    writeFileSync(join(root, "handbook/services/parcel.html"), text);
+    const out = await retrieve(root);
+    expect(
+      out.pack.files.some((file) =>
+        file.excerpts.some((entry) => entry.content.includes("AZALEA")),
+      ),
+    ).toBe(true);
+    expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
+    expect(out.pack.usage.modelInputTokens).toBeLessThanOrEqual(
+      out.pack.budget.modelInputTokensMax,
+    );
+    const prompt = fittedGroundedGatewayPrompt(
+      QUESTION,
+      out.pack,
+      (value: unknown): unknown => value,
+    );
+    expect(prompt.messages.some((message) => message.content.includes("AZALEA"))).toBe(true);
+    expect(countGatewayPromptTokens({ messages: prompt.messages })).toBeLessThanOrEqual(
+      out.pack.budget.modelInputTokensMax,
+    );
+  });
+
+  it("discloses model clipping rather than promising complete known-fit folder evidence", async () => {
+    const root = ordinaryApp();
+    writeFileSync(
+      join(root, "handbook/services/parcel.html"),
+      `${"<!-- source -->\n".repeat(5_000)}<p>actual final fact: FREESIA</p>\n`,
+    );
+    const out = await retrieve(
+      root,
+      QUESTION,
+      {},
+      { ...DEFAULT_EXPLORATION_BUDGET, modelInputTokensMax: 1024 },
+    );
+    expect(
+      out.pack.files.some((file) =>
+        file.excerpts.some((excerpt) => excerpt.content.includes("FREESIA")),
+      ),
+    ).toBe(true);
+    const prompt = fittedGroundedGatewayPrompt(
+      QUESTION,
+      out.pack,
+      (value: unknown): unknown => value,
+    );
+    expect(countGatewayPromptTokens({ messages: prompt.messages })).toBeLessThanOrEqual(1024);
+    expect(prompt.messages.map((message) => message.content).join("\n")).not.toContain("FREESIA");
+    expect(prompt.sentReferenceCount).toBeLessThan(prompt.availableReferenceCount);
+    expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
   });
 
   it("refuses whole-folder enrichment after an eligible file read failure", async () => {

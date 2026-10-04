@@ -1038,6 +1038,7 @@ function createStructuralRequestContextPool(
 }
 
 interface RingResult {
+  readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
   readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly atoms: readonly EvidenceAtom[];
   readonly omitted: readonly OmittedContextEntry[];
@@ -1657,10 +1658,14 @@ function lexicalSearchOptions(inputs: SearchInputs): {
   };
 }
 
+interface ContextSearchResult extends SearchResult {
+  readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+}
+
 async function searchLexicalTerms(
   ring: RetrievalRing,
   inputs: SearchInputs,
-): Promise<SearchResult> {
+): Promise<ContextSearchResult> {
   const options = lexicalSearchOptions(inputs);
   const definitionSymbol = directDefinitionSymbol(inputs.query, inputs.anchors);
   const terms = definitionSymbol === undefined ? anchoredLexicalTargets(inputs) : [];
@@ -1680,6 +1685,7 @@ async function searchLexicalTerms(
   if (context === undefined || result.coverage.incomplete) return result;
   return {
     ...result,
+    knownFitFileBytes: context.fileBytes(),
     atoms: [...result.atoms, ...context.atoms()],
   };
 }
@@ -1698,7 +1704,10 @@ function knownFitContextFor(inputs: SearchInputs): KnownFitScopeContext | undefi
     : undefined;
 }
 
-async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Promise<SearchResult> {
+async function lexicalRingSearch(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+): Promise<ContextSearchResult> {
   const result = await searchLexicalTerms(ring, inputs);
   if (
     inputs.retrievalIntent !== "repository-overview" ||
@@ -1717,9 +1726,9 @@ async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Pro
 }
 
 function withoutNamedSemanticSubstitution(
-  result: SearchResult,
+  result: ContextSearchResult,
   inputs: SearchInputs,
-): SearchResult {
+): ContextSearchResult {
   if (
     inputs.retrievalIntent === "diagnostic-search" ||
     requiresRelationshipOrHistoryRings(inputs.query) ||
@@ -1739,6 +1748,7 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
   // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
   // It does NOT consume the excerpt budget; excerpt reads are charged later by the assembler.
   return {
+    knownFitFileBytes: result.knownFitFileBytes,
     atoms: result.atoms,
     primaryContentIdentities: certifiedLexicalContent(result, inputs),
     omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
@@ -1922,6 +1932,7 @@ interface RingDecisionAudit {
 }
 
 interface RingRunSummary {
+  readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
   readonly decisions?: RingDecisionAudit | undefined;
   readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly atoms: readonly EvidenceAtom[];
@@ -2198,6 +2209,7 @@ async function runReservedRing(
 }
 
 interface RingEvidenceAccumulator {
+  knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
   atoms: EvidenceAtom[];
   omitted: OmittedContextEntry[];
   uncertainty: UncertaintyMarker[];
@@ -2214,6 +2226,7 @@ function newRingEvidence(): RingEvidenceAccumulator {
   };
 }
 function appendRingEvidence(evidence: RingEvidenceAccumulator, result: RingResult): void {
+  evidence.knownFitFileBytes ??= result.knownFitFileBytes;
   evidence.diagnostics ??= result.diagnostics;
   evidence.primaryContentIdentities = lexicalContentIdentities(
     result,
@@ -2277,6 +2290,7 @@ async function runAllRings(
 }
 
 export interface ExcerptInputs {
+  readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
   readonly anchors?: readonly string[] | undefined;
   readonly searchScope: SearchScope;
   readonly fs: WorkspaceFs;
@@ -4591,7 +4605,10 @@ async function readPathExcerptWindows(
     }
     const availableBytes = remainingBytes - bytesConsumed;
     if (availableBytes <= 0 || windows.length >= MAX_EXCERPT_WINDOWS_PER_FILE) break;
-    const maxBytes = Math.min(MAX_EXCERPT_WINDOW_BYTES, availableBytes);
+    const maxBytes = Math.min(
+      inputs.knownFitFileBytes?.get(scopePath) ?? MAX_EXCERPT_WINDOW_BYTES,
+      availableBytes,
+    );
     const result = await readExcerptWindow(
       scopePath,
       window,
@@ -4828,7 +4845,7 @@ async function readExcerptWaves(
       Math.max(1, Math.floor(state.remainingBytes / MAX_EXCERPT_WINDOW_BYTES)),
     );
     const wave = paths.slice(next, next + slots);
-    const grants = distributeByteBudget(state.remainingBytes, wave.length);
+    const grants = excerptWaveGrants(wave, state.remainingBytes, inputs);
     const results = await mapWithConcurrency(wave, 8, (scopePath, index) => {
       throwIfCancelled(inputs.signal);
       return readPathExcerptTask(scopePath, inputs, grants[index] ?? 0);
@@ -4840,6 +4857,23 @@ async function readExcerptWaves(
     state.byteBudgetOmittedPaths = paths.slice(next);
     state.uncertainty.push(budgetClipped("budget-exhausted on excerptBytes", inputs.nowMs()));
   }
+}
+
+function excerptWaveGrants(
+  paths: readonly string[],
+  totalBytes: number,
+  inputs: ExcerptInputs,
+): readonly number[] {
+  const known = paths.map((path) => inputs.knownFitFileBytes?.get(path));
+  const knownBytes = known.reduce<number>((sum, bytes) => sum + (bytes ?? 0), 0);
+  if (knownBytes > totalBytes || known.every((bytes) => bytes === undefined))
+    return distributeByteBudget(totalBytes, paths.length);
+  const remaining = distributeByteBudget(
+    totalBytes - knownBytes,
+    known.filter((bytes) => bytes === undefined).length,
+  );
+  let next = 0;
+  return known.map((bytes) => bytes ?? remaining[next++] ?? 0);
 }
 
 // Internal seam: package-local tests drive the excerpt-read step with a scripted clock, which the
@@ -5002,10 +5036,20 @@ interface GroundedPackCacheLookupInputs {
 }
 
 interface AssembleOptionsForGroundedPack {
+  readonly maxBytesPerExcerptByPath?: ReadonlyMap<string, number>;
   readonly includeSurroundingContext: boolean;
   readonly nowMs: () => number;
   readonly microIndex?: MicroIndex;
   readonly reranker?: RerankerSeam;
+}
+
+function knownFitAssembleOptions(
+  options: AssembleOptionsForGroundedPack,
+  rings: RingRunSummary,
+): AssembleOptionsForGroundedPack {
+  return rings.knownFitFileBytes === undefined
+    ? options
+    : { ...options, maxBytesPerExcerptByPath: rings.knownFitFileBytes };
 }
 
 function deadlineBoundMicroIndex(
@@ -5190,7 +5234,7 @@ function cachedGroundedPack({
       initialUsage,
       diagnostics: rings.diagnostics,
     },
-    assembleOptions,
+    knownFitAssembleOptions(assembleOptions, rings),
   );
   return assembleOptions.microIndex.get(key);
 }
@@ -5341,7 +5385,7 @@ async function assemblePackFromReads({
         ...(needsNoEvidenceMarker ? [noEvidence(assembleOptions.nowMs())] : []),
       ],
     },
-    assembleOptions,
+    knownFitAssembleOptions(assembleOptions, rings),
   );
   return assemble.pack;
 }
@@ -5589,6 +5633,7 @@ async function assembleGroundedPack(
     };
   }
   const excerptReads = await readKeptExcerpts(prepared.keptPaths, {
+    knownFitFileBytes: augmentedRings.knownFitFileBytes,
     searchScope,
     fs,
     budget: plan.budget,
@@ -6453,7 +6498,7 @@ function connectedContextSearchInputs(
 ): SearchInputs {
   const { workspaceIndex } = context;
   return {
-    scopeContextBytesMax: Math.min(plan.budget.excerptBytesMax, plan.budget.modelInputTokensMax),
+    scopeContextBytesMax: plan.budget.excerptBytesMax,
     hasGitMetadata: context.hasGitMetadata,
     searchScope: context.searchScope,
     query: input.query,

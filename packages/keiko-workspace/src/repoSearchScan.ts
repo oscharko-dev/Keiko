@@ -13,6 +13,7 @@ import type {
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/connected-context";
+import { Buffer } from "node:buffer";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   discoverCandidateInventory,
@@ -699,12 +700,15 @@ export async function probeBinary(fs: WorkspaceFs, abs: string, size: number): P
 }
 
 export interface SearchTextRunner {
-  readonly onEligibleTextFile?:
-    | ((file: {
-        readonly scopePath: string;
-        readonly contentBytes: number;
-        readonly lineCount: number;
-      }) => void)
+  readonly eligibleTextObserver?:
+    | {
+        active: boolean;
+        readonly observe: (file: {
+          readonly scopePath: string;
+          readonly contentBytes: number;
+          readonly lineCount: number;
+        }) => unknown;
+      }
     | undefined;
   readonly scope: ScopeShape;
   readonly limits: LimitsShape;
@@ -1329,7 +1333,7 @@ function canUseCachedLexicalMatches(runner: SearchTextRunner): boolean {
   // Hashed natural-language records cannot prove atomic phrase/alternative matching.
   return (
     runner.literalTerms === undefined &&
-    runner.onEligibleTextFile === undefined &&
+    runner.eligibleTextObserver?.active !== true &&
     runner.semantic === undefined &&
     runner.sourceInspection !== true
   );
@@ -1508,11 +1512,7 @@ function textFileMatches(
   order: number,
   text: string,
 ): FileMatches | undefined {
-  runner.onEligibleTextFile?.({
-    scopePath: file.relativePath,
-    contentBytes: Math.max(file.sizeBytes, new TextEncoder().encode(text).length),
-    lineCount: Math.max(1, text.split(/\r?\n/u).length - Number(text.endsWith("\n"))),
-  });
+  observeEligibleTextFile(runner, file, text);
   collectRankedSemanticDocument(runner, file, text);
   if (runner.sourceInspection !== true && !shouldScoreContent(runner.query, text, runner.policy)) {
     return undefined;
@@ -1541,6 +1541,27 @@ function textFileMatches(
         ),
       ),
   };
+}
+
+function observeEligibleTextFile(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  text: string,
+): void {
+  const observer = runner.eligibleTextObserver;
+  if (observer?.active !== true) return;
+  let lineCount = 1;
+  let offset = text.indexOf("\n");
+  while (offset >= 0) {
+    lineCount += 1;
+    offset = text.indexOf("\n", offset + 1);
+  }
+  observer.active =
+    observer.observe({
+      scopePath: file.relativePath,
+      contentBytes: Math.max(file.sizeBytes, Buffer.byteLength(text, "utf8")),
+      lineCount: Math.max(1, lineCount - Number(text.endsWith("\n"))),
+    }) !== false;
 }
 
 // Filename inspection still yields actual admitted text, never an inferred symbol or file body.
