@@ -1385,6 +1385,11 @@ jobs:
         # This smoke asserts the real host is Win32, creates a genuine directory junction, and calls
         # the production resolver, so the required Windows lane cannot pass without executing it.
         run: node scripts/__tests__/windows-git-reparse-smoke.mjs
+      - name: Verify Windows workbench checkout binding
+        if: runner.os == 'Windows'
+        # Git prints forward slashes on Windows. Exercise the production binding and restore
+        # paths against real Git so a Linux-only test run cannot hide a broken Windows checkout.
+        run: node node_modules/vitest/vitest.mjs run packages/keiko-server/src/task-workspace/local-checkout.test.ts
       - name: Smoke the Windows command spawn wrapper
         if: runner.os == 'Windows'
         # #3350: on modern Node a `.cmd`/`.bat` target spawned with shell:false raises EINVAL, so
