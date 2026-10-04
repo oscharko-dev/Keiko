@@ -101,6 +101,25 @@ describe("read-only cited source preview", () => {
     expect(region).toHaveTextContent("source line 57500");
   });
 
+  it("honors a new reveal identity after the user expanded previous lines", async () => {
+    const content = Array.from({ length: 183 }, (_, index) => `source ${index + 1}`).join("\n");
+    vi.mocked(fetchFilesPreview).mockResolvedValue(textPreview("/repo", "manual.html", content));
+    const props = {
+      root: "/repo",
+      path: "manual.html",
+      revealLineStart: 182,
+      revealRequestId: "first-reveal",
+      onClose: (): void => undefined,
+    };
+    const view = render(<FilePreview {...props} />);
+    const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+    expect(region.querySelectorAll(".fpv-line")).toHaveLength(7);
+    fireEvent.click(screen.getByRole("button", { name: "Show 176 previous lines" }));
+    expect(region.querySelectorAll(".fpv-line")).toHaveLength(183);
+    view.rerender(<FilePreview {...{ ...props, revealRequestId: "second-reveal" }} />);
+    expect(region.querySelectorAll(".fpv-line")).toHaveLength(7);
+  });
+
   it.each([false, true])(
     "honors the server's independent editing capability (%s)",
     async (canEdit) => {

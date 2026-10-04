@@ -586,12 +586,14 @@ function useAddressedRevealFile(
 
   const decisionRef = useRef<RevealAddresseeDecision | null>(null);
   const direct = normalizeEditorFile(workspaceRoot, file);
-  if (direct.length > 0) return direct;
-  if (revealLineStart === undefined) return activeFile || undefined;
-  const key = `${revealRequestId ?? ""}:${String(revealLineStart)}:${String(revealLineEnd ?? "")}`;
+  if (revealLineStart === undefined) {
+    decisionRef.current = null;
+    return direct || activeFile || undefined;
+  }
+  const key = JSON.stringify([workspaceRoot, revealRequestId, revealLineStart, revealLineEnd]);
   const cached = decisionRef.current;
   if (cached !== null && cached.key === key) return cached.file;
-  const resolved = layoutJustEstablished ? activeFile || undefined : undefined;
+  const resolved = direct || (layoutJustEstablished ? activeFile || undefined : undefined);
   decisionRef.current = { key, file: resolved };
   return resolved;
 }

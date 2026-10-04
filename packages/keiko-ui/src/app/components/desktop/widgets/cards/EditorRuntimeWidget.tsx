@@ -4619,6 +4619,7 @@ function EditorRuntimeWidget({
           root={previewTarget.root}
           path={previewTarget.path}
           revealLineStart={revealLineStart}
+          revealRequestId={revealRequestId}
           onClose={() => setLoadPreviewTargetKey(null)}
         />
       );

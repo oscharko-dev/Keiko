@@ -2116,6 +2116,27 @@ describe("makeMutations.openEditorFile", () => {
     expect(typeof editors[0]?.cfg["revealRequestId"]).toBe("string");
   });
 
+  it("clears a previous citation jump on an ordinary file open", () => {
+    const h = harness([
+      win(
+        "editor",
+        {
+          root: "/repo",
+          file: "src/old.ts",
+          revealLineStart: 42,
+          revealLineEnd: 44,
+          revealRequestId: "old-reveal",
+        },
+        "editor-1",
+      ),
+    ]);
+    expect(h.openEditorFile({ root: "/repo", path: "src/next.ts" }).ok).toBe(true);
+    const cfg = h.wins().find((window) => window.id === "editor-1")?.cfg;
+    expect(cfg?.["revealLineStart"]).toBeUndefined();
+    expect(cfg?.["revealLineEnd"]).toBeUndefined();
+    expect(cfg?.["revealRequestId"]).toBeUndefined();
+  });
+
   it.each([false, true])("keeps managed task root binding when reuse=%s", (reuse) => {
     const root = "/repo/.keiko/dev/ui/task-workspaces/repo/ws-1";
     const h = harness(reuse ? [win("editor", { root, file: "old.ts" }, "task-editor")] : []);

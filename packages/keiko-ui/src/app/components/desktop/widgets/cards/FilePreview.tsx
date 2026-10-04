@@ -32,6 +32,7 @@ interface FilePreviewProps {
   readonly path: string;
   readonly onClose: () => void;
   readonly revealLineStart?: number | undefined;
+  readonly revealRequestId?: string | undefined;
   readonly onOpenInEditor?: ((root: string, path: string) => void) | undefined;
 }
 
@@ -517,6 +518,7 @@ export function FilePreview({
   onClose,
   onOpenInEditor,
   revealLineStart,
+  revealRequestId,
 }: FilePreviewProps): ReactNode {
   const t = useTranslate();
   const [preview, setPreview] = useState<FilesPreviewResponse | null>(null);
@@ -620,7 +622,7 @@ export function FilePreview({
   );
 
   // A response object is not a navigation: refreshing the current file preserves expansion.
-  const lineWindowKey = JSON.stringify([root, path, revealLineStart]);
+  const lineWindowKey = JSON.stringify([root, path, revealLineStart, revealRequestId]);
   const [expandedWindow, setExpandedWindow] = useState<{
     readonly key: string;
     readonly window: PreviewLineWindow;

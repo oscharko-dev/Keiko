@@ -819,6 +819,29 @@ describe("EditorWindowSessionHost reveal targeting (#2621)", () => {
     expect(patch["revealRequestId"]).toBeUndefined();
   });
 
+  it("clears a retained reveal when another file is selected within the same root", async () => {
+    const ctx = context();
+    manifestRef.current = singleRootManifest("/repo-a");
+    render(
+      editorHost(
+        {
+          root: "/repo-a",
+          file: "src/first.ts",
+          revealLineStart: 7,
+          revealLineEnd: 10,
+          revealRequestId: "old-reveal",
+        },
+        ctx,
+      ),
+    );
+    await screen.findByTestId("editor-/repo-a");
+    editorHandlers.at(-1)?.({ root: "/repo-a", file: "src/other.ts" });
+    const patch = lastCfgPatch(ctx);
+    expect(patch).toHaveProperty("revealRequestId", undefined);
+    expect(patch).toHaveProperty("revealLineStart", undefined);
+    expect(patch).toHaveProperty("revealLineEnd", undefined);
+  });
+
   it("keeps an in-flight reveal across a layout commit that does not change the root", async () => {
     const ctx = context();
     manifestRef.current = singleRootManifest("/repo-a");

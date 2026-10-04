@@ -1612,7 +1612,7 @@ export function EditorWindowSessionHost({
     ...(file === undefined ? {} : { file }),
     ...(openFiles === undefined ? {} : { openFiles }),
     ...(layoutJson === undefined ? {} : { layoutJson }),
-    onWorkspaceChange: (patch) => updateEditorCfg(ctx, configuredRoot, patch),
+    onWorkspaceChange: (patch) => updateEditorCfg(ctx, configuredRoot, file, patch),
   };
 
   // V1/unbound roots keep the ADR-0090 remount guarantee. V2 manifests instead keep one keyed
@@ -1628,22 +1628,20 @@ type EditorSessionBaseProps = Omit<
 function updateEditorCfg(
   ctx: WindowRenderContext,
   configuredRoot: string | undefined,
+  configuredFile: string | undefined,
   patch: EditorWidgetWorkspacePatch,
 ): void {
   const rootChanged = patch.root !== undefined && patch.root !== configuredRoot;
+  const fileChanged = patch.file !== undefined && patch.file !== configuredFile;
   ctx.updateCfg({
     root: patch.root,
     ...(patch.rootBinding === undefined ? {} : { rootBinding: patch.rootBinding }),
     file: patch.file,
     openFiles: patch.openFiles,
     layoutJson: patch.layoutJson,
-    // Issue #2621 — the reveal in cfg is addressed to the root named there, so re-homing the window
-    // to a different root invalidates it. The editor applies a reveal from its Monaco mount wiring,
-    // and a root change remounts this branch's editor (ADR-0090 D4), so keeping the triple would
-    // fire the line jump again in another root's file — and would silently re-address it to the new
-    // root, which is the very targeting the multi-root branch then trusts. Only on a root change: an
-    // ordinary layout commit carries the same root and must not kill an in-flight reveal.
-    ...(rootChanged
+    // A reveal belongs to the root and file selected when it was issued. Preserve layout-only
+    // commits, but never persist the old request onto a newly selected document.
+    ...(rootChanged || fileChanged
       ? { revealLineStart: undefined, revealLineEnd: undefined, revealRequestId: undefined }
       : {}),
   });

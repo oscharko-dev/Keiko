@@ -125,6 +125,33 @@ describe("EditorWidget line-reveal addressing across panes (#2747)", (): void =>
     expect(revealsByFile().get(SIBLING)).toEqual(["::"]);
   });
 
+  it("does not re-address a retained request when the selected file changes", async () => {
+    const view = render(
+      <EditorWidget
+        root={ROOT}
+        file={ADDRESSED}
+        openFiles={[ADDRESSED, SIBLING]}
+        revealLineStart={7}
+        revealLineEnd={10}
+        revealRequestId="retained-reveal"
+      />,
+    );
+    await screen.findByText(ADDRESSED);
+    panes.length = 0;
+    view.rerender(
+      <EditorWidget
+        root={ROOT}
+        file={SIBLING}
+        openFiles={[ADDRESSED, SIBLING]}
+        revealLineStart={7}
+        revealLineEnd={10}
+        revealRequestId="retained-reveal"
+      />,
+    );
+    await screen.findByText(SIBLING);
+    expect(revealsByFile().get(SIBLING)).toEqual(["::"]);
+  });
+
   it("still delivers when only the layout names the file (#2748 review)", async (): Promise<void> => {
     // A multi-root root that already holds a session is handed `layoutJson` and no `file` prop,
     // while the reveal still arrives through the shared props. Reading the addressee from the prop

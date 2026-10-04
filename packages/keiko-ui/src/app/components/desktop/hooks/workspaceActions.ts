@@ -187,8 +187,9 @@ function editorOpenLayoutPatch(
 function revealCfg(
   lineStart: number | undefined,
   lineEnd: number | undefined,
-): Record<string, string | number> {
-  if (lineStart === undefined) return {};
+): Record<string, string | number | undefined> {
+  if (lineStart === undefined)
+    return { revealLineStart: undefined, revealLineEnd: undefined, revealRequestId: undefined };
   const safeStart = Math.max(1, Math.floor(lineStart));
   const safeEnd = Math.max(safeStart, Math.floor(lineEnd ?? safeStart));
   return {
