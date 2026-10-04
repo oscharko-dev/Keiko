@@ -232,12 +232,6 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "ui-only",
     persistence: "transient",
   },
-  diagnostics: {
-    lifecycle: ["idle", "live", "degraded", "error"],
-    trustBoundary: ["ui", "network", "evidence"],
-    authority: "user-confirm",
-    persistence: "durable.ui",
-  },
   activity: {
     lifecycle: ["live", "archived"],
     trustBoundary: ["ui", "tool", "evidence"],

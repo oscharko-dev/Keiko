@@ -17,7 +17,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSyn
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { IncomingMessage } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
+import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type {
   KnowledgeCapsuleId,
@@ -115,7 +116,13 @@ import {
   createDesktopSupportReport,
 } from "@oscharko-dev/keiko-activity-log/reader";
 import { runSupportReportJob } from "../dist/support-report-job.js";
-import { inflateSync } from "node:zlib";
+import { gunzipSync, inflateSync } from "node:zlib";
+import { handleCreateSupportReport } from "./support-report-routes.js";
+import { handleDownloadSupportReport } from "./support-report-download.js";
+import { STREAMING } from "./route-outcome.js";
+
+// The real worker requires its assembled JavaScript entry point, as in the worker integration suite.
+vi.mock("./support-report-job.js", () => import("../dist/support-report-job.js"));
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import {
   canonicalChatTurnGroundingScopeIdentity,
@@ -194,6 +201,71 @@ function ctx(body: string, res: RouteContext["res"] = fakeRes(), cookie?: string
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
   };
+}
+
+function pairedReportOwner(stateDir: string): {
+  readonly owner: UiHandlerDeps;
+  readonly cookie: string;
+} {
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+  const cookie = serializeSessionCookies(paired.cookieToken, {
+    secure: false,
+    maxAgeSeconds: 43_200,
+  })
+    .find((value) => value.includes("Path=/api/diagnostics/report;"))
+    ?.split(";")[0];
+  if (cookie === undefined) throw new TypeError("Missing diagnostic cookie projection.");
+  return {
+    owner: deps(undefined, { KEIKO_STATE_DIR: stateDir }, { codingAppSessionChannel: channel }),
+    cookie,
+  };
+}
+
+async function assertPairedAdmissionReport(stateDir: string, correlationId: string): Promise<void> {
+  const { owner, cookie } = pairedReportOwner(stateDir);
+  const response = await handleCreateSupportReport(
+    {
+      ...ctx(JSON.stringify({ correlationId }), fakeRes(), cookie),
+      correlationId: "paired-root-report",
+    },
+    owner,
+  );
+  expect(response.status).toBe(200);
+  const report = response.body as DesktopSupportReportResponse;
+  const parsed = parseSupportReport(report.reportJson);
+  expect(parsed.incident).toMatchObject({
+    trigger: "registered-failure",
+    op: "workspace.root.denied",
+  });
+  expect(parsed.incident.clientReport).toBeUndefined();
+  expect(parsed.evidence.recordCount).toBeGreaterThan(0);
+  expect(analyzeSupportReport(report.reportJson).selection.reasons).not.toContain(
+    "no-registered-failure",
+  );
+  expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+  const delivery = ctx("", fakeRes(), cookie);
+  const res = new ServerResponse(delivery.req);
+  const end = vi.spyOn(res, "end").mockReturnValue(res);
+  vi.spyOn(res, "writeHead").mockReturnValue(res);
+  expect(
+    handleDownloadSupportReport(
+      {
+        ...delivery,
+        res,
+        params: { downloadId: report.downloadPath?.split("/").at(-1) ?? "" },
+        correlationId: "paired-root-download",
+      },
+      owner,
+    ),
+  ).toBe(STREAMING);
+  const bytes: unknown = end.mock.calls[0]?.[0];
+  if (!Buffer.isBuffer(bytes)) throw new TypeError("Missing canonical gzip attachment.");
+  expect(gunzipSync(bytes).toString("utf8")).toBe(report.reportJson);
 }
 
 function customModelConfig(
@@ -1273,6 +1345,7 @@ describe("handleGroundedAsk", () => {
       ]);
       expect(report.reportJson).not.toContain(selectedRoot);
       expect(report.reportJson).not.toContain("private-admission-question-canary");
+      await assertPairedAdmissionReport(stateDir, correlationId);
     } finally {
       closeFileServerLogSinks();
       setSupportIncidentTriggerForTests(undefined);

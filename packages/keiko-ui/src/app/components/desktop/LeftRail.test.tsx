@@ -21,21 +21,9 @@ function renderRail(openTools: ReadonlySet<string> = new Set()): void {
 }
 
 describe("LeftRail — workspace tool buttons", () => {
-  it("exposes Diagnostics as an accessible pressed workspace toggle", async () => {
-    const onTool = vi.fn();
-    render(
-      <LeftRail
-        openTools={new Set(["diagnostics"])}
-        onTool={onTool}
-        onNewChat={vi.fn()}
-        theme="dark"
-        onToggleTheme={vi.fn()}
-      />,
-    );
-    const button = screen.getByRole("button", { name: "Diagnostics" });
-    expect(button).toHaveAttribute("aria-pressed", "true");
-    await userEvent.click(button);
-    expect(onTool).toHaveBeenCalledExactlyOnceWith("diagnostics");
+  it("keeps redundant diagnostic windows out of the normal navigation", () => {
+    renderRail(new Set(["diagnostics"]));
+    expect(screen.queryByRole("button", { name: "Diagnostics" })).not.toBeInTheDocument();
   });
 
   it("renders the left rail as a labeled navigation landmark", () => {

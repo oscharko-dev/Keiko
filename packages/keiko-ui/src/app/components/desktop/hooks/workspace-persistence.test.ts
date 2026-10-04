@@ -43,6 +43,12 @@ function hostileWindow(type: string, extra: Record<string, unknown> = {}): unkno
 }
 
 describe("workspace-persistence", () => {
+  it("drops retired diagnostic windows on reload while preserving ordinary windows", () => {
+    const chat = win({ id: "chat-kept", type: "chat" });
+    const retired = { ...chat, id: "retired-diagnostics", type: "diagnostics" };
+    expect(parsePersistedWindows(JSON.stringify([retired, chat]))).toEqual([chat]);
+  });
+
   it.each(["files", "editor"] as const)(
     "retains only the closed explicit %s project binding",
     (type) => {

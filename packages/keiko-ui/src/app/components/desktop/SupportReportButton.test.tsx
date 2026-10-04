@@ -75,7 +75,7 @@ describe("SupportReportButton", () => {
   );
 
   it.each(["en", "de"])(
-    "labels a %s limited report without pretending server evidence was saved",
+    "offers a %s report with plain download and support instructions",
     async (locale) => {
       window.localStorage.setItem("keiko.locale", locale);
       create.mockResolvedValue({ ...report, evidenceScope: "client-only" });
@@ -89,13 +89,19 @@ describe("SupportReportButton", () => {
       });
       await userEvent.click(button);
       expect(
-        await screen.findByText(locale === "de" ? /Eingeschränkter Bericht/u : /Limited report/u),
+        await screen.findByText(
+          locale === "de"
+            ? "Bericht bereit. Lade ihn herunter und sende ihn an den Support."
+            : "Report ready. Download it and send it to support.",
+        ),
       ).toBeVisible();
       expect(
         screen.getByRole("link", {
           name: locale === "de" ? "Bericht herunterladen" : "Download report",
         }),
       ).toBeVisible();
+      expect(screen.queryByText(/server evidence|Server-Belege|Verfügbarkeitsstatus/u)).toBeNull();
+      expect(screen.queryByText(/complete report|vollständiger Bericht/iu)).toBeNull();
       expect(screen.queryByText(/Launcher/u)).toBeNull();
     },
   );
@@ -268,11 +274,12 @@ describe("SupportReportButton", () => {
       expect(await screen.findByRole("status")).toHaveTextContent(hint);
       expect(view.container).not.toHaveTextContent("private response body");
       expect(automaticClick).not.toHaveBeenCalled();
-      expect(reportClientDiagnostic).toHaveBeenCalledWith(expect.any(String), {
-        correlationId: "report-request-refused",
-        errorKind:
-          status === 403 ? "authority-denied" : status === 429 ? "rate-limited" : "unavailable",
-      });
+      if (status === 503) expect(reportClientDiagnostic).not.toHaveBeenCalled();
+      else
+        expect(reportClientDiagnostic).toHaveBeenCalledWith(expect.any(String), {
+          correlationId: "report-request-refused",
+          errorKind: status === 403 ? "authority-denied" : "rate-limited",
+        });
       create.mockResolvedValueOnce(report);
       await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
       expect(create).toHaveBeenLastCalledWith("original-failure", expect.any(AbortSignal));

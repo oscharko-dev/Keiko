@@ -15,6 +15,8 @@ import {
   type DesktopSupportReportResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SupportReportDownload } from "@/lib/support-report-api";
+import { prepareCachedSupportReport, prepareLocalSupportReport } from "@/lib/support-report-local";
+import { ApiError } from "@/lib/api";
 import {
   currentGlobalClientFailure,
   dismissGlobalClientFailure,
@@ -151,6 +153,13 @@ interface ReportRequestRef {
   current: { key: string; controller: AbortController } | null;
 }
 
+function reportRequestIsCurrent(
+  request: ReportRequestRef,
+  pending: NonNullable<ReportRequestRef["current"]>,
+): boolean {
+  return !pending.controller.signal.aborted && request.current === pending;
+}
+
 function waitForReportStep<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   signal.throwIfAborted();
   return new Promise<T>((resolve, reject): void => {
@@ -174,9 +183,55 @@ function isReportDeliveryUnavailable(
   api: typeof import("@/lib/support-report-api") | undefined,
   signal: AbortSignal,
 ): boolean {
+  return signal.aborted || localReportFallbackAllowed(error, api);
+}
+
+function localReportFallbackAllowed(
+  error: unknown,
+  api: typeof import("@/lib/support-report-api") | undefined,
+): boolean {
+  if (api !== undefined && error instanceof api.SupportReportEvidenceUnavailable) return true;
+  if (
+    api?.SupportReportResponseInvalid !== undefined &&
+    error instanceof api.SupportReportResponseInvalid
+  )
+    return false;
+  if (error instanceof ApiError)
+    return error.status >= 500 && error.code !== "CONTRACT_VALIDATION_FAILED";
   return (
-    signal.aborted || (api !== undefined && error instanceof api.SupportReportEvidenceUnavailable)
+    error instanceof TypeError || (error instanceof DOMException && error.name === "TimeoutError")
   );
+}
+
+async function recoverLocalReport(
+  key: string,
+  controller: AbortController,
+  error: unknown,
+  api: typeof import("@/lib/support-report-api") | undefined,
+): Promise<boolean> {
+  const previous = outcomes.get(key);
+  if (
+    previous !== undefined &&
+    !(previous instanceof AbortController) &&
+    previous.download !== undefined
+  )
+    return false;
+  if (!localReportFallbackAllowed(error, api)) return false;
+  try {
+    const localSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]);
+    const prepared =
+      previous !== undefined && !(previous instanceof AbortController)
+        ? await prepareCachedSupportReport(previous.report, localSignal)
+        : await prepareLocalSupportReport(localSignal);
+    if (controller.signal.aborted) {
+      prepared.download.dispose();
+      return false;
+    }
+    fulfillReport(key, prepared.report, prepared.download);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function useReportCancellation(key: string): ReportRequestRef {
@@ -263,13 +318,18 @@ async function runReport(
   try {
     api = await waitForReportStep(import("@/lib/support-report-api"), signal);
     const report = await waitForReportStep(api.createSupportReport(correlationId, signal), signal);
-    if (controller.signal.aborted || request.current !== pending) return;
+    if (!reportRequestIsCurrent(request, pending)) return;
     signal.throwIfAborted();
     const download = api.createSupportReportDownload(report);
     fulfillReport(key, report, download);
     setFeedback({ key, state: "saved" });
   } catch (error) {
-    if (controller.signal.aborted || request.current !== pending) return;
+    if (!reportRequestIsCurrent(request, pending)) return;
+    if (await recoverLocalReport(key, controller, error, api)) {
+      setFeedback({ key, state: "saved" });
+      return;
+    }
+    if (!reportRequestIsCurrent(request, pending)) return;
     releaseReport(key, controller);
     setFeedback({ key, state: reportFailure(error) });
     // The transport already accounts for missing evidence. Do not create another incident for
@@ -376,7 +436,7 @@ function ReadyReportActions({
         <a
           className={className}
           href={ready.download.href}
-          download={ready.report.fileName}
+          download={ready.download.fileName ?? ready.report.fileName}
           onClick={() => reportSupportDownload(props.correlationId)}
         >
           {t("supportReport.download")}
@@ -389,7 +449,11 @@ function ReadyReportActions({
   );
 }
 
-export function GlobalSupportReportAction(): ReactNode {
+export function GlobalSupportReportAction({
+  onlyForFailure = false,
+}: {
+  readonly onlyForFailure?: boolean;
+}): ReactNode {
   const t = useTranslate();
   const failure = useSyncExternalStore(
     subscribeGlobalClientFailure,
@@ -403,8 +467,8 @@ export function GlobalSupportReportAction(): ReactNode {
     forgetReadyReport(correlationId ?? `global-error-${ordinal}`);
     dismissGlobalClientFailure(ordinal);
   }, [correlationId, ordinal]);
-  if (failure === null) return <SupportReportButton compact />;
-  return (
+  if (failure === null) return onlyForFailure ? null : <SupportReportButton compact />;
+  const controls = (
     <fieldset className={styles.cmpControl} aria-label={t("supportReport.create")}>
       <SupportReportButton
         compact
@@ -420,5 +484,13 @@ export function GlobalSupportReportAction(): ReactNode {
         ×
       </button>
     </fieldset>
+  );
+  return onlyForFailure ? (
+    <div className="source-limit-alert" role="alert">
+      <span>{t("supportReport.globalFailure")}</span>
+      {controls}
+    </div>
+  ) : (
+    controls
   );
 }
