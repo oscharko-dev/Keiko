@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "7ad082dd4ed4f1d0b7dc74a396b6eaf8751da347168d010d531280748dcb7f73" as const;
+  "4d92f00319e036161d436bcd7e7477b2f924122128dd9c2fd0323a970db5f9f2" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3248,6 +3248,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "automatic-suppressed",
           "timeout-blocked",
           "timeout-recovered",
+          "timeout-rejected",
           "request-superseded",
         ],
       },
@@ -3266,6 +3267,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: false,
         maxLength: 64,
+      },
+      mutationSurface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["files", "local-knowledge", "git-change"],
       },
     },
     causal: "correlation",
@@ -34820,6 +34827,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "mutationSurface",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "sourceCount",
