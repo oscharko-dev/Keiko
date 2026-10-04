@@ -3162,6 +3162,40 @@ describe("sendDesktopChatStream — correlation id threading", () => {
     expect(headers.get("X-Keiko-CSRF")).toBe("1");
   });
 
+  it.each([
+    [409, "GROUNDING_SCOPE_CHANGED"],
+    [409, "CHAT_TURN_IN_PROGRESS"],
+    [409, "CHAT_TURN_IDEMPOTENCY_CONFLICT"],
+    [409, "CHAT_CLOSED"],
+    [422, "BAD_REQUEST"],
+    [503, "GATEWAY_UNAVAILABLE"],
+  ] as const)("does not replay pre-stream %s %s as a capability fallback", async (status, code) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ error: { code, message: "Request refused." } }), {
+          status,
+          headers: {
+            "Content-Type": "application/json",
+            [CORRELATION_HEADER]: "stream-refusal-correlation",
+          },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const outcome = sendDesktopChatStream(
+      { chatId: "c6", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      makeStreamHandlers(),
+    );
+    await expect(outcome).rejects.toMatchObject({
+      name: "ApiError",
+      code,
+      status,
+      correlationId: "stream-refusal-correlation",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("attaches the server-echoed correlation id to a pre-stream StreamingUnavailableError", async () => {
     const response = new Response(
       JSON.stringify({ error: { code: "STREAMING_UNSUPPORTED", message: "no stream" } }),
@@ -3208,8 +3242,8 @@ describe("sendDesktopChatStream — correlation id threading", () => {
       const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
       const sentCorrelationId = new Headers(init.headers).get(CORRELATION_HEADER);
       expect(sentCorrelationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
-      expect(error).toBeInstanceOf(StreamingUnavailableError);
-      expect((error as StreamingUnavailableError).correlationId).toBe(sentCorrelationId);
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as ApiError).correlationId).toBe(sentCorrelationId);
     }
   });
 });

@@ -1657,8 +1657,8 @@ async function consumeSseStream(
 
 // Issue #152 Layer 3 — POST to /api/desktop/chat/stream with the same
 // headers/body as sendDesktopChat. If the response is NOT text/event-stream
-// (BFF returned a JSON pre-stream error), throws StreamingUnavailableError
-// so the caller can fall back. Otherwise reads the stream and dispatches to
+// (BFF returned a JSON pre-stream error), only an explicit STREAMING_UNSUPPORTED
+// permits a buffered fallback. Other refusals retain their status and correlation. Reads SSE via
 // handlers. Respects `signal` (abort stops reading immediately).
 //
 // RB-6 / ADR-0173 D5 — rebuilt on the same buildBffHeaders/newClientCorrelationId path
@@ -1686,19 +1686,12 @@ export async function sendDesktopChatStream(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
-    // Pre-stream error — parse the JSON envelope and throw typed.
-    let code = "STREAMING_UNSUPPORTED";
-    let message = `HTTP ${res.status.toString()}`;
-    try {
-      const envelope = (await res.json()) as { error?: { code?: string; message?: string } };
-      code = envelope.error?.code ?? code;
-      message = envelope.error?.message ?? message;
-    } catch {
-      // parse failure — keep generic values, never log body
-    }
-    const streamingError = new StreamingUnavailableError(code, message);
-    streamingError.correlationId = responseCorrelationId;
-    throw streamingError;
+    const failure = await bffFailure(res);
+    failure.correlationId ??= responseCorrelationId;
+    if (failure.code !== "STREAMING_UNSUPPORTED") throw failure;
+    const unavailable = new StreamingUnavailableError(failure.code, failure.message);
+    unavailable.correlationId = failure.correlationId;
+    throw unavailable;
   }
 
   if (res.body === null) {
