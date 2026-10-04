@@ -77,7 +77,7 @@ const MAX_QUALIFIED_INDEX_RSS_DELTA_BYTES = 512 * 1024 * 1024;
 const EXPECTED_WIRE_SNAPSHOT_HASH =
   "9ee38880de5f349e56f27724dd35c7472c661629a79541434dde5ca27036b8a9";
 export const EXPECTED_EVALUATION_SCORECARD_HASH =
-  "8c0b19e097f39cba61fbe588c64996db64c8b676c3f4b8b401ecd0c84bf0986b";
+  "8753f964c2c28619ce2bfa2bd7fac883337c2fde834f708bde094531a8c92d6e";
 const QUERY_VECTORS = [
   new Float32Array([1, 0, 0, 0]),
   new Float32Array([0, 1, 0, 0]),
@@ -1072,7 +1072,7 @@ function runFacadeProof() {
   });
 }
 
-function qualityScorecardHash(result) {
+export function qualityScorecardHash(result) {
   return sha256(
     stableStringify({
       workspace: result.summary,

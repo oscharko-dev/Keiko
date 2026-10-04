@@ -10,12 +10,12 @@ is enforced by `evaluateAnnProof` instead.
 Content-free by construction: row counts, milliseconds, recall floors, and a categorical
 winner. No vector values, no source text, no host identifiers.
 
-| Corpus | Rows  | Mode  | Service median (ms) | Exact median (ms) | Min recall@10 | Faster      |
-| ------ | ----- | ----- | ------------------- | ----------------- | ------------- | ----------- |
-| Small  | 500   | exact | 0.551               | 0.329             | n/a           | brute-force |
-| Large  | 50000 | ann   | 15.054              | 54.218            | 1.000         | ann         |
+| Corpus | Rows  | Mode  | Service median (ms) | Exact median (ms) | Min recall@10 | Faster |
+| ------ | ----- | ----- | ------------------- | ----------------- | ------------- | ------ |
+| Small  | 500   | exact | 0.484               | 0.884             | n/a           | ann    |
+| Large  | 50000 | ann   | 15.748              | 73.099            | 1.000         | ann    |
 
-Measured winners: at 500 rows → brute-force; at 50000 rows → ann.
+Measured winners: at 500 rows → ann; at 50000 rows → ann.
 
 The governed crossover is the production exact-scan cap
 (`DEFAULT_MAX_EXACT_VECTOR_SCAN_ROWS = 20000` in

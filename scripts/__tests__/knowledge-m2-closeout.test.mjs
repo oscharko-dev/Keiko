@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { resolveProvisionedUsearchPath } from "../lib/clean-checkout-demo.mjs";
+import { runRetrievalQualityCheck } from "../check-retrieval-quality.mjs";
 import {
   HS6_SINGLE_WRITER_FILE_COUNT,
   EXPECTED_EVALUATION_SCORECARD_HASH,
@@ -22,6 +23,7 @@ import {
   evidenceSettlementFailure,
   missingRerankerDiagnosticFields,
   parseWaveBookkeepingItems,
+  qualityScorecardHash,
   readWaveBookkeepingItems,
   renderKnowledgeM2Evidence,
   renderLatencyCharacterization,
@@ -580,6 +582,40 @@ describe("evidenceSettlementFailure", () => {
 });
 
 describe("runKnowledgeM2CloseoutGate", () => {
+  it("binds the real expanded case census and detects census or quality hash drift", async () => {
+    const current = await runRetrievalQualityCheck({
+      log: () => undefined,
+      fail: (message) => {
+        throw new Error(message);
+      },
+    });
+    expect(current.results.map((entry) => entry.id)).toEqual([
+      "java-maven-version-declaration",
+      "go-toolchain-declaration",
+      "node-engines-over-docs",
+      "api-route-express",
+      "api-route-spring",
+      "test-name-to-source",
+      "same-candidates-api-client",
+      "same-candidates-token-validator",
+      "short-identifier-api-id-url",
+      "stacktrace-source-location",
+      "config-key-owner",
+      "generated-artifact-avoidance",
+      "ordinary-generated-directory-text",
+      "terraform-version-declaration",
+      "openapi-version-declaration",
+      "graphql-codegen-schema",
+    ]);
+    expect(qualityScorecardHash(current)).toBe(EXPECTED_EVALUATION_SCORECARD_HASH);
+    const missingCase = structuredClone(current);
+    missingCase.summary.cases -= 1;
+    expect(qualityScorecardHash(missingCase)).not.toBe(EXPECTED_EVALUATION_SCORECARD_HASH);
+    const regressedQuality = structuredClone(current);
+    regressedQuality.summary.top1Rate = 0;
+    expect(qualityScorecardHash(regressedQuality)).not.toBe(EXPECTED_EVALUATION_SCORECARD_HASH);
+  });
+
   // Drives the six REAL proofs: a 20 001-row ANN corpus plus the retrieval, grounded-retrieval, and
   // faithfulness gates. That work does not fit the 15s repository default.
   it("executes all six real proof functions through the exported gate", async () => {
