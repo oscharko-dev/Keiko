@@ -585,7 +585,8 @@ interface CandidateDraft {
   // Set only by the registered-failure trigger (observeSupportIncidentTrigger): the window pin it
   // already published synchronously, in the same turn as the triggering failure write, before any
   // later maintenance pass could run against an unprotected window. publishCandidate reuses it
-  // instead of pinning again; any outcome other than "created" releases it (releasePrePinned).
+  // instead of pinning again. A rejected pre-pin can retry after admission; immediate protection
+  // never retires another candidate before deduplication. Non-created outcomes release the pin.
   readonly prePinned?: SupportIncidentPin | undefined;
 }
 
@@ -801,7 +802,7 @@ function claimQuotaSlot(
 }
 
 // Releases a window pin a draft already published before dedup or quota was decided (the
-// registered-failure trigger always pre-pins; see observeSupportIncidentTrigger). Nothing will
+// registered-failure trigger attempts immediate protection; see observeSupportIncidentTrigger). Nothing will
 // reference it once the candidate is rejected or turns out to be a duplicate, so it must not sit
 // and hold its segments for no reason until its own TTL. Never throws: `releaseWindowPin` mirrors
 // `releaseActivityLogPin`'s own closed, evidenced-rejection contract.
@@ -885,7 +886,10 @@ function rollDiagnosticPin(context: IncidentPinContext): boolean {
   return removed;
 }
 
-function requestIncidentPin(context: IncidentPinContext): ActivityLogPinResult {
+function requestIncidentPin(
+  context: IncidentPinContext,
+  allowRolling: boolean,
+): ActivityLogPinResult {
   const window = supportIncidentWindow(context.nowMs);
   const request = {
     scope: { kind: "window" as const, fromMs: window.fromMs, toMs: window.toMs },
@@ -894,7 +898,8 @@ function requestIncidentPin(context: IncidentPinContext): ActivityLogPinResult {
     correlationId: context.correlationId,
   };
   const first = pinActivityLogWindow(context.stateDir, request, context.env);
-  if (first.status !== "rejected" || first.reason !== "pin-limit-reached") return first;
+  if (first.status !== "rejected" || first.reason !== "pin-limit-reached" || !allowRolling)
+    return first;
   if (!rollDiagnosticPin(context)) return first;
   return pinActivityLogWindow(context.stateDir, request, context.env);
 }
@@ -904,11 +909,14 @@ function pinIncidentWindow(
   nowMs: number,
   correlationId: string,
   env: ServerLogEnv,
+  allowRolling = true,
 ): SupportIncidentPin {
   const window = supportIncidentWindow(nowMs);
   const before = overlappingSealedSegmentNames(stateDir, window, correlationId);
   try {
-    const pin = pinFromResult(requestIncidentPin({ stateDir, nowMs, correlationId, env }));
+    const pin = pinFromResult(
+      requestIncidentPin({ stateDir, nowMs, correlationId, env }, allowRolling),
+    );
     if (pin.status === "rejected" || before.size === 0) return pin;
     const after = overlappingSealedSegmentNames(stateDir, window, correlationId);
     const evidenceLostBeforePin = [...before].some((name) => !after.has(name));
@@ -927,8 +935,14 @@ function publishCandidate(
   slotIndex: number,
 ): SupportIncidentCreation {
   const pin =
-    draft.prePinned ??
-    pinIncidentWindow(context.stateDir, context.nowMs, draft.evidenceCorrelationId, context.env);
+    draft.prePinned !== undefined && draft.prePinned.status !== "rejected"
+      ? draft.prePinned
+      : pinIncidentWindow(
+          context.stateDir,
+          context.nowMs,
+          draft.evidenceCorrelationId,
+          context.env,
+        );
   const record = buildRecord(draft, context, pin, incidentId, slotIndex);
   const payload = serializeSupportIncidentRecord(record);
   if (payload === undefined) return reject(context, draft, "record-too-large", entries.length);
@@ -1684,8 +1698,9 @@ function scheduleDrain(): void {
 
 /**
  * Called by the Activity Log file sink after it persisted `event`. For an eligible, admitted
- * failure, publishes the incident window's retention pin right now (before returning) and queues
- * the rest of candidate creation; never throws. An ineligible or suppressed event does no
+ * failure, attempts immediate window protection without retiring another candidate and queues
+ * admission. A rejected pin retries only after deduplication and quota admission; never throws.
+ * An ineligible or suppressed event does no
  * filesystem work at all.
  */
 export function observeSupportIncidentTrigger(stateDir: string, event: ServerLogEvent): void {
@@ -1704,7 +1719,7 @@ export function observeSupportIncidentTrigger(stateDir: string, event: ServerLog
     if (admission.status !== "admitted") return;
     const nowMs = Date.now();
     const draft = registeredFailureDraft(admission.evidence);
-    const pin = pinIncidentWindow(stateDir, nowMs, draft.evidenceCorrelationId, process.env);
+    const pin = pinIncidentWindow(stateDir, nowMs, draft.evidenceCorrelationId, process.env, false);
     pendingCandidates.push({ stateDir, draft: { ...draft, prePinned: pin }, nowMs });
     scheduleDrain();
   } catch (error) {

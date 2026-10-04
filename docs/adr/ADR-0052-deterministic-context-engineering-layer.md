@@ -90,13 +90,14 @@ display.
 ### D2 — The model-agnostic ContextProfile and DEFAULT_CONTEXT_PROFILE
 
 We will define a `ContextProfile` carrying `maxInputTokens`, a conservative `reservedOutputTokens`, a
-`safetyMarginTokens`, and a derived `effectiveInputBudget = maxInputTokens − reservedOutputTokens −
-safetyMarginTokens`. `DEFAULT_CONTEXT_PROFILE` pins `maxInputTokens = 128_000`. The profile is the **only**
+`safetyMarginTokens`, an optional independent `inputTokenLimit`, and a derived
+`effectiveInputBudget = max(0, min(maxInputTokens − reservedOutputTokens − safetyMarginTokens,
+inputTokenLimit))`, omitting the second bound when no independent input limit is declared. `DEFAULT_CONTEXT_PROFILE` pins `maxInputTokens = 128_000`. The profile is the **only**
 place the window size lives, so customer-hosted models with different windows are handled by threading a
 profile-derived override (through `OrchestratorInput.budget` for path 1 and the harness limits for path 2) and
-**never** by editing call sites. We do **not** raise the existing `DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax`
-default of `32_000` (`connected-context.ts:122`) — that is a breaking change to path 1; profile-derived
-overrides thread through `OrchestratorInput.budget` as today.
+**never** by editing call sites. Normal Chat threads the selected model's derived override through
+`OrchestratorInput.budget`; any explicitly accepted caller budget continues to intersect that
+model bound. The default exploration input budget is 116,000 tokens, matching the default profile.
 
 The capability's output maximum is a provider ceiling, not the default response reservation. The
 shared derivation limits the default reservation to a bounded fraction of the window and to any
@@ -203,6 +204,7 @@ whole window into shares that sum to `contextWindowTokens`:
 
 - system instructions, the compaction summary, messages and retrieved knowledge sources;
 - free input up to the automatic-compaction threshold, and the compaction buffer above it;
+- input capacity unavailable under an independently declared prompt-input limit, when positive;
 - the output reserve and the safety margin.
 
 Every used share is counted with the admission estimate — the unit compaction decides with — and
@@ -212,12 +214,28 @@ a second meter.
 
 While a chat is grounded, the next question is planned with the source share of its latest grounded
 request. Knowledge Pod, folder, multi-source and hybrid answers all report that share. The
-conversation then receives min(8,000, one third of the input budget) tokens, never fewer than 512
-(`groundedHistoryLaneTokens`). The meter projects the history against that lane with the same
+conversation then receives min(8,000, one third of the input budget) tokens, with a 512-token
+floor bounded by the model's usable input budget (`groundedHistoryLaneTokens`). The meter projects the history against that lane with the same
 profile the grounded send path compacts with (`groundedConversationLaneProfile`). Retrieved sources are fetched fresh for every question and are never
 compacted. Compaction summarizes only the conversation lane; sources give way only by rank inside
 their own prompt. The latest grounded request is shown as the provider measured it, together with
 Keiko's estimate when the two differ.
+
+**Independent model limits and observation identity.** Discovery retains the alias, its declared
+whole context window, and any separate `max_input_tokens` ceiling. Explicit whole-window fields
+intersect with each other; an input-only declaration supplies the legacy window fallback only when
+no whole-window field exists. Replica declarations for an alias intersect the same constraints.
+The usable prompt input is the smaller of the whole window minus output and safety reserves, and
+the independent input ceiling. Output reserves remain bounded by the model's declared output
+limit and the existing reserve policy. An input ceiling never relabels the physical context window.
+The meter identifies that ceiling and represents any remaining unavailable input capacity as a
+separate share, preserving the exact whole-window sum.
+
+The latest grounded prompt stores optional model identity alongside its window. A current context
+reading does not present an observation from another model as the current model's previous request;
+older persisted observations without identity retain the legacy window check. Selecting another
+model or refreshing the selected alias's capability metadata refreshes the existing meter. Unknown
+windows remain explicitly assumed until provider metadata refines them.
 
 ### D3 — Eight-lane taxonomy with a fixed allocation order
 

@@ -2,7 +2,7 @@
 
 // The footer's view of `GET /api/health`: the installed version and, since #3532, the Activity
 // Log's diagnostic readiness. Read on mount and then every HEALTH_POLL_INTERVAL_MS, so a degraded
-// evidence path that appears while the page is open reaches the footer within one interval (the
+// evidence path that appears while the page is open reaches the workspace within one interval (the
 // server re-evaluates readiness on its own heartbeat). Lives in its own module for the same reason
 // as `useUnhandledRejectionLog`: the shell's test suites mock sibling component files wholesale.
 
@@ -29,6 +29,7 @@ export function useBackendHealth(): BackendHealth {
         failureReported = false;
         if (!cancelled) setBackendHealth({ state: "loaded", health });
       } catch (error) {
+        if (cancelled) return;
         // The footer shows the version as unavailable and drops a readiness it can no longer vouch
         // for. The failure is reported once per failure streak, by class only: a stopped server
         // must not turn into one diagnostic per poll.

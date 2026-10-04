@@ -15,6 +15,7 @@ import {
   setSupportIncidentTriggerForTests,
   completePreparedSupportIncident,
   dismissSupportIncident,
+  drainSupportIncidentCandidates,
 } from "./support-incident.js";
 
 import { supportIncidentRetentionPolicy } from "./support-incident-retention.js";
@@ -257,9 +258,11 @@ describe("rolling diagnostic candidate retention", () => {
     );
     expect(completePreparedSupportIncident(stateDir, first.incidentId)).toBe("dismissed");
     expect(peer?.status).toBe("created");
-    expect(
-      listSupportIncidentClaims(stateDir).some((claim) => claim.incidentId === peer?.incidentId),
-    ).toBe(true);
+    if (peer?.status !== "created") throw new Error("Expected peer candidate");
+    const peerId = peer.incidentId;
+    expect(listSupportIncidentClaims(stateDir).some((claim) => claim.incidentId === peerId)).toBe(
+      true,
+    );
     expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(capacity);
   });
 
@@ -315,6 +318,55 @@ describe("rolling diagnostic candidate retention", () => {
     expect(claim).toHaveBeenCalledTimes(1);
     expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(1);
   });
+  it("does not roll retained evidence for a duplicate observed failure at pin capacity", () => {
+    const evidence = {
+      op: "coding-runtime.readiness.failed",
+      errorKind: "unavailable",
+      correlationId: "fresh-protected-failure",
+      frames: ["packages/keiko-server/dist/coding-runtime/opencodeRuntimeAdapter.js:710:9"],
+    };
+    const original = recordRegisteredFailureIncident(stateDir, evidence);
+    if (original?.status !== "created") throw new Error("Expected original failure");
+    for (let index = 1; index < MAX_ACTIVITY_LOG_PINS; index += 1)
+      expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    const before = listSupportIncidents(stateDir, { readOnly: true });
+    const pins = listActivityLogDirectory(join(stateDir, "logs")).pins.map((pin) => pin.pinId);
+    persistFreshFailure();
+    setSupportIncidentTriggerForTests(true);
+    const registration = activityLogOperationSchema(evidence.op);
+    if (registration === undefined) throw new Error("Expected operation registration");
+    createFileServerLogSink(stateDir).write(
+      attachActivityLogEventRegistration(
+        {
+          level: "error",
+          category: "process",
+          op: evidence.op,
+          correlationId: "duplicate-observed-failure",
+          errorKind: evidence.errorKind,
+          extra: {
+            phase: "endpoint",
+            frames: evidence.frames,
+            causeChain: ["Error"],
+            completeness: "complete",
+            loss: "none",
+          },
+        },
+        registration,
+      ),
+    );
+    drainSupportIncidentCandidates();
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(before);
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins.map((pin) => pin.pinId)).toEqual(
+      pins,
+    );
+    expect(
+      persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.deduplicated",
+      ),
+    ).toHaveLength(1);
+  }, 60_000);
+
   it("protects the sixty-fifth fresh causal error by rolling only the oldest diagnostic pin", () => {
     const ids: string[] = [];
     for (let index = 0; index <= MAX_ACTIVITY_LOG_PINS; index += 1) {

@@ -564,6 +564,9 @@ function discoveredCapabilityFields(
   // Keiko's forced tool call. Keep it out of toolCalling: only the live probe can enable tools.
   return {
     ...(discovered?.contextWindow === undefined ? {} : { contextWindow: discovered.contextWindow }),
+    ...(discovered?.maxInputTokens === undefined
+      ? {}
+      : { maxInputTokens: discovered.maxInputTokens }),
     ...(discovered?.maxOutputTokens === undefined
       ? {}
       : { maxOutputTokens: discovered.maxOutputTokens }),
@@ -905,30 +908,25 @@ function reasoningEffortsFromDiscoveryRecords(
     : undefined;
 }
 
-// Declared context-window fields in order of authority; the first one a deployment declares wins.
-// LiteLLM `/model/info` publishes `max_input_tokens`, a vLLM `/v1/models` entry publishes
-// `max_model_len`, and OpenAI-compatible proxies in the field use `context_length` or
-// `context_window`. Reading only the first left every model of a vLLM-fronted gateway with an
-// undeclared window (customer report on 1.1.13: a `hosted_vllm` model planned as a 4,096-token
-// model failed every grounded question).
+// Explicit total-window declarations are distinct from LiteLLM's prompt-input ceiling.
+// All declarations of the same constraint intersect; replicas cannot widen a smaller bound.
 const DECLARED_CONTEXT_WINDOW_FIELDS: readonly string[] = [
-  "max_input_tokens",
   "max_model_len",
   "context_length",
   "context_window",
 ];
 
 function declaredContextWindow(records: readonly Record<string, unknown>[]): number | undefined {
-  for (const field of DECLARED_CONTEXT_WINDOW_FIELDS) {
-    const declared = numberFieldFromRecords(records, [field]);
-    if (declared !== undefined) return declared;
-  }
-  return undefined;
+  return (
+    numberFieldFromRecords(records, DECLARED_CONTEXT_WINDOW_FIELDS) ??
+    numberFieldFromRecords(records, ["max_input_tokens"])
+  );
 }
 
 function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscoveredModelMetadata {
   const records = discoveryRecords(item);
   const contextWindow = declaredContextWindow(records);
+  const maxInputTokens = numberFieldFromRecords(records, ["max_input_tokens"]);
   const maxOutputTokens = numberFieldFromRecords(records, ["max_output_tokens", "max_tokens"]);
   const toolCalling = optionalBooleanFieldFromRecords(records, [
     "supports_function_calling",
@@ -942,6 +940,7 @@ function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscov
   const chatModeDeclared = declaresChatCompatibleMode(mode);
   return {
     ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(maxInputTokens === undefined ? {} : { maxInputTokens }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     ...(toolCalling === undefined ? {} : { toolCalling }),
     ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
@@ -1661,6 +1660,7 @@ function intersectDeploymentMetadata(
 ): GatewayDiscoveredModelMetadata {
   return {
     ...intersectContextWindow(left, right),
+    ...intersectInputLimit(left, right),
     ...commonTokenCounter(left, right),
     maxOutputTokens: Math.min(left.maxOutputTokens ?? 0, right.maxOutputTokens ?? 0),
     toolCalling: left.toolCalling === true && right.toolCalling === true,
@@ -1669,6 +1669,16 @@ function intersectDeploymentMetadata(
       ? { chatModeDeclared: true }
       : {}),
   };
+}
+
+function intersectInputLimit(
+  left: GatewayDiscoveredModelMetadata,
+  right: GatewayDiscoveredModelMetadata,
+): Pick<GatewayDiscoveredModelMetadata, "maxInputTokens"> {
+  const limits = [left.maxInputTokens, right.maxInputTokens].filter(
+    (limit): limit is number => limit !== undefined,
+  );
+  return limits.length === 0 ? {} : { maxInputTokens: Math.min(...limits) };
 }
 
 function intersectContextWindow(

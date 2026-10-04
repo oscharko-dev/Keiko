@@ -8895,6 +8895,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: ["support.report.started", "support.report.ui.started"],
       state: [
         "client.support-report.download-started",
+        "client.support-report.prepared",
         "support.report.degraded",
         "support.report.ui.delivered",
       ],
@@ -8904,6 +8905,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     },
     requiredCausalOperations: [
       "client.support-report.download-started",
+      "client.support-report.prepared",
       "support.report.completed",
       "support.report.degraded",
       "support.report.failed",
@@ -8916,6 +8918,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLossOperations: [],
     requiredProofOperations: [
       "client.support-report.download-started",
+      "client.support-report.prepared",
       "support.report.completed",
       "support.report.degraded",
       "support.report.failed",
@@ -8928,6 +8931,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "client.support-report.download-started",
+      "client.support-report.prepared",
       "support.report.completed",
       "support.report.degraded",
       "support.report.started",

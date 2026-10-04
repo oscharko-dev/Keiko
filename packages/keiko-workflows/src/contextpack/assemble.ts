@@ -236,9 +236,15 @@ function compactIdentifiedContextWindows(
 ): { readonly excerpts: ContextExcerpt[]; readonly totalBytes: number } {
   const excerpts: ContextExcerpt[] = [];
   const seen = new Set<string>();
+  const windows = mergeContextWindows(normalizeExcerptWindows(source));
   for (const atom of atoms) {
-    for (const window of contextWindowsForAtom(source, atom)) {
-      const identity = `${window.startLine.toString()}-${window.endLine.toString()}:${window.identity ?? ""}`;
+    for (const window of contextWindowsForAtom(windows, atom)) {
+      const identity = JSON.stringify([
+        window.startLine,
+        window.endLine,
+        window.identity,
+        atom.edge,
+      ]);
       if (seen.has(identity)) continue;
       seen.add(identity);
       const excerpt = compactContextWindow(atom, window, maxBytes, scopeId);
@@ -279,6 +285,7 @@ function compactContextWindow(
         provenanceKind: atom.provenance.kind,
         provenanceTool: atom.provenance.tool,
         queryFingerprint,
+        edge: atom.edge,
       }),
     },
   };
@@ -289,6 +296,42 @@ function lineCount(content: string): number {
     return 0;
   }
   return content.split("\n").length;
+}
+
+function mergeContextWindow(left: ExcerptWindow, right: ExcerptWindow): ExcerptWindow | undefined {
+  if (left.identity !== right.identity || right.startLine > left.endLine) return undefined;
+  const leftLines = left.content.split("\n");
+  const rightLines = right.content.split("\n");
+  const overlap = Math.min(left.endLine, right.endLine) - right.startLine + 1;
+  for (let index = 0; index < overlap; index += 1) {
+    if (leftLines[right.startLine - left.startLine + index] !== rightLines[index]) return undefined;
+  }
+  return {
+    ...left,
+    endLine: Math.max(left.endLine, right.endLine),
+    content: [...leftLines, ...rightLines.slice(overlap)].join("\n"),
+  };
+}
+
+function mergeContextWindows(windows: readonly ExcerptWindow[]): readonly ExcerptWindow[] {
+  const identityOrder = new Map<string | undefined, number>();
+  for (const window of windows) {
+    if (!identityOrder.has(window.identity)) identityOrder.set(window.identity, identityOrder.size);
+  }
+  const ordered = [...windows].sort(
+    (left, right) =>
+      (identityOrder.get(left.identity) ?? 0) - (identityOrder.get(right.identity) ?? 0) ||
+      left.startLine - right.startLine ||
+      left.endLine - right.endLine,
+  );
+  const merged: ExcerptWindow[] = [];
+  for (const window of ordered) {
+    const previous = merged.at(-1);
+    const combined = previous === undefined ? undefined : mergeContextWindow(previous, window);
+    if (combined === undefined) merged.push(window);
+    else merged[merged.length - 1] = combined;
+  }
+  return merged;
 }
 
 function isExcerptWindowArray(source: ExcerptSource): source is readonly ExcerptWindow[] {
@@ -372,7 +415,17 @@ function recordBudgetClip(plan: BuildPlan, candidate: CandidateFile, nowMs: numb
   });
 }
 
-function recordUnavailableExcerpt(plan: BuildPlan, claim: string, nowMs: number): ProcessOutcome {
+function recordUnavailableExcerpt(
+  plan: BuildPlan,
+  candidate: CandidateFile,
+  claim: string,
+  nowMs: number,
+): ProcessOutcome {
+  plan.extraOmitted.push({
+    scopePath: candidate.scopePath,
+    reason: "tool-unavailable",
+    omittedAtMs: nowMs,
+  });
   plan.uncertainty.push({
     kind: "scope-incomplete",
     claim,
@@ -414,6 +467,28 @@ function appendAssembledCandidate(
   plan.usage = appendUsage(plan.usage, totalBytes);
 }
 
+function recordUnavailableAtomRanges(
+  plan: BuildPlan,
+  candidate: CandidateFile,
+  atoms: readonly EvidenceAtom[],
+  source: ExcerptSource,
+  ctx: ProcessContext,
+): void {
+  const availableSource = ctx.includeSurroundingContext
+    ? mergeContextWindows(normalizeExcerptWindows(source))
+    : source;
+  const unavailable = atoms.filter(
+    (atom) => contentForAtom(atom, availableSource) === undefined,
+  ).length;
+  if (unavailable === 0) return;
+  plan.uncertainty.push({
+    kind: "scope-incomplete",
+    claim: `${String(unavailable)} cited ranges unavailable in ${candidate.scopePath}`,
+    impactedAtomIds: [],
+    emittedAtMs: ctx.nowMs,
+  });
+}
+
 function processCandidate(
   plan: BuildPlan,
   candidate: CandidateFile,
@@ -430,6 +505,7 @@ function processCandidate(
   if (excerptSource === undefined) {
     return recordUnavailableExcerpt(
       plan,
+      candidate,
       `excerpt unavailable for ${candidate.scopePath}`,
       ctx.nowMs,
     );
@@ -447,6 +523,7 @@ function processCandidate(
   if (excerpts.length === 0) {
     return recordUnavailableExcerpt(
       plan,
+      candidate,
       `excerpt unavailable for cited ranges in ${candidate.scopePath}`,
       ctx.nowMs,
     );
@@ -460,6 +537,7 @@ function processCandidate(
     recordBudgetClip(plan, candidate, ctx.nowMs);
     return "budget-clipped";
   }
+  recordUnavailableAtomRanges(plan, candidate, atomsForPath, excerptSource, ctx);
   appendAssembledCandidate(plan, candidate, ctx, excerpts, totalBytes);
   return "continue";
 }

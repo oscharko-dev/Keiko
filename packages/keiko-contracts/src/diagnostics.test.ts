@@ -1,3 +1,4 @@
+import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -1534,5 +1535,53 @@ describe("bounded source-preview stage evidence", () => {
     const preview = { previewKind: "text", sourceTextBytesRead: 10, canEdit: false };
     expect(isClientStageIngestRequest({ ...stage, stage: "chat bind", preview })).toBe(false);
     expect(isClientStageIngestRequest({ ...stage, phase: "started", preview })).toBe(false);
+  });
+});
+
+describe("browser support report preparation evidence", () => {
+  const prepared = {
+    reportBytes: 1024,
+    evidenceScope: "client-only",
+    completeness: "complete",
+    loss: "none",
+    availabilityReason: "service-unavailable",
+  };
+  it("accepts only the closed body-free canonical disposition", () => {
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), supportReportPreparation: prepared }),
+    ).toBe(true);
+    for (const failure of [
+      { kind: "boundary" },
+      { errorKind: "internal" },
+      { supportReportDelivery: "manual" },
+    ])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          ...failure,
+          supportReportPreparation: prepared,
+        }),
+      ).toBe(false);
+    for (const reportBytes of [0, -1, MAX_SUPPORT_REPORT_BYTES + 1, 1.5, "123"])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          supportReportPreparation: { ...prepared, reportBytes },
+        }),
+      ).toBe(false);
+    for (const patch of [
+      { evidenceScope: "private" },
+      { completeness: "saved" },
+      { loss: "all" },
+      { availabilityReason: "network detail" },
+      { reportJson: "private report" },
+      { fileName: "/private/report" },
+    ])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          supportReportPreparation: { ...prepared, ...patch },
+        }),
+      ).toBe(false);
   });
 });

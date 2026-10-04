@@ -20,7 +20,9 @@ import type { IncomingMessage } from "node:http";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
-import { currentGatewayConfig } from "./deps.js";
+import { currentGatewayConfig, currentContextProfileForModel } from "./deps.js";
+import { readChatContextStatus } from "./chat-context-status.js";
+import { modelWindowAwareBudget } from "./grounded-qa.js";
 import { buildUiHandlerDeps as createUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
@@ -10295,6 +10297,18 @@ describe("handleGatewaySetup", () => {
 // customer gateway models without requiring code changes for each model name")
 // by exercising the wrapper with every documented payload shape.
 describe("normalizeDiscoveryPayload", () => {
+  it("honors an explicit smaller total context ceiling beside an input declaration", () => {
+    const normalized = normalizeDiscoveryPayloadForSetup({
+      data: [
+        {
+          model_name: "context-ceiling-alias",
+          model_info: { mode: "chat", max_input_tokens: 32_768, context_window: 8_192 },
+        },
+      ],
+    });
+    expect(normalized.modelMetadata?.["context-ceiling-alias"]?.contextWindow).toBe(8_192);
+  });
+
   it("does not reinterpret an output max_tokens field as an input context window", () => {
     const normalized = normalizeDiscoveryPayloadForSetup({
       data: [{ id: "test-chat-1", model_info: { max_tokens: 4_096 } }],
@@ -11459,4 +11473,133 @@ it("bounds discovery evidence by selected aliases instead of raw replica count",
   } finally {
     resetServerLogger();
   }
+});
+
+const MODEL_GEOMETRY_MATRIX = [
+  [4_096, 256],
+  [8_192, 512],
+  [16_384, 1_024],
+  [24_576, 2_048],
+  [32_768, 4_096],
+  [48_000, 6_000],
+  [64_000, 8_000],
+  [96_000, 12_000],
+  [128_000, 16_000],
+  [160_000, 20_000],
+  [200_000, 24_000],
+  [256_000, 32_000],
+  [500_000, 48_000],
+  [1_000_000, 64_000],
+  [2_000_000, 128_000],
+] as const;
+
+function matrixDiscovery(): ReturnType<typeof parseModelDiscovery> {
+  return parseModelDiscovery({
+    data: [
+      ...MODEL_GEOMETRY_MATRIX.map(([window, output], index) => ({
+        model_name: `matrix-alias-${String(index)}`,
+        model_info: {
+          mode: "chat",
+          context_window: window,
+          max_input_tokens: Math.floor(window / 2),
+          max_output_tokens: output,
+        },
+      })),
+      { model_name: "matrix-unknown", model_info: { mode: "chat" } },
+    ],
+  });
+}
+
+function assertSelectedModelGeometry(deps: UiHandlerDeps, chatId: string, index: number): void {
+  const row = MODEL_GEOMETRY_MATRIX[index];
+  if (row === undefined) throw new Error("Missing matrix model geometry");
+  const modelId = `matrix-alias-${String(index)}`;
+  const capability = requiredCapability(requiredGatewayConfig(deps), modelId);
+  const expected = deriveContextProfileFromCapability(capability);
+  expect(capability.contextWindow).toBe(row[0]);
+  expect(capability.maxOutputTokens).toBe(row[1]);
+  expect(capability.maxInputTokens).toBe(Math.floor(row[0] / 2));
+  expect(currentContextProfileForModel(deps, modelId)).toEqual(expected);
+  expect(modelWindowAwareBudget(deps, modelId)).toMatchObject({
+    modelInputTokensMax: expected.effectiveInputBudget,
+    modelOutputTokensMax: expected.reservedOutputTokens,
+  });
+  const status = readChatContextStatus(deps, chatId, modelId);
+  expect(status).toMatchObject({
+    modelId,
+    inputLimitTokens: Math.floor(row[0] / 2),
+    contextWindowTokens: row[0],
+    inputBudgetTokens: expected.effectiveInputBudget,
+    reservedOutputTokens: expected.reservedOutputTokens,
+    safetyMarginTokens: expected.safetyMarginTokens,
+  });
+  expect(status.segments?.reduce((sum, segment) => sum + segment.tokens, 0)).toBe(row[0]);
+  expect(status.contextWindowAssumed).toBeUndefined();
+}
+
+describe("model-specific LiteLLM conversation geometry", () => {
+  it.each([false, true])(
+    "intersects independent input and total limits for alias replicas, reversed=%s",
+    (reversed) => {
+      const replicas = [
+        {
+          model_name: "replicated-alias",
+          model_info: {
+            mode: "chat",
+            context_window: 128_000,
+            max_input_tokens: 96_000,
+            max_output_tokens: 16_000,
+          },
+        },
+        {
+          model_name: "replicated-alias",
+          model_info: {
+            mode: "chat",
+            context_window: 64_000,
+            max_input_tokens: 16_000,
+            max_output_tokens: 8_000,
+          },
+        },
+      ];
+      const discovered = parseModelDiscovery({
+        data: reversed ? [...replicas].reverse() : replicas,
+      });
+      expect(discovered.modelMetadata?.["replicated-alias"]).toMatchObject({
+        contextWindow: 64_000,
+        maxInputTokens: 16_000,
+        maxOutputTokens: 8_000,
+      });
+    },
+  );
+
+  it("carries fifteen distinct aliases through discovery, persisted setup, budgets and context status", async () => {
+    const directory = await tempDir("keiko-model-matrix-");
+    const discovered = matrixDiscovery();
+    const deps = buildUiHandlerDeps({
+      configPath: join(directory, "keiko.config.json"),
+      evidenceDir: await tempDir("keiko-model-matrix-evidence-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(directory, "ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(discovered),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://matrix.example.invalid/v1", apiKey: "synthetic-matrix-key" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    deps.store.createProject(directory, "Model matrix");
+    const chatId = deps.store.createChat(directory, "Model matrix", "matrix-alias-0").id;
+    for (let index = 0; index < MODEL_GEOMETRY_MATRIX.length; index += 1)
+      assertSelectedModelGeometry(deps, chatId, index);
+    const unknown = readChatContextStatus(deps, chatId, "matrix-unknown");
+    expect(unknown.contextWindowAssumed).toBe(true);
+    expect(unknown.contextWindowTokens).toBe(
+      deriveContextProfileFromCapability(
+        requiredCapability(requiredGatewayConfig(deps), "matrix-unknown"),
+      ).maxInputTokens,
+    );
+    deps.store.close();
+  });
 });

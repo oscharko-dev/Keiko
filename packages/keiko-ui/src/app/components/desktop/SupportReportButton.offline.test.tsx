@@ -1,6 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
+import * as clientDiagnostics from "@/lib/client-diagnostics";
 import { ApiError } from "@/lib/api";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { createSupportReport, createSupportReportDownload } from "@/lib/support-report-api";
@@ -96,6 +97,7 @@ it("preserves a prepared full report when regeneration loses the service", async
 });
 
 it("disposes a late local artifact after the reporting control is unmounted", async () => {
+  const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
   let deliver: (value: typeof local) => void = (): void => undefined;
   vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("offline"));
   vi.mocked(prepareLocalSupportReport).mockReturnValueOnce(
@@ -108,6 +110,9 @@ it("disposes a late local artifact after the reporting control is unmounted", as
   view.unmount();
   await act(async () => deliver(local));
   expect(local.download.dispose).toHaveBeenCalledOnce();
+  expect(
+    diagnostic.mock.calls.some(([, meta]) => meta?.supportReportPreparation !== undefined),
+  ).toBe(false);
 });
 
 it("passes the original error correlation and safe class to the offline producer", async () => {
@@ -148,4 +153,61 @@ it("preserves the normal Chat string Support-ID and its known BAD_REQUEST classi
       context: [],
     },
   });
+});
+
+it("records successful local preparation as routine evidence under the original support id", async () => {
+  const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
+  vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("offline"));
+  vi.mocked(prepareLocalSupportReport).mockResolvedValueOnce({
+    ...local,
+    report: {
+      ...local.report,
+      summary: {
+        status: "insufficient",
+        reasons: [],
+        recordCount: 0,
+        reportDigest: "a".repeat(64),
+        incidentId: "b".repeat(32),
+        manifestUnreadableCount: 0,
+        manifestReusedCount: 0,
+        completeness: "complete",
+        loss: "none",
+        availabilityReason: "service-unavailable",
+      },
+    },
+  });
+  render(<SupportReportButton correlationId="original-local-preparation-123" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(diagnostic).toHaveBeenCalledWith("Keiko support report prepared locally.", {
+    correlationId: "original-local-preparation-123",
+    supportReportPreparation: {
+      reportBytes: 2,
+      evidenceScope: "client-only",
+      completeness: "complete",
+      loss: "none",
+      availabilityReason: "service-unavailable",
+    },
+  });
+  expect(diagnostic.mock.calls.some(([, meta]) => meta?.supportReportDelivery !== undefined)).toBe(
+    false,
+  );
+});
+
+it("does not duplicate server preparation with a browser fallback state", async () => {
+  const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
+  vi.mocked(createSupportReport).mockResolvedValueOnce({
+    fileName: "server.json",
+    reportJson: "{}",
+  });
+  vi.mocked(createSupportReportDownload).mockReturnValueOnce({
+    href: "/api/server-prepared",
+    dispose: vi.fn(),
+  });
+  render(<SupportReportButton correlationId="normal-server-report-123" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(
+    diagnostic.mock.calls.some(([, meta]) => meta?.supportReportPreparation !== undefined),
+  ).toBe(false);
 });

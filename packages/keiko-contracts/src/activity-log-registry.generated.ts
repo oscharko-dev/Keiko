@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "094fd0c9a118e67e7c5e7dd6ae9813e68ef6ba02a2f83697163b2d6e7b93d122" as const;
+  "f935f872587f125e3399ecd1f1c8078c1f057bd4e53db8e0ed92b53444fc16a8" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3753,6 +3753,49 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["support-report"],
     proofIds: ["client.support-report.download-started.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.support-report.prepared",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientSupportReportPrepared",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reportBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      evidenceScope: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["server", "client-only"],
+      },
+      availabilityReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["support-report"],
+    proofIds: ["client.support-report.prepared.line"],
     releaseImpact: "patch",
   },
   {
@@ -24188,6 +24231,49 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      executedRingKinds: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: false,
+        maxItems: 3,
+        values: ["lexical", "structural", "git-history"],
+      },
+      skippedRingKinds: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: false,
+        maxItems: 3,
+        values: ["lexical", "structural", "git-history"],
+      },
+      ringSkipReasons: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: false,
+        maxItems: 4,
+        values: [
+          "no-git-metadata",
+          "ordinary-document",
+          "literal-absence",
+          "complete-exact-lookup",
+        ],
+      },
+      augmentationSkipped: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      augmentationSkipReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "no-git-metadata",
+          "ordinary-document",
+          "literal-absence",
+          "complete-exact-lookup",
+          "budget-exhausted",
+        ],
+      },
       usageSearchCalls: {
         type: "integer",
         dataClass: "count",
@@ -28308,6 +28394,36 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      selectedCorrelationId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+      },
+      evidenceScope: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["server", "client-only"],
+      },
+      deliveryAuthority: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["session-bound", "client-only"],
+      },
+      pinDisposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["pinned", "quota-exceeded", "rejected"],
+      },
+      availabilityReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"],
+      },
       reportBytes: {
         type: "integer",
         dataClass: "count",
@@ -28401,6 +28517,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      evidenceScope: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["server", "client-only"],
+      },
+      deliveryAuthority: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["session-bound", "client-only"],
       },
     },
     causal: "correlation",
@@ -28501,6 +28629,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["correlation", "recent"],
+      },
+      selectedCorrelationId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
       },
     },
     causal: "correlation",
@@ -40899,6 +41033,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "augmentationSkipReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "augmentationSkipped",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "budgetClippedUncertaintyCount",
               type: "integer",
               dataClass: "count",
@@ -40989,6 +41135,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "executedRingKinds",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "omittedCount",
               type: "integer",
               dataClass: "count",
@@ -41025,6 +41177,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "ringSkipReasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "scopeIdentitySha256",
               type: "string",
               dataClass: "digest",
@@ -41040,6 +41198,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "selectedFileCount",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "skippedRingKinds",
+              type: "string-array",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -63258,6 +63422,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         start: ["support.report.started", "support.report.ui.started"],
         state: [
           "client.support-report.download-started",
+          "client.support-report.prepared",
           "support.report.degraded",
           "support.report.ui.delivered",
         ],
@@ -63268,6 +63433,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       causalEdges: [
         {
           op: "client.support-report.download-started",
+          mode: "correlation",
+        },
+        {
+          op: "client.support-report.prepared",
           mode: "correlation",
         },
         {
@@ -63306,6 +63475,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lossSignals: [],
       resourceSignals: [
         "client.support-report.download-started",
+        "client.support-report.prepared",
         "support.report.completed",
         "support.report.degraded",
         "support.report.started",
@@ -63336,6 +63506,42 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["client.support-report.download-started.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "client.support-report.prepared",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "availabilityReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "evidenceScope",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "reportBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.support-report.prepared.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -63602,6 +63808,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "capability",
           safeContextFields: [
             {
+              name: "availabilityReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "deliveryAuthority",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "evidenceScope",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
               name: "incidentId",
               type: "string",
               dataClass: "opaque-id",
@@ -63617,6 +63841,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "manifestUnreadableCount",
               type: "integer",
               dataClass: "count",
+              required: false,
+            },
+            {
+              name: "pinDisposition",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -63641,6 +63871,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "reportDigest",
               type: "string",
               dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "selectedCorrelationId",
+              type: "string",
+              dataClass: "opaque-id",
               required: false,
             },
             {
@@ -63675,13 +63911,25 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "deliveryAuthority",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "evidenceScope",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
               name: "reportBytes",
               type: "integer",
               dataClass: "count",
               required: true,
             },
           ],
-          evidenceClasses: ["completeness-state", "count", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -63747,13 +63995,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "selectedCorrelationId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
               name: "selector",
               type: "string",
               dataClass: "closed-enum",
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -67539,6 +67793,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.stage.settled": "client-diagnostics",
     "client.stage.started": "client-diagnostics",
     "client.support-report.download-started": "client-diagnostics",
+    "client.support-report.prepared": "client-diagnostics",
     "coding-app-session.channel.closed": "tools-workflows",
     "coding-app-session.channel.opened": "tools-workflows",
     "coding-app-session.local-session.confirmed": "tools-workflows",

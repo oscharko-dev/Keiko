@@ -10,6 +10,7 @@ import {
   supportReportFileName,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   type DesktopSupportReportResponse,
+  type SupportReport,
   type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
@@ -86,6 +87,10 @@ async function localReport(
     await browserDigest(canonicalSupportJson(unsigned)),
   );
   signal.throwIfAborted();
+  return localReportResponse(report);
+}
+
+function localReportResponse(report: SupportReport): DesktopSupportReportResponse {
   return {
     fileName: supportReportFileName(
       report.schemaVersion,
@@ -94,6 +99,19 @@ async function localReport(
     ),
     reportJson: serializeSupportReport(report),
     evidenceScope: "client-only",
+    summary: {
+      status: report.selection.status,
+      reasons: report.selection.reasons,
+      recordCount: report.evidence.recordCount,
+      reportDigest: report.integrity.reportDigest,
+      incidentId: report.incident.incidentId,
+      manifestUnreadableCount: 0,
+      manifestReusedCount: 0,
+      completeness: report.incident.completeness,
+      loss: report.incident.loss,
+      pinDisposition: report.incident.pin.status,
+      availabilityReason: report.incident.clientReport?.availabilityReason,
+    },
   };
 }
 

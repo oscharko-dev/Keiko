@@ -168,6 +168,8 @@ describe("authenticated canonical report attachment", () => {
       reportBytes: attachmentBytes(end.mock.calls[0]?.[0]).length,
       correlationId: "download-test",
       completeness: "complete",
+      evidenceScope: "server",
+      deliveryAuthority: "session-bound",
     });
     expect(sink.lines().join("\n")).not.toContain(report.reportJson);
     expect(sink.lines().join("\n")).not.toContain(cached.downloadPath);

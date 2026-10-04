@@ -1326,3 +1326,31 @@ it("reuses the existing retained original failure while exposing no diagnostic m
   });
   expect(retainedClientDiagnosticFailure("unrelated-request-123")).toBeUndefined();
 });
+
+it("posts fallback report preparation through routine capacity without raw artifact bytes", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const supportReportPreparation = {
+    reportBytes: 1024,
+    evidenceScope: "client-only" as const,
+    completeness: "complete" as const,
+    loss: "none" as const,
+    availabilityReason: "service-unavailable" as const,
+  };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Keiko support report prepared locally.", {
+      correlationId: "ui_support-preparation-0001",
+      supportReportPreparation,
+    });
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    correlationId: "ui_support-preparation-0001",
+    supportReportPreparation,
+  });
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("errorKind");
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("reportJson");
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+  expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});

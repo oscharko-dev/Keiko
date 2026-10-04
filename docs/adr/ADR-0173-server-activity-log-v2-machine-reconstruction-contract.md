@@ -764,7 +764,12 @@ than silently claim compatibility; receiving operators use the current canonical
 analyzer. If the BFF or the report module is unavailable, the resident shared canonical producer
 can compose a bounded client report locally. Local download bytes use the same standard gzip
 transport, and existing fulfilled reports preserve their canonical content during transport
-recovery. Readiness and a manual initiation never claim an operating-system save.
+recovery. Readiness and a manual initiation never claim an operating-system save. Successful local
+preparation emits the routine `client.support-report.prepared` state on the existing diagnostic
+sink, with the original correlation when available, closed evidence scope and availability reason,
+the already measured canonical byte count, and directly projected completeness and loss. It contains no report content or failure kind
+and creates no new failure incident. Ordinary server preparation retains its existing lifecycle
+without duplicating this browser recovery state.
 Process-local delivery caching is bounded by 10 MiB of UTF-8 report bytes, 128 entries and a
 15-minute lifetime; expiry makes report creation available again. The response uses `no-store`,
 `nosniff`, and the closed canonical filename. Older-server local object URLs are released on
@@ -1571,13 +1576,15 @@ to at most one line per suppression window so a storm reports the loss once rath
 log with one line per dropped evaluation (#3533 audit).
 
 On the registered-failure trigger, the window's Activity Log retention pin (15 minutes before, 5
-minutes after, through D14's pin primitive, across every process instance) is published
-synchronously, in the same turn as the triggering write — before any later maintenance pass, this
-process's own next segment admission or another process sharing the state directory, can run against
-an unprotected window. Only the rest of candidate creation — deduplication, the quota check, and the
-record write — runs outside the logging call; it never transfers data. A duplicate or a rejected
-candidate releases the pin its trigger already published instead of leaving it to sit until its own
-TTL. The residual race a synchronous publish cannot fully close on its own — a concurrent process's
+minutes after, through D14's pin primitive, across every process instance) is requested
+synchronously, in the same turn as the triggering write. When capacity permits, it protects the
+window before a later maintenance pass or segment admission can remove evidence. This immediate
+request never retires another candidate to recover pin capacity: deduplication and candidate
+admission must succeed first. A newly admitted candidate whose immediate pin was rejected retries
+through the existing owned-pin retention mechanism; a duplicate preserves the original candidate
+and its pin. Deduplication, quota admission, and the record write run outside the logging call and
+never transfer data. A duplicate or rejected candidate releases any pin its trigger already
+published instead of leaving it until its TTL. The residual race a synchronous publish cannot fully close on its own — a concurrent process's
 retention removing a sealed segment in the narrow gap between observing the window and the pin
 actually covering it — is detected by comparing that snapshot to the pin's own outcome and reported
 as the pin's `evidenceLostBeforePin`, so the window is never reported as a clean "pinned" when part

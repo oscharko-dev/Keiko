@@ -1,6 +1,6 @@
 // Desktop composition uses the same incident, query and canonical serializer as CLI export.
 import { randomBytes, randomUUID } from "node:crypto";
-import { computeDefectFingerprint } from "../defect-fingerprint.js";
+import { computeDefectFingerprint, incidentCorrelationId } from "../defect-fingerprint.js";
 import { isRedactedLogLabel } from "../log-redaction.js";
 import { serverLogProcessIdentity } from "../server-log.js";
 import {
@@ -68,10 +68,11 @@ export function prepareManualSupportReportIncident(
   stateDir: string,
   correlationId: string,
 ): SupportIncidentDescriptorRecord {
-  const created = recordUserReportedIncident(stateDir, { correlationId });
+  const safeCorrelationId = incidentCorrelationId(correlationId) ?? randomUUID();
+  const created = recordUserReportedIncident(stateDir, { correlationId: safeCorrelationId });
   if (created.status === "rejected") {
     if (created.reason === "quota-exhausted") {
-      return prepareUnretainedUserReportIncident(stateDir, correlationId);
+      return prepareUnretainedUserReportIncident(stateDir, safeCorrelationId);
     }
     throw new DesktopSupportReportPreparationError(created.reason);
   }
@@ -268,6 +269,12 @@ function desktopReportResponse(
       incidentId: report.incident.incidentId,
       manifestUnreadableCount,
       manifestReusedCount,
+      completeness: report.incident.completeness,
+      loss: report.incident.loss,
+      pinDisposition: report.incident.pin.status,
+      ...(report.incident.clientReport === undefined
+        ? {}
+        : { availabilityReason: report.incident.clientReport.availabilityReason }),
     },
   };
 }

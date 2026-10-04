@@ -1471,6 +1471,28 @@ async function readablePolicyPath(
   return policy.path;
 }
 
+function collectRankedSemanticDocument(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  text: string,
+): void {
+  if (runner.semantic === undefined) return;
+  const contentScore = scoreContentForSearch(runner.query, text, runner.policy, file.relativePath);
+  const ranked = orderCandidatesForSearch({
+    files: [file],
+    query: runner.query,
+    policy: runner.policy,
+    contentScores: new Map([[file.relativePath, contentScore]]),
+    ignoredByDiscovery: 0,
+    deniedByDiscovery: 0,
+  }).diagnostics.rankedCandidates[0];
+  collectSemanticSearchDocument(
+    runner.semantic,
+    { scopePath: file.relativePath, text },
+    ranked?.score ?? 0,
+  );
+}
+
 function textFileMatches(
   runner: SearchTextRunner,
   file: DiscoveredFile,
@@ -1478,7 +1500,7 @@ function textFileMatches(
   order: number,
   text: string,
 ): FileMatches | undefined {
-  collectSemanticSearchDocument(runner.semantic, { scopePath: file.relativePath, text });
+  collectRankedSemanticDocument(runner, file, text);
   if (runner.sourceInspection !== true && !shouldScoreContent(runner.query, text, runner.policy)) {
     return undefined;
   }

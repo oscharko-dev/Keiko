@@ -171,6 +171,8 @@
 .cmpSwatch[data-segment="compaction-buffer"],
 .cmpBarSegment[data-segment="output-reserve"],
 .cmpSwatch[data-segment="output-reserve"],
+.cmpBarSegment[data-segment="input-capacity-unavailable"],
+.cmpSwatch[data-segment="input-capacity-unavailable"],
 .cmpBarSegment[data-segment="safety-margin"],
 .cmpSwatch[data-segment="safety-margin"] {
   background-color: color-mix(in oklch, var(--fg-muted) 35%, transparent);

@@ -1,4 +1,5 @@
 import {
+  deriveContextProfile,
   deriveContextProfileFromCapability,
   type ContextTokenAccounting,
   type ContextProfile,
@@ -95,10 +96,10 @@ export function admitGatewayPrompt(
 ): GatewayCallRequest {
   const profile = deriveContextProfileFromCapability(capability);
   const outputBudget = outputAllocation(request.maxOutputTokens, profile.reservedOutputTokens);
-  const inputBudget = Math.max(
-    0,
-    profile.maxInputTokens - outputBudget - profile.safetyMarginTokens,
-  );
+  const inputBudget = deriveContextProfile({
+    ...profile,
+    reservedOutputTokens: outputBudget,
+  }).effectiveInputBudget;
   const evidence = promptTokenEvidence(request, profile, measured, retainedTokens);
   const promptTokens = Math.max(
     evidence.localPromptTokens,

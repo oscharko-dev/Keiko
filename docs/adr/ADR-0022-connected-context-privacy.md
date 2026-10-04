@@ -143,8 +143,10 @@ An explicitly connected repository or ordinary folder is sufficient scope for a 
 orientation or natural-language search request. A filename or symbol is useful for precision,
 but is not a prerequisite to inspect the user's accepted root. Empty and punctuation-only
 requests still require clarification, and implicit roots retain their narrowing guards.
-Repository orientation uses the existing recursive file-discovery facade in addition to
-metadata and overview documents; a source-only folder must produce actual source evidence.
+Repository orientation retains the user's lexical terms and repository semantic provider. Recursive
+file discovery is a zero-evidence fallback after a complete term search, within the same search-call
+budget, alongside metadata and overview documents; a source-only folder must produce actual source
+evidence. A targeted module overview must not be replaced by an unrelated shallow file listing.
 Recursive lexical search and file discovery visit the accepted scope without a default file-count
 or elapsed-time cutoff. Final source reads likewise have no default file-count cutoff: `filesReadMax: null`
 retains eligible requested facts under the actual excerpt-byte and model-input budgets. Explicit finite
@@ -152,7 +154,10 @@ caller read budgets remain independently enforced. Source reads use at most eigh
 reads, so a broad answer cannot materialize all 2 MiB buffers at once. `null` limits express that policy on the wire; internal execution controls
 still honor an explicit caller deadline or cancellation. Directory entries stream in bounded batches,
 source bytes are processed with bounded concurrency, and only bounded best matches and diagnostic
-summaries survive the scan. Text files up to and including 2 MiB are eligible regardless of extension;
+summaries survive the scan. These shared defaults also apply to manual Editor find-in-files/replace
+preview, coding context lookups, and grounded symbol trace; explicit finite callers retain their
+bounds. An unlimited default lookup uses the live traversal rather than treating a finite workspace
+index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
 Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
 Auxiliary symbol and document filename discovery follows the same complete streaming traversal
@@ -171,7 +176,13 @@ and discovery from other queries remain eligible; actual excerpt truncation rema
 Default Chat queries share the lexical ring's finite retained-result capacity, derived from the
 accepted excerpt-byte and model-input-token budgets rather than a fixed independent file count.
 Retention uses a worst-first heap, preserving deterministic ordering without linear insertion
-movement for every matching file. Explicit finite query limits remain authoritative. Excerpts
+movement for every matching file. Each matching file's strongest range precedes secondary ranges
+so repeated hits in one file cannot consume every retained slot before another relevant file.
+Omission samples use the same bounded heap, ordered by path independently of read-completion timing.
+The streamed semantic lane retains the best 32 score/path-ranked documents within its existing
+128 KiB text pool. Each document receives a bounded equal share; existing anchored byte windows
+retain relevant late content and its actual source-line origin. Neither document selection nor
+omission sampling depends on which concurrent read finishes first. Explicit finite query limits remain authoritative. Excerpts
 are read in bounded concurrent waves; unused byte grants are recycled after a wave settles, while
 the actual accepted byte/token budgets determine which evidence fits. A large matching set therefore
 does not force every excerpt to a one-byte allocation. Unread budget tails remain budget omissions.
@@ -180,6 +191,9 @@ boosts; vague, diagnostic, relational, and semantic evidence retains ordinary re
 A completed eligible scan with only a retained-match limit reports omitted matching evidence,
 not unchecked source files. I/O failures, traversal pruning, cancellation, and elapsed limits
 continue to report incomplete scope coverage; omitted evidence never proves a fact absent.
+Language source inspection is an explicit trusted grounded-caller hint, rather than an automatic
+reinterpretation inside shared lexical search. Coding tool and context-provider lexical requests
+retain content-match semantics and cannot receive synthetic nonmatching inspection windows.
 Direct named implementation and ADR/RFC fact questions use lexical evidence plus the required
 filename batches; they do not schedule unrelated graph or history traversal. Explicit relationship,
 caller, import, test, integration, history, and diagnostic questions retain their structural routing.
@@ -237,6 +251,9 @@ HTML/text lookups and complete literal absences avoid unrelated code-graph augme
 complete explicit exact fact lookups also avoid optional graph/history work in Git folders,
 including facts stored in source-code files. Incomplete lexical evidence and explicitly requested
 definitions, relationships, and history retain their existing retrieval and uncertainty behavior.
+The existing connected-context completion event records executed/skipped ring kinds, closed skip
+reasons, and whether optional augmentation was skipped. Planned rings are never presented as
+executed work in the diagnostic audit.
 Git-history discovery is not attempted for a folder without Git unless the question requests
 history or relationships. Requested definition, relationship, and history evidence retains its
 existing retrieval path and reports genuine unavailability.

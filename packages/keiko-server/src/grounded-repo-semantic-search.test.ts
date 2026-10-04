@@ -463,6 +463,17 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     } as const;
     const hits = await provider.search(searchRequest);
     const repeatedHits = await provider.search(searchRequest);
+    const windowHits = await provider.search({
+      query: QUERY,
+      documents: [
+        {
+          scopePath: "src/auth.ts",
+          text: (files["src/auth.ts"] ?? "").split("\n").slice(1).join("\n"),
+          startLine: 2,
+        },
+      ],
+    });
+    expect(windowHits).toEqual(hits);
     const inputs = embeddingRequest.mock.calls.map(([request]) => request.input);
 
     expect(hits, `embedding inputs: ${JSON.stringify(inputs)}`).toEqual([
@@ -534,7 +545,19 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     );
 
     expect(authFile).toBeDefined();
-    expect(semanticAtom?.atom.lineRange).toEqual({ startLine: 2, endLine: 2 });
+    const rawMatches = await provider.search({
+      query: { ...QUERY, text: "Investigate session renewal in src/auth.ts" },
+      documents: [{ scopePath: "src/auth.ts", text: files["src/auth.ts"] ?? "" }],
+    });
+    expect(rawMatches.find((match) => match.scopePath === "src/auth.ts")?.line).toBe(2);
+    const range = semanticAtom?.atom.lineRange;
+    if (semanticAtom === undefined || range === undefined)
+      throw new TypeError("Expected located semantic evidence.");
+    expect(range.startLine).toBeLessThanOrEqual(2);
+    expect(range.endLine).toBeGreaterThanOrEqual(2);
+    expect(semanticAtom.content.split("\n")[2 - range.startLine]).toBe(
+      "export function renewSession() {",
+    );
     expect(embeddingRequest.mock.calls.some(([request]) => request.input.startsWith("Path:"))).toBe(
       false,
     );

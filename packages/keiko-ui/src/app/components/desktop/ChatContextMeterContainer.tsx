@@ -21,13 +21,44 @@ import type { ChatSessionApi } from "./hooks/useChatSession";
 type ContextSession = Pick<
   ChatSessionApi,
   "activeChat" | "selectedModel" | "messages" | "sending" | "regeneratingMessageId" | "loading"
->;
+> &
+  Partial<Pick<ChatSessionApi, "models">>;
 
 interface ContextState {
   readonly key: string;
   readonly status?: ChatContextStatusWire | undefined;
   readonly compacting: boolean;
   readonly error: boolean;
+}
+
+function selectedModelContextGeometry(session: ContextSession): readonly unknown[] {
+  const model = session.models?.find((candidate) => candidate.id === session.selectedModel);
+  if (model === undefined) return [];
+  const accounting = model.tokenAccounting;
+  return [
+    model.contextWindow,
+    model.maxInputTokens,
+    model.maxOutputTokens,
+    model.contextWindowAssumed,
+    model.contextWindowReported,
+    accounting?.source,
+    accounting?.counterId,
+    accounting?.scaleMilli,
+    accounting?.offsetTokens,
+  ];
+}
+
+function contextStateKey(session: ContextSession): string {
+  const chat = session.activeChat;
+  return JSON.stringify([
+    chat?.id,
+    chat?.projectPath,
+    session.selectedModel,
+    selectedModelContextGeometry(session),
+    chat?.connectedScopes ?? chat?.connectedScope,
+    chat?.localKnowledgeScopes ?? chat?.localKnowledgeScope,
+    chat?.gitChangeScopes,
+  ]);
 }
 
 function useChatContext(session: ContextSession): {
@@ -39,14 +70,7 @@ function useChatContext(session: ContextSession): {
   const chatId = session.activeChat?.id;
   const projectPath = session.activeChat?.projectPath;
   const modelId = session.selectedModel;
-  const key = JSON.stringify([
-    chatId,
-    projectPath,
-    modelId,
-    session.activeChat?.connectedScopes ?? session.activeChat?.connectedScope,
-    session.activeChat?.localKnowledgeScopes ?? session.activeChat?.localKnowledgeScope,
-    session.activeChat?.gitChangeScopes,
-  ]);
+  const key = contextStateKey(session);
   const busy = session.sending || session.regeneratingMessageId !== undefined;
   const historyKey = JSON.stringify(session.messages.map((message) => message.id));
   const [state, setState] = useState<ContextState>({ key, compacting: false, error: false });

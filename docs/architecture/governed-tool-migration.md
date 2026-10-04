@@ -152,6 +152,11 @@ including shared deadline, regex-safety and path-admission helpers, workspace pa
 and the dependency lockfile. Type-only imports do not execute and do not expand that closure.
 This dependency-derived source set stays separate from the 43 historical migration rows. Both
 producers and validators call `ownedSourceDigestAt`; no second source-digest formula exists.
+The recursive-search repair retired `codingRepositorySearchInventory.ts` completely and routes
+the Coding search adapter through the shared workspace search facade. Its deleted path is no
+longer an active closure seed; the existing `codingRepositorySearch.ts` seed follows the actual
+shared implementation dependencies. This retirement changes neither the historical 43-row
+census nor the landed H1 commit and digest pins or retained receipts.
 Its canonical path/content pairs encode Git blob bytes as base64, preserving distinct malformed
 UTF-8 bytes and byte-order marks instead of collapsing them during text decoding.
 

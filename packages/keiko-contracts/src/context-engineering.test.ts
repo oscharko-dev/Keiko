@@ -514,6 +514,26 @@ describe("effectiveContextWindow", () => {
 });
 
 describe("deriveContextProfileFromCapability", () => {
+  it("preserves the physical window while enforcing a separate declared input ceiling", () => {
+    const profile = deriveContextProfileFromCapability({
+      ...chatCapability("input-capped-alias", 128_000, 8_000),
+      maxInputTokens: 16_000,
+    });
+    expect(profile.maxInputTokens).toBe(128_000);
+    expect(profile.effectiveInputBudget).toBe(16_000);
+    expect(profile.inputTokenLimit).toBe(16_000);
+    expect(validateContextProfile(profile).ok).toBe(true);
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, null])(
+    "rejects an invalid independent input ceiling: %s",
+    (inputTokenLimit) => {
+      expect(validateContextProfile({ ...DEFAULT_CONTEXT_PROFILE, inputTokenLimit }).ok).toBe(
+        false,
+      );
+    },
+  );
+
   it("treats the output ceiling as a limit, leaving room for a GPT OSS request", () => {
     const profile = deriveContextProfileFromCapability(
       chatCapability("gpt-oss-120b", 131_072, 131_072),

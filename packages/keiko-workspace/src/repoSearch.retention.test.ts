@@ -71,8 +71,31 @@ describe("streamed retained results", () => {
     );
     expect(result.atoms.map((atom) => [atom.scopePath, atom.lineRange?.startLine])).toEqual([
       ["alpha.txt", 1],
+      ["middle.txt", 1],
+      ["zeta.txt", 1],
+    ]);
+    const wider = await searchText(
+      scope(),
+      {
+        kind: "exact-symbol",
+        text: "EqualTargetProbe",
+        caseSensitive: true,
+        maxResults: 4,
+        emittedAtMs: 1,
+      },
+      {
+        maxFilesScanned: null,
+        maxMatchesReturned: 4,
+        maxBytesPerFileScanned: 2_097_152,
+        elapsedMsMax: null,
+      },
+      { fs, nowMs: () => 1 },
+    );
+    expect(wider.atoms.map((atom) => [atom.scopePath, atom.lineRange?.startLine])).toEqual([
+      ["alpha.txt", 1],
       ["alpha.txt", 2],
       ["middle.txt", 1],
+      ["zeta.txt", 1],
     ]);
     expect(result.coverage.reasons).toContain("match-cap");
   });

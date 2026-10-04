@@ -2333,6 +2333,67 @@ describe("runGroundedExploration", () => {
     expect(log.lines().join("\n")).not.toContain("export function MyClass");
   });
 
+  it("keeps targeted overview terms and semantic retrieval beyond the shallow listing output", async () => {
+    mkdirSync(join(ROOT, "src/auth/deep/nested"), { recursive: true });
+    for (let index = 0; index < 220; index += 1)
+      writeFileSync(join(ROOT, `shallow-${String(index)}.ts`), "export const unrelated = 0;\n");
+    const target = "src/auth/deep/nested/session.ts";
+    writeFileSync(join(ROOT, target), "export const authentication = 'module session renewal';\n");
+    let semanticCalls = 0;
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "How is the authentication module structured?", maxResults: 50 }),
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        repoSemanticSearchProvider: {
+          name: "targeted-overview-review",
+          search: ({ documents }) => {
+            semanticCalls += 1;
+            return Promise.resolve(
+              documents.some((document) => document.scopePath === target)
+                ? [{ scopePath: target, score: 1, line: 1 }]
+                : [],
+            );
+          },
+        },
+      },
+    );
+    expect(out.pack.files.map((file) => file.scopePath)).toContain(target);
+    expect(semanticCalls).toBe(1);
+  });
+
+  it("records executed and skipped rings plus augmentation decisions without source bodies", async () => {
+    writeFileSync(join(ROOT, "manual.html"), "<p>other information</p>\n");
+    const log = createBufferedServerLogSink();
+    await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: 'Find the exact identifier "MISSING_REVIEW_PROBE".' }),
+      }),
+      {
+        correlationId: "review-ring-skip",
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        activityLog: log,
+      },
+    );
+    const event = log.events.find((item) => item.op === "search.connected-context.completed");
+    expect(event?.extra).toMatchObject({
+      executedRingKinds: ["lexical"],
+      skippedRingKinds: ["git-history"],
+      ringSkipReasons: ["no-git-metadata"],
+      augmentationSkipped: true,
+      augmentationSkipReason: "literal-absence",
+    });
+    expect(log.lines().join("\n")).not.toContain("MISSING_REVIEW_PROBE");
+  });
+
   it("grounds direct package.json metadata requests without leaking internal .keiko evidence", async () => {
     writeFileSync(join(ROOT, "package.json"), '{\n  "packageManager": "npm@11.16.0"\n}\n');
     mkdirSync(join(ROOT, ".keiko/evidence/qi"), { recursive: true });

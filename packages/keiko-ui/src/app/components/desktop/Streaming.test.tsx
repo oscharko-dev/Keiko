@@ -263,7 +263,7 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
     );
     const status = screen.getByRole("status");
     expect(status).toBeInTheDocument();
-    expect(status).toHaveTextContent("Contacting model…");
+    expect(status).toHaveTextContent("Preparing response…");
     expect(status.getAttribute("aria-live")).toBe("polite");
   });
 
@@ -455,7 +455,7 @@ describe("sendStatusLabel (Issue #152 — no fake progress percentages)", () => 
 
   it("returns a stable, human label for every in-flight lifecycle state", () => {
     expect(sendStatusLabel("queued")).toBe("Submitting your message…");
-    expect(sendStatusLabel("contacting")).toBe("Contacting model…");
+    expect(sendStatusLabel("contacting")).toBe("Preparing response…");
     expect(sendStatusLabel("streaming")).toBe("Receiving response…");
     expect(sendStatusLabel("cancelled")).toBe("Response cancelled.");
   });

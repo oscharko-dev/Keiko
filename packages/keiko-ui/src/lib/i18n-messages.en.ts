@@ -33,6 +33,7 @@ export const EN_MESSAGES = {
   "rail.editor": "Editor",
   "editor.empty.opening": "Opening…",
   "supportReport.globalFailure": "Keiko encountered an error.",
+  "supportReport.readinessUnavailable": "Error reports may currently be incomplete.",
   "supportReport.create": "Create error report",
   "supportReport.creating": "Creating report…",
   "supportReport.download": "Download report",

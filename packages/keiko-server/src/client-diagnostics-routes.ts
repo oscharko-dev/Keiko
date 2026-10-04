@@ -1126,6 +1126,38 @@ const CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION = defineActivityLogOperat
   releaseImpact: "patch",
 });
 
+const CLIENT_SUPPORT_REPORT_PREPARED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.support-report.prepared",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSupportReportPrepared",
+  fields: {
+    reportBytes: { type: "integer", dataClass: "count", required: true },
+    evidenceScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["server", "client-only"],
+    },
+    availabilityReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["support-report"],
+  proofIds: ["client.support-report.prepared.line"],
+  releaseImpact: "patch",
+});
+
 // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits — the
 // trigger, the search box, or an option — instead of leaving it to the workspace's own Escape
 // shortcut, which otherwise would have cleared the window selection while the menu stayed open. This
@@ -1700,6 +1732,28 @@ function logClientSupportReportDownload(
   return true;
 }
 
+function logClientSupportReportPrepared(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const prepared = request.supportReportPreparation;
+  if (prepared === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SUPPORT_REPORT_PREPARED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        reportBytes: prepared.reportBytes,
+        evidenceScope: prepared.evidenceScope,
+        availabilityReason: prepared.availabilityReason,
+        completeness: prepared.completeness,
+        loss: prepared.loss,
+      },
+    ),
+  );
+  return true;
+}
+
 // The closed report shapes, each of which owns its own registered line.
 function logClosedClientReport(
   request: ClientDiagnosticIngestRequest,
@@ -1710,7 +1764,8 @@ function logClosedClientReport(
     logClientKnowledgeCatalog(request, correlationId) ||
     logClientAnswerCopy(request, correlationId) ||
     logClientAnswerSpeech(request, correlationId) ||
-    logClientSupportReportDownload(request, correlationId)
+    logClientSupportReportDownload(request, correlationId) ||
+    logClientSupportReportPrepared(request, correlationId)
   );
 }
 
@@ -2227,7 +2282,8 @@ function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReport
     report.selectDismissal !== undefined ||
     report.knowledgeCatalog !== undefined ||
     report.answerSpeech !== undefined ||
-    report.supportReportDelivery !== undefined
+    report.supportReportDelivery !== undefined ||
+    report.supportReportPreparation !== undefined
   ) {
     return "routine";
   }

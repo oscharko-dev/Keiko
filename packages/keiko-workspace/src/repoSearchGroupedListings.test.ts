@@ -35,6 +35,8 @@ function scope(): SearchScope {
       root,
       selectedRoot: root,
       name: "grouped-files",
+      version: "0.0.0",
+      testFramework: "unknown",
       sourceDirs: [],
       testDirs: [],
       languages: [],

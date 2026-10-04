@@ -225,3 +225,34 @@ it.each([0, 100])(
     expect(line).not.toContain("private.example");
   },
 );
+
+describe("independent model input ceiling admission", () => {
+  it.each([undefined, 128, 1_024])(
+    "bounds actual input even when the output allocation is %s",
+    (maxOutputTokens) => {
+      const constrained = { ...capability, maxInputTokens: 128 };
+      const boundedRequest = {
+        ...request,
+        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+      };
+      const log = recorder();
+      expect(() =>
+        admitGatewayPrompt(boundedRequest, constrained, log, "input-ceiling", {
+          status: "available",
+          tokens: 129,
+        }),
+      ).toThrow(expect.objectContaining({ code: "GATEWAY_CONTEXT_OVERFLOW" }));
+      expect(log.events[0]?.extra).toMatchObject({
+        contextWindow: constrained.contextWindow,
+        inputBudget: constrained.maxInputTokens,
+        state: "overflow",
+      });
+      expect(() =>
+        admitGatewayPrompt(boundedRequest, constrained, recorder(), "input-ceiling", {
+          status: "available",
+          tokens: 128,
+        }),
+      ).not.toThrow();
+    },
+  );
+});

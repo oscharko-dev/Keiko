@@ -74,6 +74,7 @@ function segmentLabel(
     free: t(grounded ? "chat.context.segment.conversationFree" : "chat.context.segment.free"),
     "compaction-buffer": t("chat.context.segment.compactionBuffer"),
     "source-capacity": t("chat.context.segment.sourceCapacity"),
+    "input-capacity-unavailable": t("chat.context.segment.inputUnavailable"),
     "output-reserve": t("chat.context.outputReserve"),
     "safety-margin": t("chat.context.safetyMargin"),
   };
@@ -252,6 +253,18 @@ function ContextSummary({ status }: { readonly status: ChatContextStatusWire }):
 }
 
 // Savings, pending compaction and the assumed-window hint, shared by both presentations.
+function DeclaredInputLimit({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  return status.inputLimitTokens === undefined ? null : (
+    <p className={styles.cmpHelp}>
+      {t("chat.context.declaredInputLimit", {
+        tokens: status.inputLimitTokens.toLocaleString(locale),
+      })}
+    </p>
+  );
+}
+
 function ContextFootnotes({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
   const t = useTranslate();
   const locale = useLocale();
@@ -279,6 +292,7 @@ function ContextFootnotes({ status }: { readonly status: ChatContextStatusWire }
           })}
         </p>
       )}
+      <DeclaredInputLimit status={status} />
       {status.contextWindowAssumed === true ? (
         <p className={styles.cmpHelp}>{t("chat.context.windowAssumed")}</p>
       ) : null}

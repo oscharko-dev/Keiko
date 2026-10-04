@@ -109,7 +109,7 @@ function deliverReport(ctx: RouteContext, entry: Delivery): HandlerOutcome {
     "X-Content-Type-Options": "nosniff",
   });
   ctx.res.end(bytes);
-  emitSupportReportDelivered(ctx.correlationId, bytes.length);
+  emitSupportReportDelivered(ctx.correlationId, bytes.length, entry.authority.kind);
   return STREAMING;
 }
 

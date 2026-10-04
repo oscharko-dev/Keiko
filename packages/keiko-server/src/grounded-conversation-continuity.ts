@@ -133,7 +133,10 @@ function assembleContinuity(
  * sources, which are never compacted — they are fetched fresh per question and trimmed by rank.
  */
 export function groundedHistoryLaneTokens(modelProfile: ContextProfile): number {
-  return Math.max(512, Math.min(8_000, Math.floor(modelProfile.effectiveInputBudget / 3)));
+  return Math.min(
+    modelProfile.effectiveInputBudget,
+    Math.max(512, Math.min(8_000, Math.floor(modelProfile.effectiveInputBudget / 3))),
+  );
 }
 
 /** The profile a grounded question compacts its conversation lane against; the meter projects it. */

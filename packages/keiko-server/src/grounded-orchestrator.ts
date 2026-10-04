@@ -249,6 +249,40 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
       values: ["complete", "unavailable"],
     },
     plannedRingCount: { type: "integer", dataClass: "count", required: false },
+    executedRingKinds: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 3,
+      values: ["lexical", "structural", "git-history"],
+    },
+    skippedRingKinds: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 3,
+      values: ["lexical", "structural", "git-history"],
+    },
+    ringSkipReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 4,
+      values: ["no-git-metadata", "ordinary-document", "literal-absence", "complete-exact-lookup"],
+    },
+    augmentationSkipped: { type: "boolean", dataClass: "closed-enum", required: false },
+    augmentationSkipReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "no-git-metadata",
+        "ordinary-document",
+        "literal-absence",
+        "complete-exact-lookup",
+        "budget-exhausted",
+      ],
+    },
     usageSearchCalls: { type: "integer", dataClass: "count", required: false },
     usageFilesRead: { type: "integer", dataClass: "count", required: false },
     usageExcerptBytes: { type: "integer", dataClass: "count", required: false },
@@ -658,6 +692,7 @@ export function clarificationUserMessage(error: ClarificationNeededError): strin
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 interface SearchInputs {
+  readonly tryReserveAdditionalSearchCall?: (() => boolean) | undefined;
   readonly hasGitMetadata: boolean;
   readonly searchScope: SearchScope;
   readonly query: RetrievalQuery;
@@ -1603,26 +1638,27 @@ function lexicalSemanticProvider(
     : undefined;
 }
 
-async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Promise<SearchResult> {
-  const options = {
+function lexicalSearchOptions(inputs: SearchInputs): {
+  fs: WorkspaceFs;
+  nowMs: () => number;
+  deadlineAtMs: number;
+  searchHints: { retrievalIntent: RetrievalIntent; allowSourceInspection: boolean };
+  signal?: AbortSignal;
+} {
+  return {
     fs: inputs.fs,
     nowMs: inputs.nowMs,
     deadlineAtMs: inputs.deadlineAtMs,
-    searchHints: { retrievalIntent: inputs.retrievalIntent },
+    searchHints: { retrievalIntent: inputs.retrievalIntent, allowSourceInspection: true },
     ...(inputs.signal === undefined ? {} : { signal: inputs.signal }),
   };
-  if (inputs.retrievalIntent === "repository-overview") {
-    return findFiles(
-      inputs.searchScope,
-      {
-        ...inputs.query,
-        kind: "file-pattern",
-        text: "**/*",
-      },
-      ring.searchLimits,
-      options,
-    );
-  }
+}
+
+async function searchLexicalTerms(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+): Promise<SearchResult> {
+  const options = lexicalSearchOptions(inputs);
   const definitionSymbol = directDefinitionSymbol(inputs.query, inputs.anchors);
   const terms = definitionSymbol === undefined ? anchoredLexicalTargets(inputs) : [];
   const query =
@@ -1636,6 +1672,24 @@ async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Pro
     ...(terms.length === 0 ? {} : { queryInterpretation: { kind: "literal" as const, terms } }),
     ...(semanticSearchProvider === undefined ? {} : { semanticSearchProvider }),
   });
+}
+
+async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Promise<SearchResult> {
+  const result = await searchLexicalTerms(ring, inputs);
+  if (
+    inputs.retrievalIntent !== "repository-overview" ||
+    result.atoms.length > 0 ||
+    result.coverage.incomplete ||
+    inputs.tryReserveAdditionalSearchCall?.() !== true
+  )
+    return result;
+  const listing = await findFiles(
+    inputs.searchScope,
+    { ...inputs.query, kind: "file-pattern", text: "**/*" },
+    ring.searchLimits,
+    lexicalSearchOptions(inputs),
+  );
+  return { ...listing, elapsedMs: result.elapsedMs + listing.elapsedMs };
 }
 
 function withoutNamedSemanticSubstitution(
@@ -1833,7 +1887,18 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
   return runNonLexicalRing(ring as NonLexicalRing, inputs);
 }
 
+type RingSkipReason =
+  "no-git-metadata" | "ordinary-document" | "literal-absence" | "complete-exact-lookup";
+interface RingDecisionAudit {
+  readonly executedRingKinds: RetrievalRing["kind"][];
+  readonly skippedRingKinds: RetrievalRing["kind"][];
+  readonly ringSkipReasons: RingSkipReason[];
+  augmentationSkipped: boolean;
+  augmentationSkipReason?: RingSkipReason | "budget-exhausted";
+}
+
 interface RingRunSummary {
+  readonly decisions?: RingDecisionAudit | undefined;
   readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly atoms: readonly EvidenceAtom[];
   readonly omitted: readonly OmittedContextEntry[];
@@ -2018,22 +2083,33 @@ function isOrdinaryLiteralAbsence(
   );
 }
 
-function optionalRingIsUnneeded(
+function lookupAugmentationSkipReason(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  hasGitMetadata: boolean,
+  diagnostics: ContextPackDiagnostics | undefined,
+): RingSkipReason | undefined {
+  if (isCompleteExactLiteralLookup(query, anchors, diagnostics)) return "complete-exact-lookup";
+  if (isOrdinaryDocumentLookup(query, hasGitMetadata, diagnostics)) return "ordinary-document";
+  if (isOrdinaryLiteralAbsence(query, hasGitMetadata, anchors, diagnostics))
+    return "literal-absence";
+  return undefined;
+}
+
+function optionalRingSkipReason(
   ring: RetrievalRing,
   inputs: SearchInputs,
   diagnostics: ContextPackDiagnostics | undefined,
-): boolean {
-  if (requiresRelationshipOrHistoryRings(inputs.query)) return false;
-  if (
-    ring.kind !== "lexical" &&
-    isCompleteExactLiteralLookup(inputs.query, inputs.anchors, diagnostics)
-  )
-    return true;
-  if (ring.kind === "git-history") return !inputs.hasGitMetadata;
-  return (
-    ring.kind === "structural" &&
-    (isOrdinaryDocumentLookup(inputs.query, inputs.hasGitMetadata, diagnostics) ||
-      isOrdinaryLiteralAbsence(inputs.query, inputs.hasGitMetadata, inputs.anchors, diagnostics))
+): RingSkipReason | undefined {
+  if (requiresRelationshipOrHistoryRings(inputs.query) || ring.kind === "lexical") return undefined;
+  if (isCompleteExactLiteralLookup(inputs.query, inputs.anchors, diagnostics))
+    return "complete-exact-lookup";
+  if (ring.kind === "git-history") return inputs.hasGitMetadata ? undefined : "no-git-metadata";
+  return lookupAugmentationSkipReason(
+    inputs.query,
+    inputs.anchors,
+    inputs.hasGitMetadata,
+    diagnostics,
   );
 }
 
@@ -2052,6 +2128,86 @@ function lexicalContentIdentities(
   return result.primaryContentIdentities ?? previous;
 }
 
+function skipPlannedRing(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  diagnostics: ContextPackDiagnostics | undefined,
+  decisions: RingDecisionAudit,
+): boolean {
+  const reason = optionalRingSkipReason(ring, inputs, diagnostics);
+  if (reason === undefined) return false;
+  decisions.skippedRingKinds.push(ring.kind);
+  if (!decisions.ringSkipReasons.includes(reason)) decisions.ringSkipReasons.push(reason);
+  return true;
+}
+
+interface ExecutedRing {
+  governor: GovernorState;
+  result: RingResult;
+  marker?: undefined;
+}
+interface StoppedRing {
+  governor: GovernorState;
+  marker: UncertaintyMarker;
+  result?: undefined;
+}
+async function runReservedRing(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  current: GovernorState,
+  decisions: RingDecisionAudit,
+): Promise<ExecutedRing | StoppedRing> {
+  const reservation = reserveAvailableRing(current, ring, inputs);
+  if (reservation.marker !== undefined)
+    return { governor: reservation.governor, marker: reservation.marker };
+  let governor = reservation.governor;
+  decisions.executedRingKinds.push(ring.kind);
+  const result = await runRing(ring, {
+    ...inputs,
+    tryReserveAdditionalSearchCall: (): boolean => {
+      if (governor.usage.searchCalls >= governor.plan.budget.searchCallsMax) return false;
+      governor = applyUsage(governor, usageDelta({ searchCalls: 1 }));
+      return true;
+    },
+  });
+  return { governor, result };
+}
+
+interface RingEvidenceAccumulator {
+  atoms: EvidenceAtom[];
+  omitted: OmittedContextEntry[];
+  uncertainty: UncertaintyMarker[];
+  diagnostics: ContextPackDiagnostics | undefined;
+  primaryContentIdentities: readonly ContentEvidenceIdentity[];
+}
+function newRingEvidence(): RingEvidenceAccumulator {
+  return {
+    atoms: [],
+    omitted: [],
+    uncertainty: [],
+    diagnostics: undefined,
+    primaryContentIdentities: [],
+  };
+}
+function appendRingEvidence(evidence: RingEvidenceAccumulator, result: RingResult): void {
+  evidence.diagnostics ??= result.diagnostics;
+  evidence.primaryContentIdentities = lexicalContentIdentities(
+    result,
+    evidence.primaryContentIdentities,
+  );
+  evidence.atoms.push(...result.atoms);
+  evidence.omitted.push(...result.omitted);
+  evidence.uncertainty.push(...result.uncertainty);
+}
+function newRingDecisions(): RingDecisionAudit {
+  return {
+    executedRingKinds: [],
+    skippedRingKinds: [],
+    ringSkipReasons: [],
+    augmentationSkipped: false,
+  };
+}
+
 async function runAllRings(
   rings: readonly RetrievalRing[],
   inputs: SearchInputs,
@@ -2059,41 +2215,33 @@ async function runAllRings(
 ): Promise<RingRunSummary> {
   const blocked = initialBlockedRingSummary(initialGovernor, inputs);
   if (blocked !== undefined) return blocked;
-  const atoms: EvidenceAtom[] = [];
-  const omitted: OmittedContextEntry[] = [];
-  const uncertainty: UncertaintyMarker[] = [];
-  // Ring order is fixed by the plan, so capturing the first lexical ring's diagnostics is
-  // deterministic. (There is normally exactly one lexical ring.)
-  let diagnostics: ContextPackDiagnostics | undefined;
-  let primaryContentIdentities: readonly ContentEvidenceIdentity[] = [];
+  const evidence = newRingEvidence();
   let governor = initialGovernor;
+  const decisions = newRingDecisions();
   for (const ring of rings) {
     throwIfCancelled(inputs.signal);
-    if (optionalRingIsUnneeded(ring, inputs, diagnostics)) {
+    if (skipPlannedRing(ring, inputs, evidence.diagnostics, decisions)) {
       governor = advanceRing(governor);
       continue;
     }
     if (!canContinue(governor)) {
       break;
     }
-    const reservation = reserveAvailableRing(governor, ring, inputs);
-    governor = reservation.governor;
-    if (reservation.marker !== undefined) {
-      uncertainty.push(reservation.marker);
+    const execution = await runReservedRing(ring, inputs, governor, decisions);
+    governor = execution.governor;
+    if (execution.marker !== undefined) {
+      evidence.uncertainty.push(execution.marker);
       break;
     }
-    const result = await runRing(ring, inputs);
+    const result = execution.result;
     throwIfCancelled(inputs.signal);
-    // First lexical ring wins (??= never overwrites once set); ring order is plan-fixed.
-    diagnostics ??= result.diagnostics;
-    primaryContentIdentities = lexicalContentIdentities(result, primaryContentIdentities);
+    appendRingEvidence(evidence, result);
     const afterRing = applyUsage(governor, result.usage);
-    atoms.push(...result.atoms);
-    omitted.push(...result.omitted);
-    uncertainty.push(...result.uncertainty);
     if (afterRing.status === "budget-exhausted") {
       governor = afterRing;
-      uncertainty.push(budgetClipped(afterRing.stopReason ?? "budget exhausted", inputs.nowMs()));
+      evidence.uncertainty.push(
+        budgetClipped(afterRing.stopReason ?? "budget exhausted", inputs.nowMs()),
+      );
       break;
     }
     governor = advanceRing(afterRing);
@@ -2101,7 +2249,7 @@ async function runAllRings(
   if (governor.status === "running") {
     governor = complete(governor);
   }
-  return { atoms, omitted, governor, uncertainty, diagnostics, primaryContentIdentities };
+  return { ...evidence, governor, decisions };
 }
 
 export interface ExcerptInputs {
@@ -5223,20 +5371,25 @@ async function discoveredTraceForAugmentation(
   });
 }
 
-function ordinaryLookupNeedsNoAugmentation(
-  args: AssembleGroundedPackInputs,
+function markAugmentationSkipped(
   rings: RingRunSummary,
-): boolean {
-  return (
-    isCompleteExactLiteralLookup(args.input.query, args.plan.anchors, rings.diagnostics) ||
-    isOrdinaryDocumentLookup(args.input.query, args.hasGitMetadata, rings.diagnostics) ||
-    isOrdinaryLiteralAbsence(
-      args.input.query,
-      args.hasGitMetadata,
-      args.plan.anchors,
-      rings.diagnostics,
-    )
+  reason: RingSkipReason | "budget-exhausted",
+): void {
+  if (rings.decisions === undefined) return;
+  rings.decisions.augmentationSkipped = true;
+  rings.decisions.augmentationSkipReason = reason;
+}
+
+function recordAugmentationSkip(args: AssembleGroundedPackInputs, rings: RingRunSummary): boolean {
+  const reason = lookupAugmentationSkipReason(
+    args.input.query,
+    args.plan.anchors,
+    args.hasGitMetadata,
+    rings.diagnostics,
   );
+  if (reason === undefined) return false;
+  markAugmentationSkipped(rings, reason);
+  return true;
 }
 
 async function augmentRingsWithDeterministicAtoms(
@@ -5262,7 +5415,11 @@ async function augmentRingsWithDeterministicAtoms(
     nowMs() < deadlineAtMs
       ? withExplicitScopeAtoms(rings, input, searchScope, fs, nowMs, deadlineAtMs, deps.signal)
       : rings;
-  if (!budget.canContinue() || ordinaryLookupNeedsNoAugmentation(args, scopedRings))
+  if (!budget.canContinue()) {
+    markAugmentationSkipped(scopedRings, "budget-exhausted");
+    return finishAugmentationBudget(scopedRings, budget);
+  }
+  if (recordAugmentationSkip(args, scopedRings))
     return finishAugmentationBudget(scopedRings, budget);
   const deterministicRings = await withDeterministicContextAtoms(scopedRings, {
     input,
@@ -5439,6 +5596,7 @@ async function assembleGroundedPack(
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly decisions?: RingDecisionAudit | undefined;
   readonly excerptReadWindowCount?: number | undefined;
   readonly anchoredExcerptWindowCount?: number | undefined;
   readonly readBudgetBlocked: boolean;
@@ -5516,10 +5674,12 @@ function liveRetrievalCompletion(
   elapsedBudgetBlocked: boolean,
   anchoredExcerptWindowCount: number | undefined,
   excerptReadWindowCount: number | undefined,
+  decisions: RingDecisionAudit | undefined,
 ): ConnectedContextCompletionStatus {
   return {
     anchoredExcerptWindowCount,
     excerptReadWindowCount,
+    decisions,
     readBudgetBlocked: false,
     elapsedBudgetBlocked,
     workspaceIndexProviderStatus: workspaceIndexAvailable ? "available" : "unavailable",
@@ -5950,6 +6110,7 @@ function completionActivityExtra(
     queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
     plannedRingCount: plan.rings.length,
+    ...(execution.status.decisions ?? {}),
     usageSearchCalls: pack.usage.searchCalls,
     usageFilesRead: pack.usage.filesRead,
     usageExcerptBytes: pack.usage.excerptBytes,
@@ -6851,6 +7012,7 @@ async function retrieveLiveConnectedContext(
       assembled.elapsedBudgetBlocked,
       assembled.anchoredWindowCount,
       assembled.readWindowCount,
+      rings.decisions,
     ),
     context.structuralContexts.diagnostics(),
     context.workspaceIndexActivity.diagnostics(),

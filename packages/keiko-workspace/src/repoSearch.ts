@@ -553,7 +553,9 @@ function sourceInspectionCandidateSelection(
   deps: SearchTextRunnerDeps,
 ): Pick<SearchTextRunner, "candidatePathPredicate" | "sourceInspection"> {
   const extensions =
-    query.kind === "natural-language" && deps.queryInterpretation === undefined
+    query.kind === "natural-language" &&
+    deps.searchHints?.allowSourceInspection === true &&
+    deps.queryInterpretation === undefined
       ? requestedSourceInspectionExtensions(query.text)
       : [];
   const predicate = buildCandidatePathPredicate(deps.candidatePathGlobs, extensions);

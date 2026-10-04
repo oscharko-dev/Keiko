@@ -47,8 +47,6 @@ import {
   recordUserReportedIncident,
 } from "@oscharko-dev/keiko-activity-log";
 import { supportDiagnosticCapacity } from "../../packages/keiko-server/src/support-diagnostic-capacity.js";
-import type { RouteContext } from "../../packages/keiko-server/src/routes.js";
-import type { UiHandlerDeps } from "../../packages/keiko-server/src/deps.js";
 
 function parseLine(line: string | undefined): Record<string, unknown> {
   return JSON.parse(line ?? "") as Record<string, unknown>;
@@ -354,8 +352,8 @@ describe("Activity Log scenario: bff", () => {
     });
     expect(
       supportDiagnosticCapacity(
-        { correlationId: "bff-retained-0" } as RouteContext,
-        { env: { KEIKO_STATE_DIR: stateDir } } as UiHandlerDeps,
+        { correlationId: "bff-retained-0" },
+        { env: { KEIKO_STATE_DIR: stateDir } },
       ),
     ).toEqual({
       retainedDiagnosticCount: 0,

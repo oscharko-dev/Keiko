@@ -29,7 +29,7 @@ export interface SentGroundedPrompt {
 export function sentPromptContext(
   prompt: SentGroundedPrompt,
   measuredPromptTokens: number,
-  profile: Pick<ContextProfile, "tokenAccounting" | "maxInputTokens"> | undefined,
+  profile: Pick<ContextProfile, "tokenAccounting" | "maxInputTokens" | "model"> | undefined,
 ): GroundedPromptContextWire {
   const share = knowledgePromptShare(
     { messages: prompt.messages },
@@ -46,5 +46,6 @@ export function sentPromptContext(
     sentReferenceCount: prompt.sentReferenceCount,
     availableReferenceCount: prompt.availableReferenceCount,
     ...(profile === undefined ? {} : { contextWindowTokens: profile.maxInputTokens }),
+    ...(profile?.model?.id === undefined ? {} : { modelId: profile.model.id }),
   };
 }

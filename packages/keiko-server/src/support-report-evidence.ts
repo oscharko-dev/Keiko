@@ -5,6 +5,8 @@ import {
   DIAGNOSTIC_SUFFICIENCY_REASONS,
   type ActivityLogErrorKind,
   type DesktopSupportReportResponse,
+  type DiagnosticSufficiencyStatus,
+  type DiagnosticSufficiencyReason,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { getServerLogger } from "./observability/index.js";
 import { correlationIdOrUnknown } from "./correlation.js";
@@ -23,6 +25,28 @@ const COMPLETE = {
   completeness: { type: "string", dataClass: "completeness-state", required: true },
   loss: { type: "string", dataClass: "loss-state", required: true },
 } as const;
+const SELECTED_CORRELATION = {
+  selectedCorrelationId: {
+    type: "string",
+    dataClass: "opaque-id",
+    required: false,
+    maxLength: 128,
+  },
+} as const;
+const DELIVERY_FIELDS = {
+  evidenceScope: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["server", "client-only"],
+  },
+  deliveryAuthority: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["session-bound", "client-only"],
+  },
+} as const;
 const STARTED = defineActivityLogOperation({
   ...BASE,
   op: "support.report.ui.started",
@@ -36,6 +60,7 @@ const STARTED = defineActivityLogOperation({
       required: true,
       values: ["correlation", "recent"],
     },
+    ...SELECTED_CORRELATION,
     ...COMPLETE,
   },
   proofIds: ["support.report.ui.started.lifecycle"],
@@ -47,6 +72,20 @@ const COMPLETED = defineActivityLogOperation({
   lifecycle: "end",
   analyzerProjection: "capability",
   fields: {
+    ...SELECTED_CORRELATION,
+    ...DELIVERY_FIELDS,
+    pinDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["pinned", "quota-exceeded", "rejected"],
+    },
+    availabilityReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"],
+    },
     reportBytes: { type: "integer", dataClass: "count", required: true },
     recordCount: { type: "integer", dataClass: "count", required: false },
     reportDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
@@ -78,6 +117,7 @@ const DELIVERED = defineActivityLogOperation({
   analyzerProjection: "timeline",
   fields: {
     reportBytes: { type: "integer", dataClass: "count", required: true },
+    ...DELIVERY_FIELDS,
     ...COMPLETE,
   },
   proofIds: ["support.report.ui.delivered.line"],
@@ -86,12 +126,19 @@ const DELIVERED = defineActivityLogOperation({
 export function emitSupportReportDelivered(
   correlationId: string | undefined,
   reportBytes: number,
+  deliveryAuthority: "session-bound" | "client-only",
 ): void {
   getServerLogger().info(
     activityLogEvent(
       DELIVERED,
       { correlationId: correlationIdOrUnknown(correlationId) },
-      { reportBytes, completeness: "complete", loss: "none" },
+      {
+        reportBytes,
+        deliveryAuthority,
+        evidenceScope: deliveryAuthority === "client-only" ? "client-only" : "server",
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
 }
@@ -142,6 +189,7 @@ const FAILED = defineActivityLogOperation({
 export function emitSupportReportStarted(
   correlationId: string | undefined,
   selected: boolean,
+  selectedCorrelationId?: string,
 ): void {
   getServerLogger().info(
     activityLogEvent(
@@ -149,15 +197,60 @@ export function emitSupportReportStarted(
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         selector: selected ? "correlation" : "recent",
+        ...(selectedCorrelationId === undefined ? {} : { selectedCorrelationId }),
         completeness: "complete",
         loss: "none",
       },
     ),
   );
 }
+type CompletionSummary = Partial<{
+  [
+    Key in
+      | "recordCount"
+      | "reportDigest"
+      | "incidentId"
+      | "manifestUnreadableCount"
+      | "manifestReusedCount"
+      | "pinDisposition"
+      | "availabilityReason"
+  ]: Exclude<NonNullable<DesktopSupportReportResponse["summary"]>[Key], undefined>;
+}>;
+function completionSummary(summary: DesktopSupportReportResponse["summary"]): CompletionSummary {
+  if (summary === undefined) return {};
+  return {
+    recordCount: summary.recordCount,
+    reportDigest: summary.reportDigest,
+    incidentId: summary.incidentId,
+    manifestUnreadableCount: summary.manifestUnreadableCount,
+    manifestReusedCount: summary.manifestReusedCount,
+    ...(summary.pinDisposition === undefined ? {} : { pinDisposition: summary.pinDisposition }),
+    ...(summary.availabilityReason === undefined
+      ? {}
+      : { availabilityReason: summary.availabilityReason }),
+  };
+}
+function completionState(report: DesktopSupportReportResponse): {
+  sufficiency: DiagnosticSufficiencyStatus;
+  reasons: readonly DiagnosticSufficiencyReason[];
+  completeness: "complete" | "partial";
+  loss: "none" | "event-location-unknown";
+} {
+  const status = report.summary?.status ?? "degraded";
+  return {
+    sufficiency: status,
+    reasons: report.summary?.reasons ?? ["evidence-partial"],
+    completeness: status === "complete" ? "complete" : "partial",
+    loss:
+      status === "complete" || report.evidenceScope === "client-only"
+        ? "none"
+        : "event-location-unknown",
+  };
+}
 export function emitSupportReportCompleted(
   correlationId: string | undefined,
   report: DesktopSupportReportResponse,
+  selectedCorrelationId?: string,
 ): void {
   const summary = report.summary;
   const status = summary?.status ?? "degraded";
@@ -167,22 +260,11 @@ export function emitSupportReportCompleted(
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         reportBytes: Buffer.byteLength(report.reportJson),
-        ...(summary === undefined
-          ? {}
-          : {
-              recordCount: summary.recordCount,
-              reportDigest: summary.reportDigest,
-              incidentId: summary.incidentId,
-              manifestUnreadableCount: summary.manifestUnreadableCount,
-              manifestReusedCount: summary.manifestReusedCount,
-            }),
-        sufficiency: status,
-        reasons: summary?.reasons ?? ["evidence-partial"],
-        completeness: status === "complete" ? "complete" : "partial",
-        loss:
-          status === "complete" || report.evidenceScope === "client-only"
-            ? "none"
-            : "event-location-unknown",
+        ...(selectedCorrelationId === undefined ? {} : { selectedCorrelationId }),
+        evidenceScope: report.evidenceScope ?? "server",
+        deliveryAuthority: report.evidenceScope === "client-only" ? "client-only" : "session-bound",
+        ...completionSummary(summary),
+        ...completionState(report),
       },
     ),
   );

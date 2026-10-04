@@ -270,8 +270,10 @@ function currentGroundedRequest(
   lastPrompt: GroundedPromptContextWire | undefined,
   grounded: boolean,
   profile: ContextProfile,
+  modelId: string,
 ): GroundedPromptContextWire | undefined {
   if (!grounded || lastPrompt === undefined) return undefined;
+  if (lastPrompt.modelId !== undefined && lastPrompt.modelId !== modelId) return undefined;
   const window = lastPrompt.contextWindowTokens;
   return window === undefined || window === profile.maxInputTokens ? lastPrompt : undefined;
 }
@@ -324,6 +326,7 @@ export function readChatContextStatus(
   return {
     modelId,
     contextWindowTokens: profile.maxInputTokens,
+    ...(profile.inputTokenLimit === undefined ? {} : { inputLimitTokens: profile.inputTokenLimit }),
     ...assumedWindowField(deps, modelId),
     inputBudgetTokens: profile.effectiveInputBudget,
     reservedOutputTokens: profile.reservedOutputTokens,
@@ -333,7 +336,7 @@ export function readChatContextStatus(
     ...checkpointSavings(checkpoint, counted),
     ...(pending === undefined ? {} : { pendingCompaction: pending.wire }),
     ...groundedStatusFields(
-      currentGroundedRequest(counted.latestPromptContext, grounded !== undefined, profile),
+      currentGroundedRequest(counted.latestPromptContext, grounded !== undefined, profile, modelId),
     ),
     segments: breakdown.segments,
     autoCompactionAtTokens: breakdown.autoCompactionAtTokens,

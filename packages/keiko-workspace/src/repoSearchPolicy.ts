@@ -58,6 +58,7 @@ export type CandidateBucket =
   | "other";
 
 export interface SearchHints {
+  readonly allowSourceInspection?: boolean | undefined;
   readonly hasGitMetadata?: boolean | undefined;
   readonly retrievalIntent?: SearchIntent | undefined;
   readonly lowValuePathAllowlist?: readonly string[] | undefined;

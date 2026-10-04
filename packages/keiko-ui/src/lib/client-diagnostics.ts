@@ -44,6 +44,7 @@ import {
   type ClientDiagnosticAnswerCopy,
   type ClientDiagnosticAnswerSpeech,
   type ClientSupportReportDelivery,
+  type ClientSupportReportPreparation,
   type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
@@ -168,6 +169,7 @@ export interface ClientDiagnosticMeta {
   // under the correlation its synthesis request carries, never the spoken text.
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
+  readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

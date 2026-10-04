@@ -133,6 +133,15 @@ describe("production coding repository handler composition", () => {
       resultPathSha256: [createHash("sha256").update("src/example.ts").digest("hex")],
     });
   });
+  it("keeps lexical source-language queries free of synthetic nonmatching windows", async () => {
+    const { handler } = fixture();
+    const result = await handler.invoke(
+      { ...request, mode: "lexical", query: "find TypeScript source files that call createQuote" },
+      context(),
+    );
+    expect(result).toMatchObject({ ok: true, kind: "search", hits: [] });
+  });
+
   it("fails closed before work when the bound authority is unavailable", async () => {
     const { handler, events } = fixture(() => false);
     expect(handler.readiness()).toBe("unavailable");

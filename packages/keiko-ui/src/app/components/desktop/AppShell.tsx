@@ -7,6 +7,8 @@ import type { ReactNode, SyntheticEvent } from "react";
 // raised during hydration or an early boot crash is delivered rather than only buffered.
 import "@/lib/install-client-diagnostics";
 import { GlobalSupportReportAction } from "./SupportReportButton";
+import { DiagnosticReadinessNotice } from "./DiagnosticReadinessNotice";
+import type { BackendHealth } from "./hooks/useBackendHealth";
 import { AppShellBoundary } from "./AppShellBoundary";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
@@ -1825,6 +1827,7 @@ function AppShellInner(): ReactNode {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandPaletteOpener, setCommandPaletteOpener] = useState<HTMLElement | null>(null);
   const [windowPaletteOpen, setWindowPaletteOpen] = useState(false);
+  const [backendHealth, setBackendHealth] = useState<BackendHealth>({ state: "loading" });
   const [editorHosts, setEditorHosts] = useState<ReadonlyMap<string, EditorPaletteHost>>(
     () => new Map(),
   );
@@ -2148,6 +2151,7 @@ function AppShellInner(): ReactNode {
                         {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
                         <div className={styles.sourceAlertStack}>
+                          <DiagnosticReadinessNotice health={backendHealth} />
                           <GlobalSupportReportAction onlyForFailure />
                           {sourceConnectionNotice !== null && (
                             <div className="source-limit-alert" role="alert">
@@ -2176,6 +2180,7 @@ function AppShellInner(): ReactNode {
                       onSelectWindow={selectFooterWindow}
                       onCloseWindowPalette={closeWindowPalette}
                       statusRef={setStatusRef}
+                      onBackendHealth={setBackendHealth}
                     />
                   </div>
                   {pending !== null && (

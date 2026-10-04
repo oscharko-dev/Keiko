@@ -106,7 +106,7 @@ function fulfillReport(
   key: string,
   report: DesktopSupportReportResponse,
   download: SupportReportDownload,
-): void {
+): number {
   const bytes = new TextEncoder().encode(report.reportJson).byteLength;
   if (bytes > MAX_SUPPORT_REPORT_BYTES) {
     download.dispose();
@@ -125,6 +125,7 @@ function fulfillReport(
     outcomes.delete(expired);
   }
   notifyOutcomes();
+  return bytes;
 }
 
 export function resetSupportReportOutcomesForTests(): void {
@@ -205,6 +206,23 @@ function localReportFallbackAllowed(
   );
 }
 
+function reportLocalPreparation(
+  report: DesktopSupportReportResponse,
+  correlationId: string | undefined,
+  reportBytes: number,
+): void {
+  reportClientDiagnostic("Keiko support report prepared locally.", {
+    correlationId,
+    supportReportPreparation: {
+      reportBytes,
+      evidenceScope: report.evidenceScope ?? "server",
+      completeness: report.summary?.completeness ?? "unknown",
+      loss: report.summary?.loss ?? "event-location-unknown",
+      availabilityReason: report.summary?.availabilityReason ?? "service-unavailable",
+    },
+  });
+}
+
 async function recoverLocalReport(
   key: string,
   controller: AbortController,
@@ -230,7 +248,8 @@ async function recoverLocalReport(
       prepared.download.dispose();
       return false;
     }
-    fulfillReport(key, prepared.report, prepared.download);
+    const bytes = fulfillReport(key, prepared.report, prepared.download);
+    reportLocalPreparation(prepared.report, context.correlationId, bytes);
     return true;
   } catch {
     return false;

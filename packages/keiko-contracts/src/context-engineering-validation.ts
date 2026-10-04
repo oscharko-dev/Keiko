@@ -89,6 +89,12 @@ const TOKEN_ACCOUNTING_KEYS: ReadonlySet<string> = new Set([
   "offsetTokens",
 ]);
 
+function validInputTokenLimit(value: unknown): boolean {
+  return (
+    value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
+  );
+}
+
 function collectProfileReasons(profile: Record<string, unknown>, prefix: string): string[] {
   const reasons: string[] = [];
   pushIf(reasons, schemaMismatch(profile.schemaVersion), `${prefix}.schemaVersion mismatch`);
@@ -111,6 +117,11 @@ function collectProfileReasons(profile: Record<string, unknown>, prefix: string)
     reasons,
     !isFiniteNonNegativeNumber(profile.effectiveInputBudget),
     `${prefix}.effectiveInputBudget invalid`,
+  );
+  pushIf(
+    reasons,
+    !validInputTokenLimit(profile.inputTokenLimit),
+    `${prefix}.inputTokenLimit invalid`,
   );
   pushIf(reasons, !isNonEmptyTrimmed(profile.tokenEstimatorId), `${prefix}.tokenEstimatorId empty`);
   return reasons;
@@ -196,7 +207,11 @@ function checkBudgetIdentity(profile: Record<string, unknown>, prefix: string): 
   ) {
     return [];
   }
-  const expected = Math.max(0, max - reserved - safety);
+  const inputLimit =
+    typeof profile.inputTokenLimit === "number"
+      ? profile.inputTokenLimit
+      : Number.POSITIVE_INFINITY;
+  const expected = Math.max(0, Math.min(max - reserved - safety, inputLimit));
   return effective === expected ? [] : [`${prefix}.effectiveInputBudget mismatch`];
 }
 

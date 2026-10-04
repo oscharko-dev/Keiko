@@ -1286,6 +1286,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.automaticGrounded":
     "Keiko kompaktiert den Gesprächsverlauf ab 90 % seines Bereichs von {tokens} Tokens. Die Quellenkapazität ist separat.",
   "chat.context.segment.sourceCapacity": "Zusätzliche Quellenkapazität",
+  "chat.context.segment.inputUnavailable": "Für Eingaben nicht verfügbar",
+  "chat.context.declaredInputLimit": "Eingabegrenze des Modells: {tokens} Tokens.",
   "chat.context.segment.conversationFree": "Freier Gesprächsbereich",
   "chat.context.untilConversationCompaction":
     "Noch {tokens} Gesprächs-Tokens bis zur automatischen Kompaktierung.",

@@ -452,6 +452,7 @@ export interface ChatsResponse {
  *   free              — room left before automatic compaction starts
  *   compaction-buffer — remaining conversation capacity above its automatic-compaction threshold
  *   source-capacity   — additional usable input reserved for freshly retrieved grounded sources
+ *   input-capacity-unavailable — window capacity excluded by the independent input ceiling
  *   output-reserve    — tokens reserved for the answer
  *   safety-margin     — estimation headroom that is never planned for input
  */
@@ -463,6 +464,7 @@ export type ChatContextSegmentId =
   | "free"
   | "compaction-buffer"
   | "source-capacity"
+  | "input-capacity-unavailable"
   | "output-reserve"
   | "safety-margin";
 
@@ -476,6 +478,8 @@ export interface ChatContextSegmentWire {
 export interface ChatContextStatusWire {
   readonly modelId: string;
   readonly contextWindowTokens: number;
+  /** Optional independently declared input ceiling of the selected model. */
+  readonly inputLimitTokens?: number | undefined;
   /**
    * The gateway declared no window for this model and Keiko has not measured it yet, so the window
    * above is the planning assumption, replaced automatically once the provider states its window.
@@ -1608,6 +1612,8 @@ export interface HybridGroundedAnswer {
  * window. The context meter shows this and plans the next grounded question with it.
  */
 export interface GroundedPromptContextWire {
+  /** Answering model identity; older persisted answers may not carry it. */
+  readonly modelId?: string | undefined;
   readonly promptTokens: number;
   readonly promptTokensMeasured: boolean;
   /** Keiko's admission estimate of the same prompt; absent from answers that predate it. */

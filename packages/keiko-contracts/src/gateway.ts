@@ -195,6 +195,8 @@ export interface ModelCapability {
    */
   readonly chatModeDeclared?: boolean | undefined;
   readonly contextWindow: number;
+  /** Optional independent provider-declared prompt-input ceiling, distinct from the total window. */
+  readonly maxInputTokens?: number | undefined;
   /**
    * `true` when neither the gateway nor the operator declared this chat model's context window
    * and Keiko has not measured it yet: `contextWindow` then holds the conservative setup

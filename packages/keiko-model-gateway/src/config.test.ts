@@ -3281,3 +3281,23 @@ describe("trimTrailingAzureOpenAiSegment (#3643)", () => {
     );
   });
 });
+
+describe("independent prompt-input limit", () => {
+  it("preserves a declared input limit beside the whole context window", () => {
+    const capability = parseModelCapability(
+      { ...validCapability(), maxInputTokens: 16_000 },
+      "capability",
+    );
+    expect(capability.maxInputTokens).toBe(16_000);
+    expect(capability.contextWindow).toBe(validCapability().contextWindow);
+  });
+
+  it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, null, "16000"])(
+    "rejects a malformed declared input limit: %s",
+    (maxInputTokens) => {
+      expect(() =>
+        parseModelCapability({ ...validCapability(), maxInputTokens }, "capability"),
+      ).toThrow(ConfigInvalidError);
+    },
+  );
+});

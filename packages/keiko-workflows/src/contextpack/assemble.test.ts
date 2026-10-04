@@ -100,6 +100,84 @@ function largeCacheInput(): AssembleInput {
 }
 
 describe("assembleContextPack", () => {
+  it.each([false, true])(
+    "discloses unavailable atom ranges within a retained file (surrounding=%s)",
+    async (includeSurroundingContext) => {
+      const input: AssembleInput = {
+        ...baseInput(),
+        atoms: [
+          atom("a.ts", "available", { startLine: 1, endLine: 1 }),
+          atom("a.ts", "unavailable", { startLine: 7, endLine: 7 }),
+        ],
+        ranked: [candidate("a.ts", 0.9)],
+        excerpts: new Map([["a.ts", { startLine: 1, endLine: 1, content: "available" }]]),
+      };
+      const { pack } = await assembleContextPack(input, {
+        nowMs: fixedNow,
+        includeSurroundingContext,
+      });
+      expect(pack.files).toHaveLength(1);
+      expect(
+        pack.uncertainty.some(
+          (marker) => marker.kind === "scope-incomplete" && marker.claim.includes("a.ts"),
+        ),
+      ).toBe(true);
+      expect(validateConnectedContextPack(pack).ok).toBe(true);
+    },
+  );
+
+  it("merges intersecting source windows without charging shared lines twice", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [
+        atom("a.ts", "first", { startLine: 10, endLine: 10 }),
+        atom("a.ts", "second", { startLine: 13, endLine: 13 }),
+      ],
+      ranked: [candidate("a.ts", 0.9)],
+      excerpts: new Map([
+        [
+          "a.ts",
+          [
+            { startLine: 9, endLine: 12, content: "nine\nten\neleven\ntwelve" },
+            { startLine: 11, endLine: 14, content: "eleven\ntwelve\nthirteen\nfourteen" },
+          ],
+        ],
+      ]),
+    };
+    const { pack } = await assembleContextPack(input, {
+      nowMs: fixedNow,
+      includeSurroundingContext: true,
+    });
+    expect(pack.files[0]?.excerpts).toHaveLength(1);
+    expect(pack.files[0]?.excerpts[0]?.content).toBe(
+      "nine\nten\neleven\ntwelve\nthirteen\nfourteen",
+    );
+    expect(pack.usage.excerptBytes).toBe(
+      Buffer.byteLength("nine\nten\neleven\ntwelve\nthirteen\nfourteen"),
+    );
+    expect(validateConnectedContextPack(pack).ok).toBe(true);
+  });
+
+  it("keeps distinct structural edge identities when rebinding source ranges", async () => {
+    const edgeAtoms = (["import", "call"] as const).map((kind) => ({
+      ...atom("a.ts", kind, { startLine: 1, endLine: 1 }),
+      edge: {
+        kind,
+        source: { scopePath: "a.ts" },
+        target: { scopePath: "b.ts" },
+        confidence: "resolved" as const,
+      },
+    }));
+    const { pack } = await assembleContextPack(
+      { ...baseInput(), atoms: edgeAtoms, ranked: [candidate("a.ts", 0.9)] },
+      { nowMs: fixedNow, includeSurroundingContext: true },
+    );
+    const excerpts = pack.files[0]?.excerpts ?? [];
+    expect(excerpts.map((excerpt) => excerpt.atom.edge?.kind)).toEqual(["import", "call"]);
+    expect(new Set(excerpts.map((excerpt) => excerpt.atom.stableId)).size).toBe(2);
+    expect(validateConnectedContextPack(pack).ok).toBe(true);
+  });
+
   it("avoids enumerating unused excerpt content without an index while preserving the indexed pack", async () => {
     const input = largeCacheInput();
     const enumerate = vi.spyOn(input.excerpts, "entries");

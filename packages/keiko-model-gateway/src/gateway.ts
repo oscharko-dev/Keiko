@@ -21,7 +21,10 @@ import {
   TransportError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import {
+  deriveContextProfile,
+  deriveContextProfileFromCapability,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { GatewayPromptAdmission, ProviderPromptCounter } from "./gateway-prompt-admission.js";
 import { findConfiguredCapability } from "./model-selection.js";
 import {
@@ -1032,10 +1035,10 @@ export class Gateway {
       }),
       maxOutputTokens,
       safetyMarginTokens: profile.safetyMarginTokens,
-      maxPromptTokens: Math.max(
-        0,
-        profile.maxInputTokens - maxOutputTokens - profile.safetyMarginTokens,
-      ),
+      maxPromptTokens: deriveContextProfile({
+        ...profile,
+        reservedOutputTokens: maxOutputTokens,
+      }).effectiveInputBudget,
     });
   }
 

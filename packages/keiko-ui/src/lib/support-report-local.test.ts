@@ -91,3 +91,14 @@ it("retains the original support ID and closed failure facts without private err
     prepared.download.dispose();
   }
 });
+
+it("projects canonical header completeness and loss without a second report encoding", async () => {
+  const prepared = await prepareLocalSupportReport(new AbortController().signal);
+  const report = JSON.parse(prepared.report.reportJson) as SupportReport;
+  expect(prepared.report.summary?.completeness).toBe(report.incident.completeness);
+  expect(prepared.report.summary?.loss).toBe(report.incident.loss);
+  expect(prepared.report.summary?.availabilityReason).toBe(
+    report.incident.clientReport?.availabilityReason,
+  );
+  prepared.download.dispose();
+});

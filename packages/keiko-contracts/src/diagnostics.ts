@@ -32,10 +32,15 @@
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
 import {
+  ACTIVITY_LOG_COMPLETENESS_STATES,
+  ACTIVITY_LOG_LOSS_STATES,
+  type ActivityLogCompletenessState,
+  type ActivityLogLossState,
   isActivityLogCorrelationId,
   isActivityLogErrorKind,
   type ActivityLogErrorKind,
 } from "./observability.js";
+import { MAX_SUPPORT_REPORT_BYTES } from "./support-report.js";
 import { isGitWireUnavailableReason, type GitWireUnavailableReason } from "./git-repository.js";
 
 // EventSource.readyState at the moment the browser observed the failure: CONNECTING (0), OPEN (1)
@@ -460,6 +465,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
+  readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
@@ -649,6 +655,17 @@ function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
   );
 }
 
+function hasValidSupportPreparationContext(value: Record<string, unknown>): boolean {
+  if (value.supportReportPreparation === undefined) return true;
+  return (
+    isClientSupportReportPreparation(value.supportReportPreparation) &&
+    value.kind === undefined &&
+    value.errorKind === undefined &&
+    value.errorEvidence === undefined &&
+    value.supportReportDelivery === undefined
+  );
+}
+
 // The closed, routine report shapes that may ride a message report (select dismissal, catalog).
 function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
   return (
@@ -656,7 +673,8 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
     isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
     isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
     isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech) &&
-    isOptional(value.supportReportDelivery, isClientSupportReportDelivery)
+    isOptional(value.supportReportDelivery, isClientSupportReportDelivery) &&
+    hasValidSupportPreparationContext(value)
   );
 }
 
@@ -1650,4 +1668,50 @@ export function isClientSupportReportDelivery(
   value: unknown,
 ): value is ClientSupportReportDelivery {
   return value === "automatic" || value === "manual";
+}
+
+/** Successful browser fallback preparation; no report content or claim of an OS save. */
+export interface ClientSupportReportPreparation {
+  readonly reportBytes: number;
+  readonly evidenceScope: "server" | "client-only";
+  readonly completeness: ActivityLogCompletenessState;
+  readonly loss: ActivityLogLossState;
+  readonly availabilityReason:
+    "session-unavailable" | "diagnostic-delivery-unavailable" | "service-unavailable";
+}
+const SUPPORT_REPORT_PREPARATION_KEYS = new Set([
+  "reportBytes",
+  "evidenceScope",
+  "completeness",
+  "loss",
+  "availabilityReason",
+]);
+const REPORT_AVAILABILITY = new Set([
+  "session-unavailable",
+  "diagnostic-delivery-unavailable",
+  "service-unavailable",
+]);
+function isSupportReportPreparationBytes(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= MAX_SUPPORT_REPORT_BYTES
+  );
+}
+export function isClientSupportReportPreparation(
+  value: unknown,
+): value is ClientSupportReportPreparation {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => !SUPPORT_REPORT_PREPARATION_KEYS.has(key))
+  )
+    return false;
+  return (
+    isSupportReportPreparationBytes(value.reportBytes) &&
+    (value.evidenceScope === "server" || value.evidenceScope === "client-only") &&
+    isSetMember(value.completeness, new Set(ACTIVITY_LOG_COMPLETENESS_STATES)) &&
+    isSetMember(value.loss, new Set(ACTIVITY_LOG_LOSS_STATES)) &&
+    isSetMember(value.availabilityReason, REPORT_AVAILABILITY)
+  );
 }

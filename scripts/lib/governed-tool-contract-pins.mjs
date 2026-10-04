@@ -38,7 +38,6 @@ export const GOVERNED_TOOL_CONTRACT_PINS = {
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts",
       "packages/keiko-workspace/src/codingRepositorySearch.ts",
       "packages/keiko-workspace/src/codingRepositorySearchError.ts",
-      "packages/keiko-workspace/src/codingRepositorySearchInventory.ts",
       "packages/keiko-workspace/src/codingRepositorySearchProjection.ts",
       "packages/keiko-workspace/src/codingRepositorySearchResult.ts",
       "packages/keiko-workspace/src/discovery.ts",

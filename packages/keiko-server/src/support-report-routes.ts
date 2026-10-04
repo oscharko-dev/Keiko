@@ -89,7 +89,11 @@ async function createReportResponse(
   };
   ctx.res.once("close", cancel);
   if (ctx.res.destroyed) cancel();
-  emitSupportReportStarted(ctx.correlationId, request.correlationId !== undefined);
+  emitSupportReportStarted(
+    ctx.correlationId,
+    request.correlationId !== undefined,
+    request.correlationId,
+  );
   try {
     const report = await runSupportReportJob(
       resolveRuntimeStateDir(deps.env),
@@ -104,7 +108,7 @@ async function createReportResponse(
         env: deps.env,
       });
     }
-    emitSupportReportCompleted(ctx.correlationId, report);
+    emitSupportReportCompleted(ctx.correlationId, report, request.correlationId);
     return {
       status: 200,
       body: { ...report, ...delivery },
@@ -129,14 +133,18 @@ function clientOnlyReportResponse(
   request: DesktopSupportReportRequest,
   hasSession: boolean,
 ): RouteResult {
-  emitSupportReportStarted(ctx.correlationId, request.correlationId !== undefined);
+  emitSupportReportStarted(
+    ctx.correlationId,
+    request.correlationId !== undefined,
+    request.correlationId,
+  );
   try {
     const report = createClientOnlySupportReport(
       request.correlationId ?? ctx.correlationId,
       hasSession ? "diagnostic-delivery-unavailable" : "session-unavailable",
     );
     const delivery = cacheSupportReportDownload(deps, undefined, report);
-    emitSupportReportCompleted(ctx.correlationId, report);
+    emitSupportReportCompleted(ctx.correlationId, report, request.correlationId);
     return {
       status: 200,
       body: { ...report, ...delivery },

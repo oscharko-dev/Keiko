@@ -35,6 +35,7 @@ interface FooterProps {
   readonly onSelectWindow: (id: string) => void;
   readonly onCloseWindowPalette: () => void;
   readonly statusRef?: (node: HTMLElement | null) => void;
+  readonly onBackendHealth?: (health: BackendHealth) => void;
 }
 
 function FooterImpl({
@@ -45,12 +46,16 @@ function FooterImpl({
   onSelectWindow,
   onCloseWindowPalette,
   statusRef,
+  onBackendHealth,
 }: FooterProps): ReactNode {
   const t = useTranslate();
   const windowPaletteRef = useRef<HTMLSpanElement | null>(null);
   const windowTriggerRef = useRef<HTMLButtonElement | null>(null);
   const windowPanelRef = useRef<HTMLDivElement | null>(null);
   const backendHealth = useBackendHealth();
+  useEffect(() => {
+    onBackendHealth?.(backendHealth);
+  }, [backendHealth, onBackendHealth]);
   const installedVersion = installedVersionLabel(backendHealth, t);
   const windowLabel =
     winCount === 1

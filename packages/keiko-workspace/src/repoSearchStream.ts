@@ -26,29 +26,32 @@ import {
 import type { DiscoveredFile } from "./types.js";
 
 interface RankedStreamAtom {
+  readonly primary: boolean;
   readonly atom: EvidenceAtom;
   readonly definition: boolean;
   readonly pathScore: number;
 }
 
-interface RetainedAtomEntry {
-  readonly value: RankedStreamAtom;
+interface RetainedAtomEntry<T> {
+  readonly value: T;
   readonly order: number;
-}
-
-function compareRetainedAtoms(left: RetainedAtomEntry, right: RetainedAtomEntry): number {
-  return compareRanked(left.value, right.value) || left.order - right.order;
 }
 
 // Keep the worst retained entry at the root. Inserts/replacements are logarithmic; emission
 // sorts only once. Arrival order preserves the former stable ordering for fully equal ranks.
-class RetainedAtomHeap {
-  private readonly entries: RetainedAtomEntry[] = [];
+class RetainedAtomHeap<T> {
+  private readonly entries: RetainedAtomEntry<T>[] = [];
   private nextOrder = 0;
 
-  public constructor(private readonly limit: number) {}
+  public constructor(
+    private readonly limit: number,
+    private readonly compareValues: (left: T, right: T) => number,
+  ) {}
 
-  public retain(value: RankedStreamAtom): void {
+  private compare = (left: RetainedAtomEntry<T>, right: RetainedAtomEntry<T>): number =>
+    this.compareValues(left.value, right.value) || left.order - right.order;
+
+  public retain(value: T): void {
     const entry = { value, order: this.nextOrder++ };
     if (this.entries.length < this.limit) {
       this.entries.push(entry);
@@ -56,13 +59,13 @@ class RetainedAtomHeap {
       return;
     }
     const worst = this.entries[0];
-    if (worst === undefined || compareRetainedAtoms(entry, worst) >= 0) return;
+    if (worst === undefined || this.compare(entry, worst) >= 0) return;
     this.entries[0] = entry;
     this.siftDown(0);
   }
 
-  public sorted(): readonly RankedStreamAtom[] {
-    return [...this.entries].sort(compareRetainedAtoms).map((entry) => entry.value);
+  public sorted(): readonly T[] {
+    return [...this.entries].sort(this.compare).map((entry) => entry.value);
   }
 
   private swap(left: number, right: number): void {
@@ -79,7 +82,7 @@ class RetainedAtomHeap {
       const childEntry = this.entries[index];
       const parentEntry = this.entries[parent];
       if (childEntry === undefined || parentEntry === undefined) return;
-      if (compareRetainedAtoms(childEntry, parentEntry) <= 0) return;
+      if (this.compare(childEntry, parentEntry) <= 0) return;
       this.swap(index, parent);
       index = parent;
     }
@@ -92,9 +95,9 @@ class RetainedAtomHeap {
       const right = this.entries[child + 1];
       const current = this.entries[index];
       if (left === undefined || current === undefined) return;
-      if (right !== undefined && compareRetainedAtoms(right, left) > 0) child += 1;
+      if (right !== undefined && this.compare(right, left) > 0) child += 1;
       const worstChild = this.entries[child];
-      if (worstChild === undefined || compareRetainedAtoms(current, worstChild) >= 0) return;
+      if (worstChild === undefined || this.compare(current, worstChild) >= 0) return;
       this.swap(index, child);
       index = child;
     }
@@ -107,12 +110,15 @@ export interface StreamedFilePatternGroups {
 }
 
 class GroupedListingAtoms {
-  private readonly groups: { readonly pattern: RegExp; readonly best: RetainedAtomHeap }[];
+  private readonly groups: {
+    readonly pattern: RegExp;
+    readonly best: RetainedAtomHeap<RankedStreamAtom>;
+  }[];
 
   public constructor(private readonly options: StreamedFilePatternGroups) {
     this.groups = options.patterns.map((pattern) => ({
       pattern,
-      best: new RetainedAtomHeap(options.maxMatchesPerPattern),
+      best: new RetainedAtomHeap(options.maxMatchesPerPattern, compareRanked),
     }));
   }
 
@@ -159,6 +165,7 @@ export interface StreamedSearchCollection {
 
 function compareRanked(left: RankedStreamAtom, right: RankedStreamAtom): number {
   return (
+    Number(right.primary) - Number(left.primary) ||
     Number(right.definition) - Number(left.definition) ||
     right.pathScore - left.pathScore ||
     right.atom.score - left.atom.score ||
@@ -179,8 +186,8 @@ class StreamingSearchCollector {
   public filesDiscovered = 0;
   public filesAfterPolicy = 0;
   public filesSkipped = 0;
-  public readonly candidates: CandidateFile[] = [];
-  private readonly best: RetainedAtomHeap;
+  private readonly best: RetainedAtomHeap<RankedStreamAtom>;
+  private readonly omissions: RetainedAtomHeap<CandidateFile>;
   private matchesFound = 0;
   private readonly pending = new Set<Promise<void>>();
   private failure: Error | undefined;
@@ -206,7 +213,10 @@ class StreamingSearchCollector {
     private readonly pathPattern?: RegExp,
     filePatternGroups?: StreamedFilePatternGroups,
   ) {
-    this.best = new RetainedAtomHeap(runner.limits.maxMatchesReturned);
+    this.best = new RetainedAtomHeap(runner.limits.maxMatchesReturned, compareRanked);
+    this.omissions = new RetainedAtomHeap(runner.limits.maxMatchesReturned, (a, b) =>
+      compareStrings(a.scopePath, b.scopePath),
+    );
     this.groups =
       filePatternGroups === undefined ? undefined : new GroupedListingAtoms(filePatternGroups);
   }
@@ -262,10 +272,17 @@ class StreamingSearchCollector {
       if (readable && this.pathPattern.test(file.relativePath)) this.retainListing(file);
     }
     this.filesSkipped += omitted.length;
-    if (this.candidates.length < this.runner.limits.maxMatchesReturned)
-      this.candidates.push(...omitted);
+    this.retainOmissions(omitted);
     if (matches === undefined) return;
     this.retainMatches(file, matches);
+  }
+
+  public candidates(): readonly CandidateFile[] {
+    return this.omissions.sorted();
+  }
+
+  private retainOmissions(omitted: readonly CandidateFile[]): void {
+    for (const candidate of omitted) this.omissions.retain(candidate);
   }
 
   private retainMatches(file: DiscoveredFile, matches: FileMatches): void {
@@ -278,8 +295,16 @@ class StreamingSearchCollector {
       matches,
     );
     const pathScore = this.recordRanking(file, matches.contentScore);
+    const primary = [...emitted].sort(
+      (a, b) => b.score - a.score || (a.lineRange?.startLine ?? 0) - (b.lineRange?.startLine ?? 0),
+    )[0];
     for (const atom of emitted)
-      this.best.retain({ atom, pathScore, definition: matches.definitionMatch === true });
+      this.best.retain({
+        atom,
+        pathScore,
+        definition: matches.definitionMatch === true,
+        primary: atom === primary,
+      });
   }
 
   private retainListing(file: DiscoveredFile): void {
@@ -295,7 +320,7 @@ class StreamingSearchCollector {
       emittedAtMs: this.runner.nowMs(),
     });
     const pathScore = this.recordRanking(file);
-    const entry = { atom, pathScore, definition: false };
+    const entry = { atom, pathScore, definition: false, primary: true };
     if (this.groups === undefined) this.best.retain(entry);
     else this.groups.retain(entry);
   }
@@ -362,7 +387,7 @@ function collectionResult(
 ): StreamedSearchCollection {
   return {
     atoms: collector.atoms(),
-    candidates: collector.candidates,
+    candidates: collector.candidates(),
     state: collector.state,
     filesDiscovered: collector.filesDiscovered,
     filesAfterPolicy: collector.filesAfterPolicy,
@@ -460,7 +485,7 @@ function rescuedResult(
       ...primary.candidates.filter(
         (file) => policyOmissionReason(file.scopePath, runner.policy) === undefined,
       ),
-      ...rescue.candidates,
+      ...rescue.candidates(),
     ].slice(0, runner.limits.maxMatchesReturned),
     filesDiscovered: primary.filesDiscovered + rescue.filesDiscovered,
     filesAfterPolicy: primary.filesAfterPolicy + rescue.filesAfterPolicy,

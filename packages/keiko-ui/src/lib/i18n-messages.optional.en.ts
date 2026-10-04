@@ -1235,6 +1235,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.automaticGrounded":
     "Keiko compacts the conversation at 90% of its {tokens}-token lane. Source capacity is separate.",
   "chat.context.segment.sourceCapacity": "Additional source capacity",
+  "chat.context.segment.inputUnavailable": "Unavailable for input",
+  "chat.context.declaredInputLimit": "Model input limit: {tokens} tokens.",
   "chat.context.segment.conversationFree": "Conversation headroom",
   "chat.context.untilConversationCompaction":
     "{tokens} conversation tokens until automatic compaction.",

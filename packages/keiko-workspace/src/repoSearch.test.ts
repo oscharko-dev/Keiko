@@ -1091,7 +1091,10 @@ describe("searchText (memFs)", () => {
     expect(r.truncated).toBe(true);
     expect(r.coverage.incomplete).toBe(true);
     expect(r.coverage.reasons).toEqual(["timeout"]);
-    expect(r.coverage.elapsedMs).toBeGreaterThan(r.coverage.limits.elapsedMsMax);
+    const elapsedLimit = r.coverage.limits.elapsedMsMax;
+    expect(elapsedLimit).toBe(0);
+    if (elapsedLimit === null) throw new TypeError("Expected an explicit elapsed limit.");
+    expect(r.coverage.elapsedMs).toBeGreaterThan(elapsedLimit);
   });
 
   it("surfaces max-depth pruning as incomplete coverage without implying a file-cap hit", async () => {

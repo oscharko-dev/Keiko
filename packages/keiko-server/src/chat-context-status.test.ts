@@ -18,6 +18,7 @@ import type {
 import {
   DEFAULT_CONTEXT_PROFILE,
   deriveContextProfile,
+  deriveContextProfileFromCapability,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -31,6 +32,7 @@ import { captureChatHistory } from "./chat-history-snapshot.js";
 import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { groundedConversationContinuity } from "./grounded-conversation-continuity.js";
+import { sentPromptContext } from "./grounded-prompt-context.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
@@ -172,6 +174,64 @@ function seedGroundedAnswer(
 // sources were the largest share of every request. The status now carries that share from the
 // latest grounded answer's body-free prompt context.
 describe("grounded context status", () => {
+  it("keeps the grounded history lane inside a tiny independent model input ceiling", () => {
+    const { deps, chatId } = fixture(0);
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    const profile = deriveContextProfileFromCapability({
+      id: "tiny-input-alias",
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      maxInputTokens: 128,
+    });
+    const status = readChatContextStatus(
+      { ...deps, contextProfile: profile },
+      chatId,
+      "tiny-input-alias",
+    );
+    expect(status.conversationInputBudgetTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
+    expect(status.segments?.reduce((sum, segment) => sum + segment.tokens, 0)).toBe(
+      profile.maxInputTokens,
+    );
+  });
+
+  it("treats an equal-window request from another model as historical source metadata", () => {
+    const { deps, chatId } = fixture(2, "Short conversation.");
+    const first = deriveContextProfileFromCapability({
+      id: "model-a",
+      contextWindow: 32_000,
+      maxOutputTokens: 2_048,
+    });
+    const second = deriveContextProfileFromCapability({
+      id: "model-b",
+      contextWindow: 32_000,
+      maxOutputTokens: 1_024,
+    });
+    const sourceMessage = {
+      role: "user" as const,
+      content: "Source: src/fact.ts\nconst fact = 42;",
+    };
+    seedGroundedAnswer(
+      deps,
+      chatId,
+      sentPromptContext(
+        {
+          messages: [sourceMessage],
+          withoutSources: [],
+          sentReferenceCount: 1,
+          availableReferenceCount: 2,
+        },
+        900,
+        first,
+      ),
+    );
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    const status = readChatContextStatus({ ...deps, contextProfile: second }, chatId, "model-b");
+    expect(status.reservedOutputTokens).toBe(second.reservedOutputTokens);
+    expect(status.lastRequest).toBeUndefined();
+    expect(status.knowledgeSources).toBeUndefined();
+    expect(segmentOf(status, "knowledge").tokens).toBeGreaterThan(0);
+  });
+
   it("shows the latest grounded request's source share and size while the chat is grounded", () => {
     const { deps, chatId } = fixture(2, "Kurze Frage und Antwort.");
     seedGroundedAnswer(deps, chatId, {

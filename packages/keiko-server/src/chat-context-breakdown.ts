@@ -143,6 +143,15 @@ function availableSegments(
   ];
 }
 
+function unavailableInputCapacity(profile: ContextProfile): readonly ChatContextSegmentWire[] {
+  const unavailable =
+    profile.maxInputTokens -
+    profile.reservedOutputTokens -
+    profile.safetyMarginTokens -
+    profile.effectiveInputBudget;
+  return unavailable > 0 ? [{ id: "input-capacity-unavailable", tokens: unavailable }] : [];
+}
+
 export function contextBreakdown(input: ContextBreakdownInput): ContextBreakdown {
   const { profile } = input;
   const budget = profile.effectiveInputBudget;
@@ -157,6 +166,7 @@ export function contextBreakdown(input: ContextBreakdownInput): ContextBreakdown
       ...used,
       { id: "free", tokens: free },
       ...availableSegments(input, used, free),
+      ...unavailableInputCapacity(profile),
       { id: "output-reserve", tokens: profile.reservedOutputTokens },
       { id: "safety-margin", tokens: profile.safetyMarginTokens },
     ],

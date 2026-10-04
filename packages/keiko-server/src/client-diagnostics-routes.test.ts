@@ -1303,6 +1303,44 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  it("persists local report preparation as routine evidence without inventing a failure", async () => {
+    const sink = captureServerLog();
+    const supportReportPreparation = {
+      reportBytes: 1024,
+      evidenceScope: "client-only",
+      completeness: "complete",
+      loss: "none",
+      availabilityReason: "service-unavailable",
+    };
+    expect(
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "Keiko support report prepared locally.",
+            clientTs: CLIENT_TS,
+            correlationId: "ui_support-preparation-0001",
+            supportReportPreparation,
+          }),
+        ),
+      ),
+    ).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = sink.events.find(
+      (candidate) => candidate.op === "client.support-report.prepared",
+    );
+    const record = expectActivityLogProof(
+      "client.support-report.prepared.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_support-preparation-0001",
+      ...supportReportPreparation,
+    });
+    expect(record).not.toHaveProperty("errorKind");
+    expect(record).not.toHaveProperty("messageDigest");
+  });
+
   it("persists browser report initiation without claiming an OS save or creating a failure incident", async () => {
     const sink = captureServerLog();
     const body = JSON.stringify({

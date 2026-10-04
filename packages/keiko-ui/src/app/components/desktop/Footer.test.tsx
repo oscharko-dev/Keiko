@@ -58,6 +58,18 @@ afterEach(() => {
 });
 
 describe("Footer — window status trigger", () => {
+  it("shares the existing health poll with the workspace readiness notice", async () => {
+    const onBackendHealth = vi.fn();
+    renderFooter({ onBackendHealth });
+    await waitFor(() => {
+      expect(onBackendHealth).toHaveBeenLastCalledWith({
+        state: "loaded",
+        health: { status: "ok", version: "0.2.0-test" },
+      });
+    });
+    expect(fetchHealthMock).toHaveBeenCalledOnce();
+  });
+
   it("keeps diagnostic counts and report actions out of the centered footer", async () => {
     fetchHealthMock.mockResolvedValueOnce({
       status: "ok",

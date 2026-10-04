@@ -20,6 +20,7 @@ import {
 } from "../../../../tests/support/activity-log-segments.js";
 import {
   createDesktopSupportReport,
+  prepareManualSupportReportIncident,
   createClientOnlySupportReport,
   createPreparedDesktopSupportReport,
   readDesktopSupportReportSelection,
@@ -67,6 +68,32 @@ function writeFailures(): void {
 }
 
 describe("desktop canonical support report", () => {
+  it("projects canonical pin and availability disposition into body-free transport summary", () => {
+    const limited = createClientOnlySupportReport("summary-correlation", "session-unavailable");
+    const canonical = parseSupportReport(limited.reportJson);
+    expect(limited.summary?.pinDisposition).toBe(canonical.incident.pin.status);
+    expect(limited.summary?.availabilityReason).toBe(
+      canonical.incident.clientReport?.availabilityReason,
+    );
+    writeFailures();
+    const full = createDesktopSupportReport(stateDir, "desktop-failure-1");
+    expect(full.summary?.pinDisposition).toBe(
+      parseSupportReport(full.reportJson).incident.pin.status,
+    );
+    expect(full.summary?.availabilityReason).toBeUndefined();
+  });
+
+  it("normalizes invalid correlation consistently when young claims exhaust retention", () => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const before = supportIncidentReservationsForTests(stateDir);
+    const record = prepareManualSupportReportIncident(stateDir, "invalid correlation with spaces");
+    expect(record.correlation.rootCorrelationId).toMatch(/^[a-f0-9-]{36}$/u);
+    expect(record.correlation.rootCorrelationId).not.toContain("invalid");
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual(before);
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+  });
+
   it("omits a credential-shaped client correlation instead of exposing it or reading private evidence", () => {
     const token = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "c2lnbmF0dXJl"].join(".");
     const response = createClientOnlySupportReport(token, "session-unavailable");
@@ -332,7 +359,15 @@ describe("desktop canonical support report", () => {
           correlationId: "manual-root",
           level: caseName === "non-failure" ? "error" : "info",
           ...(caseName === "non-failure" ? { errorKind: "internal" as const } : {}),
-          ...(caseName === "non-failure" ? { fields: { reportBytes: 10 } } : {}),
+          ...(caseName === "non-failure"
+            ? {
+                fields: {
+                  reportBytes: 10,
+                  evidenceScope: "server",
+                  deliveryAuthority: "session-bound",
+                },
+              }
+            : {}),
         }),
         fixtureLine(process, now + 1, {
           op: "client.diagnostic",

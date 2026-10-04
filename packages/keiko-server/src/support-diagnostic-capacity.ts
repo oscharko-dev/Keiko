@@ -35,10 +35,12 @@ const CAPACITY = defineActivityLogOperation({
   },
   proofIds: ["support.diagnostics.capacity.line"],
 });
-const observedCounts = new WeakMap<UiHandlerDeps, string>();
+type CapacityDeps = Pick<UiHandlerDeps, "env" | "diagnostics">;
+type CapacityContext = Pick<RouteContext, "correlationId">;
+const observedCounts = new WeakMap<CapacityDeps, string>();
 function recordCapacity(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
+  ctx: CapacityContext,
+  deps: CapacityDeps,
   count: number,
   capacity: number,
 ): void {
@@ -63,7 +65,7 @@ type Capacity = Pick<
   ActivityLogReadinessSnapshot,
   "retainedDiagnosticCount" | "diagnosticCapacity"
 >;
-export function supportDiagnosticCapacity(ctx: RouteContext, deps: UiHandlerDeps): Capacity {
+export function supportDiagnosticCapacity(ctx: CapacityContext, deps: CapacityDeps): Capacity {
   const stateDir = resolveActivityLogStateDir(deps.env);
   if (stateDir === undefined) return {};
   try {

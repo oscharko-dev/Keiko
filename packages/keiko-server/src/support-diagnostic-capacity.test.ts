@@ -18,6 +18,8 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { supportDiagnosticCapacity } from "./support-diagnostic-capacity.js";
 import { API_ROUTES, STREAMING, type RouteContext } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { buildRedactor, createRunRegistry } from "./index.js";
+import { createInMemoryUiStore } from "./store/index.js";
 const directories: string[] = [];
 afterEach(() => {
   resetServerLogger();
@@ -38,7 +40,21 @@ function fixture(): { ctx: RouteContext; deps: UiHandlerDeps; stateDir: string }
       correlationId: "capacity-inspection-correlation",
       url: new URL("http://localhost/api/health"),
     },
-    deps: { env: { KEIKO_STATE_DIR: stateDir } } as UiHandlerDeps,
+    deps: {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: { KEIKO_STATE_DIR: stateDir },
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store: createInMemoryUiStore(),
+    },
   };
 }
 describe("existing health diagnostic storage projection", () => {

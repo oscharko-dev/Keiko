@@ -120,7 +120,7 @@ describe("desktop support report transport", () => {
       expect(parsed.evidence.recordCount).toBe(0);
       expect(parsed.selection.status).toBe("insufficient");
       expect(analyzeSupportReport(report.reportJson).selection.status).toBe("insufficient");
-      expect(report.reportJson).not.toContain("original-customer-error");
+      expect(parsed.incident.correlation.rootCorrelationId).toBe("original-customer-error");
       expect(report.reportJson).not.toContain("private-report-must-never-be-read");
       if (state === "expired") expect(registry.verify(mint.cookieToken)).toBeUndefined();
     },
@@ -177,6 +177,22 @@ describe("desktop support report transport", () => {
     },
   );
 
+  it("redacts credential-shaped selected identifiers in limited report lifecycle evidence", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const selected = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "c2lnbmF0dXJl"].join(".");
+    expect(
+      (
+        await handleCreateSupportReport(
+          context(JSON.stringify({ correlationId: selected })),
+          deps(false),
+        )
+      ).status,
+    ).toBe(200);
+    expect(sink.events.some((event) => event.op === "support.report.ui.completed")).toBe(true);
+    expect(sink.lines().join("\n")).not.toContain(selected);
+  });
+
   it("records completed limited availability without inventing activity-log loss", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
@@ -192,6 +208,10 @@ describe("desktop support report transport", () => {
       sufficiency: "insufficient",
       completeness: "partial",
       loss: "none",
+      evidenceScope: "client-only",
+      availabilityReason: "session-unavailable",
+      deliveryAuthority: "client-only",
+      pinDisposition: "rejected",
     });
   });
 
@@ -227,8 +247,7 @@ describe("desktop support report transport", () => {
     reportDirectories.push(stateDir);
     const candidate = recordUserReportedIncident(stateDir);
     if (candidate.status !== "created") throw new Error("Expected retained candidate");
-    const owner = deps();
-    owner.env = { KEIKO_STATE_DIR: stateDir };
+    const owner: UiHandlerDeps = { ...deps(), env: { KEIKO_STATE_DIR: stateDir } };
     const report: DesktopSupportReportResponse = {
       fileName: supportReportFileName(1, candidate.incidentId, candidate.record.createdAtMs),
       reportJson: "{}",
@@ -257,8 +276,7 @@ describe("desktop support report transport", () => {
     reportDirectories.push(stateDir);
     const candidate = recordUserReportedIncident(stateDir);
     expect(candidate.status).toBe("created");
-    const owner = deps();
-    owner.env = { KEIKO_STATE_DIR: stateDir };
+    const owner: UiHandlerDeps = { ...deps(), env: { KEIKO_STATE_DIR: stateDir } };
     vi.mocked(runSupportReportJob).mockRejectedValue(new SupportReportJobError("unavailable"));
     expect((await handleCreateSupportReport(context("{}"), owner)).status).toBe(503);
     expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(1);
@@ -304,7 +322,13 @@ describe("desktop support report transport", () => {
     );
     const started = sink.events.findIndex((event) => event.op === "support.report.ui.started");
     const completed = sink.events.findIndex((event) => event.op === "support.report.ui.completed");
-    expectActivityLogProof("support.report.ui.started.lifecycle", proofLine(sink, started));
+    const startedProof = expectActivityLogProof(
+      "support.report.ui.started.lifecycle",
+      proofLine(sink, started),
+    );
+    expect(startedProof).toMatchObject({
+      selectedCorrelationId: "selected-correlation",
+    });
     const line = expectActivityLogProof(
       "support.report.ui.completed.lifecycle",
       proofLine(sink, completed),
@@ -312,6 +336,9 @@ describe("desktop support report transport", () => {
     expect(line).toMatchObject({
       reportBytes: Buffer.byteLength(report.reportJson),
       completeness: "complete",
+      selectedCorrelationId: "selected-correlation",
+      evidenceScope: "server",
+      deliveryAuthority: "session-bound",
     });
     expect(sink.lines().join("\n")).not.toContain("report-canary");
     expect(sink.lines().join("\n")).not.toContain("server-private-report-state");

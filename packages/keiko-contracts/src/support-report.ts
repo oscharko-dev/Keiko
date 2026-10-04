@@ -1,5 +1,13 @@
-import type { DiagnosticSufficiencyReason, DiagnosticSufficiencyStatus } from "./observability.js";
-import type { SupportIncidentPrivateProjection } from "./support-incident.js";
+import type {
+  ActivityLogCompletenessState,
+  ActivityLogLossState,
+  DiagnosticSufficiencyReason,
+  DiagnosticSufficiencyStatus,
+} from "./observability.js";
+import type {
+  SupportIncidentPinStatus,
+  SupportIncidentPrivateProjection,
+} from "./support-incident.js";
 
 export const SUPPORT_REPORT_KIND = "keiko.support.report";
 /** The default export directory under the state directory. */
@@ -132,6 +140,12 @@ export interface DesktopSupportReportResponse {
         readonly incidentId: string;
         readonly manifestUnreadableCount: number;
         readonly manifestReusedCount: number;
+        readonly completeness?: ActivityLogCompletenessState | undefined;
+        readonly loss?: ActivityLogLossState | undefined;
+        readonly pinDisposition?: SupportIncidentPinStatus | undefined;
+        readonly availabilityReason?:
+          | NonNullable<SupportIncidentPrivateProjection["clientReport"]>["availabilityReason"]
+          | undefined;
       }
     | undefined;
 }

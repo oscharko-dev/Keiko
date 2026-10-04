@@ -4,10 +4,15 @@ import type {
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 
+import { queryRankingTerms } from "./repoSearchRanking.js";
+import { anchoredExcerptByteWindow } from "./repoSearchExcerptWindow.js";
+
 export const SEMANTIC_SEARCH_TOOL_PREFIX = "repo.semanticSearch";
 export const SEMANTIC_RRF_K = 60;
 
 export interface SemanticSearchDocument {
+  // Source origin of a bounded fragment; provider match lines remain absolute source lines.
+  readonly startLine?: number | undefined;
   readonly scopePath: string;
   readonly text: string;
 }
@@ -34,6 +39,8 @@ export interface SemanticSearchSession {
   readonly documents: SemanticSearchDocument[];
   readonly maxDocumentBytes?: number;
   readonly maxDocuments?: number;
+  readonly queryTerms?: readonly string[];
+  documentScores?: Map<string, number>;
   documentBytes?: number;
 }
 
@@ -145,25 +152,68 @@ export function createSemanticSearchSession(
   if (provider === undefined || query.kind === "regex" || query.kind === "file-pattern") {
     return undefined;
   }
-  return { provider, documents: [], ...bounds, documentBytes: 0 };
+  return {
+    provider,
+    documents: [],
+    ...bounds,
+    documentBytes: 0,
+    queryTerms: queryRankingTerms(query.text),
+    documentScores: new Map(),
+  };
+}
+
+function boundedSemanticDocument(
+  session: SemanticSearchSession,
+  document: SemanticSearchDocument,
+): SemanticSearchDocument {
+  const maxBytes = Math.floor((session.maxDocumentBytes ?? 0) / (session.maxDocuments ?? 1));
+  const window = anchoredExcerptByteWindow(document.text, session.queryTerms ?? [], maxBytes, 1);
+  if (window !== undefined)
+    return { scopePath: document.scopePath, text: window.content, startLine: window.startLine };
+  const bytes = new TextEncoder().encode(document.text).subarray(0, maxBytes);
+  const text = new TextDecoder("utf-8").decode(bytes).replace(/\uFFFD$/u, "");
+  return { ...document, text };
+}
+
+function rankedSemanticDocument(
+  session: SemanticSearchSession,
+  document: SemanticSearchDocument,
+  score: number,
+): void {
+  const scores = (session.documentScores ??= new Map<string, number>());
+  const compare = (a: SemanticSearchDocument, b: SemanticSearchDocument): number =>
+    (scores.get(b.scopePath) ?? 0) - (scores.get(a.scopePath) ?? 0) ||
+    comparePath(a.scopePath, b.scopePath);
+  scores.set(document.scopePath, score);
+  const worst = session.documents.at(-1);
+  if (
+    session.documents.length >= (session.maxDocuments ?? Infinity) &&
+    worst !== undefined &&
+    compare(document, worst) >= 0
+  ) {
+    scores.delete(document.scopePath);
+    return;
+  }
+  session.documents.push(boundedSemanticDocument(session, document));
+  session.documents.sort(compare);
+  if (session.documents.length > (session.maxDocuments ?? Infinity)) {
+    const removed = session.documents.pop();
+    if (removed !== undefined) scores.delete(removed.scopePath);
+  }
+  session.documentBytes = session.documents.reduce(
+    (sum, entry) => sum + new TextEncoder().encode(entry.text).length,
+    0,
+  );
 }
 
 export function collectSemanticSearchDocument(
   session: SemanticSearchSession | undefined,
   document: SemanticSearchDocument,
+  score = 0,
 ): void {
-  if (session === undefined || session.documents.length >= (session.maxDocuments ?? Infinity))
-    return;
-  if (session.maxDocumentBytes === undefined) {
-    session.documents.push(document);
-    return;
-  }
-  const available = session.maxDocumentBytes - (session.documentBytes ?? 0);
-  if (available <= 0) return;
-  const bytes = new TextEncoder().encode(document.text).subarray(0, available);
-  const text = new TextDecoder("utf-8").decode(bytes).replace(/\uFFFD$/u, "");
-  session.documentBytes = (session.documentBytes ?? 0) + bytes.length;
-  session.documents.push({ ...document, text });
+  if (session === undefined) return;
+  if (session.maxDocumentBytes === undefined) session.documents.push(document);
+  else rankedSemanticDocument(session, document, score);
 }
 
 export function semanticSearchTool(providerName: string): string {

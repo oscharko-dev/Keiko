@@ -2,6 +2,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import type { ModelCapability } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ChatContextMeter } from "./ChatContextMeter";
 import { ChatContextMeterContainer } from "./ChatContextMeterContainer";
@@ -749,3 +751,151 @@ it("stops reading after the polling cap while the window probe stays pending", a
 });
 
 afterEach(() => vi.useRealTimers());
+
+describe("independent model input ceilings", () => {
+  it("shows the physical window, usable input and unavailable share without inventing free capacity", () => {
+    render(
+      <ChatContextMeter
+        status={{
+          ...status(2_000),
+          contextWindowTokens: 32_000,
+          inputBudgetTokens: 8_000,
+          inputLimitTokens: 8_000,
+          reservedOutputTokens: 2_000,
+          safetyMarginTokens: 1_000,
+          compaction: undefined,
+          segments: [
+            { id: "system", tokens: 300 },
+            { id: "messages", tokens: 1_700, count: 2 },
+            { id: "free", tokens: 5_200 },
+            { id: "compaction-buffer", tokens: 800 },
+            { id: "input-capacity-unavailable", tokens: 21_000 },
+            { id: "output-reserve", tokens: 2_000 },
+            { id: "safety-margin", tokens: 1_000 },
+          ],
+        }}
+        busy={false}
+        compacting={false}
+        error={false}
+        onCompact={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+    const panel = screen.getByRole("region", { name: "Conversation context" });
+    expect(within(panel).getByText("Unavailable for input")).toBeInTheDocument();
+    expect(within(panel).getByText("Model input limit: 8,000 tokens.")).toBeInTheDocument();
+    expect(within(panel).getByText("21,000")).toBeInTheDocument();
+    expect(panel.textContent).toContain("32,000");
+    expect(screen.getByRole("button", { name: /approximately 25% used/ })).toBeInTheDocument();
+  });
+});
+
+function meterCapability(id: string, window: number): ModelCapability {
+  return {
+    id,
+    kind: "chat",
+    contextWindow: window,
+    maxInputTokens: Math.floor(window / 2),
+    maxOutputTokens: Math.floor(window / 8),
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "",
+    preferredUseCases: [],
+    knownLimitations: [],
+  };
+}
+
+function meterModelStatus(model: ModelCapability): ChatContextStatusWire {
+  const profile = deriveContextProfileFromCapability(model);
+  return {
+    modelId: model.id,
+    contextWindowTokens: profile.maxInputTokens,
+    inputLimitTokens: model.maxInputTokens,
+    inputBudgetTokens: profile.effectiveInputBudget,
+    reservedOutputTokens: profile.reservedOutputTokens,
+    safetyMarginTokens: profile.safetyMarginTokens,
+    estimatedInputTokens: 100,
+    canCompact: false,
+  };
+}
+
+it("refreshes an idle selected alias when its catalog geometry changes", async () => {
+  const session = contextSession();
+  const initial = meterCapability("fixture", 12_000);
+  const updated = meterCapability("fixture", 48_000);
+  contextApi.fetch
+    .mockReset()
+    .mockResolvedValueOnce(meterModelStatus(initial))
+    .mockResolvedValueOnce(meterModelStatus(updated));
+  const view = render(<ChatContextMeterContainer session={{ ...session, models: [initial] }} />);
+  await waitFor(() => expect(contextApi.fetch).toHaveBeenCalledOnce());
+  view.rerender(<ChatContextMeterContainer session={{ ...session, models: [updated] }} />);
+  await waitFor(() => expect(contextApi.fetch).toHaveBeenCalledTimes(2));
+  fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+  const panel = screen.getByRole("region", { name: "Conversation context" });
+  expect(within(panel).getByText("48,000")).toBeInTheDocument();
+  expect(within(panel).getByText("Model input limit: 24,000 tokens.")).toBeInTheDocument();
+});
+
+it("ignores catalog geometry changes for an unselected alias", async () => {
+  const session = contextSession();
+  const selected = meterCapability("fixture", 12_000);
+  contextApi.fetch.mockReset().mockResolvedValue(meterModelStatus(selected));
+  const view = render(
+    <ChatContextMeterContainer
+      session={{ ...session, models: [selected, meterCapability("other", 32_000)] }}
+    />,
+  );
+  await waitFor(() => expect(contextApi.fetch).toHaveBeenCalledOnce());
+  view.rerender(
+    <ChatContextMeterContainer
+      session={{ ...session, models: [selected, meterCapability("other", 96_000)] }}
+    />,
+  );
+  await act(async () => Promise.resolve());
+  expect(contextApi.fetch).toHaveBeenCalledOnce();
+});
+
+it("shows fifteen selected models' distinct geometry without reusing the previous model", async () => {
+  const windows = [
+    4_096, 8_192, 16_384, 24_576, 32_768, 48_000, 64_000, 96_000, 128_000, 160_000, 200_000,
+    256_000, 500_000, 1_000_000, 2_000_000,
+  ];
+  const models = windows.map((window, index) => meterCapability(`alias-${String(index)}`, window));
+  const session = contextSession();
+  contextApi.fetch
+    .mockReset()
+    .mockImplementation((_chat: string, _path: string, modelId: string) => {
+      const model = models.find((candidate) => candidate.id === modelId);
+      if (model === undefined) throw new Error("Missing selected test model");
+      return Promise.resolve(meterModelStatus(model));
+    });
+  const view = render(
+    <ChatContextMeterContainer session={{ ...session, selectedModel: models[0]?.id, models }} />,
+  );
+  for (const model of models) {
+    view.rerender(
+      <ChatContextMeterContainer session={{ ...session, selectedModel: model.id, models }} />,
+    );
+    await waitFor(() =>
+      expect(contextApi.fetch).toHaveBeenLastCalledWith(
+        session.activeChat?.id,
+        session.activeChat?.projectPath,
+        model.id,
+        expect.any(AbortSignal),
+      ),
+    );
+    await screen.findByRole("button", { name: /Conversation context: approximately/ });
+    fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+    const panel = screen.getByRole("region", { name: "Conversation context" });
+    expect(within(panel).getByText(model.contextWindow.toLocaleString("en"))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Conversation context:/ }));
+  }
+});

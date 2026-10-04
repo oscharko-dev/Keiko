@@ -7,7 +7,7 @@ import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
 import { sanitizePersistedWorkspace } from "./hooks/workspace-persistence";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { reportClientDiagnostic, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { AppWindow, Connection } from "./windows/types";
 
 const mocks = vi.hoisted(() => ({
@@ -47,7 +47,10 @@ vi.mock("@/lib/api", async (importOriginal) => ({
 vi.mock("../../relationships/connector-relationship", () => ({
   recordReadsContextRelationship: mocks.recordReadsContextRelationship,
 }));
-vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
+vi.mock("@/lib/client-diagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/client-diagnostics")>()),
+  reportClientDiagnostic: vi.fn(),
+}));
 vi.mock("./install/registerSw", () => ({ registerSw: vi.fn() }));
 vi.mock("./context/ChatSessionContext", () => ({
   ChatSessionProvider: ({ children }: { readonly children: ReactNode }): ReactNode => children,
@@ -192,6 +195,7 @@ async function mountAmbiguousFiles(): Promise<{ wins: AppWindow[]; conns: Connec
 }
 
 beforeEach((): void => {
+  resetClientDiagnosticWriter();
   vi.clearAllMocks();
   window.localStorage.clear();
   mocks.workspace = undefined;
@@ -220,6 +224,7 @@ beforeEach((): void => {
 });
 afterEach((): void => {
   cleanup();
+  resetClientDiagnosticWriter();
   Reflect.deleteProperty(navigator, "webdriver");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();

@@ -47,7 +47,11 @@ describe("explicit language source inspection through repository search", () => 
     const { scope, fs } = fixture();
     const result = await searchText(scope, query(), undefined, {
       fs,
-      searchHints: { retrievalIntent: "targeted-code-search", hasGitMetadata: false },
+      searchHints: {
+        allowSourceInspection: true,
+        retrievalIntent: "targeted-code-search",
+        hasGitMetadata: false,
+      },
     });
     expect(result.atoms[0]?.scopePath).toBe("src/Calculator.cs");
     expect(result.atoms.some((atom) => atom.scopePath.endsWith(".csproj"))).toBe(false);
@@ -80,7 +84,11 @@ describe("explicit language source inspection through repository search", () => 
     const { scope, fs } = fixture();
     const workspaceIndex = createWorkspaceIndex();
     await searchText(scope, query("unmatchedprobe"), undefined, { fs, workspaceIndex });
-    const result = await searchText(scope, query(), undefined, { fs, workspaceIndex });
+    const result = await searchText(scope, query(), undefined, {
+      fs,
+      workspaceIndex,
+      searchHints: { allowSourceInspection: true },
+    });
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/Calculator.cs"]);
   });
 
@@ -117,6 +125,7 @@ describe("explicit language source inspection through repository search", () => 
     });
     const result = await searchText(scope, query("Inspect C# source files"), undefined, {
       fs,
+      searchHints: { allowSourceInspection: true },
       candidatePathGlobs: { include: ["src/**"], exclude: ["**/excluded.cs"] },
     });
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/Calculator.cs"]);

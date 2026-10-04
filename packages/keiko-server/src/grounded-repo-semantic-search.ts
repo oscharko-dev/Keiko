@@ -54,6 +54,7 @@ interface EmbeddingContext {
 }
 
 interface CandidateDocument {
+  readonly startLine: number;
   readonly scopePath: string;
   readonly sourceText: string;
   readonly order: number;
@@ -319,7 +320,12 @@ function candidateDocuments(
       break;
     }
     if (source.text.trim().length > 0) {
-      documents.push({ scopePath: source.scopePath, sourceText: source.text, order: index });
+      documents.push({
+        scopePath: source.scopePath,
+        sourceText: source.text,
+        order: index,
+        startLine: source.startLine ?? 1,
+      });
     }
   }
   return documents;
@@ -425,9 +431,13 @@ function chunkAnchoredLine(
 ): number {
   const chunkText = document.sourceText
     .split("\n")
-    .slice(range.startLine - 1, range.endLine)
+    .slice(
+      Math.max(0, range.startLine - document.startLine),
+      Math.max(0, range.endLine - document.startLine + 1),
+    )
     .join("\n");
-  const refined = range.startLine + localizeMatchLine(chunkText, queryTerms) - 1;
+  const refined =
+    Math.max(range.startLine, document.startLine) + localizeMatchLine(chunkText, queryTerms) - 1;
   return Math.max(range.startLine, Math.min(range.endLine, refined));
 }
 
