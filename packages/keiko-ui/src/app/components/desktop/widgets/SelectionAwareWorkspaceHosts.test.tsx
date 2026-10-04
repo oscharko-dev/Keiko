@@ -25,6 +25,7 @@ import {
   useChatCreationCoordinator,
 } from "./SelectionAwareWorkspaceHosts";
 import { subText } from "../windows/connectionUtils";
+import { filesChatBindScope } from "../hooks/workspaceActions";
 import { parsePersistedWindows, sanitizePersistedWindows } from "../hooks/workspace-persistence";
 import type { AppWindow } from "../windows/types";
 import { chatReferenceFingerprint } from "./chatReferenceFingerprint";
@@ -184,12 +185,13 @@ vi.mock("../workspace-trust/useWorkspaceTrust", () => ({
 
 // The real Explorer only needs to expose the root-bar affordance for this test; its own navigation
 // behaviour is covered by FilesWidget's suite.
+const filesRootSelectionTarget = vi.hoisted(() => ({ current: "/work" }));
 vi.mock("./cards/FilesWidget", () => ({
   FilesWidget: ({ onRootChange }: { readonly onRootChange?: (next: string) => void }): ReactNode =>
     onRootChange === undefined ? (
       <div data-testid="files-without-root-bar" />
     ) : (
-      <button type="button" onClick={() => onRootChange("/work")}>
+      <button type="button" onClick={() => onRootChange(filesRootSelectionTarget.current)}>
         go up
       </button>
     ),
@@ -324,6 +326,7 @@ function cfgPatches(ctx: WindowRenderContext): readonly Record<string, unknown>[
 }
 
 afterEach(() => {
+  filesRootSelectionTarget.current = "/work";
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   window.localStorage.clear();
@@ -3063,6 +3066,42 @@ describe("ChatWindowSessionHost target missing", () => {
 });
 
 describe("FilesWindowSessionHost", () => {
+  it("replaces the configured source root for ordinary explicit folder navigation", async () => {
+    manifestRef.current = null;
+    filesRootSelectionTarget.current = "/manuals/Distinct";
+    const cfg = {
+      root: "/manuals/Scale",
+      resolvedRoot: "/manuals/Scale",
+      rootBinding: "coding-repository",
+    };
+    const ctx = context();
+    render(
+      <I18nProvider>
+        <FilesWindowSessionHost cfg={cfg} ctx={ctx} root={cfg.root} />
+      </I18nProvider>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "go up" }));
+    const patch = vi.mocked(ctx.updateCfg).mock.calls.at(-1)?.[0];
+    if (patch === undefined) throw new Error("The Files root selection did not update its cfg");
+    const files: AppWindow = {
+      id: "files-root",
+      type: "files",
+      cfg: patch,
+      x: 0,
+      y: 0,
+      w: 640,
+      h: 480,
+      z: 1,
+      max: false,
+      zoom: 1,
+    };
+    const chat: AppWindow = { ...files, id: "chat-source", type: "chat", cfg: {} };
+    expect(patch["root"]).toBe("/manuals/Distinct");
+    expect(patch["rootBinding"]).toBe("coding-repository");
+    expect(patch["resolvedRoot"]).toBeUndefined();
+    expect(filesChatBindScope(files, chat, 0)?.root).toBe("/manuals/Distinct");
+  });
+
   it("does not expose a second root authority when the global workspace root is bound", async () => {
     manifestRef.current = singleRootManifest("/work/keiko");
     const ctx = context();

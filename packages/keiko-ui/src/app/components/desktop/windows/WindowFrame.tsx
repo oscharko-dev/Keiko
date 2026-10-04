@@ -973,12 +973,15 @@ function WindowFrameImpl({
   // Read the live cfg through a ref so `updateCfg` keeps a STABLE identity across cfg changes
   // (GEN-PERF-WIDGET-001): consumers that pass updateCfg into an effect's dep array (e.g. the PDF
   // citation preview's document-load effect) no longer see a new identity on every view-only cfg
-  // write. The merge result is identical — cfgRef.current is the latest rendered win.cfg.
+  // write. Each callback advances the pending cfg immediately; the next parent render remains
+  // authoritative. Multiple widget callbacks in one commit must not restore older root fields.
   const cfgRef = useRef(win.cfg);
   cfgRef.current = win.cfg;
   const updateCfg = useCallback(
     (patch: AppWindow["cfg"]): void => {
-      api.update(win.id, { cfg: { ...cfgRef.current, ...patch } });
+      const cfg = { ...cfgRef.current, ...patch };
+      cfgRef.current = cfg;
+      api.update(win.id, { cfg });
     },
     [api, win.id],
   );
