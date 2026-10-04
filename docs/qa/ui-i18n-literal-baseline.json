@@ -1,9 +1,7 @@
 {
   "$comment": "Ratcheted ledger of pre-existing untranslated user-facing literals in the Keiko UI, one entry per file (see scripts/check-ui-i18n-guard.mjs). A literal listed here is known debt the check:ui-i18n gate tolerates; ANY literal not listed fails the gate. The ledger only shrinks - regenerate it with `npm run check:ui-i18n -- --write-baseline` after removing literals, and never add an entry to silence a new one. For a literal that is genuinely not user-facing, mark the source line `// i18n-exempt: <reason>` instead, so the claim is visible in the diff.",
   "files": {
-    "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": [
-      "Keiko | Atlassian connectors"
-    ],
+    "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": ["Keiko | Atlassian connectors"],
     "packages/keiko-ui/src/app/components/desktop/AppShell.tsx": [
       "Connected",
       "Connecting",
@@ -14,12 +12,8 @@
       "Type FORGET to remove .",
       "When muted, Keiko cannot hear your microphone until you unmute."
     ],
-    "packages/keiko-ui/src/app/components/desktop/EditorMenu.tsx": [
-      "Preferred editor for “"
-    ],
-    "packages/keiko-ui/src/app/components/desktop/Footer.tsx": [
-      "Keiko |"
-    ],
+    "packages/keiko-ui/src/app/components/desktop/EditorMenu.tsx": ["Preferred editor for “"],
+    "packages/keiko-ui/src/app/components/desktop/Footer.tsx": ["Keiko |"],
     "packages/keiko-ui/src/app/components/desktop/GroundedAnswer.tsx": [
       "Candidates",
       "Citations",
@@ -46,9 +40,7 @@
       "Sources",
       "Unavailable"
     ],
-    "packages/keiko-ui/src/app/components/desktop/Header.tsx": [
-      "Keiko"
-    ],
+    "packages/keiko-ui/src/app/components/desktop/Header.tsx": ["Keiko"],
     "packages/keiko-ui/src/app/components/desktop/hooks/voice-dialogue-evaluation/index.ts": [
       "Deprecated STT+TTS fallback deployment (full-realtime without browser WebRTC media)",
       "No-voice deployment (no voice model configured)",
@@ -56,9 +48,7 @@
       "Speech-output-only deployment (spoken answer, no capture)",
       "Speech-to-text-only deployment (dictation, no spoken answer)"
     ],
-    "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": [
-      "Git"
-    ],
+    "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": ["Git"],
     "packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx": [
       "API key header",
       "API key header authorization",
@@ -134,9 +124,7 @@
       "Type",
       "Validating…"
     ],
-    "packages/keiko-ui/src/app/components/desktop/repositoryReferences.tsx": [
-      "Open in editor"
-    ],
+    "packages/keiko-ui/src/app/components/desktop/repositoryReferences.tsx": ["Open in editor"],
     "packages/keiko-ui/src/app/components/desktop/SafeMarkdown.tsx": [
       "(opens in new tab)",
       "Copied",
@@ -662,12 +650,8 @@
     "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-actions.tsx": [
       "src/app.ts README.md"
     ],
-    "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": [
-      "Knowledge Pod Detail — Keiko"
-    ],
-    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": [
-      "MemoriaViva"
-    ],
+    "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": ["Knowledge Pod Detail — Keiko"],
+    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
     "packages/keiko-ui/src/lib/ResourceLimitDecisionsTable.tsx": [
       "Breached",
       "Dimension",

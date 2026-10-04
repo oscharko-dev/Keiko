@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "d1dc76fbe360125df2d9e6e2f6219a9b23a9b77a145c94cd64a44fa064b40907" as const;
+  "d863812535afa086fc53e198216f14c32ce09c8ad7177b4fe9219fe6bcd74ec2" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2793,6 +2793,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "workspace-layout-unlocked",
           "literal-input-preserved",
           "draft-resynchronized",
+          "scope-refusal-restored",
+          "scope-refusal-skipped-owner",
+          "scope-refusal-skipped-draft",
+          "scope-refusal-skipped-unproven",
           "equivalent-edit-ignored",
           "stale-draft-echo-ignored",
           "non-text-paste-ignored",
@@ -8572,6 +8576,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "model-verification-pending",
         ],
       },
+      inputTokenLimit: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      availablePromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       maxPromptTokens: {
         type: "integer",
         dataClass: "count",
@@ -8682,6 +8696,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      inputTokenLimit: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       maxPromptTokens: {
         type: "integer",
         dataClass: "count",
@@ -8738,6 +8757,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      inputTokenLimit: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      admissiblePromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       maxPromptTokens: {
         type: "integer",
@@ -27816,6 +27845,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["abandoned"],
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -40195,6 +40230,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "capability",
           safeContextFields: [
             {
+              name: "availablePromptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "inputTokenLimit",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "maxPromptTokens",
               type: "integer",
               dataClass: "count",
@@ -40282,6 +40329,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "inputMessageCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "inputTokenLimit",
               type: "integer",
               dataClass: "count",
               required: false,
@@ -40459,6 +40512,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "admissiblePromptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "estimatedPromptTokens",
               type: "integer",
               dataClass: "count",
@@ -40469,6 +40528,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "inputTokenLimit",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "maxOutputTokens",
@@ -63347,6 +63412,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "trigger",
