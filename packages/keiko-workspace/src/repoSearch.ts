@@ -2586,6 +2586,30 @@ function streamedCoverage(
   };
 }
 
+async function collectStreamedSemanticMatches(
+  runner: SearchTextRunner,
+  state: RunState,
+): Promise<readonly SemanticSearchMatch[]> {
+  const stoppedAfterScan = runnerStopReason(runner);
+  if (stoppedAfterScan !== undefined) {
+    markRunnerStop(state, stoppedAfterScan);
+    return [];
+  }
+  const semanticState = { timedOut: false };
+  const matches = await runSemanticSearchSession(runner.semantic, runner.query, runner.signal, {
+    timeoutMs: remainingRunnerTimeMs(runner),
+    onTimeout: (): void => {
+      semanticState.timedOut = true;
+    },
+  });
+  const stoppedAfterSemantic = semanticState.timedOut ? "timeout" : runnerStopReason(runner);
+  if (stoppedAfterSemantic !== undefined) {
+    markRunnerStop(state, stoppedAfterSemantic);
+    return [];
+  }
+  return matches;
+}
+
 async function executeStreamedSearchText(
   runner: SearchTextRunner,
   pathPattern?: RegExp,
@@ -2597,15 +2621,7 @@ async function executeStreamedSearchText(
     pathPattern,
     filePatternGroups,
   );
-  const semantic =
-    runnerStopReason(runner) === undefined
-      ? await runSemanticSearchSession(runner.semantic, runner.query, runner.signal, {
-          timeoutMs: remainingRunnerTimeMs(runner),
-          onTimeout: (): void => {
-            markRunnerStop(collected.state, "timeout");
-          },
-        })
-      : [];
+  const semantic = await collectStreamedSemanticMatches(runner, collected.state);
   const atoms = mergeSearchAtoms(
     collected.atoms,
     semantic.map((match) => semanticAtom(runner, match)),

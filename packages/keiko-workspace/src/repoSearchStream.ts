@@ -222,14 +222,13 @@ class StreamingSearchCollector {
   }
 
   private retainMatches(file: DiscoveredFile, matches: FileMatches): void {
-    this.matchesFound += matches.best.length;
     const emitted: EvidenceAtom[] = [];
-    emitFileMatches(
-      this.runner,
-      { filesScanned: 0, matchesReturned: 0, truncated: false },
-      emitted,
-      matches,
-    );
+    // The heap owns aggregate retention; emission owns this file's stop checks. Share its reasons
+    // with the actual run without treating previously emitted atoms as a corpus scan limit.
+    const emissionState = { ...this.state, matchesReturned: 0 };
+    emitFileMatches(this.runner, emissionState, emitted, matches);
+    this.state.truncated ||= emissionState.truncated;
+    this.matchesFound += emitted.length;
     const pathScore = this.recordRanking(file, matches.contentScore);
     const primary = [...emitted].sort(
       (a, b) => b.score - a.score || (a.lineRange?.startLine ?? 0) - (b.lineRange?.startLine ?? 0),
