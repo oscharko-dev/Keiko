@@ -37,9 +37,7 @@
   pointer-events: auto;
 }
 
-.cmpSourceAlertStack > [role="alert"],
-.cmpSourceAlertStack > [role="status"],
-.cmpSourceAlertStack > output {
+.cmpSourceAlertStack > * {
   position: static;
   flex-shrink: 0;
   box-sizing: border-box;

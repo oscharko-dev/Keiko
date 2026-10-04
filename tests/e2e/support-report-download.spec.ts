@@ -305,7 +305,10 @@ test("keeps stacked workspace error reports reachable on a short narrow viewport
   });
   const failure = page.getByRole("alert").filter({ hasText: "Keiko encountered an error." });
   await expect(failure).toBeVisible();
-  const stack = readiness.locator("..");
+  const stack = page.locator(".stage > div").filter({ has: readiness }).filter({ has: failure });
+  await expect(stack).toHaveCount(1);
+  await expect(readiness.locator("..")).toHaveCSS("position", "static");
+  await expect(failure).toHaveCSS("position", "static");
   await assertScrollableNoticeStack(stack);
   await prepareReport(failure);
   await saveClickedReport(page, failure, info, "short-viewport");
