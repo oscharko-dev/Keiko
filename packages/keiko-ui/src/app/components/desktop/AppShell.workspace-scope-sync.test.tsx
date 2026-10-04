@@ -104,6 +104,14 @@ vi.mock("./update/UpdateStartupNotice", () => ({ UpdateStartupNotice: (): ReactN
 
 import { AppShell } from "./AppShell";
 
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete): void => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 function scope(root: string): ChatConnectedScope {
   return { kind: "workspace-root", relativePaths: [], root, connectedAtMs: 1 };
 }
@@ -349,5 +357,67 @@ describe("AppShell canonical workspace scope synchronization", () => {
       "/manuals/Changed",
     ]);
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+  });
+  it("revalidates captured acknowledgement ownership after a pending canonical read", async (): Promise<void> => {
+    const initial = fixture(["/manuals/Scale"]);
+    mocks.initialChat = chat([scope("/manuals/Scale")]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, sanitizePersistedWorkspace(initial.wins, initial.conns).conns);
+    render(<AppShell />);
+    await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Scale"));
+    const pending = deferred<{ readonly chats: readonly Chat[] }>();
+    mocks.fetchChats.mockClear().mockReturnValueOnce(pending.promise);
+    await act(async (): Promise<void> =>
+      mocks.workspace?.api.update("files-0", {
+        cfg: { root: "/manuals/Changed", rootBinding: "coding-repository" },
+      }),
+    );
+    await waitFor(() => expect(mocks.fetchChats).toHaveBeenCalled());
+    mocks.serverChat = chat([scope("/manuals/Scale"), scope("/manuals/Changed")], 2);
+    const changed = fixture(["/manuals/Changed"]);
+    await storageReplay(changed.wins, changed.conns);
+    await act(async (): Promise<void> => pending.resolve({ chats: [mocks.serverChat!] }));
+    await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Changed"));
+    expect(mocks.serverChat?.connectedScopes?.map((item) => item.root)).toEqual([
+      "/manuals/Scale",
+      "/manuals/Changed",
+    ]);
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+  });
+  it("preserves another tab's newer scopes when stale-turn compensation conflicts", async (): Promise<void> => {
+    const initial = fixture(["/manuals/Scale"]);
+    mocks.initialChat = chat([scope("/manuals/Scale")]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, initial.conns);
+    render(<AppShell />);
+    await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(1));
+    const pending = deferred<{ readonly chat: Chat }>();
+    mocks.updateChatConnectedScopes.mockReturnValueOnce(pending.promise);
+    await act(async (): Promise<void> =>
+      mocks.workspace?.api.update("files-0", {
+        cfg: { root: "/manuals/Changed", rootBinding: "coding-repository" },
+      }),
+    );
+    await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(1));
+    await act(async (): Promise<void> =>
+      mocks.workspace?.api.update("chat-window", {
+        cfg: { chatId: "another-chat", projectPath: "/repo" },
+      }),
+    );
+    mocks.serverChat = chat([scope("/manuals/OtherTab")], 3);
+    await act(async (): Promise<void> =>
+      pending.resolve({ chat: chat([scope("/manuals/Changed")], 2) }),
+    );
+    await screen.findByText(
+      "Chat grounding recovery failed. Reload the chat before connecting another source.",
+    );
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+    expect(mocks.updateChatConnectedScopes.mock.calls[1]?.[2]).toBe(
+      chat([], 2).groundingScopeIdentity,
+    );
+    expect(mocks.serverChat?.connectedScopes?.map((item) => item.root)).toEqual([
+      "/manuals/OtherTab",
+    ]);
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
   });
 });

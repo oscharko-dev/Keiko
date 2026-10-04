@@ -437,6 +437,18 @@ function missingFilesScopeOwnership(
   );
 }
 
+function currentFilesOwnedScope(
+  connection: Connection | undefined,
+  observedFingerprint: string | undefined,
+  previousScope: ChatConnectedScope | null,
+  canonicalScopes: readonly ChatConnectedScope[],
+): ChatConnectedScope | null {
+  const restored = restoredConnectionScope(connection, canonicalScopes);
+  return observedFingerprint === connection?.boundScopeFingerprint
+    ? (previousScope ?? restored)
+    : restored;
+}
+
 function canonicalAcknowledgedScope(
   chat: Chat | undefined,
   nextScope: ChatConnectedScope,
@@ -1162,6 +1174,9 @@ function AppShellInner(): ReactNode {
       target?: ChatBindingTarget,
       connectionId?: string,
     ): Promise<boolean> => {
+      const observedFingerprint = wsConnectionsForBindingRef.current.find(
+        (edge) => edge.id === connectionId,
+      )?.boundScopeFingerprint;
       const chat = await resolveChatForWindow(chatWindowId, target, true);
       if (chat === undefined) {
         return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
@@ -1171,7 +1186,12 @@ function AppShellInner(): ReactNode {
       const connection = wsConnectionsForBindingRef.current.find(
         (edge) => edge.id === connectionId,
       );
-      const ownedScope = previousScope ?? restoredConnectionScope(connection, canonicalScopes);
+      const ownedScope = currentFilesOwnedScope(
+        connection,
+        observedFingerprint,
+        previousScope,
+        canonicalScopes,
+      );
       if (missingFilesScopeOwnership(connection, ownedScope, nextScope, canonicalScopes)) {
         reportGroundingMutationFailure(
           "Files scope ownership unavailable",
