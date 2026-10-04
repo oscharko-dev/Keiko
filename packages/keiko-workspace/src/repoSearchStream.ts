@@ -31,6 +31,46 @@ interface RankedStreamAtom {
   readonly pathScore: number;
 }
 
+export interface StreamedFilePatternGroups {
+  readonly patterns: readonly RegExp[];
+  readonly maxMatchesPerPattern: number;
+}
+
+class GroupedListingAtoms {
+  private readonly groups: { readonly pattern: RegExp; readonly best: RankedStreamAtom[] }[];
+
+  public constructor(private readonly options: StreamedFilePatternGroups) {
+    this.groups = options.patterns.map((pattern) => ({ pattern, best: [] }));
+  }
+
+  public matchesPath(scopePath: string): boolean {
+    return this.groups.some((group) => group.pattern.test(scopePath));
+  }
+
+  public retain(entry: RankedStreamAtom): void {
+    for (const group of this.groups) {
+      if (group.pattern.test(entry.atom.scopePath)) {
+        retainBest(group.best, entry, this.options.maxMatchesPerPattern);
+      }
+    }
+  }
+
+  public entries(limit: number): readonly RankedStreamAtom[] {
+    const result: RankedStreamAtom[] = [];
+    const seen = new Set<string>();
+    for (let index = 0; index < this.options.maxMatchesPerPattern; index += 1) {
+      for (const group of this.groups) {
+        const entry = group.best[index];
+        if (entry === undefined || seen.has(entry.atom.stableId)) continue;
+        seen.add(entry.atom.stableId);
+        result.push(entry);
+        if (result.length === limit) return result;
+      }
+    }
+    return result;
+  }
+}
+
 export interface StreamedSearchCollection {
   readonly atoms: readonly EvidenceAtom[];
   readonly candidates: readonly CandidateFile[];
@@ -83,7 +123,7 @@ class StreamingSearchCollector {
   private readonly best: RankedStreamAtom[] = [];
   private matchesFound = 0;
   private readonly pending = new Set<Promise<void>>();
-  private failure: unknown;
+  private failure: Error | undefined;
   private readonly bucketCounts: Record<CandidateBucket, number> = {
     "canonical-metadata": 0,
     "overview-doc": 0,
@@ -99,15 +139,22 @@ class StreamingSearchCollector {
   };
   private readonly rankedCandidates: RankedCandidateDiagnostic[] = [];
 
+  private readonly groups: GroupedListingAtoms | undefined;
+
   public constructor(
     private readonly runner: SearchTextRunner,
     private readonly pathPattern?: RegExp,
-  ) {}
+    filePatternGroups?: StreamedFilePatternGroups,
+  ) {
+    this.groups =
+      filePatternGroups === undefined ? undefined : new GroupedListingAtoms(filePatternGroups);
+  }
 
   public async enqueue(file: DiscoveredFile): Promise<void> {
     const pending = this.visit(file)
       .catch((error: unknown): void => {
-        this.failure ??= error;
+        this.failure ??=
+          error instanceof Error ? error : new Error("unknown error", { cause: error });
       })
       .finally((): void => {
         this.pending.delete(pending);
@@ -122,19 +169,28 @@ class StreamingSearchCollector {
     if (this.failure !== undefined) throw this.failure;
   }
 
-  public async visit(file: DiscoveredFile): Promise<void> {
+  private admit(file: DiscoveredFile): boolean {
     if (policyOmissionReason(file.relativePath, this.runner.policy) !== undefined) {
       this.ignoredByPolicy += 1;
-      return;
+      return false;
     }
     this.filesDiscovered += 1;
-    if (this.runner.candidatePathPredicate?.(file.relativePath) === false) return;
+    if (this.runner.candidatePathPredicate?.(file.relativePath) === false) return false;
     this.filesAfterPolicy += 1;
     this.bucketCounts[candidateBucketForPath(file.relativePath)] += 1;
-    if (this.pathPattern !== undefined && !this.pathPattern.test(file.relativePath)) {
+    if (
+      this.pathPattern !== undefined &&
+      (!this.pathPattern.test(file.relativePath) ||
+        this.groups?.matchesPath(file.relativePath) === false)
+    ) {
       this.state.filesScanned += 1;
-      return;
+      return false;
     }
+    return true;
+  }
+
+  public async visit(file: DiscoveredFile): Promise<void> {
+    if (!this.admit(file)) return;
     const omitted: CandidateFile[] = [];
     const matches =
       this.pathPattern === undefined
@@ -182,11 +238,10 @@ class StreamingSearchCollector {
       emittedAtMs: this.runner.nowMs(),
     });
     const pathScore = this.recordRanking(file);
-    retainBest(
-      this.best,
-      { atom, pathScore, definition: false },
-      this.runner.limits.maxMatchesReturned,
-    );
+    const entry = { atom, pathScore, definition: false };
+    if (this.groups === undefined)
+      retainBest(this.best, entry, this.runner.limits.maxMatchesReturned);
+    else this.groups.retain(entry);
   }
 
   private recordRanking(file: DiscoveredFile, contentScore = 0): number {
@@ -224,7 +279,7 @@ class StreamingSearchCollector {
 
   public atoms(): readonly EvidenceAtom[] {
     const grouped = new Map<string, EvidenceAtom[]>();
-    for (const entry of this.best) {
+    for (const entry of this.groups?.entries(this.runner.limits.maxMatchesReturned) ?? this.best) {
       const atoms = grouped.get(entry.atom.scopePath) ?? [];
       atoms.push(entry.atom);
       grouped.set(entry.atom.scopePath, atoms);
@@ -302,10 +357,12 @@ async function collectRescueStream(
   runner: SearchTextRunner,
   control: StructuralExecutionControl,
   pathPattern: RegExp | undefined,
+  filePatternGroups?: StreamedFilePatternGroups,
 ): Promise<StreamingSearchCollector> {
   const rescue = new StreamingSearchCollector(
     { ...runner, policy: { ...runner.policy, omitLowValueWorkspaceFiles: false } },
     pathPattern,
+    filePatternGroups,
   );
   try {
     await visitWorkspaceFiles(
@@ -364,8 +421,9 @@ export async function collectStreamedSearchText(
   runner: SearchTextRunner,
   control: StructuralExecutionControl,
   pathPattern?: RegExp,
+  filePatternGroups?: StreamedFilePatternGroups,
 ): Promise<StreamedSearchCollection> {
-  const collector = new StreamingSearchCollector(runner, pathPattern);
+  const collector = new StreamingSearchCollector(runner, pathPattern, filePatternGroups);
   const primary = await collectPrimaryStream(runner, control, collector);
   if (
     primary.atoms.length > 0 ||
@@ -373,5 +431,9 @@ export async function collectStreamedSearchText(
     primary.state.truncated
   )
     return primary;
-  return rescuedResult(primary, await collectRescueStream(runner, control, pathPattern), runner);
+  return rescuedResult(
+    primary,
+    await collectRescueStream(runner, control, pathPattern, filePatternGroups),
+    runner,
+  );
 }

@@ -144,6 +144,11 @@ source bytes are processed with bounded concurrency, and only bounded best match
 summaries survive the scan. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
 Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
+Auxiliary symbol and document filename discovery follows the same complete streaming traversal
+policy. Each requested filename pattern retains a bounded independent result bucket within one
+shared traversal per batch. Actual source-line inspection and final candidate ordering preserve
+distinct requested targets before the accepted read and context budgets select answer evidence;
+a popular first target must not displace every result for another explicitly requested target.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
 the accepted file-read budget, preserving primary root manifests before nested services. Workspace

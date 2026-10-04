@@ -76,6 +76,8 @@ export interface StructuralAdapterRequestContext {
 }
 
 export interface StructuralRequestSearchDeps {
+  readonly filePatternGroups?:
+    { readonly patterns: readonly string[]; readonly maxMatchesPerPattern: number } | undefined;
   readonly searchHints?: SearchHints | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly workspaceIndex?: WorkspaceIndex | undefined;
@@ -543,6 +545,9 @@ class DefaultStructuralAdapterRequestContext implements StructuralAdapterRequest
         nowMs: this.executionControl.nowMs,
         deadlineAtMs: control.deadlineAtMs,
         searchHints: this.searchHints(deps.searchHints),
+        ...(deps.filePatternGroups === undefined
+          ? {}
+          : { filePatternGroups: deps.filePatternGroups }),
         ...(control.signal === undefined ? {} : { signal: control.signal }),
         ...(deps.workspaceIndex === undefined ? {} : { workspaceIndex: deps.workspaceIndex }),
         ...(deps.semanticSearchProvider === undefined

@@ -5,6 +5,8 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Buffer } from "node:buffer";
+import { AsyncLocalStorage } from "node:async_hooks";
+import * as repoSearchScan from "../../keiko-workspace/src/repoSearchScan.js";
 import {
   linkSync,
   mkdirSync,
@@ -80,6 +82,7 @@ import {
 import type { GitFileHistoryEvidenceProvider } from "./grounded-git-history-evidence.js";
 
 const NOW = 1_700_000_000_000;
+const listingGuardPhase = new AsyncLocalStorage<boolean>();
 let ROOT = "";
 
 const echoAnswerer: GroundedAnswerer = {
@@ -465,6 +468,11 @@ interface FsOperationCounts {
 function countingNodeFs(): {
   readonly fs: WorkspaceFs;
   readonly counts: () => FsOperationCounts;
+  readonly listingGuards: () => {
+    readonly stat: number;
+    readonly realPath: number;
+    readonly readCalls: number;
+  };
 } {
   const iterate = nodeWorkspaceFs.iterateDirectory;
   let readFileUtf8Calls = 0;
@@ -476,6 +484,9 @@ function countingNodeFs(): {
   let openFileReaderCalls = 0;
   let readerReadRangeCalls = 0;
   let statCalls = 0;
+  let listingGuardStats = 0;
+  let listingGuardRealPaths = 0;
+  let listingGuardReads = 0;
   let readDirCalls = 0;
   let unboundedReadDirCalls = 0;
   let streamedReadDirCalls = 0;
@@ -501,6 +512,7 @@ function countingNodeFs(): {
       },
       stat: (absolutePath): WorkspaceStat => {
         statCalls += 1;
+        if (listingGuardPhase.getStore() === true) listingGuardStats += 1;
         return nodeWorkspaceFs.stat(absolutePath);
       },
       ...(iterate === undefined
@@ -525,6 +537,7 @@ function countingNodeFs(): {
       },
       realPath: (absolutePath): string => {
         realPathCalls += 1;
+        if (listingGuardPhase.getStore() === true) listingGuardRealPaths += 1;
         return nodeWorkspaceFs.realPath(absolutePath);
       },
       exists: (absolutePath): boolean => {
@@ -578,6 +591,7 @@ function countingNodeFs(): {
               expected: WorkspaceStat,
             ): Promise<Uint8Array> => {
               readFileBytesCalls += 1;
+              if (listingGuardPhase.getStore() === true) listingGuardReads += 1;
               const value = await readFileBytes(absolutePath, maxBytes, hardLinkPolicy, expected);
               contentReadBytes += value.byteLength;
               return value;
@@ -647,6 +661,11 @@ function countingNodeFs(): {
             },
           }),
     },
+    listingGuards: () => ({
+      stat: listingGuardStats,
+      realPath: listingGuardRealPaths,
+      readCalls: listingGuardReads,
+    }),
     counts: () => ({
       readFileUtf8: readFileUtf8Calls,
       readFileUtf8SameDescriptor: descriptorUtf8Calls,
@@ -819,6 +838,12 @@ interface TraversalMeasurement {
   readonly packValid: boolean;
   readonly operations: FsOperationCounts;
   readonly excerptReadOperations: FsOperationCounts;
+  readonly listingGuardOperations: {
+    readonly stat: number;
+    readonly realPath: number;
+    readonly readCalls: number;
+    readonly classifierCalls: number;
+  };
   readonly workspaceIo: WorkspaceIoCounts;
   readonly searchCalls: number;
   readonly contextCount: number;
@@ -844,7 +869,7 @@ type TraversalQueryShape = "single-anchor" | "multi-anchor";
 
 function traversalQueryText(shape: TraversalQueryShape): string {
   if (shape === "single-anchor") {
-    return "Trace TraversalAlpha implementations";
+    return "Trace TraversalAlpha ADR-1001 ADR-1002 RFC-2001 RFC-2002 implementations";
   }
   return `Trace ${TRAVERSAL_SYMBOLS.join(" ")} ADR-1001 ADR-1002 RFC-2001 RFC-2002 implementations`;
 }
@@ -915,6 +940,14 @@ async function measureRetrievalTraversal(
   const fixtureBytes = fixtureByteStats(fixtureRoot);
   const counted = countingNodeFs();
   const activityLog = createBufferedServerLogSink();
+  let classifierCalls = 0;
+  const nativeClassification = repoSearchScan.fileListingTextIsReadable;
+  const classification = vi
+    .spyOn(repoSearchScan, "fileListingTextIsReadable")
+    .mockImplementation((...args) => {
+      classifierCalls += 1;
+      return listingGuardPhase.run(true, () => nativeClassification(...args));
+    });
   const out = await retrieveConnectedContextPack(
     input({
       workspaceRoot: fixtureRoot,
@@ -934,7 +967,13 @@ async function measureRetrievalTraversal(
       fs: counted.fs,
       activityLog,
     },
-  );
+  ).finally(() => {
+    classification.mockRestore();
+  });
+  expect(classifierCalls).toBeGreaterThan(0);
+  expect(counted.listingGuards().readCalls).toBeGreaterThan(0);
+  expect(counted.listingGuards().readCalls).toBeLessThanOrEqual(classifierCalls);
+  expect(classifierCalls).toBeLessThanOrEqual(countFixtureFiles(fixtureRoot));
   const completedDetails = activityLog.events.find(
     (event) => event.op === "search.connected-context.completion-details",
   );
@@ -961,6 +1000,7 @@ async function measureRetrievalTraversal(
     packValid: validateConnectedContextPack(out.pack).ok,
     operations: counted.counts(),
     excerptReadOperations: await measureAcceptedExcerptReads(fixtureRoot, out, completed?.extra),
+    listingGuardOperations: { ...counted.listingGuards(), classifierCalls },
     workspaceIo: workspaceIoCounts(workspaceIo),
     searchCalls: out.pack.usage.searchCalls,
     contextCount: numericEventExtra(structural, "contextCount"),
@@ -1047,25 +1087,29 @@ function workspaceReadOperationCount(operations: FsOperationCounts): number {
 // The paired size and anchor-shape checks catch query-invariant work being repeated; these ceilings
 // intentionally pin bounded growth, rather than claiming a general asymptotic proof.
 //
-// #3347 keeps one shared structural inventory for all structural rings/anchors. Unlimited lexical
-// retrieval now walks its source stream separately, without storing the whole source corpus. Count
-// iterator work explicitly and bound each path to one traversal, so neither path can hide a repeated
-// per-ring walk in the other's allowance. The original structural ceilings remain unchanged.
+// #3347 keeps one shared structural inventory. Lexical retrieval, symbol filename discovery,
+// and document references each stream the admitted tree once, regardless of their anchor count.
+// Count iterator work separately from inventory work; each distinct work type has one traversal.
+// The original structural and content-read ceilings remain unchanged.
 function expectAbsoluteRetrievalIoBound(measurement: TraversalMeasurement): void {
   const { directoryCount, fileCount, operations } = measurement;
   const contentReadByteCeiling =
     16 * measurement.fixtureContentBytes + 32 * measurement.maxReadableFixtureFileBytes;
   expect(operations.unboundedReadDir).toBe(0);
   expect(operations.readDir - operations.streamedReadDir).toBeLessThanOrEqual(directoryCount + 16);
-  expect(operations.streamedReadDir).toBeLessThanOrEqual(directoryCount + 16);
+  expect(operations.streamedReadDir).toBeLessThanOrEqual(3 * directoryCount + 16);
   expect(operations.readDirEntries - operations.streamedReadDirEntries).toBeLessThanOrEqual(
     2 * directoryCount + 32,
   );
-  expect(operations.streamedReadDirEntries).toBeLessThanOrEqual(2 * directoryCount + 32);
+  expect(operations.streamedReadDirEntries).toBeLessThanOrEqual(6 * directoryCount + 32);
   expect(workspaceReadOperationCount(operations)).toBeLessThanOrEqual(16 * fileCount + 32);
   expect(operations.contentReadBytes).toBeLessThanOrEqual(contentReadByteCeiling);
-  expect(operations.stat).toBeLessThanOrEqual(22 * fileCount + 14 * directoryCount);
-  expect(operations.realPath).toBeLessThanOrEqual(48 * fileCount + 14 * directoryCount);
+  expect(operations.stat - measurement.listingGuardOperations.stat).toBeLessThanOrEqual(
+    22 * fileCount + 14 * directoryCount,
+  );
+  expect(operations.realPath - measurement.listingGuardOperations.realPath).toBeLessThanOrEqual(
+    48 * fileCount + 14 * directoryCount,
+  );
   expect(operations.exists).toBeLessThanOrEqual(64);
 }
 
@@ -1084,20 +1128,25 @@ function expectLinearRetrievalGrowth(
     large.operations[key] - small.operations[key];
   const addedReadOperations =
     workspaceReadOperationCount(large.operations) - workspaceReadOperationCount(small.operations);
-  // Preserve one structural snapshot and one live lexical stream as the workspace grows.
+  // Preserve one structural snapshot and one stream per lexical/symbol/document work type.
   expect(delta("readDir") - delta("streamedReadDir")).toBeLessThanOrEqual(addedDirectories + 16);
-  expect(delta("streamedReadDir")).toBeLessThanOrEqual(addedDirectories + 16);
+  expect(delta("streamedReadDir")).toBeLessThanOrEqual(3 * addedDirectories + 16);
   expect(delta("unboundedReadDir")).toBeLessThanOrEqual(4 * addedDirectories);
   expect(delta("readDirEntries") - delta("streamedReadDirEntries")).toBeLessThanOrEqual(
     2 * addedDirectories + 32,
   );
-  expect(delta("streamedReadDirEntries")).toBeLessThanOrEqual(2 * addedDirectories + 32);
+  expect(delta("streamedReadDirEntries")).toBeLessThanOrEqual(6 * addedDirectories + 32);
   expect(addedReadOperations).toBeLessThanOrEqual(16 * addedFiles + 16);
   expect(delta("contentReadBytes")).toBeLessThanOrEqual(
     16 * addedFixtureBytes + 16 * largestReadableFileBytes,
   );
-  expect(delta("stat")).toBeLessThanOrEqual(22 * addedFiles + 14 * addedDirectories);
-  expect(delta("realPath")).toBeLessThanOrEqual(48 * addedFiles + 14 * addedDirectories);
+  expect(
+    delta("stat") - (large.listingGuardOperations.stat - small.listingGuardOperations.stat),
+  ).toBeLessThanOrEqual(22 * addedFiles + 14 * addedDirectories);
+  expect(
+    delta("realPath") -
+      (large.listingGuardOperations.realPath - small.listingGuardOperations.realPath),
+  ).toBeLessThanOrEqual(48 * addedFiles + 14 * addedDirectories);
   expect(delta("exists")).toBe(0);
 }
 
@@ -3518,8 +3567,8 @@ describe("runGroundedExploration", () => {
       expect.arrayContaining(["TraversalAlpha", "TraversalBeta"]),
     );
     expect(multi.foundTraversalSymbols.length).toBeGreaterThanOrEqual(6);
-    expect(single.fileSearchCount).toBeGreaterThan(0);
-    expect(multi.fileSearchCount).toBeGreaterThan(single.fileSearchCount);
+    expect(single.fileSearchCount).toBe(2);
+    expect(multi.fileSearchCount).toBe(2);
     expect(multi.searchCalls).toBeGreaterThan(single.searchCalls);
     expectBoundedRetrievalProducts(single);
     expectBoundedRetrievalProducts(multi);
@@ -3540,7 +3589,10 @@ describe("runGroundedExploration", () => {
     const discoveryStatDelta =
       multi.operations.stat -
       multi.excerptReadOperations.stat -
-      (single.operations.stat - single.excerptReadOperations.stat);
+      multi.listingGuardOperations.stat -
+      (single.operations.stat -
+        single.excerptReadOperations.stat -
+        single.listingGuardOperations.stat);
     const additionalDiscoveryContentReads =
       workspaceContentReadOperationCount(multi.operations) -
       workspaceContentReadOperationCount(multi.excerptReadOperations) -
@@ -3552,7 +3604,10 @@ describe("runGroundedExploration", () => {
     const discoveryRealPathDelta =
       multi.operations.realPath -
       multi.excerptReadOperations.realPath -
-      (single.operations.realPath - single.excerptReadOperations.realPath);
+      multi.listingGuardOperations.realPath -
+      (single.operations.realPath -
+        single.excerptReadOperations.realPath -
+        single.listingGuardOperations.realPath);
     expect(discoveryRealPathDelta).toBeLessThanOrEqual(32);
     expect(multi.operations.unboundedReadDir - single.operations.unboundedReadDir).toBe(0);
   });

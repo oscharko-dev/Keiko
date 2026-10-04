@@ -97,7 +97,11 @@ import {
   anchoredExcerptByteWindow,
   anchoredExcerptByteWindows,
 } from "./repoSearchExcerptWindow.js";
-import { collectStreamedSearchText, type StreamedSearchCollection } from "./repoSearchStream.js";
+import {
+  collectStreamedSearchText,
+  type StreamedSearchCollection,
+  type StreamedFilePatternGroups,
+} from "./repoSearchStream.js";
 import {
   assertStructuralExecutionActive,
   executionControlledWorkspaceFs,
@@ -193,6 +197,9 @@ export interface ReadExcerptResult extends ReadExcerptWindowResult {
 
 interface FacadeDeps {
   readonly queryInterpretation?: LiteralQueryInterpretation | undefined;
+  // Trusted auxiliary filename batches keep independent bounded target buckets on one traversal.
+  readonly filePatternGroups?:
+    { readonly patterns: readonly string[]; readonly maxMatchesPerPattern: number } | undefined;
   readonly fs?: WorkspaceFs;
   readonly nowMs?: () => number;
   // Internal absolute request ceiling. Public callers normally use elapsedMsMax; the request-local
@@ -2571,11 +2578,13 @@ function streamedCoverage(
 async function executeStreamedSearchText(
   runner: SearchTextRunner,
   pathPattern?: RegExp,
+  filePatternGroups?: StreamedFilePatternGroups,
 ): Promise<SearchResult> {
   const collected = await collectStreamedSearchText(
     runner,
     runnerExecutionControl(runner),
     pathPattern,
+    filePatternGroups,
   );
   const semantic =
     runnerStopReason(runner) === undefined
@@ -3404,6 +3413,38 @@ function completeFindFilesSearch(
   );
 }
 
+function compileFilePatternGroups(
+  options: FacadeDeps["filePatternGroups"],
+  query: RetrievalQuery,
+  limits: SearchLimits,
+): StreamedFilePatternGroups | undefined {
+  if (options === undefined) return undefined;
+  if (
+    options.patterns.length > 8 ||
+    options.patterns.length === 0 ||
+    !Number.isSafeInteger(options.maxMatchesPerPattern) ||
+    options.maxMatchesPerPattern <= 0 ||
+    options.maxMatchesPerPattern > limits.maxMatchesReturned
+  ) {
+    throw new RepoSearchInvalidQueryError("invalid internal filename group bounds");
+  }
+  const patterns = [...new Set(options.patterns)];
+  for (const pattern of patterns) assertQuery({ ...query, text: pattern });
+  return {
+    patterns: patterns.map((pattern) => compileGlob(pattern, query.caseSensitive)),
+    maxMatchesPerPattern: options.maxMatchesPerPattern,
+  };
+}
+
+function fileListingFingerprint(
+  query: RetrievalQuery,
+  groups: FacadeDeps["filePatternGroups"],
+): string {
+  return groups === undefined
+    ? fingerprintFor(query)
+    : fingerprintFor({ ...query, text: JSON.stringify({ pattern: query.text, groups }) });
+}
+
 export async function findFiles(
   scope: SearchScope,
   query: RetrievalQuery,
@@ -3416,15 +3457,19 @@ export async function findFiles(
   if (query.kind !== "file-pattern") {
     throw new RepoSearchInvalidQueryError("findFiles requires a file-pattern query");
   }
+  const filePatternGroups = compileFilePatternGroups(deps.filePatternGroups, query, limits);
+  if (filePatternGroups !== undefined && limits.maxFilesScanned !== null) {
+    throw new RepoSearchInvalidQueryError("internal filename groups require streaming search");
+  }
   if (limits.maxFilesScanned === null) {
     const pattern = compileGlob(query.text, query.caseSensitive);
     const matchQuery = { ...query, kind: "regex" as const, text: "." };
     const runner = {
       ...searchTextRunner(scope, matchQuery, limits, deps),
       query,
-      fingerprint: fingerprintFor(query),
+      fingerprint: fileListingFingerprint(query, deps.filePatternGroups),
     };
-    return executeStreamedSearchText(runner, pattern);
+    return executeStreamedSearchText(runner, pattern, filePatternGroups);
   }
   const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;

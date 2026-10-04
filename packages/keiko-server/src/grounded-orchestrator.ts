@@ -46,6 +46,7 @@ import {
   canContinue,
   complete,
   contextPackIndexKey,
+  DEFAULT_FILTER_OPTIONS,
   planAndGovern,
   rankCandidates,
   requiresRelationshipOrHistoryRings,
@@ -2133,13 +2134,13 @@ const DOCUMENT_REFERENCE_MATCHES_MAX = 8;
 const MAX_DOCUMENT_REFERENCE_ANCHORS = 4;
 const DOCUMENT_REFERENCE_ANCHOR_RE = /^(?:adr|rfc)-\d{3,6}$/u;
 const SYMBOL_FILE_SEARCH_LIMITS = {
-  maxFilesScanned: 10_000,
+  maxFilesScanned: null,
   maxMatchesReturned: SYMBOL_FILE_MATCHES_MAX,
   maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
   elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
 } as const;
 const DOCUMENT_REFERENCE_SEARCH_LIMITS = {
-  maxFilesScanned: 10_000,
+  maxFilesScanned: null,
   maxMatchesReturned: DOCUMENT_REFERENCE_MATCHES_MAX,
   maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
   elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
@@ -2806,16 +2807,6 @@ function documentReferenceAnchorTerms(plan: ExplorationPlan): readonly string[] 
     .slice(0, MAX_DOCUMENT_REFERENCE_ANCHORS);
 }
 
-function documentReferenceQuery(input: OrchestratorInput, term: string): RetrievalQuery {
-  return {
-    kind: "file-pattern",
-    text: `**${term}*`,
-    caseSensitive: false,
-    maxResults: DOCUMENT_REFERENCE_MATCHES_MAX,
-    emittedAtMs: input.query.emittedAtMs,
-  };
-}
-
 function documentReferenceCoverageMarker(
   term: string,
   coverage: ContextCoverageDiagnostics,
@@ -2840,13 +2831,8 @@ function reserveAugmentationSearchTerms(
   signal: AbortSignal | undefined,
   budget: AugmentationBudgetMeter,
 ): readonly string[] {
-  const reserved: string[] = [];
-  for (const term of terms) {
-    throwIfCancelled(signal);
-    if (!budget.tryReserveSearchCall()) break;
-    reserved.push(term);
-  }
-  return reserved;
+  throwIfCancelled(signal);
+  return terms.length > 0 && budget.tryReserveSearchCall() ? terms : [];
 }
 
 async function documentReferenceAtoms(
@@ -2858,25 +2844,22 @@ async function documentReferenceAtoms(
   budget: AugmentationBudgetMeter,
 ): Promise<DeterministicContextEvidence> {
   const terms = reserveAugmentationSearchTerms(documentReferenceAnchorTerms(plan), signal, budget);
-  const results = await Promise.all(
-    terms.map(async (term) => {
-      throwIfCancelled(signal);
-      const result = await requestContext.findFiles(
-        documentReferenceQuery(input, term),
-        DOCUMENT_REFERENCE_SEARCH_LIMITS,
-        {
-          ...(signal === undefined ? {} : { signal }),
-          searchHints: { retrievalIntent: plan.retrievalIntent },
-        },
-      );
-      return { term, result };
-    }),
+  if (terms.length === 0) return { atoms: [], uncertainty: [] };
+  const maxMatches = DOCUMENT_REFERENCE_MATCHES_MAX * terms.length;
+  const result = await requestContext.findFiles(
+    { ...symbolFileQuery(input, "**/*"), maxResults: maxMatches },
+    { ...DOCUMENT_REFERENCE_SEARCH_LIMITS, maxMatchesReturned: maxMatches },
+    {
+      ...(signal === undefined ? {} : { signal }),
+      searchHints: { retrievalIntent: plan.retrievalIntent },
+      filePatternGroups: {
+        patterns: terms.map((term) => `**${term}*`),
+        maxMatchesPerPattern: DOCUMENT_REFERENCE_MATCHES_MAX,
+      },
+    },
   );
-  const markers = results.flatMap(({ term, result }) => {
-    const marker = documentReferenceCoverageMarker(term, result.coverage, nowMs);
-    return marker === undefined ? [] : [marker];
-  });
-  return { atoms: results.flatMap(({ result }) => result.atoms), uncertainty: markers };
+  const marker = documentReferenceCoverageMarker(terms.join(", "), result.coverage, nowMs);
+  return { atoms: result.atoms, uncertainty: marker === undefined ? [] : [marker] };
 }
 
 // eslint-disable-next-line complexity -- Guard chain keeps symbol-anchor filtering explicit.
@@ -3162,43 +3145,8 @@ function symbolLineDeadlineMarker(
   };
 }
 
-// Walk the tree ONCE for `**/term.*` and keep only `term.<code-ext>` definition files. The single
-// walk replaces the prior
-// per-extension globs (up to 27 redundant full-tree walks per question, ~4.7s on a 3.5k-file repo).
-async function symbolDefinitionMatchesForTerm(
-  term: string,
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
-  requestContext: StructuralAdapterRequestContext,
-): Promise<{
-  readonly matches: readonly SymbolDefinitionMatch[];
-  readonly uncertainty: readonly UncertaintyMarker[];
-}> {
-  const result = await requestContext.findFiles(
-    symbolFileQuery(input, `**/${term}.*`),
-    SYMBOL_FILE_SEARCH_LIMITS,
-    {
-      ...(signal === undefined ? {} : { signal }),
-      searchHints: { retrievalIntent: plan.retrievalIntent },
-    },
-  );
-  const matches: SymbolDefinitionMatch[] = [];
-  for (const atom of result.atoms) {
-    if (!isSymbolDefinitionPath(atom.scopePath, term)) {
-      continue;
-    }
-    matches.push({
-      atom,
-      term,
-      priority: symbolDefinitionPriority(atom.scopePath, term),
-    });
-  }
-  const marker = symbolCoverageIncomplete(term, result.coverage, nowMs);
-  return { matches, uncertainty: marker === undefined ? [] : [marker] };
-}
-
+// One admitted traversal discovers all requested symbol filenames. Independent bounded pattern
+// buckets preserve each target before the fair emitted result selection.
 async function collectSymbolDefinitionMatches(
   terms: readonly string[],
   input: OrchestratorInput,
@@ -3212,20 +3160,29 @@ async function collectSymbolDefinitionMatches(
   readonly uncertainty: readonly UncertaintyMarker[];
 }> {
   const reservedTerms = reserveAugmentationSearchTerms(terms, signal, budget);
-  const results = await Promise.all(
-    reservedTerms.map((term) => {
-      throwIfCancelled(signal);
-      return symbolDefinitionMatchesForTerm(term, input, plan, nowMs, signal, requestContext);
-    }),
+  if (reservedTerms.length === 0) return { matches: [], uncertainty: [] };
+  const result = await requestContext.findFiles(
+    symbolFileQuery(input, "**/*"),
+    SYMBOL_FILE_SEARCH_LIMITS,
+    {
+      ...(signal === undefined ? {} : { signal }),
+      searchHints: { retrievalIntent: plan.retrievalIntent },
+      filePatternGroups: {
+        patterns: reservedTerms.map((term) => `**/${term}.*`),
+        maxMatchesPerPattern: SYMBOL_FILE_MATCHES_MAX,
+      },
+    },
   );
   const matches: SymbolDefinitionMatch[] = [];
-  const uncertainty: UncertaintyMarker[] = [];
-  for (const result of results) {
-    throwIfCancelled(signal);
-    matches.push(...result.matches);
-    uncertainty.push(...result.uncertainty);
+  for (const atom of result.atoms) {
+    for (const term of reservedTerms) {
+      if (isSymbolDefinitionPath(atom.scopePath, term)) {
+        matches.push({ atom, term, priority: symbolDefinitionPriority(atom.scopePath, term) });
+      }
+    }
   }
-  return { matches, uncertainty };
+  const marker = symbolCoverageIncomplete(reservedTerms.join(", "), result.coverage, nowMs);
+  return { matches, uncertainty: marker === undefined ? [] : [marker] };
 }
 
 function pushUniqueAtom(atoms: EvidenceAtom[], seen: Set<string>, atom: EvidenceAtom): void {
@@ -3279,6 +3236,19 @@ function pushSymbolLineAtom(
   return false;
 }
 
+function orderSymbolMatchesForTerms(
+  matches: readonly SymbolDefinitionMatch[],
+  terms: readonly string[],
+): readonly SymbolDefinitionMatch[] {
+  const sorted = [...matches].sort(compareSymbolMatches);
+  const firstPerTerm = new Set<SymbolDefinitionMatch>();
+  for (const term of terms) {
+    const match = sorted.find((entry) => entry.term === term);
+    if (match !== undefined) firstPerTerm.add(match);
+  }
+  return [...firstPerTerm, ...sorted.filter((match) => !firstPerTerm.has(match))];
+}
+
 function collectPrioritizedSymbolAtoms(
   inputs: PrioritizedSymbolInputs,
   matches: readonly SymbolDefinitionMatch[],
@@ -3295,7 +3265,7 @@ function collectPrioritizedSymbolAtoms(
     nowMs: inputs.nowMs,
     deadlineMs: inputs.deadlineAtMs,
   };
-  for (const match of [...matches].sort(compareSymbolMatches)) {
+  for (const match of orderSymbolMatchesForTerms(matches, terms)) {
     throwIfCancelled(inputs.signal);
     pushUniqueAtom(atoms, seen, match.atom);
     if (lineDeadlineReached) {
@@ -4925,7 +4895,15 @@ function preparePackAssembly(
       context: { retrievalIntent: plan.retrievalIntent },
       ...(hasGitMetadata ? {} : { hints: { generatedPathPatterns: [] } }),
     },
-    { nowMs },
+    {
+      nowMs,
+      // Retain the admitted evidence pool until distinct requested targets are ordered. The
+      // accepted file/read/context budgets below still bound the material sent to the model.
+      filter: {
+        ...DEFAULT_FILTER_OPTIONS,
+        maxKept: new Set(atoms.map((atom) => atom.scopePath)).size,
+      },
+    },
   );
   const refined = refineCandidateOrdering(
     ranking.kept,

@@ -1,0 +1,189 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  validateConnectedContextPack,
+  type ConnectedContextPack,
+} from "@oscharko-dev/keiko-contracts/connected-context";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { retrieveConnectedContextPack, type OrchestratorInput } from "./grounded-orchestrator.js";
+
+const NOW = 1_700_000_000_000;
+let root = "";
+const deepDirectory = Array.from({ length: 45 }, () => "nested").join("/");
+
+function writeFixture(scopePath: string, content: string): void {
+  const slash = scopePath.lastIndexOf("/");
+  if (slash !== -1) mkdirSync(join(root, scopePath.slice(0, slash)), { recursive: true });
+  writeFileSync(join(root, scopePath), content);
+}
+
+function workspace(): WorkspaceInfo {
+  return {
+    root,
+    selectedRoot: root,
+    name: "auxiliary-discovery",
+    sourceDirs: [],
+    testDirs: [],
+    languages: ["typescript"],
+    ignoreLines: [],
+  };
+}
+
+function request(text: string): OrchestratorInput {
+  return {
+    workspaceRoot: root,
+    scope: {
+      schemaVersion: "1",
+      scopeId: "ordinary-auxiliary-root",
+      workspaceRoot: root,
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+      conversationId: undefined,
+      connectedAtMs: NOW,
+    },
+    query: {
+      kind: "natural-language",
+      text,
+      caseSensitive: false,
+      maxResults: 50,
+      emittedAtMs: NOW,
+    },
+  };
+}
+
+async function retrieve(text: string): Promise<ConnectedContextPack> {
+  const output = await retrieveConnectedContextPack(request(text), {
+    correlationId: undefined,
+    answerer: { answer: () => Promise.reject(new Error("Retrieval must not call the model.")) },
+    nowMs: () => NOW,
+    detectWorkspace: workspace,
+  });
+  expect(output.pack.files.length).toBeLessThanOrEqual(output.plan.budget.filesReadMax);
+  expect(output.pack.usage.filesRead).toBeLessThanOrEqual(output.plan.budget.filesReadMax);
+  expect(validateConnectedContextPack(output.pack).ok).toBe(true);
+  return output.pack;
+}
+
+beforeAll(() => {
+  root = mkdtempSync(join(tmpdir(), "keiko-auxiliary-discovery-"));
+  for (let index = 0; index < 10_020; index += 1) {
+    writeFixture(`noise-${String(index).padStart(5, "0")}.txt`, "Unrelated text.\n");
+  }
+  for (let index = 0; index < 110; index += 1) {
+    writeFixture(
+      `fair-targets/${String(index).padStart(3, "0")}/FairAlphaProbe.ts`,
+      "export function FairAlphaProbe(): number { return 73; }\n",
+    );
+  }
+  writeFixture(
+    "fair-targets/zzzz/FairBetaProbe.ts",
+    "export function FairBetaProbe(): number { return 91; }\n",
+  );
+  writeFixture(
+    "zzzz/LateAuxiliaryProbe.ts",
+    "export function LateAuxiliaryProbe(): number { return 73; }\n",
+  );
+  writeFixture(
+    "zzzz/ADR-987654-late.md",
+    "# Discovery record\nThe documented interval is 730 hours.\n",
+  );
+  writeFixture(
+    `${deepDirectory}/DeepAuxiliaryProbe.ts`,
+    "export function DeepAuxiliaryProbe(): number { return 91; }\n",
+  );
+  writeFixture(
+    `${deepDirectory}/ADR-987655-deep.md`,
+    "# Deep record\nThe documented interval is 910 hours.\n",
+  );
+  for (let index = 0; index < 12; index += 1) {
+    writeFixture(
+      `zzzz/ADR-987656-record-${String(index).padStart(2, "0")}.md`,
+      `Record ${String(index)}.\n`,
+    );
+  }
+});
+
+afterAll(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+describe("grounded auxiliary discovery traverses the complete admitted scope", () => {
+  it("retains a separately requested implementation after more than 96 earlier matches", async () => {
+    const input = request(
+      "Where are FairAlphaProbe and FairBetaProbe implemented? Cite both actual files and lines.",
+    );
+    const output = await retrieveConnectedContextPack(
+      { ...input, scope: { ...input.scope, kind: "directory", relativePaths: ["fair-targets"] } },
+      {
+        correlationId: undefined,
+        answerer: { answer: () => Promise.reject(new Error("Retrieval must not call the model.")) },
+        nowMs: () => NOW,
+        detectWorkspace: workspace,
+      },
+    );
+    expect(output.pack.files.some((file) => file.scopePath.endsWith("/FairAlphaProbe.ts"))).toBe(
+      true,
+    );
+    const beta = output.pack.files.find((file) => file.scopePath.endsWith("/FairBetaProbe.ts"));
+    expect(beta?.excerpts.some((excerpt) => excerpt.content.includes("return 91"))).toBe(true);
+    expect(output.pack.usage.filesRead).toBeLessThanOrEqual(output.plan.budget.filesReadMax);
+    expect(validateConnectedContextPack(output.pack).ok).toBe(true);
+  });
+
+  it("retains each requested document reference within its existing bounded output", async () => {
+    const pack = await retrieve("Summarize ADR-987656 and ADR-987654 precisely.");
+    expect(pack.files.some((file) => file.scopePath === "zzzz/ADR-987654-late.md")).toBe(true);
+    expect(pack.files.filter((file) => file.scopePath.includes("ADR-987656"))).toHaveLength(8);
+    expect(pack.files).toHaveLength(9);
+  }, 60_000);
+
+  it("keeps referenced-document output bounded while traversing every admitted file", async () => {
+    const pack = await retrieve("Summarize ADR-987656 precisely.");
+    const references = pack.files.filter((file) => file.scopePath.includes("ADR-987656"));
+    expect(references).toHaveLength(8);
+    const marker = pack.uncertainty.find((entry) =>
+      entry.claim.startsWith("Document reference discovery"),
+    );
+    expect(marker?.claim).toContain("match-cap");
+    expect(marker?.claim).not.toContain("file-cap");
+  }, 60_000);
+
+  it.each([
+    ["LateAuxiliaryProbe", "zzzz/LateAuxiliaryProbe.ts"],
+    ["DeepAuxiliaryProbe", `${deepDirectory}/DeepAuxiliaryProbe.ts`],
+  ])(
+    "finds the %s implementation without an implicit corpus ceiling",
+    async (symbol, scopePath) => {
+      const pack = await retrieve(`Wo ist ${symbol} implementiert? Nenne die Datei und Zeile.`);
+      const selected = pack.files.find((file) => file.scopePath === scopePath);
+      expect(selected).toBeDefined();
+      expect(selected?.excerpts.some((excerpt) => excerpt.content.includes(symbol))).toBe(true);
+      expect(
+        pack.uncertainty.some((marker) => marker.claim.startsWith("Symbol file discovery")),
+      ).toBe(false);
+    },
+    60_000,
+  );
+
+  it.each([
+    ["ADR-987654", "zzzz/ADR-987654-late.md"],
+    ["ADR-987655", `${deepDirectory}/ADR-987655-deep.md`],
+  ])(
+    "finds referenced %s beyond default file and depth ceilings",
+    async (reference, scopePath) => {
+      const pack = await retrieve(`Summarize ${reference} precisely.`);
+      const selected = pack.files.find((file) => file.scopePath === scopePath);
+      expect(selected).toBeDefined();
+      expect(
+        selected?.excerpts.some((excerpt) => excerpt.atom.provenance.tool === "repo.findFiles"),
+      ).toBe(true);
+      expect(
+        pack.uncertainty.some((marker) => marker.claim.startsWith("Document reference discovery")),
+      ).toBe(false);
+    },
+    60_000,
+  );
+});
