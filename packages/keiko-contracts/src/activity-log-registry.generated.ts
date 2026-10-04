@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "d863812535afa086fc53e198216f14c32ce09c8ad7177b4fe9219fe6bcd74ec2" as const;
+  "73576d019620f91cfdd2fb58417f441f23c94f0f3fcf5272d79297757a903a29" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3848,6 +3848,63 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "client.support-report.preparation-failed",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientSupportReportPreparationFailed",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      preparationErrorKind: {
+        type: "string",
+        dataClass: "error-kind",
+        required: true,
+        values: [
+          "unknown",
+          "internal",
+          "invalid-request",
+          "validation-failed",
+          "permission-denied",
+          "authority-denied",
+          "unavailable",
+          "timeout",
+          "cancelled",
+          "rate-limited",
+          "conflict",
+          "unsafe-target",
+          "target-exists",
+          "target-mutated",
+          "open-failed",
+          "read-failed",
+          "write-failed",
+          "durability-failed",
+          "publish-unsupported",
+        ],
+      },
+      durationMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["support-report"],
+    proofIds: ["client.support-report.preparation-failed.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "client.support-report.prepared",
     category: "diagnostic",
     owner: "keiko-server",
@@ -4483,6 +4540,80 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       truncationCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      truncationReasons: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: false,
+        maxItems: 7,
+        values: [
+          "result-limit",
+          "file-limit",
+          "inventory-limit",
+          "output-limit",
+          "depth-limit",
+          "io-error",
+          "file-too-large",
+        ],
+      },
+      progressStatus: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["available", "unavailable", "not-applicable"],
+      },
+      policyMode: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["workspace-root-default", "explicit-scope"],
+      },
+      lowValuePolicyApplied: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      lowValueRescueApplied: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      coverageIncomplete: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      coverageReasons: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: false,
+        maxItems: 6,
+        values: ["aborted", "file-cap", "match-cap", "timeout", "depth-pruned", "io-error"],
+      },
+      ignoredEntries: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      deniedEntries: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      binaryFilesSkipped: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      oversizedFilesSkipped: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      unreadableFilesSkipped: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -13920,6 +14051,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "duration",
         required: false,
       },
+      retryAfterHeader: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["absent", "valid", "unparseable", "elapsed"],
+      },
     },
     causal: "none",
     lifecycle: "failure",
@@ -13988,6 +14125,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "duration",
         required: false,
       },
+      retryAfterHeader: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["absent", "valid", "unparseable", "elapsed"],
+      },
     },
     causal: "none",
     lifecycle: "failure",
@@ -14044,6 +14187,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "number",
         dataClass: "duration",
         required: false,
+      },
+      retryAfterHeader: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["absent", "valid", "unparseable", "elapsed"],
       },
     },
     causal: "none",
@@ -36321,6 +36470,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "process-lifecycle",
           safeContextFields: [
             {
+              name: "binaryFilesSkipped",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "candidatesDiscovered",
               type: "integer",
               dataClass: "count",
@@ -36330,6 +36485,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "coverageIncomplete",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "coverageReasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "deniedEntries",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
@@ -36351,10 +36524,46 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "ignoredEntries",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "lowValuePolicyApplied",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "lowValueRescueApplied",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "outputBytes",
               type: "integer",
               dataClass: "count",
               required: false,
+            },
+            {
+              name: "oversizedFilesSkipped",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "policyMode",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "progressStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
             },
             {
               name: "reason",
@@ -36388,6 +36597,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "truncationCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "truncationReasons",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "unreadableFilesSkipped",
               type: "integer",
               dataClass: "count",
               required: false,
@@ -48613,6 +48834,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "retryAfterHeader",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "retryAfterMs",
               type: "number",
               dataClass: "duration",
@@ -48686,6 +48913,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "retryAfterHeader",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "retryAfterMs",
               type: "number",
               dataClass: "duration",
@@ -48747,13 +48980,26 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "retryAfterHeader",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "retryAfterMs",
               type: "number",
               dataClass: "duration",
               required: false,
             },
           ],
-          evidenceClasses: ["completeness-state", "count", "duration", "loss-state", "opaque-id"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "duration",
+            "loss-state",
+            "opaque-id",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -63864,6 +64110,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         start: ["support.report.started", "support.report.ui.started"],
         state: [
           "client.support-report.download-started",
+          "client.support-report.preparation-failed",
           "client.support-report.prepared",
           "support.report.degraded",
           "support.report.ui.delivered",
@@ -63876,6 +64123,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       causalEdges: [
         {
           op: "client.support-report.download-started",
+          mode: "correlation",
+        },
+        {
+          op: "client.support-report.preparation-failed",
           mode: "correlation",
         },
         {
@@ -63922,6 +64173,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lossSignals: [],
       resourceSignals: [
         "client.support-report.download-started",
+        "client.support-report.preparation-failed",
         "client.support-report.prepared",
         "support.report.completed",
         "support.report.degraded",
@@ -63954,6 +64206,36 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["client.support-report.download-started.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "client.support-report.preparation-failed",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "durationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: true,
+            },
+            {
+              name: "preparationErrorKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "duration", "error-kind", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.support-report.preparation-failed.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -68296,6 +68578,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.stage.settled": "client-diagnostics",
     "client.stage.started": "client-diagnostics",
     "client.support-report.download-started": "client-diagnostics",
+    "client.support-report.preparation-failed": "client-diagnostics",
     "client.support-report.prepared": "client-diagnostics",
     "coding-app-session.channel.closed": "tools-workflows",
     "coding-app-session.channel.opened": "tools-workflows",

@@ -107,6 +107,12 @@ const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
     },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },
+    retryAfterHeader: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["absent", "valid", "unparseable", "elapsed"],
+    },
   },
   causal: "none",
   lifecycle: "failure",
@@ -137,6 +143,12 @@ const GATEWAY_RETRY_EXHAUSTED_OPERATION = defineActivityLogOperation({
     remainingMs: { type: "number", dataClass: "duration", required: false },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },
+    retryAfterHeader: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["absent", "valid", "unparseable", "elapsed"],
+    },
   },
   causal: "none",
   lifecycle: "failure",
@@ -160,6 +172,12 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
     delayMs: { type: "number", dataClass: "duration", required: true },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },
+    retryAfterHeader: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["absent", "valid", "unparseable", "elapsed"],
+    },
   },
   causal: "none",
   lifecycle: "state",
@@ -439,6 +457,7 @@ function loggedRetryModel(context: RetryLogContext): Readonly<{ modelId?: string
 export interface ProviderErrorDetail {
   readonly httpStatus?: number;
   readonly retryAfterMs?: number;
+  readonly retryAfterHeader?: NonNullable<RateLimitError["retryAfterHeader"]>;
 }
 
 export function providerErrorDetail(error: unknown): ProviderErrorDetail {
@@ -447,9 +466,14 @@ export function providerErrorDetail(error: unknown): ProviderErrorDetail {
     error instanceof RateLimitError || error instanceof ProviderError
       ? (error.retryAfterMs ?? undefined)
       : undefined;
+  const retryAfterHeader =
+    error instanceof RateLimitError || error instanceof ProviderError
+      ? error.retryAfterHeader
+      : undefined;
   return {
     ...(httpStatus === undefined ? {} : { httpStatus }),
     ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+    ...(retryAfterHeader === undefined ? {} : { retryAfterHeader }),
   };
 }
 

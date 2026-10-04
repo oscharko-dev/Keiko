@@ -11,6 +11,7 @@ import {
 import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   cacheSupportReportDownload,
+  MAX_SUPPORT_REPORT_DELIVERY_BYTES,
   SupportReportDeliveryCapacityError,
   handleDownloadSupportReport,
 } from "./support-report-download.js";
@@ -244,6 +245,62 @@ describe("authenticated canonical report attachment", () => {
     expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(report.reportJson);
   });
 
+  it("keeps a boundary protected report and a canonical limited report independently downloadable", async () => {
+    const owner = deps("protected-session");
+    const boundary = { ...report, reportJson: "x".repeat(MAX_SUPPORT_REPORT_BYTES) };
+    const protectedTarget = cacheSupportReportDownload(owner, "protected-session", boundary);
+    const limited = createClientOnlySupportReport(
+      "limited-boundary-coexistence",
+      "session-unavailable",
+    );
+    const limitedTarget = cacheSupportReportDownload(owner, undefined, limited);
+    for (const [target, expected] of [
+      [protectedTarget, boundary],
+      [limitedTarget, limited],
+    ] as const) {
+      const ctx = context(target.downloadPath);
+      vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+      expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(expected.reportJson);
+    }
+  });
+
+  it("evicts limited evidence first under aggregate byte pressure below the count ceiling", async () => {
+    const owner = deps("protected-session");
+    const limited = createClientOnlySupportReport("limited-byte-pressure", "session-unavailable");
+    let remaining =
+      MAX_SUPPORT_REPORT_DELIVERY_BYTES -
+      Buffer.byteLength(limited.reportJson) -
+      Buffer.byteLength(report.reportJson) +
+      1;
+    const protectedTargets: { downloadPath: string; text: string }[] = [];
+    while (remaining > 0) {
+      const text = "x".repeat(Math.min(MAX_SUPPORT_REPORT_BYTES, remaining));
+      const cached = cacheSupportReportDownload(owner, "protected-session", {
+        ...report,
+        reportJson: text,
+      });
+      protectedTargets.push({ downloadPath: cached.downloadPath, text });
+      remaining -= Buffer.byteLength(text);
+    }
+    const limitedTarget = cacheSupportReportDownload(owner, undefined, limited);
+    const latest = cacheSupportReportDownload(owner, "protected-session", report);
+    expect(
+      await handleDownloadSupportReport(context(limitedTarget.downloadPath), owner),
+    ).toMatchObject({ status: 404 });
+    for (const target of [
+      ...protectedTargets,
+      { downloadPath: latest.downloadPath, text: report.reportJson },
+    ]) {
+      const ctx = context(target.downloadPath);
+      vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+      expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(target.text);
+    }
+  });
+
   it("refuses limited delivery when protected artifacts occupy the whole existing capacity", async () => {
     const owner = deps("protected-session");
     const first = cacheSupportReportDownload(owner, "protected-session", report);
@@ -414,6 +471,15 @@ describe("authenticated canonical report attachment", () => {
       ...report,
       reportJson: "é".repeat(MAX_SUPPORT_REPORT_BYTES / 2),
     });
+    let remaining = MAX_SUPPORT_REPORT_DELIVERY_BYTES - MAX_SUPPORT_REPORT_BYTES;
+    while (remaining > 0) {
+      const bytes = Math.min(remaining, MAX_SUPPORT_REPORT_BYTES);
+      cacheSupportReportDownload(owner, "other-session", {
+        ...report,
+        reportJson: "x".repeat(bytes),
+      });
+      remaining -= bytes;
+    }
     const next = cacheSupportReportDownload(owner, "owner-session", report);
     expect(await handleDownloadSupportReport(context(first.downloadPath), owner)).toMatchObject({
       status: 404,

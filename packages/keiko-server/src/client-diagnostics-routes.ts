@@ -1175,7 +1175,7 @@ const CLIENT_SUPPORT_REPORT_PREPARATION_FAILED_OPERATION = defineActivityLogOper
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
-  lifecycle: "failure",
+  lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["support-report"],
   proofIds: ["client.support-report.preparation-failed.line"],

@@ -790,16 +790,23 @@ function retryAfterDate(header: string): number {
   return Date.parse(asctime.test(header) ? `${header} GMT` : header);
 }
 
-function retryAfterMs(response: Response): number | null {
-  const header = response.headers.get("retry-after");
-  if (header === null) {
-    return null;
-  }
+function retryAfterMs(header: string): number | null {
   if (/^\d+$/.test(header.trim())) {
     return boundedRetryAfterMs(Number(header) * 1000);
   }
   if (!/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)/i.test(header)) return null;
   return boundedRetryAfterMs(retryAfterDate(header) - Date.now());
+}
+
+function retryAfterObservation(response: Response): {
+  readonly milliseconds: number | null;
+  readonly state: NonNullable<RateLimitError["retryAfterHeader"]>;
+} {
+  const header = response.headers.get("retry-after");
+  if (header === null) return { milliseconds: null, state: "absent" };
+  const milliseconds = retryAfterMs(header);
+  if (milliseconds === null) return { milliseconds, state: "unparseable" };
+  return { milliseconds, state: milliseconds > 0 ? "valid" : "elapsed" };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1153,7 +1160,16 @@ function mapHttpError(
   secrets: readonly string[],
   payload: unknown,
 ): never {
-  mapProviderFailure(response.status, retryAfterMs(response), modelId, secrets, payload, false);
+  const observed = retryAfterObservation(response);
+  mapProviderFailure(
+    response.status,
+    observed.milliseconds,
+    modelId,
+    secrets,
+    payload,
+    false,
+    observed.state,
+  );
 }
 
 // One mapping for a provider failure, whether it arrived as the response's HTTP status or as an
@@ -1165,6 +1181,7 @@ function mapProviderFailure(
   secrets: readonly string[],
   payload: unknown,
   streamed: boolean,
+  retryAfterHeader?: RateLimitError["retryAfterHeader"],
 ): never {
   if (isContextOverflow(status, payload)) {
     throw contextOverflowError(modelId, secrets, payload);
@@ -1176,12 +1193,24 @@ function mapProviderFailure(
     throw new AuthenticationError(`provider rejected credentials for '${modelId}'`, secrets);
   }
   if (status === 429) {
-    throw new RateLimitError(`provider rate limited '${modelId}'`, retryAfter, secrets, status);
+    throw new RateLimitError(
+      `provider rate limited '${modelId}'`,
+      retryAfter,
+      secrets,
+      status,
+      retryAfterHeader,
+    );
   }
   const reported = streamed
     ? `reported status ${String(status)} mid-stream`
     : `returned HTTP ${String(status)}`;
-  throw new ProviderError(`provider ${reported} for '${modelId}'`, status, secrets, retryAfter);
+  throw new ProviderError(
+    `provider ${reported} for '${modelId}'`,
+    status,
+    secrets,
+    retryAfter,
+    retryAfterHeader,
+  );
 }
 
 // A failure the provider, or a proxy such as LiteLLM, writes into a stream it has already started:

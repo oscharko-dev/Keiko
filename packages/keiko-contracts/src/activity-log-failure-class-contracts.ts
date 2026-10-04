@@ -8926,17 +8926,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: ["support.report.started", "support.report.ui.started"],
       state: [
         "client.support-report.download-started",
+        "client.support-report.preparation-failed",
         "client.support-report.prepared",
         "support.report.degraded",
         "support.report.ui.delivered",
         "support.report.ui.download-refused",
       ],
       end: ["support.report.completed", "support.report.ui.completed"],
-      failure: [
-        "client.support-report.preparation-failed",
-        "support.report.failed",
-        "support.report.ui.failed",
-      ],
+      failure: ["support.report.failed", "support.report.ui.failed"],
       loss: [],
     },
     requiredCausalOperations: [
@@ -8986,6 +8983,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "completeness-state",
       "count",
       "digest",
+      "duration",
       "error-kind",
       "loss-state",
       "opaque-id",

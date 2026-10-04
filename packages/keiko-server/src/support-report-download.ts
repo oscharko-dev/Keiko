@@ -21,6 +21,8 @@ import { errorBody } from "./route-error.js";
 
 const DELIVERY_TTL_MS = 15 * 60_000;
 const MAX_DELIVERY_ENTRIES = 128;
+// Retain the ready artifact while a replacement is prepared, each within the canonical byte cap.
+export const MAX_SUPPORT_REPORT_DELIVERY_BYTES = 2 * MAX_SUPPORT_REPORT_BYTES;
 interface Delivery {
   readonly authority:
     | { readonly kind: "session-bound"; readonly sessionId: string }
@@ -46,7 +48,7 @@ function prune(cache: Map<string, Delivery>, now: number): void {
       Number(right.authority.kind === "session-bound"),
   );
   for (const [key, entry] of ordered) {
-    if (bytes <= MAX_SUPPORT_REPORT_BYTES && cache.size <= MAX_DELIVERY_ENTRIES) break;
+    if (bytes <= MAX_SUPPORT_REPORT_DELIVERY_BYTES && cache.size <= MAX_DELIVERY_ENTRIES) break;
     bytes -= entry.bytes;
     disposeDelivery(cache, key, entry);
   }

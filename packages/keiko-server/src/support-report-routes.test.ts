@@ -169,10 +169,15 @@ describe("desktop support report transport", () => {
       setServerLogger(createServerLogger({ sink, level: "debug" }));
       const owner = deps(scope === "server");
       if (scope === "client-only") {
-        reportDownload.cacheSupportReportDownload(owner, "protected-owner", {
-          fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
-          reportJson: '"' + "x".repeat(MAX_SUPPORT_REPORT_BYTES - 2) + '"',
-        });
+        let remaining = reportDownload.MAX_SUPPORT_REPORT_DELIVERY_BYTES;
+        while (remaining > 0) {
+          const bytes = Math.min(remaining, MAX_SUPPORT_REPORT_BYTES);
+          reportDownload.cacheSupportReportDownload(owner, "protected-owner", {
+            fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+            reportJson: '"' + "x".repeat(bytes - 2) + '"',
+          });
+          remaining -= bytes;
+        }
       } else {
         vi.mocked(runSupportReportJob).mockResolvedValue({
           fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",

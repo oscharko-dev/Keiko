@@ -360,9 +360,12 @@ reach and adds the one relationship it cannot express today:
   request that triggered it. A rate-limited call always carries `httpStatus` on that same line —
   the provider's actual status, with `429` only as the default a standard rate-limit error
   assumes when none was supplied — so an agent reconstructing the failure never has to infer the
-  HTTP status from the error class alone; `retryAfterMs` is present on the same line only when the provider itself supplied a
-  retry value — there is no fallback default, so its absence is itself evidence that the provider
-  did not advertise one, not a gap in the record.
+  HTTP status from the error class alone; `retryAfterMs` carries a parsed provider retry value,
+  never the gateway's fallback backoff. OpenAI-compatible HTTP errors also carry the closed
+  `retryAfterHeader` observation (`absent`, `valid`, `unparseable`, or `elapsed`) on the existing
+  retry events. A rejected header therefore remains distinguishable from an absent header without
+  logging its contents. Legacy adapters that do not supply this observation retain unknown header
+  availability; absence of `retryAfterMs` alone must not be interpreted as proof of no header.
 - **BFF → WebSocket**: one correlation id is resolved once per connection at upgrade time, not
   re-minted per failure, so every diagnostic a WS session emits over its lifetime is joinable to
   the same id.
@@ -776,10 +779,18 @@ the already measured canonical byte count, and directly projected completeness a
 and creates no new failure incident. A failed local attempt uses the same preparation member's
 closed `outcome: failed` variant with only an error kind and measured duration; it never invents
 artifact bytes or availability. Ingest records `client.support-report.preparation-failed` as routine
-causal evidence without replacing the selected browser failure or opening another incident.
+causal state evidence without replacing the selected browser failure or opening another incident.
+This browser-local outcome does not close a server report lifecycle and does not fabricate a server
+request start; server report failures retain their existing start and terminal obligations.
 Ordinary server preparation retains its existing lifecycle without duplicating this browser recovery state.
-Process-local delivery caching is bounded by 10 MiB of UTF-8 report bytes, 128 entries and a
-15-minute lifetime; expiry makes report creation available again. The response uses `no-store`,
+Process-local delivery caching is bounded by twice the canonical per-report cap (20 MiB), 128 entries
+and a 15-minute lifetime. The aggregate byte allowance retains one ready maximum-size artifact while
+its replacement is prepared, also admitting a small canonical limited report beside one full report.
+Each artifact remains capped at 10 MiB. This is a payload-byte retention bound, not an exact resident-memory measurement: JavaScript object overhead and temporary compression buffers are additional. Only the retained raw or compressed representation is charged;
+gzip replaces its raw ownership after compression. Limited entries are removed before protected
+entries under byte or count pressure; unauthenticated limited creation cannot evict a protected
+artifact. Genuine exhausted protected capacity returns the existing explicit delivery-capacity
+refusal rather than growing memory. Expiry makes report creation available again. The response uses `no-store`,
 `nosniff`, and the closed canonical filename. Older-server local object URLs are released on
 eviction or explicit global-error dismissal. A global error stays visible until human dismissal.
 The body-free `support.report.ui.delivered` state records canonical artifact bytes and the separate

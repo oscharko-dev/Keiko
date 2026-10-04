@@ -72,6 +72,11 @@ describe("error subclasses", () => {
     expect(new RateLimitError("rate").retryAfterMs).toBeNull();
   });
 
+  it("keeps legacy provider header availability unknown instead of inventing absence", () => {
+    expect(new RateLimitError("rate").retryAfterHeader).toBeUndefined();
+    expect(new ProviderError("provider", 503).retryAfterHeader).toBeUndefined();
+  });
+
   it("RateLimitError.retryAfterMs carries the supplied value", () => {
     expect(new RateLimitError("rate", 5000).retryAfterMs).toBe(5000);
   });

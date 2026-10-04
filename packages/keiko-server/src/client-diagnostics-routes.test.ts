@@ -1452,6 +1452,9 @@ describe("POST /api/diagnostics/client", () => {
     expect(record).not.toHaveProperty("reportBytes");
     expect(record).not.toHaveProperty("errorKind");
     expect(record).not.toHaveProperty("messageDigest");
+    expect(analyzeLogText(formatActivityLogProofLine(event ?? {})).sufficiency.status).toBe(
+      "complete",
+    );
   });
 
   it("persists local report preparation as routine evidence without inventing a failure", async () => {
