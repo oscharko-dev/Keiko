@@ -12,6 +12,7 @@ import {
 import { assembleContextPack, type AssembleInput } from "@oscharko-dev/keiko-workflows";
 
 import {
+  certifiedContentPaths,
   selectGroundedCandidateFiles,
   selectGroundedEvidenceAtoms,
   tracePriority,
@@ -121,6 +122,60 @@ async function assembleSelectedCandidates(
 }
 
 describe("selectGroundedCandidateFiles", () => {
+  it("requires the certified producer identity and actual query fingerprint", () => {
+    const exact = atom("exact.txt", 0.1, 1);
+    const otherQuery = {
+      ...atom("other.txt", 0.1, 1),
+      stableId: exact.stableId,
+      provenance: { ...exact.provenance, queryFingerprint: "other-query" },
+    };
+    expect([
+      ...certifiedContentPaths(
+        [exact, otherQuery, discoveryListing("listing.txt")],
+        [
+          {
+            stableId: exact.stableId,
+            queryFingerprint: exact.provenance.queryFingerprint,
+          },
+        ],
+      ),
+    ]).toEqual(["exact.txt"]);
+  });
+
+  it("retains certified content matches below incidental path scores without promoting unrelated files", () => {
+    const kept = [
+      candidate("row-256.txt", 0.8),
+      candidate("fact.txt", 0.1),
+      candidate("noise.txt", 0.09),
+    ];
+    const selected = selectGroundedCandidateFiles({
+      kept,
+      omitted: [],
+      scopeKind: "workspace-root",
+      filesReadMax: null,
+      protectedContentPaths: new Set(["fact.txt"]),
+      nowMs: NOW,
+    });
+    expect(selected.kept.map((file) => file.scopePath)).toEqual(["row-256.txt", "fact.txt"]);
+    expect(selected.omitted).toEqual([
+      { scopePath: "noise.txt", reason: "low-relevance", omittedAtMs: NOW },
+    ]);
+    const finite = selectGroundedCandidateFiles({
+      kept,
+      omitted: [],
+      scopeKind: "workspace-root",
+      filesReadMax: 1,
+      protectedContentPaths: new Set(["fact.txt"]),
+      nowMs: NOW,
+    });
+    expect(finite.kept).toHaveLength(1);
+    expect(finite.omitted).toContainEqual({
+      scopePath: "fact.txt",
+      reason: "budget-exhausted",
+      omittedAtMs: NOW,
+    });
+  });
+
   it("returns an empty selection for empty input and for a zero file budget", () => {
     const empty = selectGroundedCandidateFiles({
       kept: [],

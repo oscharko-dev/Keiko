@@ -160,8 +160,15 @@ matches without a located line retain ordinary priority and the existing header 
 For direct definition lookups, a located definition replaces its same-query, same-path generic
 filename-discovery header before source reads. Overview headers, independently matched ranges,
 and discovery from other queries remain eligible; actual excerpt truncation remains reported.
-Default Chat queries share the lexical ring's existing retained-match bound rather than imposing
-a separate lower result ceiling. Explicit query limits and the model/excerpt budgets still apply.
+Default Chat queries share the lexical ring's finite retained-result capacity, derived from the
+accepted excerpt-byte and model-input-token budgets rather than a fixed independent file count.
+Retention uses a worst-first heap, preserving deterministic ordering without linear insertion
+movement for every matching file. Explicit finite query limits remain authoritative. Excerpts
+are read in bounded concurrent waves; unused byte grants are recycled after a wave settles, while
+the actual accepted byte/token budgets determine which evidence fits. A large matching set therefore
+does not force every excerpt to a one-byte allocation. Unread budget tails remain budget omissions.
+Successful primary literal-content matches survive incidental filename/output-count relevance
+boosts; vague, diagnostic, relational, and semantic evidence retains ordinary relevance filtering.
 A completed eligible scan with only a retained-match limit reports omitted matching evidence,
 not unchecked source files. I/O failures, traversal pruning, cancellation, and elapsed limits
 continue to report incomplete scope coverage; omitted evidence never proves a fact absent.
@@ -199,8 +206,11 @@ Exact exclusion counts remain when the remaining prompt budget cannot hold every
 
 An explicit identifier or quoted target starts an independent retrieval question even when the
 question contains an anaphoric word such as "there"; named CamelCase targets remain independent
-even when a request also says "for that". Quoted literal targets and explicit snake-case identifiers
-match whole terms, without stemming them into generic fragments. Multiple targets share the same
+even when a request also says "for that". Primary typed identifiers in factual lookups, including
+CamelCase and snake-case identifiers, and quoted targets match whole terms without stemming them
+into generic fragments. A named literal fact with no actual content match cannot be replaced by
+semantic-only evidence; diagnostic/relationship lookup and augmentation of actual primary evidence
+remain available. Multiple targets share the same
 recursive scan. Their literal interpretation participates in the query fingerprint and uses live
 matching rather than fuzzy hashed lexical records; approximate semantic evidence cannot substitute
 for a requested exact occurrence. Internal literal query text and aggregate unique target characters

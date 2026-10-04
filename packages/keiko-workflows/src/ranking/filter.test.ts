@@ -44,6 +44,28 @@ function annotated(
 }
 
 describe("filterCandidates", () => {
+  it("exempts only certified content from the absolute relevance floor", () => {
+    const result = filterCandidates(
+      [
+        annotated("exact.txt", 0.05),
+        annotated("unrelated.txt", 0.08),
+        annotated("generated.ts", 0.05, true),
+      ],
+      options({ minScoreExemptPaths: new Set(["exact.txt", "generated.ts"]) }),
+    );
+    expect(result.kept.map((entry) => entry.scopePath)).toEqual(["exact.txt"]);
+    expect(result.omitted).toContainEqual({
+      scopePath: "unrelated.txt",
+      reason: "low-relevance",
+      omittedAtMs: FIXED_NOW,
+    });
+    expect(result.omitted).toContainEqual({
+      scopePath: "generated.ts",
+      reason: "generated",
+      omittedAtMs: FIXED_NOW,
+    });
+  });
+
   it("omits candidates below minScore with reason low-relevance when maxKept is exhausted", () => {
     const result = filterCandidates([annotated("src/a.ts", 0.05)], options({ maxKept: 0 }));
     expect(result.kept).toEqual([]);

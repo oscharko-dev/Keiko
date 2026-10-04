@@ -94,9 +94,8 @@ const RING_WEIGHTS: Readonly<Record<RetrievalRingKind, number>> = {
 // never reach the file a question was actually about. These ceilings let a ring examine the
 // connected scope broadly while the excerpt READ phase keeps enforcing filesReadMax/excerptBytesMax.
 const STRUCTURAL_SCAN_FILE_CEILING = 2048;
-// Evidence atoms returned for ranking. With the search facade's per-file match cap this represents
-// many candidate files (well beyond filesReadMax) so the ranker has real choice before the excerpt
-// phase reads the top files.
+// Structural/history enrichment retains its existing bounded output. Lexical retained metadata
+// is derived from the accepted byte/token capacity below, independently of corpus traversal.
 const MATCH_RETURN_CEILING = 256;
 // Per-file scan read cap (2 MiB). A connected file up to this size is fully read and matched so it
 // is never skipped as size-exceeded regardless of format; only files larger than this are omitted.
@@ -145,12 +144,21 @@ function atLeastOne(value: number): number {
   return Math.max(1, Math.floor(value));
 }
 
-function ringMatchReturnLimit(kind: RetrievalRingKind): number {
+function ringMatchReturnLimit(kind: RetrievalRingKind, budget: ExplorationBudget): number {
+  if (kind === "lexical") {
+    // Each independently citable nonempty fact needs at least one excerpt byte and one input
+    // token. This conservative finite capacity bounds retained metadata, not corpus traversal;
+    // actual excerpts and prompt accounting still decide which evidence fits.
+    return atLeastOne(Math.min(budget.excerptBytesMax, budget.modelInputTokensMax));
+  }
   return atLeastOne(MATCH_RETURN_CEILING * RING_WEIGHTS[kind]);
 }
 
-/** The existing lexical ring's retained-result bound, shared by default Chat queries. */
-export const DEFAULT_LEXICAL_MATCH_LIMIT = ringMatchReturnLimit("lexical");
+/** Accepted default context capacity bounds retained results, independently of corpus size. */
+export const DEFAULT_LEXICAL_MATCH_LIMIT = ringMatchReturnLimit(
+  "lexical",
+  DEFAULT_EXPLORATION_BUDGET,
+);
 
 function sliceLimits(
   budget: ExplorationBudget,
@@ -167,7 +175,7 @@ function sliceLimits(
   // excerptBytesMax when it incorporates file content into the pack.
   return {
     maxFilesScanned: kind === "lexical" ? null : atLeastOne(STRUCTURAL_SCAN_FILE_CEILING * weight),
-    maxMatchesReturned: ringMatchReturnLimit(kind),
+    maxMatchesReturned: ringMatchReturnLimit(kind, budget),
     maxBytesPerFileScanned: SCAN_BYTES_PER_FILE,
     elapsedMsMax: budget.elapsedMsMax === null ? null : atLeastOne(budget.elapsedMsMax * weight),
   };

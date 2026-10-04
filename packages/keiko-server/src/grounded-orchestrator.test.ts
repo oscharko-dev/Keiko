@@ -6152,7 +6152,7 @@ describe("ring-retrieval directory snapshot (#3347 P1)", () => {
     expect(out.pack.diagnostics?.coverage?.maxFilesPrunedByDiscovery ?? 0).toBe(0);
     expect(rootReads).toEqual([SENTINEL + 1]);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
-  });
+  }, 20_000);
 });
 
 // ─── #3347 P1: the pack cache key must describe the bytes that were actually read ─

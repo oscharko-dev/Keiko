@@ -19,6 +19,7 @@ export interface AnnotatedCandidate {
 
 export interface FilterOptions {
   readonly minScore: number;
+  readonly minScoreExemptPaths?: ReadonlySet<string>;
   readonly maxKept: number;
   readonly omitGenerated: boolean;
   readonly omitNearDuplicates: boolean;
@@ -48,7 +49,10 @@ function classifyReason(
   if (entry.generatedHint && options.omitGenerated) {
     return "generated";
   }
-  if (entry.candidate.score < options.minScore) {
+  if (
+    entry.candidate.score < options.minScore &&
+    options.minScoreExemptPaths?.has(entry.candidate.scopePath) !== true
+  ) {
     return "low-relevance";
   }
   if (entry.duplicate && options.omitNearDuplicates) {

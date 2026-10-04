@@ -56,6 +56,24 @@ function plan(
 }
 
 describe("createExplorationPlan", () => {
+  it.each([
+    { excerptBytesMax: 1024, modelInputTokensMax: 4096 },
+    { excerptBytesMax: 4096, modelInputTokensMax: 1024 },
+  ])("bounds retained lexical metadata by accepted context dimensions %j", (capacity) => {
+    const p = createExplorationPlan(
+      {
+        scope: happyScope({ explicitConnection: true }),
+        query: happyQuery({ maxResults: DEFAULT_LEXICAL_MATCH_LIMIT }),
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, ...capacity },
+      },
+      { nowMs: () => 1_700_000_000_000 },
+    );
+    const lexical = p.rings.find((ring) => ring.kind === "lexical");
+    expect(lexical?.searchLimits.maxMatchesReturned).toBe(1024);
+    expect(lexical?.searchLimits.maxFilesScanned).toBeNull();
+    expect(lexical?.searchLimits.elapsedMsMax).toBeNull();
+  });
+
   it("happy path: well-formed scope + path/identifier query → ready, lexical + structural", () => {
     const p = plan();
     expect(p.state).toBe("ready");

@@ -153,6 +153,8 @@ import {
   type DocumentEvidenceResult,
 } from "./grounded-document-evidence.js";
 import {
+  certifiedContentPaths,
+  type ContentEvidenceIdentity,
   selectGroundedCandidateFiles,
   selectGroundedEvidenceAtoms,
   tracePriority,
@@ -997,6 +999,7 @@ function createStructuralRequestContextPool(
 }
 
 interface RingResult {
+  readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly atoms: readonly EvidenceAtom[];
   readonly omitted: readonly OmittedContextEntry[];
   readonly uncertainty: readonly UncertaintyMarker[];
@@ -1515,26 +1518,86 @@ type NonLexicalRing = Omit<RetrievalRing, "kind"> & {
   readonly kind: "structural" | "git-history";
 };
 
+function primaryLexicalAnchors(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  retrievalIntent: RetrievalIntent,
+): readonly SearchAnchor[] {
+  if (query.kind !== "natural-language" || retrievalIntent === "repository-overview") return [];
+  const factual =
+    !requiresRelationshipOrHistoryRings(query) &&
+    retrievalIntent !== "diagnostic-search" &&
+    !anchors.some((anchor) => anchor.kind === "path") &&
+    !anchors.some((anchor) => /(?:Test|Tests|Spec)$/iu.test(anchor.term));
+  const direct = isDirectEvidenceLookup(query, anchors);
+  return anchors.filter(
+    (anchor) =>
+      anchor.kind === "quoted" ||
+      (anchor.kind === "identifier" &&
+        anchor.weight >= 0.85 &&
+        (factual || direct || anchor.term.includes("_"))),
+  );
+}
+
 function anchoredLexicalTargets(inputs: SearchInputs): readonly string[] {
-  if (inputs.query.kind !== "natural-language") return [];
-  const directLookup = isDirectEvidenceLookup(inputs.query, inputs.anchors);
-  return inputs.anchors
+  return primaryLexicalAnchors(inputs.query, inputs.anchors, inputs.retrievalIntent).map(
+    (anchor) => anchor.term,
+  );
+}
+
+function primaryContentPaths(rings: RingRunSummary): ReadonlySet<string> {
+  // Capture provenance directly at the lexical producer, before later augmentation adds atoms.
+  return certifiedContentPaths(rings.atoms, rings.primaryContentIdentities ?? []);
+}
+
+function certifiedLexicalContent(
+  result: SearchResult,
+  inputs: SearchInputs,
+): readonly ContentEvidenceIdentity[] {
+  if (
+    requiresRelationshipOrHistoryRings(inputs.query) ||
+    (anchoredLexicalTargets(inputs).length === 0 &&
+      directDefinitionSymbol(inputs.query, inputs.anchors) === undefined &&
+      inputs.query.kind !== "exact-symbol")
+  )
+    return [];
+  return result.atoms
     .filter(
-      (anchor) =>
-        anchor.kind === "quoted" ||
-        (anchor.kind === "identifier" &&
-          anchor.weight >= 0.85 &&
-          (directLookup || anchor.term.includes("_"))),
+      (atom) =>
+        atom.provenance.kind === "lexical-search" &&
+        atom.provenance.tool === "repo.searchText" &&
+        atom.lineRange !== undefined,
     )
-    .map((anchor) => anchor.term);
+    .map((atom) => ({
+      stableId: atom.stableId,
+      queryFingerprint: atom.provenance.queryFingerprint,
+    }));
+}
+
+function primaryRankingAnchors(
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+): readonly SearchAnchor[] {
+  const targets = primaryLexicalAnchors(input.query, plan.anchors, plan.retrievalIntent);
+  return targets.length === 0 || requiresRelationshipOrHistoryRings(input.query)
+    ? plan.anchors
+    : plan.anchors.filter(
+        (anchor) =>
+          targets.includes(anchor) || anchor.kind !== "literal" || !/^\d+$/u.test(anchor.term),
+      );
 }
 
 function lexicalSemanticProvider(
   inputs: SearchInputs,
   definitionSymbol: string | undefined,
-  terms: readonly string[],
 ): SemanticSearchProvider | undefined {
-  return definitionSymbol === undefined && terms.length === 0
+  const explicitLiteral = inputs.anchors.some(
+    (anchor) =>
+      anchor.kind === "quoted" || (anchor.kind === "identifier" && anchor.term.includes("_")),
+  );
+  return definitionSymbol === undefined &&
+    !explicitLiteral &&
+    !isDirectEvidenceLookup(inputs.query, inputs.anchors)
     ? inputs.repoSemanticSearchProvider
     : undefined;
 }
@@ -1565,7 +1628,7 @@ async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Pro
     definitionSymbol === undefined
       ? { ...inputs.query, text: terms.length === 0 ? inputs.query.text : terms.join(" ") }
       : { ...inputs.query, kind: "exact-symbol" as const, text: definitionSymbol };
-  const semanticSearchProvider = lexicalSemanticProvider(inputs, definitionSymbol, terms);
+  const semanticSearchProvider = lexicalSemanticProvider(inputs, definitionSymbol);
   return searchText(inputs.searchScope, query, ring.searchLimits, {
     ...options,
     ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
@@ -1574,13 +1637,31 @@ async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Pro
   });
 }
 
+function withoutNamedSemanticSubstitution(
+  result: SearchResult,
+  inputs: SearchInputs,
+): SearchResult {
+  if (
+    inputs.retrievalIntent === "diagnostic-search" ||
+    requiresRelationshipOrHistoryRings(inputs.query) ||
+    anchoredLexicalTargets(inputs).length === 0 ||
+    certifiedLexicalContent(result, inputs).length > 0 ||
+    result.atoms.length === 0
+  )
+    return result;
+  // An approximate concept match cannot stand in for a missing named literal. Corpus failures
+  // and result truncation remain intact; only the unrelated semantic replacement is rejected.
+  return { ...result, atoms: [], coverage: { ...result.coverage, matchesReturned: 0 } };
+}
+
 async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
-  const result = await lexicalRingSearch(ring, inputs);
+  const result = withoutNamedSemanticSubstitution(await lexicalRingSearch(ring, inputs), inputs);
   inputs.workspaceIndexActivity.recordSearchResult(result);
   // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
   // It does NOT consume the excerpt budget; excerpt reads are charged later by the assembler.
   return {
     atoms: result.atoms,
+    primaryContentIdentities: certifiedLexicalContent(result, inputs),
     omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
     uncertainty: coverageUncertainty(result, inputs.nowMs()),
     usage: usageDelta({ elapsedMs: result.elapsedMs }),
@@ -1752,6 +1833,7 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
 }
 
 interface RingRunSummary {
+  readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly atoms: readonly EvidenceAtom[];
   readonly omitted: readonly OmittedContextEntry[];
   readonly governor: GovernorState;
@@ -1962,6 +2044,13 @@ function reserveAvailableRing(
   return elapsedDeadlineStop(governor, inputs) ?? reserveRingSearchCalls(governor, ring, inputs);
 }
 
+function lexicalContentIdentities(
+  result: RingResult,
+  previous: readonly ContentEvidenceIdentity[],
+): readonly ContentEvidenceIdentity[] {
+  return result.primaryContentIdentities ?? previous;
+}
+
 async function runAllRings(
   rings: readonly RetrievalRing[],
   inputs: SearchInputs,
@@ -1975,6 +2064,7 @@ async function runAllRings(
   // Ring order is fixed by the plan, so capturing the first lexical ring's diagnostics is
   // deterministic. (There is normally exactly one lexical ring.)
   let diagnostics: ContextPackDiagnostics | undefined;
+  let primaryContentIdentities: readonly ContentEvidenceIdentity[] = [];
   let governor = initialGovernor;
   for (const ring of rings) {
     throwIfCancelled(inputs.signal);
@@ -1995,6 +2085,7 @@ async function runAllRings(
     throwIfCancelled(inputs.signal);
     // First lexical ring wins (??= never overwrites once set); ring order is plan-fixed.
     diagnostics ??= result.diagnostics;
+    primaryContentIdentities = lexicalContentIdentities(result, primaryContentIdentities);
     const afterRing = applyUsage(governor, result.usage);
     atoms.push(...result.atoms);
     omitted.push(...result.omitted);
@@ -2009,7 +2100,7 @@ async function runAllRings(
   if (governor.status === "running") {
     governor = complete(governor);
   }
-  return { atoms, omitted, governor, uncertainty, diagnostics };
+  return { atoms, omitted, governor, uncertainty, diagnostics, primaryContentIdentities };
 }
 
 export interface ExcerptInputs {
@@ -2025,6 +2116,7 @@ export interface ExcerptInputs {
 }
 
 export interface ExcerptReadSummary {
+  readonly byteBudgetOmittedPaths?: readonly string[] | undefined;
   readonly readWindowCount?: number | undefined;
   readonly anchoredWindowCount?: number | undefined;
   readonly excerpts: ReadonlyMap<string, readonly ExcerptWindow[]>;
@@ -2048,6 +2140,7 @@ interface LineWindow {
 }
 
 const DEFAULT_EXCERPT_WINDOW: LineWindow = { startLine: 1, endLine: 200 };
+const MAX_EXCERPT_WINDOW_BYTES = 8192;
 const SINGLE_LINE_EXCERPT_CONTEXT_LINES = 3;
 const DISCOVERED_DEFINITION_CONTEXT_AFTER = 24;
 const MAX_EXCERPT_WINDOWS_PER_FILE = 8;
@@ -4325,7 +4418,7 @@ async function readPathExcerptWindows(
     }
     const availableBytes = remainingBytes - bytesConsumed;
     if (availableBytes <= 0 || windows.length >= MAX_EXCERPT_WINDOWS_PER_FILE) break;
-    const maxBytes = Math.min(8192, availableBytes);
+    const maxBytes = Math.min(MAX_EXCERPT_WINDOW_BYTES, availableBytes);
     const result = await readExcerptWindow(
       scopePath,
       window,
@@ -4490,36 +4583,90 @@ async function readKeptExcerpts(
   if (readablePaths.length < keptPaths.length) {
     uncertainty.push(budgetClipped("budget-exhausted on filesRead", inputs.nowMs()));
   }
-  const byteBudgets = distributeByteBudget(remainingBytes, readablePaths.length);
-  const results = await mapWithConcurrency(readablePaths, 8, (scopePath, index) => {
-    throwIfCancelled(inputs.signal);
-    return readPathExcerptTask(scopePath, inputs, byteBudgets[index] ?? 0);
-  });
-  for (const { scopePath, result, skippedReason } of results) {
-    throwIfCancelled(inputs.signal);
-    if (result === undefined || result.windows.length === 0) {
-      if (skippedReason === "too-large") {
-        uncertainty.push(largeFileExcerptOmitted(scopePath, inputs.nowMs));
-      }
-      continue;
-    }
-    excerpts.set(scopePath, result.windows);
-    uncertainty.push(...excerptWindowUncertainty(scopePath, result, inputs.nowMs));
-  }
-  const elapsedBudgetBlocked = results.some(excerptTaskStoppedByDeadline);
-  if (elapsedBudgetBlocked) {
+  const state: ExcerptWaveState = {
+    excerpts,
+    uncertainty,
+    remainingBytes,
+    anchoredWindowCount: 0,
+    elapsedBudgetBlocked: false,
+    byteBudgetOmittedPaths: undefined,
+  };
+  await readExcerptWaves(readablePaths, inputs, state);
+  if (state.elapsedBudgetBlocked) {
     uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
   }
   return {
     excerpts,
     uncertainty,
-    elapsedBudgetBlocked,
+    elapsedBudgetBlocked: state.elapsedBudgetBlocked,
     readWindowCount: [...excerpts.values()].reduce((count, windows) => count + windows.length, 0),
-    anchoredWindowCount: results.reduce(
-      (count, task) => count + (task.result?.anchoredWindowCount ?? 0),
-      0,
-    ),
+    anchoredWindowCount: state.anchoredWindowCount,
+    ...(state.byteBudgetOmittedPaths === undefined
+      ? {}
+      : { byteBudgetOmittedPaths: state.byteBudgetOmittedPaths }),
   };
+}
+
+interface ExcerptWaveState {
+  readonly excerpts: Map<string, readonly ExcerptWindow[]>;
+  readonly uncertainty: UncertaintyMarker[];
+  remainingBytes: number;
+  anchoredWindowCount: number;
+  elapsedBudgetBlocked: boolean;
+  byteBudgetOmittedPaths: readonly string[] | undefined;
+}
+
+function appendExcerptWave(
+  results: readonly ReadPathExcerptTaskResult[],
+  inputs: ExcerptInputs,
+  state: ExcerptWaveState,
+): void {
+  for (const task of results) {
+    throwIfCancelled(inputs.signal);
+    const { scopePath, result, skippedReason } = task;
+    state.elapsedBudgetBlocked ||= excerptTaskStoppedByDeadline(task);
+    if (result === undefined || result.windows.length === 0) {
+      if (skippedReason === "too-large")
+        state.uncertainty.push(largeFileExcerptOmitted(scopePath, inputs.nowMs));
+      continue;
+    }
+    state.remainingBytes -= result.bytesConsumed;
+    state.anchoredWindowCount += result.anchoredWindowCount;
+    state.excerpts.set(scopePath, result.windows);
+    state.uncertainty.push(...excerptWindowUncertainty(scopePath, result, inputs.nowMs));
+  }
+}
+
+async function readExcerptWaves(
+  paths: readonly string[],
+  inputs: ExcerptInputs,
+  state: ExcerptWaveState,
+): Promise<void> {
+  let next = 0;
+  while (next < paths.length && state.remainingBytes > 0 && !state.elapsedBudgetBlocked) {
+    throwIfCancelled(inputs.signal);
+    if (inputs.nowMs() >= inputs.deadlineAtMs) {
+      state.elapsedBudgetBlocked = true;
+      break;
+    }
+    const slots = Math.min(
+      8,
+      paths.length - next,
+      Math.max(1, Math.floor(state.remainingBytes / MAX_EXCERPT_WINDOW_BYTES)),
+    );
+    const wave = paths.slice(next, next + slots);
+    const grants = distributeByteBudget(state.remainingBytes, wave.length);
+    const results = await mapWithConcurrency(wave, 8, (scopePath, index) => {
+      throwIfCancelled(inputs.signal);
+      return readPathExcerptTask(scopePath, inputs, grants[index] ?? 0);
+    });
+    appendExcerptWave(results, inputs, state);
+    next += wave.length;
+  }
+  if (next < paths.length && state.remainingBytes <= 0) {
+    state.byteBudgetOmittedPaths = paths.slice(next);
+    state.uncertainty.push(budgetClipped("budget-exhausted on excerptBytes", inputs.nowMs()));
+  }
 }
 
 // Internal seam: package-local tests drive the excerpt-read step with a scripted clock, which the
@@ -4889,6 +5036,14 @@ function selectPackAtoms(
   );
 }
 
+function primaryCandidateFilter(rings: RingRunSummary): typeof DEFAULT_FILTER_OPTIONS {
+  return {
+    ...DEFAULT_FILTER_OPTIONS,
+    minScoreExemptPaths: primaryContentPaths(rings),
+    maxKept: new Set(rings.atoms.map((atom) => atom.scopePath)).size,
+  };
+}
+
 function preparePackAssembly(
   input: OrchestratorInput,
   plan: ExplorationPlan,
@@ -4904,7 +5059,7 @@ function preparePackAssembly(
   const ranking = rankCandidates(
     {
       atoms,
-      anchors: plan.anchors,
+      anchors: primaryRankingAnchors(input, plan),
       context: { retrievalIntent: plan.retrievalIntent },
       ...(hasGitMetadata ? {} : { hints: { generatedPathPatterns: [] } }),
     },
@@ -4912,10 +5067,7 @@ function preparePackAssembly(
       nowMs,
       // Retain the admitted evidence pool until distinct requested targets are ordered. The
       // accepted file/read/context budgets below still bound the material sent to the model.
-      filter: {
-        ...DEFAULT_FILTER_OPTIONS,
-        maxKept: new Set(atoms.map((atom) => atom.scopePath)).size,
-      },
+      filter: primaryCandidateFilter(rings),
     },
   );
   const refined = refineCandidateOrdering(
@@ -4929,6 +5081,7 @@ function preparePackAssembly(
   const ordered = selectGroundedCandidateFiles({
     ...refined,
     scopeKind: input.scope.kind,
+    protectedContentPaths: primaryContentPaths(rings),
     filesReadMax: plan.budget.filesReadMax,
     nowMs: nowMs(),
   });
@@ -4945,6 +5098,27 @@ function preparePackAssembly(
   };
 }
 
+function afterExcerptByteBudget(
+  ordered: CandidateOrdering,
+  reads: ExcerptReadSummary,
+  nowMs: number,
+): CandidateOrdering {
+  const paths = reads.byteBudgetOmittedPaths;
+  if (paths === undefined) return ordered;
+  const omitted = new Set(paths);
+  return {
+    kept: ordered.kept.filter((candidate) => !omitted.has(candidate.scopePath)),
+    omitted: [
+      ...ordered.omitted,
+      ...paths.map((scopePath): OmittedContextEntry => ({
+        scopePath,
+        reason: "budget-exhausted",
+        omittedAtMs: nowMs,
+      })),
+    ],
+  };
+}
+
 async function assemblePackFromReads({
   input,
   plan,
@@ -4956,6 +5130,7 @@ async function assemblePackFromReads({
   assembleOptions,
 }: FinalContextPackInputs): Promise<ConnectedContextPack> {
   const excerpts = mergeExcerptSources(excerptReads.excerpts, documentEvidence.excerpts);
+  const ordered = afterExcerptByteBudget(prepared.ordered, excerptReads, assembleOptions.nowMs());
   const needsNoEvidenceMarker =
     excerpts.size === 0 &&
     !prepared.evidenceUncertainty.some((marker) => marker.kind === "no-evidence");
@@ -4963,7 +5138,7 @@ async function assemblePackFromReads({
   // surface as document evidence or as a precise document diagnostic. The code-first lexical scan
   // also sees them as binary candidates, so strip any document-path omission it produced to avoid a
   // path that is both a selected file and an omitted entry (which the pack validator rejects).
-  const codeOmitted = [...rings.omitted, ...prepared.ordered.omitted].filter(
+  const codeOmitted = [...rings.omitted, ...ordered.omitted].filter(
     (entry) => !isConnectedDocumentPath(entry.scopePath),
   );
   const assemble = await assembleContextPack(
@@ -4972,7 +5147,7 @@ async function assemblePackFromReads({
       query: input.query,
       budget: plan.budget,
       atoms: [...prepared.atoms, ...documentEvidence.atoms],
-      ranked: [...prepared.ordered.kept, ...documentEvidence.candidates],
+      ranked: [...ordered.kept, ...documentEvidence.candidates],
       omittedFromRanking: [...codeOmitted, ...documentEvidence.omitted],
       excerpts,
       // Document evidence is request-local and not part of the file-state cache key, so a pack that

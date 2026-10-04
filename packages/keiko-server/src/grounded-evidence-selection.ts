@@ -5,6 +5,31 @@ import type {
   SelectedScope,
 } from "@oscharko-dev/keiko-contracts";
 
+export interface ContentEvidenceIdentity {
+  readonly stableId: string;
+  readonly queryFingerprint: string;
+}
+
+export function certifiedContentPaths(
+  atoms: readonly EvidenceAtom[],
+  identities: readonly ContentEvidenceIdentity[],
+): ReadonlySet<string> {
+  const certified = new Map(
+    identities.map((identity) => [identity.stableId, identity.queryFingerprint]),
+  );
+  return new Set(
+    atoms
+      .filter(
+        (atom) =>
+          atom.provenance.kind === "lexical-search" &&
+          atom.provenance.tool === "repo.searchText" &&
+          atom.lineRange !== undefined &&
+          certified.get(atom.stableId) === atom.provenance.queryFingerprint,
+      )
+      .map((atom) => atom.scopePath),
+  );
+}
+
 const MIN_RELATIVE_CANDIDATE_SCORE = 0.55;
 const MAX_EVIDENCE_ATOMS_PER_FILE = 12;
 const TRACE_RANGE_SLOTS_PER_FILE = 4;
@@ -15,6 +40,7 @@ export interface GroundedCandidateSelectionInput {
   readonly omitted: readonly OmittedContextEntry[];
   readonly scopeKind: SelectedScope["kind"];
   readonly filesReadMax: number | null;
+  readonly protectedContentPaths?: ReadonlySet<string>;
   readonly nowMs: number;
 }
 
@@ -32,20 +58,30 @@ function boundedFileLimit(input: GroundedCandidateSelectionInput): number {
 function selectedWorkspaceCandidates(
   kept: readonly CandidateFile[],
   limit: number,
+  protectedContentPaths: ReadonlySet<string> | undefined,
 ): readonly CandidateFile[] {
   const bestScore = kept[0]?.score;
   if (bestScore === undefined || limit === 0) return [];
   const relativeFloor = bestScore * MIN_RELATIVE_CANDIDATE_SCORE;
-  return kept.filter((candidate) => candidate.score >= relativeFloor).slice(0, limit);
+  return kept
+    .filter(
+      (candidate) =>
+        candidate.score >= relativeFloor ||
+        protectedContentPaths?.has(candidate.scopePath) === true,
+    )
+    .slice(0, limit);
 }
 
 function selectionReasonFor(
   candidate: CandidateFile,
   selectedPaths: ReadonlySet<string>,
   relativeFloor: number | undefined,
+  protectedContentPaths: ReadonlySet<string> | undefined,
 ): OmittedContextEntry["reason"] | undefined {
   if (selectedPaths.has(candidate.scopePath)) return undefined;
-  return relativeFloor !== undefined && candidate.score < relativeFloor
+  return relativeFloor !== undefined &&
+    candidate.score < relativeFloor &&
+    protectedContentPaths?.has(candidate.scopePath) !== true
     ? "low-relevance"
     : "budget-exhausted";
 }
@@ -61,14 +97,19 @@ export function selectGroundedCandidateFiles(
   const selected =
     input.scopeKind === "files"
       ? input.kept.slice(0, limit)
-      : selectedWorkspaceCandidates(input.kept, limit);
+      : selectedWorkspaceCandidates(input.kept, limit, input.protectedContentPaths);
   const selectedPaths = new Set(selected.map((candidate) => candidate.scopePath));
   const relativeFloor =
     input.scopeKind === "files" || input.kept[0] === undefined
       ? undefined
       : input.kept[0].score * MIN_RELATIVE_CANDIDATE_SCORE;
   const newlyOmitted = input.kept.flatMap((candidate) => {
-    const reason = selectionReasonFor(candidate, selectedPaths, relativeFloor);
+    const reason = selectionReasonFor(
+      candidate,
+      selectedPaths,
+      relativeFloor,
+      input.protectedContentPaths,
+    );
     return reason === undefined
       ? []
       : [{ scopePath: candidate.scopePath, reason, omittedAtMs: input.nowMs }];

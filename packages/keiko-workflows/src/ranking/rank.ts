@@ -64,6 +64,9 @@ function resolveFilterOptions(
   const base = filter ?? DEFAULT_FILTER_OPTIONS;
   return {
     minScore: base.minScore,
+    ...(base.minScoreExemptPaths === undefined
+      ? {}
+      : { minScoreExemptPaths: base.minScoreExemptPaths }),
     maxKept: base.maxKept,
     omitGenerated: base.omitGenerated,
     omitNearDuplicates: base.omitNearDuplicates,
