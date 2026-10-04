@@ -3345,7 +3345,7 @@ describe("runGroundedExploration", () => {
       ?.excerpts.find((excerpt) => excerpt.content.includes("export function DescriptorProbe"));
     expect(descriptorCaps).toContain(2_097_152);
     expect(descriptorExcerpt).toBeDefined();
-    expect(descriptorExcerpt?.atom.lineRange).toEqual({ startLine: 1, endLine: 4 });
+    expect(descriptorExcerpt?.atom.lineRange).toEqual({ startLine: 3, endLine: 4 });
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 

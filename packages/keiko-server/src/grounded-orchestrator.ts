@@ -4087,7 +4087,7 @@ function lineWindowForAtom(atom: EvidenceAtom): LineWindow {
   if (range === undefined) {
     return DEFAULT_EXCERPT_WINDOW;
   }
-  const isDiscoveredDefinition = atom.provenance.tool === "discovered-symbol-definition";
+  const isDiscoveredDefinition = tracePriority(atom) === 2;
   const addSingleLineContext =
     range.startLine === range.endLine &&
     atom.provenance.kind !== "semantic-search" &&

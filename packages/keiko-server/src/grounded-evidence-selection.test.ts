@@ -14,6 +14,7 @@ import { assembleContextPack, type AssembleInput } from "@oscharko-dev/keiko-wor
 import {
   selectGroundedCandidateFiles,
   selectGroundedEvidenceAtoms,
+  tracePriority,
 } from "./grounded-evidence-selection.js";
 
 import { buildGroundedGatewayMessages } from "./grounded-qa.js";
@@ -245,6 +246,15 @@ describe("selectGroundedCandidateFiles", () => {
 });
 
 describe("selectGroundedEvidenceAtoms", () => {
+  it("keeps file-level symbol discovery without a located line at ordinary priority", () => {
+    const listing = pathLevelAtom("src/target.ts", 1);
+    expect(
+      tracePriority({
+        ...listing,
+        provenance: { ...listing.provenance, tool: "repo.symbolFileDiscovery" },
+      }),
+    ).toBe(0);
+  });
   it("deduplicates equal ranges and retains context-rich windows beside top scores", () => {
     const atoms = [
       atom("src/target.ts", 0.95, 40, 40, "best"),
@@ -266,31 +276,35 @@ describe("selectGroundedEvidenceAtoms", () => {
     expect(selected.some((entry) => entry.scopePath === "src/decoy.ts")).toBe(false);
   });
 
-  it("reserves the discovered definition when high-score decoys exhaust the normal slots", () => {
-    const definition = {
-      ...atom("src/target.ts", 0.1, 400, 426, "definition"),
-      provenance: {
-        kind: "structural" as const,
-        tool: "discovered-symbol-definition",
-        queryFingerprint: "query",
-      },
-    };
-    const atoms = [
-      definition,
-      atom("src/target.ts", 0.2, 1, 100, "context-a"),
-      atom("src/target.ts", 0.2, 150, 250, "context-b"),
-      ...Array.from({ length: 20 }, (_value, index) =>
-        atom("src/target.ts", 20 - index, 300 + index, 300 + index, `decoy-${String(index)}`),
-      ),
-    ];
+  it.each([
+    ["structural", "discovered-symbol-definition"],
+    ["lexical-search", "repo.symbolFileDiscovery"],
+  ] as const)(
+    "reserves the %s definition when high-score decoys exhaust the normal slots",
+    (kind, tool) => {
+      const definition = {
+        ...atom("src/target.ts", 0.1, 400, 426, "definition"),
+        provenance: {
+          kind,
+          tool,
+          queryFingerprint: "query",
+        },
+      };
+      const atoms = [
+        definition,
+        atom("src/target.ts", 0.2, 1, 100, "context-a"),
+        atom("src/target.ts", 0.2, 150, 250, "context-b"),
+        ...Array.from({ length: 20 }, (_value, index) =>
+          atom("src/target.ts", 20 - index, 300 + index, 300 + index, `decoy-${String(index)}`),
+        ),
+      ];
 
-    const selected = selectGroundedEvidenceAtoms(atoms, new Set(["src/target.ts"]), "scope");
+      const selected = selectGroundedEvidenceAtoms(atoms, new Set(["src/target.ts"]), "scope");
 
-    expect(selected).toHaveLength(12);
-    expect(selected.some((entry) => entry.provenance.tool === "discovered-symbol-definition")).toBe(
-      true,
-    );
-  });
+      expect(selected).toHaveLength(12);
+      expect(selected.some((entry) => entry.provenance.tool === tool)).toBe(true);
+    },
+  );
 
   it("keeps structural trace evidence when it shares a range with a higher raw score", () => {
     const lexical = atom("src/target.ts", 50, 40, 45, "lexical");

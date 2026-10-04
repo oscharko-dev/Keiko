@@ -154,6 +154,9 @@ distinct requested targets before the accepted read and context budgets select a
 a popular first target must not displace every result for another explicitly requested target.
 Definition-line lookup inspects every retained symbol candidate sequentially with the existing
 2 MiB descriptor bound and cancellation/deadline checks, without a second read-count cutoff.
+Located symbol lines use the existing definition priority for atom and excerpt-window selection;
+requested definitions consume their per-file byte share before unrelated file headers. File-level
+matches without a located line retain ordinary priority and the existing header fallback.
 A completed eligible scan with only a retained-match limit reports omitted matching evidence,
 not unchecked source files. I/O failures, traversal pruning, cancellation, and elapsed limits
 continue to report incomplete scope coverage; omitted evidence never proves a fact absent.
