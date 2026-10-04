@@ -32,6 +32,7 @@ type ContextSession = Pick<
 
 interface ContextState {
   readonly key: string;
+  readonly compactionAuthorityKey?: string | undefined;
   readonly status?: ChatContextStatusWire | undefined;
   readonly compacting: boolean;
   readonly error: boolean;
@@ -131,7 +132,8 @@ function useChatContext(session: ContextSession): {
     controller,
     setState,
   );
-  const staleCompaction = state.key !== key && state.compacting;
+  const compacting = state.compacting && state.compactionAuthorityKey === authorityKey;
+  const staleCompaction = state.key !== key && compacting;
   useEffect(() => {
     if (session.loading) return;
     const cancel = pollPendingContext(refresh, busy, currentStatus.current?.estimatedInputTokens);
@@ -141,10 +143,10 @@ function useChatContext(session: ContextSession): {
     };
   }, [refresh, busy, session.loading, historyKey, revision, staleCompaction, controller]);
   return {
-    state: state.key === key ? state : { key, compacting: state.compacting, error: false },
+    state: state.key === key ? state : { key, compacting, error: false },
     busy,
     compact: (): void => {
-      if (!busy && !state.compacting) void refresh(true);
+      if (!busy && !compacting) void refresh(true);
     },
     retry: (): void => {
       setRevision((value) => value + 1);
@@ -176,7 +178,7 @@ function useContextRefresh(
         return undefined;
       const request = new AbortController();
       controller.current = { controller: request, authorityKey, compact };
-      if (compact) setState((previous) => pendingContextState(previous, key, compact));
+      if (compact) setState((previous) => pendingContextState(previous, key, authorityKey));
       const call = compact ? compactChatContext : fetchChatContextStatus;
       try {
         return await settleContextRequest(
@@ -283,12 +285,13 @@ function pollPendingContext(
 function pendingContextState(
   previous: ContextState,
   key: string,
-  compacting: boolean,
+  compactionAuthorityKey: string,
 ): ContextState {
   return {
     key,
     status: previous.key === key ? previous.status : undefined,
-    compacting,
+    compacting: true,
+    compactionAuthorityKey,
     error: false,
   };
 }

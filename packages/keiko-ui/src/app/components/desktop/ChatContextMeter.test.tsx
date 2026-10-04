@@ -581,6 +581,7 @@ describe("Chat context request diagnostics", () => {
       if (!(signal instanceof AbortSignal)) throw new TypeError("missing compaction signal");
       const next = {
         ...session,
+        loading: true,
         selectedModel: changed === "model" ? "other-model" : session.selectedModel,
         activeChat: {
           ...session.activeChat,
@@ -590,7 +591,9 @@ describe("Chat context request diagnostics", () => {
       };
       view.rerender(<ChatContextMeterContainer session={next} />);
       expect(signal.aborted).toBe(true);
+      expect(screen.queryByRole("button", { name: "Compacting context…" })).toBeNull();
       await act(async () => finish?.(status(1_000)));
+      expect(screen.queryByRole("button", { name: "Compacting context…" })).toBeNull();
       expect(contextApi.compact).toHaveBeenCalledOnce();
       expect(contextApi.report).not.toHaveBeenCalled();
     },
