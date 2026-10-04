@@ -3,12 +3,15 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { gunzipSync } from "node:zlib";
 import * as zlib from "node:zlib";
-vi.mock("node:zlib", { spy: true });
 import {
   createClientOnlySupportReport,
   parseSupportReport,
 } from "@oscharko-dev/keiko-activity-log/reader";
-import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  MAX_SUPPORT_REPORT_BYTES,
+  supportReportFileName,
+  isSupportReportDownloadPath,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   cacheSupportReportDownload,
   MAX_SUPPORT_REPORT_DELIVERY_BYTES,
@@ -27,8 +30,10 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { STREAMING, type RouteContext } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 
+vi.mock("node:zlib", { spy: true });
+
 const report = {
-  fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+  fileName: supportReportFileName(1, "aabbccddeeff".padEnd(32, "0"), Date.UTC(2026, 9, 3)),
   reportJson: '{"kind":"keiko.support.report"}',
 };
 function deps(sessionId: string | undefined): UiHandlerDeps {
@@ -70,6 +75,7 @@ describe("authenticated canonical report attachment", () => {
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const owner = deps(control.session);
     const cached = cacheSupportReportDownload(owner, "owner-session", report);
+    expect(isSupportReportDownloadPath(cached.downloadPath)).toBe(true);
     const ctx = context(
       control.known ? cached.downloadPath : "/api/diagnostics/report/download/unknown",
     );

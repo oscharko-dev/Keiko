@@ -12,7 +12,7 @@ import {
   cacheSupportReportDownload,
   SupportReportDeliveryCapacityError,
 } from "./support-report-download.js";
-import { readJsonRequestBody } from "./bounded-request-body.js";
+import { readJsonRequestBodyOutcome } from "./bounded-request-body.js";
 import { isValidCorrelationId } from "./correlation.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import { createInlineCompletionRateLimiter } from "./editor/inlineCompletionRateLimiter.js";
@@ -84,14 +84,18 @@ export async function handleCreateSupportReport(
 async function readReportRequest(
   ctx: RouteContext,
 ): Promise<DesktopSupportReportRequest | RouteResult> {
-  const parsed = await readJsonRequestBody(
+  const outcome = await readJsonRequestBodyOutcome(
     ctx.req,
     MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES,
     ctx.correlationId,
   );
-  const request = reportRequest(parsed);
+  if (outcome.kind === "rejected") return invalidReportRequest(ctx, outcome.response.status);
+  const request = reportRequest(outcome.value);
   if (request !== undefined) return request;
-  const status = "status" in parsed && parsed.status === 413 ? 413 : 400;
+  return invalidReportRequest(ctx, 400);
+}
+
+function invalidReportRequest(ctx: RouteContext, status: 400 | 413): RouteResult {
   return {
     status,
     body: errorBody(

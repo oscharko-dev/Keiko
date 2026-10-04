@@ -414,37 +414,67 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 // for that wrapper layer; callers keep their own max-bytes constant (there is no reason to force
 // them to share one, only the logic), pass it in, and get back either the parsed JSON object or the
 // RouteResult (413/400) their handler should return as-is.
+interface JsonBodyRejection extends Record<string, unknown> {
+  readonly status: 400 | 413;
+  readonly body: unknown;
+}
+export type JsonRequestBodyOutcome =
+  | { readonly kind: "parsed"; readonly value: Record<string, unknown> }
+  | { readonly kind: "rejected"; readonly response: JsonBodyRejection };
+
+type JsonBodyResult = Record<string, unknown> | JsonBodyRejection | JsonRequestBodyOutcome;
+
+function rejectedJsonBody(
+  status: 400 | 413,
+  code: "BAD_REQUEST" | "PAYLOAD_TOO_LARGE",
+  message: string,
+  tagged: true | undefined,
+): JsonBodyRejection | JsonRequestBodyOutcome {
+  const response = { status, body: { error: { code, message } } };
+  return tagged === true ? { kind: "rejected", response } : response;
+}
+
+export function readJsonRequestBody(
+  req: IncomingMessage,
+  maxBytes: number,
+  correlationId: string | undefined,
+  tagged: true,
+): Promise<JsonRequestBodyOutcome>;
+export function readJsonRequestBody(
+  req: IncomingMessage,
+  maxBytes: number,
+  correlationId?: string,
+): Promise<Record<string, unknown> | JsonBodyRejection>;
 export async function readJsonRequestBody(
   req: IncomingMessage,
   maxBytes: number,
   correlationId?: string,
-): Promise<Record<string, unknown> | { readonly status: number; readonly body: unknown }> {
+  tagged?: true,
+): Promise<JsonBodyResult> {
   let raw: string;
   try {
     raw = await readBoundedRequestBody(req, maxBytes, undefined, correlationId);
   } catch (error) {
-    if (error instanceof RequestBodyTooLargeError) {
-      return {
-        status: 413,
-        body: { error: { code: "PAYLOAD_TOO_LARGE", message: "Request body too large." } },
-      };
-    }
+    if (error instanceof RequestBodyTooLargeError)
+      return rejectedJsonBody(413, "PAYLOAD_TOO_LARGE", "Request body too large.", tagged);
     throw error;
   }
   let parsed: unknown;
   try {
     parsed = raw.length === 0 ? {} : JSON.parse(raw);
   } catch {
-    return {
-      status: 400,
-      body: { error: { code: "BAD_REQUEST", message: "Request body is not valid JSON." } },
-    };
+    return rejectedJsonBody(400, "BAD_REQUEST", "Request body is not valid JSON.", tagged);
   }
-  if (!isPlainRecord(parsed)) {
-    return {
-      status: 400,
-      body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
-    };
-  }
-  return parsed;
+  if (!isPlainRecord(parsed))
+    return rejectedJsonBody(400, "BAD_REQUEST", "Request body must be a JSON object.", tagged);
+  return tagged === true ? { kind: "parsed", value: parsed } : parsed;
+}
+
+/** Tagged outcome prevents a parsed customer's `status`/`body` fields impersonating a refusal. */
+export function readJsonRequestBodyOutcome(
+  req: IncomingMessage,
+  maxBytes: number,
+  correlationId?: string,
+): Promise<JsonRequestBodyOutcome> {
+  return readJsonRequestBody(req, maxBytes, correlationId, true);
 }

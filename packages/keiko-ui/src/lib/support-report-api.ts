@@ -5,6 +5,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   isClientReportFailure,
+  isSupportReportFileName,
+  isSupportReportDownloadPath,
   ACTIVITY_LOG_COMPLETENESS_STATES,
   ACTIVITY_LOG_LOSS_STATES,
   DIAGNOSTIC_SUFFICIENCY_STATUSES,
@@ -154,7 +156,7 @@ function validateSupportReportResponse(value: unknown): DesktopSupportReportResp
     throw new SupportReportResponseInvalid("Invalid support report response");
   if (
     typeof value.fileName !== "string" ||
-    !/^keiko-support-v1-[a-f0-9]{12}-\d{4}-\d{2}-\d{2}\.json$/u.test(value.fileName) ||
+    !isSupportReportFileName(value.fileName) ||
     typeof value.reportJson !== "string" ||
     new TextEncoder().encode(value.reportJson).byteLength > MAX_SUPPORT_REPORT_BYTES
   )
@@ -175,9 +177,7 @@ function validateDownloadTarget(
   if (
     !("downloadPath" in value) ||
     typeof value.downloadPath !== "string" ||
-    !/^\/api\/diagnostics\/report\/download\/[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(
-      value.downloadPath,
-    ) ||
+    !isSupportReportDownloadPath(value.downloadPath) ||
     !("downloadExpiresAtMs" in value) ||
     typeof value.downloadExpiresAtMs !== "number" ||
     !Number.isSafeInteger(value.downloadExpiresAtMs) ||

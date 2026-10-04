@@ -18,7 +18,6 @@ import { Socket } from "node:net";
 import { gunzipSync } from "node:zlib";
 import { handleDownloadSupportReport } from "./support-report-download.js";
 import * as reportDownload from "./support-report-download.js";
-vi.mock("./support-report-download.js", { spy: true });
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
@@ -29,15 +28,17 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
 
-vi.mock("./support-report-job.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./support-report-job.js")>();
-  return { ...actual, runSupportReportJob: vi.fn() };
-});
 import { runSupportReportJob, SupportReportJobError } from "./support-report-job.js";
 import { handleCreateSupportReport } from "./support-report-routes.js";
 import { analyzeSupportReport, parseSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+
+vi.mock("./support-report-download.js", { spy: true });
+vi.mock("./support-report-job.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./support-report-job.js")>();
+  return { ...actual, runSupportReportJob: vi.fn() };
+});
 
 function context(body: string): RouteContext {
   const req = new IncomingMessage(new Socket());
@@ -75,6 +76,11 @@ function proofLine(sink: ReturnType<typeof createBufferedServerLogSink>, index: 
   return formatActivityLogProofLine(event);
 }
 
+const fixtureReportFileName = supportReportFileName(
+  1,
+  "aabbccddeeff".padEnd(32, "0"),
+  Date.UTC(2026, 9, 3),
+);
 const reportDirectories: string[] = [];
 let clock = Date.now();
 beforeEach(() => {
@@ -118,7 +124,7 @@ describe("desktop support report transport", () => {
       if (connection === "closed") ctx.res.emit("close");
       else ctx.res.destroy();
       finish?.({
-        fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+        fileName: fixtureReportFileName,
         reportJson: "{}",
         summary: {
           status: "complete",
@@ -152,7 +158,7 @@ describe("desktop support report transport", () => {
         onPrepared?.(abandon);
         ctx.res.emit("close");
         return Promise.resolve({
-          fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+          fileName: fixtureReportFileName,
           reportJson: "{}",
         });
       },
@@ -173,14 +179,14 @@ describe("desktop support report transport", () => {
         while (remaining > 0) {
           const bytes = Math.min(remaining, MAX_SUPPORT_REPORT_BYTES);
           reportDownload.cacheSupportReportDownload(owner, "protected-owner", {
-            fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+            fileName: fixtureReportFileName,
             reportJson: '"' + "x".repeat(bytes - 2) + '"',
           });
           remaining -= bytes;
         }
       } else {
         vi.mocked(runSupportReportJob).mockResolvedValue({
-          fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+          fileName: fixtureReportFileName,
           reportJson: "{}",
         });
         vi.mocked(reportDownload.cacheSupportReportDownload).mockImplementationOnce(() => {
@@ -319,6 +325,7 @@ describe("desktop support report transport", () => {
     "null",
     "{broken",
     '{"status":201,"body":{}}',
+    '{"correlationId":"report-client-correlation","status":413}',
   ])("rejects closed-shape or malformed input %s", async (body) => {
     expect((await handleCreateSupportReport(context(body), deps())).status).toBe(400);
     expect(runSupportReportJob).not.toHaveBeenCalled();
@@ -354,7 +361,7 @@ describe("desktop support report transport", () => {
 
   it("keeps authenticated server evidence authoritative over browser supplied facts", async () => {
     const serverReport = {
-      fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+      fileName: fixtureReportFileName,
       reportJson: "{}",
     };
     vi.mocked(runSupportReportJob).mockResolvedValue(serverReport);
@@ -459,7 +466,7 @@ describe("desktop support report transport", () => {
       expect((await handleCreateSupportReport(context("{}"), owner)).status).toBe(200);
     expect((await handleCreateSupportReport(context("{}"), owner)).status).toBe(429);
     vi.mocked(runSupportReportJob).mockResolvedValue({
-      fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+      fileName: fixtureReportFileName,
       reportJson: "{}",
     });
     expect((await handleCreateSupportReport(context("{}"), deps())).status).toBe(200);
@@ -524,7 +531,7 @@ describe("desktop support report transport", () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const report: DesktopSupportReportResponse = {
-      fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+      fileName: fixtureReportFileName,
       reportJson: '{"private":"report-canary"}',
       summary: {
         status: "complete",
@@ -633,7 +640,7 @@ describe("desktop support report transport", () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const report: DesktopSupportReportResponse = {
-      fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+      fileName: fixtureReportFileName,
       reportJson: "{}",
       summary: {
         status: "insufficient",
@@ -692,7 +699,7 @@ describe("desktop support report transport", () => {
 
   it("bounds repeated downloads without queueing scans", async () => {
     vi.mocked(runSupportReportJob).mockResolvedValue({
-      fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+      fileName: fixtureReportFileName,
       reportJson: "{}",
     });
     for (let index = 0; index < 6; index++)

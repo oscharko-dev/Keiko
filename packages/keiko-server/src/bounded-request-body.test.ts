@@ -14,6 +14,7 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   readBoundedRequestBody,
   readJsonRequestBody,
+  readJsonRequestBodyOutcome,
   RequestBodyCancelledError,
   RequestBodyTooLargeError,
 } from "./bounded-request-body.js";
@@ -467,6 +468,23 @@ describe("bounded request body activity log", () => {
 // is now the one owner of that wrapper layer; each caller keeps its own max-bytes constant and
 // becomes a one-line delegate to this function.
 describe("readJsonRequestBody", () => {
+  it("keeps request-supplied refusal-shaped fields inside the parsed branch", async () => {
+    const input = { status: 413, body: { error: { code: "PAYLOAD_TOO_LARGE" } } };
+    const req = asRequest(Readable.from([Buffer.from(JSON.stringify(input))]));
+    expect(await readJsonRequestBodyOutcome(req, 128_000)).toEqual({
+      kind: "parsed",
+      value: input,
+    });
+  });
+
+  it("tags a genuine byte-limit refusal independently of parsed body fields", async () => {
+    const req = asRequest(Readable.from([Buffer.from("oversized")]));
+    expect(await readJsonRequestBodyOutcome(req, 1)).toMatchObject({
+      kind: "rejected",
+      response: { status: 413, body: { error: { code: "PAYLOAD_TOO_LARGE" } } },
+    });
+  });
+
   it.each([
     {
       name: "413 PAYLOAD_TOO_LARGE for an oversized body",

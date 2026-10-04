@@ -9,7 +9,10 @@ import {
 import { bffFetchJson } from "./http";
 import { ApiError } from "./api";
 import { canonicalSupportReportFixture } from "../test-utils/support-report-fixture";
-import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  MAX_SUPPORT_REPORT_BYTES,
+  supportReportFileName,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 const response = vi.hoisted(() => ({ value: {} as unknown }));
 const pairing = vi.hoisted(() => ({
@@ -34,9 +37,15 @@ afterEach(() => {
   vi.clearAllMocks();
   pairing.settled = Promise.resolve(true);
 });
-const fileName = "keiko-support-v1-aabbccddeeff-2026-10-03.json";
+const fileName = supportReportFileName(1, "aabbccddeeff".padEnd(32, "0"), Date.UTC(2026, 9, 3));
 
 describe("support report browser download", () => {
+  it("accepts the filename grammar owned by the canonical producer", async () => {
+    const producedFileName = supportReportFileName(2, "a".repeat(32), Date.UTC(2026, 9, 3));
+    response.value = { fileName: producedFileName, reportJson: "{}" };
+    await expect(createSupportReport()).resolves.toEqual(response.value);
+  });
+
   it("confirms only existing session projections before selecting report evidence", async () => {
     let confirm: ((value: { repaired: boolean; correlationId: string }) => void) | undefined;
     pairing.repair.mockReturnValueOnce(

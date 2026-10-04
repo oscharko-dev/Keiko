@@ -119,6 +119,24 @@ export function isSupportReportFileName(name: string): boolean {
   return SUPPORT_REPORT_FILE_NAME_PATTERN.test(name);
 }
 
+const SUPPORT_REPORT_DOWNLOAD_PREFIX = "/api/diagnostics/report/download/";
+const SUPPORT_REPORT_DOWNLOAD_ID_PATTERN =
+  /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
+
+/** One same-origin, opaque attachment identity; never a path selected by the caller. */
+export function supportReportDownloadPath(downloadId: string): string {
+  if (!SUPPORT_REPORT_DOWNLOAD_ID_PATTERN.test(downloadId))
+    throw new TypeError("Invalid support report download identity");
+  return `${SUPPORT_REPORT_DOWNLOAD_PREFIX}${downloadId}`;
+}
+
+export function isSupportReportDownloadPath(path: string): boolean {
+  return (
+    path.startsWith(SUPPORT_REPORT_DOWNLOAD_PREFIX) &&
+    SUPPORT_REPORT_DOWNLOAD_ID_PATTERN.test(path.slice(SUPPORT_REPORT_DOWNLOAD_PREFIX.length))
+  );
+}
+
 /** Same-origin desktop export; the state directory and destination are server-owned. */
 export interface DesktopSupportReportRequest {
   readonly correlationId?: string | undefined;

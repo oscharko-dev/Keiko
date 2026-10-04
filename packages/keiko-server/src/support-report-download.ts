@@ -5,6 +5,7 @@ import { gzip } from "node:zlib";
 import {
   MAX_SUPPORT_REPORT_BYTES,
   isSupportReportFileName,
+  supportReportDownloadPath,
   type DesktopSupportReportResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
@@ -133,7 +134,7 @@ export function cacheSupportReportDownload(
   prune(cache, Date.now());
   if (!cache.has(id)) throw new SupportReportDeliveryCapacityError();
   return {
-    downloadPath: `/api/diagnostics/report/download/${id}`,
+    downloadPath: supportReportDownloadPath(id),
     downloadExpiresAtMs: expiresAtMs,
   };
 }
