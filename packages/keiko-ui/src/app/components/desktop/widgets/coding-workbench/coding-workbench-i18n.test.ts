@@ -7,6 +7,22 @@ import { DE_CODING_WORKBENCH_MESSAGES } from "./coding-workbench-i18n.de";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 
 describe("Coding Workbench translations", () => {
+  it.each([
+    "codingWorkbench.setup.runtimeUnavailable",
+    "codingWorkbench.alert.runtimeUnqualified",
+  ] as const)("explains the Windows npm runtime limitation in %s", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en).toContain("Windows network isolation is not implemented yet");
+    expect(de).toContain("Windows-Netzwerkisolation ist noch nicht implementiert");
+    for (const text of [en, de]) {
+      expect(text).toContain("npm");
+      expect(text).toContain("Mac");
+      expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-arm64");
+      expect(text).toContain("@oscharko-dev/keiko-coding-runtime-darwin-x64");
+    }
+  });
+
   it("localizes English and German feature labels", () => {
     expect(translateCodingWorkbench("en", "codingWorkbench.header.summary")).toBe(
       "Start and supervise one governed coding run. Authority and outcomes remain server-owned.",
