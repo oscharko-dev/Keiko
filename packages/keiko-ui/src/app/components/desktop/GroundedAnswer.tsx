@@ -252,19 +252,19 @@ function hasOnlyOmittedMatches(coverage: NonNullable<SearchCoverage>): boolean {
 }
 
 function selectedReadCount(pack: GroundedAnswerContextPackSummary, t: I18nTranslate): string {
-  return pack.budget.filesReadMax === null
-    ? t(
-        pack.usage.filesRead === 1
-          ? "grounded.inspection.fileCountUncapped.one"
-          : "grounded.inspection.fileCountUncapped.other",
-        { used: formatCount(pack.usage.filesRead, t.locale) },
-      )
-    : inspectionCount(
-        t,
-        "grounded.inspection.fileCount",
-        pack.usage.filesRead,
-        pack.budget.filesReadMax,
-      );
+  if (pack.budget.filesReadMax !== null) {
+    return inspectionCount(
+      t,
+      "grounded.inspection.fileCount",
+      pack.usage.filesRead,
+      pack.budget.filesReadMax,
+    );
+  }
+  const key =
+    pack.usage.filesRead === 1
+      ? "grounded.inspection.fileCountUncapped.one"
+      : "grounded.inspection.fileCountUncapped.other";
+  return t(key, { used: formatCount(pack.usage.filesRead, t.locale) });
 }
 
 function inspectionCount(t: I18nTranslate, key: MessageKey, used: number, max: number): string {

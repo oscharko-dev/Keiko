@@ -47,16 +47,14 @@ function previewResponseRecord(value: unknown): value is Record<string, unknown>
 }
 
 function binaryPreviewCounts(response: Record<string, unknown>): ClientSourcePreviewCounts {
-  return {
+  const counts: ClientSourcePreviewCounts = {
     previewKind: "binary",
     sourceTextBytesRead: 0,
     canEdit: false,
-    ...(response.reason === "too_large"
-      ? { binaryReason: "too-large" }
-      : response.reason === "unsupported"
-        ? { binaryReason: "unsupported" }
-        : {}),
   };
+  if (response.reason === "too_large") return { ...counts, binaryReason: "too-large" };
+  if (response.reason === "unsupported") return { ...counts, binaryReason: "unsupported" };
+  return counts;
 }
 
 function sourcePreviewCounts(

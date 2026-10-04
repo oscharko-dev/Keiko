@@ -818,13 +818,15 @@ export default function KeikoSelect({
   function captureMenuEscape(event: ReactKeyboardEvent<HTMLDivElement>): void {
     if (event.key !== "Escape") return;
     const target = event.target;
-    const focus =
-      target === searchRef.current
-        ? "search"
-        : target instanceof Element && target.closest('[role="option"]') !== null
-          ? "option"
-          : "menu";
-    consumeEscape(focus, event);
+    if (target === searchRef.current) {
+      consumeEscape("search", event);
+      return;
+    }
+    if (target instanceof Element && target.closest('[role="option"]') !== null) {
+      consumeEscape("option", event);
+      return;
+    }
+    consumeEscape("menu", event);
   }
 
   function onOptionKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void {

@@ -828,18 +828,17 @@ function reportGroundingMutationFailure(
   originalCorrelationId?: string,
 ): void {
   const correlationId = originalCorrelationId ?? correlationIdOf(error);
-  const metadata =
-    originalCorrelationId === undefined
-      ? correlationId === undefined
-        ? undefined
-        : { correlationId }
-      : {
-          correlationId,
-          kind: "other" as const,
-          errorKind: bffRequestErrorKind(error),
-          errorEvidence: clientErrorEvidence(error),
-        };
-  reportClientDiagnostic(`[keiko] ${message}: ${clientErrorSummary(error)}`, metadata);
+  const summary = `[keiko] ${message}: ${clientErrorSummary(error)}`;
+  if (originalCorrelationId === undefined) {
+    reportClientDiagnostic(summary, correlationId === undefined ? undefined : { correlationId });
+    return;
+  }
+  reportClientDiagnostic(summary, {
+    correlationId,
+    kind: "other",
+    errorKind: bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+  });
 }
 
 class ChatLookupFailure extends Error {
