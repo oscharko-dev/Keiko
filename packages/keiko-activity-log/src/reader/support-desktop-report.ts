@@ -13,6 +13,7 @@ import {
   supportReportFileName,
   type DesktopSupportReportResponse,
   type SupportIncidentDescriptorRecord,
+  type SupportIncidentRecord,
   type SupportReport,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -67,6 +68,7 @@ function correlationSelection(
 export function prepareManualSupportReportIncident(
   stateDir: string,
   correlationId: string,
+  onCreated?: (record: SupportIncidentRecord) => void,
 ): SupportIncidentDescriptorRecord {
   const safeCorrelationId = incidentCorrelationId(correlationId) ?? randomUUID();
   const created = recordUserReportedIncident(stateDir, { correlationId: safeCorrelationId });
@@ -77,6 +79,7 @@ export function prepareManualSupportReportIncident(
     throw new DesktopSupportReportPreparationError(created.reason);
   }
   if (created.record === undefined) throw new SupportReportError("selection-unavailable");
+  if (created.status === "created") onCreated?.(created.record);
   return created.record;
 }
 
@@ -125,6 +128,7 @@ export function prepareDesktopSupportReport(
   stateDir: string,
   correlationId?: string,
   requestCorrelationId?: string,
+  onCreated?: (record: SupportIncidentRecord) => void,
 ): SupportIncidentDescriptorRecord {
   const existing =
     correlationId === undefined
@@ -137,6 +141,7 @@ export function prepareDesktopSupportReport(
     prepareManualSupportReportIncident(
       stateDir,
       correlationId ?? requestCorrelationId ?? randomUUID(),
+      onCreated,
     )
   );
 }

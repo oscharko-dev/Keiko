@@ -81,6 +81,7 @@ beforeEach(() => {
   clock += 120_000;
   vi.setSystemTime(clock);
   vi.mocked(runSupportReportJob).mockReset();
+  vi.mocked(reportDownload.cacheSupportReportDownload).mockClear();
 });
 afterEach(() => {
   resetServerLogger();
@@ -91,6 +92,76 @@ afterEach(() => {
 });
 
 describe("desktop support report transport", () => {
+  it.each(["closed", "destroyed"])(
+    "preserves the selected candidate when the response is %s after worker preparation",
+    async (connection) => {
+      const stateDir = mkdtempSync(join(tmpdir(), "keiko-report-disconnected-"));
+      reportDirectories.push(stateDir);
+      const candidate = recordUserReportedIncident(stateDir);
+      if (candidate.status !== "created")
+        throw new TypeError("Expected retained fixture candidate");
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      let finish: ((report: DesktopSupportReportResponse) => void) | undefined;
+      const prepared = new Promise<DesktopSupportReportResponse>((resolve) => {
+        finish = resolve;
+      });
+      vi.mocked(runSupportReportJob).mockReturnValue(prepared);
+      const ctx = context("{}");
+      const result = handleCreateSupportReport(ctx, {
+        ...deps(),
+        env: { KEIKO_STATE_DIR: stateDir },
+      });
+      await vi.waitFor(() => {
+        expect(runSupportReportJob).toHaveBeenCalledOnce();
+      });
+      if (connection === "closed") ctx.res.emit("close");
+      else ctx.res.destroy();
+      finish?.({
+        fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+        reportJson: "{}",
+        summary: {
+          status: "complete",
+          reasons: [],
+          recordCount: 0,
+          reportDigest: "a".repeat(64),
+          incidentId: candidate.incidentId,
+          manifestUnreadableCount: 0,
+          manifestReusedCount: 0,
+        },
+      });
+      expect(await result).toMatchObject({ status: 503 });
+      expect(
+        listSupportIncidents(stateDir, { readOnly: true }).map((record) => record.incidentId),
+      ).toContain(candidate.incidentId);
+      const failureIndex = sink.events.findIndex(
+        (event) => event.op === "support.report.ui.failed",
+      );
+      expect(
+        expectActivityLogProof("support.report.ui.failed.lifecycle", proofLine(sink, failureIndex)),
+      ).toMatchObject({ reason: "cancelled", correlationId: "report-route-test" });
+      expect(sink.events.some((event) => event.op === "support.report.ui.completed")).toBe(false);
+    },
+  );
+
+  it("withdraws only handed-off fresh preparation when a completed worker loses its client", async () => {
+    const abandon = vi.fn();
+    const ctx = context("{}");
+    vi.mocked(runSupportReportJob).mockImplementationOnce(
+      (_stateDir, _correlationId, _signal, _requestCorrelationId, onPrepared) => {
+        onPrepared?.(abandon);
+        ctx.res.emit("close");
+        return Promise.resolve({
+          fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+          reportJson: "{}",
+        });
+      },
+    );
+    expect(await handleCreateSupportReport(ctx, deps())).toMatchObject({ status: 503 });
+    expect(abandon).toHaveBeenCalledExactlyOnceWith();
+    expect(reportDownload.cacheSupportReportDownload).not.toHaveBeenCalled();
+  });
+
   it.each(["client-only", "server"])(
     "records delivery-capacity rejection as a terminal failure for %s preparation",
     async (scope) => {
@@ -299,6 +370,7 @@ describe("desktop support report transport", () => {
       "server-failure-root",
       expect.any(AbortSignal),
       "report-route-test",
+      expect.any(Function),
     );
   });
 
@@ -482,6 +554,7 @@ describe("desktop support report transport", () => {
       "selected-correlation",
       expect.any(AbortSignal),
       "report-route-test",
+      expect.any(Function),
     );
     const started = sink.events.findIndex((event) => event.op === "support.report.ui.started");
     const completed = sink.events.findIndex((event) => event.op === "support.report.ui.completed");

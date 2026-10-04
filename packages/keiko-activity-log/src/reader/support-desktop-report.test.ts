@@ -9,9 +9,15 @@ import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listSupportIncidents,
+  dismissSupportIncident,
   recordRegisteredFailureIncident,
   prepareUnretainedUserReportIncident,
 } from "../support-incident.js";
+import {
+  expectActivityLogProof,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../../tests/support/activity-log-proof.js";
 import {
   fixtureLine,
   fixtureProcess,
@@ -21,6 +27,7 @@ import {
 import {
   createDesktopSupportReport,
   prepareManualSupportReportIncident,
+  prepareDesktopSupportReport,
   createClientOnlySupportReport,
   createPreparedDesktopSupportReport,
   readDesktopSupportReportSelection,
@@ -68,6 +75,45 @@ function writeFailures(): void {
 }
 
 describe("desktop canonical support report", () => {
+  it("grants abandonment ownership only for a newly retained manual preparation", () => {
+    const onCreated = vi.fn();
+    const fresh = prepareDesktopSupportReport(stateDir, "new-manual-root", undefined, onCreated);
+    expect(onCreated).toHaveBeenCalledExactlyOnceWith(fresh);
+    onCreated.mockClear();
+    expect(
+      prepareDesktopSupportReport(stateDir, "new-manual-root", "another-request", onCreated),
+    ).toEqual(fresh);
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(
+      dismissSupportIncident(stateDir, fresh.incidentId, {
+        correlationId: "abandoned-preparation-request",
+        retirementReason: "abandoned",
+      }),
+    ).toBe("dismissed");
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.dismissed",
+    );
+    expect(
+      expectActivityLogProof("support.incident.dismissed.emitted-line", lines[0] ?? ""),
+    ).toMatchObject({
+      reason: "abandoned",
+      incidentState: "candidate",
+      trigger: "user-report",
+      pinRelease: "released",
+      openIncidentCount: 0,
+    });
+  });
+
+  it("does not grant abandonment ownership for a transient quota descriptor", () => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const onCreated = vi.fn();
+    const descriptor = prepareDesktopSupportReport(stateDir, undefined, "quota-request", onCreated);
+    expect(descriptor).not.toHaveProperty("slotIndex");
+    expect(onCreated).not.toHaveBeenCalled();
+  });
+
   it("projects canonical pin and availability disposition into body-free transport summary", () => {
     const limited = createClientOnlySupportReport("summary-correlation", "session-unavailable");
     const canonical = parseSupportReport(limited.reportJson);

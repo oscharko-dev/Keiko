@@ -109,6 +109,7 @@ async function createReportResponse(
   sessionId: string,
 ): Promise<RouteResult> {
   const controller = new AbortController();
+  let abandon: (() => void) | undefined;
   const cancel = (): void => {
     controller.abort();
   };
@@ -125,7 +126,12 @@ async function createReportResponse(
       request.correlationId,
       controller.signal,
       ctx.correlationId,
+      (cleanup): void => {
+        abandon = cleanup;
+      },
     );
+    if (controller.signal.aborted || ctx.res.destroyed)
+      throw new SupportReportJobError("cancelled");
     const delivery = cacheSupportReportDownload(deps, sessionId, report, ctx.correlationId);
     if (report.summary !== undefined) {
       completePreparedSupportIncident(resolveRuntimeStateDir(deps.env), report.summary.incidentId, {
@@ -140,6 +146,7 @@ async function createReportResponse(
       headers: { "Cache-Control": "no-store" },
     };
   } catch (error) {
+    abandon?.();
     return reportPreparationFailure(ctx, error);
   } finally {
     ctx.res.off("close", cancel);
@@ -177,10 +184,9 @@ function clientOnlyReportResponse(
 
 function reportPreparationFailure(ctx: RouteContext, error: unknown): RouteResult {
   const capacity = error instanceof SupportReportDeliveryCapacityError;
+  const reason = capacity ? "busy" : "unavailable";
   const failure =
-    error instanceof SupportReportJobError
-      ? error
-      : new SupportReportJobError(capacity ? "busy" : "unavailable", error);
+    error instanceof SupportReportJobError ? error : new SupportReportJobError(reason, error);
   emitSupportReportFailed(
     ctx.correlationId,
     failure,

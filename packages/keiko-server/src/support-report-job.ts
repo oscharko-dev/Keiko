@@ -4,7 +4,9 @@ import {
   type DesktopSupportReportResponse,
   type SupportReportFailure,
   type SupportIncidentDescriptorRecord,
+  type SupportIncidentRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { dismissSupportIncident, reportServerLogFailure } from "@oscharko-dev/keiko-activity-log";
 import {
   prepareDesktopSupportReport,
   SupportReportError,
@@ -58,9 +60,15 @@ function prepareReport(
   stateDir: string,
   correlationId: string | undefined,
   requestCorrelationId: string | undefined,
+  onCreated: ((record: SupportIncidentRecord) => void) | undefined,
 ): void {
   try {
-    const record = prepareDesktopSupportReport(stateDir, correlationId, requestCorrelationId);
+    const record = prepareDesktopSupportReport(
+      stateDir,
+      correlationId,
+      requestCorrelationId,
+      onCreated,
+    );
     worker.postMessage({ kind: "prepared", record } satisfies SupportReportPreparedMessage);
   } catch (error) {
     throw new SupportReportJobError(
@@ -79,6 +87,7 @@ function reportMessageHandler(
   resolve: (report: DesktopSupportReportResponse) => void,
   reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1],
   requestCorrelationId: string | undefined,
+  onCreated: ((record: SupportIncidentRecord) => void) | undefined,
 ): (value: SupportReportWorkerMessage) => void {
   let prepareStarted = false;
   return (value): void => {
@@ -96,7 +105,7 @@ function reportMessageHandler(
         return;
       }
       try {
-        prepareReport(worker, stateDir, value.correlationId, requestCorrelationId);
+        prepareReport(worker, stateDir, value.correlationId, requestCorrelationId, onCreated);
       } catch (error) {
         reject(error);
       }
@@ -115,6 +124,7 @@ async function awaitReport(
   correlationId: string | undefined,
   signal?: AbortSignal,
   requestCorrelationId?: string,
+  onCreated?: (record: SupportIncidentRecord) => void,
 ): Promise<DesktopSupportReportResponse> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let cancel: (() => void) | undefined;
@@ -135,6 +145,7 @@ async function awaitReport(
         resolve,
         reject,
         requestCorrelationId,
+        onCreated,
       );
       worker.on("message", (value: SupportReportWorkerMessage) => {
         if (accepting) onMessage(value);
@@ -164,27 +175,78 @@ async function releaseWorker(worker: Worker | undefined): Promise<void> {
   }
 }
 
+function reportAbandonedPreparation(
+  stateDir: string,
+  record: SupportIncidentRecord,
+  correlationId: string | undefined,
+): void {
+  if (record.trigger !== "user-report") return;
+  try {
+    dismissSupportIncident(stateDir, record.incidentId, {
+      correlationId,
+      retirementReason: "abandoned",
+    });
+  } catch (error) {
+    reportServerLogFailure(error, { op: "support.incident.dismissed", correlationId });
+  }
+}
+
+async function releaseReportJob(
+  worker: Worker | undefined,
+  completed: boolean,
+  stateDir: string,
+  owned: SupportIncidentRecord | undefined,
+  correlationId: string | undefined,
+): Promise<void> {
+  try {
+    await releaseWorker(worker);
+  } catch (error) {
+    completed = false;
+    throw error;
+  } finally {
+    if (!completed && owned !== undefined)
+      reportAbandonedPreparation(stateDir, owned, correlationId);
+  }
+}
+
 /** Keep synchronous log scans off the request event loop, with one bounded worker per server. */
 export async function runSupportReportJob(
   stateDir: string,
   correlationId?: string,
   signal?: AbortSignal,
   requestCorrelationId?: string,
+  onPrepared?: (abandon: () => void) => void,
 ): Promise<DesktopSupportReportResponse> {
   if (running) throw new SupportReportJobError("busy");
   if (signal?.aborted === true) throw new SupportReportJobError("cancelled");
   running = true;
   let worker: Worker | undefined;
+  let owned: SupportIncidentRecord | undefined;
+  let completed = false;
   try {
     worker = new Worker(new URL("./support-report-worker.js", import.meta.url), {
       workerData: { stateDir, correlationId },
       resourceLimits: { maxOldGenerationSizeMb: 256 },
     });
-    return await awaitReport(worker, stateDir, correlationId, signal, requestCorrelationId);
+    const report = await awaitReport(
+      worker,
+      stateDir,
+      correlationId,
+      signal,
+      requestCorrelationId,
+      (record): void => {
+        owned = record;
+        onPrepared?.((): void => {
+          reportAbandonedPreparation(stateDir, record, requestCorrelationId);
+        });
+      },
+    );
+    completed = true;
+    return report;
   } catch (error) {
     if (error instanceof SupportReportJobError) throw error;
     throw new SupportReportJobError("unavailable", error);
   } finally {
-    await releaseWorker(worker);
+    await releaseReportJob(worker, completed, stateDir, owned, requestCorrelationId);
   }
 }

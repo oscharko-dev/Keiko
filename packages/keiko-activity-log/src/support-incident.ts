@@ -270,6 +270,12 @@ const SUPPORT_INCIDENT_DISMISSED_OPERATION = defineActivityLogOperation({
       values: ["released", "not-pinned", "rejected"],
     },
     openIncidentCount: OPEN_COUNT_FIELD,
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["abandoned"],
+    },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -441,6 +447,7 @@ interface DismissalFacts {
   readonly correlationId: string;
   readonly openIncidentCount: number;
   readonly pinRelease: SupportIncidentPinRelease;
+  readonly reason?: "abandoned" | undefined;
 }
 
 function dismissedEvidence(
@@ -461,6 +468,7 @@ function dismissedEvidence(
         incidentState: record.state,
         pinRelease: facts.pinRelease,
         openIncidentCount: facts.openIncidentCount,
+        ...(facts.reason === undefined ? {} : { reason: facts.reason }),
         ...(facts.pinRelease === "rejected" ? { completeness: "partial" as const } : {}),
       },
     ),
@@ -572,6 +580,8 @@ export interface SupportIncidentOptions {
   readonly nowMs?: number | undefined;
   // The correlation of the user action (Report a problem); a fresh one is minted when absent.
   readonly correlationId?: string | undefined;
+  /** Owner withdrawal of a newly created manual preparation whose report never completed. */
+  readonly retirementReason?: "abandoned" | undefined;
 }
 
 interface CandidateDraft {
@@ -1478,7 +1488,7 @@ function releaseIncidentPin(
 }
 
 /**
- * Explicit human dismissal: removes the record and releases its Activity Log pin, so the window
+ * Withdraws the owned record and releases its Activity Log pin, so the window
  * returns to ordinary retention. A pin that cannot be released still lapses at its bounded expiry.
  */
 function retireSupportIncident(
@@ -1510,12 +1520,13 @@ function retireSupportIncident(
       correlationId,
       openIncidentCount: open.length - 1,
       pinRelease,
+      reason: options.retirementReason,
     },
   );
   return "dismissed";
 }
 
-/** Explicit human dismissal of one retained candidate. */
+/** Explicit withdrawal of one retained candidate, including an owner's abandoned preparation. */
 export function dismissSupportIncident(
   stateDir: string,
   incidentId: string,

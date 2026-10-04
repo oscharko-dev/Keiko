@@ -779,8 +779,8 @@ Process-local delivery caching is bounded by 10 MiB of UTF-8 report bytes, 128 e
 15-minute lifetime; expiry makes report creation available again. The response uses `no-store`,
 `nosniff`, and the closed canonical filename. Older-server local object URLs are released on
 eviction or explicit global-error dismissal. A global error stays visible until human dismissal.
-The body-free `support.report.ui.delivered` state records attachment response bytes written by the
-server, without claiming that the operating system saved them. The routine
+The body-free `support.report.ui.delivered` state records canonical artifact bytes and the separate
+compressed transport byte count, without claiming that the operating system saved them. The routine
 `client.support-report.download-started` line records `automatic` or `manual` initiation under the
 selected error's correlation; it records no report body, destination, filename or saved claim.
 
@@ -794,7 +794,12 @@ cleanup. In-flight reservations are never stolen; a transient descriptor reports
 rather than implying protected retention. After a desktop artifact is successfully prepared and
 admitted to the existing fifteen-minute memory download cache, its durable candidate and pin are
 released. This means the artifact is prepared, not that it was saved or sent. Failed preparation or
-cache admission preserves the diagnostic candidate; no additional report archive is created.
+cache admission preserves pre-existing diagnostic candidates. The owner preparation callback marks
+only a newly created retained manual candidate; cancellation, timeout, worker failure or failed
+delivery admission withdraws that exact owned candidate and its claims and pin through the existing
+retirement path. Its `support.incident.dismissed` line carries the closed `abandoned` reason and
+candidate state, never a successful-report or human-dismissal claim. Existing candidates and
+transient descriptors grant no abandonment ownership. No additional report archive is created.
 When a manual descriptor's supported causal selection retains a registry-eligible failure
 under the requested root or its direct child, desktop composition derives a registered-failure
 identity from that retained event using the existing fingerprint, frame and correlation rules.
