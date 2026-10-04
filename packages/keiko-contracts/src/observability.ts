@@ -510,11 +510,7 @@ export interface ActivityLogOperationRegistration {
   readonly releaseImpact: ActivityLogReleaseImpact;
 }
 
-const ACTIVITY_LOG_OPERATION_BY_OP: ReadonlyMap<string, ActivityLogOperationRegistration> = new Map(
-  ACTIVITY_LOG_OPERATION_REGISTRY.map(
-    (registration) => [registration.op, registration as ActivityLogOperationRegistration] as const,
-  ),
-);
+let activityLogOperationByOp: ReadonlyMap<string, ActivityLogOperationRegistration> | undefined;
 
 export interface RegisteredActivityLogEvent<
   Registration extends ActivityLogOperationRegistration = ActivityLogOperationRegistration,
@@ -832,7 +828,13 @@ function validateActivityLogFields(
 export function activityLogOperationSchema(
   op: string,
 ): ActivityLogOperationRegistration | undefined {
-  return ACTIVITY_LOG_OPERATION_BY_OP.get(op);
+  activityLogOperationByOp ??= new Map(
+    ACTIVITY_LOG_OPERATION_REGISTRY.map(
+      (registration) =>
+        [registration.op, registration as ActivityLogOperationRegistration] as const,
+    ),
+  );
+  return activityLogOperationByOp.get(op);
 }
 
 export function validateActivityLogOperationFields(

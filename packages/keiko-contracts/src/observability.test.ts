@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ACTIVITY_LOG_EVENT_REGISTRATION,
@@ -104,6 +104,42 @@ function adversarialDispatchFields(index: number): readonly Readonly<Record<stri
     { timeoutMs: -0.5 - index },
   ];
 }
+
+describe("Activity Log registry lookup initialization", () => {
+  it("defers indexing for client defect imports and reuses the first schema lookup index", async () => {
+    vi.resetModules();
+    const { ACTIVITY_LOG_OPERATION_REGISTRY } =
+      await import("./activity-log-registry.generated.js");
+    const indexEntries = vi.spyOn(ACTIVITY_LOG_OPERATION_REGISTRY, "map");
+    try {
+      const observability = await import("./observability.js");
+      expect(observability.clientDefectContext({ clientKind: "window-error" })).toEqual([
+        "kind:window-error",
+      ]);
+      expect(indexEntries).not.toHaveBeenCalled();
+
+      for (const op of ["gateway.instance.reused", "chat.request.dispatch"]) {
+        const registration = ACTIVITY_LOG_OPERATION_REGISTRY.find((entry) => entry.op === op);
+        expect(registration).toBeDefined();
+        expect(observability.activityLogOperationSchema(op)).toBe(registration);
+      }
+      expect(
+        observability.activityLogOperationSchema("registry.unregistered.fixture"),
+      ).toBeUndefined();
+      expect(() =>
+        observability.validateActivityLogOperationFields(
+          "registry.unregistered.fixture",
+          "diagnostic",
+          {},
+        ),
+      ).toThrow(observability.ActivityLogEventValidationError);
+      expect(indexEntries).toHaveBeenCalledTimes(1);
+    } finally {
+      indexEntries.mockRestore();
+      vi.resetModules();
+    }
+  });
+});
 
 describe("ERROR_KIND_PATTERN (ADR-0173 D11)", () => {
   it("accepts an identifier, a taxonomy code, and a constructor name", () => {
