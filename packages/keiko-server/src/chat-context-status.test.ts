@@ -606,6 +606,37 @@ describe("composer context status and manual maintenance", () => {
   });
   // PR #3678 review: the inspected line must let an agent rebuild the meter reading: the trigger,
   // the last knowledge request, the reference trim, the known shares and a pending probe.
+  it("records the declared input ceiling and unavailable window share from the actual meter producer", () => {
+    const { deps, chatId } = fixture();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const status = readChatContextStatus(
+      {
+        ...deps,
+        contextProfile: deriveContextProfile({
+          maxInputTokens: 128_000,
+          inputTokenLimit: 16_000,
+          reservedOutputTokens: 8_000,
+          safetyMarginTokens: 4_000,
+        }),
+      },
+      chatId,
+      "fixture",
+      "corr-input-geometry",
+    );
+    logChatContextManagement("inspected", status, 0, "corr-input-geometry");
+    const event = sink.events.find((entry) => entry.op === "chat.context.management");
+    expect(event?.extra).toMatchObject({
+      contextWindowTokens: 128_000,
+      inputLimitTokens: 16_000,
+      inputCapacityUnavailableTokens: status.segments.find(
+        (segment) => segment.id === "input-capacity-unavailable",
+      )?.tokens,
+      reservedOutputTokens: 8_000,
+      safetyMarginTokens: 4_000,
+    });
+  });
+
   it("records the meter reading's trigger, knowledge request and shares on the inspected line", () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
@@ -1070,6 +1101,35 @@ describe("composer context status and manual maintenance", () => {
       }),
     );
     expect(JSON.stringify(sink.events)).not.toContain("probe.ts");
+  });
+
+  it("releases manual compaction when a same-window declared input ceiling grows", () => {
+    const { deps, chatId } = fixture();
+    const restricted = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        maxInputTokens: 128_000,
+        inputTokenLimit: 2_000,
+        reservedOutputTokens: 0,
+        safetyMarginTokens: 0,
+      }),
+    };
+    compactChatContext(restricted, chatId, "fixture", "corr-input-ceiling");
+    const checkpoint = loadChatContinuityCheckpoint(
+      deps.evidenceStore,
+      chatId,
+      deps.store.chatHistoryRevision(chatId),
+    );
+    expect(checkpoint?.conversationCoverage?.effectiveInputBudget).toBe(2_000);
+    expect(readChatContextStatus(restricted, chatId, "fixture").compaction).toBeDefined();
+    const expanded = {
+      ...deps,
+      contextProfile: deriveContextProfile({
+        ...restricted.contextProfile,
+        inputTokenLimit: 64_000,
+      }),
+    };
+    expect(readChatContextStatus(expanded, chatId, "fixture").compaction).toBeUndefined();
   });
 
   it("uses a manual checkpoint on the next request and re-expands for a larger window", () => {

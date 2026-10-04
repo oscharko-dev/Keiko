@@ -85,6 +85,11 @@ const CHAT_CONTEXT_MANAGEMENT = defineActivityLogOperation({
     },
     inputTokens: { type: "integer", dataClass: "count", required: true },
     inputBudget: { type: "integer", dataClass: "count", required: true },
+    contextWindowTokens: { type: "integer", dataClass: "count", required: false },
+    inputLimitTokens: { type: "integer", dataClass: "count", required: false },
+    inputCapacityUnavailableTokens: { type: "integer", dataClass: "count", required: false },
+    reservedOutputTokens: { type: "integer", dataClass: "count", required: false },
+    safetyMarginTokens: { type: "integer", dataClass: "count", required: false },
     tokensSaved: { type: "integer", dataClass: "count", required: true },
     // An inspection that projected automatic compaction: the stored history before the projection
     // and the projected history after it, so an oversized history that the meter reports as fitting
@@ -165,6 +170,8 @@ type ContextManagementStatus = Pick<
       | "lastRequest"
       | "segments"
       | "contextWindowProbePending"
+      | "contextWindowTokens"
+      | "inputLimitTokens"
     >
   >;
 
@@ -180,6 +187,7 @@ function contextStatusEvidence(status: ContextManagementStatus): Evidence {
           projectedHistoryTokens: pending.tokensAfter,
           projectedMessagesCompacted: pending.messagesCompacted,
         }),
+    ...declaredWindowEvidence(status),
     ...knowledgeEvidence(status),
     ...segmentEvidence(status.segments),
     ...(status.contextWindowAssumed === true ? { contextWindowAssumed: true } : {}),
@@ -221,6 +229,9 @@ const SEGMENT_EVIDENCE_FIELDS = new Map([
   ["summary", "summaryTokens"],
   ["messages", "messageTokens"],
   ["source-capacity", "sourceCapacityTokens"],
+  ["input-capacity-unavailable", "inputCapacityUnavailableTokens"],
+  ["output-reserve", "reservedOutputTokens"],
+  ["safety-margin", "safetyMarginTokens"],
 ]);
 
 function segmentEvidence(segments: ContextManagementStatus["segments"]): Evidence {
@@ -230,4 +241,13 @@ function segmentEvidence(segments: ContextManagementStatus["segments"]): Evidenc
     if (field !== undefined) evidence[field] = segment.tokens;
   }
   return evidence;
+}
+
+function declaredWindowEvidence(status: ContextManagementStatus): Evidence {
+  return {
+    ...(status.contextWindowTokens === undefined
+      ? {}
+      : { contextWindowTokens: status.contextWindowTokens }),
+    ...(status.inputLimitTokens === undefined ? {} : { inputLimitTokens: status.inputLimitTokens }),
+  };
 }

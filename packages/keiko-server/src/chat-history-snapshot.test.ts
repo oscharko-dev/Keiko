@@ -7,7 +7,7 @@ import {
   deriveContextProfile,
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { createInMemoryUiStore, type ChatMessage, type UiStore } from "./store/index.js";
-import { captureChatHistory } from "./chat-history-snapshot.js";
+import { captureChatHistory, checkpointFitsProfile } from "./chat-history-snapshot.js";
 import { rehydrateChatHistory } from "./chat-history-rehydration.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import {
@@ -188,6 +188,64 @@ describe("paged conversation continuity", () => {
     );
     expect(expanded.history).toHaveLength(61);
     expect(expanded.earlierCompaction).toBeUndefined();
+  });
+
+  it("re-expands original turns when the input ceiling grows inside the same model window", () => {
+    const { store, chatId, add } = fixture();
+    for (let index = 0; index < 30; index += 1) {
+      add("user", `Question ${String(index)} ${"x".repeat(600)}`);
+      add("assistant", "Understood. ".repeat(40));
+    }
+    const current = add("user", "Continue with the original turns.");
+    const restricted = deriveContextProfile({
+      maxInputTokens: 128_000,
+      inputTokenLimit: 2_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const first = captureChatHistory(store, chatId, current.id, restricted, []);
+    expect(first.earlierCompaction).toBeDefined();
+    const expanded = captureChatHistory(
+      store,
+      chatId,
+      current.id,
+      deriveContextProfile({ ...restricted, inputTokenLimit: 64_000 }),
+      [],
+      first.earlierCompaction,
+    );
+    expect(expanded.history).toHaveLength(61);
+    expect(expanded.earlierCompaction).toBeUndefined();
+  });
+
+  it("preserves legacy checkpoint fallback and invalidates only a larger stamped input budget", () => {
+    const { store, chatId, add } = fixture();
+    for (let index = 0; index < 30; index += 1) {
+      add("user", "Original context. ".repeat(100));
+      add("assistant", "Understood.");
+    }
+    const current = add("user", "Continue.");
+    const restricted = deriveContextProfile({
+      maxInputTokens: 128_000,
+      inputTokenLimit: 2_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const record = captureChatHistory(store, chatId, current.id, restricted, []).earlierCompaction;
+    if (record?.conversationCoverage === undefined) throw new TypeError("Missing checkpoint");
+    const { effectiveInputBudget, ...legacyCoverage } = record.conversationCoverage;
+    expect(effectiveInputBudget).toBe(2_000);
+    const expanded = deriveContextProfile({ ...restricted, inputTokenLimit: 64_000 });
+    expect(checkpointFitsProfile(record, expanded)).toBe(false);
+    expect(checkpointFitsProfile(record, restricted)).toBe(true);
+    expect(
+      checkpointFitsProfile(
+        record,
+        deriveContextProfile({ ...restricted, inputTokenLimit: 1_000 }),
+      ),
+    ).toBe(true);
+    expect(
+      checkpointFitsProfile({ ...record, conversationCoverage: legacyCoverage }, expanded),
+    ).toBe(true);
   });
 
   it("rehydrates a middle-of-history German correction with stable source ids", () => {

@@ -2596,7 +2596,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const [streamingAssistantMessage, setStreamingAssistantMessage] = useState<
     ChatMessage | undefined
   >();
-  const [draft, setDraftState] = useState("");
+  const [draftState, setDraftState] = useState("");
   const draftRevisionRef = useRef(0);
   const setDraft = useCallback((value: string): void => {
     draftRevisionRef.current += 1;
@@ -4078,7 +4078,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     async (options?: SendMessageOptions): Promise<SendMessageOutcome> => {
       const admission = resolveSendMessageAdmission({
         options,
-        draft,
+        draft: draftState,
         activeChat: state.activeChat,
         selectedModel: state.selectedModel,
         models: state.models,
@@ -4148,7 +4148,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           projectPath: project.path,
           signal: controller.signal,
           draftRevision: clearedDraftRevision,
-          text: options?.text ?? draft,
+          text: options?.text ?? draftState,
         });
         // Only the latest attempt owns the shared lifecycle. cancelSend leaves this attempt's signal
         // as owner until settlement; an immediate replacement installs a different signal and cannot
@@ -4182,7 +4182,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }
     },
     [
-      draft,
+      draftState,
       state.activeChat,
       state.selectedModel,
       state.models,
@@ -4706,7 +4706,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
       noEligibleModels,
-      draft,
+      draft: draftState,
       loading,
       sending,
       sendStatus,
@@ -4760,7 +4760,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.activeChat,
       state.selectedModel,
       noEligibleModels,
-      draft,
+      draftState,
       setDraft,
       loading,
       sending,

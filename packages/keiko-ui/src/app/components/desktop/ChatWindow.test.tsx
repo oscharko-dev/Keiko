@@ -364,6 +364,83 @@ describe("ChatWindow cancel button", () => {
     expect(regenerateMessage).toHaveBeenCalledWith("a1");
   });
 
+  it.each(["completed", "reloaded"])(
+    "does not offer plain regeneration for a %s grounded answer",
+    (state) => {
+      const regenerateMessage = vi.fn();
+      const groundedAnswer = copyTestGroundedAnswer("Grounded answer", 1);
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          messages: [
+            makeMessage({ id: "m1", content: "Question" }),
+            makeMessage({
+              id: "m2",
+              role: "assistant",
+              content: groundedAnswer.content,
+              timestamp: 2,
+              groundedAnswer,
+            }),
+          ],
+          latestGrounded: state === "completed" ? groundedAnswer : undefined,
+          regenerateMessage,
+        }),
+      );
+      expect(screen.getByText("Grounded answer")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Copy answer" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /regenerate response/i })).toBeNull();
+      expect(regenerateMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not offer plain regeneration after connecting sources to a plain chat", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScope: {
+            kind: "files",
+            relativePaths: ["src/a.ts"],
+            connectedAtMs: 1,
+          },
+        }),
+        messages: [
+          makeMessage({ content: "Question" }),
+          makeMessage({ id: "a1", role: "assistant", content: "Plain answer", timestamp: 2 }),
+        ],
+      }),
+    );
+    expect(screen.getByText("Plain answer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /regenerate response/i })).toBeNull();
+  });
+
+  it("does not offer plain regeneration while inspecting an older grounded response version", async () => {
+    const user = userEvent.setup();
+    const groundedAnswer = copyTestGroundedAnswer("Current grounded answer", 1);
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          makeMessage({ id: "m1", content: "Question" }),
+          makeMessage({
+            id: "m2",
+            role: "assistant",
+            content: groundedAnswer.content,
+            timestamp: 20,
+            groundedAnswer,
+            responseVersion: 2,
+            responseVersions: [
+              { version: 1, content: "Original answer", timestamp: 10 },
+              { version: 2, content: groundedAnswer.content, timestamp: 20 },
+            ],
+          }),
+        ],
+      }),
+    );
+    await user.selectOptions(screen.getByRole("combobox", { name: "Response version" }), "1");
+    expect(screen.getByText("Original answer")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /regenerate response/i })).toBeNull();
+  });
+
   it("lets the user inspect preserved assistant response versions", async () => {
     const user = userEvent.setup();
     renderWindow(
@@ -4526,7 +4603,7 @@ describe("ChatWindow message copy", () => {
       }),
     );
 
-    expect(screen.queryByRole("dialog", { name: "Select repository source" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Select repository source:/ })).toBeNull();
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/Users/dev/Projects/Keiko",
       path: "packages/keiko-editor/src/range.ts",
@@ -4617,10 +4694,10 @@ describe("ChatWindow message copy", () => {
     await user.click(
       screen.getByRole("button", { name: "Open src/context.ts at line 12 in editor" }),
     );
-    const picker = screen.getByRole("dialog", { name: "Select repository source" });
-    expect(picker).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "repo-b" }));
+    expect(
+      screen.getByRole("button", { name: "Select repository source: repo-a" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Select repository source: repo-b" }));
 
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/repo-b",

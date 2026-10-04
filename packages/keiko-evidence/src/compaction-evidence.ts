@@ -269,6 +269,9 @@ function redactScalarFields(
             ...(record.conversationCoverage.contextWindowTokens === undefined
               ? {}
               : { contextWindowTokens: record.conversationCoverage.contextWindowTokens }),
+            ...(record.conversationCoverage.effectiveInputBudget === undefined
+              ? {}
+              : { effectiveInputBudget: record.conversationCoverage.effectiveInputBudget }),
           },
         }),
     ...(record.summaryRefHash === undefined

@@ -429,6 +429,9 @@ describe("a completed but empty model answer (#3610)", () => {
 
 // Exercise the OpenAI-compatible wire used by LiteLLM, without an Azure endpoint.
 describe("stream startup resilience", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
   it("retries a temporary proxy rejection before delivering any answer", async () => {
     let calls = 0;
     const log = recorder();
@@ -568,15 +571,18 @@ describe("stream startup resilience", () => {
       },
     });
     const received: string[] = [];
+    const activeTimerCounts: number[] = [];
     const consume = async (): Promise<void> => {
       for await (const chunk of gateway.chatStream(REQUEST)) {
         if (chunk.type === "delta") {
           received.push(chunk.token);
-          expect(vi.getTimerCount()).toBeGreaterThan(0);
+          activeTimerCounts.push(vi.getTimerCount());
         }
       }
     };
-    await expect(consume()).rejects.toThrow();
+    await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_PROVIDER_ERROR" });
+    expect(activeTimerCounts).toHaveLength(1);
+    expect(activeTimerCounts[0]).toBeGreaterThan(0);
     expect(received).toEqual(["partial answer"]);
     expect(calls).toBe(1);
     expect(vi.getTimerCount()).toBe(0);

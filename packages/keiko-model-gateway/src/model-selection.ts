@@ -244,6 +244,9 @@ function codingSidecarProjection(
     supportsToolCalling: true,
     runMetadata: {
       maxPromptTokens: contextProfile.maxInputTokens,
+      ...(contextProfile.inputTokenLimit === undefined
+        ? {}
+        : { inputTokenLimit: contextProfile.inputTokenLimit }),
       maxOutputTokens: contextProfile.reservedOutputTokens,
       // OpenCode records multiple assistant/tool messages per user turn. The raw 1 MiB body cap
       // remains the hard memory bound, while 512 permits native compaction to run before ordinary

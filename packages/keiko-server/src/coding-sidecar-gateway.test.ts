@@ -3936,6 +3936,16 @@ describe("coding-sidecar gateway", () => {
     expect(JSON.stringify(sink.events)).not.toContain("private-overflow");
   });
 
+  it("bounds sidecar prompt admission by the independent input ceiling", () => {
+    expect(
+      admissiblePromptTokens({
+        maxPromptTokens: 128_000,
+        maxOutputTokens: 8_000,
+        inputTokenLimit: 16_000,
+      }),
+    ).toBe(16_000);
+  });
+
   it("returns a provider context overflow when estimated prompt tokens exceed maxPromptTokens", async () => {
     const seenRequests: GatewayRequest[] = [];
     const deps = depsValue(

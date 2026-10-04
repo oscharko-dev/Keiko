@@ -152,7 +152,12 @@ export function resolveOpenCodeContextGeometry(
   const wireInputTokens = Math.floor(
     (maxRequestBytes - OPENCODE_WIRE_ENVELOPE_RESERVE_BYTES) / OPENCODE_WIRE_BYTES_PER_PROMPT_TOKEN,
   );
-  const maxInputTokens = Math.min(modelInputTokens, wireInputTokens);
+  const maxInputTokens = Math.min(
+    modelInputTokens,
+    wireInputTokens,
+    metadata.inputTokenLimit ?? Number.POSITIVE_INFINITY,
+  );
+  if (!Number.isSafeInteger(maxInputTokens)) return undefined;
   if (maxInputTokens <= 0) return undefined;
   return {
     contextWindowTokens: maxInputTokens + maxOutputTokens,

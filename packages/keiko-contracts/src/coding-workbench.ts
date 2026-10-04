@@ -548,6 +548,8 @@ export const CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS = 32_000;
 
 export interface CodingWorkbenchSidecarGatewayRunMetadata {
   readonly maxPromptTokens: number;
+  /** Independent provider-declared input ceiling; the prompt window remains separate. */
+  readonly inputTokenLimit?: number | undefined;
   readonly maxOutputTokens: number;
   readonly maxInputMessages: number;
   readonly maxRequestBytes: number;

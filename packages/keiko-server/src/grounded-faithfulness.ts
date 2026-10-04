@@ -36,15 +36,12 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
-import {
-  LEGACY_CONNECTED_SEARCH_ABSTENTION,
-  isNoEvidenceAnswerText,
-} from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
+import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 export { connectedSearchNoEvidenceAnswer } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
 // Preserve the legacy source-neutral response for stored answers and historical evaluation
 // fixtures. Current folder, multi-source and hybrid producers share the localized builder above.
-export const GROUNDED_NO_EVIDENCE_ANSWER = LEGACY_CONNECTED_SEARCH_ABSTENTION;
+export { LEGACY_CONNECTED_SEARCH_ABSTENTION as GROUNDED_NO_EVIDENCE_ANSWER } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
 // ─── Evidence-presence predicates ─────────────────────────────────────────────
 
@@ -603,17 +600,28 @@ export function splitClaimSpans(text: string): readonly string[] {
   const spans: string[] = [];
   let depth = 0;
   let start = 0;
-  for (let i = 0; i < text.length; i += 1) {
+  const code = markdownCodeRanges(text);
+  let codeCursor = 0;
+  let i = 0;
+  while (i < text.length) {
+    codeCursor = skipCompletedCodeRanges(code, codeCursor, i);
+    const range = code[codeCursor];
+    if (range !== undefined && i >= range.start) {
+      i = range.end;
+      continue;
+    }
+    const offset = i;
     const ch = text.charAt(i);
+    i += 1;
     const nextDepth = citationBracketDepth(depth, ch);
     if (nextDepth !== depth) {
       depth = nextDepth;
       continue;
     }
-    if (depth !== 0 || !isSentenceBoundary(text, i)) continue;
-    const span = text.slice(start, i + 1);
+    if (depth !== 0 || !isSentenceBoundary(text, offset)) continue;
+    const span = text.slice(start, i);
     if (span.trim().length > 0) spans.push(span);
-    start = i + 1;
+    start = i;
   }
   if (text.slice(start).trim().length > 0) {
     spans.push(text.slice(start));

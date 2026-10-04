@@ -382,7 +382,9 @@ interface ReferenceSuffixNode {
 
 function insertReferenceSuffix(root: ReferenceSuffixNode, parts: readonly string[]): void {
   let node = root;
-  for (const part of [...parts].reverse()) {
+  const reversedParts = [...parts];
+  reversedParts.reverse();
+  for (const part of reversedParts) {
     const child = node.children.get(part) ?? {
       count: 0,
       children: new Map<string, ReferenceSuffixNode>(),
@@ -401,7 +403,8 @@ function shortestReferenceSuffix(root: ReferenceSuffixNode, parts: readonly stri
     node = node?.children.get(part);
     if (node === undefined || node.count === 1) break;
   }
-  return suffix.reverse().join("/");
+  suffix.reverse();
+  return suffix.join("/");
 }
 
 // A reversed segment trie finds the shortest distinct suffix in linear work over source paths.
@@ -418,7 +421,9 @@ export function repositoryReferencePathLabels(
 }
 
 function referenceVisibleLabel(reference: RepositoryReference, displayPath?: string): string {
-  const fileName = displayPath ?? reference.path.split("/").filter(Boolean).pop() ?? reference.path;
+  const parts = reference.path.split("/");
+  parts.reverse();
+  const fileName = displayPath ?? parts.find(Boolean) ?? reference.path;
   if (reference.lineStart === undefined) return fileName;
   if (reference.lineEnd === undefined || reference.lineEnd === reference.lineStart) {
     return `${fileName}:${String(reference.lineStart)}`;
@@ -634,12 +639,13 @@ export function RepositoryReferenceInline({
         <span>{referenceVisibleLabel(reference, displayPath)}</span>
       </button>
       {status === "choosing" ? (
-        <span className="repo-ref-picker" role="dialog" aria-label="Select repository source">
+        <span className="repo-ref-picker">
           {bestRootOptions.map((root) => (
             <button
               key={root.root}
               type="button"
               className="repo-ref-root"
+              aria-label={`Select repository source: ${root.label}`}
               onClick={() => openForRoot(root)}
             >
               <span>{root.label}</span>

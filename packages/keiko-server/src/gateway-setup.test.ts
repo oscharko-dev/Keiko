@@ -11719,6 +11719,53 @@ function expectSelectedDeploymentMetadata(deps: UiHandlerDeps): void {
 }
 
 describe("selected deployment discovery metadata", () => {
+  it.each(["reported", "unavailable"] as const)(
+    "refreshes an omitted input ceiling only when selected metadata is %s",
+    async (state) => {
+      const directory = await tempDir("keiko-refresh-input-ceiling-");
+      let first = true;
+      const deps = buildUiHandlerDeps({
+        configPath: join(directory, "keiko.config.json"),
+        evidenceDir: await tempDir("keiko-refresh-input-evidence-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(directory, "ui.db"),
+        gatewayModelDiscovery: () => {
+          if (!first && state === "unavailable") return Promise.reject(new Error("No discovery"));
+          return Promise.resolve(
+            parseModelDiscovery({
+              data: [
+                {
+                  model_name: "selected-small",
+                  model_info: {
+                    mode: "chat",
+                    context_window: 128_000,
+                    max_output_tokens: 8_000,
+                    ...(first ? { max_input_tokens: 16_000 } : {}),
+                  },
+                },
+              ],
+            }),
+          );
+        },
+        gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+      });
+      const body = {
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+        deploymentNames: ["selected-small"],
+      };
+      expect((await handleGatewaySetup(ctx(body), deps)).status).toBe(200);
+      expect(requiredCapability(requiredGatewayConfig(deps), "selected-small").maxInputTokens).toBe(
+        16_000,
+      );
+      first = false;
+      expect((await handleGatewaySetup(ctx(body), deps)).status).toBe(200);
+      const capability = requiredCapability(requiredGatewayConfig(deps), "selected-small");
+      expect(capability.maxInputTokens).toBe(state === "reported" ? undefined : 16_000);
+      expect(capability.contextWindow).toBe(128_000);
+    },
+  );
+
   it.each(["explicit", "preserved", "replacement"] as const)(
     "persists discovered model geometry without widening %s deployment selection",
     async (selection) => {

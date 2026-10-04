@@ -3205,7 +3205,10 @@ function gatewayReadinessProjection(
 function codingContextFits(result: CodingWorkbenchSidecarGatewayResult): boolean {
   return (
     result.status === "available" &&
-    result.runMetadata.maxPromptTokens >= CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
+    Math.min(
+      result.runMetadata.maxPromptTokens,
+      result.runMetadata.inputTokenLimit ?? Number.POSITIVE_INFINITY,
+    ) >= CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
   );
 }
 
@@ -3579,7 +3582,7 @@ export const MINIMUM_ADMITTED_OUTPUT_TOKENS = 512;
 
 type OutputBounds = Pick<
   CodingWorkbenchSidecarGatewayRunMetadata,
-  "maxPromptTokens" | "maxOutputTokens"
+  "maxPromptTokens" | "maxOutputTokens" | "inputTokenLimit"
 >;
 
 // What a prompt must leave free of `maxPromptTokens`: the window's safety margin plus the minimum
@@ -3596,7 +3599,10 @@ function reservedWindowTokens(bounds: OutputBounds): number {
 // — past the window the probe had proven, and the provider refused the turn. The prompt must
 // leave the margin and the minimum allowance free, or the turn is refused before any call.
 export function admissiblePromptTokens(bounds: OutputBounds): number {
-  return bounds.maxPromptTokens - reservedWindowTokens(bounds);
+  return Math.min(
+    bounds.maxPromptTokens - reservedWindowTokens(bounds),
+    bounds.inputTokenLimit ?? Number.POSITIVE_INFINITY,
+  );
 }
 
 // The allowance an ADMITTED turn sends: the run's reserve, shrunk to what the prompt leaves after

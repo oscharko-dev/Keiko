@@ -19,7 +19,11 @@ import {
   countConversationCheckpointTokens,
   type ConversationCompactionOutcome,
 } from "./conversation-compaction.js";
-import { captureChatHistory, stampHistoryRevision } from "./chat-history-snapshot.js";
+import {
+  captureChatHistory,
+  checkpointFitsProfile,
+  stampHistoryRevision,
+} from "./chat-history-snapshot.js";
 import { loadChatContinuityCheckpoint } from "./chat-compaction-resurfacing.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
 import { UiStoreError } from "./store/index.js";
@@ -52,9 +56,7 @@ function checkpointForProfile(
     correlationId,
   );
   if (checkpoint?.conversationCoverage?.contextWindowTokens === undefined) return undefined;
-  return profile.maxInputTokens <= checkpoint.conversationCoverage.contextWindowTokens
-    ? checkpoint
-    : undefined;
+  return checkpointFitsProfile(checkpoint, profile) ? checkpoint : undefined;
 }
 
 // The stored history exactly as the send path captures it (chat-handlers, grounded continuity): the
@@ -422,6 +424,7 @@ function manualCompactionCandidate(
       outcome.compaction,
       snapshot.historyRevision ?? 0,
       profile.maxInputTokens,
+      profile.effectiveInputBudget,
     );
     return record !== undefined && record.tokensAfter < record.tokensBefore ? record : undefined;
   } catch (error) {

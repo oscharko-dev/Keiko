@@ -312,15 +312,17 @@ function ConnectAnnouncer({ wins, connecting, conns, outcome }: ConnectAnnouncer
     prevConnecting.current = connecting;
     const wasLen = prevConnsLen.current;
     prevConnsLen.current = conns.length;
-    if (was === null && connecting !== null) {
-      setMessage(describeConnectStart(wins, connecting, t));
+    if (
+      outcome !== undefined &&
+      prevOutcome.current !== outcome &&
+      (outcome.kind !== "pending" || connecting === null)
+    ) {
+      prevOutcome.current = outcome;
+      setMessage(describeConnectionOutcome(wins, outcome, t));
       return;
     }
-    if (connecting === null && outcome !== undefined) {
-      if (prevOutcome.current !== outcome) {
-        prevOutcome.current = outcome;
-        setMessage(describeConnectionOutcome(wins, outcome, t));
-      }
+    if (was === null && connecting !== null) {
+      setMessage(describeConnectStart(wins, connecting, t));
       return;
     }
     if (was !== null && connecting === null) {

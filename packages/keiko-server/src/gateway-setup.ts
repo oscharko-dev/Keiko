@@ -644,6 +644,16 @@ function workflowCapabilityFields(
   };
 }
 
+// A successful declaration replaces its optional input ceiling; unavailable discovery preserves it.
+function refreshedSetupCapability(
+  existing: ModelCapability | undefined,
+  discovered: GatewayDiscoveredModelMetadata | undefined,
+): ModelCapability | undefined {
+  if (existing === undefined || discovered === undefined) return existing;
+  const { maxInputTokens, ...retained } = existing;
+  return retained;
+}
+
 function createDefaultSetupCapability(
   modelId: string,
   baseUrl: string,
@@ -668,8 +678,11 @@ function createDefaultSetupCapability(
   // fields (contextWindow, maxOutputTokens) belong to the wrong kind — a chat capability with an
   // embedding's contextWindow: 0 fails config-parse under KEIKO-0520. Treat existing as absent
   // when its kind no longer matches so the flow restarts from baseCapability's defaults.
-  const existing = rawExisting?.kind === baseCapability.kind ? rawExisting : undefined;
   const discovered = options.modelMetadata?.[modelId];
+  const existing = refreshedSetupCapability(
+    rawExisting?.kind === baseCapability.kind ? rawExisting : undefined,
+    discovered,
+  );
   const capability: ModelCapability = withContextWindowProvenance(existing, discovered, {
     ...baseCapability,
     // The endpoint-move restriction is PRESERVE semantics: a fresh replacement deliberately
@@ -5514,12 +5527,9 @@ async function discoverSetupModels(
     logSetupMetadataOutcome("available", startedAt, input.correlationId);
     return normalized;
   } catch (cause) {
-    const outcome =
-      input.signal?.aborted === true
-        ? "cancelled"
-        : discoveryProgrammingFailure(cause)
-          ? "failed"
-          : "unavailable";
+    let outcome: "cancelled" | "failed" | "unavailable" = "unavailable";
+    if (input.signal?.aborted === true) outcome = "cancelled";
+    else if (discoveryProgrammingFailure(cause)) outcome = "failed";
     logSetupMetadataOutcome(outcome, startedAt, input.correlationId);
     throw cause;
   }

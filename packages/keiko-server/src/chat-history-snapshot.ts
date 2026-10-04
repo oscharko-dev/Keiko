@@ -88,11 +88,7 @@ export function captureChatHistory(
     history,
     currentUserMessageId,
     historyRevision,
-    earlierCompaction: stampHistoryRevision(
-      earlierRecord(state, profile),
-      historyRevision,
-      profile.maxInputTokens,
-    ),
+    earlierCompaction: stampProfileBudget(earlierRecord(state, profile), historyRevision, profile),
   };
 }
 
@@ -137,9 +133,19 @@ function initialCheckpointDisposition(
   if (supplied !== undefined && checkpoint === undefined) return "revision-mismatch";
   if (checkpoint === undefined)
     return options.checkpointDisposition === "revision-mismatch" ? "revision-mismatch" : "none";
+  return expandedCheckpointDisposition(checkpoint, profile);
+}
+
+function expandedCheckpointDisposition(
+  checkpoint: ContextCompactionRecord,
+  profile: ContextProfile,
+): CheckpointDisposition {
   const originalWindow = checkpoint.conversationCoverage?.contextWindowTokens;
-  return originalWindow !== undefined && profile.maxInputTokens > originalWindow
-    ? "window-expanded"
+  if (originalWindow !== undefined && profile.maxInputTokens > originalWindow)
+    return "window-expanded";
+  const originalBudget = checkpoint.conversationCoverage?.effectiveInputBudget;
+  return originalBudget !== undefined && profile.effectiveInputBudget > originalBudget
+    ? "input-budget-expanded"
     : "boundary-missing";
 }
 
@@ -221,6 +227,7 @@ export function stampHistoryRevision(
   record: ContextCompactionRecord | undefined,
   historyRevision: number,
   contextWindowTokens?: number,
+  effectiveInputBudget?: number,
 ): ContextCompactionRecord | undefined {
   return record?.conversationCoverage === undefined
     ? record
@@ -230,6 +237,7 @@ export function stampHistoryRevision(
           ...record.conversationCoverage,
           historyRevision,
           ...(contextWindowTokens === undefined ? {} : { contextWindowTokens }),
+          ...(effectiveInputBudget === undefined ? {} : { effectiveInputBudget }),
         },
       };
 }
@@ -240,7 +248,7 @@ function shouldRestoreCheckpoint(
   profile: ContextProfile,
 ): boolean {
   const originalWindow = record.conversationCoverage?.contextWindowTokens;
-  if (originalWindow !== undefined) return profile.maxInputTokens <= originalWindow;
+  if (originalWindow !== undefined) return checkpointFitsProfile(record, profile);
   return state.tokens + record.tokensBefore > profile.effectiveInputBudget;
 }
 
@@ -257,4 +265,31 @@ function emptyHistoryAccumulator(): HistoryAccumulator {
     unitsVisited: 0,
     checkpointDisposition: "none",
   };
+}
+
+/** Legacy checkpoints retain their window-only identity until a current capture stamps the budget. */
+export function checkpointFitsProfile(
+  record: ContextCompactionRecord,
+  profile: ContextProfile,
+): boolean {
+  const coverage = record.conversationCoverage;
+  if (coverage?.contextWindowTokens === undefined) return false;
+  return (
+    profile.maxInputTokens <= coverage.contextWindowTokens &&
+    (coverage.effectiveInputBudget === undefined ||
+      profile.effectiveInputBudget <= coverage.effectiveInputBudget)
+  );
+}
+
+function stampProfileBudget(
+  record: ContextCompactionRecord | undefined,
+  historyRevision: number,
+  profile: ContextProfile,
+): ContextCompactionRecord | undefined {
+  return stampHistoryRevision(
+    record,
+    historyRevision,
+    profile.maxInputTokens,
+    profile.effectiveInputBudget,
+  );
 }

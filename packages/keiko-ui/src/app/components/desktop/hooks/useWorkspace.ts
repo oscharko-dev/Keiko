@@ -43,7 +43,6 @@ import {
   connectorChatBind,
   connectionTeardownScope,
   chatUnbindTarget,
-  filesChatBindScope,
   isWorkspaceWindowSelectable,
   makeConnectActions,
   makeLayoutActions,
@@ -2254,7 +2253,6 @@ export function useWorkspace(
   // can tear it down from cancel/confirm without re-attaching effects.
   const connectingRef = useRef<ConnectingState | null>(null);
   connectingRef.current = connecting;
-  const connectionOutcomeVersionRef = useRef(0);
   const connectCleanupRef = useRef<(() => void) | null>(null);
   const cancelConnectRef = useRef<() => void>(() => undefined);
   // GEN-UI-KEYBOARD-009 — the keyboard snap chords drive the same setSnap/commitSnap
@@ -2459,7 +2457,6 @@ export function useWorkspace(
         focus: focusWindow,
         setConns,
         setConnecting,
-        connectionOutcomeVersionRef,
         onConnectionOutcome: setConnectionOutcome,
         onScopeBind: stableScopeBind,
         onScopeUnbind: stableScopeUnbind,

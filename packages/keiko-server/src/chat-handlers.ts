@@ -1908,12 +1908,14 @@ function stampGatewayCompaction(
   snapshot: GatewayTurnSnapshot,
 ): GatewayPromptAssembly | undefined {
   if (selected === undefined) return undefined;
+  const profile = currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE;
   return {
     ...selected,
     compaction: stampHistoryRevision(
       selected.compaction,
       snapshot.historyRevision ?? 0,
-      (currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE).maxInputTokens,
+      profile.maxInputTokens,
+      profile.effectiveInputBudget,
     ),
   };
 }

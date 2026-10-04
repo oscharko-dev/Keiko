@@ -345,6 +345,8 @@ export interface ContextCompactionRecord {
         readonly throughMessageId: string;
         readonly historyRevision: number;
         readonly contextWindowTokens?: number | undefined;
+        /** Usable input budget when this checkpoint was assembled; absent on legacy records. */
+        readonly effectiveInputBudget?: number | undefined;
       }
     | undefined;
   // ── PR1 fields (unchanged) ───────────────────────────────

@@ -83,6 +83,7 @@ describe("direct global error reporting", () => {
       expect(createSupportReport).toHaveBeenCalledExactlyOnceWith(
         "global-source-error",
         expect.any(AbortSignal),
+        { errorKind: "unknown", context: ["kind:window-error"] },
       );
       await userEvent.click(
         screen.getByRole("button", { name: locale === "de" ? "Schließen" : "Close" }),

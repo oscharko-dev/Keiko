@@ -10,6 +10,7 @@ export type CheckpointDisposition =
   | "restored"
   | "revision-mismatch"
   | "window-expanded"
+  | "input-budget-expanded"
   | "current-turn-protected"
   | "boundary-missing";
 
@@ -40,6 +41,7 @@ const CHAT_CONTINUITY_CAPTURE = defineActivityLogOperation({
         "restored",
         "revision-mismatch",
         "window-expanded",
+        "input-budget-expanded",
         "current-turn-protected",
         "boundary-missing",
       ],

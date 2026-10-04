@@ -1492,6 +1492,18 @@ export function longContextTokens(
   capability: ModelCapability | undefined,
 ): number {
   const contextWindow = capability?.contextWindow ?? 0;
+  return Math.min(
+    longContextWindowTokens(options, capability),
+    contextWindow > 0 ? contextWindow : Number.POSITIVE_INFINITY,
+    capability?.maxInputTokens ?? Number.POSITIVE_INFINITY,
+  );
+}
+
+function longContextWindowTokens(
+  options: GatewayReadinessOptions | undefined,
+  capability: ModelCapability | undefined,
+): number {
+  const contextWindow = capability?.contextWindow ?? 0;
   if (options?.maxContextTokens !== undefined) {
     const deploymentCeiling = contextWindow > 0 ? contextWindow : MAX_CONTEXT_TOKENS;
     return Math.min(options.maxContextTokens, deploymentCeiling, MAX_CONTEXT_TOKENS);
@@ -1500,8 +1512,7 @@ export function longContextTokens(
   // KEIKO-0358: an unknown/not-yet-probed contextWindow (0) is not evidence the model is
   // short-context; capping such probes at 32k lets a genuinely long-context model look
   // healthy from the readiness lane and then run out of room in production. Assume the
-  // extended budget for the 0 case; genuinely small windows (1..EXTENDED-1) still cap at
-  // DEFAULT_LONG_CONTEXT_TOKENS to avoid probing past the model's real ceiling.
+  // extended budget for the 0 case; the caller intersects known total and input ceilings.
   if (contextWindow === 0) return EXTENDED_LONG_CONTEXT_TOKENS;
   return DEFAULT_LONG_CONTEXT_TOKENS;
 }
@@ -2008,7 +2019,8 @@ function workbenchProbesNeeded(capability: ModelCapability): readonly GatewayRea
   const eligibility = codingWorkbenchModelEligibility(capability);
   if (eligibility === "ineligible") return [];
   const shortWindow =
-    capability.contextWindow < CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS;
+    Math.min(capability.contextWindow, capability.maxInputTokens ?? Number.POSITIVE_INFINITY) <
+    CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS;
   return [
     ...(eligibility === "tool-calling-unverified" ? (["tool_calling"] as const) : []),
     ...(shortWindow ? (["long_context"] as const) : []),

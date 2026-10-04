@@ -1142,7 +1142,11 @@ function ChatBubbleImpl({
           <ChatBubbleFooterActions
             isUser={isUser}
             message={displayedMessage}
-            showRegenerate={showRegenerate}
+            showRegenerate={
+              showRegenerate &&
+              message.groundedAnswer === undefined &&
+              !hasGroundingScope(activeChat)
+            }
             regenerating={regenerating}
             onRegenerate={onRegenerate}
             onCancelRegenerate={onCancelRegenerate}

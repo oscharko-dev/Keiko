@@ -1027,7 +1027,6 @@ export function makeSnapActions({
 }
 
 interface ConnectArgs {
-  readonly connectionOutcomeVersionRef?: { current: number } | undefined;
   readonly onConnectionOutcome?: ((outcome: ConnectionOutcome) => void) | undefined;
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly viewRef: RefObject<View>;
@@ -1113,7 +1112,6 @@ interface ConnectionBindingSelection {
 }
 
 interface ConnectionAttempt {
-  readonly outcomeVersion: number;
   readonly fromId: string;
   readonly toId: string;
   readonly boundScope: ChatConnectedScope | null;
@@ -1616,19 +1614,14 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     onConnectionUnbindFailure,
     onConnectionOutcome,
   } = args;
-  const outcomeVersionRef = args.connectionOutcomeVersionRef ?? { current: 0 };
-  const reportConnectionOutcome = (
-    outcome: ConnectionOutcome,
-    version = outcomeVersionRef.current,
-  ): void => {
-    if (version === outcomeVersionRef.current) onConnectionOutcome?.(outcome);
+  const reportConnectionOutcome = (outcome: ConnectionOutcome): void => {
+    onConnectionOutcome?.(outcome);
   };
   const reportAttemptOutcome = (attempt: ConnectionAttempt, accepted: boolean): void =>
     reportConnectionOutcome(
       accepted
         ? { kind: "connected", fromId: attempt.fromId, toId: attempt.toId }
         : { kind: "rejected" },
-      attempt.outcomeVersion,
     );
 
   const winById = (id: string): AppWindow | undefined =>
@@ -1664,7 +1657,6 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const cancelConnect: WorkspaceApi["cancelConnect"] = () => {
     const cancelled = connectingRef.current !== null;
     if (cancelled) {
-      outcomeVersionRef.current += 1;
       reportConnectionOutcome({ kind: "cancelled" });
     }
     clearConnect();
@@ -1818,7 +1810,6 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const chatConversationIdAtBind =
       chatWindowId === null ? undefined : chatConversationId(winById(chatWindowId));
     return {
-      outcomeVersion: outcomeVersionRef.current,
       fromId,
       toId,
       boundScope,
@@ -1923,7 +1914,6 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     e.stopPropagation();
     const c = connectingRef.current;
     if (c === null) return;
-    outcomeVersionRef.current += 1;
     reportConnectionOutcome({ kind: "rejected" });
     const from = winById(c.from);
     const to = winById(toId);
@@ -1947,7 +1937,6 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     }
     const el = wsRef.current;
     if (el === null) return;
-    outcomeVersionRef.current += 1;
     const r = el.getBoundingClientRect();
     const v = viewRef.current;
     const toWX = (cx: number): number => (cx - r.left - v.x) / v.zoom;

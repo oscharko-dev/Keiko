@@ -559,7 +559,6 @@ function ref<T>(value: T): MutableRefObject<T> {
 }
 
 interface ConnectHarnessOverrides {
-  readonly connectionOutcomeVersionRef?: { current: number };
   readonly onConnectionOutcome?: (outcome: ConnectionOutcome) => void;
   readonly connecting?: ConnectingState | null;
   readonly setConns?: Dispatch<SetStateAction<Connection[]>>;
@@ -637,7 +636,6 @@ function makeConnectHarness(
     focus: () => undefined,
     setConns,
     setConnecting: (() => undefined) as Dispatch<SetStateAction<ConnectingState | null>>,
-    connectionOutcomeVersionRef: overrides.connectionOutcomeVersionRef,
     onConnectionOutcome: overrides.onConnectionOutcome,
     onScopeBind: overrides.onScopeBind,
     onScopeUnbind: overrides.onScopeUnbind,
@@ -2775,30 +2773,32 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     expect(outcomes.map((outcome) => outcome.kind)).not.toContain("cancelled");
   });
 
-  it("does not let an earlier acknowledgement overwrite a newer cancelled gesture", async () => {
+  it("announces a pending acknowledgement separately after a newer gesture is cancelled", async () => {
     const acceptance = deferredValue<boolean>();
     const outcomes: ConnectionOutcome[] = [];
-    const connectionOutcomeVersionRef = { current: 0 };
     const wins = [
       win("files", { resolvedRoot: "/data/docs" }, "files-1"),
       win("chat", {}, "chat-1"),
     ];
     const overrides: ConnectHarnessOverrides = {
       connecting: { from: "files-1", x: 0, y: 0 },
-      connectionOutcomeVersionRef,
       onScopeBind: () => acceptance.promise,
       onConnectionOutcome: (outcome) => outcomes.push(outcome),
     };
     makeConnectHarness(wins, [], overrides).confirmConnect("chat-1", evt);
     expect(outcomes.at(-1)?.kind).toBe("pending");
-    makeConnectHarness(wins, [], overrides).cancelConnect();
+    makeConnectHarness(wins, [], {
+      ...overrides,
+      connecting: { from: "files-2", x: 0, y: 0 },
+    }).cancelConnect();
     const cancelledCount = outcomes.length;
     expect(outcomes.at(-1)?.kind).toBe("cancelled");
     acceptance.resolve(true);
     await acceptance.promise;
     await flushAsyncBind();
-    expect(outcomes).toHaveLength(cancelledCount);
-    expect(outcomes.at(-1)?.kind).toBe("cancelled");
+    expect(outcomes).toHaveLength(cancelledCount + 1);
+    expect(outcomes.at(-2)?.kind).toBe("cancelled");
+    expect(outcomes.at(-1)).toEqual({ kind: "connected", fromId: "files-1", toId: "chat-1" });
   });
 
   it("reports a rejected scope bind and preserves explicit cancellation", async () => {

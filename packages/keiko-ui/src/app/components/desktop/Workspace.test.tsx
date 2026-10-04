@@ -970,6 +970,87 @@ describe("Workspace card connections", () => {
     );
   });
 
+  it("announces an earlier acknowledgement while a different connection gesture is active", () => {
+    const wins = [
+      appWindow({ id: "files-1", type: "files" }),
+      appWindow({ id: "chat-1", type: "chat" }),
+      appWindow({ id: "files-2", type: "files" }),
+    ];
+    const props = { wsRef: createRef<HTMLDivElement>(), openPalette: (): void => undefined };
+    const connecting = { from: "files-2", x: 100, y: 100 };
+    const { container, rerender } = render(
+      <Workspace
+        {...props}
+        ws={workspace({ wins, connecting, connectionOutcome: { kind: "pending" } })}
+      />,
+    );
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({
+          wins,
+          connecting,
+          conns: [{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }],
+          connectionOutcome: { kind: "connected", fromId: "files-1", toId: "chat-1" },
+        })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toMatch(/^Connected/);
+  });
+
+  it("retains an acknowledgement arriving in the same render as a newer gesture starts", () => {
+    const wins = [
+      appWindow({ id: "files-1", type: "files" }),
+      appWindow({ id: "chat-1", type: "chat" }),
+    ];
+    const props = { wsRef: createRef<HTMLDivElement>(), openPalette: (): void => undefined };
+    const { container, rerender } = render(
+      <Workspace {...props} ws={workspace({ wins, connectionOutcome: { kind: "pending" } })} />,
+    );
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({
+          wins,
+          connecting: { from: "files-1", x: 0, y: 0 },
+          conns: [{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }],
+          connectionOutcome: { kind: "connected", fromId: "files-1", toId: "chat-1" },
+        })}
+      />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toMatch(/^Connected/);
+  });
+
+  it("announces a later gesture cancellation when its previous acknowledgement is unchanged", () => {
+    const wins = [
+      appWindow({ id: "files-1", type: "files" }),
+      appWindow({ id: "chat-1", type: "chat" }),
+    ];
+    const props = { wsRef: createRef<HTMLDivElement>(), openPalette: (): void => undefined };
+    const connectionOutcome = { kind: "connected", fromId: "files-1", toId: "chat-1" } as const;
+    const conns = [{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }];
+    const { container, rerender } = render(
+      <Workspace {...props} ws={workspace({ wins, conns, connectionOutcome })} />,
+    );
+    rerender(
+      <Workspace
+        {...props}
+        ws={workspace({
+          wins,
+          conns,
+          connectionOutcome,
+          connecting: { from: "files-1", x: 100, y: 100 },
+        })}
+      />,
+    );
+    rerender(
+      <Workspace {...props} ws={workspace({ wins, conns, connectionOutcome, connecting: null })} />,
+    );
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe(
+      "Connection cancelled",
+    );
+  });
+
   it("keeps the acknowledged endpoint announcement when another edge changes", () => {
     const wins = [
       appWindow({ id: "files-1", type: "files" }),

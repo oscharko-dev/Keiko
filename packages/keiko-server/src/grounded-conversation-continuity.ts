@@ -60,6 +60,7 @@ export function groundedConversationContinuity(
       assembly.compaction,
       snapshot.historyRevision ?? 0,
       profile.maxInputTokens,
+      profile.effectiveInputBudget,
     ),
   };
 }

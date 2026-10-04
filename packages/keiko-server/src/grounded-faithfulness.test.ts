@@ -1064,6 +1064,15 @@ describe("stripInlineCitations", () => {
 });
 
 describe("segmentCitedClaims", () => {
+  it.each(["```", "~~~"])("keeps %s code fences out of cited claim segmentation", (fence) => {
+    const code = [fence + "ts", "const values = [1];", "// [src/a.ts:3]", fence].join("\n");
+    const pathClaims = segmentCitedClaims(`${code}\nThe retention is 30 days [src/a.ts:1-20].`);
+    const numericClaims = segmentNumericCitedClaims(`${code}\nThe retention is 30 days [1].`);
+    expect(pathClaims).toHaveLength(1);
+    expect(pathClaims[0]?.claimText).toBe("The retention is 30 days .");
+    expect(numericClaims).toEqual([{ claimText: "The retention is 30 days .", markers: [1] }]);
+  });
+
   it("returns only spans that carry a citation, with brackets stripped from the claim text", () => {
     const claims = segmentCitedClaims(
       "The service authenticates users. Login validates in [src/auth/login.ts:10-20].",
@@ -1135,6 +1144,18 @@ describe("reconcileClaimEntailment", () => {
       packWith([{ scopePath: "src/a.ts", excerpts: [excerptWith("src/a.ts", 1, 20, content)] }]),
     ]);
   }
+
+  it("judges only the prose claim outside a multiline code fence", async () => {
+    const result = await reconcileClaimEntailment(
+      "```ts\n// [src/a.ts:3]\nconst values = [1];\n```\nThe retention is 30 days [src/a.ts:1-20].",
+      { unsupported: [], citedScopePaths: new Set(["src/a.ts"]) },
+      judgeFixturePack("The retention is 30 days."),
+      scriptedJudge(),
+    );
+    expect(result.judgedClaims).toBe(1);
+    expect(result.unentailed).toEqual([]);
+    expect(result.unavailableClaims).toBe(0);
+  });
 
   it("flags a claim whose in-pack (membership-valid) excerpt does NOT support it", async () => {
     // The citation passes membership (it IS in the pack) but the excerpt contradicts the claim —

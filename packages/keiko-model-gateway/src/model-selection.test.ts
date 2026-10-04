@@ -640,6 +640,27 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
     });
   });
 
+  it("preserves the independent input ceiling in the coding sidecar projection", () => {
+    const result = resolveCodingSafeSidecarGatewayProfile(
+      config(
+        ["capped-coder"],
+        [
+          {
+            ...codingSidecarCapability("capped-coder"),
+            maxInputTokens: 16_000,
+          },
+        ],
+      ),
+    );
+    expect(result).toMatchObject({
+      status: "available",
+      runMetadata: {
+        maxPromptTokens: 128_000,
+        inputTokenLimit: 16_000,
+      },
+    });
+  });
+
   it("selects a configured coding-capable model and omits provider endpoint and credential details", () => {
     const configValue = sidecarConfig(
       [

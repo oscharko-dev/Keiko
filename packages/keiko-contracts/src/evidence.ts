@@ -295,6 +295,8 @@ export interface EvidenceConnectedContextAudit {
   readonly budget: {
     readonly usage: Record<string, number>;
     readonly limits: Record<string, number>;
+    readonly filesReadBounded?: boolean | undefined;
+    readonly elapsedMsBounded?: boolean | undefined;
   };
   readonly files: readonly EvidenceConnectedContextFile[];
   readonly omitted: readonly EvidenceConnectedContextOmitted[];

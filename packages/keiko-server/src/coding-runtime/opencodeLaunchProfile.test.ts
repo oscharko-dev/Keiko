@@ -304,6 +304,22 @@ describe("OpenCode launch profile", () => {
     ).toEqual({ ok: false, reason: "secret-generation-failed" });
   });
 
+  it("honors a declared input ceiling independently of the total context window", () => {
+    expect(
+      resolveOpenCodeContextGeometry({
+        maxPromptTokens: 128_000,
+        inputTokenLimit: 16_000,
+        maxOutputTokens: 8_000,
+        maxInputMessages: 512,
+        maxRequestBytes: 1_048_576,
+      }),
+    ).toEqual({
+      contextWindowTokens: 24_000,
+      maxInputTokens: 16_000,
+      maxOutputTokens: 8_000,
+    });
+  });
+
   it("derives model-specific limits below the raw JSON transport ceiling", () => {
     const smaller = resolveOpenCodeContextGeometry({
       maxPromptTokens: 64_000,

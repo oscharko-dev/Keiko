@@ -277,6 +277,8 @@ function connectedContextOf(
     budget: {
       usage: numberRecord(input.pack.usage),
       limits: numberRecord(input.pack.budget),
+      filesReadBounded: input.pack.budget.filesReadMax !== null,
+      elapsedMsBounded: input.pack.budget.elapsedMsMax !== null,
     },
     files: input.pack.files.map((file) => fileOf(file, redact)),
     omitted: input.pack.omitted.map((entry) => ({

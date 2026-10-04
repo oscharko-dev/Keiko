@@ -212,17 +212,14 @@ function contextPackHeadline(
   t: I18nTranslate,
 ): string {
   const scope = formatScopeLabel(contextPack, t);
-  return t(
-    contextPack.scopeKind === "files"
-      ? contextPack.fileCount === 1
+  let key: MessageKey = "grounded.inspection.scope";
+  if (contextPack.scopeKind === "files") {
+    key =
+      contextPack.fileCount === 1
         ? "grounded.inspection.scopeFile"
-        : "grounded.inspection.scopeFiles"
-      : "grounded.inspection.scope",
-    {
-      scope,
-      count: contextPack.fileCount,
-    },
-  );
+        : "grounded.inspection.scopeFiles";
+  }
+  return t(key, { scope, count: contextPack.fileCount });
 }
 
 type InspectionMetric = readonly [string, string];
@@ -254,6 +251,11 @@ function inspectionCount(t: I18nTranslate, key: MessageKey, used: number, max: n
   return t(key, { used: formatCount(used), max: formatCapWith(max, formatCount) });
 }
 
+function coverageMessageKey(coverage: NonNullable<SearchCoverage>): MessageKey {
+  if (hasOnlyOmittedMatches(coverage)) return "grounded.inspection.resultsLimited";
+  return coverage.incomplete ? "grounded.inspection.incomplete" : "grounded.inspection.complete";
+}
+
 function inspectionCoverageMetrics(
   pack: GroundedAnswerContextPackSummary,
   t: I18nTranslate,
@@ -270,16 +272,7 @@ function inspectionCoverageMetrics(
         coverage.filesDiscovered,
       ),
     ],
-    [
-      t("grounded.inspection.coverage"),
-      t(
-        hasOnlyOmittedMatches(coverage)
-          ? "grounded.inspection.resultsLimited"
-          : coverage.incomplete
-            ? "grounded.inspection.incomplete"
-            : "grounded.inspection.complete",
-      ),
-    ],
+    [t("grounded.inspection.coverage"), t(coverageMessageKey(coverage))],
   ];
 }
 
@@ -409,27 +402,27 @@ function formatRange(citation: GroundedEvidenceCitation): string {
   return `${citation.scopePath}:${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
 }
 
+function citationSpan(citation: GroundedEvidenceCitation, t: I18nTranslate): string {
+  if (citation.lineRange === undefined) return "";
+  const key =
+    citation.documentFormat === undefined
+      ? "grounded.citation.lines"
+      : "grounded.citation.extractedSpan";
+  return t(key, {
+    start: citation.lineRange.startLine,
+    end: citation.lineRange.endLine,
+  });
+}
+
 function citationTitle(citation: GroundedEvidenceCitation, t: I18nTranslate): string {
   const kind =
     citation.documentFormat === undefined
       ? t("grounded.citation.evidence")
       : t("grounded.citation.documentEvidence", { format: citation.documentFormat.toUpperCase() });
-  const span =
-    citation.lineRange === undefined
-      ? ""
-      : t(
-          citation.documentFormat === undefined
-            ? "grounded.citation.lines"
-            : "grounded.citation.extractedSpan",
-          {
-            start: citation.lineRange.startLine,
-            end: citation.lineRange.endLine,
-          },
-        );
   return t("grounded.citation.title", {
     kind,
     path: citation.scopePath,
-    span,
+    span: citationSpan(citation, t),
   });
 }
 
@@ -1153,6 +1146,16 @@ function uncertaintyLineText(marker: GroundedUncertainty, t: I18nTranslate): str
   return `${detail} ${named.join(", ")}${unlisted ? ", …" : ""}`;
 }
 
+function nextUncertaintyKey(
+  marker: GroundedUncertainty | undefined,
+  occurrences: Map<string, number>,
+): string {
+  const identity = JSON.stringify(marker ?? null);
+  const occurrence = (occurrences.get(identity) ?? 0) + 1;
+  occurrences.set(identity, occurrence);
+  return `${identity}:${String(occurrence)}`;
+}
+
 function OriginalUncertaintyDetails({
   markers,
   t,
@@ -1162,11 +1165,15 @@ function OriginalUncertaintyDetails({
 }): ReactNode {
   const first = markers[0];
   if (first === undefined || !RETRIEVAL_UNCERTAINTY_DETAIL_KEYS.has(first.kind)) return null;
+  const occurrences = new Map<string, number>();
   return (
     <details>
       <summary>{t("grounded.uncertainty.original")}</summary>
-      {markers.map((marker, index) => (
-        <p key={index} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+      {markers.map((marker) => (
+        <p
+          key={nextUncertaintyKey(marker, occurrences)}
+          style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+        >
           {marker.claim}
         </p>
       ))}
@@ -1218,13 +1225,14 @@ function UncertaintyLine({
 }): ReactNode {
   const t = useTranslate();
   if (markers.length === 0) return null;
+  const occurrences = new Map<string, number>();
   const kinds = Array.from(new Set(markers.map((m) => uncertaintyKindLabel(m.kind, t)))).join(", ");
   return (
     <div className="grounded-uncertainty" role="note">
       <div>{t("grounded.uncertainty.summary", { count: markers.length, kinds })}</div>
       <ul className="grounded-uncertainty-list">
-        {uncertaintyDisplayGroups(markers).map((group, index) => (
-          <UncertaintyItem key={index} markers={group} t={t} />
+        {uncertaintyDisplayGroups(markers).map((group) => (
+          <UncertaintyItem key={nextUncertaintyKey(group[0], occurrences)} markers={group} t={t} />
         ))}
       </ul>
     </div>
@@ -1587,8 +1595,7 @@ function certifiedEmptySearchCoverage(
   }
   const coverage = answer.contextPack.coverage;
   if (
-    coverage === undefined ||
-    coverage.matchesReturned !== 0 ||
+    coverage?.matchesReturned !== 0 ||
     !hasEmptyUninvokedSearchSummary(answer.contextPack) ||
     !hasCompleteEligibleCoverage(coverage)
   ) {
