@@ -36,10 +36,10 @@ function unavailableFs(code: string, matchingFile: boolean): WorkspaceFs {
   if (read === undefined) throw new Error("fixture bounded reader missing");
   return {
     ...base,
-    readFileBytes: (path, maximum): Promise<Uint8Array> => {
+    readFileBytes: (path, maximum, hardLinkPolicy, expected): Promise<Uint8Array> => {
       if (path.endsWith("/unreadable.html"))
         return Promise.reject(Object.assign(new Error("fixture read unavailable"), { code }));
-      return read(path, maximum);
+      return read(path, maximum, hardLinkPolicy, expected);
     },
   };
 }
