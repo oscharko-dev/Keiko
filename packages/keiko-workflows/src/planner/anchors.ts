@@ -158,7 +158,7 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
 // Module-scope regex pool. Each pattern uses character classes only (no nested quantifiers),
 // so scanning is linear in input length — ReDoS-safe.
 const QUOTED_DOUBLE_RE = /"([^"\n]+)"/g;
-const QUOTED_SINGLE_RE = /'([^'\n]+)'/g;
+const QUOTED_SINGLE_RE = /(?<![\p{L}\p{N}_])'([^'\n]+)'(?![\p{L}\p{N}_])/gu;
 const BACKTICK_RE = /`([^`\n]+)`/g;
 const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // Bounded per-segment (<=64 chars) and per-depth (<=64 levels) repetition — generous for any

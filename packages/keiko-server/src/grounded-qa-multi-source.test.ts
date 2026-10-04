@@ -513,6 +513,35 @@ describe("buildConnectedScopes", () => {
 });
 
 describe("buildMultiSourceGatewayMessages", () => {
+  it("attributes unavailable counts and original line offsets to the correct source", () => {
+    const base = scopePack("handbook/service.html", 1, "first");
+    const first: ConnectedContextPack = {
+      ...base,
+      files: base.files.map((file) => ({
+        ...file,
+        excerpts: file.excerpts.map((excerpt) => ({
+          ...excerpt,
+          atom: { ...excerpt.atom, lineRange: { startLine: 182, endLine: 182 } },
+          content: "Maintenance: 731 hours.",
+        })),
+      })),
+      omittedCounts: { ...connectedContextOmittedCounts({ omitted: [] }), "tool-unavailable": 3 },
+    };
+    const messages = buildMultiSourceGatewayMessages(
+      "Document the intervals",
+      [
+        { label: "manuals", pack: first },
+        { label: "app", pack: scopePack("src/app.ts", 1, "second") },
+      ],
+      buildRedactor({}),
+    );
+    const [manuals, app] = (messages[1]?.content ?? "").split("### Source 2");
+    expect(manuals).toContain("182 | Maintenance: 731 hours.");
+    expect(manuals).toContain("- tool-unavailable: 3");
+    expect(manuals).toContain("Candidate file evidence unavailable for reading/retrieval: 3.");
+    expect(app).not.toContain("tool-unavailable: 3");
+    expect(app).not.toContain("Candidate file evidence unavailable");
+  });
   it("keeps exact aggregate omission counts attributed to their own source", () => {
     const first: ConnectedContextPack = {
       ...scopePack("src/a.ts", 1, "first"),
@@ -567,7 +596,7 @@ describe("buildMultiSourceGatewayMessages", () => {
     const packB = scopePack("src/b.ts", 0.9, "high");
     const [budgetedA, budgetedB] = [packA, packB].map((pack) => ({
       ...pack,
-      budget: { ...pack.budget, modelInputTokensMax: 512 },
+      budget: { ...pack.budget, modelInputTokensMax: 1024 },
       files: pack.files.map((file) => ({
         ...file,
         excerpts: file.excerpts.map((excerpt) => ({
@@ -585,7 +614,7 @@ describe("buildMultiSourceGatewayMessages", () => {
       ],
       buildRedactor({}, undefined),
     );
-    expect(promptByteLength(messages)).toBeLessThanOrEqual(maxUtf8BytesForTokenBudget(512 + 512));
+    expect(promptByteLength(messages)).toBeLessThanOrEqual(maxUtf8BytesForTokenBudget(1024 + 1024));
     expect(messages[1]?.content).toContain("Source 1: api");
     expect(messages[1]?.content).toContain("Source 2: web");
     expect(messages[1]?.content).toContain("[source:1|src/file.ts:10-20]");

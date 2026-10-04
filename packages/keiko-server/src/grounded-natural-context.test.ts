@@ -144,6 +144,35 @@ function legacyHandbooks(): string {
 
 describe("natural connected-folder context", () => {
   it.each([
+    ["What Next.js version is documented?", "Next.js 16 is documented."],
+    ["Which package manager is documented?", "The package manager is npm."],
+    ["What's the format of the user's profile page?", "The user profile page uses HTML."],
+  ])(
+    "retains semantic evidence for natural wording without an actual named literal: %s",
+    async (text, fact) => {
+      const root = ordinaryApp();
+      writeFileSync(join(root, "README.md"), `# Overview\n${fact}\n`);
+      let semanticCalls = 0;
+      const out = await retrieve(root, text, {
+        repoSemanticSearchProvider: {
+          name: "actual natural-question provider",
+          search: () => {
+            semanticCalls += 1;
+            return Promise.resolve([{ scopePath: "README.md", line: 2, score: 0.99 }]);
+          },
+        },
+      });
+      expect(semanticCalls).toBeGreaterThan(0);
+      expect(
+        out.pack.files
+          .flatMap((file) => file.excerpts)
+          .map((excerpt) => excerpt.content)
+          .join("\n"),
+      ).toContain(fact);
+    },
+  );
+
+  it.each([
     QUESTION,
     "Was macht diese Anwendung, wie viel kostet die Lieferung eines drei Kilogramm schweren Pakets und welche Frist ist im Handbuch genannt?",
     "Explain this little application, its price calculation and weight limit, and the marker and collection deadline in its handbook.",
@@ -371,6 +400,14 @@ describe("natural connected-folder context", () => {
       });
       expect(out.pack.diagnostics?.coverage?.reasons).toContain("io-error");
       expect(out.pack.uncertainty.some((entry) => entry.kind === "scope-incomplete")).toBe(true);
+      const sent = fittedGroundedGatewayPrompt(text, out.pack, (value: unknown): unknown => value);
+      const prompt = sent.messages.map((message) => message.content).join("\n");
+      expect(prompt).toContain("Candidate file evidence unavailable for reading/retrieval: 1.");
+      expect(prompt).toContain("Current traversal incomplete: true; reasons: io-error.");
+      expect(prompt).not.toContain("9999");
+      expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(
+        out.pack.budget.modelInputTokensMax,
+      );
       expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
     },
   );

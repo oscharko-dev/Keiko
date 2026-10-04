@@ -1568,15 +1568,32 @@ function primaryLexicalAnchors(
     !requiresRelationshipOrHistoryRings(query) &&
     retrievalIntent !== "diagnostic-search" &&
     !anchors.some((anchor) => anchor.kind === "path") &&
-    !anchors.some((anchor) => /(?:Test|Tests|Spec)$/iu.test(anchor.term));
+    !anchors.some(
+      (anchor) => anchor.kind === "identifier" && /(?:Test|Tests|Spec)$/iu.test(anchor.term),
+    );
   const direct = isDirectEvidenceLookup(query, anchors);
+  const sourceTerms = new Set(
+    query.text
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}_.$-]+/u)
+      .map(trimAnchorEdgeDots),
+  );
   return anchors.filter(
     (anchor) =>
       anchor.kind === "quoted" ||
       (anchor.kind === "identifier" &&
         anchor.weight >= 0.85 &&
+        sourceTerms.has(anchor.term) &&
         (factual || direct || anchor.term.includes("_"))),
   );
+}
+
+function trimAnchorEdgeDots(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === ".") start += 1;
+  while (start < end && value[end - 1] === ".") end -= 1;
+  return value.slice(start, end);
 }
 
 function anchoredLexicalTargets(inputs: SearchInputs): readonly string[] {
@@ -2880,6 +2897,11 @@ function metadataDirectoryPath(
   return stat.isDirectory ? contained.path : undefined;
 }
 
+function recordUnavailableMetadataDirectory(cache: FileExistenceCache | undefined): void {
+  // The connected-context completion records the resulting scope-incomplete uncertainty count.
+  if (cache !== undefined) cache.unavailableDirectoryInspections += 1;
+}
+
 async function visitMetadataDirectory(
   searchScope: SearchScope,
   fs: WorkspaceFs,
@@ -2904,7 +2926,7 @@ async function visitMetadataDirectory(
     return true;
   } catch (error) {
     rethrowMetadataCancellation(error);
-    if (cache !== undefined) cache.unavailableDirectoryInspections += 1;
+    recordUnavailableMetadataDirectory(cache);
     return false;
   }
 }
@@ -4951,14 +4973,14 @@ function strongFileCacheIdentity(
   });
 }
 
-function fileStateCacheIdentity(
+async function fileStateCacheIdentity(
   keptPaths: readonly string[],
   searchScope: SearchScope,
   fs: WorkspaceFs,
   nowMs: () => number,
   deadlineAtMs: number,
   signal?: AbortSignal,
-): PackCacheIdentity | undefined {
+): Promise<PackCacheIdentity | undefined> {
   const identity: string[] = [];
   const guardedFs = cancellationGuardedWorkspaceFs(fs, signal);
   try {
@@ -4973,25 +4995,33 @@ function fileStateCacheIdentity(
       const strongIdentity = strongFileCacheIdentity(scopePath, target.realRelative, stat);
       if (strongIdentity === undefined) return undefined;
       identity.push(strongIdentity);
+      if (identity.length % 64 === 0) await cacheIdentitySchedulingYield(signal);
     }
   } catch (error) {
     rethrowMetadataCancellation(error);
     return undefined;
   }
+  if (nowMs() >= deadlineAtMs) return undefined;
   return identity.sort((left, right) => left.localeCompare(right));
 }
 
 // Internal mutation seam: package-local tests pin cancellation between synchronous cache-identity
 // probes without exposing this implementation detail from the server package root.
-export function _fileStateCacheIdentityForTests(
+export async function _fileStateCacheIdentityForTests(
   keptPaths: readonly string[],
   searchScope: SearchScope,
   fs: WorkspaceFs,
   nowMs: () => number,
   deadlineAtMs: number,
   signal: AbortSignal | undefined,
-): readonly string[] | undefined {
+): Promise<readonly string[] | undefined> {
   return fileStateCacheIdentity(keptPaths, searchScope, fs, nowMs, deadlineAtMs, signal);
+}
+
+async function cacheIdentitySchedulingYield(signal?: AbortSignal): Promise<void> {
+  // Scheduling batches bound event-loop monopolization, not eligible paths or cache coverage.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  throwIfCancelled(signal);
 }
 
 interface ReadyPlanResult {
@@ -5552,10 +5582,10 @@ interface GroundedPackAssembly {
   readonly elapsedBudgetBlocked: boolean;
 }
 
-function assemblyFileStateCacheIdentity(
+async function assemblyFileStateCacheIdentity(
   args: AssembleGroundedPackInputs,
   keptPaths: readonly string[],
-): PackCacheIdentity | undefined {
+): Promise<PackCacheIdentity | undefined> {
   const { searchScope, fs, nowMs, deadlineAtMs, deps } = args;
   return fileStateCacheIdentity(keptPaths, searchScope, fs, nowMs, deadlineAtMs, deps.signal);
 }
@@ -5583,7 +5613,7 @@ async function prepareGroundedAssembly(
   const cacheIdentity =
     deps.microIndex === undefined || hasDocumentEvidence || !withinDeadline
       ? undefined
-      : assemblyFileStateCacheIdentity(args, prepared.keptPaths);
+      : await assemblyFileStateCacheIdentity(args, prepared.keptPaths);
   const canStartAssemblySeams = nowMs() < deadlineAtMs;
   const assembleOptions = assembleOptionsFor(
     deps,
@@ -5633,13 +5663,13 @@ function withGroundedContextDiagnostics(
 // claims. Re-derive the identity after the reads and keep it only when every kept path matches the
 // one proven before them; on any mismatch — or an identity that can no longer be established at all
 // — drop the identity so the pack is assembled but never inserted into the cache.
-function excerptBoundCacheIdentity(
+async function excerptBoundCacheIdentity(
   args: AssembleGroundedPackInputs,
   keptPaths: readonly string[],
   captured: PackCacheIdentity | undefined,
-): PackCacheIdentity | undefined {
+): Promise<PackCacheIdentity | undefined> {
   if (captured === undefined) return undefined;
-  const current = assemblyFileStateCacheIdentity(args, keptPaths);
+  const current = await assemblyFileStateCacheIdentity(args, keptPaths);
   if (current === undefined) return undefined;
   if (current.length !== captured.length) return undefined;
   return current.every((entry, index) => entry === captured[index]) ? captured : undefined;
@@ -5677,7 +5707,7 @@ async function assembleGroundedPack(
     prepared,
     excerptReads,
     documentEvidence: ctx.documentEvidence,
-    cacheIdentity: excerptBoundCacheIdentity(args, prepared.keptPaths, ctx.cacheIdentity),
+    cacheIdentity: await excerptBoundCacheIdentity(args, prepared.keptPaths, ctx.cacheIdentity),
     assembleOptions: ctx.assembleOptions,
   });
   return {
@@ -6205,7 +6235,7 @@ function completionActivityExtra(
     queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
     plannedRingCount: plan.rings.length,
-    ...(execution.status.decisions ?? {}),
+    ...execution.status.decisions,
     usageSearchCalls: pack.usage.searchCalls,
     usageFilesRead: pack.usage.filesRead,
     usageExcerptBytes: pack.usage.excerptBytes,

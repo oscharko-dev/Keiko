@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
+  validateConnectedContextPack,
   type ConnectedContextPack,
   type ExplorationBudget,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -1337,6 +1338,62 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
 
   // PR #3678 review: the hybrid prompt was sent without fitting it to the model's window. The
   // highest-ranked candidates that fit are kept, and the prompt share reports the trim.
+  it("renders folder line offsets and unavailable counts in the actual hybrid prompt", async () => {
+    const { capsuleId } = await seedReadyCapsule("Maintenance documents");
+    const chatId = makeHybridChat(
+      [
+        {
+          kind: "workspace-root",
+          root: tempRoot("maintenance"),
+          relativePaths: [],
+          connectedAtMs: NOW,
+        },
+      ],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+    const base = folderPack("src/service.html", 1, "maintenance-source");
+    const pack: ConnectedContextPack = {
+      ...base,
+      usage: {
+        ...base.usage,
+        excerptBytes: Buffer.byteLength("<!-- archive -->\n<p>Maintenance: 731 hours.</p>\n"),
+      },
+      files: base.files.map((file) => ({
+        ...file,
+        excerpts: file.excerpts.map((excerpt) => ({
+          ...excerpt,
+          atom: { ...excerpt.atom, lineRange: { startLine: 181, endLine: 183 } },
+          content: "<!-- archive -->\n<p>Maintenance: 731 hours.</p>\n",
+          contentBytes: Buffer.byteLength("<!-- archive -->\n<p>Maintenance: 731 hours.</p>\n"),
+        })),
+      })),
+      omitted: [
+        { scopePath: "src/unavailable.html", reason: "tool-unavailable", omittedAtMs: NOW },
+      ],
+    };
+    let prompt = "";
+    expect(validateConnectedContextPack(pack)).toMatchObject({ ok: true });
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Which maintenance interval is documented?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(new Map([["", pack]])),
+        connectorRetrieve: () => Promise.resolve({ references: [], noEvidence: true }),
+        answer: (_system, user) => {
+          prompt = user;
+          return Promise.resolve("Maintenance: 731 hours [1].");
+        },
+      },
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(prompt).toContain("182 | <p>Maintenance: 731 hours.</p>");
+    expect(prompt).toContain("- tool-unavailable: 1");
+    expect(prompt).toContain("Candidate file evidence unavailable for reading/retrieval: 1.");
+    expect(prompt).not.toContain(".env");
+  });
+
   it("keeps the highest-ranked candidates that fit the model's input budget", async () => {
     const { capsuleId: capA } = await seedReadyCapsule("Window Beta Docs");
     const { capsuleId: capB } = await seedReadyCapsule("Window Gamma Docs");

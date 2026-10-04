@@ -156,6 +156,14 @@ enrichment, and interrupted traversal disables it. When traversal finishes with 
 the bounded successfully decoded subset remains usable; coverage and its read-failure warnings stay
 incomplete, and no claim is made about the unreadable documents. Actual full-file ranges use
 file-listing provenance rather than synthetic lexical matches.
+Folder excerpts sent to an answering model annotate each line with its original source-line offset;
+these prompt annotations do not alter stored source text or citation ranges. Single-source,
+multi-source and hybrid prompts also disclose canonical closed omission reason counts without
+excluded paths or unread contents. Candidate file evidence unavailable for reading or retrieval
+is identified by its canonical omission count, separately from unavailable tool uncertainty.
+The current traversal's incomplete flag and closed reasons are also projected; these counts
+do not imply the contents or specific encoding of an unread file. The existing prompt fitter charges this serialized metadata
+and line-number overhead against the actual model input budget.
 Fresh reads reserve each qualified file's observed byte requirement within the aggregate source
 budget, and only those qualified paths may exceed the ordinary 8 KiB excerpt window. The pack
 cache fingerprints these per-path limits. Once the collector overflows, later files perform no

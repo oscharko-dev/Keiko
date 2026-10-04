@@ -1082,7 +1082,9 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
       lines.push(
         `- ${label} ${redactedString(redactor, citation)} (score ${excerpt.atom.score.toFixed(2)}):`,
         "```",
-        promptSafeExcerptText(redactedString(redactor, excerpt.content)),
+        promptSafeExcerptText(
+          numberedEvidenceText(redactedString(redactor, excerpt.content), excerpt.atom.lineRange),
+        ),
         "```",
       );
     }
@@ -1091,6 +1093,42 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
     lines.push("No evidence excerpts were selected for this question.");
   }
   return lines;
+}
+
+/** Line annotations belong to the prompt; source content and citation ranges remain unchanged. */
+export function numberedEvidenceText(content: string, range: EvidenceAtom["lineRange"]): string {
+  if (range === undefined || content.length === 0) return content;
+  return content
+    .split("\n")
+    .slice(0, range.endLine - range.startLine + 1)
+    .map((line, index) => `${String(range.startLine + index)} | ${line}`)
+    .join("\n");
+}
+
+/** Closed canonical counts disclose unavailable evidence without revealing excluded paths. */
+export function omissionReasonLines(pack: ConnectedContextPack): readonly string[] {
+  const omittedCounts = connectedContextOmittedCounts(pack);
+  const counts = Object.entries(omittedCounts).filter(([, count]) => count > 0);
+  const reasons =
+    counts.length === 0
+      ? []
+      : [
+          "Known omission reason counts (metadata only, not file-content evidence):",
+          ...counts.map(([reason, count]) => `- ${reason}: ${String(count)}`),
+        ];
+  const unavailable = omittedCounts["tool-unavailable"];
+  const coverage = pack.diagnostics?.coverage;
+  return [
+    ...reasons,
+    ...(unavailable > 0
+      ? [`Candidate file evidence unavailable for reading/retrieval: ${String(unavailable)}.`]
+      : []),
+    ...(coverage === undefined
+      ? []
+      : [
+          `Current traversal incomplete: ${String(coverage.incomplete)}; reasons: ${coverage.reasons.join(", ") || "none"}.`,
+        ]),
+  ];
 }
 
 function allowedSizeExclusionPaths(pack: ConnectedContextPack): readonly string[] {
@@ -1176,6 +1214,7 @@ function buildRawGroundedGatewayMessages(
     `- query kind: ${pack.query.kind}`,
     `- budget/usage: ${packBudgetSummary(pack)}`,
     `- omitted files: ${String(connectedContextOmittedCount(pack))}`,
+    ...omissionReasonLines(pack),
     ...sizeExclusionLines(pack, redactor, omissionPathBytes),
     "",
     "Repository evidence excerpts:",

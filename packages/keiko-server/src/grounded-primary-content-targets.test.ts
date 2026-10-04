@@ -115,19 +115,23 @@ describe("primary content evidence is independent of presentation wording", () =
       expect(prompt.includes(`PrimaryReadingProbe ${String(71000 + index)}`)).toBe(true);
   });
 
-  it("does not substitute another identifier's semantic evidence for named fact absence", async (): Promise<void> => {
-    writeFileSync(join(root, "facts", "related.txt"), "OtherReadingProbe 81234\n");
-    const { pack } = await retrieve(
-      "CompactAbsentProbe: Welche Information ist dazu in diesem Ordner belegt?",
-      {
+  it.each([
+    "CompactAbsentProbe: Welche Information ist dazu in diesem Ordner belegt?",
+    "What is the latest value of CompactAbsentProbe?",
+    "What is the fastest value of CompactAbsentProbe?",
+  ])(
+    "does not substitute another identifier's semantic evidence for named fact absence: %s",
+    async (content): Promise<void> => {
+      writeFileSync(join(root, "facts", "related.txt"), "OtherReadingProbe 81234\n");
+      const { pack } = await retrieve(content, {
         name: "related fixture",
         search: (): Promise<readonly { scopePath: string; line: number; score: number }[]> =>
           Promise.resolve([{ scopePath: "facts/related.txt", line: 1, score: 0.99 }]),
-      },
-    );
-    expect(pack.files).toEqual([]);
-    expect(pack.diagnostics?.coverage?.matchesReturned).toBe(0);
-  });
+      });
+      expect(pack.files).toEqual([]);
+      expect(pack.diagnostics?.coverage?.matchesReturned).toBe(0);
+    },
+  );
 
   it("does not turn exact identifier absence into a fuzzy related-word hit", async (): Promise<void> => {
     writeFileSync(join(root, "facts", "related.txt"), "Absent target probe values\n");
@@ -138,7 +142,29 @@ describe("primary content evidence is independent of presentation wording", () =
     expect(pack.diagnostics?.coverage?.filesScanned).toBe(1);
   });
 
-  it.each(["Suche nach 256", 'Suche nach "256"', 'Find the literal "präziser Druck"'])(
+  it("distinguishes an unquoted numeric hit from supplemental verified folder context", async (): Promise<void> => {
+    writeFileSync(join(root, "facts", "target.txt"), "256 präziser Druck 81234\n");
+    writeFileSync(join(root, "facts", "unrelated.txt"), "ordinary unrelated prose\n");
+    const { pack } = await retrieve("Suche nach 256");
+    const target = pack.files.find((file) => file.scopePath === "facts/target.txt");
+    const supplemental = pack.files.find((file) => file.scopePath === "facts/unrelated.txt");
+    expect(
+      target?.excerpts.some((excerpt) => excerpt.content.includes("256 präziser Druck 81234")),
+    ).toBe(true);
+    expect(pack.diagnostics?.coverage?.matchesReturned).toBe(1);
+    expect(pack.diagnostics?.coverage?.filesScanned).toBe(2);
+    expect(pack.diagnostics?.coverage?.incomplete).toBe(false);
+    expect(pack.diagnostics?.coverage?.reasons).toEqual([]);
+    expect(supplemental?.excerpts).toHaveLength(1);
+    expect(
+      supplemental?.excerpts.every((excerpt) => excerpt.atom.provenance.kind === "file-listing"),
+    ).toBe(true);
+    expect(
+      supplemental?.excerpts.some((excerpt) => excerpt.atom.provenance.kind === "lexical-search"),
+    ).toBe(false);
+  });
+
+  it.each(['Suche nach "256"', 'Find the literal "präziser Druck"'])(
     "preserves the actual literal target in %s",
     async (content): Promise<void> => {
       writeFileSync(join(root, "facts", "target.txt"), "256 präziser Druck 81234\n");

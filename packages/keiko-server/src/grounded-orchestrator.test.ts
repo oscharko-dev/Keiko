@@ -6,7 +6,7 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Buffer } from "node:buffer";
 import { AsyncLocalStorage } from "node:async_hooks";
-import * as repoSearchScan from "../../keiko-workspace/src/repoSearchScan.js";
+import { fileListingClassifierForTests as repoSearchScan } from "@oscharko-dev/keiko-workspace/testing";
 import {
   linkSync,
   mkdirSync,
@@ -2913,6 +2913,7 @@ describe("runGroundedExploration", () => {
   });
 
   it("falls back to exact manifest stats and reports unavailable metadata directories", async () => {
+    const log = createBufferedServerLogSink();
     writeFileSync(join(ROOT, "package.json"), JSON.stringify({ packageManager: "npm@11.16.0" }));
     writeFileSync(
       join(ROOT, "pom.xml"),
@@ -2946,11 +2947,12 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
-        correlationId: undefined,
+        correlationId: "metadata-enumeration-failure",
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
         fs,
+        activityLog: log,
       },
     );
 
@@ -2967,6 +2969,13 @@ describe("runGroundedExploration", () => {
     ).toBe(true);
     expect(metadataClosed).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    const completion = log.events.find(
+      (event) => event.op === "search.connected-context.completed",
+    );
+    expect(completion?.correlationId).toBe("metadata-enumeration-failure");
+    expect(completion?.extra?.scopeIncompleteUncertaintyCount).toBe(1);
+    expect(log.lines().join("\n")).not.toContain("simulated metadata enumeration failure");
+    expect(log.lines().join("\n")).not.toContain("maven.compiler.release");
   });
 
   it("retrieves the service-local Java manifest in a polyglot monorepo (not only the root manifest)", async () => {
@@ -4922,7 +4931,7 @@ describe("runGroundedExploration", () => {
     expect(fs.accessesAfterDeadline()).toBe(0);
   });
 
-  it("starts no cache-identity filesystem operation after identity collection is cancelled", () => {
+  it("starts no cache-identity filesystem operation after identity collection is cancelled", async () => {
     const firstTarget = realpathSync(join(ROOT, "src/foo.ts"));
     const controller = new AbortController();
     const counted = countingNodeFs();
@@ -4941,7 +4950,7 @@ describe("runGroundedExploration", () => {
       relativePaths: ["src"],
     };
 
-    expect(() =>
+    await expect(
       _fileStateCacheIdentityForTests(
         ["src/foo.ts", "src/bar.ts"],
         searchScope,
@@ -4950,7 +4959,7 @@ describe("runGroundedExploration", () => {
         NOW + 1_000,
         controller.signal,
       ),
-    ).toThrow(CancelledError);
+    ).rejects.toThrow(CancelledError);
     expect(controller.signal.aborted).toBe(true);
     expect(fs.accessesAfterDeadline()).toBe(0);
   });

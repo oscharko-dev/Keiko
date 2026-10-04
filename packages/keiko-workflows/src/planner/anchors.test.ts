@@ -49,6 +49,21 @@ describe("extractAnchors", () => {
     expect(quoted).toEqual([{ term: "foo bar", weight: 1, kind: "quoted" }]);
   });
 
+  it.each([
+    "What's the format of the user's profile page?",
+    "Describe the user's profile and the team's account page.",
+    "L'utilisateur consulte l'application.",
+  ])("does not interpret apostrophes inside words as quoted targets: %s", (text) => {
+    expect(run(text).anchors.some((anchor) => anchor.kind === "quoted")).toBe(false);
+  });
+
+  it("preserves genuine single-quoted targets beside contractions", () => {
+    const result = run("What's the value of 'UserProfileProbe' in the user's page?");
+    expect(result.anchors.filter((anchor) => anchor.kind === "quoted")).toEqual([
+      { term: "userprofileprobe", weight: 1, kind: "quoted" },
+    ]);
+  });
+
   it("captures a path-shaped token as a path anchor at weight 0.95", () => {
     const result = run("see src/foo/bar.ts for context");
     const path = result.anchors.find((a) => a.kind === "path");

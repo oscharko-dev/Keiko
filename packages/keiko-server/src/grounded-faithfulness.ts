@@ -81,7 +81,9 @@ export interface ParsedInlineCitation {
 // markdown links (`[text](url)`) are NOT misread as citations.
 // The shared path bound plus bounded source ordinal and safe-integer line suffixes.
 const CITATION_TOKEN_MAX_CHARS = WORKSPACE_PORTABLE_PATH_MAX_BYTES + 64;
-const BRACKET_RE = new RegExp(String.raw`\[([^\]\n]{1,${CITATION_TOKEN_MAX_CHARS}})\]`, "g");
+const BRACKET_PATTERN = String.raw`\[([^\[\]\n]{1,${CITATION_TOKEN_MAX_CHARS}})\]`;
+const BRACKET_RE = new RegExp(BRACKET_PATTERN, "g");
+const FOLLOWING_BRACKET_RE = new RegExp(BRACKET_PATTERN, "y");
 // Normalize only the numeric range separator; the cited path and raw token remain unchanged.
 const LINE_RANGE_SUFFIX_RE = /:(\d+)(?:[-\u2010-\u2014\u2212](\d+))?$/u;
 const SOURCE_QUALIFIER_RE = /^source:(\d+)\|/u;
@@ -154,8 +156,22 @@ function parseCitationToken(token: string): ParsedInlineCitation | undefined {
 
 function isMarkdownLink(answerText: string, match: RegExpMatchArray): boolean {
   if (match.index === undefined) return false;
-  const next = answerText.charAt(match.index + match[0].length);
-  return next === "(" || next === "[";
+  const nextOffset = match.index + match[0].length;
+  const next = answerText.charAt(nextOffset);
+  if (next === "(") return true;
+  if (next !== "[") return false;
+  FOLLOWING_BRACKET_RE.lastIndex = nextOffset;
+  const following = FOLLOWING_BRACKET_RE.exec(answerText);
+  return following === null || !isCitationBracket(following[0]);
+}
+
+function isCitationBracket(token: string): boolean {
+  const numeric = findCitationMarkerGroups(token)[0];
+  if (numeric?.start === 0 && numeric.end === token.length) return true;
+  return token
+    .slice(1, -1)
+    .split(",")
+    .every((part) => parseCitationToken(part.trim()) !== undefined);
 }
 
 function citationDedupKey(citation: ParsedInlineCitation): string {
@@ -631,14 +647,31 @@ export function splitClaimSpans(text: string): readonly string[] {
 
 // Every bracketed span the claim stripper removes, a citation or not.
 const CLAIM_BRACKET_RE = new RegExp(
-  String.raw`[[［【][^\]］】\n]{1,${CITATION_TOKEN_MAX_CHARS}}[\]］】]`,
+  String.raw`[[［【][^\[［【\]］】\n]{1,${CITATION_TOKEN_MAX_CHARS}}[\]］】]`,
   "g",
 );
 
+function* proseBracketMatches(text: string): Generator<RegExpExecArray> {
+  const code = markdownCodeRanges(text);
+  let nextCode = 0;
+  for (const match of text.matchAll(CLAIM_BRACKET_RE)) {
+    nextCode = skipCompletedCodeRanges(code, nextCode, match.index);
+    if ((code[nextCode]?.start ?? Number.POSITIVE_INFINITY) <= match.index) continue;
+    yield match;
+  }
+}
+
 /** Remove inline `[...]` citation brackets from a claim span so the judge sees the prose claim. */
 export function stripInlineCitations(text: string): string {
-  return text
-    .replace(CLAIM_BRACKET_RE, " ")
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const match of proseBracketMatches(text)) {
+    parts.push(text.slice(cursor, match.index), " ");
+    cursor = match.index + match[0].length;
+  }
+  parts.push(text.slice(cursor));
+  return parts
+    .join("")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
@@ -657,7 +690,7 @@ function isPathCitationBracket(span: string, match: RegExpMatchArray): boolean {
 // `[The repository enforces MFA]` or a link label that the reader sees and the judge never reads.
 function hidesBracketedProse(span: string): boolean {
   const markerStarts = new Set(findCitationMarkerGroups(span).map((group) => group.start));
-  return [...span.matchAll(CLAIM_BRACKET_RE)].some(
+  return [...proseBracketMatches(span)].some(
     (match) => !markerStarts.has(match.index) && !isPathCitationBracket(span, match),
   );
 }

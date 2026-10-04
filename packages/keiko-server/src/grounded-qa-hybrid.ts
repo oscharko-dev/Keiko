@@ -142,6 +142,8 @@ import {
   mappedGatewayError,
   mappedWorkspaceError,
   promptSafeExcerptText,
+  numberedEvidenceText,
+  omissionReasonLines,
   redactString,
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
@@ -189,6 +191,8 @@ export type ConnectorRetrieve = (
 export type HybridAnswerer = (system: string, user: string) => Promise<GroundedAnswerPayload>;
 
 export interface HybridGroundedAskCtx {
+  /** Canonical closed omission counts from retrieved folders; no excluded paths or contents. */
+  readonly folderOmissionMetadata?: readonly string[];
   readonly retrievalContent?: string | undefined;
   readonly chat: Chat;
   readonly content: string;
@@ -795,12 +799,15 @@ const HYBRID_SYSTEM_PROMPT =
   `${GROUNDED_SYSTEM_PROMPT} Connector excerpts are indexed-document citations: attribute every ` +
   "connector claim to its source label and the matching [n] marker in addition to any file reference.";
 
+function hybridCandidateExcerpt(candidate: SelectedCandidate<HybridPayload>): string {
+  if (candidate.redactedText.length === 0) return "(No excerpt text available.)";
+  const range = isFolderCandidate(candidate) ? candidate.payload.lineRange : undefined;
+  return promptSafeExcerptText(numberedEvidenceText(candidate.redactedText, range));
+}
+
 function renderHybridCandidateBlock(candidate: SelectedCandidate<HybridPayload>): string {
   const kindLabel = candidate.kind === "folder" ? "Folder" : "Connector";
-  const excerpt =
-    candidate.redactedText.length > 0
-      ? promptSafeExcerptText(candidate.redactedText)
-      : "(No excerpt text available.)";
+  const excerpt = hybridCandidateExcerpt(candidate);
   return (
     `[${String(candidate.marker)}] ### ${kindLabel} source: ${candidate.sourceLabel}\n` +
     `\`\`\`text\n${excerpt}\n\`\`\``
@@ -814,6 +821,7 @@ function buildRerankedHybridUserMessage(
   question: string,
   selected: readonly SelectedCandidate<HybridPayload>[],
   redactor: Redactor,
+  omissionMetadata: readonly string[] = [],
 ): string {
   const folderCount = selected.filter((s) => s.kind === "folder").length;
   const connectorCount = selected.filter((s) => s.kind === "connector").length;
@@ -823,6 +831,7 @@ function buildRerankedHybridUserMessage(
     "",
     `Connected sources: ${String(folderCount)} folder(s), ${String(connectorCount)} connector(s).`,
     "Cite every claim by its [n] marker and source label.",
+    ...omissionMetadata,
     "",
   ];
   for (const candidate of selected) {
@@ -1698,11 +1707,27 @@ function hybridPromptContext(
     {
       messages: [
         system,
-        { role: "user", content: buildRerankedHybridUserMessage(question, selected, redactor) },
+        {
+          role: "user",
+          content: buildRerankedHybridUserMessage(
+            question,
+            selected,
+            redactor,
+            ctx.folderOmissionMetadata,
+          ),
+        },
       ],
       withoutSources: [
         system,
-        { role: "user", content: buildRerankedHybridUserMessage(question, [], redactor) },
+        {
+          role: "user",
+          content: buildRerankedHybridUserMessage(
+            question,
+            [],
+            redactor,
+            ctx.folderOmissionMetadata,
+          ),
+        },
       ],
       sentReferenceCount: selected.length,
       availableReferenceCount,
@@ -2085,11 +2110,27 @@ async function runHybridWithStore(
           skipped: [...capped.overCapConnectorSkipped, ...connectorResult.skipped],
         }
       : connectorResult;
-  return await answerAndAssemble(ctx, store, {
+  const answerCtx = {
+    ...ctx,
+    folderOmissionMetadata: folderOmissionMetadata(folderResult.retrieved, ctx.deps.redactor),
+  };
+  return await answerAndAssemble(answerCtx, store, {
     folderScopeCount: capped.allFolderCount,
     connectorScopeCount: capped.allConnectorCount,
     folderResult,
     connectorResult: connectorResultWithOverCap,
+  });
+}
+
+function folderOmissionMetadata(
+  folders: readonly RetrievedFolder[],
+  redactor: Redactor,
+): readonly string[] {
+  return folders.flatMap((source) => {
+    const reasons = omissionReasonLines(source.pack);
+    return reasons.length === 0
+      ? []
+      : [`Folder source: ${redactString(redactor, source.label)}`, ...reasons];
   });
 }
 
@@ -2182,6 +2223,7 @@ function hybridCandidatesWithinWindow(
           question,
           selected.slice(0, count),
           ctx.deps.redactor,
+          ctx.folderOmissionMetadata,
         ),
       },
     ],
@@ -2216,6 +2258,7 @@ async function answerHybridWithinWindow(
         ctx.answerContent ?? ctx.content,
         sent,
         ctx.deps.redactor,
+        ctx.folderOmissionMetadata,
       );
       return normalizeGroundedAnswerPayload(await answerer.answer(HYBRID_SYSTEM_PROMPT, user));
     },

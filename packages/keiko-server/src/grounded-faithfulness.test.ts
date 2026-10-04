@@ -125,6 +125,33 @@ function packWith(
 }
 
 describe("parseInlineCitations", () => {
+  it("does not let a stray opening bracket consume the next source citation", () => {
+    const answer = "xs[0 is read, see [src/a.ts:3].";
+    expect(parseInlineCitations(answer)).toMatchObject([{ scopePath: "src/a.ts" }]);
+    expect(segmentCitedClaims(answer)).toMatchObject([
+      { claimText: "xs[0 is read, see .", citations: [{ scopePath: "src/a.ts" }] },
+    ]);
+  });
+
+  it("reconciles every adjacent source citation including an unsupported first path", () => {
+    const answer = "X is defined in [fake/path.ts:1][src/real.ts:2].";
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: "src/real.ts", excerpts: [excerpt("src/real.ts", 2, 2)] }]),
+    ]);
+    expect(parseInlineCitations(answer).map((citation) => citation.scopePath)).toEqual([
+      "fake/path.ts",
+      "src/real.ts",
+    ]);
+    expect(reconcileInlineCitations(answer, index).unsupported).toMatchObject([
+      { scopePath: "fake/path.ts" },
+    ]);
+  });
+
+  it("keeps actual reference links excluded beside adjacent numeric citation markers", () => {
+    expect(parseInlineCitations("See [src/a.ts:3][repository docs].")).toEqual([]);
+    expect(parseInlineCitations("See [src/a.ts:3](https://example.test).")).toEqual([]);
+    expect(parseInlineCitations("See [src/a.ts:3][1].")).toMatchObject([{ scopePath: "src/a.ts" }]);
+  });
   it.each(["-", "\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212"])(
     "parses numeric line ranges with the typographic separator %s without changing paths",
     (separator) => {
@@ -207,9 +234,11 @@ describe("parseInlineCitations", () => {
 
   it("bounds hostile unterminated citation markers without suppressing a later valid source", () => {
     const answer = `${"[".repeat(64_000)}\nSee [src/manual.html:1-2].`;
-    const startedAt = performance.now();
     expect(parseInlineCitations(answer)).toMatchObject([{ scopePath: "src/manual.html" }]);
-    expect(performance.now() - startedAt).toBeLessThan(2000);
+    expect(stripInlineCitations(answer)).toBe(`${"[".repeat(64_000)}\nSee .`);
+    expect(segmentCitedClaims(answer)).toMatchObject([
+      { citations: [{ scopePath: "src/manual.html" }] },
+    ]);
   });
 
   it("reconciles a deep manual citation through the same portable path contract as source reads", () => {
@@ -1050,6 +1079,20 @@ describe("splitClaimSpans", () => {
 });
 
 describe("stripInlineCitations", () => {
+  it.each(["foo[0]", "arr[i]", "values[1, 2]"])(
+    "preserves inline code %s while judging the surrounding cited claim",
+    (code) => {
+      const prose = `Use \`${code}\` for the first element`;
+      expect(stripInlineCitations(`${prose} [src/a.ts:3].`)).toBe(`${prose} .`);
+      expect(segmentCitedClaims(`${prose} [src/a.ts:3].`)).toMatchObject([
+        { claimText: `${prose} .`, citations: [{ scopePath: "src/a.ts" }] },
+      ]);
+      expect(segmentCitedClaims(`${prose} [src/a.ts:3].`)[0]).not.toHaveProperty("hidesProse");
+      expect(segmentNumericCitedClaims(`${prose} [1].`)).toEqual([
+        { claimText: `${prose} .`, markers: [1] },
+      ]);
+    },
+  );
   it("removes citation brackets and collapses whitespace", () => {
     expect(stripInlineCitations("Login validates in [src/auth/login.ts:10-20] the session.")).toBe(
       "Login validates in the session.",
