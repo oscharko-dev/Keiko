@@ -884,8 +884,11 @@ included in human and JSON output; a line cannot become trusted v2 evidence mere
 parsed successfully.
 Canonical support reports intentionally select causal evidence, so the first observed event of
 each process supplies the sequence baseline rather than declaring its unselected prefix missing.
-Subsequent internal gaps, duplicates, resets and decreasing values retain the same detection.
-Raw-log and bundle analysis still reports a missing prefix from sequence one.
+Later positive jumps likewise cannot establish missing process events: unrelated retained records
+may be intentionally absent from the selection. Duplicate, reset and decreasing values remain
+observable in the selected records. Declared source-integrity losses and selection reasons, plus
+malformed, unsupported, truncated and incomplete records, retain their existing fail-closed handling.
+Raw-log and bundle analysis still reports all gaps, including a missing prefix from sequence one.
 
 The compatibility and deprecation contract is explicit:
 

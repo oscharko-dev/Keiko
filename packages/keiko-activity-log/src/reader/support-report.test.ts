@@ -102,6 +102,35 @@ function fixture(
 }
 
 describe("canonical body-free offline report", () => {
+  it("does not label retained unrelated events omitted by canonical selection as process gaps", () => {
+    const selectedSequences = new Set([1821, 1854, 1870, 1890, 1892]);
+    const { report, query } = fixture(1, {}, undefined, (process) => {
+      process.seq = 1820;
+      return Array.from({ length: 72 }, (_, index) =>
+        fixtureLine(process, T0, {
+          op: "client.diagnostic",
+          correlationId: selectedSequences.has(1821 + index)
+            ? CORRELATION
+            : `unrelated-${String(index)}`,
+        }),
+      );
+    });
+    expect(
+      query.events
+        .filter((event) => event.parsed.view.pid === 4242)
+        .map((event) => event.parsed.view.seq),
+    ).toEqual([1821, 1854, 1870, 1890, 1892, 1893]);
+    const analyzed = analyzeSupportReport(serializeSupportReport(report));
+    expect(analyzed.incident.loss).toBe("none");
+    expect(analyzed.selection.status).toBe("complete");
+    expect(
+      analyzed.analysis.evidence.sequenceAnomalies.filter((anomaly) => anomaly.pid === 4242),
+    ).toEqual([]);
+    expect(analyzed.analysis.warnings).not.toContainEqual(
+      expect.stringContaining("process sequence anomaly"),
+    );
+  });
+
   it("does not report an intentionally unselected process prefix as a canonical report anomaly", () => {
     const { report } = fixture(1, {}, undefined, (process) => {
       process.seq = 339;

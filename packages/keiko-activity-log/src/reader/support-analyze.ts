@@ -1516,11 +1516,16 @@ function detectSequenceAnomalies(
     const existing = states.get(key);
     const state = existing ?? createSequenceState();
     // Canonical reports select causal evidence, so their first process event need not be seq 1.
-    // Subsequent gaps and identity violations still use the same strict sequence detector.
+    // Positive jumps can also omit retained unrelated events; identity violations remain observable.
     if (existing === undefined && kind === "support-report") {
       state.previous = orZero(line.view.seq) - 1;
     }
-    anomalies.push(...lineSequenceAnomalies(line, state));
+    const detected = lineSequenceAnomalies(line, state);
+    anomalies.push(
+      ...(kind === "support-report"
+        ? detected.filter((anomaly) => anomaly.kind !== "gap")
+        : detected),
+    );
     states.set(key, state);
   }
   return anomalies;
