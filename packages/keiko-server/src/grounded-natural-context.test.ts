@@ -106,6 +106,42 @@ function unavailableFs(): WorkspaceFs {
   };
 }
 
+function legacyHandbooks(): string {
+  const root = mkdtempSync(join(tmpdir(), "keiko-natural-legacy-context-"));
+  roots.push(root);
+  const manuals = [
+    ["water/pump.html", "Shift_JIS", [0x82, 0xa0], "Pumpe", 731],
+    ["material/conveyor.html", "Big5", [0xa4, 0xa4, 0xa4, 0xe5], "Foerderband", 1193],
+    [
+      "metrology/calibration.html",
+      "ISO-2022-JP",
+      [0x1b, 0x24, 0x42, 0x24, 0x22, 0x1b, 0x28, 0x42],
+      "Kalibrierstation",
+      1687,
+    ],
+    ["monitoring/controller.html", "windows-1252", [], "Steuerung", 428],
+  ] as const;
+  for (const [path, charset, bytes, name, interval] of manuals) {
+    const target = join(root, "handbooks", path);
+    mkdirSync(join(target, ".."), { recursive: true });
+    writeFileSync(
+      target,
+      Buffer.concat([
+        Buffer.from(
+          `<meta charset="${charset}">\n${"<!-- archived instructions -->\n".repeat(180)}<p>${name} `,
+        ),
+        Buffer.from(bytes),
+        Buffer.from(`: Wartung alle ${String(interval)} Betriebsstunden.</p>\n`),
+      ]),
+    );
+  }
+  writeFileSync(
+    join(root, "unsupported.html"),
+    '<meta charset="unavailable-codec"><p>Unverified interval: 9999 hours.</p>\n',
+  );
+  return root;
+}
+
 describe("natural connected-folder context", () => {
   it.each([
     QUESTION,
@@ -305,7 +341,41 @@ describe("natural connected-folder context", () => {
     expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
   });
 
-  it("refuses whole-folder enrichment after an eligible file read failure", async () => {
+  it.each([
+    "Nenne pro Anlage das dokumentierte Wartungsintervall im verbundenen Handbuchordner. Belege jede Angabe mit der gelesenen Datei und Zeile. Weise darauf hin, wenn ein Dokument nicht lesbar ist.",
+    "List the documented maintenance interval for each plant in this handbook folder. Cite the actual file and line and disclose any unreadable document.",
+  ])(
+    "retains verified readable legacy manuals while disclosing unavailable text: %s",
+    async (text) => {
+      const out = await retrieve(legacyHandbooks(), text);
+      expect(out.pack.files.map((file) => file.scopePath)).toEqual(
+        expect.arrayContaining([
+          "handbooks/water/pump.html",
+          "handbooks/material/conveyor.html",
+          "handbooks/metrology/calibration.html",
+          "handbooks/monitoring/controller.html",
+        ]),
+      );
+      const content = out.pack.files
+        .flatMap((file) => file.excerpts)
+        .map((excerpt) => excerpt.content)
+        .join("\n");
+      for (const interval of [731, 1193, 1687, 428])
+        expect(content).toContain(`${String(interval)} Betriebsstunden`);
+      expect(content).not.toContain("9999");
+      expect(out.pack.usage.filesRead).toBe(4);
+      expect(out.pack.diagnostics?.coverage).toMatchObject({
+        filesDiscovered: 5,
+        filesScanned: 5,
+        incomplete: true,
+      });
+      expect(out.pack.diagnostics?.coverage?.reasons).toContain("io-error");
+      expect(out.pack.uncertainty.some((entry) => entry.kind === "scope-incomplete")).toBe(true);
+      expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
+    },
+  );
+
+  it("retains readable partial context after an eligible file read failure", async () => {
     const root = ordinaryApp();
     writeFileSync(join(root, "unavailable.txt"), "other information\n");
     const out = await retrieve(root, QUESTION, { fs: unavailableFs() });
@@ -320,6 +390,9 @@ describe("natural connected-folder context", () => {
             atom.provenance.tool === "repo.findFiles" &&
             atom.lineRange !== undefined,
         ),
-    ).toBe(false);
+    ).toBe(true);
+    expect(out.pack.usage.filesRead).toBe(5);
+    expect(out.pack.diagnostics?.coverage?.incomplete).toBe(true);
+    expect(out.pack.uncertainty.some((entry) => entry.kind === "scope-incomplete")).toBe(true);
   });
 });

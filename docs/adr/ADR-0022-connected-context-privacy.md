@@ -151,8 +151,11 @@ Unanchored natural-language questions may additionally use the complete eligible
 the same lexical traversal proves that its actual decoded/redacted bytes and transient evidence
 metadata fit the accepted excerpt-byte capacity. The model token capacity is checked separately
 when fitting the actual gateway prompt; tokens are never treated as a source-byte ceiling. Only
-successful safe reads enter this body-free context collector; overflow irreversibly discards the enrichment, and incomplete traversal disables
-it. Actual full-file ranges use file-listing provenance rather than synthetic lexical matches.
+successful safe reads enter this body-free context collector; overflow irreversibly discards the
+enrichment, and interrupted traversal disables it. When traversal finishes with only read failures,
+the bounded successfully decoded subset remains usable; coverage and its read-failure warnings stay
+incomplete, and no claim is made about the unreadable documents. Actual full-file ranges use
+file-listing provenance rather than synthetic lexical matches.
 Fresh reads reserve each qualified file's observed byte requirement within the aggregate source
 budget, and only those qualified paths may exceed the ordinary 8 KiB excerpt window. The pack
 cache fingerprints these per-path limits. Once the collector overflows, later files perform no

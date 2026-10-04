@@ -1682,12 +1682,21 @@ async function searchLexicalTerms(
     ...(terms.length === 0 ? {} : { queryInterpretation: { kind: "literal" as const, terms } }),
     ...(semanticSearchProvider === undefined ? {} : { semanticSearchProvider }),
   });
-  if (context === undefined || result.coverage.incomplete) return result;
+  if (context === undefined || !allowsReadableScopeContext(result.coverage)) return result;
   return {
     ...result,
     knownFitFileBytes: context.fileBytes(),
     atoms: [...result.atoms, ...context.atoms()],
   };
+}
+
+function allowsReadableScopeContext(coverage: SearchResult["coverage"]): boolean {
+  // Read failures leave these observed files individually verified. Keep that bounded readable
+  // subset while preserving incomplete coverage; interrupted traversal cannot qualify it.
+  return (
+    !coverage.incomplete ||
+    (coverage.reasons.length > 0 && coverage.reasons.every((reason) => reason === "io-error"))
+  );
 }
 
 function knownFitContextFor(inputs: SearchInputs): KnownFitScopeContext | undefined {
