@@ -571,6 +571,15 @@ describe("client diagnostic loss counts", () => {
 // #3532: the readiness `/api/health` reports and `keiko status` prints.
 describe("isActivityLogReadinessSnapshot", () => {
   const ready = { readiness: "ready", reasons: [], writer: "production-file", lostEvents: 0 };
+  it("preserves truthful retained stock above a newly governing admission capacity", () => {
+    expect(
+      isActivityLogReadinessSnapshot({
+        ...ready,
+        retainedDiagnosticCount: 16,
+        diagnosticCapacity: 15,
+      }),
+    ).toBe(true);
+  });
   it("accepts coherent retained diagnostic capacity and rejects incomplete or invalid counts", () => {
     expect(
       isActivityLogReadinessSnapshot({
@@ -582,7 +591,6 @@ describe("isActivityLogReadinessSnapshot", () => {
     for (const fields of [
       { retainedDiagnosticCount: 32 },
       { diagnosticCapacity: 32 },
-      { retainedDiagnosticCount: 33, diagnosticCapacity: 32 },
       { retainedDiagnosticCount: -1, diagnosticCapacity: 32 },
       { retainedDiagnosticCount: 1.5, diagnosticCapacity: 32 },
       { retainedDiagnosticCount: 0, diagnosticCapacity: 0 },
@@ -1686,6 +1694,7 @@ describe("Files scope ownership decision evidence", () => {
   it.each([
     "timeout-blocked",
     "timeout-recovered",
+    "timeout-rejected",
     "request-superseded",
     "acknowledged",
     "ack-invalidated",
@@ -1698,6 +1707,18 @@ describe("Files scope ownership decision evidence", () => {
       }),
     ).toBe(true);
   });
+  it.each(["files", "local-knowledge", "git-change"])(
+    "accepts the shared grounding queue surface %s without private references",
+    (mutationSurface) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "scope-decision-123",
+          filesScopeDecision: { decision: "timeout-rejected", mutationSurface },
+        }),
+      ).toBe(true);
+    },
+  );
   const decision = {
     decision: "blocked-ambiguous",
     sourceCount: 1,
@@ -1711,6 +1732,7 @@ describe("Files scope ownership decision evidence", () => {
       { candidateCount: 1.5 },
       { bindingFingerprint: "/private/customer/root" },
       { root: "/private/customer/root" },
+      { mutationSurface: "/private/customer/root" },
     ])
       expect(
         isClientDiagnosticIngestRequest({

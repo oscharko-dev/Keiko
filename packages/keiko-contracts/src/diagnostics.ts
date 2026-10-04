@@ -1663,8 +1663,7 @@ function hasCoherentDiagnosticCapacity(value: Record<string, unknown>): boolean 
     count >= 0 &&
     typeof capacity === "number" &&
     Number.isSafeInteger(capacity) &&
-    capacity > 0 &&
-    count <= capacity
+    capacity > 0
   );
 }
 
@@ -1762,7 +1761,7 @@ function coherentReportPreparationScope(value: Record<string, unknown>): boolean
   );
 }
 
-/** Closed Files-to-Chat ownership decisions; references and source content never cross this port. */
+/** Closed source ownership and shared grounding-queue decisions; no references or source content. */
 export const CLIENT_FILES_SCOPE_DECISIONS = [
   "restored",
   "owned-elsewhere",
@@ -1776,6 +1775,7 @@ export const CLIENT_FILES_SCOPE_DECISIONS = [
   "automatic-suppressed",
   "timeout-blocked",
   "timeout-recovered",
+  "timeout-rejected",
   "request-superseded",
 ] as const;
 export interface ClientFilesScopeDecision {
@@ -1783,13 +1783,20 @@ export interface ClientFilesScopeDecision {
   readonly sourceCount?: number | undefined;
   readonly candidateCount?: number | undefined;
   readonly bindingFingerprint?: string | undefined;
+  readonly mutationSurface?: "files" | "local-knowledge" | "git-change" | undefined;
 }
 const FILES_SCOPE_DECISIONS: ReadonlySet<unknown> = new Set(CLIENT_FILES_SCOPE_DECISIONS);
+const GROUNDING_MUTATION_SURFACES: ReadonlySet<unknown> = new Set([
+  "files",
+  "local-knowledge",
+  "git-change",
+]);
 const FILES_SCOPE_DECISION_KEYS = new Set([
   "decision",
   "sourceCount",
   "candidateCount",
   "bindingFingerprint",
+  "mutationSurface",
 ]);
 const FILES_SCOPE_DECISION_EXCLUSIVE_KEYS = [
   "kind",
@@ -1819,6 +1826,8 @@ function isClientFilesScopeDecision(value: unknown): value is ClientFilesScopeDe
     return false;
   return (
     FILES_SCOPE_DECISIONS.has(value.decision) &&
+    (value.mutationSurface === undefined ||
+      GROUNDING_MUTATION_SURFACES.has(value.mutationSurface)) &&
     isScopeDecisionCount(value.sourceCount) &&
     isScopeDecisionCount(value.candidateCount) &&
     (value.bindingFingerprint === undefined ||
