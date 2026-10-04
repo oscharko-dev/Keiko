@@ -1,0 +1,353 @@
+import { useCallback, useMemo, useState, type ReactNode, type RefObject } from "react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "@/lib/api";
+import type { Chat, ChatConnectedScope } from "@/lib/types";
+import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
+import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
+import { sanitizePersistedWorkspace } from "./hooks/workspace-persistence";
+import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
+import type { AppWindow, Connection } from "./windows/types";
+
+const mocks = vi.hoisted(() => ({
+  initialChat: undefined as Chat | undefined,
+  serverChat: undefined as Chat | undefined,
+  workspace: undefined as UseWorkspaceResult | undefined,
+  fetchChats: vi.fn(),
+  updateChatConnectedScopes: vi.fn(),
+  recordReadsContextRelationship: vi.fn(),
+}));
+
+function useTestChatSession(): Record<string, unknown> {
+  const [activeChat, setActiveChat] = useState(mocks.initialChat);
+  const chats = useMemo(() => (activeChat === undefined ? [] : [activeChat]), [activeChat]);
+  const replaceChat = useCallback((chat: Chat): void => setActiveChat(chat), []);
+  return {
+    chats,
+    activeChat,
+    activeProject: { name: "Search lab", path: "/repo", available: true },
+    models: [{ id: "example-chat-model" }],
+    loading: false,
+    error: undefined,
+    noEligibleModels: false,
+    selectedModel: "example-chat-model",
+    replaceChat,
+  };
+}
+
+vi.mock("./hooks/useChatSession", () => ({ useChatSession: useTestChatSession }));
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  fetchChats: mocks.fetchChats,
+  fetchConfig: vi.fn(async () => ({ effectiveGroundingLimits: DEFAULT_GROUNDING_LIMITS })),
+  fetchStartupUpdatePreflight: vi.fn(async () => ({})),
+  updateChatConnectedScopes: mocks.updateChatConnectedScopes,
+}));
+vi.mock("../../relationships/connector-relationship", () => ({
+  recordReadsContextRelationship: mocks.recordReadsContextRelationship,
+}));
+vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
+vi.mock("./install/registerSw", () => ({ registerSw: vi.fn() }));
+vi.mock("./context/ChatSessionContext", () => ({
+  ChatSessionProvider: ({ children }: { readonly children: ReactNode }): ReactNode => children,
+}));
+vi.mock("./hooks/useTheme", () => ({
+  useTheme: (): Record<string, unknown> => ({ theme: "dark", toggle: vi.fn() }),
+}));
+vi.mock("./hooks/useKeyboardShortcuts", () => ({ useKeyboardShortcuts: vi.fn() }));
+vi.mock("./hooks/useUndoStack", () => ({
+  useUndoStack: (): Record<string, unknown> => ({
+    canUndo: false,
+    canRedo: false,
+    undoLabel: null,
+    redoLabel: null,
+    push: vi.fn(),
+    undo: vi.fn(),
+    redo: vi.fn(),
+    clear: vi.fn(),
+  }),
+}));
+vi.mock("./hooks/useActiveWorkspaceState", () => ({
+  useActiveWorkspaceState: (): Record<string, unknown> => ({
+    instances: [],
+    activeBinding: null,
+    activeRoot: null,
+    refresh: vi.fn(),
+  }),
+}));
+vi.mock("./Header", () => ({ Header: (): ReactNode => <header /> }));
+vi.mock("./Footer", () => ({ Footer: (): ReactNode => <footer /> }));
+vi.mock("./LeftRail", () => ({ LeftRail: (): ReactNode => <aside /> }));
+vi.mock("./RightRail", () => ({ RightRail: (): ReactNode => <aside /> }));
+vi.mock("./Workspace", () => ({
+  Workspace: ({
+    ws,
+    wsRef,
+  }: {
+    readonly ws: UseWorkspaceResult;
+    readonly wsRef: RefObject<HTMLDivElement | null>;
+  }): ReactNode => {
+    mocks.workspace = ws;
+    return (
+      <main ref={wsRef} data-testid="workspace">
+        {ws.wins?.length ?? 0}
+      </main>
+    );
+  },
+}));
+vi.mock("./widgets", () => ({}));
+vi.mock("./modals/CommandPalette", () => ({ DesktopCommandPalette: (): ReactNode => null }));
+vi.mock("./modals/GatewaySetupDialog", () => ({ GatewaySetupDialog: (): ReactNode => null }));
+vi.mock("./modals/NewWindowDialog", () => ({ NewWindowDialog: (): ReactNode => null }));
+vi.mock("./modals/Palette", () => ({ Palette: (): ReactNode => null }));
+vi.mock("./update/UpdateStartupNotice", () => ({ UpdateStartupNotice: (): ReactNode => null }));
+
+import { AppShell } from "./AppShell";
+
+function scope(root: string): ChatConnectedScope {
+  return { kind: "workspace-root", relativePaths: [], root, connectedAtMs: 1 };
+}
+function chat(scopes: readonly ChatConnectedScope[], updatedAt = 1): Chat {
+  return {
+    id: "chat-1",
+    projectPath: "/repo",
+    title: "Preserved history",
+    selectedModel: "example-chat-model",
+    branchLabel: undefined,
+    status: undefined,
+    localKnowledgeScope: undefined,
+    connectedScopes: scopes,
+    connectedScope: scopes[0],
+    createdAt: 1,
+    updatedAt,
+    groundingScopeIdentity: `gsi-v1:${String(updatedAt).padStart(64, "0")}`,
+  };
+}
+function windowRecord(id: string, type: AppWindow["type"], cfg: AppWindow["cfg"]): AppWindow {
+  return { id, type, cfg, x: 0, y: 0, w: 400, h: 300, z: 1, max: false, zoom: 1 };
+}
+function fixture(roots: readonly string[]): {
+  readonly wins: AppWindow[];
+  readonly conns: Connection[];
+} {
+  return {
+    wins: [
+      windowRecord("chat-window", "chat", { chatId: "chat-1", projectPath: "/repo" }),
+      ...roots.map((root, i) =>
+        windowRecord(`files-${String(i)}`, "files", {
+          root,
+          resolvedRoot: root,
+          rootBinding: "coding-repository",
+        }),
+      ),
+    ],
+    conns: roots.map((root, i) => ({
+      id: `edge-${String(i)}`,
+      a: `files-${String(i)}`,
+      b: "chat-window",
+      boundChatWindowId: "chat-window",
+      boundRoot: root,
+      boundScopeKind: "workspace-root",
+      boundScopeFingerprint: connectedScopeFingerprint(scope(root)),
+    })),
+  };
+}
+function persist(wins: readonly AppWindow[], conns: readonly Connection[]): void {
+  window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(wins));
+  window.localStorage.setItem("keiko.conns.v1", JSON.stringify(conns));
+}
+async function storageReplay(
+  wins: readonly AppWindow[],
+  conns: readonly Connection[],
+): Promise<void> {
+  const snapshot = sanitizePersistedWorkspace(wins, conns);
+  await act(async (): Promise<void> => {
+    persist(snapshot.wins, snapshot.conns);
+    window.dispatchEvent(new StorageEvent("storage", { key: "keiko.workspace.v4" }));
+  });
+}
+
+beforeEach((): void => {
+  vi.clearAllMocks();
+  window.localStorage.clear();
+  mocks.workspace = undefined;
+  Object.defineProperty(navigator, "webdriver", { configurable: true, value: true });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response("{}", { status: 200 })),
+  );
+  mocks.fetchChats.mockImplementation(async () => ({
+    chats: mocks.serverChat === undefined ? [] : [mocks.serverChat],
+  }));
+  mocks.updateChatConnectedScopes.mockImplementation(
+    async (
+      _id: string,
+      scopes: readonly ChatConnectedScope[] | null,
+      expectedIdentity?: string,
+    ) => {
+      if (mocks.updateChatConnectedScopes.mock.calls.length > 8)
+        throw new Error("Unexpected repeated scope mutation");
+      if (expectedIdentity !== mocks.serverChat?.groundingScopeIdentity)
+        throw new ApiError("GROUNDING_SCOPE_CHANGED", "Sources changed", 409);
+      mocks.serverChat = chat(scopes ?? [], (mocks.serverChat?.updatedAt ?? 1) + 1);
+      return { chat: mocks.serverChat };
+    },
+  );
+});
+afterEach((): void => {
+  cleanup();
+  Reflect.deleteProperty(navigator, "webdriver");
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+describe("AppShell canonical workspace scope synchronization", () => {
+  it("acknowledges an unchanged sanitized storage replay without scope writes or relationships", async (): Promise<void> => {
+    const initial = fixture(["/manuals/Scale", "/manuals/Distinct"]);
+    mocks.initialChat = chat([scope("/manuals/Scale"), scope("/manuals/Distinct")]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, initial.conns);
+    render(<AppShell />);
+    await screen.findByTestId("workspace");
+    await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(2));
+    await storageReplay(
+      initial.wins.map((win) => ({ ...win, x: win.x + 1 })),
+      initial.conns,
+    );
+    await waitFor(() => expect(mocks.workspace?.wins?.[0]?.x).toBe(1));
+    await act(async (): Promise<void> => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    });
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
+    expect(mocks.serverChat?.connectedScopes).toEqual(mocks.initialChat.connectedScopes);
+  });
+  it("refreshes a stale tab before replacing its owned root and preserves the second canonical source", async (): Promise<void> => {
+    const initial = fixture(["/manuals/Scale"]);
+    mocks.initialChat = chat([scope("/manuals/Scale")]);
+    mocks.serverChat = chat([scope("/manuals/Scale"), scope("/manuals/Distinct")], 2);
+    persist(initial.wins, initial.conns);
+    render(<AppShell />);
+    await screen.findByTestId("workspace");
+    await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(1));
+    await act(async (): Promise<void> =>
+      mocks.workspace?.api.update("files-0", {
+        cfg: {
+          root: "/manuals/Changed",
+          resolvedRoot: "/manuals/Changed",
+          rootBinding: "coding-repository",
+        },
+      }),
+    );
+    await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalled());
+    expect(mocks.serverChat?.connectedScopes?.map((item) => item.root)).toEqual([
+      "/manuals/Distinct",
+      "/manuals/Changed",
+    ]);
+    expect(mocks.serverChat?.title).toBe("Preserved history");
+  });
+  it("reapplies a root-change intent after one competing canonical source write", async (): Promise<void> => {
+    const initial = fixture(["/manuals/Scale"]);
+    mocks.initialChat = chat([scope("/manuals/Scale")]);
+    mocks.serverChat = chat([scope("/manuals/Scale"), scope("/manuals/Distinct")], 2);
+    persist(initial.wins, initial.conns);
+    render(<AppShell />);
+    await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(1));
+    mocks.updateChatConnectedScopes.mockImplementationOnce(async (): Promise<never> => {
+      mocks.serverChat = chat(
+        [scope("/manuals/Scale"), scope("/manuals/Distinct"), scope("/manuals/OtherTab")],
+        3,
+      );
+      throw new ApiError("GROUNDING_SCOPE_CHANGED", "Sources changed", 409);
+    });
+    await act(async (): Promise<void> =>
+      mocks.workspace?.api.update("files-0", {
+        cfg: {
+          root: "/manuals/Changed",
+          resolvedRoot: "/manuals/Changed",
+          rootBinding: "coding-repository",
+        },
+      }),
+    );
+    await waitFor(() =>
+      expect(mocks.serverChat?.connectedScopes?.map((item) => item.root)).toEqual([
+        "/manuals/Distinct",
+        "/manuals/OtherTab",
+        "/manuals/Changed",
+      ]),
+    );
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+    expect(mocks.updateChatConnectedScopes.mock.calls.map((call) => call[2])).toEqual([
+      chat([], 2).groundingScopeIdentity,
+      chat([], 3).groundingScopeIdentity,
+    ]);
+    expect(mocks.recordReadsContextRelationship).toHaveBeenCalledTimes(1);
+  });
+  it("refuses repeated competing scope writes after one fresh intent retry", async (): Promise<void> => {
+    const initial = fixture(["/manuals/Scale"]);
+    mocks.initialChat = chat([scope("/manuals/Scale")]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, initial.conns);
+    render(<AppShell />);
+    await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(1));
+    const conflict = async (): Promise<never> => {
+      mocks.serverChat = chat(
+        [scope("/manuals/Scale"), scope("/manuals/OtherTab")],
+        (mocks.serverChat?.updatedAt ?? 1) + 1,
+      );
+      throw new ApiError("GROUNDING_SCOPE_CHANGED", "Sources changed", 409);
+    };
+    mocks.updateChatConnectedScopes
+      .mockImplementationOnce(conflict)
+      .mockImplementationOnce(conflict);
+    await act(async (): Promise<void> =>
+      mocks.workspace?.api.update("files-0", {
+        cfg: { root: "/manuals/Changed", rootBinding: "coding-repository" },
+      }),
+    );
+    await screen.findByText(
+      "Keiko could not connect that source. Check that it is still available and try again.",
+    );
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+    expect(mocks.serverChat?.connectedScopes?.map((item) => item.root)).toEqual([
+      "/manuals/Scale",
+      "/manuals/OtherTab",
+    ]);
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
+  });
+  it("uses the fresh persisted ownership digest when an older local acknowledgement is absent", async (): Promise<void> => {
+    const initial = fixture(["/manuals/Scale"]);
+    mocks.initialChat = chat([scope("/manuals/Scale")]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, sanitizePersistedWorkspace(initial.wins, initial.conns).conns);
+    render(<AppShell />);
+    await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Scale"));
+    mocks.serverChat = chat([scope("/manuals/Changed")], 2);
+    const changed = fixture(["/manuals/Changed"]);
+    await storageReplay(
+      changed.wins.map((win) => (win.type === "files" ? { ...win, cfg: {} } : win)),
+      changed.conns,
+    );
+    await waitFor(() => expect(mocks.workspace?.conns[0]?.boundScopeElided).toBe(true));
+    await act(async (): Promise<void> => mocks.workspace?.api.removeConn("edge-0"));
+    await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(0));
+    expect(mocks.serverChat?.connectedScopes).toEqual([]);
+  });
+  it("adopts a changed persisted ownership digest without deleting the former manual source", async (): Promise<void> => {
+    const initial = fixture(["/manuals/Scale"]);
+    mocks.initialChat = chat([scope("/manuals/Scale")]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, sanitizePersistedWorkspace(initial.wins, initial.conns).conns);
+    render(<AppShell />);
+    await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Scale"));
+    mocks.serverChat = chat([scope("/manuals/Scale"), scope("/manuals/Changed")], 2);
+    const changed = fixture(["/manuals/Changed"]);
+    await storageReplay(changed.wins, changed.conns);
+    await waitFor(() => expect(mocks.workspace?.conns[0]?.boundRoot).toBe("/manuals/Changed"));
+    expect(mocks.serverChat?.connectedScopes?.map((item) => item.root)).toEqual([
+      "/manuals/Scale",
+      "/manuals/Changed",
+    ]);
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+  });
+});

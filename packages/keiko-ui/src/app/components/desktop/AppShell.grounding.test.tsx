@@ -77,6 +77,7 @@ const mocks = vi.hoisted(() => ({
     workspaceOptions: undefined as WorkspaceHookOptions | undefined,
     workspaceResult: undefined as UseWorkspaceResult | undefined,
     session: undefined as TestSession | undefined,
+    canonicalChats: new Map<string, Chat>(),
     groundingLimits: undefined as GroundingLimits | undefined,
     activeWorkspaceRoot: null as string | null,
     workspaceRendered: false,
@@ -149,11 +150,22 @@ function restoreDialogMethod(
   Object.defineProperty(HTMLDialogElement.prototype, name, descriptor);
 }
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ApiError: (await importOriginal<typeof import("@/lib/api")>()).ApiError,
   fetchChats: mocks.fetchChats,
   fetchConfig: mocks.fetchConfig,
   fetchStartupUpdatePreflight: mocks.fetchStartupUpdatePreflight,
-  updateChatConnectedScopes: mocks.updateChatConnectedScopes,
+  updateChatConnectedScopes: async (
+    id: string,
+    scopes: readonly ChatConnectedScope[] | null,
+    expectedIdentity?: string,
+  ): Promise<{ readonly chat: Chat }> => {
+    const response = (await (expectedIdentity === undefined
+      ? mocks.updateChatConnectedScopes(id, scopes)
+      : mocks.updateChatConnectedScopes(id, scopes, expectedIdentity))) as { readonly chat: Chat };
+    mocks.state.canonicalChats.set(id, response.chat);
+    return response;
+  },
   updateChatLocalKnowledgeScopes: mocks.updateChatLocalKnowledgeScopes,
 }));
 
@@ -552,7 +564,12 @@ describe("AppShell grounding connections", () => {
       configPresent: false,
       effectiveGroundingLimits: DEFAULT_GROUNDING_LIMITS,
     });
-    mocks.fetchChats.mockReset().mockResolvedValue({ chats: [] });
+    mocks.state.canonicalChats.clear();
+    mocks.fetchChats.mockReset().mockImplementation(async () => ({
+      chats: (mocks.state.session?.chats ?? []).map(
+        (current) => mocks.state.canonicalChats.get(current.id) ?? current,
+      ),
+    }));
     mocks.state.activeWorkspaceRoot = null;
     mocks.fetchStartupUpdatePreflight.mockResolvedValue({
       schemaVersion: 1,
@@ -1863,7 +1880,7 @@ describe("AppShell grounding connections", () => {
       expect(api.updateConnBoundScope).toHaveBeenCalledWith("legacy-edge", visible),
     );
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
-    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+    expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(active);
   });
 
   it.each([false, true])(
@@ -2041,7 +2058,7 @@ describe("AppShell grounding connections", () => {
     };
     const connections = [connection, independentConnection];
     mocks.state.workspaceResult = workspaceResult(windows, connections, api);
-    mocks.fetchChats.mockReturnValueOnce(initial.promise);
+    mocks.fetchChats.mockResolvedValue({ chats: [active] }).mockReturnValueOnce(initial.promise);
     const view = render(<AppShell />);
     await screen.findByTestId("workspace");
     await waitFor(() => expect(mocks.fetchChats).toHaveBeenCalled());

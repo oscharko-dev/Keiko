@@ -61,6 +61,15 @@ sources still owned by another edge. An ambiguous legacy or unmatched reference 
 addition or deletion with a localized source-review notice. An already connected visible scope or
 an empty canonical source list may be adopted without deleting unrelated sources.
 
+An unchanged privacy-elided connection replay acknowledges the existing canonical scope without
+recreating the binding or relationship. Files source mutations refresh the canonical Chat projection;
+Chat and Files source updates carry its server-owned grounding identity as a precondition, checked
+inside the existing serialized Chat mutation before any write. A conflicting Files action refreshes and recalculates its original
+ownership-bound intent; it never retries a stale replacement list. A conflicting explicitly
+confirmed Chat source clear instead refreshes the visible sources and asks the user to review the
+new list before repeating the action. The grounding admission guard continues to reject obsolete
+source identities, with body-free causal diagnostics available to the canonical support report.
+
 ## Consequences
 
 - No new persistence store is added by Epic #518.
