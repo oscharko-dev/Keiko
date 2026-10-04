@@ -1332,7 +1332,7 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("preserves lexical incompleteness for an exact factual lookup in Git", async () => {
+  it("preserves retained-result uncertainty for an exact factual lookup in Git", async () => {
     mkdirSync(join(ROOT, ".git"));
     for (const name of ["first", "second"])
       writeFileSync(
@@ -1355,8 +1355,11 @@ describe("runGroundedExploration", () => {
       },
     );
     expect(out.pack.diagnostics?.coverage?.incomplete).toBe(true);
-    expect(out.pack.diagnostics?.coverage?.reasons).toContain("match-cap");
-    expect(out.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(true);
+    expect(out.pack.diagnostics?.coverage?.reasons).toEqual(["match-cap"]);
+    expect(out.pack.diagnostics?.coverage?.filesScanned).toBe(5);
+    expect(out.pack.diagnostics?.coverage?.filesAfterPolicy).toBe(5);
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "budget-clipped")).toBe(true);
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(false);
   });
 
   it.each([
@@ -3142,7 +3145,7 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("promotes lexical scan truncation to model-facing uncertainty", async () => {
+  it("discloses retained-match truncation separately from intentional discovery exclusions", async () => {
     writeFileSync(join(ROOT, "src/coverage-a.ts"), "export const coverageMarker = 'alpha';\n");
     writeFileSync(join(ROOT, "src/coverage-b.ts"), "export const coverageMarker = 'beta';\n");
     writeFileSync(join(ROOT, ".env"), "SECRET=value\n");
@@ -3163,19 +3166,26 @@ describe("runGroundedExploration", () => {
         detectWorkspace: () => ({ ...fakeWorkspace(), ignoreLines: ["ignored/"] }),
       },
     );
-    expect(out.pack.diagnostics?.coverage?.truncated).toBe(true);
-    expect(out.pack.diagnostics?.coverage?.ignoredByDiscovery).toBeGreaterThan(0);
-    expect(out.pack.diagnostics?.coverage?.deniedByDiscovery).toBeGreaterThan(0);
+    const coverage = out.pack.diagnostics?.coverage;
+    expect(coverage).toMatchObject({
+      truncated: true,
+      reasons: ["match-cap"],
+      filesScanned: 5,
+      filesAfterPolicy: 5,
+    });
+    expect(coverage?.ignoredByDiscovery).toBeGreaterThan(0);
+    expect(coverage?.deniedByDiscovery).toBeGreaterThan(0);
     expect(
       out.pack.uncertainty.some(
         (marker) =>
-          marker.kind === "scope-incomplete" &&
-          marker.claim.includes("repository search coverage was incomplete") &&
+          marker.kind === "budget-clipped" &&
+          marker.claim.includes("all eligible files were searched") &&
           marker.claim.includes("scanned") &&
           marker.claim.includes("ignored") &&
           marker.claim.includes("denied"),
       ),
     ).toBe(true);
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(false);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 

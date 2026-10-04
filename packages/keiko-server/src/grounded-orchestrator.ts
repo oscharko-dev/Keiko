@@ -1079,7 +1079,6 @@ function onlyRetainedMatchesLimited(coverage: ContextCoverageDiagnostics): boole
     coverage.reasons.length === 1 &&
     coverage.reasons[0] === "match-cap" &&
     coverage.filesScanned === coverage.filesAfterPolicy &&
-    coverage.filesSkipped === 0 &&
     coverage.depthPrunedByDiscovery === 0 &&
     coverage.maxFilesPrunedByDiscovery === 0
   );
@@ -1765,7 +1764,16 @@ function withoutNamedSemanticSubstitution(
     return result;
   // An approximate concept match cannot stand in for a missing named literal. Corpus failures
   // and result truncation remain intact; only the unrelated semantic replacement is rejected.
-  return { ...result, atoms: [], coverage: { ...result.coverage, matchesReturned: 0 } };
+  return {
+    ...result,
+    atoms: [],
+    candidates: result.candidates.filter((candidate) => candidate.omitted !== undefined),
+    diagnostics:
+      result.diagnostics === undefined
+        ? undefined
+        : { ...result.diagnostics, rankedCandidates: [] },
+    coverage: { ...result.coverage, matchesReturned: 0 },
+  };
 }
 
 async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
+import type { ConnectedFileEntry } from "@oscharko-dev/keiko-contracts/connected-context";
 import { buildGroundedGatewayMessages, buildQuery } from "./grounded-qa.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
 
@@ -55,6 +56,17 @@ function facts(target: string, extension: string, count = 16): void {
     );
   }
   writeFileSync(join(root, "facts", `unrelated-16.${extension}`), "unrelated values 16\n");
+}
+
+function expectSupplementalFileListing(file: ConnectedFileEntry | undefined): void {
+  if (file === undefined) throw new TypeError("Expected supplemental file context");
+  expect(file.excerpts).toHaveLength(1);
+  expect(file.excerpts.every((excerpt) => excerpt.atom.provenance.kind === "file-listing")).toBe(
+    true,
+  );
+  expect(file.excerpts.some((excerpt) => excerpt.atom.provenance.kind === "lexical-search")).toBe(
+    false,
+  );
 }
 
 const variants = [
@@ -151,17 +163,13 @@ describe("primary content evidence is independent of presentation wording", () =
     expect(
       target?.excerpts.some((excerpt) => excerpt.content.includes("256 präziser Druck 81234")),
     ).toBe(true);
-    expect(pack.diagnostics?.coverage?.matchesReturned).toBe(1);
-    expect(pack.diagnostics?.coverage?.filesScanned).toBe(2);
-    expect(pack.diagnostics?.coverage?.incomplete).toBe(false);
-    expect(pack.diagnostics?.coverage?.reasons).toEqual([]);
-    expect(supplemental?.excerpts).toHaveLength(1);
-    expect(
-      supplemental?.excerpts.every((excerpt) => excerpt.atom.provenance.kind === "file-listing"),
-    ).toBe(true);
-    expect(
-      supplemental?.excerpts.some((excerpt) => excerpt.atom.provenance.kind === "lexical-search"),
-    ).toBe(false);
+    expect(pack.diagnostics?.coverage).toMatchObject({
+      matchesReturned: 1,
+      filesScanned: 2,
+      incomplete: false,
+      reasons: [],
+    });
+    expectSupplementalFileListing(supplemental);
   });
 
   it.each(['Suche nach "256"', 'Find the literal "präziser Druck"'])(
