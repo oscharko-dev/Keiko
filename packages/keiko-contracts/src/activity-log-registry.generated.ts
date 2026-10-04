@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "fc7074c3039295311edf964a0dae2713e4896e313c54100e48db151301cc9181" as const;
+  "7ad082dd4ed4f1d0b7dc74a396b6eaf8751da347168d010d531280748dcb7f73" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -12896,6 +12896,55 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["gateway-circuit-breaker"],
     proofIds: ["gateway.circuit.rejected.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.circuit.wait",
+    category: "gateway",
+    owner: "keiko-model-gateway",
+    emitter: "resilience.CircuitBreaker.logWait",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 256,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["provider-cooldown", "circuit-cooldown", "probe-saturated"],
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["started", "changed", "timer", "cancelled", "failed"],
+      },
+      delayMs: {
+        type: "number",
+        dataClass: "duration",
+        required: true,
+      },
+    },
+    causal: "none",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-circuit-breaker"],
+    proofIds: ["gateway.circuit.wait.emitted-line"],
     releaseImpact: "patch",
   },
   {
@@ -28144,6 +28193,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: false,
         maxLength: 64,
+      },
+      pinRelease: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["released", "not-pinned", "rejected"],
       },
       openIncidentCount: {
         type: "integer",
@@ -47446,7 +47501,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["end", "failure", "state"],
       lifecycleOperations: {
         start: [],
-        state: ["gateway.circuit.half-open"],
+        state: ["gateway.circuit.half-open", "gateway.circuit.wait"],
         end: ["gateway.circuit.closed"],
         failure: ["gateway.circuit.opened", "gateway.circuit.rejected"],
         loss: [],
@@ -47468,9 +47523,17 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "gateway.circuit.rejected",
           mode: "none",
         },
+        {
+          op: "gateway.circuit.wait",
+          mode: "none",
+        },
       ],
       lossSignals: [],
-      resourceSignals: ["gateway.circuit.closed", "gateway.circuit.half-open"],
+      resourceSignals: [
+        "gateway.circuit.closed",
+        "gateway.circuit.half-open",
+        "gateway.circuit.wait",
+      ],
       replayReferences: [],
       operations: [
         {
@@ -47657,6 +47720,54 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["gateway.circuit.rejected.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "gateway.circuit.wait",
+          owner: "keiko-model-gateway",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "none",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "delayMs",
+              type: "number",
+              dataClass: "duration",
+              required: true,
+            },
+            {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "duration",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.circuit.wait.emitted-line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -63965,6 +64076,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "pinRelease",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "removalStatus",
               type: "string",
               dataClass: "closed-enum",
@@ -69020,6 +69137,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.circuit.half-open": "model-gateway",
     "gateway.circuit.opened": "model-gateway",
     "gateway.circuit.rejected": "model-gateway",
+    "gateway.circuit.wait": "model-gateway",
     "gateway.config.resolved": "model-gateway",
     "gateway.context-window.adoption": "model-gateway",
     "gateway.context-window.probe": "model-gateway",

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fc7074c3039295311edf964a0dae2713e4896e313c54100e48db151301cc9181"
+    "catalogDigest": "7ad082dd4ed4f1d0b7dc74a396b6eaf8751da347168d010d531280748dcb7f73"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 512,
-    "proofCount": 519,
-    "resolvedProofCount": 519,
+    "operationCount": 513,
+    "proofCount": 520,
+    "resolvedProofCount": 520,
     "failureClassCount": 335,
     "scenarioCount": 31,
     "resolvedScenarioCount": 31
@@ -195,6 +195,7 @@
         "gateway.circuit.half-open",
         "gateway.circuit.opened",
         "gateway.circuit.rejected",
+        "gateway.circuit.wait",
         "gateway.config.resolved",
         "gateway.context-window.adoption",
         "gateway.context-window.probe",
@@ -1616,6 +1617,9 @@
     ],
     "gateway.circuit.rejected.emitted-line": [
       "packages/keiko-model-gateway/src/resilience.logging.test.ts"
+    ],
+    "gateway.circuit.wait.emitted-line": [
+      "packages/keiko-model-gateway/src/gateway.cooldown.test.ts"
     ],
     "gateway.config.resolved.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
