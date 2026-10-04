@@ -67,12 +67,14 @@ function sourcePreviewCounts(
 export function startFilesNavigationEvidence(
   stage: ClientStageId,
   correlationId = newClientCorrelationId(),
+  parentCorrelationId?: string,
 ): (response?: unknown, navigationOutcome?: ClientNavigationOutcome) => void {
   if (stage === "files source preview" && !readStageAvailable()) return (): void => undefined;
   const ordinal = ++nextOrdinal;
   const startedAt = performance.now();
   reportClientDiagnostic("Workspace navigation started", {
     correlationId,
+    parentCorrelationId,
     stageReport: { stage, phase: "started", ordinal },
   });
   let settled = false;
@@ -81,6 +83,7 @@ export function startFilesNavigationEvidence(
     settled = true;
     reportClientDiagnostic("Workspace navigation settled", {
       correlationId,
+      parentCorrelationId,
       stageReport: {
         stage,
         phase: "settled",

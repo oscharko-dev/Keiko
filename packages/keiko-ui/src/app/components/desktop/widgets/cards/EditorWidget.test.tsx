@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import { resetFilesNavigationEvidenceForTests } from "@/lib/files-navigation-evidence";
 import { useEffect, useLayoutEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorDiagnostic } from "@oscharko-dev/keiko-editor";
@@ -384,6 +385,7 @@ function workspaceSnippetSnapshot(
 }
 
 afterEach(() => {
+  resetClientDiagnosticWriter();
   delete document.documentElement.dataset.theme;
   restoreEventSource();
   resetSharedEventSourcesForTests();
@@ -673,10 +675,15 @@ describe("EditorWidget — load", () => {
   it.each(["UNSUPPORTED_FILE", "FILE_TOO_LARGE"])(
     "shows a read-only source for %s while keeping the editor unavailable",
     async (code) => {
+      const records: ClientDiagnosticMeta[] = [];
+      resetFilesNavigationEvidenceForTests();
+      setClientDiagnosticWriter((_message, meta) => {
+        if (meta !== undefined) records.push(meta);
+      });
       vi.mocked(fetchFilesContent).mockRejectedValueOnce(
         new ApiError(code, "Unsupported editable content.", 400),
       );
-      vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      vi.mocked(fetchFilesPreview).mockResolvedValue({
         root: "/repo",
         path: "legacy.html",
         name: "legacy.html",
@@ -701,6 +708,22 @@ describe("EditorWidget — load", () => {
       expect(screen.queryByTestId("editor-surface")).toBeNull();
       expect(screen.queryByRole("button", { name: "Open in editor" })).toBeNull();
       expect(saveFilesContent).not.toHaveBeenCalled();
+      const correlation = vi.mocked(fetchFilesContent).mock.calls[0]?.[2];
+      expect(records).toContainEqual(
+        expect.objectContaining({ correlationId: correlation, errorKind: expect.any(String) }),
+      );
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          parentCorrelationId: correlation,
+          stageReport: expect.objectContaining({ stage: "files source preview", phase: "settled" }),
+        }),
+      );
+      fireEvent.keyDown(screen.getByRole("button", { name: "Close preview" }), { key: "Escape" });
+      expect(screen.queryByRole("region", { name: "File preview: legacy.html" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Show source preview" }));
+      expect(
+        await screen.findByRole("region", { name: "File preview: legacy.html" }),
+      ).toBeVisible();
     },
   );
 
@@ -754,6 +777,34 @@ describe("EditorWidget — load", () => {
     view.rerender(<EditorRuntimeWidget root="/other" file="manual.html" />);
     expect(screen.queryByRole("region", { name: "File preview: manual.html" })).toBeNull();
     expect(fetchFilesPreview).toHaveBeenCalledTimes(2);
+  });
+
+  it("records an unsupported reconciliation failure without replacing the dirty buffer", async () => {
+    await renderLoaded();
+    const records: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) records.push(meta);
+    });
+    act(() => {
+      surface.props?.onContentChange({ text: "unsaved local edit\n", sizeBytes: 19 }, "human");
+    });
+    vi.mocked(fetchFilesContent).mockRejectedValueOnce(
+      new ApiError("UNSUPPORTED_FILE", "Not editable.", 400),
+    );
+    await act(async () => {
+      await expect(requestEditorBufferReconciliation("/repo")).rejects.toMatchObject({
+        code: "UNSUPPORTED_FILE",
+      });
+    });
+    const correlation = vi.mocked(fetchFilesContent).mock.calls.at(-1)?.[2];
+    expect(records).toContainEqual(
+      expect.objectContaining({ correlationId: correlation, errorKind: expect.any(String) }),
+    );
+    expect(fetchFilesPreview).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Show source preview" })).toBeNull();
+    expect(surface.props?.buffer.content.text).toBe("unsaved local edit\n");
+    expect(surface.props?.fileModel.dirty).toBe(true);
+    expect(JSON.stringify(records)).not.toContain("unsaved local edit");
   });
 
   it.each(["DENIED", "STALE_SESSION", "READ_FAILED"])(

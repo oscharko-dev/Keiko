@@ -1600,6 +1600,23 @@ function editorLoadFailureState(error: unknown): KeikoEditorLoadState {
   };
 }
 
+function SourcePreviewReopenButton({
+  available,
+  onClick,
+  label,
+}: {
+  readonly available: boolean;
+  readonly onClick: () => void;
+  readonly label: string;
+}): ReactNode {
+  if (!available) return null;
+  return (
+    <button type="button" className="ed-reload" onClick={onClick}>
+      {label}
+    </button>
+  );
+}
+
 function editorLoadErrorMessage(
   hasTarget: boolean,
   state: KeikoEditorLoadState,
@@ -1872,6 +1889,7 @@ function EditorRuntimeWidget({
   const [loadCorrelationId, setLoadCorrelationId] = useState<string | undefined>(undefined);
   const [loadRetryable, setLoadRetryable] = useState(true);
   const [loadPreviewTargetKey, setLoadPreviewTargetKey] = useState<string | null>(null);
+  const [closedSourcePreviewKey, setClosedSourcePreviewKey] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [localHistoryProtection, setLocalHistoryProtection] = useState<
@@ -2495,12 +2513,11 @@ function EditorRuntimeWidget({
           previewAvailable ? sessionKey : undefined,
         ),
       );
-      if (!previewAvailable)
-        reportClientDiagnostic(`[keiko] editor file load failed: ${clientErrorSummary(err)}`, {
-          correlationId,
-          errorKind: bffRequestErrorKind(err),
-          errorEvidence: clientErrorEvidence(err),
-        });
+      reportClientDiagnostic(`[keiko] editor file load failed: ${clientErrorSummary(err)}`, {
+        correlationId,
+        errorKind: bffRequestErrorKind(err),
+        errorEvidence: clientErrorEvidence(err),
+      });
     },
     [],
   );
@@ -4612,7 +4629,8 @@ function EditorRuntimeWidget({
       editorLoadError,
       dirtyRef.current,
     );
-    if (previewTarget !== null) {
+    const previewRequestKey = JSON.stringify([root, file, revealRequestId]);
+    if (previewTarget !== null && closedSourcePreviewKey !== previewRequestKey) {
       panel = (
         <FilePreview
           key={documentSessionKey(previewTarget.root, previewTarget.path)}
@@ -4621,13 +4639,19 @@ function EditorRuntimeWidget({
           revealLineStart={revealLineStart}
           revealLineEnd={revealLineEnd}
           revealRequestId={revealRequestId}
-          onClose={() => setLoadPreviewTargetKey(null)}
+          parentCorrelationId={loadCorrelationId}
+          onClose={() => setClosedSourcePreviewKey(previewRequestKey)}
         />
       );
     } else if (editorLoadError !== null) {
       panel = (
         <div className="ed-host-loading" role="alert">
           <span>{editorLoadError}</span>
+          <SourcePreviewReopenButton
+            available={previewTarget !== null}
+            onClick={() => setClosedSourcePreviewKey(null)}
+            label={commonT("filePreview.showSource")}
+          />
           {loadRetryable ? (
             <>
               <button type="button" className="ed-reload" onClick={reload}>

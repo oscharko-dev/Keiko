@@ -35,6 +35,7 @@ interface FilePreviewProps {
   readonly revealLineStart?: number | undefined;
   readonly revealLineEnd?: number | undefined;
   readonly revealRequestId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly onOpenInEditor?: ((root: string, path: string) => void) | undefined;
 }
 
@@ -323,11 +324,11 @@ function PreviewRevealNotice({
   const end = Math.max(revealLineStart, revealLineEnd ?? revealLineStart);
   const outside = end > lines.length;
   return (
-    <div className="fpv-banner" role="status">
+    <output className="fpv-banner">
       {outside
         ? t("filePreview.revealOutsideContent", { line: end, count: lines.length })
         : t("filePreview.revealedRange", { start: revealLineStart, end })}
-    </div>
+    </output>
   );
 }
 
@@ -350,13 +351,13 @@ function usePreviewLineNavigation(props: TextFilePreviewProps): {
   return {
     sectionRef,
     announcement: (
-      <span className="sr-only" role="status" aria-atomic="true">
+      <output className="sr-only" aria-atomic="true">
         {added.count === 0 ? null : (
           <span key={added.sequence}>
             {props.t("filePreview.linesAdded", { count: added.count })}
           </span>
         )}
-      </span>
+      </output>
     ),
     previous: (event): void => show(true, event),
     more: (event): void => show(false, event),
@@ -610,6 +611,7 @@ export function FilePreview({
   revealLineStart,
   revealLineEnd,
   revealRequestId,
+  parentCorrelationId,
 }: FilePreviewProps): ReactNode {
   const t = useTranslate();
   const [preview, setPreview] = useState<FilesPreviewResponse | null>(null);
@@ -651,7 +653,11 @@ export function FilePreview({
     if (!isManualRefresh) setPreview(null);
 
     const correlationId = newClientCorrelationId();
-    const settle = startFilesNavigationEvidence("files source preview", correlationId);
+    const settle = startFilesNavigationEvidence(
+      "files source preview",
+      correlationId,
+      parentCorrelationId,
+    );
     void fetchFilesPreview(root, path, correlationId, controller.signal)
       .then((response) => {
         if (cancelled) return;
@@ -675,7 +681,7 @@ export function FilePreview({
       controller.abort();
       settle(undefined, "cancelled");
     };
-  }, [path, root, refreshKey]);
+  }, [path, root, refreshKey, parentCorrelationId]);
 
   useEffect(() => {
     if (refreshStatus !== "refreshed") return undefined;
