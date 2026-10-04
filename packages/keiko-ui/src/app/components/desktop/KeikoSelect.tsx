@@ -14,6 +14,7 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
+import type { ClientSelectDismissalFocus } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useTranslate } from "@/lib/i18n";
 import styles from "./KeikoSelect.module.css";
@@ -21,8 +22,6 @@ import { Icons } from "./Icons";
 
 const SearchIcon = Icons.search;
 import { viewportOverlayPosition } from "./viewport-overlay";
-
-type EscapeFocusLocation = "trigger" | "search" | "option";
 
 type KeikoSelectOption = {
   readonly value: string;
@@ -788,7 +787,10 @@ export default function KeikoSelect({
   // surface stays open is a changed product runtime behaviour with no other trace, so every call
   // here — always a genuinely open menu, since each caller is only reachable while `open` is true —
   // reports body-free evidence of the dismissal (PR #3625 review).
-  function consumeEscape(focus: EscapeFocusLocation, event: ReactKeyboardEvent<HTMLElement>): void {
+  function consumeEscape(
+    focus: ClientSelectDismissalFocus,
+    event: ReactKeyboardEvent<HTMLElement>,
+  ): void {
     event.preventDefault();
     event.stopPropagation();
     closeMenu();
@@ -801,10 +803,6 @@ export default function KeikoSelect({
 
   function onTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
     if (disabled) return;
-    if (event.key === "Escape" && open) {
-      consumeEscape("trigger", event);
-      return;
-    }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       openMenu(selectedIndex >= 0 ? selectedIndex : firstEnabledIndex(flatOptions));
@@ -819,15 +817,17 @@ export default function KeikoSelect({
 
   function captureMenuEscape(event: ReactKeyboardEvent<HTMLDivElement>): void {
     if (event.key !== "Escape") return;
-    const focus = event.target instanceof HTMLInputElement ? "search" : "option";
+    const target = event.target;
+    const focus =
+      target === searchRef.current
+        ? "search"
+        : target instanceof Element && target.closest('[role="option"]') !== null
+          ? "option"
+          : "menu";
     consumeEscape(focus, event);
   }
 
   function onOptionKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void {
-    if (event.key === "Escape") {
-      consumeEscape("option", event);
-      return;
-    }
     if (event.key === "Tab") {
       // Consume Tab and restore the trigger so modal focus containment and the
       // select's existing dismissal behavior remain stable (mirrors Escape/commit).
@@ -864,9 +864,7 @@ export default function KeikoSelect({
   }
 
   function onSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): void {
-    if (event.key === "Escape") {
-      consumeEscape("search", event);
-    } else if (event.key === "ArrowDown") {
+    if (event.key === "ArrowDown") {
       event.preventDefault();
       const firstIndex = firstEnabledIndex(flatOptions);
       setActiveIndex(firstIndex);

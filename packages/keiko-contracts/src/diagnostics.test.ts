@@ -341,6 +341,14 @@ describe("isClientDiagnosticIngestRequest", () => {
   // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits, and
   // this closed pair is the only evidence of which surface actually closed — never a label or an
   // option's text.
+  it("accepts an Escape dismissal from menu chrome without an invented option target", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        selectDismissal: { reason: "escape", focus: "menu" },
+      }),
+    ).toBe(true);
+  });
   it("accepts only a closed select dismissal: a known reason paired with a known focus location", () => {
     for (const reason of CLIENT_SELECT_DISMISSAL_REASONS) {
       for (const focus of CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS) {
@@ -354,7 +362,7 @@ describe("isClientDiagnosticIngestRequest", () => {
     }
     for (const invalid of [
       { reason: "outside-click", focus: "trigger" },
-      { reason: "escape", focus: "menu" },
+      { reason: "escape", focus: "unknown" },
       { reason: "escape" },
       { focus: "trigger" },
       { reason: "escape", focus: "trigger", label: "Model only" },
@@ -1513,6 +1521,53 @@ describe("bounded source-preview stage evidence", () => {
     durationMs: 1,
     navigationOutcome: "applied",
   };
+  it.each(["too-large", "unsupported"] as const)(
+    "accepts closed binary reason %s",
+    (binaryReason) => {
+      expect(
+        isClientStageIngestRequest({
+          ...stage,
+          preview: { previewKind: "binary", sourceTextBytesRead: 0, canEdit: false, binaryReason },
+        }),
+      ).toBe(true);
+    },
+  );
+  it("retains legacy binary metadata without inventing a reason", () => {
+    expect(
+      isClientStageIngestRequest({
+        ...stage,
+        preview: { previewKind: "binary", sourceTextBytesRead: 0, canEdit: false },
+      }),
+    ).toBe(true);
+  });
+  it.each(["text", "image", "binary"])(
+    "refuses private or mismatched binary reasons for %s",
+    (previewKind) => {
+      expect(
+        isClientStageIngestRequest({
+          ...stage,
+          preview: {
+            previewKind,
+            sourceTextBytesRead: 0,
+            canEdit: false,
+            binaryReason: "/private/customer",
+          },
+        }),
+      ).toBe(false);
+      if (previewKind !== "binary")
+        expect(
+          isClientStageIngestRequest({
+            ...stage,
+            preview: {
+              previewKind,
+              sourceTextBytesRead: 0,
+              canEdit: false,
+              binaryReason: "too-large",
+            },
+          }),
+        ).toBe(false);
+    },
+  );
   it("accepts the bounded text-only byte count and independent editing capability", () => {
     expect(
       isClientStageIngestRequest({

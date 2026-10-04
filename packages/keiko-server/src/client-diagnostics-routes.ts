@@ -626,6 +626,12 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["text", "image", "binary"],
     },
+    binaryReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["too-large", "unsupported"],
+    },
     sourceTextBytesRead: { type: "integer", dataClass: "count", required: false },
     canEdit: { type: "boolean", dataClass: "closed-enum", required: false },
     navigationOutcome: {
@@ -1242,7 +1248,7 @@ const CLIENT_SELECT_DISMISSED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["trigger", "search", "option"],
+      values: ["trigger", "search", "option", "menu"],
     },
   },
   causal: "correlation",
@@ -1975,6 +1981,19 @@ function logClientStageStarted(
   );
 }
 
+type SourcePreviewActivityFields = Pick<
+  ActivityLogFields<typeof CLIENT_STAGE_SETTLED_OPERATION>,
+  "previewKind" | "sourceTextBytesRead" | "canEdit" | "binaryReason"
+>;
+
+function sourcePreviewActivityFields(
+  preview: ClientStageSettledIngestRequest["preview"],
+): SourcePreviewActivityFields {
+  if (preview === undefined) return {};
+  const { binaryReason, ...counts } = preview;
+  return binaryReason === undefined ? counts : { ...counts, binaryReason };
+}
+
 function logClientStageSettled(
   request: ClientStageSettledIngestRequest,
   correlationId: string,
@@ -1987,7 +2006,7 @@ function logClientStageSettled(
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
         ...request.deletion,
-        ...request.preview,
+        ...sourcePreviewActivityFields(request.preview),
         ...(request.navigationOutcome === undefined
           ? {}
           : { navigationOutcome: request.navigationOutcome }),

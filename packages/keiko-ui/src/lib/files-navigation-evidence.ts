@@ -46,13 +46,27 @@ function previewResponseRecord(value: unknown): value is Record<string, unknown>
   return typeof value === "object" && value !== null && "kind" in value;
 }
 
+function binaryPreviewCounts(response: Record<string, unknown>): ClientSourcePreviewCounts {
+  return {
+    previewKind: "binary",
+    sourceTextBytesRead: 0,
+    canEdit: false,
+    ...(response.reason === "too_large"
+      ? { binaryReason: "too-large" }
+      : response.reason === "unsupported"
+        ? { binaryReason: "unsupported" }
+        : {}),
+  };
+}
+
 function sourcePreviewCounts(
   stage: ClientStageId,
   response: unknown,
 ): ClientSourcePreviewCounts | undefined {
   if (stage !== "files source preview" || !previewResponseRecord(response)) return undefined;
-  if (response.kind === "image" || response.kind === "binary")
-    return { previewKind: response.kind, sourceTextBytesRead: 0, canEdit: false };
+  if (response.kind === "image")
+    return { previewKind: "image", sourceTextBytesRead: 0, canEdit: false };
+  if (response.kind === "binary") return binaryPreviewCounts(response);
   if (response.kind !== "text" || !("sizeBytes" in response) || !("canEdit" in response))
     return undefined;
   if (!validSourceByteCount(response.sizeBytes) || typeof response.canEdit !== "boolean")

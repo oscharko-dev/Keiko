@@ -1572,7 +1572,7 @@ describe("POST /api/diagnostics/client", () => {
   });
 
   it("persists every closed focus location on its own client.select.dismissed line", async () => {
-    for (const focus of ["trigger", "search", "option"] as const) {
+    for (const focus of ["trigger", "search", "option", "menu"] as const) {
       const sink = captureServerLog();
       const body = JSON.stringify({
         message: `[keiko] select menu dismissed by Escape (focus=${focus})`,
@@ -1586,6 +1586,11 @@ describe("POST /api/diagnostics/client", () => {
         body: null,
       });
       expect(selectDismissedEvent(sink).extra).toMatchObject({ reason: "escape", focus });
+      const record = expectActivityLogProof(
+        "client.select.dismissed.line",
+        formatActivityLogProofLine(selectDismissedEvent(sink)),
+      );
+      expect(record).toMatchObject({ reason: "escape", focus });
     }
   });
 
@@ -2697,6 +2702,38 @@ describe("reviewed navigation and render evidence", () => {
       canEdit: false,
     });
   });
+  it.each(["too-large", "unsupported"] as const)(
+    "persists binary preview reason %s without path/body fields",
+    async (binaryReason) => {
+      const sink = captureServerLog();
+      const body = {
+        kind: "stage",
+        stage: "files source preview",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 2,
+        navigationOutcome: "applied",
+        preview: { previewKind: "binary", binaryReason, sourceTextBytesRead: 0, canEdit: false },
+      };
+      expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+      expect(sink.events.find((event) => event.op === "client.stage.settled")?.extra).toMatchObject(
+        { previewKind: "binary", binaryReason, sourceTextBytesRead: 0, canEdit: false },
+      );
+      expect(sink.lines().join("")).toContain(`"binaryReason":"${binaryReason}"`);
+      const event = sink.events.find((candidate) => candidate.op === "client.stage.settled");
+      const record = expectActivityLogProof(
+        "client.stage.settled.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(record).toMatchObject({
+        binaryReason,
+        previewKind: "binary",
+        sourceTextBytesRead: 0,
+        canEdit: false,
+      });
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    },
+  );
   it("persists file-read transport and stage lifecycle under one minted correlation", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "keiko-navigation-stage-"));
     const sink = createActivityLogSink(stateDir, { level: "debug" });

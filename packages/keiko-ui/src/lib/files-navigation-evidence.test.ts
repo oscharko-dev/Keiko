@@ -100,6 +100,27 @@ describe("body-free source preview evidence", () => {
     });
     expect(JSON.stringify(writer.mock.calls)).not.toContain("private");
   });
+  it.each([
+    ["too_large", "too-large"],
+    ["unsupported", "unsupported"],
+  ] as const)(
+    "retains the closed %s preview reason without private response fields",
+    (reason, binaryReason) => {
+      const writer = vi.fn();
+      setClientDiagnosticWriter(writer);
+      startFilesNavigationEvidence("files source preview")(
+        { kind: "binary", reason, root: "/private/customer", path: "private.dat" },
+        "applied",
+      );
+      expect(writer.mock.calls.at(-1)?.[1]?.stageReport?.preview).toEqual({
+        previewKind: "binary",
+        binaryReason,
+        sourceTextBytesRead: 0,
+        canEdit: false,
+      });
+      expect(JSON.stringify(writer.mock.calls)).not.toContain("private");
+    },
+  );
   it("does not invent read counts for a failed request", () => {
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);

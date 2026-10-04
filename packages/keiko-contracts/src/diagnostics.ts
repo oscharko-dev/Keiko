@@ -795,6 +795,7 @@ export interface ClientSourcePreviewCounts {
   readonly previewKind: "text" | "image" | "binary";
   readonly sourceTextBytesRead: number;
   readonly canEdit: boolean;
+  readonly binaryReason?: "too-large" | "unsupported" | undefined;
 }
 
 export interface ClientStageSettledIngestRequest {
@@ -878,23 +879,34 @@ const SOURCE_PREVIEW_COUNT_KEYS: ReadonlySet<string> = new Set([
   "previewKind",
   "sourceTextBytesRead",
   "canEdit",
+  "binaryReason",
 ]);
+
+function hasValidBinaryPreviewReason(value: Record<string, unknown>): boolean {
+  if (value.binaryReason === undefined) return true;
+  return (
+    value.previewKind === "binary" &&
+    (value.binaryReason === "too-large" || value.binaryReason === "unsupported")
+  );
+}
+
+function isSourcePreviewKind(value: unknown): value is ClientSourcePreviewCounts["previewKind"] {
+  return value === "text" || value === "image" || value === "binary";
+}
 
 function isSourcePreviewCounts(value: unknown): value is ClientSourcePreviewCounts {
   if (!isRecord(value) || Object.keys(value).some((key) => !SOURCE_PREVIEW_COUNT_KEYS.has(key)))
     return false;
-  if (
-    value.previewKind !== "text" &&
-    value.previewKind !== "image" &&
-    value.previewKind !== "binary"
-  )
-    return false;
+  if (!isSourcePreviewKind(value.previewKind)) return false;
   if (
     typeof value.canEdit !== "boolean" ||
     !isBoundedNonNegativeInteger(value.sourceTextBytesRead, 2_097_152)
   )
     return false;
-  return value.previewKind === "text" || (value.sourceTextBytesRead === 0 && !value.canEdit);
+  return (
+    hasValidBinaryPreviewReason(value) &&
+    (value.previewKind === "text" || (value.sourceTextBytesRead === 0 && !value.canEdit))
+  );
 }
 
 function hasValidSourcePreview(value: Record<string, unknown>): boolean {
@@ -1420,7 +1432,12 @@ export function isClientGitRetryAttemptIngestRequest(
 export const CLIENT_SELECT_DISMISSAL_REASONS = ["escape"] as const;
 export type ClientSelectDismissalReason = (typeof CLIENT_SELECT_DISMISSAL_REASONS)[number];
 
-export const CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS = ["trigger", "search", "option"] as const;
+export const CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS = [
+  "trigger",
+  "search",
+  "option",
+  "menu",
+] as const;
 export type ClientSelectDismissalFocus = (typeof CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS)[number];
 
 export interface ClientDiagnosticSelectDismissal {
