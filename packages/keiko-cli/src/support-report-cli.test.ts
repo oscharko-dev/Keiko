@@ -315,6 +315,39 @@ async function withProductStack<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 describe("support report CLI and private publication", () => {
+  it("describes the actual empty bounded manual selection instead of an unbudgeted second window", async () => {
+    rmSync(join(stateDir, "logs"), { recursive: true });
+    const process = fixtureProcess(4242, "aabbccdd");
+    const now = Date.now();
+    writeFixtureSegment(
+      stateDir,
+      segmentIdentity(process, now, 1),
+      Array.from({ length: 4100 }, (_, index) =>
+        fixtureLine(process, now, {
+          op: "client.diagnostic",
+          correlationId: `manual-required-${String(index)}`,
+        }),
+      ),
+    );
+    const destination = join(root, "bounded-manual-window");
+    const captured = capture();
+    expect(
+      await runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", destination],
+        captured.io,
+        {},
+        { cwd: root, controlActivityStateDir: controlStateDir },
+      ),
+    ).toBe(0);
+    const filename = readdirSync(destination).find((entry) => entry.endsWith(".json"));
+    if (filename === undefined) throw new TypeError("Missing bounded report");
+    const report = parseSupportReport(readSupportReportFile(join(destination, filename)));
+    expect(report.selection.status).toBe("insufficient");
+    expect(report.selection.reasons).toContain("report-budget-exceeded");
+    expect(report.evidence.recordCount).toBe(0);
+    expect(report.incident.lineCount).toBe(0);
+    expect(report.incident.sufficiencyStatus).toBe("insufficient");
+  });
   it("exports an honest manual window at a full candidate quota without a selector", async () => {
     vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
     occupySupportIncidentRetentionForTests(stateDir);

@@ -30,6 +30,7 @@ import * as incidentStore from "./support-incident-store.js";
 import {
   attachActivityLogEventRegistration,
   activityLogOperationSchema,
+  ACTIVITY_LOG_ERROR_KINDS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createDesktopSupportReport } from "./reader/support-desktop-report.js";
 import { parseSupportReport, analyzeSupportReport } from "./reader/support-report.js";
@@ -80,6 +81,84 @@ function persistFreshFailure(): void {
 }
 
 describe("rolling diagnostic candidate retention", () => {
+  it("does not retain a published pin when a manual candidate write fails", () => {
+    vi.spyOn(incidentStore, "writeSupportIncidentRecord").mockImplementation(() => {
+      throw new Error("simulated candidate publication failure");
+    });
+    expect(
+      recordUserReportedIncident(stateDir, { correlationId: "failed-manual-publication" }),
+    ).toEqual({ status: "rejected", reason: "store-unavailable" });
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+    expect(listSupportIncidentClaims(stateDir)).toEqual([]);
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+  });
+
+  it("preserves manual and server failure pins when a browser candidate rolls its own oldest class", () => {
+    const manual = recordUserReportedIncident(stateDir, { correlationId: "protected-manual" });
+    const server = recordRegisteredFailureIncident(stateDir, {
+      op: "coding-runtime.readiness.failed",
+      errorKind: "unavailable",
+      correlationId: "protected-server",
+      frames: ["packages/keiko-server/dist/coding-runtime/opencodeRuntimeAdapter.js:710:9"],
+    });
+    if (manual.status !== "created" || server?.status !== "created")
+      throw new Error("Expected protected candidates");
+    const browserIds: string[] = [];
+    for (let index = 2; index < MAX_ACTIVITY_LOG_PINS; index += 1) {
+      const candidate = recordRegisteredFailureIncident(stateDir, {
+        op: "client.diagnostic",
+        errorKind: "internal",
+        correlationId: `browser-${String(index)}`,
+        clientKind: "boundary",
+        renderFailure: "window-body",
+      });
+      if (candidate?.status !== "created") throw new Error("Expected browser candidate");
+      browserIds.push(candidate.incidentId);
+    }
+    const newest = recordRegisteredFailureIncident(stateDir, {
+      op: "client.diagnostic",
+      errorKind: "internal",
+      correlationId: "new-browser",
+      clientKind: "boundary",
+      renderFailure: "window-body",
+    });
+    expect(newest?.status).toBe("created");
+    const retainedIds = listSupportIncidents(stateDir, { readOnly: true }).map(
+      (entry) => entry.incidentId,
+    );
+    expect(retainedIds).toContain(manual.incidentId);
+    expect(retainedIds).toContain(server.incidentId);
+    expect(retainedIds).not.toContain(browserIds[0]);
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toHaveLength(
+      MAX_ACTIVITY_LOG_PINS,
+    );
+  }, 60_000);
+
+  it("never replaces a server failure slot to admit a lower-priority browser diagnostic", () => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    const policy = supportIncidentRetentionPolicy(stateDir);
+    for (let index = 0; index < policy.browserCapacity; index += 1) {
+      const server = recordRegisteredFailureIncident(stateDir, {
+        op: "coding-runtime.readiness.failed",
+        errorKind: ACTIVITY_LOG_ERROR_KINDS[index],
+        correlationId: `protected-server-${String(index)}`,
+        frames: [
+          `packages/keiko-server/dist/coding-runtime/opencodeRuntimeAdapter.js:${String(710 + index)}:9`,
+        ],
+      });
+      expect(server?.status).toBe("created");
+    }
+    const before = listSupportIncidents(stateDir, { readOnly: true });
+    const browser = recordRegisteredFailureIncident(stateDir, {
+      op: "client.diagnostic",
+      errorKind: "internal",
+      correlationId: "no-browser-victim",
+      clientKind: "boundary",
+      renderFailure: "window-body",
+    });
+    expect(browser).toEqual({ status: "rejected", reason: "quota-exhausted" });
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(before);
+  });
   it("admits the thirty-third manual candidate within the existing storage byte budget", () => {
     for (let index = 0; index < 33; index += 1) {
       expect(recordUserReportedIncident(stateDir).status).toBe("created");

@@ -32,14 +32,11 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
   SUPPORT_INCIDENT_TTL_MS,
-  SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
-  SUPPORT_INCIDENT_WINDOW_AFTER_MS,
   supportIncidentWindow,
   ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
-  SUPPORT_INCIDENT_SLOT_COUNT,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   activityLogEvent,
   activityLogOperationSchema,
@@ -109,9 +106,9 @@ export {
   SUPPORT_INCIDENT_TTL_MS,
   SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   SUPPORT_INCIDENT_WINDOW_AFTER_MS,
-};
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 /** Legacy compatibility value, superseded by the governing byte reservation policy. */
-export const MAX_SUPPORT_INCIDENTS = SUPPORT_INCIDENT_SLOT_COUNT;
+export { SUPPORT_INCIDENT_SLOT_COUNT as MAX_SUPPORT_INCIDENTS } from "@oscharko-dev/keiko-contracts/runtime/observability";
 /** Legacy compatibility reserve, superseded by the governing byte reservation policy. */
 export const MAX_REGISTERED_FAILURE_INCIDENTS = 24;
 
@@ -752,6 +749,12 @@ function claimAvailableSlot(
   return undefined;
 }
 
+function mayEvictCandidate(draft: CandidateDraft, record: SupportIncidentRecord): boolean {
+  if (draft.trigger === "user-report") return true;
+  if (record.trigger !== "registered-failure") return false;
+  return draft.input.op !== "client.diagnostic" || record.fingerprint.op === "client.diagnostic";
+}
+
 function evictOldestCandidate(
   context: CandidateContext,
   draft: CandidateDraft,
@@ -760,9 +763,7 @@ function evictOldestCandidate(
 ): string | undefined {
   const entry = entries.find(
     ({ record }) =>
-      record !== undefined &&
-      record.slotIndex < capacity &&
-      (draft.trigger === "user-report" || record.trigger === "registered-failure"),
+      record !== undefined && record.slotIndex < capacity && mayEvictCandidate(draft, record),
   );
   if (entry === undefined) return undefined;
   const removed = removeEntry(context.stateDir, entry, context);
@@ -848,6 +849,7 @@ interface IncidentPinContext {
   readonly nowMs: number;
   readonly correlationId: string;
   readonly env: ServerLogEnv;
+  readonly candidate: CandidateDraft | undefined;
 }
 
 function ownsDiagnosticPin(record: SupportIncidentRecord, pin: ActivityLogPinRecord): boolean {
@@ -867,7 +869,11 @@ function rollDiagnosticPin(context: IncidentPinContext): boolean {
   );
   const entries = listSupportIncidentEntries(context.stateDir);
   const oldest = entries.find(
-    ({ record }) => record !== undefined && pins.some((pin) => ownsDiagnosticPin(record, pin)),
+    ({ record }) =>
+      record !== undefined &&
+      context.candidate !== undefined &&
+      mayEvictCandidate(context.candidate, record) &&
+      pins.some((pin) => ownsDiagnosticPin(record, pin)),
   );
   if (oldest === undefined) return false;
   const removed = removeEntry(context.stateDir, oldest, context);
@@ -905,12 +911,13 @@ function pinIncidentWindow(
   correlationId: string,
   env: ServerLogEnv,
   allowRolling = true,
+  candidate?: CandidateDraft,
 ): SupportIncidentPin {
   const window = supportIncidentWindow(nowMs);
   const before = overlappingSealedSegmentNames(stateDir, window, correlationId);
   try {
     const pin = pinFromResult(
-      requestIncidentPin({ stateDir, nowMs, correlationId, env }, allowRolling),
+      requestIncidentPin({ stateDir, nowMs, correlationId, env, candidate }, allowRolling),
     );
     if (pin.status === "rejected" || before.size === 0) return pin;
     const after = overlappingSealedSegmentNames(stateDir, window, correlationId);
@@ -937,10 +944,13 @@ function publishCandidate(
           context.nowMs,
           draft.evidenceCorrelationId,
           context.env,
+          true,
+          draft,
         );
   const record = buildRecord(draft, context, pin, incidentId, slotIndex);
   const payload = serializeSupportIncidentRecord(record);
-  if (payload === undefined) return reject(context, draft, "record-too-large", entries.length);
+  if (payload === undefined)
+    return reject(context, { ...draft, prePinned: pin }, "record-too-large", entries.length);
   try {
     writeSupportIncidentRecord(
       supportIncidentDirectory(context.stateDir),
@@ -952,8 +962,7 @@ function publishCandidate(
       op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
       correlationId: draft.evidenceCorrelationId,
     });
-    // The pin (if any) still expires with the candidate's TTL; nothing is left unbounded.
-    return reject(context, draft, "store-unavailable", entries.length);
+    return reject(context, { ...draft, prePinned: pin }, "store-unavailable", entries.length);
   }
   const retainedCount = listSupportIncidentEntries(context.stateDir).filter((entry) =>
     openEntry(entry, context.nowMs),

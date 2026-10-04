@@ -32,7 +32,6 @@ import {
   reportServerLogFailure,
   listSupportIncidents,
   readSupportIncident,
-  supportIncidentSegmentFiles,
   type ServerLogSink,
 } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -56,7 +55,6 @@ import {
   type AnalyzedSupportReport,
   type ReproductionSeed,
   type SupportAnalyzeOptions,
-  type SupportQueryResult,
   resolveSelectedSupportIncident,
 } from "@oscharko-dev/keiko-activity-log/reader";
 import {
@@ -68,11 +66,6 @@ import {
 import { resolveStateDir } from "./state-paths.js";
 import { loadActivityLog, loadToolLifecycle } from "./lazy-modules.js";
 import { collectSupportReportQuery } from "./support-selective-export.js";
-import {
-  resolveSupportIncident,
-  SupportIncidentWindowError,
-  unresolvedSupportIncident,
-} from "./support-incident.js";
 import { type SupportQueryRun, type SupportSelectorArgs } from "./support-query-cli.js";
 import {
   emitSupportReportStarted,
@@ -149,26 +142,6 @@ function createdIncident(
   }
 }
 
-// A window that cannot be read whole still yields an honest report: its incident is described by
-// its segment references alone and is explicitly insufficient with the closed reason.
-function reportIncident(
-  record: SupportIncidentDescriptorRecord,
-  stateDir: string,
-  selected?: SupportQueryResult,
-): SupportReport["incident"] {
-  if (selected !== undefined)
-    return supportIncidentPrivateProjection(resolveSelectedSupportIncident(record, selected));
-  const segments = supportIncidentSegmentFiles(stateDir, record);
-  try {
-    return supportIncidentPrivateProjection(resolveSupportIncident(record, segments, stateDir));
-  } catch (error) {
-    if (!(error instanceof SupportIncidentWindowError)) throw error;
-    return supportIncidentPrivateProjection(
-      unresolvedSupportIncident(record, segments, error.reason),
-    );
-  }
-}
-
 async function selectionQuery(
   selector: SupportSelectorArgs,
   stateDir: string,
@@ -187,6 +160,28 @@ async function selectionQuery(
   return run;
 }
 
+async function reportQuery(
+  record: SupportIncidentDescriptorRecord,
+  selected: SupportQueryRun | undefined,
+  stateDir: string,
+  io: CliIo,
+  correlationId: string,
+): Promise<SupportQueryRun> {
+  if (selected !== undefined) return selected;
+  if (!("slotIndex" in record)) return readManualSupportReportEvidence(stateDir, record);
+  return selectionQuery(
+    {
+      incidentId: record.incidentId,
+      correlationId: undefined,
+      defectFingerprint: undefined,
+      filter: {},
+    },
+    stateDir,
+    io,
+    correlationId,
+  );
+}
+
 async function makeReport(
   stateDir: string,
   args: SafeSupportExportArgs,
@@ -203,27 +198,9 @@ async function makeReport(
   if (existing === undefined && selected?.result.events.length === 0)
     throw new SupportReportError("selection-unavailable");
   const record = existing ?? createdIncident(stateDir, args.selector, correlationId, io);
-  const query =
-    selected ??
-    ("slotIndex" in record
-      ? await selectionQuery(
-          {
-            incidentId: record.incidentId,
-            correlationId: undefined,
-            defectFingerprint: undefined,
-            filter: {},
-          },
-          stateDir,
-          io,
-          correlationId,
-        )
-      : readManualSupportReportEvidence(stateDir, record));
+  const query = await reportQuery(record, selected, stateDir, io, correlationId);
   return buildSupportReport(
-    reportIncident(
-      record,
-      stateDir,
-      args.selector?.correlationId === undefined ? undefined : query.result,
-    ),
+    supportIncidentPrivateProjection(resolveSelectedSupportIncident(record, query.result)),
     query.result,
     args.maxBytes ?? MAX_SUPPORT_REPORT_BYTES,
   );
