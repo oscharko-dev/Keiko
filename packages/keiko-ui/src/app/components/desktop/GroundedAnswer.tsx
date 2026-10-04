@@ -15,6 +15,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
+import { isConnectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 import { isCanonicalConnectedSearchAbstention } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { formatBytes, formatMs } from "@/lib/format";
 import {
@@ -468,6 +469,20 @@ function attributedCitationLabel(label: string, sourceLabel: string | undefined)
   return sourceLabel === undefined ? label : `${sourceLabel} · ${label}`;
 }
 
+function citationRootOptions(
+  citation: GroundedEvidenceCitation,
+  roots: readonly RepositoryReferenceRoot[],
+): { readonly roots: readonly RepositoryReferenceRoot[]; readonly requireRootChoice: boolean } {
+  const fingerprint = citation.sourceScopeFingerprint;
+  if (fingerprint === undefined) return { roots, requireRootChoice: roots.length > 1 };
+  const matching = isConnectedScopeFingerprint(fingerprint)
+    ? roots.filter((root) => root.scopeFingerprints?.includes(fingerprint) === true)
+    : [];
+  return matching.length === 1
+    ? { roots: matching, requireRootChoice: false }
+    : { roots, requireRootChoice: true };
+}
+
 function CitationReference({
   citation,
   repositoryRoots,
@@ -483,6 +498,7 @@ function CitationReference({
 }): ReactNode {
   const t = useTranslate();
   const documentFormat = citation.documentFormat?.toUpperCase();
+  const options = citationRootOptions(citation, repositoryRoots);
   const canOpenRepositoryCitation =
     documentFormat === undefined &&
     openRepositoryReference !== undefined &&
@@ -499,7 +515,9 @@ function CitationReference({
         {canOpenRepositoryCitation ? (
           <RepositoryReferenceInline
             reference={citationRepositoryReference(citation)}
-            roots={repositoryRoots}
+            roots={options.roots}
+            requireRootChoice={options.requireRootChoice}
+            sourceLabel={sourceLabel}
             openReference={openRepositoryReference}
             className="repo-ref-link grounded-citation-open"
             displayPath={attributedCitationLabel(

@@ -31,6 +31,12 @@ import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { I18N_STORAGE_KEY, I18nProvider, translate, type I18nTranslate } from "@/lib/i18n";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { ChatSessionApi } from "./hooks/useChatSession";
+import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
+import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
+  DEFAULT_EXPLORATION_BUDGET,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 import type { PdfCitationPreviewWindowApi } from "./hooks/usePdfCitationPreview";
 import type {
   Chat,
@@ -323,7 +329,98 @@ async function findRepositoryResultOption(name: string): Promise<HTMLButtonEleme
   return screen.findByRole("button", { name });
 }
 
+function repositoryTestContextSummary(): ReturnType<typeof buildGroundedAnswerContextPackSummary> {
+  return buildGroundedAnswerContextPackSummary(
+    {
+      schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+      stableId: "navigation-fixture",
+      emittedAtMs: 1,
+      ledgerRef: undefined,
+      scope: {
+        schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+        scopeId: "navigation",
+        workspaceRoot: "/ManualA",
+        kind: "workspace-root",
+        relativePaths: [],
+        conversationId: "chat-1",
+        connectedAtMs: 1,
+      },
+      query: {
+        kind: "natural-language",
+        text: "Sources",
+        caseSensitive: true,
+        maxResults: 2,
+        emittedAtMs: 1,
+      },
+      budget: DEFAULT_EXPLORATION_BUDGET,
+      usage: {
+        searchCalls: 0,
+        filesRead: 0,
+        excerptBytes: 0,
+        modelInputTokens: 0,
+        modelOutputTokens: 0,
+        elapsedMs: 0,
+        rerankCalls: 0,
+      },
+      files: [],
+      omitted: [],
+      uncertainty: [],
+    },
+    2,
+    1,
+  );
+}
+
 describe("ChatWindow cancel button", () => {
+  it("retains canonical source attribution when reopening a saved multi-folder answer", () => {
+    const scopes = ["ManualA", "ManualB"].map((name) => ({
+      root: `/${name}`,
+      kind: "directory" as const,
+      relativePaths: ["src"],
+      connectedAtMs: 1,
+    }));
+    const groundedAnswer: GroundedAnswer = {
+      groundingKind: "connected-context",
+      userMessageId: "m1",
+      assistantMessageId: "m2",
+      content: "Grounded saved answer",
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 1,
+      contextPack: repositoryTestContextSummary(),
+      citations: scopes.map((scope) => ({
+        scopePath: "src/foo.ts",
+        stableId: scope.root,
+        score: 1,
+        lineRange: { startLine: 1, endLine: 2 },
+        source: scope.root.slice(1),
+        sourceScopeFingerprint: connectedScopeFingerprint(scope),
+      })),
+    };
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({ connectedScopes: scopes }),
+        messages: [
+          makeMessage({ role: "assistant", content: groundedAnswer.content, groundedAnswer }),
+        ],
+      }),
+      { openEditorFile },
+    );
+    const summary = document.querySelector("details.grounded-evidence-disclosure summary");
+    if (summary === null) throw new TypeError("Missing grounded evidence disclosure");
+    fireEvent.click(summary);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open ManualB · src/foo.ts at lines 1-2 in editor" }),
+    );
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/ManualB",
+      path: "src/foo.ts",
+      lineStart: 1,
+      lineEnd: 2,
+    });
+  });
+
   it("renders regenerate on the latest ungrounded assistant response", async () => {
     const regenerateMessage = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();

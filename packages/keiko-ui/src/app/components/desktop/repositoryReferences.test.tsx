@@ -24,8 +24,27 @@ import {
   repositoryReferenceTextParts,
   repositoryReferencePathLabels,
   repositoryRootLabel,
+  repositoryReferenceRootsForScopes,
   sanitizeRepositoryEvidenceText,
 } from "./repositoryReferences";
+import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
+
+describe("current repository scope navigation identities", () => {
+  it("retains all selected scope identities on one root and resolves a legacy project root", () => {
+    const scopes = ["src", "manuals"].map((path) => ({
+      kind: "directory" as const,
+      relativePaths: [path],
+      connectedAtMs: 1,
+    }));
+    const roots = repositoryReferenceRootsForScopes(scopes, "/repo");
+    expect(roots).toHaveLength(1);
+    expect(roots[0]).toMatchObject({ root: "/repo", label: "repo" });
+    expect(roots[0]?.scopeFingerprints).toEqual(
+      scopes.map((scope) => connectedScopeFingerprint({ ...scope, root: "/repo" })),
+    );
+    expect(new Set(roots[0]?.scopeFingerprints).size).toBe(2);
+  });
+});
 
 describe("repository source path labels", () => {
   it("uses the shortest distinguishing suffix while keeping unique filenames short", () => {

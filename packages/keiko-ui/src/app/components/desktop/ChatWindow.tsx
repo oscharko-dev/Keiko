@@ -71,6 +71,7 @@ import dynamic from "next/dynamic";
 import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import {
   repositoryReferenceRoots,
+  repositoryReferenceRootsForScopes,
   sanitizeRepositoryEvidenceText,
   type OpenRepositoryReference,
   type RepositoryReferenceRoot,
@@ -1558,6 +1559,7 @@ const MAX_REPOSITORY_FOCUS_PATHS = 50;
 interface RepositoryRootOption {
   readonly root: string;
   readonly label: string;
+  readonly scopeFingerprints?: readonly string[] | undefined;
 }
 
 interface ComposerRepositoryReference {
@@ -1601,15 +1603,7 @@ function connectedRepositoryRoots(
 ): readonly RepositoryRootOption[] {
   if (chat === undefined) return [];
   const fallbackRoot = activeProjectPath ?? chat.projectPath;
-  const seen = new Set<string>();
-  const roots: RepositoryRootOption[] = [];
-  for (const scope of effectiveConnectedScopes(chat)) {
-    const root = scope.root ?? fallbackRoot;
-    if (root.length === 0 || seen.has(root)) continue;
-    seen.add(root);
-    roots.push({ root, label: rootDisplayName(root) });
-  }
-  return roots;
+  return repositoryReferenceRootsForScopes(effectiveConnectedScopes(chat), fallbackRoot);
 }
 
 function repositoryReferenceRootPaths(args: {
@@ -5739,6 +5733,12 @@ export function ChatWindow({
   const hasLiveStreamingAssistant = hasLiveStreamingAssistantContent(streamingAssistantMessage);
   const scrollRef = useRef<HTMLDivElement>(null);
   const repositoryRoots = useMemo(() => {
+    const fingerprints = new Map(
+      connectedRepositoryRoots(activeChat, activeProject?.path).map((root) => [
+        root.root,
+        root.scopeFingerprints,
+      ]),
+    );
     return repositoryReferenceRoots(
       repositoryReferenceRootPaths({
         chat: activeChat,
@@ -5746,7 +5746,7 @@ export function ChatWindow({
         linkedRoot,
         linkedRoots,
       }),
-    );
+    ).map((root) => ({ ...root, scopeFingerprints: fingerprints.get(root.root) }));
   }, [activeChat, activeProject?.path, linkedRoot, linkedRoots]);
   const openRepositoryReference: OpenRepositoryReference | undefined = openEditorFile;
   // uiux-fix F009 C090 — stick-to-bottom autoscroll: follow new messages AND

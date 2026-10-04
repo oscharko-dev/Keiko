@@ -88,6 +88,39 @@ export interface ChatConnectedScope {
   readonly root?: string;
 }
 
+function normalizedConnectedRoot(root: string): string {
+  const forward = root.replaceAll("\\", "/");
+  if (/^[A-Za-z]:\/?$/u.test(forward)) return forward;
+  let end = forward.length;
+  while (end > 0 && forward.charAt(end - 1) === "/") end -= 1;
+  return forward.slice(0, end);
+}
+
+function normalizedConnectedRelativePath(path: string): string {
+  const forward = path.replaceAll("\\", "/");
+  let start = 0;
+  let end = forward.length;
+  while (start < end && forward.charAt(start) === "/") start += 1;
+  while (end > start && forward.charAt(end - 1) === "/") end -= 1;
+  return forward.slice(start, end);
+}
+
+/** Comparison identity only; it never authorizes a workspace read. */
+export function chatConnectedScopeIdentity(scope: ChatConnectedScope | null): string | null {
+  if (scope?.root === undefined) return null;
+  return JSON.stringify([
+    normalizedConnectedRoot(scope.root),
+    scope.kind,
+    scope.relativePaths.map(normalizedConnectedRelativePath),
+  ]);
+}
+
+/** Shared input for existing SHA-256 adapters; excludes timestamps and display labels. */
+export function chatConnectedScopeFingerprintInput(scope: ChatConnectedScope): string | undefined {
+  const identity = chatConnectedScopeIdentity(scope);
+  return identity === null ? undefined : `keiko-files-scope-reference-v1\u0000${identity}`;
+}
+
 // ─── Grounding limits (operator-configurable fan-out caps) ───────────────────────
 // Shape for all grounded Q&A fan-out limits. An operator may tune these via the gateway config
 // `grounding` block; absent → DEFAULT_GROUNDING_LIMITS are used (behaviour identical to before).
@@ -1241,6 +1274,9 @@ export interface GroundedEvidenceCitation {
   // (the connected root's basename; disambiguated with a short hash when two sources share a
   // basename). Absent for legacy single-source answers, which carry no per-source attribution.
   readonly source?: string;
+  // Navigation attribution only, matched against current connected scopes before opening.
+  // Missing or ambiguous identity requires the existing explicit source picker.
+  readonly sourceScopeFingerprint?: string | undefined;
   // Global evidence marker in the hybrid reranked prompt ([n]); absent for non-hybrid
   // (folder-only) answers.
   readonly marker?: number;

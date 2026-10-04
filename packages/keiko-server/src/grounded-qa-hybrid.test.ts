@@ -783,6 +783,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(answer.citations.length).toBeGreaterThan(0);
     for (const citation of answer.citations) {
       expect(citation.source).toBe("alpha-repo");
+      expect(citation.sourceScopeFingerprint).toMatch(/^[0-9a-f]{64}$/u);
       expect(typeof citation.marker).toBe("number");
       expect(Number(citation.marker) >= 1).toBe(true);
     }

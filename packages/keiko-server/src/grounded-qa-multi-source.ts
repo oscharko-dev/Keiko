@@ -31,6 +31,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   buildGroundedAnswerContextPackSummary,
+  chatConnectedScopeFingerprintInput,
   type ChatConnectedScope,
   type GroundedAnswer,
   type GroundedAnswerContextSummary,
@@ -900,14 +901,27 @@ interface SourceCitationBundle {
   readonly labeledCitations: readonly GroundedEvidenceCitation[];
 }
 
+export function groundedSourceScopeFingerprint(scope: SelectedScope): string {
+  const input = chatConnectedScopeFingerprintInput({
+    root: scope.workspaceRoot,
+    kind: scope.kind,
+    relativePaths: scope.relativePaths,
+    connectedAtMs: 0,
+  });
+  if (input === undefined) throw new TypeError("Connected source identity is unavailable");
+  return createHash("sha256").update(input).digest("hex");
+}
+
 function labelAnswerCitations(
   citations: readonly GroundedEvidenceCitation[],
   sourceLabel: string,
   redactor: Redactor,
+  sourceScopeFingerprint?: string,
 ): readonly GroundedEvidenceCitation[] {
   return citations.map((citation) => ({
     ...citation,
     source: redactString(redactor, sourceLabel),
+    ...(sourceScopeFingerprint === undefined ? {} : { sourceScopeFingerprint }),
   }));
 }
 
@@ -942,7 +956,12 @@ function sourceCitationBundles(
     return {
       source,
       citations,
-      labeledCitations: labelAnswerCitations(citations, source.label, redactor),
+      labeledCitations: labelAnswerCitations(
+        citations,
+        source.label,
+        redactor,
+        groundedSourceScopeFingerprint(source.scope),
+      ),
     };
   });
 }

@@ -9,6 +9,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { GroundedAnswer } from "./GroundedAnswer";
+import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 import { I18N_STORAGE_KEY, I18nProvider, resetLoadedMessageCatalogs } from "@/lib/i18n";
 import activityBadgeStyles from "./GroundedAnswer.module.css";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
@@ -17,9 +18,16 @@ import type {
   GroundedAnswerContextPackSummary,
   GroundedEvidenceCitation,
   GroundedUncertainty,
+  ChatConnectedScope,
   KnowledgePodRetrievalActivity,
   LocalKnowledgeEvidenceCitation,
 } from "@/lib/types";
+
+function scopeFingerprint(scope: ChatConnectedScope): string {
+  const fingerprint = connectedScopeFingerprint(scope);
+  if (fingerprint === undefined) throw new TypeError("Missing fixture scope fingerprint");
+  return fingerprint;
+}
 
 function cssClass(name: keyof typeof activityBadgeStyles): string {
   const value = activityBadgeStyles[name];
@@ -900,14 +908,41 @@ describe("GroundedAnswer", () => {
       ),
     ).toEqual(["ManualA · foo.ts:10-25", "ManualB · foo.ts:10-25"]);
     openEvidenceDisclosure(container);
-    const first = screen.getAllByRole("button", {
-      name: "Open src/foo.ts at lines 10-25 in editor",
-    })[0];
-    if (first === undefined) throw new Error("citation missing");
+    const first = screen.getByRole("button", {
+      name: "Open ManualA · src/foo.ts at lines 10-25 in editor",
+    });
     fireEvent.click(first);
     expect(openReference).toHaveBeenCalledWith({
       root: "/repo",
       path: "src/foo.ts",
+      lineStart: 10,
+      lineEnd: 25,
+    });
+  });
+
+  it("requires an explicit source for legacy relative paths that resemble a root label", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    const { container } = render(
+      <GroundedAnswer
+        answer={answer({ citations: [citation({ scopePath: "ManualB/src/foo.ts" })] })}
+        busy={false}
+        repositoryRoots={[
+          { root: "/ManualA", label: "ManualA" },
+          { root: "/ManualB", label: "ManualB" },
+        ]}
+        openRepositoryReference={openReference}
+      />,
+    );
+    openEvidenceDisclosure(container);
+    fireEvent.click(screen.getByRole("button", { name: /Open ManualB\/src\/foo.ts/ }));
+    expect(openReference).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Select repository source: ManualB" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Select repository source: ManualA" }));
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/ManualA",
+      path: "ManualB/src/foo.ts",
       lineStart: 10,
       lineEnd: 25,
     });
@@ -921,6 +956,135 @@ describe("GroundedAnswer", () => {
     expect(
       [...container.querySelectorAll(".grounded-citation-range")].map((range) => range.textContent),
     ).toEqual(["ManualA · src/foo.ts:10-25", "ManualB · src/foo.ts:10-25"]);
+  });
+
+  it("opens the exact attributed source and includes its visible label in the accessible name", () => {
+    const scopes = ["ManualA", "ManualB"].map((name) => ({
+      kind: "directory" as const,
+      root: `/${name}`,
+      relativePaths: ["src"],
+      connectedAtMs: 1,
+    }));
+    const citations = scopes.map((scope) =>
+      citation({
+        stableId: scope.root,
+        source: scope.root.slice(1),
+        sourceScopeFingerprint: scopeFingerprint(scope),
+      }),
+    );
+    const roots = scopes.map((scope) => ({
+      root: scope.root,
+      label: scope.root.slice(1),
+      scopeFingerprints: [scopeFingerprint(scope)],
+    }));
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <GroundedAnswer
+        answer={answer({ citations })}
+        busy={false}
+        repositoryRoots={roots}
+        openRepositoryReference={openReference}
+      />,
+    );
+    openEvidenceDisclosure(document.body);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open ManualB · src/foo.ts at lines 10-25 in editor",
+      }),
+    );
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/ManualB",
+      path: "src/foo.ts",
+      lineStart: 10,
+      lineEnd: 25,
+    });
+    expect(screen.queryByRole("button", { name: /Select repository source:/u })).toBeNull();
+  });
+
+  it.each(["replacement", "different subfolder", "ambiguous"])(
+    "requires a manual source choice for %s identity instead of guessing from labels",
+    (kind) => {
+      const original = {
+        kind: "directory" as const,
+        root: "/old/manual",
+        relativePaths: ["src"],
+        connectedAtMs: 1,
+      };
+      const current = {
+        ...original,
+        root: kind === "replacement" ? "/new/manual" : original.root,
+        relativePaths: kind === "different subfolder" ? ["docs"] : original.relativePaths,
+      };
+      const fingerprint = scopeFingerprint(original);
+      const root = {
+        root: current.root,
+        label: "manual",
+        scopeFingerprints: [scopeFingerprint(current)],
+      };
+      const roots = kind === "ambiguous" ? [root, { ...root, root: "/alias/manual" }] : [root];
+      const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+      render(
+        <GroundedAnswer
+          answer={answer({
+            citations: [citation({ source: "manual", sourceScopeFingerprint: fingerprint })],
+          })}
+          busy={false}
+          repositoryRoots={roots}
+          openRepositoryReference={openReference}
+        />,
+      );
+      openEvidenceDisclosure(document.body);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Open src/foo.ts at lines 10-25 in editor" }),
+      );
+      expect(openReference).not.toHaveBeenCalled();
+      expect(
+        screen.getAllByRole("button", { name: "Select repository source: manual" }),
+      ).toHaveLength(roots.length);
+    },
+  );
+
+  it("uses identity rather than colliding basenames and strips hostile source display controls", () => {
+    const scopes = ["first", "second"].map((name) => ({
+      kind: "directory" as const,
+      root: `/${name}/manual`,
+      relativePaths: ["src"],
+      connectedAtMs: 1,
+    }));
+    const citations = scopes.map((scope, index) =>
+      citation({
+        stableId: scope.root,
+        source: index === 0 ? "manual~first" : "manual~second\u202e",
+        sourceScopeFingerprint: scopeFingerprint(scope),
+      }),
+    );
+    const roots = scopes.map((scope) => ({
+      root: scope.root,
+      label: "manual",
+      scopeFingerprints: [scopeFingerprint(scope)],
+    }));
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <GroundedAnswer
+        answer={answer({ citations })}
+        busy={false}
+        repositoryRoots={roots}
+        openRepositoryReference={openReference}
+      />,
+    );
+    openEvidenceDisclosure(document.body);
+    const button = screen.getByRole("button", {
+      name: "Open manual~second · src/foo.ts at lines 10-25 in editor",
+    });
+    expect(button).toHaveTextContent("manual~second · foo.ts:10-25");
+    expect(button.textContent).not.toContain("\u202e");
+    fireEvent.click(button);
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/second/manual",
+      path: "src/foo.ts",
+      lineStart: 10,
+      lineEnd: 25,
+    });
   });
 
   it("keeps distinct ranges from one file without displaying a numeric retrieval rank", () => {

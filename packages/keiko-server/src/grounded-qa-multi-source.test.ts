@@ -1206,6 +1206,14 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(labels).toContain("api");
     expect(labels).toContain("web");
     expect(labels).not.toContain("gone");
+    const identities = answer.citations.map((citation) => citation.sourceScopeFingerprint);
+    expect(identities).toHaveLength(2);
+    expect(
+      identities.every(
+        (identity) => typeof identity === "string" && /^[0-9a-f]{64}$/u.test(identity),
+      ),
+    ).toBe(true);
+    expect(new Set(identities).size).toBe(2);
     const skippedClaims = answer.uncertainty
       .filter((u) => u.kind === "source-skipped")
       .map((u) => u.claim)

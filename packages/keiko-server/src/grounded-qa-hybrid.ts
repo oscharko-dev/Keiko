@@ -82,6 +82,7 @@ import {
   buildConnectedScopes,
   defaultRetriever,
   mergeContextPackSummaries,
+  groundedSourceScopeFingerprint,
   sourceLabels,
   splitExplorationBudget,
   splitExplorationBudgets,
@@ -266,6 +267,7 @@ interface FolderPayload {
   readonly lineRange: { readonly startLine: number; readonly endLine: number } | undefined;
   readonly score: number;
   readonly stableId: string;
+  readonly sourceScopeFingerprint: string;
 }
 
 interface ConnectorPayload {
@@ -295,8 +297,9 @@ function folderRerankInputs(
   folders: readonly RetrievedFolder[],
   redactor: Redactor,
 ): RerankInput<HybridPayload>[] {
-  return folders.flatMap((src) =>
-    src.pack.files.flatMap((file) =>
+  return folders.flatMap((src) => {
+    const sourceScopeFingerprint = groundedSourceScopeFingerprint(src.scope);
+    return src.pack.files.flatMap((file) =>
       file.excerpts.map((excerpt) => ({
         kind: "folder" as const,
         redactedText: redactString(redactor, excerpt.content),
@@ -309,10 +312,11 @@ function folderRerankInputs(
           lineRange: excerpt.atom.lineRange,
           score: excerpt.atom.score,
           stableId: excerpt.atom.stableId,
+          sourceScopeFingerprint,
         },
       })),
-    ),
-  );
+    );
+  });
 }
 
 // Cheap length proxy for rerankAndSelect's byte-budget check, computed from the citation's own
@@ -916,6 +920,7 @@ function selectedFolderCitations(
       score: s.payload.score,
       stableId: redactString(redactor, s.payload.stableId),
       source: s.sourceLabel,
+      sourceScopeFingerprint: s.payload.sourceScopeFingerprint,
       marker: s.marker,
     }));
 }

@@ -14,6 +14,8 @@ import { FileIcon } from "./widgets/shared/projectTree";
 import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import type { ChatConnectedScope } from "@/lib/types";
+import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 
 export interface RepositoryReference {
   readonly label: string;
@@ -25,6 +27,7 @@ export interface RepositoryReference {
 export interface RepositoryReferenceRoot {
   readonly root: string;
   readonly label: string;
+  readonly scopeFingerprints?: readonly string[] | undefined;
 }
 
 export type OpenRepositoryReference = (request: OpenEditorFileRequest) => OpenEditorFileResult;
@@ -403,6 +406,28 @@ export function repositoryReferenceRoots(
   return out;
 }
 
+export function repositoryReferenceRootsForScopes(
+  scopes: readonly ChatConnectedScope[],
+  fallbackRoot: string,
+): readonly RepositoryReferenceRoot[] {
+  const roots = new Map<string, { root: string; label: string; scopeFingerprints: string[] }>();
+  for (const scope of scopes) {
+    const root = scope.root ?? fallbackRoot;
+    if (root.length === 0) continue;
+    const option = roots.get(root) ?? {
+      root,
+      label: repositoryRootLabel(root),
+      scopeFingerprints: [],
+    };
+    const fingerprint = connectedScopeFingerprint({ ...scope, root });
+    if (fingerprint !== undefined && !option.scopeFingerprints.includes(fingerprint)) {
+      option.scopeFingerprints.push(fingerprint);
+    }
+    roots.set(root, option);
+  }
+  return [...roots.values()];
+}
+
 function referenceRangeLabel(reference: RepositoryReference, t: I18nTranslate): string {
   if (reference.lineStart === undefined) return "";
   if (reference.lineEnd === undefined || reference.lineEnd === reference.lineStart) {
@@ -532,6 +557,8 @@ interface RepositoryReferenceInlineProps {
   readonly openReference: OpenRepositoryReference | undefined;
   readonly className?: string | undefined;
   readonly displayPath?: string | undefined;
+  readonly sourceLabel?: string | undefined;
+  readonly requireRootChoice?: boolean | undefined;
 }
 
 const OPENED_CONFIRMATION_MS = 1800;
@@ -567,6 +594,8 @@ export function RepositoryReferenceInline({
   openReference,
   className = "repo-ref-link",
   displayPath,
+  sourceLabel,
+  requireRootChoice = false,
 }: RepositoryReferenceInlineProps): ReactNode {
   const t = useTranslate();
   const [status, setStatus] = useState<"idle" | "choosing" | "opening" | "opened" | "failed">(
@@ -594,8 +623,11 @@ export function RepositoryReferenceInline({
     return out;
   }, [roots]);
   const rankedRootOptions = useMemo(
-    () => rankedRootsForReference(reference, rootOptions),
-    [reference, rootOptions],
+    () =>
+      requireRootChoice
+        ? rootOptions.map((root) => ({ ...root, openPath: normalizeReferencePath(reference.path) }))
+        : rankedRootsForReference(reference, rootOptions),
+    [reference, requireRootChoice, rootOptions],
   );
   const bestRootOptions = useMemo(() => {
     const best = rankedRootOptions[0];
@@ -638,7 +670,7 @@ export function RepositoryReferenceInline({
       setMessage(t("chat.repository.sourceMismatch"));
       return;
     }
-    if (bestRootOptions.length === 1) {
+    if (bestRootOptions.length === 1 && !requireRootChoice) {
       const root = bestRootOptions[0];
       if (root !== undefined) openForRoot(root);
       return;
@@ -650,6 +682,7 @@ export function RepositoryReferenceInline({
     openForRoot,
     openReference,
     rankedRootOptions.length,
+    requireRootChoice,
     rootOptions.length,
     t,
   ]);
@@ -684,10 +717,15 @@ export function RepositoryReferenceInline({
         type="button"
         className={className}
         aria-label={t("chat.repository.openInEditor", {
-          path: repositoryReferenceDisplayPath(reference.path),
+          path:
+            sourceLabel === undefined
+              ? repositoryReferenceDisplayPath(reference.path)
+              : `${repositoryReferenceDisplayPath(sourceLabel)} · ${repositoryReferenceDisplayPath(reference.path)}`,
           range: referenceRangeLabel(reference, t),
         })}
-        aria-expanded={bestRootOptions.length > 1 ? status === "choosing" : undefined}
+        aria-expanded={
+          bestRootOptions.length > 1 || requireRootChoice ? status === "choosing" : undefined
+        }
         data-state={status}
         title={repositoryReferenceDisplayPath(reference.label)}
         onClick={activate}
