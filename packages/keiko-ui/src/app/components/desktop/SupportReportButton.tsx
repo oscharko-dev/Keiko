@@ -242,6 +242,20 @@ function reportLocalPreparation(
   });
 }
 
+function localPreparationContext(
+  error: unknown,
+  api: typeof import("@/lib/support-report-api") | undefined,
+  context: Pick<ClientOnlySupportReportInput, "correlationId" | "failure">,
+): Pick<ClientOnlySupportReportInput, "correlationId" | "failure"> &
+  Partial<Pick<ClientOnlySupportReportInput, "availabilityReason">> {
+  return {
+    ...context,
+    ...(api !== undefined && error instanceof api.SupportReportEvidenceUnavailable
+      ? { availabilityReason: "diagnostic-delivery-unavailable" as const }
+      : {}),
+  };
+}
+
 async function recoverLocalReport(
   key: string,
   controller: AbortController,
@@ -263,7 +277,10 @@ async function recoverLocalReport(
     const prepared =
       previous !== undefined && !(previous instanceof AbortController)
         ? await prepareCachedSupportReport(previous.report, localSignal)
-        : await prepareLocalSupportReport(localSignal, context);
+        : await prepareLocalSupportReport(
+            localSignal,
+            localPreparationContext(error, api, context),
+          );
     if (controller.signal.aborted) {
       prepared.download.dispose();
       return false;

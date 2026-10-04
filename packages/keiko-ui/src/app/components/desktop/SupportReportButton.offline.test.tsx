@@ -8,6 +8,7 @@ import {
   createSupportReport,
   createSupportReportDownload,
   SupportReportResponseInvalid,
+  SupportReportEvidenceUnavailable,
 } from "@/lib/support-report-api";
 import { prepareCachedSupportReport, prepareLocalSupportReport } from "@/lib/support-report-local";
 import { SupportReportButton, resetSupportReportOutcomesForTests } from "./SupportReportButton";
@@ -328,5 +329,18 @@ it("diagnoses a malformed successful server response as an internal contract fai
     correlationId: undefined,
     parentCorrelationId: "original-invalid-response",
     errorKind: "internal",
+  });
+});
+
+it("passes diagnostic-delivery unavailability to local preparation without claiming a service outage", async () => {
+  vi.mocked(createSupportReport).mockRejectedValueOnce(new SupportReportEvidenceUnavailable());
+  vi.mocked(prepareLocalSupportReport).mockResolvedValueOnce(local);
+  render(<SupportReportButton correlationId="original-delivery-unavailable" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {
+    correlationId: "original-delivery-unavailable",
+    failure: undefined,
+    availabilityReason: "diagnostic-delivery-unavailable",
   });
 });

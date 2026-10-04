@@ -8,7 +8,7 @@ import {
   type SupportReport,
   type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { prepareLocalSupportReport } from "./support-report-local";
+import { prepareLocalSupportReport, prepareCachedSupportReport } from "./support-report-local";
 import { setClientDiagnosticDeliveryRetry, takeClientDiagnosticLoss } from "./client-diagnostics";
 
 beforeEach(() => {
@@ -199,3 +199,28 @@ it("does not declare transport loss for absent optional supplied and retained fa
     prepared.download.dispose();
   }
 });
+
+it.each(["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"] as const)(
+  "seals the observed availability reason and preserves it through cached download retry: %s",
+  async (availabilityReason) => {
+    const context = { correlationId: "original-availability-cause", availabilityReason };
+    const prepared = await prepareLocalSupportReport(new AbortController().signal, context);
+    try {
+      const report = JSON.parse(prepared.report.reportJson) as SupportReport;
+      expect(report.incident.clientReport?.availabilityReason).toBe(availabilityReason);
+      expect(prepared.report.summary?.availabilityReason).toBe(availabilityReason);
+      expect(report.evidence.recordCount).toBe(0);
+      expect(report.incident.sufficiencyStatus).toBe("insufficient");
+      const retry = await prepareCachedSupportReport(prepared.report, new AbortController().signal);
+      try {
+        const downloaded = Buffer.from(await (await fetch(retry.download.href)).arrayBuffer());
+        expect(gunzipSync(downloaded).toString("utf8")).toBe(prepared.report.reportJson);
+        expect(retry.report).toBe(prepared.report);
+      } finally {
+        retry.download.dispose();
+      }
+    } finally {
+      prepared.download.dispose();
+    }
+  },
+);

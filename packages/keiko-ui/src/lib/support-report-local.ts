@@ -21,7 +21,8 @@ import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/ver
 import type { SupportReportDownload } from "./support-report-api";
 import { retainedClientDiagnosticFailure, recordClientDiagnosticLoss } from "./client-diagnostics";
 
-type LocalFailureContext = Pick<ClientOnlySupportReportInput, "correlationId" | "failure">;
+type LocalFailureContext = Pick<ClientOnlySupportReportInput, "correlationId" | "failure"> &
+  Partial<Pick<ClientOnlySupportReportInput, "availabilityReason">>;
 
 export interface PreparedLocalSupportReport {
   readonly report: DesktopSupportReportResponse;
@@ -92,7 +93,7 @@ async function localReport(
     defectFingerprint: await browserDigest(
       defectFingerprintPreimage(UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT),
     ),
-    availabilityReason: "service-unavailable",
+    availabilityReason: context.availabilityReason ?? "service-unavailable",
     ...(correlationId === undefined ? {} : { correlationId }),
     ...(failure === undefined ? {} : { failure }),
   });
