@@ -223,6 +223,29 @@ function contextPackHeadline(
 }
 
 type InspectionMetric = readonly [string, string];
+type SearchCoverage = GroundedAnswerContextPackSummary["coverage"];
+
+function hasOnlyOmittedMatches(coverage: NonNullable<SearchCoverage>): boolean {
+  return (
+    coverage.reasons.length === 1 &&
+    coverage.reasons[0] === "match-cap" &&
+    coverage.filesScanned === coverage.filesAfterPolicy &&
+    coverage.filesSkipped === 0 &&
+    coverage.depthPrunedByDiscovery === 0 &&
+    coverage.maxFilesPrunedByDiscovery === 0
+  );
+}
+
+function selectedReadCount(pack: GroundedAnswerContextPackSummary, t: I18nTranslate): string {
+  return pack.budget.filesReadMax === null
+    ? t("grounded.inspection.fileCountUncapped", { used: formatCount(pack.usage.filesRead) })
+    : inspectionCount(
+        t,
+        "grounded.inspection.fileCount",
+        pack.usage.filesRead,
+        pack.budget.filesReadMax,
+      );
+}
 
 function inspectionCount(t: I18nTranslate, key: MessageKey, used: number, max: number): string {
   return t(key, { used: formatCount(used), max: formatCapWith(max, formatCount) });
@@ -246,15 +269,22 @@ function inspectionCoverageMetrics(
     ],
     [
       t("grounded.inspection.coverage"),
-      t(coverage.incomplete ? "grounded.inspection.incomplete" : "grounded.inspection.complete"),
+      t(
+        hasOnlyOmittedMatches(coverage)
+          ? "grounded.inspection.resultsLimited"
+          : coverage.incomplete
+            ? "grounded.inspection.incomplete"
+            : "grounded.inspection.complete",
+      ),
     ],
   ];
 }
 
 function inspectionReadMetrics(
-  { usage, budget }: GroundedAnswerContextPackSummary,
+  pack: GroundedAnswerContextPackSummary,
   t: I18nTranslate,
 ): readonly InspectionMetric[] {
+  const { usage, budget } = pack;
   return [
     [
       t("grounded.inspection.searches"),
@@ -265,10 +295,7 @@ function inspectionReadMetrics(
         budget.searchCallsMax,
       ),
     ],
-    [
-      t("grounded.inspection.selectedReads"),
-      inspectionCount(t, "grounded.inspection.fileCount", usage.filesRead, budget.filesReadMax),
-    ],
+    [t("grounded.inspection.selectedReads"), selectedReadCount(pack, t)],
     [
       t("grounded.inspection.excerptBytes"),
       `${formatBytes(usage.excerptBytes)} / ${formatCapWith(budget.excerptBytesMax, formatBytes)}`,
@@ -352,7 +379,9 @@ function ContextPackSummary({
         <p className="grounded-meta">{t("grounded.inspection.scopeCountHint")}</p>
       )}
       <p className="grounded-meta">
-        {t("grounded.inspection.readHint", { max: formatCap(contextPack.budget.filesReadMax) })}
+        {contextPack.budget.filesReadMax === null
+          ? t("grounded.inspection.readHintUncapped")
+          : t("grounded.inspection.readHint", { max: formatCap(contextPack.budget.filesReadMax) })}
       </p>
       <p className="grounded-meta">{t("grounded.inspection.timeHint")}</p>
       <p className="grounded-meta">{t("grounded.inspection.modelBudgetHint")}</p>
@@ -602,10 +631,18 @@ function connectedEvidenceSummary(answer: ConnectedGroundedAnswer, t: I18nTransl
   return citationCountLabel(
     t,
     citationCount,
-    { one: "grounded.summary.connected.one", other: "grounded.summary.connected.other" },
+    answer.contextPack.budget.filesReadMax === null
+      ? {
+          one: "grounded.summary.connected.uncapped.one",
+          other: "grounded.summary.connected.uncapped.other",
+        }
+      : { one: "grounded.summary.connected.one", other: "grounded.summary.connected.other" },
     {
       read: formatCount(answer.contextPack.usage.filesRead),
-      max: formatCap(answer.contextPack.budget.filesReadMax),
+      max:
+        answer.contextPack.budget.filesReadMax === null
+          ? ""
+          : formatCap(answer.contextPack.budget.filesReadMax),
       omitted:
         omittedCount > 0 ? t("grounded.summary.notUsed", { count: formatCount(omittedCount) }) : "",
     },
@@ -1068,7 +1105,20 @@ function uncertaintyKindLabel(kind: string, t: I18nTranslate): string {
   return key === undefined ? humanizeToken(kind) : t(key);
 }
 
-function uncertaintyLineText(marker: GroundedUncertainty, t: I18nTranslate): string {
+function scopeIncompleteDetail(coverage: SearchCoverage, t: I18nTranslate): string {
+  if (coverage?.reasons.includes("io-error") === true) return t("grounded.detail.scopeReadError");
+  if (coverage !== undefined && hasOnlyOmittedMatches(coverage)) {
+    return t("grounded.detail.scopeMatchesOmitted");
+  }
+  return t("grounded.detail.scopeIncomplete");
+}
+
+function uncertaintyLineText(
+  marker: GroundedUncertainty,
+  t: I18nTranslate,
+  coverage: SearchCoverage,
+): string {
+  if (marker.kind === "scope-incomplete") return scopeIncompleteDetail(coverage, t);
   const detailKey = UNCERTAINTY_KIND_DETAIL_KEYS.get(marker.kind);
   if (detailKey === undefined) return marker.claim;
   const detail = t(detailKey);
@@ -1126,15 +1176,17 @@ function uncertaintyDisplayGroups(
 function UncertaintyItem({
   markers,
   t,
+  coverage,
 }: {
   readonly markers: readonly GroundedUncertainty[];
   readonly t: I18nTranslate;
+  readonly coverage: SearchCoverage;
 }): ReactNode {
   const first = markers[0];
   if (first === undefined) return null;
   return (
     <li>
-      <span>{`${uncertaintyKindLabel(first.kind, t)}: ${uncertaintyLineText(first, t)}`}</span>
+      <span>{`${uncertaintyKindLabel(first.kind, t)}: ${uncertaintyLineText(first, t, coverage)}`}</span>
       <OriginalUncertaintyDetails markers={markers} t={t} />
     </li>
   );
@@ -1142,8 +1194,10 @@ function UncertaintyItem({
 
 function UncertaintyLine({
   markers,
+  coverage,
 }: {
   readonly markers: readonly GroundedUncertainty[];
+  readonly coverage?: SearchCoverage;
 }): ReactNode {
   const t = useTranslate();
   if (markers.length === 0) return null;
@@ -1153,7 +1207,7 @@ function UncertaintyLine({
       <div>{t("grounded.uncertainty.summary", { count: markers.length, kinds })}</div>
       <ul className="grounded-uncertainty-list">
         {uncertaintyDisplayGroups(markers).map((group, index) => (
-          <UncertaintyItem key={index} markers={group} t={t} />
+          <UncertaintyItem key={index} markers={group} t={t} coverage={coverage} />
         ))}
       </ul>
     </div>
@@ -1624,7 +1678,10 @@ export function GroundedAnswer({
             unverifiedSupport={supportUnverified(answer.uncertainty)}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
-          <UncertaintyLine markers={answer.uncertainty} />
+          <UncertaintyLine
+            markers={answer.uncertainty}
+            coverage={answer.contextPack.folder.coverage}
+          />
           <OmittedLine
             omittedCount={answer.omittedCount}
             omittedCounts={answer.contextPack.folder.omittedCounts}
@@ -1649,7 +1706,7 @@ export function GroundedAnswer({
           repositoryRoots={repositoryRoots}
           openRepositoryReference={openRepositoryReference}
         />
-        <UncertaintyLine markers={answer.uncertainty} />
+        <UncertaintyLine markers={answer.uncertainty} coverage={answer.contextPack.coverage} />
         <OmittedLine
           omittedCount={answer.contextPack.omittedCount}
           omittedCounts={answer.contextPack.omittedCounts}

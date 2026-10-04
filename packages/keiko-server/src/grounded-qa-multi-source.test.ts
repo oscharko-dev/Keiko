@@ -408,8 +408,9 @@ describe("splitExplorationBudget", () => {
 
     expect(budgets).toHaveLength(3);
     expect(budgetSum(budgets)).toStrictEqual(DEFAULT_EXPLORATION_BUDGET);
-    expect(budgets[0]?.filesReadMax).toBeGreaterThan(budgets[1]?.filesReadMax ?? 0);
-    expect(budgets[1]?.filesReadMax).toBeGreaterThanOrEqual(budgets[2]?.filesReadMax ?? 0);
+    expect(budgets.every((budget) => budget.filesReadMax === null)).toBe(true);
+    expect(budgets[0]?.excerptBytesMax).toBeGreaterThan(budgets[1]?.excerptBytesMax ?? 0);
+    expect(budgets[1]?.excerptBytesMax).toBeGreaterThanOrEqual(budgets[2]?.excerptBytesMax ?? 0);
     expect(budgets.filter((budget) => budget.rerankCallsMax > 0)).toHaveLength(1);
   });
 
@@ -417,13 +418,18 @@ describe("splitExplorationBudget", () => {
     const base = { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1 };
     const budgets = splitExplorationBudgets(base, scopes, query);
     expect(budgetSum(budgets).filesReadMax).toBe(1);
-    expect(budgets.filter((budget) => budget.filesReadMax > 0)).toHaveLength(1);
+    expect(
+      budgets.filter((budget) => budget.filesReadMax !== null && budget.filesReadMax > 0),
+    ).toHaveLength(1);
   });
 
   it("keeps the legacy equal split helper deterministic", () => {
     const split = splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, 3);
     expect(split.searchCallsMax).toBe(6);
-    expect(split.filesReadMax).toBe(11);
+    expect(split.filesReadMax).toBeNull();
+    expect(
+      splitExplorationBudget({ ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 32 }, 3).filesReadMax,
+    ).toBe(11);
   });
 });
 
@@ -448,7 +454,8 @@ describe("splitExplorationBudgets", () => {
 
     expect(budgets[0]?.filesReadMax).toBeGreaterThan(budgets[1]?.filesReadMax ?? 0);
     expect(budgets[0]?.searchCallsMax).toBeGreaterThan(budgets[2]?.searchCallsMax ?? 0);
-    expect(budgets.reduce((sum, budget) => sum + budget.filesReadMax, 0)).toBe(30);
+    expect(budgets.every((budget) => budget.filesReadMax !== null)).toBe(true);
+    expect(budgets.reduce((sum, budget) => sum + (budget.filesReadMax ?? 0), 0)).toBe(30);
   });
 });
 
@@ -683,7 +690,7 @@ describe("mergeContextPackSummaries", () => {
     const b = buildGroundedAnswerContextPackSummary(rootPack, 1, 13);
     const merged = mergeContextPackSummaries([a, b]);
     expect(merged.usage.searchCalls).toBe(a.usage.searchCalls + b.usage.searchCalls);
-    expect(merged.budget.filesReadMax).toBe(a.budget.filesReadMax + b.budget.filesReadMax);
+    expect(merged.budget.filesReadMax).toBeNull();
     expect(merged.citationCount).toBe(2);
     expect(merged.omittedCount).toBe(a.omittedCount + b.omittedCount);
     expect(merged.fileCount).toBe(-1);
@@ -1303,7 +1310,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       11,
     );
     expect(answer.contextPack.usage.searchCalls).toBe(baseSummary.usage.searchCalls * 2);
-    expect(answer.contextPack.budget.filesReadMax).toBe(baseSummary.budget.filesReadMax * 2);
+    expect(answer.contextPack.budget.filesReadMax).toBeNull();
     expect(answer.uncertainty).toHaveLength(2);
   });
 
@@ -1484,11 +1491,11 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
 
     expect(result.status).toBe(200);
     expect(budgetSum([...seenBudgets.values()])).toStrictEqual(DEFAULT_EXPLORATION_BUDGET);
-    expect(seenBudgets.get("services/payments-api")?.filesReadMax).toBeGreaterThan(
-      seenBudgets.get("apps/web")?.filesReadMax ?? 0,
+    expect(seenBudgets.get("services/payments-api")?.excerptBytesMax).toBeGreaterThan(
+      seenBudgets.get("apps/web")?.excerptBytesMax ?? 0,
     );
-    expect(seenBudgets.get("apps/web")?.filesReadMax).toBeGreaterThanOrEqual(
-      seenBudgets.get("docs")?.filesReadMax ?? 0,
+    expect(seenBudgets.get("apps/web")?.excerptBytesMax).toBeGreaterThanOrEqual(
+      seenBudgets.get("docs")?.excerptBytesMax ?? 0,
     );
     expect([...seenBudgets.values()].filter((budget) => budget.rerankCallsMax > 0)).toHaveLength(1);
   });

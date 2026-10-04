@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "cf250d93d61c81253b4b8ac8d903c34dd00c8997db69336ce1e28c37e86bbfa3" as const;
+  "e2b16624137403635548c46c7c24e968b3fc6e0ff3b66abdcb6f48ba7dd4efad" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -24886,6 +24886,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      filesReadBounded: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       excerptBytesMax: {
         type: "integer",
         dataClass: "count",
@@ -41613,6 +41618,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "boolean",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "filesReadBounded",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "filesReadMax",

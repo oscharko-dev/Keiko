@@ -138,7 +138,10 @@ requests still require clarification, and implicit roots retain their narrowing 
 Repository orientation uses the existing recursive file-discovery facade in addition to
 metadata and overview documents; a source-only folder must produce actual source evidence.
 Recursive lexical search and file discovery visit the accepted scope without a default file-count
-or elapsed-time cutoff. `null` limits express that policy on the wire; internal execution controls
+or elapsed-time cutoff. Final source reads likewise have no default file-count cutoff: `filesReadMax: null`
+retains eligible requested facts under the actual excerpt-byte and model-input budgets. Explicit finite
+caller read budgets remain independently enforced. Source reads use at most eight concurrent descriptor
+reads, so a broad answer cannot materialize all 2 MiB buffers at once. `null` limits express that policy on the wire; internal execution controls
 still honor an explicit caller deadline or cancellation. Directory entries stream in bounded batches,
 source bytes are processed with bounded concurrency, and only bounded best matches and diagnostic
 summaries survive the scan. Text files up to and including 2 MiB are eligible regardless of extension;

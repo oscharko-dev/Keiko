@@ -1026,7 +1026,9 @@ export function packBudgetSummary(pack: ConnectedContextPack): string {
   const { usage, budget } = pack;
   return [
     `search calls ${String(usage.searchCalls)}/${String(budget.searchCallsMax)}`,
-    `files read ${String(usage.filesRead)}/${String(budget.filesReadMax)}`,
+    budget.filesReadMax === null
+      ? `files read ${String(usage.filesRead)}`
+      : `files read ${String(usage.filesRead)}/${String(budget.filesReadMax)}`,
     `excerpt bytes ${String(usage.excerptBytes)}/${String(budget.excerptBytesMax)}`,
     `model input tokens ${String(usage.modelInputTokens)}/${String(budget.modelInputTokensMax)}`,
     `model output tokens ${String(usage.modelOutputTokens)}/${String(budget.modelOutputTokensMax)}`,

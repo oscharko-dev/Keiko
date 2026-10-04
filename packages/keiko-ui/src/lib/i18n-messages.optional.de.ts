@@ -1359,6 +1359,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "{max} ist das Lesebudget für diese Antwort, nicht die Anzahl der Dateien im Ordner. Rekursive Prüfung und Antwortauszüge werden getrennt gezählt.",
   "grounded.inspection.searchCount": "{used} / {max} Suchvorgänge",
   "grounded.inspection.fileCount": "{used} / {max} Dateien",
+  "grounded.inspection.fileCountUncapped": "{used} Dateien gelesen",
+  "grounded.inspection.readHintUncapped":
+    "Kein festes Dateianzahllimit. Ausgewählte Belege bleiben durch Auszugsgröße und Modellkontext begrenzt. Rekursive Prüfung und Antwortauszüge werden getrennt gezählt.",
+  "grounded.inspection.resultsLimited": "Weitere passende Treffer ausgelassen",
   "grounded.inspection.scopeFileCount": "{used} / {max} Dateien je Suchbereich",
   "grounded.inspection.scopeCountHint":
     "Dies sind Summen je Suchbereich. Überlappende Suchbereiche können dieselbe Datei mehrfach zählen.",
@@ -1413,6 +1417,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "{count} Quellenangabe · {read} / {max} Dateien für diese Antwort gelesen{omitted}",
   "grounded.summary.connected.other":
     "{count} Quellenangaben · {read} / {max} Dateien für diese Antwort gelesen{omitted}",
+  "grounded.summary.connected.uncapped.one":
+    "{count} Quellenangabe · {read} Dateien gelesen für diese Antwort{omitted}",
+  "grounded.summary.connected.uncapped.other":
+    "{count} Quellenangaben · {read} Dateien gelesen für diese Antwort{omitted}",
   "grounded.summary.notUsed": " · {count} nicht verwendet",
   "grounded.summary.knowledge.one": "{count} Quellenangabe · {used} / {budget} Referenzen",
   "grounded.summary.knowledge.other": "{count} Quellenangaben · {used} / {budget} Referenzen",
@@ -1445,7 +1453,11 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "grounded.detail.staleEvidence":
     "Ein Teil der Belege ist möglicherweise veraltet. Prüfe diese Angaben anhand der aktuellen Quelle.",
   "grounded.detail.scopeIncomplete":
-    "Ein Teil der verbundenen Quellen konnte nicht vollständig untersucht werden. Die Antwort kann Details auslassen.",
+    "Die ausgewählten Belege sind unvollständig. Ein Teil der Quellen oder passenden Textstellen konnte nicht aufgenommen werden. Die Antwort kann Details auslassen.",
+  "grounded.detail.scopeMatchesOmitted":
+    "Alle zugelassenen Dateien je Suchbereich wurden durchsucht. Weitere passende Treffer wurden nicht in die Antwortbelege aufgenommen.",
+  "grounded.detail.scopeReadError":
+    "Beim Durchsuchen oder Lesen verbundener Quellen trat ein Fehler auf. Die Antwort kann Details aus diesen Quellen auslassen.",
   "grounded.detail.budgetClipped":
     "Ein festgelegtes Limit hat die berücksichtigten Informationen begrenzt. Ein Teil der Quellen oder Antwortdetails kann fehlen.",
   "grounded.detail.toolUnavailable":

@@ -14,7 +14,7 @@ export interface GroundedCandidateSelectionInput {
   readonly kept: readonly CandidateFile[];
   readonly omitted: readonly OmittedContextEntry[];
   readonly scopeKind: SelectedScope["kind"];
-  readonly filesReadMax: number;
+  readonly filesReadMax: number | null;
   readonly nowMs: number;
 }
 
@@ -24,7 +24,9 @@ export interface GroundedCandidateSelection {
 }
 
 function boundedFileLimit(input: GroundedCandidateSelectionInput): number {
-  return Math.max(0, Math.floor(input.filesReadMax));
+  return input.filesReadMax === null
+    ? input.kept.length
+    : Math.max(0, Math.floor(input.filesReadMax));
 }
 
 function selectedWorkspaceCandidates(

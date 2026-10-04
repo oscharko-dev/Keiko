@@ -342,7 +342,8 @@ function expectedRequestExtra(input: OrchestratorInput): Readonly<Record<string,
     caseSensitive: input.query.caseSensitive,
     maxResults: input.query.maxResults,
     searchCallsMax: budget.searchCallsMax,
-    filesReadMax: budget.filesReadMax,
+    ...(budget.filesReadMax === null ? {} : { filesReadMax: budget.filesReadMax }),
+    filesReadBounded: budget.filesReadMax !== null,
     excerptBytesMax: budget.excerptBytesMax,
     modelInputTokensMax: budget.modelInputTokensMax,
     modelOutputTokensMax: budget.modelOutputTokensMax,
@@ -1006,7 +1007,12 @@ describe("retrieveConnectedContextPack activity log", () => {
       reportCount: 0,
       fallbackSearchCount: 0,
     });
-    expect(workspaceIndex.searchCount).toBeGreaterThan(0);
+    expect(workspaceIndex.searchCount).toBe(0);
+    expect(nestedExtra(details.extra, "workspaceIo")).toMatchObject({
+      readDirCalls: 0,
+      contentReadCalls: 0,
+      contentReadBytes: 0,
+    });
     expectBodyFree(activityLog);
   });
 

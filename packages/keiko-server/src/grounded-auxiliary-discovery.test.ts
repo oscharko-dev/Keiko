@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  DEFAULT_EXPLORATION_BUDGET,
   validateConnectedContextPack,
   type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -24,6 +25,8 @@ function workspace(): WorkspaceInfo {
     root,
     selectedRoot: root,
     name: "auxiliary-discovery",
+    version: "0.0.0",
+    testFramework: "vitest",
     sourceDirs: [],
     testDirs: [],
     languages: ["typescript"],
@@ -61,8 +64,8 @@ async function retrieve(text: string): Promise<ConnectedContextPack> {
     nowMs: () => NOW,
     detectWorkspace: workspace,
   });
-  expect(output.pack.files.length).toBeLessThanOrEqual(output.plan.budget.filesReadMax);
-  expect(output.pack.usage.filesRead).toBeLessThanOrEqual(output.plan.budget.filesReadMax);
+  expect(output.plan.budget.filesReadMax).toBeNull();
+  expect(output.pack.usage.excerptBytes).toBeLessThanOrEqual(output.plan.budget.excerptBytesMax);
   expect(validateConnectedContextPack(output.pack).ok).toBe(true);
   return output.pack;
 }
@@ -186,7 +189,11 @@ describe("grounded auxiliary discovery traverses the complete admitted scope", (
       "Where are FairAlphaProbe and FairBetaProbe implemented? Cite both actual files and lines.",
     );
     const output = await retrieveConnectedContextPack(
-      { ...input, scope: { ...input.scope, kind: "directory", relativePaths: ["fair-targets"] } },
+      {
+        ...input,
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 32 },
+        scope: { ...input.scope, kind: "directory", relativePaths: ["fair-targets"] },
+      },
       {
         correlationId: undefined,
         answerer: { answer: () => Promise.reject(new Error("Retrieval must not call the model.")) },
@@ -199,7 +206,8 @@ describe("grounded auxiliary discovery traverses the complete admitted scope", (
     );
     const beta = output.pack.files.find((file) => file.scopePath.endsWith("/FairBetaProbe.ts"));
     expect(beta?.excerpts.some((excerpt) => excerpt.content.includes("return 91"))).toBe(true);
-    expect(output.pack.usage.filesRead).toBeLessThanOrEqual(output.plan.budget.filesReadMax);
+    expect(output.plan.budget.filesReadMax).toBe(32);
+    expect(output.pack.usage.filesRead).toBeLessThanOrEqual(32);
     expect(output.pack.diagnostics?.coverage?.reasons).toContain("match-cap");
     expect(output.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(true);
     expect(validateConnectedContextPack(output.pack).ok).toBe(true);

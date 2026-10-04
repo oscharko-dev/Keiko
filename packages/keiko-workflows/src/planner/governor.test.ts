@@ -42,9 +42,11 @@ function happyQuery(): RetrievalQuery {
   };
 }
 
+const FINITE_READ_BUDGET = { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 32 };
+
 function readyPlan(): ExplorationPlan {
   return createExplorationPlan(
-    { scope: happyScope(), query: happyQuery() },
+    { scope: happyScope(), query: happyQuery(), budget: FINITE_READ_BUDGET },
     { nowMs: () => 1_700_000_000_000 },
   );
 }
@@ -67,6 +69,13 @@ function makeGovernor(): GovernorState {
 }
 
 describe("createGovernor", () => {
+  it("keeps unlimited default reads governed by the other finite dimensions", () => {
+    const plan = createExplorationPlan({ scope: happyScope(), query: happyQuery() });
+    const state = applyUsage(createGovernor(plan), delta({ filesRead: 40 }));
+    expect(canContinue(state)).toBe(true);
+    expect(state.usage.filesRead).toBe(40);
+  });
+
   it("throws when the plan is not in ready state", () => {
     const blocked: ExplorationPlan = { ...readyPlan(), state: "clarification-needed" };
     expect(() => createGovernor(blocked)).toThrow(RangeError);
@@ -93,7 +102,7 @@ describe("applyUsage", () => {
 
   it("exceeding filesRead budget transitions to budget-exhausted with named dimension", () => {
     let g = makeGovernor();
-    g = applyUsage(g, delta({ filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1 }));
+    g = applyUsage(g, delta({ filesRead: FINITE_READ_BUDGET.filesReadMax + 1 }));
     expect(g.status).toBe("budget-exhausted");
     expect(g.stopReason).toContain("filesRead");
   });
@@ -104,7 +113,7 @@ describe("applyUsage", () => {
     g = applyUsage(
       g,
       delta({
-        filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1,
+        filesRead: FINITE_READ_BUDGET.filesReadMax + 1,
         elapsedMs: 30_001,
       }),
     );
@@ -136,7 +145,7 @@ describe("canContinue", () => {
 
   it("returns false immediately after budget-exhausted", () => {
     let g = makeGovernor();
-    g = applyUsage(g, delta({ filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1 }));
+    g = applyUsage(g, delta({ filesRead: FINITE_READ_BUDGET.filesReadMax + 1 }));
     expect(canContinue(g)).toBe(false);
   });
 });
@@ -158,7 +167,7 @@ describe("advanceRing", () => {
 
   it("does not advance after budget exhaustion", () => {
     let g = makeGovernor();
-    g = applyUsage(g, delta({ filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1 }));
+    g = applyUsage(g, delta({ filesRead: FINITE_READ_BUDGET.filesReadMax + 1 }));
     const advanced = advanceRing(g);
     expect(advanced).toBe(g);
     expect(advanced.currentRingIndex).toBe(0);
@@ -174,7 +183,7 @@ describe("complete", () => {
 
   it("does not overwrite budget-exhausted terminal state", () => {
     let g = makeGovernor();
-    g = applyUsage(g, delta({ filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1 }));
+    g = applyUsage(g, delta({ filesRead: FINITE_READ_BUDGET.filesReadMax + 1 }));
     const completed = complete(g);
     expect(completed).toBe(g);
     expect(completed.status).toBe("budget-exhausted");

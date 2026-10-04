@@ -187,7 +187,10 @@ function sumBudget(
   return summaries.reduce<GroundedAnswerContextPackSummary["budget"]>(
     (acc, s) => ({
       searchCallsMax: acc.searchCallsMax + s.budget.searchCallsMax,
-      filesReadMax: acc.filesReadMax + s.budget.filesReadMax,
+      filesReadMax:
+        acc.filesReadMax === null || s.budget.filesReadMax === null
+          ? null
+          : acc.filesReadMax + s.budget.filesReadMax,
       excerptBytesMax: acc.excerptBytesMax + s.budget.excerptBytesMax,
       modelInputTokensMax: acc.modelInputTokensMax + s.budget.modelInputTokensMax,
       modelOutputTokensMax: acc.modelOutputTokensMax + s.budget.modelOutputTokensMax,

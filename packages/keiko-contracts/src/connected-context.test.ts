@@ -162,14 +162,14 @@ describe("DEFAULT_EXPLORATION_BUDGET", () => {
   it("has finite content budgets and no default source-time cutoff", () => {
     const dims: readonly number[] = [
       DEFAULT_EXPLORATION_BUDGET.searchCallsMax,
-      DEFAULT_EXPLORATION_BUDGET.filesReadMax,
       DEFAULT_EXPLORATION_BUDGET.excerptBytesMax,
       DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
       DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax,
       DEFAULT_EXPLORATION_BUDGET.rerankCallsMax,
     ];
     expect(DEFAULT_EXPLORATION_BUDGET.elapsedMsMax).toBeNull();
-    expect(dims).toHaveLength(6);
+    expect(DEFAULT_EXPLORATION_BUDGET.filesReadMax).toBeNull();
+    expect(dims).toHaveLength(5);
     for (const value of dims) {
       expect(Number.isInteger(value)).toBe(true);
       expect(value).toBeGreaterThanOrEqual(0);
@@ -303,6 +303,12 @@ describe("isValidLineRange", () => {
 
 // ─── isWithinBudget ───────────────────────────────────────────────────────────
 describe("isWithinBudget", () => {
+  it("allows default file counts while retaining explicit finite read budgets", () => {
+    const usage = { ...happyUsage(), filesRead: 40 };
+    expect(isWithinBudget(usage, DEFAULT_EXPLORATION_BUDGET)).toBe(true);
+    expect(isWithinBudget(usage, { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 32 })).toBe(false);
+  });
+
   it("keeps a complete source scan beyond 30 seconds within the default time policy", () => {
     expect(isWithinBudget({ ...happyUsage(), elapsedMs: 34_700 }, DEFAULT_EXPLORATION_BUDGET)).toBe(
       true,
@@ -312,7 +318,7 @@ describe("isWithinBudget", () => {
   it("returns true when every dimension equals its cap", () => {
     const usage: ExplorationUsage = {
       searchCalls: DEFAULT_EXPLORATION_BUDGET.searchCallsMax,
-      filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax,
+      filesRead: 40,
       excerptBytes: DEFAULT_EXPLORATION_BUDGET.excerptBytesMax,
       modelInputTokens: DEFAULT_EXPLORATION_BUDGET.modelInputTokensMax,
       modelOutputTokens: DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax,

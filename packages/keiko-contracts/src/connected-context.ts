@@ -161,7 +161,8 @@ export interface EvidenceAtomMetrics {
 // overshoot in another.
 export interface ExplorationBudget {
   readonly searchCallsMax: number;
-  readonly filesReadMax: number;
+  // Null selects evidence under byte/model bounds without an artificial file-count cutoff.
+  readonly filesReadMax: number | null;
   readonly excerptBytesMax: number;
   readonly modelInputTokensMax: number;
   readonly modelOutputTokensMax: number;
@@ -170,10 +171,10 @@ export interface ExplorationBudget {
   readonly rerankCallsMax: number;
 }
 
-// KEIKO-0880: Object.freeze — flat record of numbers, so a shallow freeze is sufficient.
+// KEIKO-0880: Object.freeze — flat record of scalar values, so a shallow freeze is sufficient.
 export const DEFAULT_EXPLORATION_BUDGET: ExplorationBudget = Object.freeze({
   searchCallsMax: 16,
-  filesReadMax: 32,
+  filesReadMax: null,
   excerptBytesMax: 131_072,
   modelInputTokensMax: 116_000,
   modelOutputTokensMax: 4_096,
@@ -593,7 +594,7 @@ export function isValidLineRange(range: unknown): boolean {
   return endLine >= startLine;
 }
 
-function isWithinElapsedBudget(used: number, cap: number | null): boolean {
+function isWithinOptionalBudget(used: number, cap: number | null): boolean {
   if (!isFiniteNonNegativeInteger(used)) return false;
   return cap === null || (isFiniteNonNegativeInteger(cap) && used <= cap);
 }
@@ -604,7 +605,6 @@ export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudge
   }
   const dims: readonly (readonly [number, number])[] = [
     [usage.searchCalls, budget.searchCallsMax],
-    [usage.filesRead, budget.filesReadMax],
     [usage.excerptBytes, budget.excerptBytesMax],
     [usage.modelInputTokens, budget.modelInputTokensMax],
     [usage.modelOutputTokens, budget.modelOutputTokensMax],
@@ -627,7 +627,10 @@ export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudge
       return false;
     }
   }
-  return isWithinElapsedBudget(usage.elapsedMs, budget.elapsedMsMax);
+  return (
+    isWithinOptionalBudget(usage.elapsedMs, budget.elapsedMsMax) &&
+    isWithinOptionalBudget(usage.filesRead, budget.filesReadMax)
+  );
 }
 
 function pushIf(reasons: string[], condition: boolean, reason: string): void {
@@ -1184,7 +1187,10 @@ function checkBudgetDimension(
   dimension: string,
   reasons: string[],
 ): void {
-  if (!(dimension === "elapsedMs" && cap === null) && !isFiniteNonNegativeInteger(cap)) {
+  if (
+    !((dimension === "elapsedMs" || dimension === "filesRead") && cap === null) &&
+    !isFiniteNonNegativeInteger(cap)
+  ) {
     reasons.push(`budget.${dimension}Max not a finite non-negative integer`);
     return;
   }

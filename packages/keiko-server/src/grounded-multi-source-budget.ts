@@ -8,7 +8,6 @@ import type { ChatConnectedScope } from "@oscharko-dev/keiko-contracts/bff-wire"
 
 const BUDGET_KEYS = [
   "searchCallsMax",
-  "filesReadMax",
   "excerptBytesMax",
   "modelInputTokensMax",
   "modelOutputTokensMax",
@@ -127,10 +126,11 @@ function budgetAt(
   allocations: ReadonlyMap<keyof ExplorationBudget, readonly number[]>,
   index: number,
   elapsedMsMax: number | null,
+  filesReadMax: number | null,
 ): ExplorationBudget {
   return {
     searchCallsMax: allocationAt(allocations, "searchCallsMax", index),
-    filesReadMax: allocationAt(allocations, "filesReadMax", index),
+    filesReadMax,
     excerptBytesMax: allocationAt(allocations, "excerptBytesMax", index),
     modelInputTokensMax: allocationAt(allocations, "modelInputTokensMax", index),
     modelOutputTokensMax: allocationAt(allocations, "modelOutputTokensMax", index),
@@ -150,7 +150,11 @@ function budgetsFromWeights(
   }
   const elapsed =
     base.elapsedMsMax === null ? undefined : allocateDimension(base.elapsedMsMax, weights);
-  return weights.map((_, index) => budgetAt(allocations, index, elapsed?.[index] ?? null));
+  const reads =
+    base.filesReadMax === null ? undefined : allocateDimension(base.filesReadMax, weights);
+  return weights.map((_, index) =>
+    budgetAt(allocations, index, elapsed?.[index] ?? null, reads?.[index] ?? null),
+  );
 }
 
 export function splitExplorationBudget(base: ExplorationBudget, n: number): ExplorationBudget {

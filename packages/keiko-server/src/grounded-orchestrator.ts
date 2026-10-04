@@ -112,6 +112,7 @@ import {
   testSourcePairingAdapter,
 } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { CancelledError, ERROR_CODES } from "@oscharko-dev/keiko-model-gateway";
+import { mapWithConcurrency } from "./bounded-concurrency.js";
 import {
   isWorkspacePathSnapshotCurrent,
   nodeWorkspaceFs,
@@ -210,6 +211,7 @@ const SEARCH_CONNECTED_CONTEXT_STARTED_OPERATION = defineActivityLogOperation({
     maxResults: { type: "integer", dataClass: "count", required: false },
     searchCallsMax: { type: "integer", dataClass: "count", required: false },
     filesReadMax: { type: "integer", dataClass: "count", required: false },
+    filesReadBounded: { type: "boolean", dataClass: "closed-enum", required: false },
     excerptBytesMax: { type: "integer", dataClass: "count", required: false },
     modelInputTokensMax: { type: "integer", dataClass: "count", required: false },
     modelOutputTokensMax: { type: "integer", dataClass: "count", required: false },
@@ -1090,7 +1092,7 @@ function usageDelta(overrides: Partial<ExplorationUsage> = {}): ExplorationUsage
 function clampUsageToBudget(usage: ExplorationUsage, budget: ExplorationBudget): ExplorationUsage {
   return {
     searchCalls: Math.min(usage.searchCalls, budget.searchCallsMax),
-    filesRead: Math.min(usage.filesRead, budget.filesReadMax),
+    filesRead: Math.min(usage.filesRead, budget.filesReadMax ?? Number.POSITIVE_INFINITY),
     excerptBytes: Math.min(usage.excerptBytes, budget.excerptBytesMax),
     modelInputTokens: Math.min(usage.modelInputTokens, budget.modelInputTokensMax),
     modelOutputTokens: Math.min(usage.modelOutputTokens, budget.modelOutputTokensMax),
@@ -1135,7 +1137,7 @@ function toolUnavailable(claim: string, nowMs: number): UncertaintyMarker {
 
 function readBudgetStopReason(budget: ExplorationBudget): string | undefined {
   const exhausted = [
-    ...(budget.filesReadMax <= 0 ? ["filesRead"] : []),
+    ...(budget.filesReadMax !== null && budget.filesReadMax <= 0 ? ["filesRead"] : []),
     ...(budget.excerptBytesMax <= 0 ? ["excerptBytes"] : []),
   ];
   if (exhausted.length === 0) {
@@ -3758,7 +3760,7 @@ async function deterministicMetadataEvidence(
     queryFingerprint: projectMetadataQueryFingerprint(input.query),
     control,
     existsCache,
-    maxResults: plan.budget.filesReadMax,
+    maxResults: plan.budget.filesReadMax ?? input.query.maxResults,
   };
   const atoms = [...(await projectMetadataAtoms(discovery)), ...repositoryOverviewAtoms(discovery)];
   const emittedAtMs = nowMs();
@@ -4446,7 +4448,10 @@ interface RemainingExcerptCapacity {
 
 function remainingExcerptCapacity(inputs: ExcerptInputs): RemainingExcerptCapacity {
   return {
-    files: Math.max(0, inputs.budget.filesReadMax - inputs.initialUsage.filesRead),
+    files: Math.max(
+      0,
+      (inputs.budget.filesReadMax ?? Number.POSITIVE_INFINITY) - inputs.initialUsage.filesRead,
+    ),
     bytes: Math.max(0, inputs.budget.excerptBytesMax - inputs.initialUsage.excerptBytes),
   };
 }
@@ -4498,12 +4503,10 @@ async function readKeptExcerpts(
     uncertainty.push(budgetClipped("budget-exhausted on filesRead", inputs.nowMs()));
   }
   const byteBudgets = distributeByteBudget(remainingBytes, readablePaths.length);
-  const results = await Promise.all(
-    readablePaths.map((scopePath, index) => {
-      throwIfCancelled(inputs.signal);
-      return readPathExcerptTask(scopePath, inputs, byteBudgets[index] ?? 0);
-    }),
-  );
+  const results = await mapWithConcurrency(readablePaths, 8, (scopePath, index) => {
+    throwIfCancelled(inputs.signal);
+    return readPathExcerptTask(scopePath, inputs, byteBudgets[index] ?? 0);
+  });
   for (const { scopePath, result, skippedReason } of results) {
     throwIfCancelled(inputs.signal);
     if (result === undefined || result.windows.length === 0) {
@@ -5371,7 +5374,7 @@ interface ConnectedContextActivityIdentity {
   readonly caseSensitive: ActivityBoolean;
   readonly maxResults: ActivityNumber;
   readonly searchCallsMax: ActivityNumber;
-  readonly filesReadMax: ActivityNumber;
+  readonly filesReadMax: ActivityNumber | null;
   readonly excerptBytesMax: ActivityNumber;
   readonly modelInputTokensMax: ActivityNumber;
   readonly modelOutputTokensMax: ActivityNumber;
@@ -5391,6 +5394,7 @@ interface ConnectedContextCommonActivityFields {
   readonly maxResults?: number;
   readonly searchCallsMax?: number;
   readonly filesReadMax?: number;
+  readonly filesReadBounded: boolean;
   readonly excerptBytesMax?: number;
   readonly modelInputTokensMax?: number;
   readonly modelOutputTokensMax?: number;
@@ -5501,7 +5505,10 @@ function budgetActivityIdentity(
   const budget = activityBudget(input);
   return {
     searchCallsMax: activityNumber(budget, "searchCallsMax"),
-    filesReadMax: activityNumber(budget, "filesReadMax"),
+    filesReadMax:
+      activityProperty(budget, "filesReadMax") === null
+        ? null
+        : activityNumber(budget, "filesReadMax"),
     excerptBytesMax: activityNumber(budget, "excerptBytesMax"),
     modelInputTokensMax: activityNumber(budget, "modelInputTokensMax"),
     modelOutputTokensMax: activityNumber(budget, "modelOutputTokensMax"),
@@ -5587,6 +5594,7 @@ function commonActivityExtra(
     ...(maxResults === undefined ? {} : { maxResults }),
     ...(searchCallsMax === undefined ? {} : { searchCallsMax }),
     ...(filesReadMax === undefined ? {} : { filesReadMax }),
+    filesReadBounded: identity.filesReadMax !== null,
     ...(excerptBytesMax === undefined ? {} : { excerptBytesMax }),
     ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
     ...(modelOutputTokensMax === undefined ? {} : { modelOutputTokensMax }),

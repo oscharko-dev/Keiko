@@ -1307,6 +1307,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "{max} is the read budget for this answer, not the number of files in the folder. Recursive checks and answer excerpts are counted separately.",
   "grounded.inspection.searchCount": "{used} / {max} searches",
   "grounded.inspection.fileCount": "{used} / {max} files",
+  "grounded.inspection.fileCountUncapped": "{used} files read",
+  "grounded.inspection.readHintUncapped":
+    "No fixed file-count limit. Selected evidence remains bounded by excerpt bytes and model context. Recursive checks and answer excerpts are counted separately.",
+  "grounded.inspection.resultsLimited": "Additional matching results omitted",
   "grounded.inspection.scopeFileCount": "{used} / {max} files across search scopes",
   "grounded.inspection.scopeCountHint":
     "These are totals per search scope. Overlapping scopes can count the same file more than once.",
@@ -1361,6 +1365,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "{count} citation · {read} / {max} files read for this answer{omitted}",
   "grounded.summary.connected.other":
     "{count} citations · {read} / {max} files read for this answer{omitted}",
+  "grounded.summary.connected.uncapped.one":
+    "{count} citation · {read} files read for this answer{omitted}",
+  "grounded.summary.connected.uncapped.other":
+    "{count} citations · {read} files read for this answer{omitted}",
   "grounded.summary.notUsed": " · {count} not used",
   "grounded.summary.knowledge.one": "{count} citation · {used} / {budget} references",
   "grounded.summary.knowledge.other": "{count} citations · {used} / {budget} references",
@@ -1391,7 +1399,11 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "grounded.detail.staleEvidence":
     "Some evidence may be outdated. Check these statements against the current source.",
   "grounded.detail.scopeIncomplete":
-    "Some connected sources could not be fully inspected. The answer may omit details.",
+    "The selected evidence is incomplete. Some sources or matching passages could not be included. The answer may omit details.",
+  "grounded.detail.scopeMatchesOmitted":
+    "All eligible files in each search scope were searched. Additional matching results were not included in the answer evidence.",
+  "grounded.detail.scopeReadError":
+    "An error occurred while searching or reading connected sources. The answer may omit details from those sources.",
   "grounded.detail.budgetClipped":
     "A configured limit restricted the information considered. Some sources or answer details may be missing.",
   "grounded.detail.toolUnavailable":

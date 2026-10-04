@@ -166,6 +166,28 @@ function contextPack(
   };
 }
 
+function fullMatchLimitedCoverage(
+  overrides: Partial<NonNullable<GroundedAnswerContextPackSummary["coverage"]>> = {},
+): NonNullable<GroundedAnswerContextPackSummary["coverage"]> {
+  return {
+    incomplete: true,
+    reasons: ["match-cap"],
+    filesDiscovered: 112,
+    filesAfterPolicy: 112,
+    filesScanned: 112,
+    filesSkipped: 0,
+    truncated: true,
+    ignoredByDiscovery: 0,
+    deniedByDiscovery: 0,
+    depthPrunedByDiscovery: 0,
+    maxFilesPrunedByDiscovery: 0,
+    matchesReturned: 50,
+    elapsedMs: 1,
+    limits: { maxFilesScanned: null, maxMatchesReturned: 50, elapsedMsMax: null },
+    ...overrides,
+  };
+}
+
 function producedEmptyScopeSummary(
   summary: GroundedAnswerContextPackSummary,
 ): GroundedAnswerContextPackSummary {
@@ -2006,6 +2028,94 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     expect(screen.getByText("1 Quellenangabe · 1 / 10 Referenzen")).toBeInTheDocument();
   });
 
+  it.each(["de", "en"] as const)(
+    "shows uncapped selected reads without a false denominator in %s",
+    async (locale) => {
+      const pack = contextPack();
+      const { container } = renderInLocale(
+        locale,
+        answer({
+          contextPack: { ...pack, budget: { ...pack.budget, filesReadMax: null } },
+        }),
+      );
+      await screen.findAllByText(locale === "de" ? "Evidenz" : "Evidence");
+      openEvidenceDisclosure(container);
+      expect(container).not.toHaveTextContent("5 / 32");
+      expect(container).not.toHaveTextContent("5 / —");
+      expect(container).not.toHaveTextContent("5 / ∞");
+      expect(container).toHaveTextContent(locale === "de" ? "5 Dateien gelesen" : "5 files read");
+      expect(container).toHaveTextContent(
+        locale === "de" ? "Kein festes Dateianzahllimit" : "No fixed file-count limit",
+      );
+    },
+  );
+
+  it("retains an explicitly finite32 read budget in the evidence summary and counters", async () => {
+    const { container } = renderInLocale("de", answer({ contextPack: contextPack() }));
+    await screen.findAllByText("Evidenz");
+    openEvidenceDisclosure(container);
+    expect(container).toHaveTextContent("5 / 32 Dateien");
+    expect(container).toHaveTextContent("32 ist das Lesebudget");
+    expect(container).not.toHaveTextContent("Kein festes Dateianzahllimit");
+  });
+
+  it.each(["match-cap", "io-error"] as const)(
+    "explains typed %s coverage truthfully in German",
+    async (reason) => {
+      const pack = contextPack();
+      const claim = "Opaque original coverage diagnostic.";
+      const { container } = renderInLocale(
+        "de",
+        answer({
+          uncertainty: [{ kind: "scope-incomplete", claim }],
+          contextPack: {
+            ...pack,
+            coverage: fullMatchLimitedCoverage({ reasons: [reason] }),
+          },
+        }),
+      );
+      await screen.findAllByText("Evidenz");
+      openEvidenceDisclosure(container);
+      expect(container).toHaveTextContent(
+        reason === "match-cap"
+          ? "Weitere passende Treffer wurden nicht in die Antwortbelege aufgenommen."
+          : "Beim Durchsuchen oder Lesen verbundener Quellen trat ein Fehler auf.",
+      );
+      if (reason === "match-cap")
+        expect(container).toHaveTextContent(
+          "Alle zugelassenen Dateien je Suchbereich wurden durchsucht.",
+        );
+      expect(container).toHaveTextContent("Umfang unvollständig");
+      expect(screen.getByText(claim)).not.toBeVisible();
+      fireEvent.click(screen.getByText("Technische Originaldetails"));
+      expect(screen.getByText(claim)).toBeVisible();
+    },
+  );
+
+  it.each([
+    { filesScanned: 111 },
+    { filesSkipped: 1 },
+    { depthPrunedByDiscovery: 1 },
+    { maxFilesPrunedByDiscovery: 1 },
+    { reasons: ["match-cap", "io-error"] as const },
+    { reasons: ["timeout"] as const },
+  ])("does not claim complete traversal for incomplete coverage %j", async (coverage) => {
+    const pack = contextPack();
+    const { container } = renderInLocale(
+      "en",
+      answer({
+        uncertainty: [{ kind: "scope-incomplete", claim: "Original incomplete evidence." }],
+        contextPack: { ...pack, coverage: fullMatchLimitedCoverage(coverage) },
+      }),
+    );
+    await screen.findAllByText("Evidence");
+    openEvidenceDisclosure(container);
+    expect(container).not.toHaveTextContent(
+      "All eligible files in each search scope were searched.",
+    );
+    expect(container).toHaveTextContent("scope incomplete");
+  });
+
   it("localizes incomplete search hints while retaining exact original diagnostics behind disclosure", async () => {
     const claims = [
       "repository search coverage was incomplete (reasons io-error)",
@@ -2023,7 +2133,7 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     openEvidenceDisclosure(container);
     expect(
       screen.getAllByText(
-        "Umfang unvollständig: Ein Teil der verbundenen Quellen konnte nicht vollständig untersucht werden. Die Antwort kann Details auslassen.",
+        "Umfang unvollständig: Die ausgewählten Belege sind unvollständig. Ein Teil der Quellen oder passenden Textstellen konnte nicht aufgenommen werden. Die Antwort kann Details auslassen.",
       ),
     ).toHaveLength(1);
     expect(

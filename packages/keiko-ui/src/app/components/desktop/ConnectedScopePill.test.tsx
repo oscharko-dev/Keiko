@@ -347,6 +347,23 @@ describe("ConnectedScopePill", () => {
     expect(screen.getByText(/Last grounded run:/)).toHaveTextContent("1.4k tokens, 5 files");
   });
 
+  it("ignores an uncapped file count while preserving real finite budget pressure", () => {
+    const pack = contextPack();
+    const uncapped = { ...pack, budget: { ...pack.budget, filesReadMax: null } };
+    expect(
+      buildLastGroundedBudgetStatus({
+        ...uncapped,
+        usage: { ...pack.usage, filesRead: 40 },
+      })?.pressure,
+    ).toBe("low");
+    expect(
+      buildLastGroundedBudgetStatus({
+        ...uncapped,
+        usage: { ...pack.usage, filesRead: 40, modelInputTokens: 6000 },
+      })?.pressure,
+    ).toBe("exceeded");
+  });
+
   // Issue #2723 — pressureFromRatio's other three thresholds (low/high/exceeded), reached through
   // the same exported entry point the "Moderate" case above already uses.
   it.each([

@@ -1241,6 +1241,7 @@ describe("runGroundedExploration", () => {
           }),
         }),
         {
+          correlationId: undefined,
           answerer: echoAnswerer,
           fs,
           nowMs: () => NOW,
@@ -1283,6 +1284,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         fs: nodeWorkspaceFs,
         nowMs: () => NOW,
@@ -1315,7 +1317,12 @@ describe("runGroundedExploration", () => {
           maxResults: 1,
         }),
       }),
-      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
     );
     expect(out.pack.diagnostics?.coverage?.incomplete).toBe(true);
     expect(out.pack.diagnostics?.coverage?.reasons).toContain("match-cap");
@@ -1341,6 +1348,7 @@ describe("runGroundedExploration", () => {
           query: happyQuery({ text: question }),
         }),
         {
+          correlationId: undefined,
           answerer: echoAnswerer,
           nowMs: () => NOW,
           detectWorkspace: () => fakeWorkspace(),
@@ -1385,6 +1393,7 @@ describe("runGroundedExploration", () => {
           }),
         }),
         {
+          correlationId: undefined,
           answerer: echoAnswerer,
           fs: nodeWorkspaceFs,
           nowMs: () => NOW,
@@ -1431,6 +1440,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         fs: nodeWorkspaceFs,
         nowMs: () => NOW,
@@ -1463,6 +1473,7 @@ describe("runGroundedExploration", () => {
         query: happyQuery({ text: question }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         fs: nodeWorkspaceFs,
         nowMs: () => NOW,
@@ -1489,6 +1500,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         fs: nodeWorkspaceFs,
         nowMs: () => NOW,
@@ -1510,7 +1522,12 @@ describe("runGroundedExploration", () => {
           text: 'Finde rekursiv "LAB_MANUAL_MISSING". Ist dieser Marker im HTML-Handbuch vorhanden?',
         }),
       }),
-      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
     );
     expect(out.pack.diagnostics?.coverage?.incomplete).toBe(false);
     expect(out.pack.diagnostics?.coverage?.matchesReturned).toBe(0);
@@ -1531,6 +1548,7 @@ describe("runGroundedExploration", () => {
         }),
       }),
       {
+        correlationId: undefined,
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
@@ -3205,6 +3223,7 @@ describe("runGroundedExploration", () => {
     };
     const out = await retrieveConnectedContextPack(
       input({
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 32 },
         scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
         query: happyQuery({
           text: "Welche Technologien und Abhängigkeiten verwendet dieses Projekt?",
@@ -3213,7 +3232,8 @@ describe("runGroundedExploration", () => {
       { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW, fs },
     );
     expect(out.pack.files.some((file) => file.scopePath === "zproject.csproj")).toBe(true);
-    expect(out.pack.files.length).toBeLessThanOrEqual(out.pack.budget.filesReadMax);
+    expect(out.pack.budget.filesReadMax).toBe(32);
+    expect(out.pack.files.length).toBeLessThanOrEqual(32);
     expect(serviceInspections).toBe(80);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
@@ -4254,8 +4274,9 @@ describe("runGroundedExploration", () => {
     let delayed = false;
     const counted = countingNodeFs();
     const answerer = {
-      answer: vi.fn((question: string, pack: ConnectedContextPack): Promise<string> =>
-        echoAnswerer.answer(question, pack),
+      answer: vi.fn(
+        (question: string, pack: ConnectedContextPack): ReturnType<GroundedAnswerer["answer"]> =>
+          echoAnswerer.answer(question, pack),
       ),
     };
     const fs: WorkspaceFs = {
@@ -4315,8 +4336,9 @@ describe("runGroundedExploration", () => {
     const controller = new AbortController();
     const base = countingNodeFs();
     const answerer = {
-      answer: vi.fn((question: string, pack: ConnectedContextPack): Promise<string> =>
-        echoAnswerer.answer(question, pack),
+      answer: vi.fn(
+        (question: string, pack: ConnectedContextPack): ReturnType<GroundedAnswerer["answer"]> =>
+          echoAnswerer.answer(question, pack),
       ),
     };
     let cancelled = false;
