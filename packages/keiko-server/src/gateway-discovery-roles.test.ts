@@ -6,7 +6,7 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
-import type { IncomingMessage } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -60,9 +60,11 @@ async function tempDir(prefix: string): Promise<string> {
 }
 
 function ctx(body: unknown): RouteContext {
+  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage;
+  req.complete = true;
   return {
-    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
-    res: {} as RouteContext["res"],
+    req,
+    res: new ServerResponse(req),
     params: {},
     url: new URL("http://127.0.0.1/api/gateway/setup"),
     correlationId: "corr-discovery-roles",
@@ -209,16 +211,16 @@ describe("declared context windows", () => {
     return parsed.modelMetadata?.m?.contextWindow;
   }
 
-  it("reads max_input_tokens first, then the vLLM and OpenAI-compatible spellings", () => {
+  it("keeps input limits separate from total context and accepts compatible context spellings", () => {
     expect(windowOf({ model_info: { max_input_tokens: 8_192, max_model_len: 32_768 } })).toBe(
-      8_192,
+      32_768,
     );
     expect(windowOf({ max_model_len: 32_768 })).toBe(32_768);
     expect(windowOf({ context_length: 65_536 })).toBe(65_536);
     expect(windowOf({ context_window: 16_384 })).toBe(16_384);
-    // First declared field in authority order wins, whatever the others say.
-    expect(windowOf({ context_window: 16_384, max_model_len: 32_768 })).toBe(32_768);
-    expect(windowOf({ context_window: 16_384, context_length: 65_536 })).toBe(65_536);
+    // Two total-window declarations intersect independently from the input-only ceiling.
+    expect(windowOf({ context_window: 16_384, max_model_len: 32_768 })).toBe(16_384);
+    expect(windowOf({ context_window: 16_384, context_length: 65_536 })).toBe(16_384);
   });
 
   it("reads the nested records LiteLLM uses", () => {

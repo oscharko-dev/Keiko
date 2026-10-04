@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "25b5363e08d9d8cf656c408fe3d7c9904617284dc94cb2405457ebc8718ff734" as const;
+  "e15152ebcf7e9e11f9b8bcd06f898948761f7a6a4cb9e2f3ca96a1363193b09c" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -13970,6 +13970,43 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["gateway-route-rejection"],
     proofIds: ["gateway.route.rejected.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.setup.metadata.resolved",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-setup.logSetupMetadataOutcome",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["available", "unavailable", "cancelled", "failed"],
+      },
+      elapsedMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-setup-metadata"],
+    proofIds: ["gateway.setup.metadata.resolved.line"],
     releaseImpact: "patch",
   },
   {
@@ -30862,8 +30899,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 334,
-  completeClassCount: 334,
+  supportedClassCount: 335,
+  completeClassCount: 335,
   completeness: "complete",
   classes: [
     {
@@ -48476,6 +48513,62 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["gateway.route.rejected.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "gateway-setup-metadata",
+      requirementContract: "gateway-setup-metadata",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["gateway.setup.metadata.resolved"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "gateway.setup.metadata.resolved",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["gateway.setup.metadata.resolved"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "gateway.setup.metadata.resolved",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "elapsedMs",
+              type: "integer",
+              dataClass: "duration",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "duration", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.setup.metadata.resolved.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -67974,6 +68067,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.retry.exhausted": "model-gateway",
     "gateway.retry.scheduled": "model-gateway",
     "gateway.route.rejected": "model-gateway",
+    "gateway.setup.metadata.resolved": "model-gateway",
     "gateway.spend.ceiling": "model-gateway",
     "gateway.spend.rejected": "model-gateway",
     "gateway.spend.reserved": "model-gateway",

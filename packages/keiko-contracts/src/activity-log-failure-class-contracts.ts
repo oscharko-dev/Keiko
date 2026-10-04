@@ -77,6 +77,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "gateway-setup-metadata",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["gateway.setup.metadata.resolved"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["gateway.setup.metadata.resolved"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["gateway.setup.metadata.resolved"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["gateway.setup.metadata.resolved"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "duration", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "gateway-context-admission",
     requiredProductSurfaces: ["keiko-model-gateway"],
     requiredLifecycleOperations: {

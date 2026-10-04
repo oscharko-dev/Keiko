@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { IncomingMessage } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
@@ -136,9 +136,11 @@ async function tempDir(prefix: string): Promise<string> {
 }
 
 function ctx(body: unknown, correlationId?: string): RouteContext {
+  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage;
+  req.complete = true;
   return {
-    req: Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage,
-    res: {} as RouteContext["res"],
+    req,
+    res: new ServerResponse(req),
     params: {},
     url: new URL("http://127.0.0.1/api/gateway/setup"),
     correlationId,
@@ -11814,3 +11816,160 @@ describe("selected deployment discovery metadata", () => {
     );
   });
 });
+
+async function metadataResponsivenessDeps(): Promise<UiHandlerDeps> {
+  const directory = await tempDir("keiko-metadata-responsiveness-");
+  return buildUiHandlerDeps({
+    configPath: join(directory, "keiko.config.json"),
+    evidenceDir: await tempDir("keiko-metadata-responsiveness-evidence-"),
+    env: { ...MOCK_FETCH_EGRESS_ENV },
+    uiDbPath: join(directory, "ui.db"),
+    gatewaySetupTester: (_config, ids) => Promise.resolve(ids),
+  });
+}
+
+function selectedMetadataContext(): RouteContext {
+  return ctx({
+    baseUrl: "https://selected.example.invalid/v1",
+    apiKey: "synthetic-selected-key",
+    deploymentNames: ["selected-small"],
+  });
+}
+
+function metadataAbortTimers(): void {
+  vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+    const controller = new AbortController();
+    setTimeout(() => {
+      controller.abort(new DOMException("Timed out", "TimeoutError"));
+    }, milliseconds);
+    return controller.signal;
+  });
+}
+
+describe("selected metadata responsiveness", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    resetServerLogger();
+  });
+
+  it("spends the existing discovery timeout once before probing explicit deployments", async () => {
+    const deps = await metadataResponsivenessDeps();
+    Object.assign(deps, { gatewayModelDiscovery: undefined });
+    vi.useFakeTimers();
+    metadataAbortTimers();
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        requests.push(fetchInputUrl(url));
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(new DOMException("Timed out", "TimeoutError"));
+            },
+            {
+              once: true,
+            },
+          );
+        });
+      }),
+    );
+    const setup = handleGatewaySetup(selectedMetadataContext(), deps);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
+      "selected-small",
+    ]);
+    expect(requests).toHaveLength(1);
+    expect((await setup).status).toBe(200);
+  });
+
+  it("does not swallow a programming failure during optional metadata discovery", async () => {
+    const deps = await metadataResponsivenessDeps();
+    Object.assign(deps, {
+      gatewayModelDiscovery: () => Promise.reject(new TypeError("Synthetic defect")),
+    });
+    expect((await handleGatewaySetup(selectedMetadataContext(), deps)).status).toBe(502);
+    expect(currentGatewayConfig(deps)).toBeUndefined();
+  });
+
+  it("does not start probes or persist after the requesting client disconnects", async () => {
+    const deps = await metadataResponsivenessDeps();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    let started: (() => void) | undefined;
+    const discoveryStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const probe = vi.fn((_config: GatewayConfig, ids: readonly string[]) => Promise.resolve(ids));
+    Object.assign(deps, {
+      gatewaySetupTester: probe,
+      diagnostics: {
+        record: (record: ServerDiagnosticRecord): void => {
+          diagnostics.push(record);
+        },
+      },
+      gatewayModelDiscovery: () => {
+        started?.();
+        return new Promise<readonly string[]>(() => undefined);
+      },
+    });
+    const context = selectedMetadataContext();
+    const setup = handleGatewaySetup(context, deps);
+    await discoveryStarted;
+    context.res.emit("close");
+    expect((await setup).status).toBe(502);
+    expect(probe).not.toHaveBeenCalled();
+    expect(
+      diagnostics.filter((record) => record.source === "gateway.setup.provider-verify"),
+    ).toHaveLength(0);
+    expect(
+      sink.events.find((event) => event.op === "gateway.setup.metadata.resolved")?.extra?.outcome,
+    ).toBe("cancelled");
+    expect(currentGatewayConfig(deps)).toBeUndefined();
+    expect(context.res.listenerCount("close")).toBe(0);
+  });
+});
+
+it.each(["available", "unavailable", "failed"] as const)(
+  "records a body-free selected metadata %s outcome",
+  async (outcome) => {
+    const deps = await metadataResponsivenessDeps();
+    Object.assign(deps, {
+      gatewayModelDiscovery: () => {
+        if (outcome === "unavailable")
+          return Promise.reject(new Error("Synthetic availability failure"));
+        if (outcome === "failed")
+          return Promise.reject(new TypeError("Synthetic programming failure"));
+        return Promise.resolve(selectedDeploymentMetadata());
+      },
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      await handleGatewaySetup(selectedMetadataContext(), deps);
+      const events = sink.events.filter((event) => event.op === "gateway.setup.metadata.resolved");
+      expect(events).toHaveLength(1);
+      expect(events[0]?.extra).toMatchObject({
+        outcome,
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(typeof events[0]?.extra?.elapsedMs).toBe("number");
+      expect(JSON.stringify(events)).not.toContain("synthetic-selected-key");
+      expect(JSON.stringify(events)).not.toContain("selected.example.invalid");
+      expect(JSON.stringify(events)).not.toContain("Synthetic programming failure");
+      const event = events[0];
+      if (event === undefined) throw new Error("Expected the metadata outcome event.");
+      expectActivityLogProof(
+        "gateway.setup.metadata.resolved.line",
+        formatActivityLogProofLine(event),
+      );
+    } finally {
+      resetServerLogger();
+    }
+  },
+);
