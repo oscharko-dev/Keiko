@@ -554,8 +554,10 @@ describe("EditorWidget — empty state", () => {
       </I18nProvider>,
     );
 
-    expect(await screen.findByRole("note")).toHaveTextContent(
-      "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
+    await waitFor(() =>
+      expect(screen.getByRole("note")).toHaveTextContent(
+        "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
+      ),
     );
   });
 });

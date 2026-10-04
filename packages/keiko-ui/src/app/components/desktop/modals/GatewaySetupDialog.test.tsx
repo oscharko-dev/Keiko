@@ -697,7 +697,9 @@ describe("GatewaySetupDialog", () => {
       </I18nProvider>,
     );
 
-    await userEvent.click(screen.getByText("Audio- und Digital-Twin-Einstellungen aktualisieren"));
+    await userEvent.click(
+      await screen.findByText("Audio- und Digital-Twin-Einstellungen aktualisieren"),
+    );
     await userEvent.click(
       screen.getByText(/Erweitert: natives Realtime oder separate Audio-Verbindung/i),
     );

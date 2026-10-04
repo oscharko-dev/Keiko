@@ -295,7 +295,9 @@ describe("Chat context meter presentation details", () => {
     cleanup();
     await loadLocaleMessages("de");
     const german = renderMeter(withSegments([{ id: "messages", tokens: 735, count: 4 }]), "de");
-    expect(within(german).getByRole("heading")).toHaveTextContent("Gesprächskontext 81,7 %");
+    await waitFor(() =>
+      expect(within(german).getByRole("heading")).toHaveTextContent("Gesprächskontext 81,7 %"),
+    );
     expect(within(german).getByText("73,5 %")).toBeInTheDocument();
   });
 
@@ -308,7 +310,7 @@ describe("Chat context meter presentation details", () => {
       ]),
       "de",
     );
-    expect(within(panel).getByText("Systemanweisungen")).toBeInTheDocument();
+    expect(await within(panel).findByText("Systemanweisungen")).toBeInTheDocument();
     expect(within(panel).getByText("Wissensquellen")).toBeInTheDocument();
     expect(within(panel).queryByText(/System-Anweisungen|Quellen \(Wissen\)/u)).toBeNull();
   });
@@ -359,7 +361,7 @@ describe("Chat context meter presentation details", () => {
       "de",
     );
     expect(
-      within(panel).getByText("600 Tokens bei 1 zusammengefassten Nachricht eingespart."),
+      await within(panel).findByText("600 Tokens bei 1 zusammengefassten Nachricht eingespart."),
     ).toBeInTheDocument();
   });
 
@@ -373,7 +375,7 @@ describe("Chat context meter presentation details", () => {
       "de",
     );
     expect(
-      within(panel).getByText(
+      await within(panel).findByText(
         "Letzte Wissensanfrage: 5.901 Tokens (vom Anbieter gemessen). Keiko hatte diese Anfrage auf 6.420 Tokens geschätzt. Die Aufteilung oben schätzt die nächste Anfrage.",
       ),
     ).toBeInTheDocument();
