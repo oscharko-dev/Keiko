@@ -250,6 +250,7 @@ async function recoverLocalReport(
   )
     return false;
   if (!localReportFallbackAllowed(error, api)) return false;
+  const startedAt = performance.now();
   try {
     const localSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]);
     const prepared =
@@ -263,7 +264,16 @@ async function recoverLocalReport(
     const bytes = fulfillReport(key, prepared.report, prepared.download);
     reportLocalPreparation(prepared.report, context.correlationId, bytes);
     return true;
-  } catch {
+  } catch (failure) {
+    if (!controller.signal.aborted)
+      reportClientDiagnostic("Keiko local support report preparation failed.", {
+        correlationId: context.correlationId,
+        supportReportPreparation: {
+          outcome: "failed",
+          errorKind: bffRequestErrorKind(failure),
+          durationMs: Math.round(Math.max(0, performance.now() - startedAt)),
+        },
+      });
     return false;
   }
 }

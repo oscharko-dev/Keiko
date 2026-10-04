@@ -243,7 +243,17 @@ describe("SupportReportButton", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
     expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
     expect(automaticClick).not.toHaveBeenCalled();
-    expect(reportClientDiagnostic).not.toHaveBeenCalled();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "Keiko local support report preparation failed.",
+      {
+        correlationId: "stalled-export",
+        supportReportPreparation: {
+          outcome: "failed",
+          errorKind: "timeout",
+          durationMs: expect.any(Number),
+        },
+      },
+    );
     create.mockResolvedValueOnce(report);
     vi.spyOn(AbortSignal, "timeout").mockReturnValue(new AbortController().signal);
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
@@ -258,7 +268,17 @@ describe("SupportReportButton", () => {
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
     expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
-    expect(reportClientDiagnostic).not.toHaveBeenCalled();
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "Keiko local support report preparation failed.",
+      {
+        correlationId: "offline-original-error",
+        supportReportPreparation: {
+          outcome: "failed",
+          errorKind: "unavailable",
+          durationMs: expect.any(Number),
+        },
+      },
+    );
     expect(automaticClick).not.toHaveBeenCalled();
   });
 
@@ -277,7 +297,18 @@ describe("SupportReportButton", () => {
       expect(await screen.findByRole("status")).toHaveTextContent(hint);
       expect(view.container).not.toHaveTextContent("private response body");
       expect(automaticClick).not.toHaveBeenCalled();
-      if (status === 503) expect(reportClientDiagnostic).not.toHaveBeenCalled();
+      if (status === 503)
+        expect(reportClientDiagnostic).toHaveBeenCalledWith(
+          "Keiko local support report preparation failed.",
+          {
+            correlationId: "original-failure",
+            supportReportPreparation: {
+              outcome: "failed",
+              errorKind: "unavailable",
+              durationMs: expect.any(Number),
+            },
+          },
+        );
       else
         expect(reportClientDiagnostic).toHaveBeenCalledWith(expect.any(String), {
           correlationId: "report-request-refused",

@@ -773,8 +773,11 @@ recovery. Readiness and a manual initiation never claim an operating-system save
 preparation emits the routine `client.support-report.prepared` state on the existing diagnostic
 sink, with the original correlation when available, closed evidence scope and availability reason,
 the already measured canonical byte count, and directly projected completeness and loss. It contains no report content or failure kind
-and creates no new failure incident. Ordinary server preparation retains its existing lifecycle
-without duplicating this browser recovery state.
+and creates no new failure incident. A failed local attempt uses the same preparation member's
+closed `outcome: failed` variant with only an error kind and measured duration; it never invents
+artifact bytes or availability. Ingest records `client.support-report.preparation-failed` as routine
+causal evidence without replacing the selected browser failure or opening another incident.
+Ordinary server preparation retains its existing lifecycle without duplicating this browser recovery state.
 Process-local delivery caching is bounded by 10 MiB of UTF-8 report bytes, 128 entries and a
 15-minute lifetime; expiry makes report creation available again. The response uses `no-store`,
 `nosniff`, and the closed canonical filename. Older-server local object URLs are released on
@@ -787,6 +790,10 @@ selected error's correlation; it records no report body, destination, filename o
 The shared desktop report action preserves the selected error when reporting itself fails. A
 session refusal offers report regeneration, a local service failure names application recovery, and a
 rate refusal names the bounded retry delay; none grants authority or automatically replays a write.
+An explicit report action first joins the existing same-bearer session confirmation after boot pairing.
+This restores only valid cookie projections; absent, revoked, expired or forged bearers receive no
+new authority and can still obtain the explicitly limited artifact. Cancellation during confirmation
+prevents a subsequent report POST.
 An exhausted diagnostic reservation buffer must not prevent manual export of already retained evidence. Desktop and CLI
 export may prepare the canonical user-report descriptor without a persistent slot or retention pin,
 then compose and validate the same bounded report. Byte pressure rolls the oldest eligible diagnostic candidate out through its existing claim and pin

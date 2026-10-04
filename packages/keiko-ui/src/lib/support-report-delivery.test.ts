@@ -12,6 +12,10 @@ import {
 
 vi.mock("./coding-app-session-client", () => ({
   codingAppSessionPairingSettled: (): Promise<boolean> => Promise.resolve(true),
+  repairLocalCodingAppSessionWithEvidence: (): Promise<{
+    repaired: boolean;
+    correlationId: string;
+  }> => Promise.resolve({ repaired: true, correlationId: "report-session-confirm" }),
 }));
 
 const correlationId = "browser-crash-evidence-01";

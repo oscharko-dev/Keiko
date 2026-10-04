@@ -1539,6 +1539,29 @@ describe("bounded source-preview stage evidence", () => {
 });
 
 describe("browser support report preparation evidence", () => {
+  it("accepts a failed attempt without manufactured artifact metadata", () => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        supportReportPreparation: {
+          outcome: "failed",
+          errorKind: "unavailable",
+          durationMs: 12,
+        },
+      }),
+    ).toBe(true);
+  });
+  it.each([
+    { outcome: "failed", errorKind: "invented", durationMs: 12 },
+    { outcome: "failed", errorKind: "unavailable", durationMs: -1 },
+    { outcome: "failed", errorKind: "unavailable", durationMs: 12, reportBytes: 1024 },
+    { outcome: "failed", errorKind: "unavailable", durationMs: 12, message: "private detail" },
+  ])("refuses incoherent failed preparation %j", (supportReportPreparation) => {
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), supportReportPreparation })).toBe(
+      false,
+    );
+  });
+
   const prepared = {
     reportBytes: 1024,
     evidenceScope: "client-only",

@@ -263,3 +263,31 @@ it("does not invent preparation loss or availability when a legacy artifact has 
     diagnostic.mock.calls.some(([, meta]) => meta?.supportReportPreparation !== undefined),
   ).toBe(false);
 });
+
+it("records failed local preparation without replacing the original global failure", async () => {
+  clientDiagnostics.reportClientDiagnostic("Original body-free failure.", {
+    kind: "window-error",
+    globalFailure: true,
+    correlationId: "original-recovery-failure",
+    errorKind: "internal",
+  });
+  const original = clientDiagnostics.currentGlobalClientFailure();
+  const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
+  vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("offline"));
+  vi.mocked(prepareLocalSupportReport).mockRejectedValueOnce(new TypeError("private local detail"));
+  render(<SupportReportButton correlationId="original-recovery-failure" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await vi.waitFor(() => {
+    expect(diagnostic).toHaveBeenCalledWith("Keiko local support report preparation failed.", {
+      correlationId: "original-recovery-failure",
+      supportReportPreparation: {
+        outcome: "failed",
+        errorKind: "unavailable",
+        durationMs: expect.any(Number),
+      },
+    });
+  });
+  expect(clientDiagnostics.currentGlobalClientFailure()).toEqual(original);
+  expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
+  expect(screen.queryByText(/private local detail/u)).toBeNull();
+});

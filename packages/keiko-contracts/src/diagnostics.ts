@@ -1677,7 +1677,7 @@ export function isClientSupportReportDelivery(
 }
 
 /** Successful browser fallback preparation; no report content or claim of an OS save. */
-export interface ClientSupportReportPreparation {
+interface ClientSupportReportPrepared {
   readonly reportBytes: number;
   readonly evidenceScope: "server" | "client-only";
   readonly completeness: ActivityLogCompletenessState;
@@ -1685,6 +1685,15 @@ export interface ClientSupportReportPreparation {
   readonly availabilityReason?:
     "session-unavailable" | "diagnostic-delivery-unavailable" | "service-unavailable" | undefined;
 }
+export type ClientSupportReportPreparation =
+  | ClientSupportReportPrepared
+  | {
+      readonly outcome: "failed";
+      readonly errorKind: ActivityLogErrorKind;
+      readonly durationMs: number;
+    };
+const SUPPORT_REPORT_PREPARATION_FAILURE_KEYS = new Set(["outcome", "errorKind", "durationMs"]);
+
 const SUPPORT_REPORT_PREPARATION_KEYS = new Set([
   "reportBytes",
   "evidenceScope",
@@ -1705,14 +1714,19 @@ function isSupportReportPreparationBytes(value: unknown): value is number {
     value <= MAX_SUPPORT_REPORT_BYTES
   );
 }
+function isFailedSupportReportPreparation(value: Record<string, unknown>): boolean {
+  return (
+    Object.keys(value).every((key) => SUPPORT_REPORT_PREPARATION_FAILURE_KEYS.has(key)) &&
+    isActivityLogErrorKind(value.errorKind) &&
+    isBoundedNonNegativeInteger(value.durationMs, CLIENT_STAGE_DURATION_MS_MAX)
+  );
+}
 export function isClientSupportReportPreparation(
   value: unknown,
 ): value is ClientSupportReportPreparation {
-  if (
-    !isRecord(value) ||
-    Object.keys(value).some((key) => !SUPPORT_REPORT_PREPARATION_KEYS.has(key))
-  )
-    return false;
+  if (!isRecord(value)) return false;
+  if (value.outcome === "failed") return isFailedSupportReportPreparation(value);
+  if (Object.keys(value).some((key) => !SUPPORT_REPORT_PREPARATION_KEYS.has(key))) return false;
   return (
     isSupportReportPreparationBytes(value.reportBytes) &&
     (value.evidenceScope === "server" || value.evidenceScope === "client-only") &&

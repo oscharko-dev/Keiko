@@ -198,13 +198,12 @@ async function releaseReportJob(
   owned: SupportIncidentRecord | undefined,
   correlationId: string | undefined,
 ): Promise<void> {
+  let released = false;
   try {
     await releaseWorker(worker);
-  } catch (error) {
-    completed = false;
-    throw error;
+    released = true;
   } finally {
-    if (!completed && owned !== undefined)
+    if ((!completed || !released) && owned !== undefined)
       reportAbandonedPreparation(stateDir, owned, correlationId);
   }
 }

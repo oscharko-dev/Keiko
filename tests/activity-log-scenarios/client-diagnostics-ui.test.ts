@@ -38,6 +38,7 @@ import {
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
 } from "@oscharko-dev/keiko-server";
+import { listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
 import { createClientOnlySupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 
 import {
@@ -225,10 +226,33 @@ describe("Activity Log scenario: client-diagnostics", () => {
       204,
     );
 
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(
+            JSON.stringify({
+              message: "Keiko local support report preparation failed.",
+              clientTs: CLIENT_TS,
+              correlationId: "ui_report-rejection-0001",
+              supportReportPreparation: {
+                outcome: "failed",
+                errorKind: "unavailable",
+                durationMs: 12,
+              },
+            }),
+          ),
+        )
+      ).status,
+    ).toBe(204);
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
     const trace = await expectActivityLogScenario("client-diagnostics.rejection", {
       stateDir,
       startedAtMs,
-      expectedOps: ["client.diagnostic.rejected", "client.support-report.prepared"],
+      expectedOps: [
+        "client.diagnostic.rejected",
+        "client.support-report.prepared",
+        "client.support-report.preparation-failed",
+      ],
     });
     expect(trace.failureClasses).toEqual(
       expect.arrayContaining(["client-diagnostic-rejection", "support-report"]),

@@ -1414,6 +1414,46 @@ describe("POST /api/diagnostics/client", () => {
       "complete",
     );
   });
+  it("persists failed local preparation as routine causal evidence without inventing an artifact", async () => {
+    const sink = captureServerLog();
+    expect(
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "Keiko local support report preparation failed.",
+            clientTs: CLIENT_TS,
+            correlationId: "ui_support-local-failed-0001",
+            supportReportPreparation: {
+              outcome: "failed",
+              errorKind: "unavailable",
+              durationMs: 12,
+            },
+          }),
+        ),
+      ),
+    ).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expect(sink.events.some((event) => event.op === "client.support-report.prepared")).toBe(false);
+    const event = sink.events.find(
+      (item) => item.op === "client.support-report.preparation-failed",
+    );
+    const record = expectActivityLogProof(
+      "client.support-report.preparation-failed.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      level: "info",
+      correlationId: "ui_support-local-failed-0001",
+      preparationErrorKind: "unavailable",
+      durationMs: 12,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("reportBytes");
+    expect(record).not.toHaveProperty("errorKind");
+    expect(record).not.toHaveProperty("messageDigest");
+  });
+
   it("persists local report preparation as routine evidence without inventing a failure", async () => {
     const sink = captureServerLog();
     const supportReportPreparation = {

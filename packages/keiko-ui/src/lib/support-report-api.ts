@@ -16,7 +16,10 @@ import {
   ensureClientDiagnosticDelivery,
   CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS,
 } from "./client-diagnostics";
-import { codingAppSessionPairingSettled } from "./coding-app-session-client";
+import {
+  codingAppSessionPairingSettled,
+  repairLocalCodingAppSessionWithEvidence,
+} from "./coding-app-session-client";
 
 export class SupportReportEvidenceUnavailable extends Error {
   constructor() {
@@ -61,6 +64,8 @@ export async function createSupportReport(
   const deadline = AbortSignal.timeout(35_000);
   const requestSignal = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
   await codingAppSessionPairingSettled();
+  requestSignal.throwIfAborted();
+  await repairLocalCodingAppSessionWithEvidence();
   requestSignal.throwIfAborted();
   if (correlationId !== undefined) await ensureReportEvidence(correlationId, requestSignal);
   requestSignal.throwIfAborted();

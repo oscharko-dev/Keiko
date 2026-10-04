@@ -1381,3 +1381,27 @@ it("posts scope ownership decisions through routine capacity and preserves failu
   expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
   expect(clientDiagnosticPostThrottledCount()).toBe(0);
 });
+
+it("posts failed local preparation through routine capacity without replacing failure evidence", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const supportReportPreparation = {
+    outcome: "failed" as const,
+    errorKind: "unavailable" as const,
+    durationMs: 5,
+  };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Keiko local support report preparation failed.", {
+      correlationId: "ui_local-preparation-failure",
+      supportReportPreparation,
+    });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ supportReportPreparation });
+  expect(isClientDiagnosticIngestRequest(lastPostedBody(fetchMock))).toBe(true);
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("errorKind");
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("reportJson");
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+  expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});

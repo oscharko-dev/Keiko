@@ -4,9 +4,13 @@ import { bffFetchJson } from "./http";
 import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 const response = vi.hoisted(() => ({ value: {} as unknown }));
-const pairing = vi.hoisted(() => ({ settled: Promise.resolve(true) }));
+const pairing = vi.hoisted(() => ({
+  settled: Promise.resolve(true),
+  repair: vi.fn(() => Promise.resolve({ repaired: true, correlationId: "report-session-confirm" })),
+}));
 vi.mock("./coding-app-session-client", () => ({
   codingAppSessionPairingSettled: (): Promise<boolean> => pairing.settled,
+  repairLocalCodingAppSessionWithEvidence: pairing.repair,
 }));
 vi.mock("./http", () => ({
   bffFetchJson: vi.fn(
@@ -25,6 +29,43 @@ afterEach(() => {
 const fileName = "keiko-support-v1-aabbccddeeff-2026-10-03.json";
 
 describe("support report browser download", () => {
+  it("confirms only existing session projections before selecting report evidence", async () => {
+    let confirm: ((value: { repaired: boolean; correlationId: string }) => void) | undefined;
+    pairing.repair.mockReturnValueOnce(
+      new Promise((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    response.value = { fileName, reportJson: "{}", evidenceScope: "client-only" };
+    const result = createSupportReport("existing-session-report");
+    await vi.waitFor(() => {
+      expect(pairing.repair).toHaveBeenCalledOnce();
+    });
+    expect(bffFetchJson).not.toHaveBeenCalled();
+    confirm?.({ repaired: false, correlationId: "report-session-confirm" });
+    await expect(result).resolves.toEqual(response.value);
+    expect(bffFetchJson).toHaveBeenCalledOnce();
+  });
+
+  it("does not post after cancellation during existing-session confirmation", async () => {
+    let confirm: ((value: { repaired: boolean; correlationId: string }) => void) | undefined;
+    pairing.repair.mockReturnValueOnce(
+      new Promise((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    const controller = new AbortController();
+    const result = createSupportReport("cancelled-session-report", controller.signal);
+    const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+    await vi.waitFor(() => {
+      expect(pairing.repair).toHaveBeenCalledOnce();
+    });
+    controller.abort();
+    confirm?.({ repaired: true, correlationId: "report-session-confirm" });
+    await rejected;
+    expect(bffFetchJson).not.toHaveBeenCalled();
+  });
+
   it("preserves the validated canonical disposition for locally reused server evidence", async () => {
     const summary = {
       status: "degraded",

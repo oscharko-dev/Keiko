@@ -85,6 +85,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   activityLogEvent,
+  ACTIVITY_LOG_ERROR_KINDS,
   defineActivityLogOperation,
   recordActivityLogLoss,
   type ActivityLogErrorKind,
@@ -1155,6 +1156,32 @@ const CLIENT_FILES_SCOPE_DECISION_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const CLIENT_SUPPORT_REPORT_PREPARATION_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.support-report.preparation-failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSupportReportPreparationFailed",
+  fields: {
+    preparationErrorKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: true,
+      values: ACTIVITY_LOG_ERROR_KINDS,
+    },
+    durationMs: { type: "integer", dataClass: "duration", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "timeline",
+  failureClasses: ["support-report"],
+  proofIds: ["client.support-report.preparation-failed.line"],
+  releaseImpact: "patch",
+});
+
 const CLIENT_SUPPORT_REPORT_PREPARED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -1763,12 +1790,34 @@ function logClientSupportReportDownload(
   return true;
 }
 
+function logClientSupportReportPreparationFailed(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const prepared = request.supportReportPreparation;
+  if (prepared === undefined || !("outcome" in prepared)) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SUPPORT_REPORT_PREPARATION_FAILED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        preparationErrorKind: prepared.errorKind,
+        durationMs: prepared.durationMs,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
 function logClientSupportReportPrepared(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
 ): boolean {
   const prepared = request.supportReportPreparation;
   if (prepared === undefined) return false;
+  if ("outcome" in prepared) return logClientSupportReportPreparationFailed(request, correlationId);
   getServerLogger().info(
     activityLogEvent(
       CLIENT_SUPPORT_REPORT_PREPARED_OPERATION,
