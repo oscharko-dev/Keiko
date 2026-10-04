@@ -466,6 +466,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
+  readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly composerActivity?: ClientComposerActivity | undefined;
   readonly composerFocusIndicator?: "keyboard" | undefined;
   readonly composerCodeStage?: ClientComposerCodeStage | undefined;
@@ -674,7 +675,8 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
     isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
     isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech) &&
     isOptional(value.supportReportDelivery, isClientSupportReportDelivery) &&
-    hasValidSupportPreparationContext(value)
+    hasValidSupportPreparationContext(value) &&
+    hasValidFilesScopeDecisionContext(value)
   );
 }
 
@@ -1722,5 +1724,76 @@ function coherentReportPreparationScope(value: Record<string, unknown>): boolean
     value.completeness === "complete" &&
     value.loss === "none" &&
     isSetMember(value.availabilityReason, REPORT_AVAILABILITY)
+  );
+}
+
+/** Closed Files-to-Chat ownership decisions; references and source content never cross this port. */
+export const CLIENT_FILES_SCOPE_DECISIONS = [
+  "restored",
+  "owned-elsewhere",
+  "released",
+  "blocked-ambiguous",
+  "fingerprint-absent",
+  "conflict-retried",
+  "ack-missing",
+  "automatic-suppressed",
+  "timeout-blocked",
+  "timeout-recovered",
+  "request-superseded",
+] as const;
+export interface ClientFilesScopeDecision {
+  readonly decision: (typeof CLIENT_FILES_SCOPE_DECISIONS)[number];
+  readonly sourceCount?: number | undefined;
+  readonly candidateCount?: number | undefined;
+  readonly bindingFingerprint?: string | undefined;
+}
+const FILES_SCOPE_DECISIONS: ReadonlySet<unknown> = new Set(CLIENT_FILES_SCOPE_DECISIONS);
+const FILES_SCOPE_DECISION_KEYS = new Set([
+  "decision",
+  "sourceCount",
+  "candidateCount",
+  "bindingFingerprint",
+]);
+const FILES_SCOPE_DECISION_EXCLUSIVE_KEYS = [
+  "kind",
+  "errorKind",
+  "errorEvidence",
+  "moduleLoadFailure",
+  "renderFailure",
+  "supportReportDelivery",
+  "supportReportPreparation",
+  "selectDismissal",
+  "knowledgeCatalog",
+  "answerCopy",
+  "answerSpeech",
+  "gitClientOperation",
+  "composerActivity",
+  "gitChangeDescription",
+  "workspaceTrustBinding",
+  "voiceDialogueStage",
+];
+function isScopeDecisionCount(value: unknown): boolean {
+  return (
+    value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  );
+}
+function isClientFilesScopeDecision(value: unknown): value is ClientFilesScopeDecision {
+  if (!isRecord(value) || Object.keys(value).some((key) => !FILES_SCOPE_DECISION_KEYS.has(key)))
+    return false;
+  return (
+    FILES_SCOPE_DECISIONS.has(value.decision) &&
+    isScopeDecisionCount(value.sourceCount) &&
+    isScopeDecisionCount(value.candidateCount) &&
+    (value.bindingFingerprint === undefined ||
+      (typeof value.bindingFingerprint === "string" &&
+        CLIENT_BINDING_TARGET_FINGERPRINT_PATTERN.test(value.bindingFingerprint)))
+  );
+}
+function hasValidFilesScopeDecisionContext(value: Record<string, unknown>): boolean {
+  if (value.filesScopeDecision === undefined) return true;
+  return (
+    isClientFilesScopeDecision(value.filesScopeDecision) &&
+    isActivityLogCorrelationId(value.correlationId) &&
+    FILES_SCOPE_DECISION_EXCLUSIVE_KEYS.every((key) => value[key] === undefined)
   );
 }

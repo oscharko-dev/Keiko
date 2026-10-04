@@ -1603,3 +1603,56 @@ describe("browser support report preparation evidence", () => {
       ).toBe(false);
   });
 });
+
+describe("Files scope ownership decision evidence", () => {
+  it.each(["timeout-blocked", "timeout-recovered", "request-superseded"])(
+    "accepts the closed queue lifecycle decision %s",
+    (decision) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "scope-decision-123",
+          filesScopeDecision: { decision },
+        }),
+      ).toBe(true);
+    },
+  );
+  const decision = {
+    decision: "blocked-ambiguous",
+    sourceCount: 1,
+    candidateCount: 2,
+    bindingFingerprint: "a".repeat(64),
+  };
+  it("rejects forged or failure-shaped decisions before they can consume routine capacity", () => {
+    for (const patch of [
+      { decision: "private root" },
+      { sourceCount: -1 },
+      { candidateCount: 1.5 },
+      { bindingFingerprint: "/private/customer/root" },
+      { root: "/private/customer/root" },
+    ])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "scope-decision-123",
+          filesScopeDecision: { ...decision, ...patch },
+        }),
+      ).toBe(false);
+    for (const patch of [
+      { correlationId: undefined },
+      { kind: "boundary" },
+      { errorKind: "internal" },
+      { moduleLoadFailure: "git-sync" },
+      { errorEvidence: { errorClass: "Error", frames: [], causeChain: [] } },
+      { supportReportDelivery: "manual" },
+    ])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "scope-decision-123",
+          ...patch,
+          filesScopeDecision: decision,
+        }),
+      ).toBe(false);
+  });
+});

@@ -1303,6 +1303,58 @@ describe("POST /api/diagnostics/client", () => {
     });
   });
 
+  it.each([
+    "restored",
+    "owned-elsewhere",
+    "released",
+    "blocked-ambiguous",
+    "fingerprint-absent",
+    "conflict-retried",
+    "ack-missing",
+    "automatic-suppressed",
+    "timeout-blocked",
+    "timeout-recovered",
+    "request-superseded",
+  ])(
+    "persists the closed Files ownership decision %s as routine causal evidence",
+    async (decision) => {
+      const sink = captureServerLog();
+      const filesScopeDecision = {
+        decision,
+        sourceCount: 1,
+        candidateCount: 2,
+        bindingFingerprint: "a".repeat(64),
+      };
+      expect(
+        await handleClientDiagnosticIngest(
+          context(
+            JSON.stringify({
+              message: "Keiko Files scope ownership decision.",
+              clientTs: CLIENT_TS,
+              correlationId: "ui_scope-decision-0001",
+              filesScopeDecision,
+            }),
+          ),
+        ),
+      ).toEqual({ status: 204, body: null });
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+      const event = sink.events.find((candidate) => candidate.op === "client.files-scope.decision");
+      if (event === undefined) throw new TypeError("Missing scope ownership decision evidence");
+      const record = expectActivityLogProof(
+        "client.files-scope.decision.line",
+        formatActivityLogProofLine(event),
+      );
+      expect(record).toMatchObject({
+        level: "info",
+        correlationId: "ui_scope-decision-0001",
+        ...filesScopeDecision,
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(record).not.toHaveProperty("errorKind");
+      expect(record).not.toHaveProperty("messageDigest");
+    },
+  );
   it("persists local report preparation as routine evidence without inventing a failure", async () => {
     const sink = captureServerLog();
     const supportReportPreparation = {

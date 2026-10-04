@@ -6,6 +6,8 @@ import { CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX } from "@oscharko-dev/keiko-contracts/
 import {
   recordClientDiagnosticLoss,
   reportClientDiagnostic,
+  reportFilesScopeDecision,
+  currentGlobalClientFailure,
   resetClientDiagnosticWriter,
   restoreClientDiagnosticLoss,
   setClientDiagnosticWriter,
@@ -221,4 +223,31 @@ describe("clientErrorSummary", () => {
     expect(clientErrorSummary({ token: "s3cr3t" })).toBe("object");
     expect(clientErrorSummary(undefined)).toBe("undefined");
   });
+});
+
+it("routes Files ownership decisions without replacing a real global failure", () => {
+  const priorFailure = currentGlobalClientFailure();
+  const written: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+  setClientDiagnosticWriter((message, meta) => written.push({ message, meta }));
+  reportFilesScopeDecision("ui_scope-decision-0001", {
+    decision: "timeout-recovered",
+    sourceCount: 1,
+    candidateCount: 2,
+    bindingFingerprint: "a".repeat(64),
+  });
+  expect(written).toEqual([
+    {
+      message: "Keiko Files scope ownership decision.",
+      meta: {
+        correlationId: "ui_scope-decision-0001",
+        filesScopeDecision: {
+          decision: "timeout-recovered",
+          sourceCount: 1,
+          candidateCount: 2,
+          bindingFingerprint: "a".repeat(64),
+        },
+      },
+    },
+  ]);
+  expect(currentGlobalClientFailure()).toBe(priorFailure);
 });

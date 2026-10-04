@@ -77,6 +77,10 @@ function streamResponse(text: string): Response {
 }
 
 describe("API BFF boundary helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("selects a chat by encoded identity without requesting a larger list page", async () => {
     const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse({ chats: [] })));
     vi.stubGlobal("fetch", fetchMock);
@@ -84,10 +88,6 @@ describe("API BFF boundary helpers", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "/api/chats?projectPath=%2Fworkspace%2Fwith%20space&id=chat%26one",
     );
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
   });
 
   it("keeps a caller-supplied voice turn correlation on both chat transports", async () => {

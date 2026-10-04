@@ -1354,3 +1354,30 @@ it("posts fallback report preparation through routine capacity without raw artif
   expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
   expect(clientDiagnosticPostThrottledCount()).toBe(0);
 });
+
+it("posts scope ownership decisions through routine capacity and preserves failure capacity", () => {
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const filesScopeDecision = {
+    decision: "automatic-suppressed" as const,
+    sourceCount: 1,
+    candidateCount: 2,
+    bindingFingerprint: "a".repeat(64),
+  };
+  for (let index = 0; index < 25; index += 1)
+    fanOutClientDiagnostic("Keiko Files scope ownership decision.", {
+      correlationId: "ui_scope-decision-0001",
+      filesScopeDecision,
+    });
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    correlationId: "ui_scope-decision-0001",
+    filesScopeDecision,
+  });
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("errorKind");
+  expect(retainedClientDiagnosticFailure("ui_scope-decision-0001")).toBeUndefined();
+  fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+  expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+  expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});

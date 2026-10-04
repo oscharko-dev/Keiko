@@ -7,13 +7,18 @@ import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
 import { sanitizePersistedWorkspace } from "./hooks/workspace-persistence";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
-import { reportClientDiagnostic, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import {
+  reportClientDiagnostic,
+  reportFilesScopeDecision,
+  resetClientDiagnosticWriter,
+} from "@/lib/client-diagnostics";
 import type { AppWindow, Connection } from "./windows/types";
 
 const mocks = vi.hoisted(() => ({
   initialChat: undefined as Chat | undefined,
   serverChat: undefined as Chat | undefined,
   workspace: undefined as UseWorkspaceResult | undefined,
+  publishChat: undefined as ((chat: Chat) => void) | undefined,
   fetchChats: vi.fn(),
   fetchHealth: vi.fn(),
   updateChatConnectedScopes: vi.fn(),
@@ -24,6 +29,7 @@ function useTestChatSession(): Record<string, unknown> {
   const [activeChat, setActiveChat] = useState(mocks.initialChat);
   const chats = useMemo(() => (activeChat === undefined ? [] : [activeChat]), [activeChat]);
   const replaceChat = useCallback((chat: Chat): void => setActiveChat(chat), []);
+  mocks.publishChat = replaceChat;
   return {
     chats,
     activeChat,
@@ -52,6 +58,7 @@ vi.mock("../../relationships/connector-relationship", () => ({
 vi.mock("@/lib/client-diagnostics", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/client-diagnostics")>()),
   reportClientDiagnostic: vi.fn(),
+  reportFilesScopeDecision: vi.fn(),
 }));
 vi.mock("./install/registerSw", () => ({ registerSw: vi.fn() }));
 vi.mock("./context/ChatSessionContext", () => ({
@@ -253,16 +260,18 @@ describe("AppShell canonical workspace scope synchronization", () => {
   it("does not reannounce a dismissed unchanged automatic scope ambiguity on unrelated changes", async () => {
     await mountAmbiguousFiles();
     const initialReports = vi.mocked(reportClientDiagnostic).mock.calls.length;
-    const refreshed = deferred<{ chats: Chat[] }>();
-    mocks.fetchChats.mockReturnValueOnce(refreshed.promise);
     mocks.fetchChats.mockClear();
     await act(async () => {
       mocks.workspace?.api.update("unconnected-files", { cfg: { root: "/unrelated/new" } });
     });
-    await waitFor(() => expect(mocks.fetchChats).toHaveBeenCalledOnce());
-    await act(async () => {
-      refreshed.resolve({ chats: [mocks.serverChat!] });
-      await refreshed.promise;
+    await waitFor(() =>
+      expect(
+        mocks.workspace?.wins?.find((win) => win.id === "unconnected-files")?.cfg["root"],
+      ).toBe("/unrelated/new"),
+    );
+    expect(mocks.fetchChats).not.toHaveBeenCalled();
+    expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
+      decision: "automatic-suppressed",
     });
     expect(screen.queryByText(/cannot be restored uniquely/u)).not.toBeInTheDocument();
     expect(reportClientDiagnostic).toHaveBeenCalledTimes(initialReports);
@@ -271,32 +280,24 @@ describe("AppShell canonical workspace scope synchronization", () => {
     expect(mocks.workspace?.conns[0]?.boundScopeFingerprint).toBeUndefined();
   });
 
-  it.each(["requested scope", "canonical GSI", "ownership digest"] as const)(
+  it.each(["requested scope", "canonical GSI"] as const)(
     "reports a new automatic ambiguity when %s changes",
     async (change) => {
-      const initial = await mountAmbiguousFiles();
+      await mountAmbiguousFiles();
       const initialReports = vi.mocked(reportClientDiagnostic).mock.calls.length;
       if (change === "canonical GSI") mocks.serverChat = chat([scope("/manuals/Old")], 2);
       await act(async () => {
-        if (change === "ownership digest")
-          await storageReplay(
-            initial.wins,
-            initial.conns.map((edge) => ({
-              ...edge,
-              boundScopeFingerprint: "a".repeat(64),
-            })),
-          );
-        else
-          mocks.workspace?.api.update(
-            change === "requested scope" ? "files-0" : "unconnected-files",
-            {
-              cfg: {
-                root: "/manuals/Changed",
-                resolvedRoot: "/manuals/Changed",
-                rootBinding: "coding-repository",
-              },
+        if (change === "canonical GSI") mocks.publishChat?.(mocks.serverChat!);
+        mocks.workspace?.api.update(
+          change === "requested scope" ? "files-0" : "unconnected-files",
+          {
+            cfg: {
+              root: "/manuals/Changed",
+              resolvedRoot: "/manuals/Changed",
+              rootBinding: "coding-repository",
             },
-          );
+          },
+        );
       });
       await screen.findByText(/cannot be restored uniquely/u);
       expect(vi.mocked(reportClientDiagnostic).mock.calls.length).toBeGreaterThan(initialReports);
@@ -320,6 +321,9 @@ describe("AppShell canonical workspace scope synchronization", () => {
   it("resets the warning after canonical ownership is successfully restored", async () => {
     const initial = await mountAmbiguousFiles();
     mocks.serverChat = chat([scope("/manuals/New")], 2);
+    await act(async () => {
+      mocks.publishChat?.(mocks.serverChat!);
+    });
     await act(async () =>
       mocks.workspace?.api.update("unconnected-files", { cfg: { root: "/changed" } }),
     );
@@ -364,9 +368,12 @@ describe("AppShell canonical workspace scope synchronization", () => {
       initial.conns,
     );
     await waitFor(() => expect(mocks.workspace?.wins?.[0]?.x).toBe(1));
-    await act(async (): Promise<void> => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 30));
-    });
+    await waitFor(() =>
+      expect(mocks.workspace?.conns.map((edge) => edge.boundRoot)).toEqual([
+        "/manuals/Scale",
+        "/manuals/Distinct",
+      ]),
+    );
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
     expect(mocks.serverChat?.connectedScopes).toEqual(mocks.initialChat.connectedScopes);
@@ -431,6 +438,14 @@ describe("AppShell canonical workspace scope synchronization", () => {
       chat([], 3).groundingScopeIdentity,
     ]);
     expect(mocks.recordReadsContextRelationship).toHaveBeenCalledTimes(1);
+    const retry = vi
+      .mocked(reportFilesScopeDecision)
+      .mock.calls.find((call) => call[1].decision === "conflict-retried");
+    expect(retry).toBeDefined();
+    expect(mocks.fetchChats.mock.calls.filter((call) => call[1] === retry?.[0])).toHaveLength(2);
+    expect(JSON.stringify(vi.mocked(reportFilesScopeDecision).mock.calls)).not.toContain(
+      "/manuals/",
+    );
   });
   it("refuses repeated competing scope writes after one fresh intent retry", async (): Promise<void> => {
     const initial = fixture(["/manuals/Scale"]);

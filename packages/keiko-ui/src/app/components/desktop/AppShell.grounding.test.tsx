@@ -917,7 +917,7 @@ describe("AppShell grounding connections", () => {
     );
 
     expect(accepted).toBe(true);
-    expect(mocks.fetchChats).toHaveBeenCalledWith("/private", undefined, "chat-private");
+    expect(mocks.fetchChats).toHaveBeenCalledWith("/private", expect.any(String), "chat-private");
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
       privateChat.id,
       expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
@@ -951,7 +951,7 @@ describe("AppShell grounding connections", () => {
       );
 
       expect(accepted).toBe(true);
-      expect(mocks.fetchChats).toHaveBeenCalledWith("/private", undefined, "chat-private");
+      expect(mocks.fetchChats).toHaveBeenCalledWith("/private", expect.any(String), "chat-private");
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
         privateChat.id,
         expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
@@ -985,7 +985,7 @@ describe("AppShell grounding connections", () => {
       );
 
       expect(accepted).toBe(true);
-      expect(mocks.fetchChats).toHaveBeenCalledWith("/private", undefined, "chat-private");
+      expect(mocks.fetchChats).toHaveBeenCalledWith("/private", expect.any(String), "chat-private");
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
         privateChat.id,
         expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
@@ -1097,10 +1097,75 @@ describe("AppShell grounding connections", () => {
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(updated);
     expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith("chat-1", "/late");
     expect(reportError).not.toHaveBeenCalled();
+    const attemptCorrelation = mocks.fetchChats.mock.calls[0]?.[1] as string;
     expect(reportedDiagnostics).toEqual([
+      {
+        message: "Keiko Files scope ownership decision.",
+        meta: {
+          correlationId: attemptCorrelation,
+          filesScopeDecision: { decision: "timeout-blocked" },
+        },
+      },
       { message: "[keiko] Chat grounding timeout: Error" },
       { message: "[keiko] Chat grounding timeout: Error" },
+      {
+        message: "Keiko Files scope ownership decision.",
+        meta: {
+          correlationId: attemptCorrelation,
+          filesScopeDecision: { decision: "timeout-recovered" },
+        },
+      },
     ]);
+  });
+
+  it("unblocks a timed-out chat only after the late mutation and compensation settle", async (): Promise<void> => {
+    const persisted = deferred<{ readonly chat: Chat }>();
+    const compensation = deferred<{ readonly chat: Chat }>();
+    const source = fileScope("/late");
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockReturnValueOnce(compensation.promise);
+    await renderMounted();
+    vi.useFakeTimers();
+    const bind = mocks.state.workspaceOptions?.onScopeBind;
+    const first = bind?.("chat-window", source);
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+    expect(await first).toBe(false);
+    await act(async (): Promise<void> => {
+      persisted.resolve({ chat: chat({ connectedScopes: [source], updatedAt: 2 }) });
+    });
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+    expect(await bind?.("chat-window", fileScope("/still-blocked"))).toBe(false);
+    await act(async (): Promise<void> => {
+      compensation.resolve({ chat: chat({ connectedScopes: [], updatedAt: 3 }) });
+    });
+    await act(async (): Promise<void> => {
+      expect(await bind?.("chat-window", fileScope("/after-recovery"))).toBe(true);
+    });
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(3);
+    expect(mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[1]).toEqual([
+      expect.objectContaining({ root: "/after-recovery" }),
+    ]);
+  });
+
+  it("keeps a timed-out connector blocked when its late compensation fails", async (): Promise<void> => {
+    const persisted = deferred<{ readonly chat: Chat }>();
+    const source = capsuleScope("late-capsule");
+    mocks.updateChatLocalKnowledgeScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockRejectedValueOnce(new Error("compensation unavailable"));
+    await renderMounted();
+    vi.useFakeTimers();
+    const bind = mocks.state.workspaceOptions?.onConnectorBind;
+    const first = bind?.("chat-window", source);
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+    expect(await first).toBe(false);
+    await act(async (): Promise<void> => {
+      persisted.resolve({ chat: chat({ localKnowledgeScopes: [source], updatedAt: 2 }) });
+    });
+    expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenCalledTimes(2);
+    expect(await bind?.("chat-window", capsuleScope("must-remain-blocked"))).toBe(false);
+    expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenCalledTimes(2);
   });
 
   it("compensates a timed-out scope unbind before retaining the visible edge", async () => {
@@ -1429,7 +1494,7 @@ describe("AppShell grounding connections", () => {
     await waitFor((): void => {
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(privateChat.id, null);
     });
-    expect(mocks.fetchChats).toHaveBeenCalledWith("/private", undefined, "chat-private");
+    expect(mocks.fetchChats).toHaveBeenCalledWith("/private", expect.any(String), "chat-private");
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
   });
 
@@ -1897,7 +1962,7 @@ describe("AppShell grounding connections", () => {
     ]);
   });
 
-  it.each(["0".repeat(64), "BAD-DIGEST"])(
+  it.each(["BAD-DIGEST"])(
     "never deletes canonical sources for an unmatched ownership digest %s",
     async (digest): Promise<void> => {
       const active = chat({ connectedScopes: [fileScope("/manuals/Unowned")] });
@@ -1923,6 +1988,65 @@ describe("AppShell grounding connections", () => {
     },
   );
 
+  it("rebinds a valid absent fingerprint without deleting other canonical sources", async (): Promise<void> => {
+    const absent = connectedScopeFingerprint(fileScope("/removed-from-chat"));
+    const { oldScope, otherScope } = restoredTeardownFixture(absent);
+    const workspace = mocks.state.workspaceResult!;
+    mocks.state.workspaceResult = workspaceResult(
+      (workspace.wins ?? []).map((window) =>
+        window.type === "files" ? { ...window, cfg: { root: "/newly-selected" } } : window,
+      ),
+      workspace.conns,
+      workspace.api,
+    );
+    await renderMounted();
+    await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
+    expect(mocks.updateChatConnectedScopes.mock.calls[0]?.[1]).toEqual([
+      oldScope,
+      otherScope,
+      expect.objectContaining({ root: "/newly-selected" }),
+    ]);
+  });
+
+  it("accepts teardown when a valid fingerprint proves that its source is absent", async (): Promise<void> => {
+    const absent = connectedScopeFingerprint(fileScope("/removed-from-chat"));
+    restoredTeardownFixture(absent);
+    await renderMounted();
+    await act(async (): Promise<void> => {
+      expect(
+        await mocks.state.workspaceOptions?.onScopeUnbind?.(
+          "chat-owner",
+          fileScope("/visible-folder"),
+          undefined,
+          "owned-edge",
+        ),
+      ).toBe(true);
+    });
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+  });
+
+  it("preserves a newer local chat edit during an already canonical source refresh", async (): Promise<void> => {
+    const source = fileScope("/already-connected");
+    const initial = chat({ connectedScopes: [source], title: "Old title", updatedAt: 1 });
+    mocks.state.session = { ...mocks.state.session!, activeChat: initial, chats: [initial] };
+    const lookup = deferred<{ readonly chats: readonly Chat[] }>();
+    mocks.fetchChats.mockReturnValueOnce(lookup.promise);
+    const view = render(<AppShell />);
+    await screen.findByTestId("workspace");
+    const binding = mocks.state.workspaceOptions?.onScopeBind?.("chat-window", source);
+    await waitFor(() => expect(mocks.fetchChats).toHaveBeenCalledOnce());
+    const edited = { ...initial, title: "New local title", updatedAt: 2 };
+    mocks.state.session = { ...mocks.state.session!, activeChat: edited, chats: [edited] };
+    view.rerender(<AppShell />);
+    await act(async (): Promise<void> => {
+      lookup.resolve({ chats: [initial] });
+      expect(await binding).toBe(true);
+    });
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+  });
+
   it("adopts a legacy edge already matching a canonical source without deleting other sources", async (): Promise<void> => {
     const visible = fileScope("/manuals/Scale");
     const active = chat({ connectedScopes: [fileScope("/manuals/Unowned"), visible] });
@@ -1941,7 +2065,7 @@ describe("AppShell grounding connections", () => {
       expect(api.updateConnBoundScope).toHaveBeenCalledWith("legacy-edge", visible),
     );
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
-    expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(active);
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -1968,7 +2092,7 @@ describe("AppShell grounding connections", () => {
     },
   );
 
-  it.each([undefined, "0".repeat(64)])(
+  it.each([undefined, "BAD-DIGEST"])(
     "refuses immediate teardown with unproven ownership %s",
     async (digest): Promise<void> => {
       restoredTeardownFixture(digest);
@@ -2092,7 +2216,7 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[1]).toBeNull();
   });
 
-  it("replaces a restored Files edge after an in-flight initial acknowledgement", async (): Promise<void> => {
+  it("coalesces queued Files roots after an in-flight initial acknowledgement", async (): Promise<void> => {
     const initial = deferred<{ readonly chats: readonly Chat[] }>();
     const oldScope = fileScope("/manual-old");
     const otherScope = fileScope("/independent-folder");
@@ -2123,6 +2247,14 @@ describe("AppShell grounding connections", () => {
     const view = render(<AppShell />);
     await screen.findByTestId("workspace");
     await waitFor(() => expect(mocks.fetchChats).toHaveBeenCalled());
+    mocks.state.workspaceResult = workspaceResult(
+      [{ ...windows[0]!, cfg: { root: "/intermediate-root" } }, ...windows.slice(1)],
+      connections,
+      api,
+    );
+    await act(async (): Promise<void> => {
+      view.rerender(<AppShell />);
+    });
     const nextScope = fileScope("/manual-new");
     const updated = chat({
       connectedScopes: [otherScope, nextScope],
@@ -2143,6 +2275,7 @@ describe("AppShell grounding connections", () => {
       initial.resolve({ chats: [active] });
     });
     await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalled());
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce();
     const requested = mocks.updateChatConnectedScopes.mock.calls.at(
       -1,
     )?.[1] as ChatConnectedScope[];

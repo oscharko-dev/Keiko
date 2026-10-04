@@ -287,6 +287,7 @@ function clientMessagePostBody(
     answerSpeech: meta.answerSpeech,
     supportReportDelivery: meta.supportReportDelivery,
     supportReportPreparation: meta.supportReportPreparation,
+    filesScopeDecision: meta.filesScopeDecision,
     composerActivity: meta.composerActivity,
     composerFocusIndicator: meta.composerFocusIndicator,
     composerCodeStage: meta.composerCodeStage,
@@ -367,13 +368,20 @@ function gitClientOperationPostBudget(
 // else is a failure report. The binding, repair and git-client rules are the server's own
 // (keiko-contracts), so the two budgets never drift.
 // The closed report shapes, by the server's own rule (client-diagnostics-routes closedReportBudget).
+function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
+  return (
+    meta.supportReportDelivery !== undefined ||
+    meta.supportReportPreparation !== undefined ||
+    meta.filesScopeDecision !== undefined
+  );
+}
+
 function closedReportPostBudget(
   meta: ClientDiagnosticMeta,
 ): ClientDiagnosticPostBudget | undefined {
   if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
   if (meta.selectDismissal !== undefined || meta.knowledgeCatalog !== undefined) return "routine";
-  if (meta.answerSpeech !== undefined || meta.supportReportDelivery !== undefined) return "routine";
-  if (meta.supportReportPreparation !== undefined) return "routine";
+  if (meta.answerSpeech !== undefined || routineSupportReportEvidence(meta)) return "routine";
   if (meta.answerCopy === undefined) return undefined;
   return meta.answerCopy.outcome === "failed" ? "failure" : "routine";
 }

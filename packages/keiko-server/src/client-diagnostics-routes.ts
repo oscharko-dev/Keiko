@@ -73,6 +73,7 @@ import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
   CLIENT_COMPOSER_ACTIVITIES,
   CLIENT_COMPOSER_CODE_STAGES,
+  CLIENT_FILES_SCOPE_DECISIONS,
   CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
@@ -1126,6 +1127,34 @@ const CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION = defineActivityLogOperat
   releaseImpact: "patch",
 });
 
+const CLIENT_FILES_SCOPE_DECISION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.files-scope.decision",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientFilesScopeDecision",
+  fields: {
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_FILES_SCOPE_DECISIONS,
+    },
+    sourceCount: { type: "integer", dataClass: "count", required: false },
+    candidateCount: { type: "integer", dataClass: "count", required: false },
+    bindingFingerprint: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.files-scope.decision.line"],
+  releaseImpact: "patch",
+});
+
 const CLIENT_SUPPORT_REPORT_PREPARED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -1756,6 +1785,33 @@ function logClientSupportReportPrepared(
   return true;
 }
 
+function logClientFilesScopeDecision(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const decision = request.filesScopeDecision;
+  if (decision === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_FILES_SCOPE_DECISION_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        decision: decision.decision,
+        ...(decision.sourceCount === undefined ? {} : { sourceCount: decision.sourceCount }),
+        ...(decision.candidateCount === undefined
+          ? {}
+          : { candidateCount: decision.candidateCount }),
+        ...(decision.bindingFingerprint === undefined
+          ? {}
+          : { bindingFingerprint: decision.bindingFingerprint }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
 // The closed report shapes, each of which owns its own registered line.
 function logClosedClientReport(
   request: ClientDiagnosticIngestRequest,
@@ -1767,7 +1823,8 @@ function logClosedClientReport(
     logClientAnswerCopy(request, correlationId) ||
     logClientAnswerSpeech(request, correlationId) ||
     logClientSupportReportDownload(request, correlationId) ||
-    logClientSupportReportPrepared(request, correlationId)
+    logClientSupportReportPrepared(request, correlationId) ||
+    logClientFilesScopeDecision(request, correlationId)
   );
 }
 
@@ -2285,7 +2342,8 @@ function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReport
     report.knowledgeCatalog !== undefined ||
     report.answerSpeech !== undefined ||
     report.supportReportDelivery !== undefined ||
-    report.supportReportPreparation !== undefined
+    report.supportReportPreparation !== undefined ||
+    report.filesScopeDecision !== undefined
   ) {
     return "routine";
   }

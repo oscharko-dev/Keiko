@@ -681,6 +681,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
         "client.binding.candidates-offered",
         "client.binding.choice-kept",
         "client.binding.choice-withdrawn",
+        "client.files-scope.decision",
       ],
       end: ["client.binding.resolved"],
       failure: ["client.binding.target-missing"],
@@ -692,6 +693,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "client.binding.choice-withdrawn",
       "client.binding.resolved",
       "client.binding.target-missing",
+      "client.files-scope.decision",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
@@ -700,6 +702,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "client.binding.choice-withdrawn",
       "client.binding.resolved",
       "client.binding.target-missing",
+      "client.files-scope.decision",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
@@ -707,6 +710,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "client.binding.choice-kept",
       "client.binding.choice-withdrawn",
       "client.binding.resolved",
+      "client.files-scope.decision",
     ],
     requiredEvidenceClasses: [
       "closed-enum",

@@ -45,6 +45,7 @@ import {
   type ClientDiagnosticAnswerSpeech,
   type ClientSupportReportDelivery,
   type ClientSupportReportPreparation,
+  type ClientFilesScopeDecision,
   type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
@@ -170,6 +171,7 @@ export interface ClientDiagnosticMeta {
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
+  readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;
@@ -379,4 +381,15 @@ function sseStreamCloseReason(readyState: number | undefined): SseStreamCloseRea
 export function sseStreamErrorDiagnostic(stream: string, readyState: number | undefined): string {
   const readyStateText = readyState === undefined ? "unknown" : String(readyState);
   return `[keiko] ${stream} sse stream error (kind=sse-error, readyState=${readyStateText}, reason=${sseStreamCloseReason(readyState)})`; // i18n-exempt: developer diagnostic for the activity log, never rendered to a person
+}
+
+/** Emits an ownership decision on the existing routine diagnostic transport under its attempt. */
+export function reportFilesScopeDecision(
+  correlationId: string,
+  decision: ClientFilesScopeDecision,
+): void {
+  reportClientDiagnostic("Keiko Files scope ownership decision.", {
+    correlationId,
+    filesScopeDecision: decision,
+  });
 }

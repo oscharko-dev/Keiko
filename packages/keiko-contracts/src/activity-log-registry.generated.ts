@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f3deee25f01c647d7d8b711097a4fa482c0ebd83e32d411424e358c4b1a1d4d9" as const;
+  "f8c42c5299342d270c9bf39fb280a8ca2a64ac43c817c83614d9afda9940e8dd" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -969,6 +969,31 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      contextWindowTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      inputLimitTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      inputCapacityUnavailableTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      reservedOutputTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      safetyMarginTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       tokensSaved: {
         type: "integer",
         dataClass: "count",
@@ -1181,6 +1206,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "restored",
           "revision-mismatch",
           "window-expanded",
+          "input-budget-expanded",
           "current-turn-protected",
           "boundary-missing",
         ],
@@ -3186,6 +3212,66 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "client.files-scope.decision",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientFilesScopeDecision",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      decision: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "restored",
+          "owned-elsewhere",
+          "released",
+          "blocked-ambiguous",
+          "fingerprint-absent",
+          "conflict-retried",
+          "ack-missing",
+          "automatic-suppressed",
+          "timeout-blocked",
+          "timeout-recovered",
+          "request-superseded",
+        ],
+      },
+      sourceCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      candidateCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      bindingFingerprint: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-binding"],
+    proofIds: ["client.files-scope.decision.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "client.git-operation.attempted",
     category: "diagnostic",
     owner: "keiko-server",
@@ -3787,7 +3873,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       availabilityReason: {
         type: "string",
         dataClass: "closed-enum",
-        required: true,
+        required: false,
         values: ["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"],
       },
     },
@@ -28560,6 +28646,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      reportDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
       evidenceScope: {
         type: "string",
         dataClass: "closed-enum",
@@ -32741,6 +32833,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "contextWindowTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "conversationInputBudgetTokens",
               type: "integer",
               dataClass: "count",
@@ -32751,6 +32849,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "inputCapacityUnavailableTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "inputLimitTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "inputTokens",
@@ -32802,6 +32912,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "projectedMessagesCompacted",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "reservedOutputTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "safetyMarginTokens",
               type: "integer",
               dataClass: "count",
               required: false,
@@ -33829,6 +33951,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           "client.binding.candidates-offered",
           "client.binding.choice-kept",
           "client.binding.choice-withdrawn",
+          "client.files-scope.decision",
         ],
         end: ["client.binding.resolved"],
         failure: ["client.binding.target-missing"],
@@ -33855,6 +33978,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "client.binding.target-missing",
           mode: "correlation",
         },
+        {
+          op: "client.files-scope.decision",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
       resourceSignals: [
@@ -33862,6 +33989,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "client.binding.choice-kept",
         "client.binding.choice-withdrawn",
         "client.binding.resolved",
+        "client.files-scope.decision",
       ],
       replayReferences: [],
       operations: [
@@ -34203,6 +34331,48 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["client.binding.target-missing.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "client.files-scope.decision",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "bindingFingerprint",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
+              name: "candidateCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "decision",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "sourceCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.files-scope.decision.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -63625,7 +63795,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "availabilityReason",
               type: "string",
               dataClass: "closed-enum",
-              required: true,
+              required: false,
             },
             {
               name: "evidenceScope",
@@ -64032,8 +64202,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "count",
               required: true,
             },
+            {
+              name: "reportDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -67886,6 +68062,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.diagnostic": "client-diagnostics",
     "client.diagnostic.rate-limited": "client-diagnostics",
     "client.diagnostic.rejected": "client-diagnostics",
+    "client.files-scope.decision": "client-diagnostics",
     "client.git-operation.attempted": "client-diagnostics",
     "client.git-operation.settled": "client-diagnostics",
     "client.knowledge-catalog.unavailable": "client-diagnostics",
