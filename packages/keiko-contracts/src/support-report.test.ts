@@ -19,6 +19,26 @@ describe("closed support report attachment identities", () => {
   });
 
   it.each([
+    "keiko-support-v0-abcdef012345-2026-10-03.json",
+    "keiko-support-v01-abcdef012345-2026-10-03.json",
+    "keiko-support-v10000-abcdef012345-2026-10-03.json",
+    "keiko-support-v1-ABCDEF012345-2026-10-03.json",
+    "keiko-support-v1-gbcdef012345-2026-10-03.json",
+    "keiko-support-v1-abcdef01234-2026-10-03.json",
+    "keiko-support-v1-abcdef0123456-2026-10-03.json",
+    "keiko-support-v1-abcdef012345-2026-1-03.json",
+    "keiko-support-v1-abcdef012345-2026-10-3.json",
+    "keiko-support-v1-abcdef012345-2026-10-03",
+    "keiko-support-v1-abcdef012345-2026-10-03.json.gz",
+    "keiko-support-v1-abcdef012345-2026-10-03.json/extra",
+    "../keiko-support-v1-abcdef012345-2026-10-03.json",
+    "keiko-support-v1-abcdef012345-2026-10-03.json\n",
+    "keiko-support-v1-abcdef012345-2026-10-03.json\r",
+  ])("rejects a filename outside the canonical attachment grammar: %j", (name) => {
+    expect(isSupportReportFileName(name)).toBe(false);
+  });
+
+  it.each([
     "https://other.example/report",
     "/api/diagnostics/report/download/../private",
     "/api/diagnostics/report/download/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa?token=private",
