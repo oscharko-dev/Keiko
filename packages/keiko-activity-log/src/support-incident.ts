@@ -307,6 +307,12 @@ const SUPPORT_INCIDENT_EXPIRED_OPERATION = defineActivityLogOperation({
       values: ["removed", "failed"],
     },
     defectFingerprint: { ...FINGERPRINT_FIELD, required: false },
+    pinRelease: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["released", "not-pinned", "rejected"],
+    },
     openIncidentCount: OPEN_COUNT_FIELD,
   },
   causal: "correlation",
@@ -475,10 +481,16 @@ function dismissedEvidence(
   );
 }
 
+interface EntryRemoval {
+  readonly removed: boolean;
+  readonly complete: boolean;
+  readonly pinRelease?: SupportIncidentPinRelease;
+}
+
 interface ExpiryFacts {
   readonly reason?: "retention";
   readonly entry: SupportIncidentStoreEntry;
-  readonly removed: boolean;
+  readonly removal: EntryRemoval;
   readonly correlationId: string;
   readonly openIncidentCount: number;
 }
@@ -506,12 +518,13 @@ function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
       {
         incidentId: facts.entry.incidentId,
         expiryReason: facts.reason ?? (record === undefined ? "invalid-record" : "expired"),
-        removalStatus: facts.removed ? "removed" : "failed",
+        removalStatus: facts.removal.removed ? "removed" : "failed",
+        ...(facts.removal.pinRelease === undefined ? {} : { pinRelease: facts.removal.pinRelease }),
         ...(record === undefined
           ? {}
           : { defectFingerprint: record.fingerprint.defectFingerprint }),
         openIncidentCount: facts.openIncidentCount,
-        ...(facts.removed ? {} : { completeness: "partial" as const }),
+        ...(facts.removal.complete ? {} : { completeness: "partial" as const }),
       },
     ),
   );
@@ -777,15 +790,15 @@ function evictOldestCandidate(
       record !== undefined && record.slotIndex < capacity && mayEvictCandidate(draft, record),
   );
   if (entry === undefined) return undefined;
-  const removed = removeEntry(context.stateDir, entry, context);
+  const removal = removeEntry(context.stateDir, entry, context);
   expiredEvidence(context.stateDir, {
     entry,
-    removed,
+    removal,
     correlationId: draft.evidenceCorrelationId,
-    openIncidentCount: entries.length - Number(removed),
+    openIncidentCount: entries.length - Number(removal.removed),
     reason: "retention",
   });
-  return removed ? entry.incidentId : undefined;
+  return removal.complete ? entry.incidentId : undefined;
 }
 
 interface ClaimedQuotaSlot {
@@ -887,15 +900,15 @@ function rollDiagnosticPin(context: IncidentPinContext): boolean {
       pins.some((pin) => ownsDiagnosticPin(record, pin)),
   );
   if (oldest === undefined) return false;
-  const removed = removeEntry(context.stateDir, oldest, context);
+  const removal = removeEntry(context.stateDir, oldest, context);
   expiredEvidence(context.stateDir, {
     entry: oldest,
-    removed,
+    removal,
     reason: "retention",
     correlationId: context.correlationId,
-    openIncidentCount: entries.length - Number(removed),
+    openIncidentCount: entries.length - Number(removal.removed),
   });
-  return removed;
+  return removal.complete && removal.pinRelease === "released";
 }
 
 function requestIncidentPin(
@@ -1325,25 +1338,37 @@ function releaseRecordClaims(stateDir: string, record: SupportIncidentRecord): v
   );
 }
 
+function releaseEntryClaims(stateDir: string, record: SupportIncidentRecord): boolean {
+  try {
+    releaseRecordClaims(stateDir, record);
+    return true;
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
+      correlationId: incidentLifecycleCorrelation(record),
+    });
+    return false;
+  }
+}
+
 function removeEntry(
   stateDir: string,
   entry: SupportIncidentStoreEntry,
   options: Pick<SupportIncidentOptions, "env" | "correlationId"> = {},
-): boolean {
+): EntryRemoval {
   try {
     removeSupportIncidentRecord(stateDir, entry.incidentId);
   } catch (error) {
     reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
-    return false;
+    return { removed: false, complete: false };
   }
-  if (entry.record !== undefined) {
-    releaseRecordClaims(stateDir, entry.record);
-    releaseIncidentPin(stateDir, entry.record, {
-      correlationId: incidentLifecycleCorrelation(entry.record, options.correlationId),
-      env: options.env ?? process.env,
-    });
-  }
-  return true;
+  if (entry.record === undefined) return { removed: true, complete: true };
+  const claimsReleased = releaseEntryClaims(stateDir, entry.record);
+  const pinRelease = releaseIncidentPin(stateDir, entry.record, {
+    correlationId: incidentLifecycleCorrelation(entry.record, options.correlationId),
+    env: options.env ?? process.env,
+  });
+  return { removed: true, complete: claimsReleased && pinRelease !== "rejected", pinRelease };
 }
 
 // A claim whose referenced incidentId names no record right now is an orphan once it is older than
@@ -1396,8 +1421,8 @@ function sweepExpiredEntries(
   const open = entries.filter((entry) => openEntry(entry, nowMs));
   for (const entry of entries) {
     if (!removableEntry(entry, nowMs)) continue;
-    const removed = removeEntry(stateDir, entry);
-    expiredEvidence(stateDir, { entry, removed, correlationId, openIncidentCount: open.length });
+    const removal = removeEntry(stateDir, entry);
+    expiredEvidence(stateDir, { entry, removal, correlationId, openIncidentCount: open.length });
   }
   sweepOrphanedClaims(stateDir);
   return open;

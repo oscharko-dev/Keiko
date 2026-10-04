@@ -204,13 +204,43 @@ export function writeSupportIncidentRecord(
   }
 }
 
+function artifactLeafIsAbsent(path: string, directory: string): boolean {
+  const root = lstatSync(directory);
+  return (
+    root.isDirectory() &&
+    !root.isSymbolicLink() &&
+    lstatSync(path, { throwIfNoEntry: false }) === undefined
+  );
+}
+
+function removeIncidentArtifact(
+  path: string,
+  directory: string,
+  shouldRemove?: (descriptor: number) => boolean,
+): void {
+  try {
+    removeSafeArtifactFile(
+      path,
+      { artifactClass: ARTIFACT_CLASS, trustedRoot: directory },
+      shouldRemove,
+    );
+  } catch (error) {
+    // Only a guarded leaf open followed by confirmed absence is an idempotent peer cleanup.
+    // Unsafe ancestors, permissions, mutation conflicts and storage errors still fail closed.
+    if (
+      error instanceof SafeArtifactFileError &&
+      error.kind === "open-failed" &&
+      artifactLeafIsAbsent(path, directory)
+    )
+      return;
+    throw error;
+  }
+}
+
 /** Removes one closed-grammar record through the handle-checked removal primitive. */
 export function removeSupportIncidentRecord(stateDir: string, incidentId: string): void {
   const directory = supportIncidentDirectory(stateDir);
-  removeSafeArtifactFile(join(directory, supportIncidentFileName(incidentId)), {
-    artifactClass: ARTIFACT_CLASS,
-    trustedRoot: directory,
-  });
+  removeIncidentArtifact(join(directory, supportIncidentFileName(incidentId)), directory);
 }
 
 // ─── Cross-process dedup and quota claims (#3533 review 4050606506) ────────────────────────────
@@ -290,7 +320,6 @@ function claimSupportIncidentFile(
   return true;
 }
 
-/** Best-effort, idempotent removal: a claim that is already gone is not an error. */
 function claimOwnerMatches(descriptor: number, owner: string | undefined): boolean {
   const text = readBoundedText(descriptor);
   const current = text !== undefined && isSupportIncidentId(text) ? text : undefined;
@@ -302,16 +331,16 @@ interface ExpectedClaimOwner {
   readonly claimedAtMs?: number;
 }
 
+/** An absent claim is idempotent; a changed owner or mtime remains untouched. */
 function removeClaimIfPresent(
   directory: string,
   fileName: string,
   expected?: ExpectedClaimOwner,
 ): void {
   const path = join(directory, fileName);
-  if (regularFileSize(path) === undefined) return;
-  removeSafeArtifactFile(
+  removeIncidentArtifact(
     path,
-    { artifactClass: ARTIFACT_CLASS, trustedRoot: directory },
+    directory,
     expected === undefined
       ? undefined
       : (descriptor): boolean =>

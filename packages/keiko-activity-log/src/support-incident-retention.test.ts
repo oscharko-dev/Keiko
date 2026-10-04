@@ -26,11 +26,15 @@ import {
 } from "./support-incident-store.js";
 import { MAX_ACTIVITY_LOG_PINS, listActivityLogDirectory } from "./activity-log-store.js";
 import * as incidentStore from "./support-incident-store.js";
+import * as serverLog from "./server-log.js";
+import * as artifactFiles from "@oscharko-dev/keiko-security/fs-hardening";
 
 import {
   attachActivityLogEventRegistration,
   activityLogOperationSchema,
   ACTIVITY_LOG_ERROR_KINDS,
+  supportIncidentFileName,
+  supportIncidentSlotClaimFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createDesktopSupportReport,
@@ -43,8 +47,16 @@ import {
   readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 
+vi.mock("@oscharko-dev/keiko-security/fs-hardening", { spy: true });
+
+const actualArtifactFiles = await vi.importActual<typeof artifactFiles>(
+  "@oscharko-dev/keiko-security/fs-hardening",
+);
 let stateDir: string;
 beforeEach(() => {
+  vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementation(
+    actualArtifactFiles.removeSafeArtifactFile,
+  );
   stateDir = mkdtempSync(join(tmpdir(), "keiko-incident-retention-"));
   vi.spyOn(process.stderr, "write").mockReturnValue(true);
 });
@@ -113,6 +125,122 @@ describe("rolling diagnostic candidate retention", () => {
     expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
     expect(listSupportIncidentClaims(stateDir)).toEqual([]);
     expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+  });
+
+  it.each(["record", "slot"] as const)(
+    "finishes expiry when a peer removes the %s leaf immediately before the guarded open",
+    (kind) => {
+      const created = recordUserReportedIncident(stateDir, { correlationId: "peer-expiry-owner" });
+      if (created.status !== "created") throw new Error("Expected candidate");
+      const target = join(
+        incidentStore.supportIncidentDirectory(stateDir),
+        kind === "record"
+          ? supportIncidentFileName(created.incidentId)
+          : supportIncidentSlotClaimFileName(created.record.slotIndex),
+      );
+      const originalRemove = actualArtifactFiles.removeSafeArtifactFile;
+      vi.spyOn(artifactFiles, "removeSafeArtifactFile").mockImplementation((path, ...args) => {
+        if (path === target && existsSync(target)) rmSync(target);
+        originalRemove(path, ...args);
+      });
+      expect(listSupportIncidents(stateDir, { nowMs: created.record.expiresAtMs + 1 })).toEqual([]);
+      expect(listSupportIncidentClaims(stateDir)).toEqual([]);
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+      const ended = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.expired",
+      );
+      expect(ended.map((line): unknown => JSON.parse(line))).toContainEqual(
+        expect.objectContaining({
+          correlationId: "peer-expiry-owner",
+          removalStatus: "removed",
+          pinRelease: "released",
+        }),
+      );
+    },
+  );
+
+  it("releases its owned pin and records partial expiry after a genuine claim-release failure", () => {
+    const created = recordUserReportedIncident(stateDir, {
+      correlationId: "claim-release-failure",
+    });
+    if (created.status !== "created") throw new Error("Expected candidate");
+    vi.spyOn(incidentStore, "releaseSupportIncidentSlot").mockImplementationOnce(() => {
+      throw new artifactFiles.SafeArtifactFileError("manifest", "permission-unsafe");
+    });
+    expect(listSupportIncidents(stateDir, { nowMs: created.record.expiresAtMs + 1 })).toEqual([]);
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+    const ended = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.expired",
+    );
+    expect(ended.map((line): unknown => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({
+        correlationId: "claim-release-failure",
+        removalStatus: "removed",
+        pinRelease: "released",
+        completeness: "partial",
+      }),
+    );
+  });
+
+  it.each(["open-failed", "permission-unsafe"] as const)(
+    "preserves a present record after a genuine %s guarded removal failure",
+    (kind) => {
+      const created = recordUserReportedIncident(stateDir, { correlationId: "guarded-removal" });
+      if (created.status !== "created") throw new Error("Expected candidate");
+      const failure = new artifactFiles.SafeArtifactFileError("manifest", kind);
+      vi.spyOn(artifactFiles, "removeSafeArtifactFile").mockImplementationOnce(() => {
+        throw failure;
+      });
+      expect(() => {
+        incidentStore.removeSupportIncidentRecord(stateDir, created.incidentId);
+      }).toThrow(failure);
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(1);
+      expect(listSupportIncidentClaims(stateDir)).not.toEqual([]);
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toHaveLength(1);
+    },
+  );
+
+  it("does not treat a missing trusted directory as an idempotent leaf removal", () => {
+    const created = recordUserReportedIncident(stateDir, { correlationId: "missing-store-root" });
+    if (created.status !== "created") throw new Error("Expected candidate");
+    rmSync(incidentStore.supportIncidentDirectory(stateDir), { recursive: true });
+    expect(() => {
+      incidentStore.removeSupportIncidentRecord(stateDir, created.incidentId);
+    }).toThrow();
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toHaveLength(1);
+  });
+
+  it("does not claim recovered pin pressure when the owned pin release was rejected", () => {
+    for (let index = 0; index < MAX_ACTIVITY_LOG_PINS; index += 1) {
+      expect(
+        recordUserReportedIncident(stateDir, {
+          correlationId: `pin-release-owner-${String(index)}`,
+        }).status,
+      ).toBe("created");
+    }
+    vi.spyOn(serverLog, "releaseActivityLogPin").mockReturnValueOnce({
+      status: "rejected",
+      reason: "removal-failed",
+    });
+    const request = vi.spyOn(serverLog, "pinActivityLogWindow");
+    const next = recordUserReportedIncident(stateDir, { correlationId: "pin-release-new-request" });
+    expect(next.status).toBe("created");
+    if (next.status !== "created") throw new Error("Expected degraded candidate");
+    expect(next.record.pin.status).toBe("rejected");
+    expect(request).toHaveBeenCalledOnce();
+    const ended = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.expired",
+    );
+    expect(ended.map((line): unknown => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({
+        removalStatus: "removed",
+        pinRelease: "rejected",
+        completeness: "partial",
+      }),
+    );
   });
 
   it("preserves manual and server failure pins when a browser candidate rolls its own oldest class", () => {
