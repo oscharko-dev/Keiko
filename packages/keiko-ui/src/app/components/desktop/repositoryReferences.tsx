@@ -13,6 +13,7 @@ import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWor
 import { FileIcon } from "./widgets/shared/projectTree";
 import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
+import { useTranslate } from "@/lib/i18n";
 
 export interface RepositoryReference {
   readonly label: string;
@@ -54,15 +55,24 @@ export interface RepositoryReferenceTextPart {
 //     analysis still recognizes the quantifier as bounded.
 const REPOSITORY_REFERENCE_SEGMENT = String.raw`[\p{L}\p{N}\p{M}_.-]{1,255}`;
 const REPOSITORY_REFERENCE_PATH_CORE = String.raw`(?:${REPOSITORY_REFERENCE_SEGMENT}\/){0,1000}${REPOSITORY_REFERENCE_SEGMENT}\.[A-Za-z0-9][A-Za-z0-9]{0,15}`;
+const REFERENCE_HORIZONTAL_SPACE = String.raw`[ \t\u00a0\u202f]{0,64}`;
+function referenceLineRange(capture: boolean): string {
+  const digits = capture ? String.raw`(\d{1,7})` : String.raw`\d{1,7}`;
+  return String.raw`${REFERENCE_HORIZONTAL_SPACE}:${REFERENCE_HORIZONTAL_SPACE}${digits}(?:${REFERENCE_HORIZONTAL_SPACE}[-\u2010-\u2014\u2212]${REFERENCE_HORIZONTAL_SPACE}${digits})?`;
+}
+const REFERENCE_LINE_RANGE = referenceLineRange(true);
+const FOLLOWING_REFERENCE_LINE_RANGE = new RegExp(`^${REFERENCE_LINE_RANGE}`, "u");
 const REPOSITORY_REFERENCE_PATTERN = new RegExp(
-  String.raw`\[[^\]]{1,4096}\]|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?::(\d{1,7})(?:[-\u2010-\u2014\u2212](\d{1,7}))?)?`,
+  String.raw`\[[^\]]{1,4096}\]|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?:${REFERENCE_LINE_RANGE})?`,
   "gu",
 );
 // Exact/bracketed references have a known boundary, so their filenames may contain spaces or
 // other Unicode characters. The shared portable-path contract still owns path validity.
-const EXACT_REPOSITORY_REFERENCE_PATTERN =
-  /^@?([^:[\]\r\n]{1,4096})(?::(\d{1,7})(?:[-\u2010-\u2014\u2212](\d{1,7}))?)?$/u;
-const REPOSITORY_REFERENCE_SOURCE = String.raw`@?${REPOSITORY_REFERENCE_PATH_CORE}(?::\d{1,7}(?:[-\u2010-\u2014\u2212]\d{1,7})?)?`;
+const EXACT_REPOSITORY_REFERENCE_PATTERN = new RegExp(
+  String.raw`^@?([^:[\]\r\n]{1,4096}?)(?:${REFERENCE_LINE_RANGE})?$`,
+  "u",
+);
+const REPOSITORY_REFERENCE_SOURCE = String.raw`@?${REPOSITORY_REFERENCE_PATH_CORE}(?:${referenceLineRange(false)})?`;
 const REPOSITORY_REFERENCE_IN_BRACKETS_PATTERN = new RegExp(
   String.raw`\[\s*(${REPOSITORY_REFERENCE_SOURCE})\s*\]`,
   "giu",
@@ -257,10 +267,23 @@ function validMatchedLineRange(
   return start !== undefined && (match[3] === undefined || (end !== undefined && end >= start));
 }
 
+function incompleteReferenceLineSuffix(source: string, offset: number): boolean {
+  const tail = source.slice(offset, offset + 65).replace(/^[ \t\u00a0\u202f]{0,64}/u, "");
+  return /^[:\u2010-\u2014\u2212-]/u.test(tail);
+}
+
+function validReferenceMatchBoundary(match: RegExpExecArray, source: string): boolean {
+  const end = match.index + match[0].length;
+  return (
+    boundaryBefore(source, match.index) &&
+    boundaryAfter(source, end) &&
+    (match[2] === undefined || !incompleteReferenceLineSuffix(source, end))
+  );
+}
+
 function referenceFromMatch(match: RegExpExecArray, source: string): RepositoryReference | null {
   const raw = match[0] ?? "";
-  const matchIndex = match.index;
-  if (!boundaryBefore(source, matchIndex) || !boundaryAfter(source, matchIndex + raw.length)) {
+  if (!validReferenceMatchBoundary(match, source)) {
     return null;
   }
   const path = match[1] ?? "";
@@ -339,12 +362,25 @@ export function parseExactRepositoryReference(
   source: string,
   allowSpaces = false,
 ): RepositoryReference | null {
-  if (!allowSpaces && /\s/u.test(source)) return null;
   const match = EXACT_REPOSITORY_REFERENCE_PATTERN.exec(source);
   if (match?.index !== 0 || (match[0]?.length ?? 0) !== source.length) {
     return null;
   }
+  if (!allowSpaces && /\s/u.test(match[1] ?? "")) return null;
   return referenceFromMatch(match, source);
+}
+
+/** A line suffix must be immediately adjacent to the code-wrapped path in the same text node. */
+export function consumeRepositoryReferenceLineSuffix(
+  path: string,
+  followingText: string,
+): { readonly reference: RepositoryReference; readonly length: number } | undefined {
+  const match = FOLLOWING_REFERENCE_LINE_RANGE.exec(followingText);
+  if (match === null || !boundaryAfter(followingText, match[0].length)) return undefined;
+  if (incompleteReferenceLineSuffix(followingText, match[0].length)) return undefined;
+  const reference = parseExactRepositoryReference(`${path}${match[0]}`, true);
+  if (reference?.lineStart === undefined) return undefined;
+  return { reference, length: match[0].length };
 }
 
 export function repositoryRootLabel(root: string): string {
@@ -523,6 +559,7 @@ export function RepositoryReferenceInline({
   className = "repo-ref-link",
   displayPath,
 }: RepositoryReferenceInlineProps): ReactNode {
+  const t = useTranslate();
   const [status, setStatus] = useState<"idle" | "choosing" | "opening" | "opened" | "failed">(
     "idle",
   );
@@ -645,7 +682,7 @@ export function RepositoryReferenceInline({
               key={root.root}
               type="button"
               className="repo-ref-root"
-              aria-label={`Select repository source: ${root.label}`}
+              aria-label={t("chat.repository.selectSource", { label: root.label })}
               onClick={() => openForRoot(root)}
             >
               <span>{root.label}</span>

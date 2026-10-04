@@ -551,6 +551,7 @@ export const EN_MESSAGES = {
   "chat.repository.connectedSource": "Source",
   "chat.repository.closePicker": "Close file picker",
   "chat.repository.source": "Repository",
+  "chat.repository.selectSource": "Select repository source: {label}",
   "chat.repository.connectedRepositories": "Repositories",
   "chat.repository.results": "Repository file results",
   "chat.repository.reference": "Reference {path}",

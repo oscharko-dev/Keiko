@@ -125,6 +125,70 @@ function packWith(
 }
 
 describe("parseInlineCitations", () => {
+  it.each([false, true])(
+    "associates spaced table source lines with each factual claim (code=%s)",
+    (code) => {
+      const paths = ["chapters/conveyor.html", "chapters/calibration.html", "文書/運転 手順.html"];
+      const rows = paths.map((path, index) => {
+        const ref = `${path}\u202f:\u202f182`;
+        return `| Machine ${String(index)} | ${String(1193 + index)} hours | ${code ? "`" + ref + "`" : ref} |`;
+      });
+      const answer = ["| Machine | Interval | Source |", "|---|---|---|", ...rows].join("\n");
+      const index = buildPackCitationIndex([
+        packWith(
+          paths.map((scopePath) => ({
+            scopePath,
+            excerpts: [excerpt(scopePath, 182, 182)],
+          })),
+        ),
+      ]);
+      expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual(paths);
+      expect(segmentCitedClaims(answer)).toHaveLength(3);
+      expect(segmentCitedClaims(answer)[0]).toMatchObject({
+        citations: [{ scopePath: paths[0], lineRange: { startLine: 182, endLine: 182 } }],
+      });
+      expect(
+        reconcileInlineCitations(
+          "missing.html\u202f:\u202f182 and chapters/conveyor.html\u202f:\u202f183",
+          index,
+        ).unsupported,
+      ).toHaveLength(2);
+    },
+  );
+
+  it("associates an adjacent outside-code line with the exact wrapped path", () => {
+    const path = "文書/運転 手順.html";
+    const answer = `Service interval1193 hours \`${path}\`\u202f:\u202f182.`;
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: path, excerpts: [excerpt(path, 182, 182)] }]),
+    ]);
+    expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual([path]);
+    expect(segmentCitedClaims(answer)).toMatchObject([
+      { citations: [{ scopePath: path, lineRange: { startLine: 182, endLine: 182 } }] },
+    ]);
+    expect(parseInlineCitations(`\`${path}\`\n :182`)).toEqual([]);
+  });
+
+  it("keeps spaced location grammar within a single actual reference", () => {
+    expect(
+      parseInlineCitations(
+        "foo[0] and [docs/a.html : 182](https://example.test) and [docs/a.html : 182][guide]",
+      ),
+    ).toEqual([]);
+    expect(
+      parseInlineCitations("docs/a.html\n : 182\n`const path = [0]`\n```\ndocs/a.html : 182\n```"),
+    ).toEqual([]);
+    expect(parseInlineCitations("docs/a.html : 182 - wrong")).toEqual([]);
+    expect(
+      reconcileInlineCitations(
+        "[docs/a.html : 182 - wrong] [../docs/a.html : 182]",
+        buildPackCitationIndex([
+          packWith([{ scopePath: "docs/a.html", excerpts: [excerpt("docs/a.html", 182, 182)] }]),
+        ]),
+      ).unsupported,
+    ).toHaveLength(1);
+  });
+
   it("does not let a stray opening bracket consume the next source citation", () => {
     const answer = "xs[0 is read, see [src/a.ts:3].";
     expect(parseInlineCitations(answer)).toMatchObject([{ scopePath: "src/a.ts" }]);

@@ -568,6 +568,7 @@ export const DE_MESSAGES = {
   "chat.repository.connectedSource": "Verbundene Quelle",
   "chat.repository.closePicker": "Repository-Dateiauswahl schließen",
   "chat.repository.source": "Repository-Quelle",
+  "chat.repository.selectSource": "Quelle auswählen: {label}",
   "chat.repository.connectedRepositories": "Verbundene Repositorys",
   "chat.repository.results": "Repository-Dateiergebnisse",
   "chat.repository.reference": "{path} referenzieren",

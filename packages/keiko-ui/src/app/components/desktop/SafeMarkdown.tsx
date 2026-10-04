@@ -38,6 +38,7 @@ import {
 } from "./widgets/cards/shared/syntaxHighlight";
 import { Icons } from "./Icons";
 import {
+  consumeRepositoryReferenceLineSuffix,
   parseExactRepositoryReference,
   RepositoryReferenceInline,
   repositoryReferenceTextParts,
@@ -279,13 +280,54 @@ const HEADING_CLASSES = {
 // Node renderer — split into sub-functions to stay within max-lines-per-function
 // ---------------------------------------------------------------------------
 
+function repositoryCodeLinePair(
+  code: SafeMarkdownNode | undefined,
+  following: SafeMarkdownNode | undefined,
+): readonly [SafeMarkdownNode, SafeMarkdownNode] | undefined {
+  if (code?.kind !== "inline-code" || following?.kind !== "text") return undefined;
+  const text = following.text ?? "";
+  const suffix = consumeRepositoryReferenceLineSuffix(code.text ?? "", text);
+  if (suffix === undefined) return undefined;
+  return [
+    { ...code, text: suffix.reference.label },
+    { ...following, text: text.slice(suffix.length) },
+  ];
+}
+
+function adjacentRepositoryCodeLocations(
+  children: readonly SafeMarkdownNode[],
+): readonly SafeMarkdownNode[] {
+  let adjusted: SafeMarkdownNode[] | undefined;
+  for (let index = 0; index < children.length - 1; index += 1) {
+    const pair = repositoryCodeLinePair(children[index], children[index + 1]);
+    if (pair === undefined) continue;
+    adjusted ??= [...children];
+    adjusted[index] = pair[0];
+    adjusted[index + 1] = pair[1];
+  }
+  return adjusted ?? children;
+}
+
+function tableRepositoryLocationChildren(node: SafeMarkdownNode): readonly SafeMarkdownNode[] {
+  const children = node.children ?? [];
+  if (node.kind !== "td" && node.kind !== "th") return children;
+  const text = children.length === 1 && children[0]?.kind === "text" ? children[0].text : undefined;
+  if (text === undefined) return children;
+  const reference = parseExactRepositoryReference(text.trim(), true);
+  if (reference?.lineStart === undefined) return children;
+  return [{ ...children[0], kind: "inline-code", text: reference.label }];
+}
+
 function renderChildren(
   node: SafeMarkdownNode,
   key: string,
   options: RenderOptions,
   trailing?: ReactNode | undefined,
 ): ReactNode[] {
-  const children = node.children ?? [];
+  const children =
+    options.literalUserInput || options.openRepositoryReference === undefined
+      ? (node.children ?? [])
+      : adjacentRepositoryCodeLocations(tableRepositoryLocationChildren(node));
   if (children.length === 0) {
     return trailing === undefined ? [] : [<Fragment key={`${key}-trailing`}>{trailing}</Fragment>];
   }
@@ -637,7 +679,9 @@ function renderInlineCode(
 ): ReactNode {
   const text = node.text ?? "";
   const reference =
-    options.openRepositoryReference === undefined ? null : parseExactRepositoryReference(text);
+    options.openRepositoryReference === undefined
+      ? null
+      : parseExactRepositoryReference(text, true);
   return (
     <code key={key} className="sm-inline-code">
       {reference === null ? (
@@ -785,7 +829,7 @@ function useMarkdownListEvidence(
 function referencePathsInNode(node: SafeMarkdownNode): readonly string[] {
   const text = node.text ?? "";
   if (node.kind === "inline-code") {
-    const reference = parseExactRepositoryReference(text);
+    const reference = parseExactRepositoryReference(text, true);
     return reference === null ? [] : [reference.path];
   }
   if (node.kind !== "text") return [];

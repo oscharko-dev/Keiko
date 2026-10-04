@@ -67,6 +67,22 @@ describe("repository source path labels", () => {
 });
 
 describe("parseExactRepositoryReference / repositoryReferenceTextParts (S8786 regression)", () => {
+  it.each(["chapters/conveyor.html", "文書/運転 手順.html"])(
+    "keeps spaced source punctuation out of the actual path %s",
+    (path) => {
+      const text = `${path}\u202f:\u202f182`;
+      expect(parseExactRepositoryReference(text, true)).toMatchObject({
+        path,
+        lineStart: 182,
+        lineEnd: 182,
+      });
+      const parts = repositoryReferenceTextParts(path.includes(" ") ? `[${text}]` : text);
+      expect(parts.filter((part) => part.kind === "reference")).toMatchObject([
+        { reference: { path, lineStart: 182, lineEnd: 182 } },
+      ]);
+    },
+  );
+
   it.each(["-", "\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212"])(
     "links exact numeric ranges with separator %s without changing the filename",
     (separator) => {

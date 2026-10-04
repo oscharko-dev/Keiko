@@ -942,3 +942,89 @@ describe("SafeMarkdown — ordered list continuation", () => {
     ]);
   });
 });
+
+describe("SafeMarkdown spaced source table", () => {
+  it("preserves ordinary table text and code boundaries without a reference opener", () => {
+    const path = "文書/運転 手順.html";
+    render(
+      <SafeMarkdown
+        source={`| Source |\n|---|\n| ${path}\u202f:\u202f182 |\n| \`${path}\`\u202f:\u202f182 |`}
+      />,
+    );
+    const cells = screen.getAllByRole("cell");
+    expect(cells[0]?.querySelector("code")).toBeNull();
+    expect(cells[0]?.textContent).toBe(`${path}\u202f:\u202f182`);
+    expect(cells[1]?.querySelector("code")?.textContent).toBe(path);
+    expect(cells[1]?.textContent).toBe(`${path}\u202f:\u202f182`);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("preserves a CJK filename containing a space in a complete code-wrapped location", () => {
+    const path = "文書/運転 手順.html";
+    const opened = vi.fn(() => ({ ok: true as const, windowId: "preview" }));
+    render(
+      <SafeMarkdown
+        source={`| Source |\n|---|\n| \`${path}\u202f:\u202f182\` |`}
+        repositoryRoots={[{ root: "/synthetic/handbook", label: "Handbook" }]}
+        openRepositoryReference={opened}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({ path, lineStart: 182, lineEnd: 182 }),
+    );
+  });
+
+  it("opens an explicitly adjacent outside-code line with its unchanged CJK path", () => {
+    const path = "文書/運転 手順.html";
+    const opened = vi.fn(() => ({ ok: true as const, windowId: "preview" }));
+    render(
+      <SafeMarkdown
+        source={`| Source |\n|---|\n| \`${path}\`\u202f:\u202f182 |`}
+        repositoryRoots={[{ root: "/synthetic/handbook", label: "Handbook" }]}
+        openRepositoryReference={opened}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({ path, lineStart: 182, lineEnd: 182 }),
+    );
+  });
+
+  it("keeps an entire space-bearing path in a bare table source cell", () => {
+    const path = "文書/運転 手順.html";
+    const opened = vi.fn(() => ({ ok: true as const, windowId: "preview" }));
+    render(
+      <SafeMarkdown
+        source={`| Source |\n|---|\n| ${path}\u202f:\u202f182 |`}
+        repositoryRoots={[{ root: "/synthetic/handbook", label: "Handbook" }]}
+        openRepositoryReference={opened}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({ path, lineStart: 182, lineEnd: 182 }),
+    );
+  });
+
+  it("opens the actual source line182 rather than only the bare path", () => {
+    const path = "handbooks/material/service/archive/current/chapters/conveyor.html";
+    const opened = vi.fn(() => ({ ok: true as const, windowId: "preview" }));
+    render(
+      <SafeMarkdown
+        source={`| Machine | Interval | Source |\n|---|---|---|\n| Conveyor | 1193 hours | ${path}\u202f:\u202f182 |`}
+        repositoryRoots={[{ root: "/synthetic/handbook", label: "Handbook" }]}
+        openRepositoryReference={opened}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button"));
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/synthetic/handbook",
+        path,
+        lineStart: 182,
+        lineEnd: 182,
+      }),
+    );
+  });
+});

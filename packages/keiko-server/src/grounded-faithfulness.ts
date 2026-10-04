@@ -82,10 +82,18 @@ export interface ParsedInlineCitation {
 // The shared path bound plus bounded source ordinal and safe-integer line suffixes.
 const CITATION_TOKEN_MAX_CHARS = WORKSPACE_PORTABLE_PATH_MAX_BYTES + 64;
 const BRACKET_PATTERN = String.raw`\[([^\[\]\n]{1,${CITATION_TOKEN_MAX_CHARS}})\]`;
-const BRACKET_RE = new RegExp(BRACKET_PATTERN, "g");
 const FOLLOWING_BRACKET_RE = new RegExp(BRACKET_PATTERN, "y");
-// Normalize only the numeric range separator; the cited path and raw token remain unchanged.
-const LINE_RANGE_SUFFIX_RE = /:(\d+)(?:[-\u2010-\u2014\u2212](\d+))?$/u;
+// Formatting whitespace belongs to citation punctuation, never to the actual cited path.
+const CITATION_HORIZONTAL_SPACE = String.raw`[ \t\u00a0\u202f]{0,64}`;
+const LINE_RANGE_SUFFIX_SOURCE = String.raw`${CITATION_HORIZONTAL_SPACE}:${CITATION_HORIZONTAL_SPACE}(\d{1,16})(?:${CITATION_HORIZONTAL_SPACE}[-\u2010-\u2014\u2212]${CITATION_HORIZONTAL_SPACE}(\d{1,16}))?`;
+const LINE_RANGE_SUFFIX_RE = new RegExp(`${LINE_RANGE_SUFFIX_SOURCE}$`, "u");
+const BARE_CITATION_SEGMENT = String.raw`[\p{L}\p{N}\p{M}_.-]{1,255}`;
+const BARE_CITATION_PATH = String.raw`(?:${BARE_CITATION_SEGMENT}\/){0,1000}${BARE_CITATION_SEGMENT}\.[A-Za-z0-9]{1,12}`;
+const BARE_CITATION_RANGE = String.raw`${CITATION_HORIZONTAL_SPACE}:${CITATION_HORIZONTAL_SPACE}\d{1,16}(?:${CITATION_HORIZONTAL_SPACE}[-\u2010-\u2014\u2212]${CITATION_HORIZONTAL_SPACE}\d{1,16})?`;
+const REPOSITORY_CITATION_RE = new RegExp(
+  String.raw`${BRACKET_PATTERN}|(?<!\x60)\x60([^\x60\r\n]{1,${CITATION_TOKEN_MAX_CHARS}})\x60(?!\x60)(?:${BARE_CITATION_RANGE})?|(?<=\|)([^|\x60\r\n]{1,${CITATION_TOKEN_MAX_CHARS}}${BARE_CITATION_RANGE})(?=${CITATION_HORIZONTAL_SPACE}\|)|(?<![\p{L}\p{N}\p{M}_./:@\x60\[(-])(${BARE_CITATION_PATH}${BARE_CITATION_RANGE})(?![\p{L}\p{N}_:/\u2010-\u2014\u2212-])`,
+  "gu",
+);
 const SOURCE_QUALIFIER_RE = /^source:(\d+)\|/u;
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
@@ -213,17 +221,62 @@ function appendBracketCitations(
   }
 }
 
-/** Parse the inline `[path:line]` / `[path:start-end]` / `[path]` markers from an answer. */
+function referenceMatchInsideCode(
+  match: RegExpExecArray,
+  range: MarkdownCodeRange | undefined,
+): boolean {
+  if (range === undefined || range.start > match.index) return false;
+  // A complete, pure inline-code path+line is a source location. Other code stays excluded.
+  return (
+    match[2] === undefined ||
+    range.start !== match.index ||
+    range.end !== match.index + match[2].length + 2
+  );
+}
+
+function incompleteLocationSuffix(text: string, offset: number): boolean {
+  const tail = text.slice(offset, offset + 65).replace(/^[ \t\u00a0\u202f]{0,64}/u, "");
+  return /^[:\u2010-\u2014\u2212-]/u.test(tail);
+}
+
+function appendMatchedRepositoryCitation(
+  match: RegExpExecArray,
+  seen: Set<string>,
+  out: ParsedInlineCitation[],
+): void {
+  if (match[1] !== undefined) {
+    appendBracketCitations(match[1].trim(), seen, out);
+    return;
+  }
+  const token =
+    match[2] === undefined
+      ? (match[3] ?? match[4] ?? "").trim()
+      : `${match[2]}${match[0].slice(match[2].length + 2)}`.trim();
+  const citation = parseCitationToken(token);
+  if (citation?.lineRange === undefined) return;
+  const key = citationDedupKey(citation);
+  if (!seen.has(key)) {
+    seen.add(key);
+    out.push(citation);
+  }
+}
+
+/** Parse bracketed markers and explicit prose/table/inline-code repository line references. */
 export function parseInlineCitations(answerText: string): readonly ParsedInlineCitation[] {
   const out: ParsedInlineCitation[] = [];
   const seen = new Set<string>();
   const code = markdownCodeRanges(answerText);
   let nextCode = 0;
-  for (const match of answerText.matchAll(BRACKET_RE)) {
+  for (const match of answerText.matchAll(REPOSITORY_CITATION_RE)) {
     nextCode = skipCompletedCodeRanges(code, nextCode, match.index);
-    if ((code[nextCode]?.start ?? Number.POSITIVE_INFINITY) <= match.index) continue;
-    if (isMarkdownLink(answerText, match)) continue;
-    appendBracketCitations(match[1]?.trim() ?? "", seen, out);
+    if (referenceMatchInsideCode(match, code[nextCode])) continue;
+    if (match[1] !== undefined && isMarkdownLink(answerText, match)) continue;
+    if (
+      match[1] === undefined &&
+      incompleteLocationSuffix(answerText, match.index + match[0].length)
+    )
+      continue;
+    appendMatchedRepositoryCitation(match, seen, out);
   }
   return out;
 }
