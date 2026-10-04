@@ -430,23 +430,7 @@ function citationTitle(citation: GroundedEvidenceCitation, t: I18nTranslate): st
     kind,
     path: citation.scopePath,
     span,
-    relevance: t("grounded.citation.relevance", { score: citation.score.toFixed(2) }),
   });
-}
-
-function CitationScore({ score }: { readonly score: number }): ReactNode {
-  const t = useTranslate();
-  return (
-    <span
-      className="grounded-citation-score"
-      title={t("grounded.citation.relevance", { score: score.toFixed(2) })}
-    >
-      <span className="sr-only">
-        {t("grounded.citation.relevance", { score: score.toFixed(2) })}
-      </span>
-      <span aria-hidden="true">{score.toFixed(2)}</span>
-    </span>
-  );
 }
 
 function citationRepositoryReference(citation: GroundedEvidenceCitation): RepositoryReference {
@@ -506,7 +490,6 @@ function CitationReference({
           attributedCitationLabel(formatRange(citation), sourceLabel)
         )}
       </span>
-      <CitationScore score={citation.score} />
     </span>
   );
 }
@@ -944,11 +927,9 @@ function knowledgeCitationTitle(citation: LocalKnowledgeEvidenceCitation): strin
   if (citation.htmlManual !== undefined) {
     const section = citation.htmlManual.sectionPath?.join(" · ");
     const suffix = section === undefined ? "" : ` · ${section}`;
-    return `${citation.htmlManual.pageTitle}${suffix} — HTML manual evidence, relevance ${citation.score.toFixed(2)}`;
+    return `${citation.htmlManual.pageTitle}${suffix} — HTML manual evidence`;
   }
-  return citation.source === undefined
-    ? `${citation.label} — relevance ${citation.score.toFixed(2)}`
-    : `${citation.source} · ${citation.label} — relevance ${citation.score.toFixed(2)}`;
+  return citation.source === undefined ? citation.label : `${citation.source} · ${citation.label}`;
 }
 
 function manualCitationLabel(citation: LocalKnowledgeEvidenceCitation): string {
@@ -1035,7 +1016,6 @@ function ManualCitationChip({
       <span className="grounded-citation-action-label" aria-live="polite">
         {actionLabel}
       </span>
-      <CitationScore score={citation.score} />
     </button>
   );
 }
@@ -1082,7 +1062,6 @@ function KnowledgeCitationChip({
       <span className="grounded-citation" title={knowledgeCitationTitle(citation)}>
         <span className="grounded-citation-range">{label}</span>
         {unverified ? <UnverifiedSupportBadge /> : null}
-        <CitationScore score={citation.score} />
       </span>
     );
   }
@@ -1107,7 +1086,6 @@ function KnowledgeCitationChip({
       <span className="grounded-citation-range">{label}</span>
       {unverified ? <UnverifiedSupportBadge /> : null}
       <span className="grounded-citation-action-label">{actionLabel}</span>
-      <CitationScore score={citation.score} />
     </button>
   );
 }

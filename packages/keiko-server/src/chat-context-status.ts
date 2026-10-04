@@ -264,7 +264,7 @@ function groundedShare(
 
 // The latest grounded request describes the current request's shape only while the chat is still
 // grounded and the model still plans the window that request was planned for. After a model switch
-// or an adopted window its reference counts and size are history: the meter keeps the source share
+// or changed input/output limits its reference counts and size are history: the meter keeps the source share
 // (fitted to the current budget) but does not present the old request as the last one.
 function currentGroundedRequest(
   lastPrompt: GroundedPromptContextWire | undefined,
@@ -273,9 +273,25 @@ function currentGroundedRequest(
   modelId: string,
 ): GroundedPromptContextWire | undefined {
   if (!grounded || lastPrompt === undefined) return undefined;
-  if (lastPrompt.modelId !== undefined && lastPrompt.modelId !== modelId) return undefined;
-  const window = lastPrompt.contextWindowTokens;
-  return window === undefined || window === profile.maxInputTokens ? lastPrompt : undefined;
+  return lastPrompt.modelId === modelId &&
+    lastPrompt.contextWindowTokens === profile.maxInputTokens &&
+    lastPrompt.inputBudgetTokens === profile.effectiveInputBudget &&
+    lastPrompt.reservedOutputTokens === profile.reservedOutputTokens
+    ? lastPrompt
+    : undefined;
+}
+
+function groundedSourceEstimate(
+  grounding: ContextBreakdownInput["grounded"],
+  observed: GroundedPromptContextWire | undefined,
+  current: GroundedPromptContextWire | undefined,
+): ContextBreakdownInput["grounded"] {
+  if (grounding === undefined) return undefined;
+  const lastPrompt =
+    observed === undefined || current !== undefined
+      ? observed
+      : { ...observed, sentReferenceCount: 0, availableReferenceCount: 0 };
+  return { ...grounding, lastPrompt };
 }
 
 function groundedStatusFields(
@@ -313,10 +329,17 @@ export function readChatContextStatus(
     currentGrounding === undefined ? profile : groundedConversationLaneProfile(profile);
   const checkpoint = checkpointForProfile(deps, chatId, conversationProfile, correlationId);
   const counted = countHistory(deps, chatId, conversationProfile, checkpoint);
-  const grounded =
-    currentGrounding === undefined
-      ? undefined
-      : { ...currentGrounding, lastPrompt: counted.latestPromptContext };
+  const currentPrompt = currentGroundedRequest(
+    counted.latestPromptContext,
+    currentGrounding !== undefined,
+    profile,
+    modelId,
+  );
+  const grounded = groundedSourceEstimate(
+    currentGrounding,
+    counted.latestPromptContext,
+    currentPrompt,
+  );
   const pending = pendingCompaction(deps, chatId, conversationProfile, counted, correlationId);
   const breakdown = contextBreakdown({
     profile,
@@ -335,9 +358,7 @@ export function readChatContextStatus(
     canCompact: counted.messages >= 2,
     ...checkpointSavings(checkpoint, counted),
     ...(pending === undefined ? {} : { pendingCompaction: pending.wire }),
-    ...groundedStatusFields(
-      currentGroundedRequest(counted.latestPromptContext, grounded !== undefined, profile, modelId),
-    ),
+    ...groundedStatusFields(currentPrompt),
     segments: breakdown.segments,
     autoCompactionAtTokens: breakdown.autoCompactionAtTokens,
     ...(grounded === undefined

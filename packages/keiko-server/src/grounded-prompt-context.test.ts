@@ -2,6 +2,7 @@
 // so the context meter no longer shows 0 knowledge tokens for those grounded chats.
 import { describe, expect, it } from "vitest";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { sentPromptContext } from "./grounded-prompt-context.js";
 
 describe("sentPromptContext", () => {
@@ -36,6 +37,26 @@ describe("sentPromptContext", () => {
     const context = sentPromptContext(prompt, 0, undefined);
     expect(context.promptTokensMeasured).toBe(false);
     expect(context.promptTokens).toBe(countGatewayPromptTokens({ messages: prompt.messages }));
+  });
+
+  it("stamps the admission geometry without claiming unknown profile metadata", () => {
+    const profile = deriveContextProfileFromCapability({
+      id: "bounded-alias",
+      contextWindow: 32_000,
+      maxInputTokens: 8_000,
+      maxOutputTokens: 2_048,
+    });
+    expect(sentPromptContext(prompt, 812, profile)).toMatchObject({
+      modelId: profile.model?.id,
+      contextWindowTokens: profile.maxInputTokens,
+      inputBudgetTokens: profile.effectiveInputBudget,
+      reservedOutputTokens: profile.reservedOutputTokens,
+    });
+    const unknown = sentPromptContext(prompt, 812, undefined);
+    expect(unknown.modelId).toBeUndefined();
+    expect(unknown.contextWindowTokens).toBeUndefined();
+    expect(unknown.inputBudgetTokens).toBeUndefined();
+    expect(unknown.reservedOutputTokens).toBeUndefined();
   });
 
   it("reports no source share for a prompt without excerpts", () => {

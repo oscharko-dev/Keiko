@@ -83,11 +83,14 @@ function fixture(
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     store,
-    contextProfile: deriveContextProfile({
-      maxInputTokens: 32_000,
-      reservedOutputTokens: 2_000,
-      safetyMarginTokens: 1_000,
-    }),
+    contextProfile: {
+      ...deriveContextProfile({
+        maxInputTokens: 32_000,
+        reservedOutputTokens: 2_000,
+        safetyMarginTokens: 1_000,
+      }),
+      model: { id: "fixture" },
+    },
     modelPortFactory: () => {
       throw new Error("Manual compaction must not call a provider");
     },
@@ -230,11 +233,82 @@ describe("grounded context status", () => {
     expect(status.lastRequest).toBeUndefined();
     expect(status.knowledgeSources).toBeUndefined();
     expect(segmentOf(status, "knowledge").tokens).toBeGreaterThan(0);
+    expect(segmentOf(status, "knowledge").count).toBe(0);
+  });
+
+  it.each([
+    ["input", 128, 2_048],
+    ["output", 24_000, 1_024],
+  ] as const)(
+    "treats equal-window metadata after an %s limit change as historical",
+    (_kind, input, output) => {
+      const { deps, chatId } = fixture(2, "Short conversation.");
+      const first = deriveContextProfileFromCapability({
+        id: "stable-alias",
+        contextWindow: 32_000,
+        maxInputTokens: 24_000,
+        maxOutputTokens: 2_048,
+      });
+      const second = deriveContextProfileFromCapability({
+        id: "stable-alias",
+        contextWindow: 32_000,
+        maxInputTokens: input,
+        maxOutputTokens: output,
+      });
+      seedGroundedAnswer(
+        deps,
+        chatId,
+        sentPromptContext(
+          {
+            messages: [{ role: "user", content: "Source: src/fact.ts\nconst fact = 42;" }],
+            withoutSources: [],
+            sentReferenceCount: 1,
+            availableReferenceCount: 2,
+          },
+          900,
+          first,
+        ),
+      );
+      deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+      const status = readChatContextStatus(
+        { ...deps, contextProfile: second },
+        chatId,
+        "stable-alias",
+      );
+      expect(status.lastRequest).toBeUndefined();
+      expect(status.knowledgeSources).toBeUndefined();
+      expect(segmentOf(status, "knowledge").count).toBe(0);
+      expect(status.segments?.reduce((sum, segment) => sum + segment.tokens, 0)).toBe(
+        second.maxInputTokens,
+      );
+    },
+  );
+
+  it("keeps legacy source tokens as estimates without asserting matching request metadata", () => {
+    const { deps, chatId } = fixture(2, "Short conversation.");
+    seedGroundedAnswer(deps, chatId, {
+      promptTokens: 900,
+      promptTokensMeasured: true,
+      instructionTokens: 100,
+      sourceTokens: 400,
+      sentReferenceCount: 4,
+      availableReferenceCount: 6,
+    });
+    deps.store.updateChat(chatId, { localKnowledgeScopes: GROUNDED_SCOPES });
+    const status = readChatContextStatus(deps, chatId, "fixture");
+    expect(status.lastRequest).toBeUndefined();
+    expect(status.knowledgeSources).toBeUndefined();
+    expect(segmentOf(status, "knowledge")).toEqual({ tokens: 400, count: 0 });
   });
 
   it("shows the latest grounded request's source share and size while the chat is grounded", () => {
     const { deps, chatId } = fixture(2, "Kurze Frage und Antwort.");
     seedGroundedAnswer(deps, chatId, {
+      ...sentPromptContext(
+        { messages: [], withoutSources: [], sentReferenceCount: 4, availableReferenceCount: 16 },
+        5_901,
+        deps.contextProfile,
+      ),
       promptTokens: 5_901,
       promptTokensMeasured: true,
       estimatedPromptTokens: 6_420,

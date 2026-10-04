@@ -61,8 +61,7 @@
   min-width: 0;
 }
 
-.manualCitationAction :global(.grounded-citation-action-label),
-.manualCitationAction :global(.grounded-citation-score) {
+.manualCitationAction :global(.grounded-citation-action-label) {
   flex: 0 0 auto;
 }
 

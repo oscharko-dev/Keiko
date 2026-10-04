@@ -737,16 +737,11 @@ describe("GroundedAnswer", () => {
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     expect(screen.getByText("src/foo.ts:1-4")).toBeInTheDocument();
     expect(screen.getByText("src/bar.ts:10-12")).toBeInTheDocument();
-    // uiux-fix F051 C306: the tooltip explains the trailing decimal (relevance score).
     const chip = screen.getByText("src/foo.ts:1-4").closest(".grounded-citation");
-    expect(chip).toHaveAttribute(
-      "title",
-      "Evidence citation in src/foo.ts at lines 1-4 — relevance 0.87 (retrieval rank, not answer confidence)",
-    );
-    // The score carries a screen-reader-only label so it is not announced as a bare number.
-    expect(chip?.querySelector(".grounded-citation-score .sr-only")?.textContent).toBe(
-      "relevance 0.87 (retrieval rank, not answer confidence)",
-    );
+    expect(chip).toHaveAttribute("title", "Evidence citation in src/foo.ts at lines 1-4");
+    expect(chip?.querySelector(".grounded-citation-score")).toBeNull();
+    expect(screen.queryByText("0.87")).toBeNull();
+    expect(screen.queryByText("0.55")).toBeNull();
   });
 
   it("opens connected-context citations in the editor when repository navigation is available", () => {
@@ -886,6 +881,23 @@ describe("GroundedAnswer", () => {
     ).toEqual(["ManualA · src/foo.ts:10-25", "ManualB · src/foo.ts:10-25"]);
   });
 
+  it("keeps distinct ranges from one file without displaying a numeric retrieval rank", () => {
+    const citations = Array.from({ length: 6 }, (_, index) =>
+      citation({
+        stableId: `range-${String(index)}`,
+        scopePath: "README.md",
+        lineRange: { startLine: index * 10 + 1, endLine: index * 10 + 2 },
+        score: 0.04,
+      }),
+    );
+    const { container } = render(<GroundedAnswer answer={answer({ citations })} busy={false} />);
+    expect(container.querySelectorAll(".grounded-citation")).toHaveLength(6);
+    expect(screen.getByText("README.md:1-2")).toBeInTheDocument();
+    expect(screen.getByText("README.md:51-52")).toBeInTheDocument();
+    expect(screen.queryByText("0.04")).toBeNull();
+    expect(container.querySelector(".grounded-citation-score")).toBeNull();
+  });
+
   it("renders the scopePath alone when the citation has no lineRange", () => {
     const a = answer({
       citations: [citation({ lineRange: undefined, scopePath: "src/qux.ts", stableId: "q" })],
@@ -894,7 +906,7 @@ describe("GroundedAnswer", () => {
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     expect(screen.getByText("src/qux.ts").closest(".grounded-citation")).toHaveAttribute(
       "title",
-      "Evidence citation in src/qux.ts — relevance 0.87 (retrieval rank, not answer confidence)",
+      "Evidence citation in src/qux.ts",
     );
   });
 
@@ -1923,9 +1935,8 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     expect(region).not.toHaveTextContent("Searched");
     expect(region).not.toHaveTextContent("∞");
     expect(screen.getByText(/Nicht als Quelle verwendet: 3 Dateien/)).toBeInTheDocument();
-    expect(
-      screen.getByText("Relevanz 1.00 (Suchrang, keine Antwortsicherheit)"),
-    ).toBeInTheDocument();
+    expect(screen.queryByText("1.00")).toBeNull();
+    expect(screen.getByTitle("Quellenangabe in src/foo.ts in Zeilen 10-25")).toBeInTheDocument();
   });
 
   it("counts the distinct dangling marker indices, not the marker objects", () => {

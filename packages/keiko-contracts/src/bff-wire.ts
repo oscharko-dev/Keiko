@@ -1629,6 +1629,9 @@ export interface GroundedPromptContextWire {
    * Absent from answers that predate it.
    */
   readonly contextWindowTokens?: number | undefined;
+  /** Usable input and reserved output at admission; absent from legacy observations. */
+  readonly inputBudgetTokens?: number | undefined;
+  readonly reservedOutputTokens?: number | undefined;
 }
 
 export type GroundedAnswer = (
