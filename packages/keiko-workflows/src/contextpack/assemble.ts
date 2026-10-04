@@ -461,6 +461,20 @@ function processCandidate(
   return "continue";
 }
 
+function recordRemainingBudgetOmissions(
+  plan: BuildPlan,
+  remaining: readonly CandidateFile[],
+  nowMs: number,
+): void {
+  for (const candidate of remaining) {
+    plan.extraOmitted.push({
+      scopePath: candidate.scopePath,
+      reason: candidate.omitted ?? "budget-exhausted",
+      omittedAtMs: nowMs,
+    });
+  }
+}
+
 function buildPlan(
   ordered: readonly CandidateFile[],
   ctx: ProcessContext,
@@ -469,9 +483,12 @@ function buildPlan(
 ): BuildPlan {
   const plan = emptyBuildPlan(initialUsage, initialUncertainty);
   let unavailableExcerpts = 0;
-  for (const candidate of ordered) {
+  for (const [index, candidate] of ordered.entries()) {
     const outcome = processCandidate(plan, candidate, ctx);
-    if (outcome === "budget-clipped") break;
+    if (outcome === "budget-clipped") {
+      recordRemainingBudgetOmissions(plan, ordered.slice(index + 1), ctx.nowMs);
+      break;
+    }
     if (outcome === "excerpt-unavailable") unavailableExcerpts += 1;
   }
   if (plan.files.length === 0 && unavailableExcerpts > 0) {

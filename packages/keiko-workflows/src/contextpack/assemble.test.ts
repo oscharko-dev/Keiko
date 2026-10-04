@@ -3,7 +3,7 @@
 // uncertainty markers, editable/read-only role assignment, the empty-atom corner, and
 // contract-level validity of the produced pack.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_EXPLORATION_BUDGET,
@@ -215,9 +215,58 @@ describe("assembleContextPack", () => {
     // The first candidate exceeds 5 bytes, so processing stops immediately and the second
     // file is never added.
     expect(result.pack.files).toHaveLength(0);
-    // Exactly one budget-exhausted omission: the clip must BREAK the candidate loop, so the
-    // second candidate is never processed (and never recorded) at all.
-    expect(result.pack.omitted.filter((o) => o.reason === "budget-exhausted")).toHaveLength(1);
+    // Processing still stops on the first clip; every known unselected candidate is accounted
+    // for without reading or assembling its excerpt.
+    expect(result.pack.omitted.filter((o) => o.reason === "budget-exhausted")).toHaveLength(2);
+  });
+
+  it("accounts for every known ranked omission without accessing later excerpt content", async () => {
+    const paths = Array.from(
+      { length: 20 },
+      (_value, index) => `src/file-${String(index).padStart(2, "0")}.ts`,
+    );
+    const excerpts = new Map(paths.map((path) => [path, `module ${path}`]));
+    const get = vi.spyOn(excerpts, "get");
+    const result = await assembleContextPack(
+      {
+        ...baseInput(),
+        scope: { ...scope(), kind: "workspace-root", relativePaths: [] },
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 100 },
+        atoms: paths.map((path, index) => atom(path, `atom-${String(index)}`)),
+        ranked: paths.map((path) => candidate(path, 0.9)),
+        excerpts,
+      },
+      { nowMs: fixedNow },
+    );
+    expect(result.pack.files).toHaveLength(4);
+    expect(result.pack.omitted).toHaveLength(16);
+    expect(result.pack.omitted.every((entry) => entry.reason === "budget-exhausted")).toBe(true);
+    expect(result.pack.usage.excerptBytes).toBe(84);
+    expect(result.pack.usage.filesRead).toBe(4);
+    expect(get).toHaveBeenCalledTimes(5);
+    expect(get.mock.calls.map(([path]) => path)).toEqual(paths.slice(0, 5));
+    expect(
+      result.pack.uncertainty.filter((marker) => marker.kind === "budget-clipped"),
+    ).toHaveLength(1);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+
+  it("preserves pre-marked omission reasons and canonical identity after a budget stop", async () => {
+    const input: AssembleInput = {
+      ...baseInput(),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 5 },
+      ranked: [candidate("a.ts", 0.9), { ...candidate("b.ts", 0.5), omitted: "generated" }],
+      omittedFromRanking: [
+        { scopePath: "b.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW - 1 },
+      ],
+    };
+    const result = await assembleContextPack(input, { nowMs: fixedNow });
+    expect(result.pack.files).toEqual([]);
+    expect(result.pack.omitted).toEqual([
+      { scopePath: "b.ts", reason: "generated", omittedAtMs: FIXED_NOW },
+      { scopePath: "a.ts", reason: "budget-exhausted", omittedAtMs: FIXED_NOW },
+    ]);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
   });
 
   it("starts from caller-supplied usage and skips reranking when that budget is already spent", async () => {

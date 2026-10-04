@@ -16,6 +16,8 @@ import {
   selectGroundedEvidenceAtoms,
 } from "./grounded-evidence-selection.js";
 
+import { buildGroundedGatewayMessages } from "./grounded-qa.js";
+
 const NOW = 1_784_653_600_000;
 
 function candidate(scopePath: string, score: number): CandidateFile {
@@ -195,6 +197,18 @@ describe("selectGroundedCandidateFiles", () => {
     expect(pack.omitted.some((entry) => entry.reason === "budget-exhausted")).toBe(true);
     expect(pack.uncertainty.some((entry) => entry.kind === "budget-clipped")).toBe(true);
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it("keeps budget-omitted candidate bodies out of the actual Gateway prompt", async () => {
+    const { pack } = await assembleSelectedCandidates({
+      ...DEFAULT_EXPLORATION_BUDGET,
+      excerptBytesMax: 100,
+    });
+    const messages = buildGroundedGatewayMessages("describe the modules", pack, (value) => value);
+    const prompt = messages.map((message) => message.content).join("\n");
+    expect(prompt).toContain("module src/file-00.ts");
+    expect(prompt).not.toContain("module src/file-04.ts");
+    expect(prompt).not.toContain("module src/file-19.ts");
   });
 
   it("preserves the remaining read quota when earlier stages consumed accepted reads", async () => {
