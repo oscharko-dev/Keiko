@@ -161,6 +161,7 @@ export {
 export {
   computeDefectFingerprint,
   dismissSupportIncident,
+  completePreparedSupportIncident,
   listSupportIncidents,
   readSupportIncident,
   recordRegisteredFailureIncident,
@@ -184,3 +185,8 @@ export {
   type SupportIncidentRejection,
   type SupportIncidentSegmentFile,
 } from "./support-incident.js";
+
+export {
+  supportIncidentRetentionPolicy,
+  type SupportIncidentRetentionPolicy,
+} from "./support-incident-retention.js";

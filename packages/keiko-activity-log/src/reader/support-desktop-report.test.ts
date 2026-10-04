@@ -1,12 +1,14 @@
+import {
+  occupySupportIncidentRetentionForTests,
+  supportIncidentReservationsForTests,
+} from "../../../../tests/support/activity-log-test-support.js";
 import { mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  MAX_SUPPORT_INCIDENTS,
   listSupportIncidents,
-  recordUserReportedIncident,
   recordRegisteredFailureIncident,
   prepareUnretainedUserReportIncident,
 } from "../support-incident.js";
@@ -39,6 +41,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   rmSync(stateDir, { recursive: true, force: true });
+  vi.unstubAllEnvs();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -347,12 +350,9 @@ describe("desktop canonical support report", () => {
 
   it("exports retained error evidence even when every incident slot is occupied", () => {
     writeFailures();
-    for (let index = 0; index < MAX_SUPPORT_INCIDENTS; index += 1) {
-      expect(
-        recordUserReportedIncident(stateDir, { correlationId: `previous-report-${String(index)}` })
-          .status,
-      ).toBe("created");
-    }
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
     const response = createDesktopSupportReport(stateDir, "desktop-failure-1");
     const analyzed = analyzeSupportReport(response.reportJson);
     expect(
@@ -360,7 +360,8 @@ describe("desktop canonical support report", () => {
         .flatMap((timeline) => timeline.lines)
         .some((line) => line.op === "client.diagnostic" && line.errorKind === "timeout"),
     ).toBe(true);
-    expect(listSupportIncidents(stateDir)).toHaveLength(MAX_SUPPORT_INCIDENTS);
+    expect(listSupportIncidents(stateDir)).toHaveLength(0);
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
     expect(parseSupportReport(response.reportJson).incident).toMatchObject({
       trigger: "registered-failure",
       op: "client.diagnostic",

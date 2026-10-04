@@ -1,6 +1,9 @@
 import type { DesktopSupportReportRequest } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createClientOnlySupportReport } from "@oscharko-dev/keiko-activity-log/reader";
-import { resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
+import {
+  completePreparedSupportIncident,
+  resolveRuntimeStateDir,
+} from "@oscharko-dev/keiko-activity-log";
 import {
   cacheSupportReportDownload,
   SupportReportDeliveryCapacityError,
@@ -94,10 +97,17 @@ async function createReportResponse(
       controller.signal,
       ctx.correlationId,
     );
+    const delivery = cacheSupportReportDownload(deps, sessionId, report);
+    if (report.summary !== undefined) {
+      completePreparedSupportIncident(resolveRuntimeStateDir(deps.env), report.summary.incidentId, {
+        correlationId: ctx.correlationId,
+        env: deps.env,
+      });
+    }
     emitSupportReportCompleted(ctx.correlationId, report);
     return {
       status: 200,
-      body: { ...report, ...cacheSupportReportDownload(deps, sessionId, report) },
+      body: { ...report, ...delivery },
       headers: { "Cache-Control": "no-store" },
     };
   } catch (error) {

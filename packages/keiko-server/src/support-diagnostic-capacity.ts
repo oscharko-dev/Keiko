@@ -1,6 +1,6 @@
 // The existing health diagnostics expose bounded storage usage without turning candidates into bugs.
 import {
-  MAX_SUPPORT_INCIDENTS,
+  supportIncidentRetentionPolicy,
   listSupportIncidents,
   resolveActivityLogStateDir,
 } from "@oscharko-dev/keiko-activity-log";
@@ -35,17 +35,23 @@ const CAPACITY = defineActivityLogOperation({
   },
   proofIds: ["support.diagnostics.capacity.line"],
 });
-const observedCounts = new WeakMap<UiHandlerDeps, number>();
-function recordCapacity(ctx: RouteContext, deps: UiHandlerDeps, count: number): void {
-  if (observedCounts.get(deps) === count) return;
-  observedCounts.set(deps, count);
+const observedCounts = new WeakMap<UiHandlerDeps, string>();
+function recordCapacity(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  count: number,
+  capacity: number,
+): void {
+  const snapshot = `${String(count)}:${String(capacity)}`;
+  if (observedCounts.get(deps) === snapshot) return;
+  observedCounts.set(deps, snapshot);
   getServerLogger().info(
     activityLogEvent(
       CAPACITY,
       { correlationId: correlationIdOrUnknown(ctx.correlationId) },
       {
         retainedCandidateCount: count,
-        candidateCapacity: MAX_SUPPORT_INCIDENTS,
+        candidateCapacity: capacity,
         completeness: "complete",
         loss: "none",
       },
@@ -62,10 +68,11 @@ export function supportDiagnosticCapacity(ctx: RouteContext, deps: UiHandlerDeps
   if (stateDir === undefined) return {};
   try {
     const count = listSupportIncidents(stateDir, { readOnly: true }).length;
-    recordCapacity(ctx, deps, count);
+    const capacity = supportIncidentRetentionPolicy(stateDir, deps.env).capacity;
+    recordCapacity(ctx, deps, count, capacity);
     return {
       retainedDiagnosticCount: count,
-      diagnosticCapacity: MAX_SUPPORT_INCIDENTS,
+      diagnosticCapacity: capacity,
     };
   } catch (error) {
     emitServerDiagnostic(

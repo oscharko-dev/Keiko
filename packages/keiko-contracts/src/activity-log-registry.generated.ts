@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e2b16624137403635548c46c7c24e968b3fc6e0ff3b66abdcb6f48ba7dd4efad" as const;
+  "094fd0c9a118e67e7c5e7dd6ae9813e68ef6ba02a2f83697163b2d6e7b93d122" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -27608,7 +27608,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["expired", "invalid-record"],
+        values: ["expired", "invalid-record", "retention"],
       },
       removalStatus: {
         type: "string",
@@ -30677,6 +30677,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: [
           "denied-locus",
+          "ordinary-root-unavailable",
+          "credential-shaped-root",
           "managed-root-session-authority-missing",
           "managed-authority-unavailable",
           "managed-root-ownership",

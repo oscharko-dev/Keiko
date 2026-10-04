@@ -1,3 +1,8 @@
+import {
+  occupySupportIncidentRetentionForTests,
+  supportIncidentReservationsForTests,
+  setSupportIncidentTriggerForTests,
+} from "../../../tests/support/activity-log-test-support.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 // Tests for the grounded Q&A BFF handler (Issue #185). Drives `handleGroundedAsk` directly
@@ -31,6 +36,7 @@ import * as readiness from "./gateway-readiness.js";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  connectedContextOmittedCounts,
   type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
@@ -99,12 +105,15 @@ import {
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
 import {
-  MAX_SUPPORT_INCIDENTS,
-  recordUserReportedIncident,
   listSupportIncidents,
   closeFileServerLogSinks,
+  createFileServerLogSink,
 } from "@oscharko-dev/keiko-activity-log";
-import { parseSupportReport, analyzeSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  parseSupportReport,
+  analyzeSupportReport,
+  createDesktopSupportReport,
+} from "@oscharko-dev/keiko-activity-log/reader";
 import { runSupportReportJob } from "../dist/support-report-job.js";
 import { inflateSync } from "node:zlib";
 import { handleSendDesktopChat } from "./chat-handlers.js";
@@ -824,8 +833,10 @@ describe("grounded continuity evidence lifecycle", () => {
 describe("mappedWorkspaceError", () => {
   it("maps an unavailable workspace root without exposing its path", () => {
     const unavailablePath = "/private/customer/.aws/workspace";
+    const activityLog = createBufferedServerLogSink();
     const result = mappedWorkspaceError(
       new WorkspaceNotFoundError("root disappeared", unavailablePath, [unavailablePath]),
+      { activityLog, correlationId: "grounded-retrieval-root-unavailable-0001" },
     );
 
     expect(result).toEqual({
@@ -838,6 +849,14 @@ describe("mappedWorkspaceError", () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain(unavailablePath);
+    expect(activityLog.events).toMatchObject([
+      {
+        op: "workspace.root.denied",
+        correlationId: "grounded-retrieval-root-unavailable-0001",
+        extra: { reason: "ordinary-root-unavailable", failureKind: "WORKSPACE_NOT_FOUND" },
+      },
+    ]);
+    expect(JSON.stringify(activityLog.events)).not.toContain(unavailablePath);
   });
 });
 
@@ -1034,13 +1053,34 @@ describe("buildGroundedGatewayMessages", () => {
     );
     expect(messages[0]?.content).toContain("including 2 MiB (2,097,152 bytes)");
     expect(messages[1]?.content).toContain('"manuals/above.txt"; reason=size-exceeded');
-    expect(messages[1]?.content).toContain(
-      "Allowed relative paths excluded by file-size policy: 1",
-    );
+    expect(messages[1]?.content).toContain("Files excluded by file-size policy: 1");
     expect(messages[1]?.content).toContain("not file-content evidence");
     expect(messages[1]?.content).not.toContain(".env");
     expect(messages[1]?.content).not.toContain("escape.txt");
     expect(messages[1]?.content).not.toContain("src/irrelevant.ts");
+    expect(messages[1]?.content).not.toMatch(/\[manuals\/above\.txt(?::|\])/u);
+  });
+
+  it("discloses exact omitted totals when per-path details are retained separately", () => {
+    const pack: ConnectedContextPack = {
+      ...packWithCitations(),
+      omitted: [{ scopePath: "manuals/above.txt", reason: "size-exceeded", omittedAtMs: NOW }],
+      omittedCounts: {
+        ...connectedContextOmittedCounts({ omitted: [] }),
+        "size-exceeded": 5000,
+        "budget-exhausted": 7984,
+      },
+    };
+    const messages = buildGroundedGatewayMessages(
+      "Explain size exclusions",
+      pack,
+      buildRedactor({}),
+    );
+    expect(messages[1]?.content).toContain("omitted files: 12984");
+    expect(messages[1]?.content).toContain("Files excluded by file-size policy: 5000");
+    expect(messages[1]?.content).toContain("Additional excluded paths not listed: 4999");
+    expect(messages[1]?.content).toContain('"manuals/above.txt"; reason=size-exceeded');
+    expect(messages[1]?.content).toContain("not file-content evidence");
     expect(messages[1]?.content).not.toMatch(/\[manuals\/above\.txt(?::|\])/u);
   });
 
@@ -1082,11 +1122,11 @@ describe("buildGroundedGatewayMessages", () => {
       modelInputPromptByteLimit(pack.budget.modelInputTokensMax),
     );
     expect(omissionLines.length).toBeLessThan(20);
-    expect(prompt).toContain("Allowed relative paths excluded by file-size policy: 20");
+    expect(prompt).toContain("Files excluded by file-size policy: 20");
     expect(prompt).toContain(
       `Additional excluded paths not listed: ${String(20 - omissionLines.length)}.`,
     );
-    expect(withoutSources).not.toContain("Allowed relative paths excluded by file-size policy");
+    expect(withoutSources).not.toContain("Files excluded by file-size policy");
     expect(sentPromptContext(sent, 0, undefined).sourceTokens).toBeGreaterThan(0);
     expect(sent.sentReferenceCount).toBe(
       base.files.reduce((total, file) => total + file.excerpts.length, 0),
@@ -1185,6 +1225,98 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it("exports the actual closed admission cause when a connected ordinary root disappears", async () => {
+    const { chatId } = await setupChatWithoutScope();
+    const selectedRoot = join(tmp, "connected-disposable-root");
+    mkdirSync(selectedRoot);
+    store.updateChat(chatId, {
+      connectedScope: {
+        kind: "workspace-root",
+        root: selectedRoot,
+        relativePaths: [],
+        connectedAtMs: NOW,
+      },
+    });
+    rmSync(selectedRoot, { recursive: true });
+    const stateDir = join(tmp, "diagnostic-state");
+    setServerLogger(
+      createServerLogger({ sink: createFileServerLogSink(stateDir), level: "debug" }),
+    );
+    const correlationId = "c8aa2674-e638-4b33-bac0-bb7842a7f655";
+    const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
+    setSupportIncidentTriggerForTests(true);
+    try {
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(JSON.stringify({ chatId, content: "private-admission-question-canary" })),
+          correlationId,
+        },
+        deps(undefined, {}, { env: { KEIKO_STATE_DIR: stateDir } }),
+        scopedRunner,
+      );
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(scopedRunner).not.toHaveBeenCalled();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const report = createDesktopSupportReport(stateDir, correlationId);
+      const analysis = analyzeSupportReport(report.reportJson);
+      expect(parseSupportReport(report.reportJson).incident).toMatchObject({
+        trigger: "registered-failure",
+        op: "workspace.root.denied",
+        errorKind: "unavailable",
+      });
+      expect(analysis.selection.reasons).not.toContain("no-registered-failure");
+      const causes = analysis.analysis.timelines
+        .flatMap((timeline) => timeline.lines)
+        .filter((line) => line.op === "workspace.root.denied");
+      expect(causes).toMatchObject([
+        { extra: { reason: "ordinary-root-unavailable", failureKind: "WORKSPACE_NOT_FOUND" } },
+      ]);
+      expect(report.reportJson).not.toContain(selectedRoot);
+      expect(report.reportJson).not.toContain("private-admission-question-canary");
+    } finally {
+      closeFileServerLogSinks();
+      setSupportIncidentTriggerForTests(undefined);
+      resetServerLogger();
+    }
+  });
+
+  it("records credential-shaped root admission without exposing root or credentials", async () => {
+    const { chatId, projectPath: admittedRoot } = await setupChatWithScope();
+    const activityLog = createBufferedServerLogSink();
+    const correlationId = "grounded-credential-shaped-root-0001";
+    const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
+    const handlerDeps = deps(
+      undefined,
+      {},
+      {
+        redactor: (value: unknown): unknown => (value === admittedRoot ? "[REDACTED]" : value),
+      },
+    );
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+    try {
+      const result = await handleGroundedAsk(
+        { ...ctx(JSON.stringify({ chatId, content: "private-question-canary" })), correlationId },
+        handlerDeps,
+        scopedRunner,
+      );
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(scopedRunner).not.toHaveBeenCalled();
+      const denials = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+      expect(denials).toMatchObject([
+        {
+          correlationId,
+          level: "error",
+          errorKind: "permission-denied",
+          extra: { reason: "credential-shaped-root", failureKind: "CREDENTIAL_SHAPED_METADATA" },
+        },
+      ]);
+      expect(JSON.stringify(denials)).not.toContain(admittedRoot);
+      expect(JSON.stringify(denials)).not.toContain("private-question-canary");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
   it("keeps a paired session active through explicit ordinary-folder grounded turns", async () => {
     const { chatId } = await setupChatWithScope();
     let clock = 0;
@@ -1984,11 +2116,9 @@ describe("handleGroundedAsk", () => {
     const expectedGroundingScopeIdentity = deriveChatGroundingScopeIdentity(requiredChat(chatId));
     store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
     const stateDir = join(tmp, "scope-refusal-report-state");
-    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1)
-      expect(
-        recordUserReportedIncident(stateDir, { correlationId: `occupied-scope-${String(slot)}` })
-          .status,
-      ).toBe("created");
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
     const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
     const correlationId = "quota-scope-refusal-correlation";
     vi.stubEnv("KEIKO_STATE_DIR", stateDir);
@@ -2020,6 +2150,8 @@ describe("handleGroundedAsk", () => {
         errorKind: "invalid-request",
       });
       expect(report.incident.frameCount).toBeGreaterThan(0);
+      expect(report.incident.pin.status).toBe("rejected");
+      expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
       expect(analyzed.selection.status).toBe("complete");
       const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
       for (const field of ['"reason":"grounding-scope"', '"httpStatus":409', '"frames":['])
@@ -3183,11 +3315,9 @@ describe("handleGroundedAsk", () => {
     const { chatId } = await setupChatWithScope();
     const stateDir = join(tmp, "diagnostic-report-state");
     const correlationId = "full-quota-pack-validation-correlation";
-    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1)
-      expect(
-        recordUserReportedIncident(stateDir, { correlationId: `occupied-report-${String(slot)}` })
-          .status,
-      ).toBe("created");
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
     const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
     vi.stubEnv("KEIKO_STATE_DIR", stateDir);
     const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -3204,6 +3334,8 @@ describe("handleGroundedAsk", () => {
       closeFileServerLogSinks();
       const response = await runSupportReportJob(stateDir, correlationId);
       assertAttributablePackReport(response.reportJson, stateDir, correlationId, retainedIds);
+      expect(parseSupportReport(response.reportJson).incident.pin.status).toBe("rejected");
+      expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
     } finally {
       stderr.mockRestore();
       vi.unstubAllEnvs();

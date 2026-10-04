@@ -6,7 +6,6 @@ import { ACTIVITY_LOG_FAILURE_SURFACES } from "./activity-log-registry.generated
 import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
-  SUPPORT_INCIDENT_SLOT_COUNT,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   defectFingerprintPreimage,
   isSupportIncidentSurface,
@@ -324,7 +323,7 @@ describe("the closed record schema", () => {
         return rest;
       })(),
     ],
-    ["an out-of-bounds slotIndex", { ...record(), slotIndex: SUPPORT_INCIDENT_SLOT_COUNT }],
+    ["an out-of-bounds slotIndex", { ...record(), slotIndex: Number.MAX_SAFE_INTEGER + 1 }],
     ["a negative slotIndex", { ...record(), slotIndex: -1 }],
   ])("rejects %s", (_label, value) => {
     expect(parseSupportIncidentRecord(value)).toBeUndefined();
@@ -359,9 +358,10 @@ describe("the closed record schema", () => {
     expect(supportIncidentSlotClaimFileName(0)).toBe("slot-00.claim");
     expect(supportIncidentSlotClaimFileName(31)).toBe("slot-31.claim");
     expect(parseSupportIncidentSlotClaimFileName("slot-07.claim")).toBe(7);
-    expect(parseSupportIncidentSlotClaimFileName("slot-99.claim")).toBeUndefined();
+    expect(parseSupportIncidentSlotClaimFileName("slot-99.claim")).toBe(99);
+    expect(parseSupportIncidentSlotClaimFileName("slot-099.claim")).toBeUndefined();
     expect(parseSupportIncidentSlotClaimFileName(`incident-${INCIDENT_ID}.json`)).toBeUndefined();
-    expect(() => supportIncidentSlotClaimFileName(SUPPORT_INCIDENT_SLOT_COUNT)).toThrow(RangeError);
+    expect(() => supportIncidentSlotClaimFileName(Number.MAX_SAFE_INTEGER + 1)).toThrow(RangeError);
     expect(() => supportIncidentSlotClaimFileName(-1)).toThrow(RangeError);
 
     // parseSupportIncidentFileName is the one function state-paths.ts calls for ownership, so both

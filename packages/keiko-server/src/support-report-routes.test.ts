@@ -1,4 +1,15 @@
-import { parseSupportIncidentPrivateProjection } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  closeFileServerLogSinks,
+  listSupportIncidents,
+  recordUserReportedIncident,
+} from "@oscharko-dev/keiko-activity-log";
+import {
+  parseSupportIncidentPrivateProjection,
+  supportReportFileName,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
@@ -59,6 +70,7 @@ function proofLine(sink: ReturnType<typeof createBufferedServerLogSink>, index: 
   return formatActivityLogProofLine(event);
 }
 
+const reportDirectories: string[] = [];
 let clock = Date.now();
 beforeEach(() => {
   clock += 120_000;
@@ -68,6 +80,9 @@ beforeEach(() => {
 afterEach(() => {
   resetServerLogger();
   vi.useRealTimers();
+  closeFileServerLogSinks();
+  for (const directory of reportDirectories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
 });
 
 describe("desktop support report transport", () => {
@@ -205,6 +220,48 @@ describe("desktop support report transport", () => {
       availabilityReason: "diagnostic-delivery-unavailable",
     });
     expect(runSupportReportJob).not.toHaveBeenCalled();
+  });
+
+  it("releases the retained candidate only after the canonical report is prepared and cached", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-report-completed-"));
+    reportDirectories.push(stateDir);
+    const candidate = recordUserReportedIncident(stateDir);
+    if (candidate.status !== "created") throw new Error("Expected retained candidate");
+    const owner = deps();
+    owner.env = { KEIKO_STATE_DIR: stateDir };
+    const report: DesktopSupportReportResponse = {
+      fileName: supportReportFileName(1, candidate.incidentId, candidate.record.createdAtMs),
+      reportJson: "{}",
+      summary: {
+        status: "insufficient",
+        reasons: [],
+        recordCount: 0,
+        reportDigest: "a".repeat(64),
+        incidentId: candidate.incidentId,
+        manifestUnreadableCount: 0,
+        manifestReusedCount: 0,
+      },
+    };
+    vi.mocked(runSupportReportJob).mockResolvedValue(report);
+    const result = await handleCreateSupportReport(context("{}"), owner);
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      reportJson: report.reportJson,
+      downloadPath: expect.any(String) as unknown,
+    });
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+  });
+
+  it("retains diagnostic evidence when report preparation fails", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-report-incomplete-"));
+    reportDirectories.push(stateDir);
+    const candidate = recordUserReportedIncident(stateDir);
+    expect(candidate.status).toBe("created");
+    const owner = deps();
+    owner.env = { KEIKO_STATE_DIR: stateDir };
+    vi.mocked(runSupportReportJob).mockRejectedValue(new SupportReportJobError("unavailable"));
+    expect((await handleCreateSupportReport(context("{}"), owner)).status).toBe(503);
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(1);
   });
 
   it("returns the exact canonical report bytes and records only counts", async () => {

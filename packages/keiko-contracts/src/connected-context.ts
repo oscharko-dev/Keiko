@@ -346,15 +346,12 @@ export interface UncertaintyMarker {
 }
 
 // ─── Omitted-context entry ────────────────────────────────────────────────────
-// KEIKO-0849: upper bound on how many omitted entries a pack may carry. validatePackOmitted's
-// overlap checks are O(n^2) in entries.length (each entry is checked for overlap against every
-// selected path and every previously-seen omitted path); above this cap the validator short-circuits
-// with a single reason instead of running that scan. 4_096 is 2x the default single-ring lexical
-// retrieval scan size — packages/keiko-workspace/src/repoSearch.ts DEFAULT_SEARCH_LIMITS.
-// maxFilesScanned = 2_000, and every scanned-but-excluded file becomes one omitted entry via
-// omittedFromSearchCandidates in grounded-orchestrator.ts — rounded up to match this package's own
-// TOKEN_ESTIMATE_CACHE_MAX_ENTRIES precedent for a similar order-of-magnitude cap.
+// Bound retained path details, not inspected files or total omissions. The validator checks
+// path overlap among these details; producers retain exact closed per-reason totals when the
+// detailed list is clipped. This keeps large eligible corpora valid without unbounded metadata.
 export const MAX_OMITTED_CONTEXT_ENTRIES = 4_096;
+
+export type ContextOmissionCounts = Readonly<Record<CandidateOmissionReason, number>>;
 
 export interface OmittedContextEntry {
   readonly scopePath: string;
@@ -372,6 +369,9 @@ export interface ConnectedContextPack {
   readonly usage: ExplorationUsage;
   readonly files: readonly ConnectedFileEntry[];
   readonly omitted: readonly OmittedContextEntry[];
+  // Exact totals before detail retention. Absent when the complete detailed list fits;
+  // counts never grant source authority or represent evidence from unread file bodies.
+  readonly omittedCounts?: ContextOmissionCounts | undefined;
   readonly uncertainty: readonly UncertaintyMarker[];
   readonly emittedAtMs: number;
   readonly ledgerRef: EvidenceLedgerRef | undefined;
@@ -381,6 +381,24 @@ export interface ConnectedContextPack {
   // fingerprint hashes only scope/query/atomStableIds). `bucket`/`ecosystem` are opaque strings
   // here — contracts does not depend on the workspace registry that produces them.
   readonly diagnostics?: ContextPackDiagnostics | undefined;
+}
+
+// Legacy packs derive totals from their complete detailed list.
+export function connectedContextOmittedCounts(
+  pack: Pick<ConnectedContextPack, "omitted" | "omittedCounts">,
+): ContextOmissionCounts {
+  if (pack.omittedCounts !== undefined) return pack.omittedCounts;
+  const counts = Object.fromEntries(
+    CANDIDATE_OMISSION_REASONS.map((reason) => [reason, 0]),
+  ) as Record<CandidateOmissionReason, number>;
+  for (const entry of pack.omitted) counts[entry.reason] += 1;
+  return counts;
+}
+
+export function connectedContextOmittedCount(
+  pack: Pick<ConnectedContextPack, "omitted" | "omittedCounts">,
+): number {
+  return Object.values(connectedContextOmittedCounts(pack)).reduce((sum, count) => sum + count, 0);
 }
 
 // ─── Explainable ranking diagnostics (enterprise retrieval M2) ──────────────────
@@ -1057,28 +1075,84 @@ function validatePackFiles(
   return { actualExcerptBytes, selectedPaths };
 }
 
+interface OmittedPathIndex {
+  readonly paths: Set<string>;
+  readonly ancestors: Set<string>;
+}
+
+function pathAncestors(path: string): readonly string[] {
+  const ancestors: string[] = [];
+  let separator = path.indexOf("/");
+  while (separator >= 0) {
+    ancestors.push(path.slice(0, separator));
+    separator = path.indexOf("/", separator + 1);
+  }
+  return ancestors;
+}
+
+function addIndexedPath(index: OmittedPathIndex, path: string): void {
+  index.paths.add(path);
+  for (const ancestor of pathAncestors(path)) index.ancestors.add(ancestor);
+}
+
+function omittedPathIndex(paths: ReadonlySet<string>): OmittedPathIndex {
+  const index: OmittedPathIndex = { paths: new Set(), ancestors: new Set() };
+  for (const path of paths) addIndexedPath(index, path);
+  return index;
+}
+
+function indexedPathsOverlap(index: OmittedPathIndex, path: string): boolean {
+  return (
+    index.paths.has(path) ||
+    index.ancestors.has(path) ||
+    pathAncestors(path).some((ancestor) => index.paths.has(ancestor))
+  );
+}
+
 function validateOmittedPathState(
   entry: Record<string, unknown>,
   entryIndex: number,
   reasons: string[],
-  selectedPaths: ReadonlySet<string>,
-  omittedPaths: Set<string>,
+  selectedPaths: OmittedPathIndex,
+  omittedPaths: OmittedPathIndex,
 ): void {
   const scopePath = entry.scopePath;
   const validScopePath = isValidScopePath(scopePath, { mustBeRelative: true });
-  if (typeof scopePath === "string" && setHasOverlappingPath(selectedPaths, scopePath)) {
+  if (typeof scopePath === "string" && indexedPathsOverlap(selectedPaths, scopePath)) {
     reasons.push("pack.omitted overlaps selected scopePath");
   }
   if (typeof scopePath === "string" && validScopePath) {
-    if (omittedPaths.has(scopePath)) {
+    if (omittedPaths.paths.has(scopePath)) {
       reasons.push("pack.omitted contains duplicate scopePath");
-    } else if (setHasOverlappingPath(omittedPaths, scopePath)) {
+    } else if (indexedPathsOverlap(omittedPaths, scopePath)) {
       reasons.push("pack.omitted contains overlapping scopePath");
     }
-    omittedPaths.add(scopePath);
+    addIndexedPath(omittedPaths, scopePath);
   }
-  if (!validScopePath) {
-    reasons.push(`omitted[${entryIndex.toString()}].scopePath invalid`);
+  if (!validScopePath) reasons.push(`omitted[${entryIndex.toString()}].scopePath invalid`);
+}
+
+function validateOmittedEntries(
+  entries: readonly unknown[],
+  scope: SelectedScope,
+  reasons: string[],
+  selectedPaths: ReadonlySet<string>,
+): void {
+  const selectedIndex = omittedPathIndex(selectedPaths);
+  const omittedIndex = omittedPathIndex(new Set());
+  for (const [i, entry] of entries.entries()) {
+    if (!isRecord(entry)) {
+      reasons.push("pack.omitted entry invalid");
+      continue;
+    }
+    validateOmittedPathState(entry, i, reasons, selectedIndex, omittedIndex);
+    if (!isCandidateOmissionReason(entry.reason)) reasons.push("pack.omitted has invalid reason");
+    if (!isPathWithinSelectedScope(scope, entry.scopePath)) {
+      reasons.push("pack.omitted entry falls outside selected scope");
+    }
+    if (!isFiniteNonNegativeInteger(entry.omittedAtMs)) {
+      reasons.push("pack.omitted has invalid omittedAtMs");
+    }
   }
 }
 
@@ -1092,27 +1166,64 @@ function validatePackOmitted(
     reasons.push("pack.omitted invalid");
     return;
   }
-  // KEIKO-0849: cap BEFORE the O(n^2) overlap scan below, not after — return immediately instead
-  // of continuing on to run that scan over an oversized array.
   if (entries.length > MAX_OMITTED_CONTEXT_ENTRIES) {
     reasons.push(`pack.omitted exceeds ${String(MAX_OMITTED_CONTEXT_ENTRIES)}`);
     return;
   }
-  const omittedPaths = new Set<string>();
-  for (const [i, entry] of entries.entries()) {
-    if (!isRecord(entry)) {
-      reasons.push("pack.omitted entry invalid");
-      continue;
-    }
-    validateOmittedPathState(entry, i, reasons, selectedPaths, omittedPaths);
-    if (!isCandidateOmissionReason(entry.reason)) {
-      reasons.push("pack.omitted has invalid reason");
-    }
-    if (!isPathWithinSelectedScope(scope, entry.scopePath)) {
-      reasons.push("pack.omitted entry falls outside selected scope");
-    }
-    if (!isFiniteNonNegativeInteger(entry.omittedAtMs)) {
-      reasons.push("pack.omitted has invalid omittedAtMs");
+  validateOmittedEntries(entries, scope, reasons, selectedPaths);
+}
+
+// Producers validate every known omission before retaining bounded wire details. Prefix sets
+// check overlap in path-depth time; no previously seen path collection is scanned per entry.
+export function validateOmittedContextEntries(
+  entries: readonly OmittedContextEntry[],
+  scope: SelectedScope,
+  selectedScopePaths: readonly string[],
+): ValidationResult {
+  const reasons: string[] = [];
+  appendPrefixedReasons(validateSelectedScope(scope), "omitted ", reasons);
+  if (!Array.isArray(entries)) return buildResult([...reasons, "pack.omitted invalid"]);
+  if (isRuntimeSelectedScope(scope)) {
+    validateOmittedEntries(entries, scope, reasons, new Set(selectedScopePaths));
+  }
+  return buildResult(reasons);
+}
+
+function validOmissionCountRecord(
+  value: unknown,
+): value is Record<CandidateOmissionReason, number> {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === CANDIDATE_OMISSION_REASONS.length &&
+    Object.keys(value).every(isCandidateOmissionReason) &&
+    CANDIDATE_OMISSION_REASONS.every(
+      (reason) =>
+        Object.hasOwn(value, reason) &&
+        Number.isSafeInteger(value[reason]) &&
+        Number(value[reason]) >= 0,
+    )
+  );
+}
+
+function validatePackOmittedCounts(pack: ConnectedContextPack, reasons: string[]): void {
+  if (pack.omittedCounts === undefined) return;
+  if (!validOmissionCountRecord(pack.omittedCounts)) {
+    reasons.push("pack.omittedCounts invalid");
+    return;
+  }
+  const total = connectedContextOmittedCount(pack);
+  if (!Number.isSafeInteger(total)) reasons.push("pack.omittedCounts total invalid");
+  if (!Array.isArray(pack.omitted)) return;
+  if (pack.omitted.length !== Math.min(total, MAX_OMITTED_CONTEXT_ENTRIES)) {
+    reasons.push("pack.omitted details do not account for omittedCounts");
+  }
+  const retained = pack.omitted.filter(
+    (entry) => isRecord(entry) && isCandidateOmissionReason(entry.reason),
+  );
+  const retainedCounts = connectedContextOmittedCounts({ omitted: retained });
+  for (const reason of CANDIDATE_OMISSION_REASONS) {
+    if (pack.omittedCounts[reason] < retainedCounts[reason]) {
+      reasons.push(`pack.omittedCounts.${reason} below retained details`);
     }
   }
 }
@@ -1293,6 +1404,7 @@ export function validateConnectedContextPack(pack: ConnectedContextPack): Valida
   const fileSummary = validatePackFileCollection(pack, reasons);
   validatePackBudget(pack, fileSummary.actualExcerptBytes, reasons);
   validatePackOmittedCollection(pack, fileSummary, reasons);
+  validatePackOmittedCounts(pack, reasons);
   validatePackUncertainty(pack.uncertainty, collectPackAtomIds(pack.files), reasons);
   pushIf(reasons, !isFiniteNonNegativeInteger(pack.emittedAtMs), "pack.emittedAtMs invalid");
   if (pack.ledgerRef !== undefined) {

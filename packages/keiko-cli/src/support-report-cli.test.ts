@@ -1,3 +1,7 @@
+import {
+  occupySupportIncidentRetentionForTests,
+  supportIncidentReservationsForTests,
+} from "../../../tests/support/activity-log-test-support.js";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -21,12 +25,7 @@ import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  closeFileServerLogSinks,
-  MAX_SUPPORT_INCIDENTS,
-  listSupportIncidents,
-  recordUserReportedIncident,
-} from "@oscharko-dev/keiko-activity-log";
+import { closeFileServerLogSinks, listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
 import {
   ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
   analyzeLogText,
@@ -183,12 +182,15 @@ async function analyze(
 function sha256Of(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
-async function runExport(out: string): Promise<{ code: number } & ReturnType<typeof capture>> {
+async function runExport(
+  out: string,
+  env: Readonly<Record<string, string | undefined>> = {},
+): Promise<{ code: number } & ReturnType<typeof capture>> {
   const result = capture();
   const code = await runSupportCli(
     ["export", "--state-dir", stateDir, "--correlation-id", CORRELATION, "--out", out],
     result.io,
-    {},
+    env,
     { cwd: root, controlActivityStateDir: controlStateDir },
   );
   return { code, ...result };
@@ -296,6 +298,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   closeFileServerLogSinks();
   rmSync(root, { recursive: true, force: true });
 });
@@ -313,19 +316,16 @@ async function withProductStack<T>(operation: () => Promise<T>): Promise<T> {
 
 describe("support report CLI and private publication", () => {
   it("exports an honest manual window at a full candidate quota without a selector", async () => {
-    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1) {
-      expect(
-        recordUserReportedIncident(stateDir, { correlationId: `full-manual-${String(slot)}` })
-          .status,
-      ).toBe("created");
-    }
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
     const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
     const destination = join(root, "manual-quota-report");
     const captured = capture();
     const code = await runSupportCli(
       ["export", "--state-dir", stateDir, "--out", destination],
       captured.io,
-      {},
+      { KEIKO_LOG_RETENTION_BYTES: "65536" },
       { cwd: root, controlActivityStateDir: controlStateDir },
     );
     expect(code).toBe(0);
@@ -343,17 +343,16 @@ describe("support report CLI and private publication", () => {
       retainedIds,
     );
     expect(parseSupportReport(reportJson).incident.pin.status).toBe("rejected");
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
   });
 
   it("exports the selected retained evidence at a full candidate quota without a browser session", async () => {
-    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1) {
-      expect(
-        recordUserReportedIncident(stateDir, { correlationId: `full-${String(slot)}` }).status,
-      ).toBe("created");
-    }
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
     const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
     const destination = join(root, "quota-report");
-    const exported = await runExport(destination);
+    const exported = await runExport(destination, { KEIKO_LOG_RETENTION_BYTES: "65536" });
     expect(exported.code).toBe(0);
     const filename = readdirSync(destination).find((entry) => entry.endsWith(".json"));
     if (filename === undefined) throw new TypeError("Missing quota report");
@@ -367,6 +366,7 @@ describe("support report CLI and private publication", () => {
       retainedIds,
     );
     expect(parseSupportReport(reportJson).incident.pin.status).toBe("rejected");
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
   });
 
   it("assesses a historical selected correlation closure rather than the export-time window", async () => {

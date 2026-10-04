@@ -9,6 +9,9 @@ import { createHash } from "node:crypto";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  MAX_OMITTED_CONTEXT_ENTRIES,
+  connectedContextOmittedCounts,
+  validateOmittedContextEntries,
   type CandidateFile,
   type ConnectedContextPack,
   type ContextPackDiagnostics,
@@ -552,8 +555,35 @@ function buildStableId(
   });
 }
 
+function omissionDetailPriority(entry: OmittedContextEntry): number {
+  if (entry.reason === "size-exceeded") return 0;
+  return entry.reason === "budget-exhausted" ? 2 : 1;
+}
+
+function retainedOmissionDetails(
+  omitted: readonly OmittedContextEntry[],
+): readonly OmittedContextEntry[] {
+  if (omitted.length <= MAX_OMITTED_CONTEXT_ENTRIES) return omitted;
+  // Prefer eligibility metadata used to explain excluded files over budget-only detail.
+  const retained: OmittedContextEntry[] = [];
+  for (const priority of [0, 1, 2]) {
+    for (const entry of omitted) {
+      if (omissionDetailPriority(entry) !== priority) continue;
+      retained.push(entry);
+      if (retained.length === MAX_OMITTED_CONTEXT_ENTRIES) return retained;
+    }
+  }
+  return retained;
+}
+
 function buildPack(input: AssembleInput, plan: BuildPlan, nowMs: number): ConnectedContextPack {
   const omitted = mergeOmittedEntries(input.omittedFromRanking, plan.extraOmitted);
+  const validation = validateOmittedContextEntries(
+    omitted,
+    input.scope,
+    plan.files.map((file) => file.scopePath),
+  );
+  if (!validation.ok) throw new TypeError(validation.reasons.join("; "));
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     stableId: buildStableId(input, plan, omitted),
@@ -562,7 +592,10 @@ function buildPack(input: AssembleInput, plan: BuildPlan, nowMs: number): Connec
     budget: input.budget,
     usage: plan.usage,
     files: plan.files,
-    omitted,
+    omitted: retainedOmissionDetails(omitted),
+    ...(omitted.length > MAX_OMITTED_CONTEXT_ENTRIES
+      ? { omittedCounts: connectedContextOmittedCounts({ omitted }) }
+      : {}),
     uncertainty: plan.uncertainty,
     emittedAtMs: nowMs,
     ledgerRef: undefined,

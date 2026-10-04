@@ -1,3 +1,8 @@
+import {
+  occupySupportIncidentRetentionForTests,
+  releaseSupportIncidentReservationForTests,
+  supportIncidentReservationsForTests,
+} from "../support/activity-log-test-support.js";
 import { resetServerLogger } from "../support/activity-log-test-support.js";
 // Activity Log scenario matrix (#3532): the bff surface — the keiko-server HTTP/BFF layer (the
 // `request` close line, the bounded request-body reader, chat admission and PR-description turn
@@ -37,7 +42,6 @@ import {
 } from "../support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
 import {
-  MAX_SUPPORT_INCIDENTS,
   dismissSupportIncident,
   listSupportIncidents,
   recordUserReportedIncident,
@@ -334,11 +338,16 @@ describe("Activity Log scenario: bff", () => {
 
   it("keeps bounded diagnostic storage visible after candidate quota rejection", async () => {
     const startedAtMs = Date.now();
-    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1)
-      expect(
-        recordUserReportedIncident(stateDir, { correlationId: `bff-retained-${String(slot)}` })
-          .status,
-      ).toBe("created");
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    const prior = recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" });
+    if (prior.status !== "created") throw new TypeError("Missing prior diagnostic lifecycle");
+    expect(
+      dismissSupportIncident(stateDir, prior.record.incidentId, {
+        correlationId: prior.record.correlation.rootCorrelationId,
+      }),
+    ).toBe("dismissed");
+    const capacity = occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
     expect(recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" })).toEqual({
       status: "rejected",
       reason: "quota-exhausted",
@@ -349,25 +358,23 @@ describe("Activity Log scenario: bff", () => {
         { env: { KEIKO_STATE_DIR: stateDir } } as UiHandlerDeps,
       ),
     ).toEqual({
-      retainedDiagnosticCount: MAX_SUPPORT_INCIDENTS,
-      diagnosticCapacity: MAX_SUPPORT_INCIDENTS,
+      retainedDiagnosticCount: 0,
+      diagnosticCapacity: capacity,
     });
-    for (const retained of listSupportIncidents(stateDir).slice(0, 2))
-      expect(
-        dismissSupportIncident(stateDir, retained.incidentId, {
-          correlationId: retained.correlation.rootCorrelationId,
-        }),
-      ).toBe("dismissed");
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
+    releaseSupportIncidentReservationForTests(stateDir, capacity - 1);
+    releaseSupportIncidentReservationForTests(stateDir, capacity - 2);
     expect(recordUserReportedIncident(stateDir, { correlationId: "bff-quota-loss" }).status).toBe(
       "created",
     );
+    expect(listSupportIncidents(stateDir)).toHaveLength(1);
     const trace = await expectActivityLogScenario("bff.loss", {
       stateDir,
       startedAtMs,
       expectedOps: [
-        "support.incident.created",
         "support.incident.rejected",
         "support.diagnostics.capacity",
+        "support.incident.created",
       ],
     });
     expect(trace.failureClasses).toContain("support-incident");

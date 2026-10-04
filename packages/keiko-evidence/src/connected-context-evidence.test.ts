@@ -7,6 +7,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  connectedContextOmittedCounts,
+  MAX_OMITTED_CONTEXT_ENTRIES,
   type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
@@ -174,6 +176,44 @@ function assertNoSensitiveText(manifest: EvidenceManifest): void {
 }
 
 describe("connected-context evidence", () => {
+  it("persists exact omission totals separately from bounded redacted path details", () => {
+    const source = pack();
+    const omitted = Array.from({ length: MAX_OMITTED_CONTEXT_ENTRIES }, (_, index) => ({
+      scopePath: `src/omitted-${String(index)}.ts`,
+      reason: "budget-exhausted" as const,
+      omittedAtMs: NOW,
+    }));
+    const store = createInMemoryEvidenceStore();
+    persistConnectedContextEvidence(
+      {
+        runId: "large-omissions",
+        modelId: "example-chat-model",
+        workspaceRoot: "/workspace",
+        pack: {
+          ...source,
+          omitted,
+          omittedCounts: {
+            ...connectedContextOmittedCounts({ omitted: [] }),
+            "budget-exhausted": 8000,
+          },
+        },
+        citationCount: 1,
+        elapsedMs: 42,
+        startedAt: NOW,
+        finishedAt: NOW + 42,
+      },
+      { store, env: {}, additionalSecrets: [SK_FAKE, GHP_FAKE, PEM_FAKE] },
+    );
+    const manifest = requireManifest(loadEvidence(store, "large-omissions"));
+    const audit = requireConnectedContext(manifest);
+    expect(audit.omitted).toHaveLength(MAX_OMITTED_CONTEXT_ENTRIES);
+    expect(audit.omittedCounts?.["budget-exhausted"]).toBe(8000);
+    expect(audit.summary.omittedCount).toBe(8000);
+    expect(manifest.context?.totalCandidates).toBe(8001);
+    expect(manifest.context?.droppedForBudget).toBe(8000);
+    assertNoSensitiveText(manifest);
+  });
+
   it("persists a parseable metadata-only manifest without query or excerpt text", () => {
     const store = createInMemoryEvidenceStore();
     const result = persistConnectedContextEvidence(

@@ -2828,6 +2828,10 @@ export type {
 export type {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   MAX_OMITTED_CONTEXT_ENTRIES,
+  connectedContextOmittedCount,
+  connectedContextOmittedCounts,
+  validateOmittedContextEntries,
+  ContextOmissionCounts,
   MAX_RANKED_CANDIDATE_DIAGNOSTICS,
   SELECTED_SCOPE_KINDS,
   EVIDENCE_ATOM_PROVENANCE_KINDS,

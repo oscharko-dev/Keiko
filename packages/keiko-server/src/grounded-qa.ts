@@ -48,6 +48,8 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import {
+  connectedContextOmittedCount,
+  connectedContextOmittedCounts,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
   validateConnectedContextPack,
@@ -121,7 +123,10 @@ import {
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import {
   recordWorkspaceRootDenial,
+  recordWorkspaceRootDenied,
+  recordWorkspaceRootUnavailable,
   resolveRecordedWorkspaceRoot,
+  type WorkspaceRootDenialLogContext,
 } from "./workspace-root-denial-log.js";
 import {
   uncitedMemoryContextMarker,
@@ -324,9 +329,13 @@ function pathDeniedResult(error: PathDeniedError): RouteResult {
   };
 }
 
-export function mappedWorkspaceError(error: unknown): RouteResult | undefined {
+export function mappedWorkspaceError(
+  error: unknown,
+  context: WorkspaceRootDenialLogContext = {},
+): RouteResult | undefined {
   if (error instanceof PathDeniedError) return pathDeniedResult(error);
   if (error instanceof WorkspaceNotFoundError) {
+    recordWorkspaceRootUnavailable(error, context);
     return badRequest("Connected scope root is not accessible.");
   }
   if (
@@ -560,10 +569,19 @@ function canonicalGroundedRoot(
     if (error instanceof PathDeniedError) {
       return pathDeniedResult(error);
     }
+    recordWorkspaceRootUnavailable(error, { correlationId });
     return badRequest("Connected scope root is not accessible.");
   }
   const redacted = deps.redactor(realRoot);
   if (typeof redacted === "string" && redacted !== realRoot) {
+    recordWorkspaceRootDenied(
+      {
+        reason: "credential-shaped-root",
+        failureKind: "CREDENTIAL_SHAPED_METADATA",
+        errorKind: "permission-denied",
+      },
+      { correlationId },
+    );
     return badRequest("Connected scope root contains credential-shaped metadata.");
   }
   return realRoot;
@@ -1097,10 +1115,14 @@ export function sizeExclusionLines(
 ): readonly string[] {
   if (pathByteLimit < 0) return [];
   const paths = allowedSizeExclusionPaths(pack);
-  if (paths.length === 0) return [];
+  const total =
+    pack.omittedCounts === undefined
+      ? paths.length
+      : connectedContextOmittedCounts(pack)["size-exceeded"];
+  if (total === 0) return [];
   const lines = [
     "Known file-size exclusions (metadata only, not file-content evidence):",
-    `Allowed relative paths excluded by file-size policy: ${String(paths.length)}.`,
+    `Files excluded by file-size policy: ${String(total)}.`,
   ];
   let pathBytes = 0;
   let listed = 0;
@@ -1112,8 +1134,8 @@ export function sizeExclusionLines(
     pathBytes += bytes;
     listed += 1;
   }
-  if (listed < paths.length)
-    lines.push(`Additional excluded paths not listed: ${String(paths.length - listed)}.`);
+  if (listed < total)
+    lines.push(`Additional excluded paths not listed: ${String(total - listed)}.`);
   lines.push(
     "These files were not read as evidence. Do not infer their contents or invent line references.",
   );
@@ -1153,7 +1175,7 @@ function buildRawGroundedGatewayMessages(
     `- scope kind: ${pack.scope.kind}`,
     `- query kind: ${pack.query.kind}`,
     `- budget/usage: ${packBudgetSummary(pack)}`,
-    `- omitted evidence atoms: ${String(pack.omitted.length)}`,
+    `- omitted files: ${String(connectedContextOmittedCount(pack))}`,
     ...sizeExclusionLines(pack, redactor, omissionPathBytes),
     "",
     "Repository evidence excerpts:",
@@ -1774,7 +1796,7 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     content: assistantContent,
     citations,
     uncertainty: buildUncertainty(output.pack, deps.redactor),
-    omittedCount: output.pack.omitted.length,
+    omittedCount: connectedContextOmittedCount(output.pack),
     elapsedMs: output.elapsedMs,
     contextPack,
     ...(modelInvoked && output.promptContext !== undefined
@@ -1831,7 +1853,7 @@ async function runGroundedRunner(
     if (error instanceof ClarificationNeededError) {
       return clarificationRequest(clarificationUserMessage(error));
     }
-    const workspaceResult = mappedWorkspaceError(error);
+    const workspaceResult = mappedWorkspaceError(error, { correlationId: workerCtx.correlationId });
     if (workspaceResult !== undefined) return workspaceResult;
     const gatewayResult = mappedGatewayError(error, workerCtx.deps, workerCtx.correlationId);
     if (gatewayResult !== undefined) return gatewayResult;

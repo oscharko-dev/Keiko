@@ -35,6 +35,7 @@ import {
 } from "./grounded-rerank.js";
 
 import {
+  connectedContextOmittedCount,
   CANDIDATE_OMISSION_REASONS,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
@@ -1711,6 +1712,10 @@ function hybridPromptContext(
   );
 }
 
+function totalFolderOmissions(folders: readonly RetrievedFolder[]): number {
+  return folders.reduce((total, source) => total + connectedContextOmittedCount(source.pack), 0);
+}
+
 function assembleHybridAnswer(
   input: AssembleHybridAnswerInput,
 ): HybridGroundedAnswer & Pick<GroundedAnswer, "promptContext"> {
@@ -1744,7 +1749,7 @@ function assembleHybridAnswer(
     citations: projection.citations,
     knowledgeCitations: projection.knowledgeCitations,
     uncertainty: projection.uncertainty,
-    omittedCount: sources.folders.reduce((acc, src) => acc + src.pack.omitted.length, 0),
+    omittedCount: totalFolderOmissions(sources.folders),
     elapsedMs,
     retrievalActivity: projection.retrievalActivity,
     contextPack: hybridAnswerContextPack({
@@ -1891,7 +1896,7 @@ export async function runHybridGroundedAsk(ctx: HybridGroundedAskCtx): Promise<R
     if (ctx.signal.aborted) {
       return { status: 499, body: errorBody("CANCELLED", "Grounded request was cancelled.") };
     }
-    return mapHybridError(error, ctx.deps);
+    return mapHybridError(error, ctx.deps, ctx.correlationId);
   } finally {
     env.close();
   }
@@ -2287,8 +2292,12 @@ function persistHybridGroundedExchange(
 // single-source path). The non-gateway `Error` fallback carries an arbitrary dynamic message that
 // can echo a provider endpoint or token, so it is scrubbed through the SAME boundary before it
 // reaches the wire.
-function mapHybridError(error: unknown, deps: UiHandlerDeps): RouteResult {
-  const gatewayResult = mappedGatewayError(error, deps);
+function mapHybridError(
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): RouteResult {
+  const gatewayResult = mappedGatewayError(error, deps, correlationId);
   if (gatewayResult !== undefined) return gatewayResult;
   // GRD-016: mirror the single-source and multi-source paths — a vague/no-anchor question
   // (ClarificationNeededError) or a typed workspace read error is a client-actionable 400, not
@@ -2296,7 +2305,7 @@ function mapHybridError(error: unknown, deps: UiHandlerDeps): RouteResult {
   if (error instanceof ClarificationNeededError) {
     return clarificationRequest(clarificationUserMessage(error));
   }
-  const workspaceResult = mappedWorkspaceError(error);
+  const workspaceResult = mappedWorkspaceError(error, { correlationId });
   if (workspaceResult !== undefined) return workspaceResult;
   if (error instanceof Error) {
     return internalError(redact(error.message, currentRedactionSecrets(deps)));

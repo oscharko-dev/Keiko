@@ -1,6 +1,7 @@
 // Canonical support report file I/O. The former JSONL bundle serializer was retired by #3534.
 import { closeSync, fstatSync, readSync } from "node:fs";
 import { dirname } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   openSafeArtifactFile,
@@ -9,6 +10,18 @@ import {
   type SafeArtifactPermissionAssurance,
 } from "@oscharko-dev/keiko-security/fs-hardening";
 import { SupportReportError } from "@oscharko-dev/keiko-activity-log/reader";
+
+/** Gzip is only a bounded transport wrapper around the unchanged canonical report bytes. */
+function decodeSupportReportTransport(bytes: Buffer): Buffer {
+  if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
+  try {
+    return gunzipSync(bytes, { maxOutputLength: MAX_SUPPORT_REPORT_BYTES });
+  } catch (error) {
+    const exceeded =
+      error instanceof Error && "code" in error && error.code === "ERR_BUFFER_TOO_LARGE";
+    throw new SupportReportError(exceeded ? "report-budget-exceeded" : "corrupt-report");
+  }
+}
 
 /** Reads exactly the human-selected file through the existing private-file handle checks. */
 export function readSupportReportFile(path: string): string {
@@ -30,7 +43,7 @@ export function readSupportReportFile(path: string): string {
       if (total > MAX_SUPPORT_REPORT_BYTES) throw new SupportReportError("report-budget-exceeded");
       chunks.push(chunk.subarray(0, count));
     }
-    const bytes = Buffer.concat(chunks);
+    const bytes = decodeSupportReportTransport(Buffer.concat(chunks));
     const text = bytes.toString("utf8");
     if (!bytes.equals(Buffer.from(text))) throw new SupportReportError("corrupt-report");
     return text;

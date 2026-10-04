@@ -17,7 +17,8 @@ import type { ModelCapability } from "./gateway.js";
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.
 import {
-  CANDIDATE_OMISSION_REASONS,
+  connectedContextOmittedCount,
+  connectedContextOmittedCounts,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateOmissionReason,
   type ConnectedContextPack,
@@ -1371,19 +1372,6 @@ export interface LocalKnowledgeIndexLifecycleSummary {
   readonly staleCapsuleIds?: readonly KnowledgeCapsuleId[] | undefined;
 }
 
-function buildOmittedCounts(
-  pack: ConnectedContextPack,
-): Readonly<Record<CandidateOmissionReason, number>> {
-  const counts = {} as Record<CandidateOmissionReason, number>;
-  for (const reason of CANDIDATE_OMISSION_REASONS) {
-    counts[reason] = 0;
-  }
-  for (const entry of pack.omitted) {
-    counts[entry.reason] += 1;
-  }
-  return counts;
-}
-
 function hashString32(value: string): string {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
@@ -1480,8 +1468,8 @@ export function buildGroundedAnswerContextPackSummary(
     usage: pack.usage,
     budget: pack.budget,
     citationCount,
-    omittedCount: pack.omitted.length,
-    omittedCounts: buildOmittedCounts(pack),
+    omittedCount: connectedContextOmittedCount(pack),
+    omittedCounts: connectedContextOmittedCounts(pack),
     uncertaintyCount: pack.uncertainty.length,
     elapsedMs,
     ...(rankingSummary !== undefined ? { rankingSummary } : {}),

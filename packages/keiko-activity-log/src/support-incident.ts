@@ -23,16 +23,10 @@
 // so a failure storm costs no filesystem work. User reports are never merged: each explicit "Report
 // a problem" is its own occurrence.
 //
-// QUOTAS AND EXPIRY. The store holds at most MAX_SUPPORT_INCIDENTS records (each at most
-// MAX_SUPPORT_INCIDENT_RECORD_BYTES), of which registered-failure candidates may occupy at most
-// MAX_REGISTERED_FAILURE_INCIDENTS so a failure flood can never block an explicit user report. Both
-// bounds hold atomically across processes too: every candidate claims one of a bounded pool of
-// exclusive-create quota-slot files before its record is written (automatics from slot 0 up,
-// reserving the top slots for user reports, exactly as the count-based reserve always intended). A
-// full store rejects the new candidate with body-free loss evidence; it never evicts a candidate the
-// user has not seen. Every candidate expires SUPPORT_INCIDENT_TTL_MS after creation; its pin expires
-// at the same instant, and its fingerprint and slot claims release with it, so an unreported incident
-// releases its evidence and its claims predictably.
+// RETENTION. Small candidate records reserve their maximal bytes through exclusive-create claims
+// under the governing Activity Log byte policy. Manual reports retain a protected share. On byte
+// pressure the oldest eligible candidate rolls out and releases its pin and claims. Unreported
+// diagnostics expire after twenty-four hours; generated reports are transient download artifacts.
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -42,6 +36,7 @@ import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
   SUPPORT_INCIDENT_SLOT_COUNT,
+  parseSupportIncidentSlotClaimFileName,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   activityLogEvent,
   activityLogOperationSchema,
@@ -62,9 +57,11 @@ import {
   activityLogPinCovers,
   isActivityLogSegmentEntry,
   listActivityLogDirectory,
+  readActivityLogPins,
   type ActivityLogPinRecord,
 } from "./activity-log-store.js";
 import type { ServerLogEnv } from "./log-level.js";
+import { supportIncidentRetentionPolicy } from "./support-incident-retention.js";
 import {
   claimActivityLogWriterOwnership,
   createFileServerLogSink,
@@ -107,17 +104,16 @@ const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
 
 /** An unreported candidate (and its pin) expires this long after creation. */
-export const SUPPORT_INCIDENT_TTL_MS = 14 * DAY_MS;
+export const SUPPORT_INCIDENT_TTL_MS = DAY_MS;
 /** The pinned window reaches this far before the incident … */
 export const SUPPORT_INCIDENT_WINDOW_BEFORE_MS = 15 * MINUTE_MS;
 /** … and this far after it, so segments sealed after the incident are retained too. */
 export const SUPPORT_INCIDENT_WINDOW_AFTER_MS = 5 * MINUTE_MS;
-/** Records the store holds at most (count quota); also the quota-slot claim file grammar's bound. */
+/** Legacy compatibility value, superseded by the governing byte reservation policy. */
 export const MAX_SUPPORT_INCIDENTS = SUPPORT_INCIDENT_SLOT_COUNT;
-/** Of those, registered-failure candidates may occupy at most this many. */
+/** Legacy compatibility reserve, superseded by the governing byte reservation policy. */
 export const MAX_REGISTERED_FAILURE_INCIDENTS = 24;
-// Browser occurrences cannot occupy the sixteen slots reserved for server failures.
-const MAX_BROWSER_FAILURE_INCIDENTS = 8;
+
 /** A process re-evaluates one defectFingerprint at most this often. */
 export const SUPPORT_INCIDENT_SUPPRESSION_MS = MINUTE_MS;
 /**
@@ -298,7 +294,7 @@ const SUPPORT_INCIDENT_EXPIRED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["expired", "invalid-record"],
+      values: ["expired", "invalid-record", "retention"],
     },
     removalStatus: {
       type: "string",
@@ -474,10 +470,24 @@ function dismissedEvidence(
 }
 
 interface ExpiryFacts {
+  readonly reason?: "retention";
   readonly entry: SupportIncidentStoreEntry;
   readonly removed: boolean;
   readonly correlationId: string;
   readonly openIncidentCount: number;
+}
+
+// Automatic cleanup closes the record's own lifecycle, rather than the request that retires it.
+function incidentLifecycleCorrelation(
+  record: SupportIncidentRecord | undefined,
+  fallback?: string,
+): string {
+  return (
+    record?.correlation.childCorrelationIds[0] ??
+    record?.correlation.rootCorrelationId ??
+    fallback ??
+    randomUUID()
+  );
 }
 
 function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
@@ -486,10 +496,10 @@ function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
     stateDir,
     activityLogEvent(
       SUPPORT_INCIDENT_EXPIRED_OPERATION,
-      { correlationId: facts.correlationId },
+      { correlationId: incidentLifecycleCorrelation(record, facts.correlationId) },
       {
         incidentId: facts.entry.incidentId,
-        expiryReason: record === undefined ? "invalid-record" : "expired",
+        expiryReason: facts.reason ?? (record === undefined ? "invalid-record" : "expired"),
         removalStatus: facts.removed ? "removed" : "failed",
         ...(record === undefined
           ? {}
@@ -722,39 +732,79 @@ export function prepareUnretainedUserReportDescriptor(
   );
 }
 
-// Automatics claim ascending from slot 0 (0..MAX_REGISTERED_FAILURE_INCIDENTS-1); user reports
-// claim descending from the top (MAX_SUPPORT_INCIDENTS-1..0). Automatics never touch the top
-// MAX_SUPPORT_INCIDENTS-MAX_REGISTERED_FAILURE_INCIDENTS slots, so those stay available to a user
-// report even when automatics hold their full share -- reproducing quotaAllows's old count-based
-// reserve atomically, one exclusive-create attempt at a time instead of one racy directory count.
-function slotSearchOrder(trigger: SupportIncidentTrigger, op: string): readonly number[] {
-  if (trigger === "user-report") {
-    return Array.from(
-      { length: MAX_SUPPORT_INCIDENTS },
-      (_, index) => MAX_SUPPORT_INCIDENTS - 1 - index,
-    );
-  }
-  const length =
-    op === "client.diagnostic" ? MAX_BROWSER_FAILURE_INCIDENTS : MAX_REGISTERED_FAILURE_INCIDENTS;
-  return Array.from({ length }, (_, index) => index);
+function slotCapacity(context: CandidateContext, draft: CandidateDraft): number {
+  const policy = supportIncidentRetentionPolicy(context.stateDir, context.env);
+  if (draft.trigger === "user-report") return policy.capacity;
+  return draft.input.op === "client.diagnostic" ? policy.browserCapacity : policy.automaticCapacity;
 }
 
-/**
- * Atomically claims one quota slot for `incidentId`, or `undefined` when every slot this trigger
- * may use is already held -- the store (or, for a registered failure, its 24-slot share) is full.
- * Each attempt is one exclusive-create (#3533 review 4050606506): two processes racing the same
- * free slot can never both win it, unlike a count read from a directory listing.
- */
-function claimQuotaSlot(
-  stateDir: string,
-  trigger: SupportIncidentTrigger,
+function occupiedSlots(stateDir: string): ReadonlySet<number> {
+  return new Set(
+    listSupportIncidentClaims(stateDir).flatMap((claim) => {
+      const index = parseSupportIncidentSlotClaimFileName(claim.fileName);
+      return index === undefined ? [] : [index];
+    }),
+  );
+}
+
+function claimAvailableSlot(
+  context: CandidateContext,
+  draft: CandidateDraft,
   incidentId: string,
-  op: string,
+  capacity: number,
 ): number | undefined {
-  for (const slotIndex of slotSearchOrder(trigger, op)) {
-    if (claimSupportIncidentSlot(stateDir, slotIndex, incidentId)) return slotIndex;
+  const occupied = occupiedSlots(context.stateDir);
+  for (let offset = 0; offset < capacity; offset += 1) {
+    const index = draft.trigger === "user-report" ? capacity - 1 - offset : offset;
+    if (!occupied.has(index) && claimSupportIncidentSlot(context.stateDir, index, incidentId)) {
+      return index;
+    }
   }
   return undefined;
+}
+
+function evictOldestCandidate(
+  context: CandidateContext,
+  draft: CandidateDraft,
+  entries: readonly SupportIncidentStoreEntry[],
+  capacity: number,
+): string | undefined {
+  const entry = entries.find(
+    ({ record }) =>
+      record !== undefined &&
+      record.slotIndex < capacity &&
+      (draft.trigger === "user-report" || record.trigger === "registered-failure"),
+  );
+  if (entry === undefined) return undefined;
+  const removed = removeEntry(context.stateDir, entry, context);
+  expiredEvidence(context.stateDir, {
+    entry,
+    removed,
+    correlationId: draft.evidenceCorrelationId,
+    openIncidentCount: entries.length - Number(removed),
+    reason: "retention",
+  });
+  return removed ? entry.incidentId : undefined;
+}
+
+interface ClaimedQuotaSlot {
+  readonly slotIndex: number;
+  readonly evictedIncidentId?: string;
+}
+
+function claimQuotaSlot(
+  context: CandidateContext,
+  draft: CandidateDraft,
+  incidentId: string,
+  entries: readonly SupportIncidentStoreEntry[],
+): ClaimedQuotaSlot | undefined {
+  const capacity = slotCapacity(context, draft);
+  const available = claimAvailableSlot(context, draft, incidentId, capacity);
+  if (available !== undefined) return { slotIndex: available };
+  const evictedIncidentId = evictOldestCandidate(context, draft, entries, capacity);
+  if (evictedIncidentId === undefined) return undefined;
+  const slotIndex = claimAvailableSlot(context, draft, incidentId, capacity);
+  return slotIndex === undefined ? undefined : { slotIndex, evictedIncidentId };
 }
 
 // Releases a window pin a draft already published before dedup or quota was decided (the
@@ -804,6 +854,58 @@ const REJECTED_PIN: SupportIncidentPin = {
  * loss is reported as `evidenceLostBeforePin` instead of a silent, clean `pinned`. A failed pin
  * never blocks the candidate: it is recorded as `rejected`, so sufficiency can say so.
  */
+interface IncidentPinContext {
+  readonly stateDir: string;
+  readonly nowMs: number;
+  readonly correlationId: string;
+  readonly env: ServerLogEnv;
+}
+
+function ownsDiagnosticPin(record: SupportIncidentRecord, pin: ActivityLogPinRecord): boolean {
+  return (
+    record.pin.pinId === pin.pinId &&
+    pin.reason === "incident" &&
+    pin.scope.kind === "window" &&
+    pin.scope.fromMs === record.window.fromMs &&
+    pin.scope.toMs === record.window.toMs
+  );
+}
+
+function rollDiagnosticPin(context: IncidentPinContext): boolean {
+  const directory = join(context.stateDir, ACTIVITY_LOG_DIRECTORY_NAME);
+  const pins = readActivityLogPins(listActivityLogDirectory(directory), directory).flatMap(
+    ({ record }) => (record === undefined ? [] : [record]),
+  );
+  const entries = listSupportIncidentEntries(context.stateDir);
+  const oldest = entries.find(
+    ({ record }) => record !== undefined && pins.some((pin) => ownsDiagnosticPin(record, pin)),
+  );
+  if (oldest === undefined) return false;
+  const removed = removeEntry(context.stateDir, oldest, context);
+  expiredEvidence(context.stateDir, {
+    entry: oldest,
+    removed,
+    reason: "retention",
+    correlationId: context.correlationId,
+    openIncidentCount: entries.length - Number(removed),
+  });
+  return removed;
+}
+
+function requestIncidentPin(context: IncidentPinContext): ActivityLogPinResult {
+  const window = incidentWindow(context.nowMs);
+  const request = {
+    scope: { kind: "window" as const, fromMs: window.fromMs, toMs: window.toMs },
+    expiresAtMs: context.nowMs + SUPPORT_INCIDENT_TTL_MS,
+    reason: "incident" as const,
+    correlationId: context.correlationId,
+  };
+  const first = pinActivityLogWindow(context.stateDir, request, context.env);
+  if (first.status !== "rejected" || first.reason !== "pin-limit-reached") return first;
+  if (!rollDiagnosticPin(context)) return first;
+  return pinActivityLogWindow(context.stateDir, request, context.env);
+}
+
 function pinIncidentWindow(
   stateDir: string,
   nowMs: number,
@@ -813,18 +915,7 @@ function pinIncidentWindow(
   const window = incidentWindow(nowMs);
   const before = overlappingSealedSegmentNames(stateDir, window, correlationId);
   try {
-    const pin = pinFromResult(
-      pinActivityLogWindow(
-        stateDir,
-        {
-          scope: { kind: "window", fromMs: window.fromMs, toMs: window.toMs },
-          expiresAtMs: nowMs + SUPPORT_INCIDENT_TTL_MS,
-          reason: "incident",
-          correlationId,
-        },
-        env,
-      ),
-    );
+    const pin = pinFromResult(requestIncidentPin({ stateDir, nowMs, correlationId, env }));
     if (pin.status === "rejected" || before.size === 0) return pin;
     const after = overlappingSealedSegmentNames(stateDir, window, correlationId);
     const evidenceLostBeforePin = [...before].some((name) => !after.has(name));
@@ -862,7 +953,10 @@ function publishCandidate(
     // The pin (if any) still expires with the candidate's TTL; nothing is left unbounded.
     return reject(context, draft, "store-unavailable", entries.length);
   }
-  createdEvidence(context.stateDir, record, draft.evidenceCorrelationId, entries.length + 1);
+  const retainedCount = listSupportIncidentEntries(context.stateDir).filter((entry) =>
+    openEntry(entry, context.nowMs),
+  ).length;
+  createdEvidence(context.stateDir, record, draft.evidenceCorrelationId, retainedCount);
   return { status: "created", incidentId: record.incidentId, record };
 }
 
@@ -1062,16 +1156,17 @@ function createCandidate(
     if (handled.done) return handled.result;
   }
 
-  const slotIndex = claimQuotaSlot(stateDir, draft.trigger, incidentId, draft.input.op);
-  if (slotIndex === undefined) {
+  const quota = claimQuotaSlot(context, draft, incidentId, entries);
+  if (quota === undefined) {
     if (dedupFingerprint !== undefined) {
       releaseSupportIncidentFingerprintClaim(stateDir, dedupFingerprint);
     }
     return reject(context, draft, "quota-exhausted", entries.length);
   }
 
-  const created = publishCandidate(draft, context, entries, incidentId, slotIndex);
-  if (created.status !== "created") releaseClaims(stateDir, dedupFingerprint, slotIndex);
+  const retained = entries.filter((entry) => entry.incidentId !== quota.evictedIncidentId);
+  const created = publishCandidate(draft, context, retained, incidentId, quota.slotIndex);
+  if (created.status !== "created") releaseClaims(stateDir, dedupFingerprint, quota.slotIndex);
   return created;
 }
 
@@ -1124,8 +1219,12 @@ export function recordUserReportedIncident(
 
 // ─── Reading, expiry, dismissal ────────────────────────────────────────────────────────────────
 
+function candidateExpiry(record: SupportIncidentRecord): number {
+  return Math.min(record.expiresAtMs, record.createdAtMs + SUPPORT_INCIDENT_TTL_MS);
+}
+
 function openEntry(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
-  return entry.record !== undefined && entry.record.expiresAtMs > nowMs;
+  return entry.record !== undefined && candidateExpiry(entry.record) > nowMs;
 }
 
 // An expired record, or an unreadable one whose writer is gone. An unreadable record younger than
@@ -1133,7 +1232,7 @@ function openEntry(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
 function removableEntry(entry: SupportIncidentStoreEntry, nowMs: number): boolean {
   return entry.record === undefined
     ? abandonedStoreFile(entry.modifiedAtMs)
-    : entry.record.expiresAtMs <= nowMs;
+    : candidateExpiry(entry.record) <= nowMs;
 }
 
 // Releases the quota-slot claim, and (for a registered failure) the fingerprint claim, that a
@@ -1165,14 +1264,24 @@ function releaseRecordClaims(stateDir: string, record: SupportIncidentRecord): v
   );
 }
 
-function removeEntry(stateDir: string, entry: SupportIncidentStoreEntry): boolean {
+function removeEntry(
+  stateDir: string,
+  entry: SupportIncidentStoreEntry,
+  options: Pick<SupportIncidentOptions, "env" | "correlationId"> = {},
+): boolean {
   try {
     removeSupportIncidentRecord(stateDir, entry.incidentId);
   } catch (error) {
     reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
     return false;
   }
-  if (entry.record !== undefined) releaseRecordClaims(stateDir, entry.record);
+  if (entry.record !== undefined) {
+    releaseRecordClaims(stateDir, entry.record);
+    releaseIncidentPin(stateDir, entry.record, {
+      correlationId: incidentLifecycleCorrelation(entry.record, options.correlationId),
+      env: options.env ?? process.env,
+    });
+  }
   return true;
 }
 
@@ -1257,7 +1366,7 @@ export function readSupportIncident(
   options: Pick<SupportIncidentOptions, "nowMs"> = {},
 ): SupportIncidentRecord | undefined {
   const record = readSupportIncidentRecord(stateDir, incidentId);
-  return record !== undefined && record.expiresAtMs > (options.nowMs ?? Date.now())
+  return record !== undefined && candidateExpiry(record) > (options.nowMs ?? Date.now())
     ? record
     : undefined;
 }
@@ -1321,10 +1430,11 @@ function releaseIncidentPin(
  * Explicit human dismissal: removes the record and releases its Activity Log pin, so the window
  * returns to ordinary retention. A pin that cannot be released still lapses at its bounded expiry.
  */
-export function dismissSupportIncident(
+function retireSupportIncident(
   stateDir: string,
   incidentId: string,
-  options: SupportIncidentOptions = {},
+  options: SupportIncidentOptions,
+  state: "candidate" | "reported",
 ): SupportIncidentDismissal {
   const correlationId = options.correlationId ?? randomUUID();
   const open = sweepExpiredEntries(stateDir, options.nowMs ?? Date.now(), correlationId);
@@ -1341,12 +1451,42 @@ export function dismissSupportIncident(
     correlationId,
     env: options.env ?? process.env,
   });
-  dismissedEvidence(stateDir, record, {
-    correlationId,
-    openIncidentCount: open.length - 1,
-    pinRelease,
-  });
+  dismissedEvidence(
+    stateDir,
+    { ...record, state },
+    {
+      correlationId,
+      openIncidentCount: open.length - 1,
+      pinRelease,
+    },
+  );
   return "dismissed";
+}
+
+/** Explicit human dismissal of one retained candidate. */
+export function dismissSupportIncident(
+  stateDir: string,
+  incidentId: string,
+  options: SupportIncidentOptions = {},
+): SupportIncidentDismissal {
+  return retireSupportIncident(stateDir, incidentId, options, "candidate");
+}
+
+/** The canonical artifact is prepared and cached; this never claims transmission or a saved file. */
+export function completePreparedSupportIncident(
+  stateDir: string,
+  incidentId: string,
+  options: SupportIncidentOptions = {},
+): SupportIncidentDismissal {
+  try {
+    return retireSupportIncident(stateDir, incidentId, options, "reported");
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
+      correlationId: options.correlationId,
+    });
+    return "failed";
+  }
 }
 
 // ─── The registered-failure trigger ────────────────────────────────────────────────────────────

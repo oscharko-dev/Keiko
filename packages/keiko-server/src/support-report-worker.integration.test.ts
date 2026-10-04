@@ -1,13 +1,15 @@
+import {
+  occupySupportIncidentRetentionForTests,
+  supportIncidentReservationsForTests,
+} from "../../../tests/support/activity-log-test-support.js";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listSupportIncidents,
-  MAX_SUPPORT_INCIDENTS,
   recordRegisteredFailureIncident,
-  recordUserReportedIncident,
   createFileServerLogSink,
   closeFileServerLogSinks,
 } from "@oscharko-dev/keiko-activity-log";
@@ -34,6 +36,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   closeFileServerLogSinks();
+  vi.unstubAllEnvs();
   rmSync(stateDir, { recursive: true, force: true });
 });
 
@@ -110,11 +113,9 @@ describe("real canonical support report worker", () => {
 
   it("downloads the selected failure through the real worker when all candidate slots are occupied", async () => {
     failure();
-    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1) {
-      expect(
-        recordUserReportedIncident(stateDir, { correlationId: `occupied-${String(slot)}` }).status,
-      ).toBe("created");
-    }
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    occupySupportIncidentRetentionForTests(stateDir);
+    const reservations = supportIncidentReservationsForTests(stateDir);
     const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
     const response = await runSupportReportJob(stateDir, "desktop-worker-failure");
     const report = parseSupportReport(response.reportJson);
@@ -124,7 +125,8 @@ describe("real canonical support report worker", () => {
     expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
       retainedIds,
     );
-    expect(listSupportIncidents(stateDir)).toHaveLength(MAX_SUPPORT_INCIDENTS);
+    expect(listSupportIncidents(stateDir)).toHaveLength(0);
+    expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
     const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
     expect(evidence).toContain('"op":"client.diagnostic"');
     expect(evidence).toContain('"errorKind":"timeout"');

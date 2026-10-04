@@ -13,6 +13,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import {
+  connectedContextOmittedCount,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
   isValidScopePath,
@@ -5960,7 +5961,7 @@ function completionActivityExtra(
     usageRerankCalls: pack.usage.rerankCalls,
     selectedFileCount: pack.files.length,
     ...contextObservationActivityExtra(pack),
-    omittedCount: pack.omitted.length,
+    omittedCount: connectedContextOmittedCount(pack),
     uncertaintyCount: pack.uncertainty.length,
     ...uncertaintyActivityExtra(pack.uncertainty),
     ...coverageActivityExtra(pack),

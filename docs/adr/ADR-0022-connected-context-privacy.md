@@ -72,6 +72,14 @@ counts-only-plus-enums:
 - `budget` (full ExplorationBudget — all numbers)
 - `citationCount`, `omittedCount`, `uncertaintyCount`, `elapsedMs` (numbers)
 
+Large context packs retain at most 4,096 omitted path details, independently of corpus size.
+Before that projection, assembly validates every known omission and fingerprints the full
+canonical omission set. Packs whose details are clipped carry exact closed per-reason
+`omittedCounts`; legacy and smaller packs derive totals from their complete detail list.
+Browser summaries, model disclosures, activity counters, and audit manifests use these exact
+totals. The audit retains bounded redacted path details alongside the aggregate, without
+persisting unread file content. Detail retention never implies unfinished source traversal.
+
 There is no field that can carry raw scope ids, raw file paths, query text, excerpt
 content, or credentials. The builder is a pure function with no IO and no redaction
 step — the type itself is the redaction contract.

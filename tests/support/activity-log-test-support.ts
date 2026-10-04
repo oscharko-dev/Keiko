@@ -1,5 +1,36 @@
 // Repository-only controls for resetting the built Activity Log graph consumed by other packages.
 // They remain internal and must never become part of the production package entry point.
+import { supportIncidentRetentionPolicy } from "../../packages/keiko-activity-log/src/support-incident-retention.js";
+import {
+  claimSupportIncidentSlot,
+  ensureSupportIncidentDirectory,
+  listSupportIncidentClaims,
+  releaseSupportIncidentSlot,
+} from "../../packages/keiko-activity-log/src/support-incident-store.js";
+
+/** Young real claims cannot be rolled out before their publishing process settles. */
+export function occupySupportIncidentRetentionForTests(stateDir: string): number {
+  ensureSupportIncidentDirectory(stateDir);
+  const { capacity } = supportIncidentRetentionPolicy(stateDir);
+  for (let slot = 0; slot < capacity; slot += 1) {
+    const incidentId = slot.toString(16).padStart(32, "0");
+    if (!claimSupportIncidentSlot(stateDir, slot, incidentId)) {
+      throw new TypeError("Fixture could not reserve diagnostic retention bytes");
+    }
+  }
+  return capacity;
+}
+
+export function supportIncidentReservationsForTests(stateDir: string): readonly string[] {
+  return listSupportIncidentClaims(stateDir)
+    .map((claim) => `${claim.fileName}:${claim.incidentId ?? "unpublished"}`)
+    .sort();
+}
+
+export function releaseSupportIncidentReservationForTests(stateDir: string, slot: number): void {
+  releaseSupportIncidentSlot(stateDir, slot);
+}
+
 export { resetActivityLogReadinessForTests } from "../../packages/keiko-activity-log/dist/activity-log-readiness.js";
 export {
   installActivityLogTestWriter,

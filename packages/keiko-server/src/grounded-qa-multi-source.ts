@@ -20,6 +20,7 @@ import type { ContextBudgetPressure, ContextLaneId } from "@oscharko-dev/keiko-c
 import { CONTEXT_LANE_IDS } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 
 import {
+  connectedContextOmittedCount,
   CANDIDATE_OMISSION_REASONS,
   DEFAULT_EXPLORATION_BUDGET,
   type CandidateOmissionReason,
@@ -397,7 +398,7 @@ function sourceSection(
   return [
     `### Source ${String(index + 1)}: ${label}`,
     `- budget/usage: ${packBudgetSummary(pack)}`,
-    `- omitted evidence atoms: ${String(pack.omitted.length)}`,
+    `- omitted files: ${String(connectedContextOmittedCount(pack))}`,
     ...sizeExclusionLines(pack, redactor, omissionPathBytes),
     "",
     "Repository evidence excerpts:",
@@ -791,8 +792,9 @@ export interface MultiSourceAskInput {
 function classifyPerSourceRetrieveError(
   error: unknown,
   label: string,
+  correlationId: string | undefined,
 ): { readonly skipped: SkippedScope; readonly mapped: RouteResult } | undefined {
-  const mapped = mappedWorkspaceError(error);
+  const mapped = mappedWorkspaceError(error, { correlationId });
   if (mapped === undefined) return undefined;
   const body = mapped.body as { readonly error?: { readonly message?: unknown } };
   const safeMessage =
@@ -840,7 +842,7 @@ async function retrieveOneSource(
     });
     ensureNotCancelled(ctx.signal);
   } catch (error) {
-    const classified = classifyPerSourceRetrieveError(error, label);
+    const classified = classifyPerSourceRetrieveError(error, label, ctx.correlationId);
     if (classified === undefined) throw error; // non-workspace error → outer handler
     acc.skipped.push(classified.skipped);
     acc.firstError ??= classified.mapped;
@@ -1062,7 +1064,7 @@ function assembleMultiSourceAnswer(
       ...mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
       ...reconciliationUncertainty,
     ],
-    omittedCount: sources.reduce((acc, src) => acc + src.pack.omitted.length, 0),
+    omittedCount: sources.reduce((acc, src) => acc + connectedContextOmittedCount(src.pack), 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
     contextPack: withMergedAssistantUsage(mergedSummary, assistant),
     ...(modelInvoked && assistant.promptContext !== undefined
@@ -1283,7 +1285,7 @@ function mapMultiSourceError(
   if (error instanceof ClarificationNeededError) {
     return clarificationRequest(clarificationUserMessage(error));
   }
-  const workspaceResult = mappedWorkspaceError(error);
+  const workspaceResult = mappedWorkspaceError(error, { correlationId });
   if (workspaceResult !== undefined) return workspaceResult;
   // The request's correlation, so a local refusal's diagnostic joins the ask (PR #3678 review).
   const gatewayResult = mappedGatewayError(error, deps, correlationId);

@@ -108,6 +108,7 @@ import {
 // server-log.ts imports support-incident.ts back for the sink's trigger hook, so a factory-based
 // vi.mock("./server-log.js", ...) here never took effect against that circular import; spying on
 // the resolved namespace after both modules finish loading works around it.
+import { supportIncidentRetentionPolicy } from "./support-incident-retention.js";
 import * as serverLogModule from "./server-log.js";
 import {
   claimSupportIncidentFingerprint,
@@ -115,7 +116,6 @@ import {
   ensureSupportIncidentDirectory,
 } from "./support-incident-store.js";
 import {
-  MAX_REGISTERED_FAILURE_INCIDENTS,
   SUPPORT_INCIDENT_IN_FLIGHT_GRACE_MS,
   SUPPORT_INCIDENT_TTL_MS,
   SUPPORT_INCIDENT_WINDOW_AFTER_MS,
@@ -188,6 +188,7 @@ describe("SupportIncident candidates", () => {
     closeFileServerLogSinks();
     resetServerLogFailureNotices();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     retentionRace.targetPath = undefined;
     retentionRace.armed = false;
     dedupRace.onStaleSnapshot = undefined;
@@ -632,7 +633,9 @@ describe("SupportIncident candidates", () => {
 
   describe("quotas", () => {
     function fillAutomaticQuota(): void {
-      for (let index = 0; index < MAX_REGISTERED_FAILURE_INCIDENTS; index += 1) {
+      vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+      const capacity = supportIncidentRetentionPolicy(stateDir).automaticCapacity;
+      for (let index = 0; index < capacity; index += 1) {
         created(
           recordRegisteredFailureIncident(stateDir, {
             op: FAILURE_OP,
@@ -643,44 +646,19 @@ describe("SupportIncident candidates", () => {
       }
     }
 
-    it("rejects a new automatic candidate at the quota with body-free loss evidence", () => {
+    it("rolls a new automatic candidate at byte pressure while preserving manual headroom", () => {
       fillAutomaticQuota();
-      const rejected = recordRegisteredFailureIncident(stateDir, {
-        op: FAILURE_OP,
-        errorKind: "internal",
-        correlationId: "over-quota-1",
-      });
+      const capacity = supportIncidentRetentionPolicy(stateDir).automaticCapacity;
       expect(
         recordRegisteredFailureIncident(stateDir, {
-          op: "client.diagnostic",
+          op: FAILURE_OP,
           errorKind: "internal",
-          correlationId: "over-quota-browser",
-          clientKind: "boundary",
-          renderFailure: "window-body",
-        }),
-      ).toEqual({ status: "rejected", reason: "quota-exhausted" });
-      expect(
-        expectActivityLogProof(
-          "support.incident.rejected.emitted-line",
-          lines("support.incident.rejected").at(-1) ?? "",
-        ),
-      ).toMatchObject({ fingerprintAlgorithm: 2, correlationId: "over-quota-browser" });
-      expect(rejected).toEqual({ status: "rejected", reason: "quota-exhausted" });
-      expect(storeNames()).toHaveLength(MAX_REGISTERED_FAILURE_INCIDENTS);
-      const line = expectActivityLogProof(
-        "support.incident.rejected.emitted-line",
-        lines("support.incident.rejected")[0] ?? "",
-      );
-      expect(line).toMatchObject({
-        rejectionReason: "quota-exhausted",
-        trigger: "registered-failure",
-        openIncidentCount: MAX_REGISTERED_FAILURE_INCIDENTS,
-        completeness: "partial",
-        loss: "event-dropped",
-        errorKind: "rate-limited",
-        correlationId: "over-quota-1",
-      });
-    }, 60_000);
+          correlationId: "over-budget-replacement",
+        })?.status,
+      ).toBe("created");
+      expect(storeNames()).toHaveLength(capacity);
+      expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    });
 
     it("keeps a reserve so a failure flood never blocks an explicit report", () => {
       fillAutomaticQuota();

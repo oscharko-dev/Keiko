@@ -448,6 +448,7 @@ describe("assembleContextPack", () => {
   it("stable ID ignores volatile emitted timestamps", async () => {
     const first: AssembleInput = {
       ...baseInput(),
+      scope: { ...scope(), relativePaths: ["a.ts", "b.ts", "skipped.ts"] },
       query: { ...query(), emittedAtMs: FIXED_NOW },
       atoms: baseInput().atoms.map((entry) => ({ ...entry, emittedAtMs: FIXED_NOW })),
       omittedFromRanking: [
@@ -582,7 +583,11 @@ describe("assembleContextPack", () => {
     const inputOmitted: OmittedContextEntry[] = [
       { scopePath: "skipped.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW - 1 },
     ];
-    const input: AssembleInput = { ...baseInput(), omittedFromRanking: inputOmitted };
+    const input: AssembleInput = {
+      ...baseInput(),
+      scope: { ...scope(), relativePaths: ["a.ts", "b.ts", "skipped.ts"] },
+      omittedFromRanking: inputOmitted,
+    };
     const result = await assembleContextPack(input, { nowMs: fixedNow });
     expect(result.pack.omitted).toEqual(
       expect.arrayContaining([

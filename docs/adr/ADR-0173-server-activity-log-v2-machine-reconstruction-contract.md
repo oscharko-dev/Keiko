@@ -767,10 +767,14 @@ selected error's correlation; it records no report body, destination, filename o
 The shared desktop report action preserves the selected error when reporting itself fails. A
 session refusal offers report regeneration, a local service failure names application recovery, and a
 rate refusal names the bounded retry delay; none grants authority or automatically replays a write.
-A full 32-candidate store must not prevent manual export of already retained evidence. Desktop and CLI
+An exhausted diagnostic reservation buffer must not prevent manual export of already retained evidence. Desktop and CLI
 export may prepare the canonical user-report descriptor without a persistent slot or retention pin,
-then compose and validate the same bounded report. Existing candidates are never evicted for this
-purpose, and the descriptor reports its rejected pin rather than implying protected retention.
+then compose and validate the same bounded report. Byte pressure rolls the oldest eligible diagnostic candidate out through its existing claim and pin
+cleanup. In-flight reservations are never stolen; a transient descriptor reports its rejected pin
+rather than implying protected retention. After a desktop artifact is successfully prepared and
+admitted to the existing fifteen-minute memory download cache, its durable candidate and pin are
+released. This means the artifact is prepared, not that it was saved or sent. Failed preparation or
+cache admission preserves the diagnostic candidate; no additional report archive is created.
 When that transient descriptor's supported causal selection retains a registry-eligible failure
 under the requested root or its direct child, desktop composition derives a registered-failure
 identity from that retained event using the existing fingerprint, frame and correlation rules.
@@ -1584,29 +1588,42 @@ fingerprints do not promise cross-release grouping.
 Browser diagnostics can still be indistinguishable when they carry no usable product frame or
 closed feature context. Their retention claim is therefore scoped to the occurrence's validated
 causal reference as well as its defect fingerprint. Replaying the same request deduplicates; a later
-request retains its own window instead of discarding it under a fourteen-day coarse defect claim.
+request retains its own window instead of discarding it under a coarse defect claim.
 The local claim key is a hash and is never exported as a customer reference. Existing automatic
-slot quotas and evaluation rate limits apply; full quotas surface explicit loss. Browser candidates
-may use only eight of the twenty-four automatic slots and at most two of the six evaluations per
-rolling minute. This reserves sixteen automatic slots and four evaluations for server failures
-without enlarging the shared bounds. The same atomic slot claims and closed rejection evidence
-apply to both classes. Server failures
-and historical version-one browser records keep their fingerprint-scoped deduplication.
+byte reservations and evaluation rate limits apply. Browser candidates may use one quarter of the
+reservation pool; all automatic candidates may use three quarters, preserving manual-report
+headroom. Browser evaluation remains at most two of the six evaluations per rolling minute,
+reserving the remaining evaluations for server failures. Existing atomic claims and closed
+rejection evidence apply to both classes. Server failures and historical version-one browser
+records keep their fingerprint-scoped deduplication.
 
 The descriptor has a strict public projection and a richer, still body-free private projection from
 the same record; both expose the sufficiency status, and only the private one carries reasons and
-coverage. The store is owner-private, closed-grammar and quota-bounded (32 open candidates, 8 of them
-reserved for explicit reports, 4 KiB each), and candidates expire after 14 days.
+coverage. The store is owner-private and uses the existing governing Activity Log retention-byte
+policy to size its reservation pool. Each slot reserves one maximal 4 KiB candidate plus the two
+opaque owning-id claim payloads; there is no independent candidate-count setting. Unreported
+candidates expire after twenty-four hours, including older records written with a longer expiry.
+On byte pressure, the oldest eligible candidate rolls out and its pin and claims are released.
+Generated reports remain only in the existing transient download cache, without a disk archive.
+The existing Activity Log pin ceiling remains unchanged. If a new diagnostic window is refused
+specifically because that pin ceiling is full, one oldest diagnostic candidate with an exact owned
+`incident` window pin is retired and the existing pin manager is retried once. Durable-batch and
+other unowned pins are preserved. The original refusal remains evidenced, and the before/after
+segment check still reports any evidence lost before the replacement pin; retry never invents
+recovered bytes.
 
-Both the defectFingerprint dedup rule and the count quotas hold atomically across every process
+Both the defectFingerprint dedup rule and the byte-reservation pool hold atomically across every process
 sharing the state directory (#3533 review 4050606506), not from a directory-listing count two
 processes could each read as "still free": a registered failure claims its deduplication key's own
 `fingerprint-<64 hex>.claim` file by exclusive-create before it decides duplicate-or-new, and every
-candidate claims one of a bounded pool of `slot-<NN>.claim` files (automatics from slot 0 up, user
+candidate claims one of a bounded pool of `slot-<nonnegative safe integer>.claim` files (automatics from slot 0 up, user
 reports from the top down, so the reserve holds without a shared counter) before its record is
 written. Both claim grammars are recognized by the same `parseSupportIncidentFileName` the
 repair/uninstall ownership predicate already calls, so state-paths.ts needed no change to own them.
-A claim releases with its record on dismissal or expiry. Between a claim and its record, and between
+Legacy two-digit slot claims remain readable; no destructive migration is required. Reservation
+indices are generated lazily against the actual occupied claims, without allocating an array sized
+to the configured byte pool. A claim releases with its record on dismissal, expiry, rolling eviction
+or successful preparation into the download cache. Between a claim and its record, and between
 a record's exclusive create and its bytes, another process can see a claim without a record or an
 unreadable record at any moment, so such a file is treated as in flight until it is older than a
 one-minute grace by its own mtime: a repeat of the same retention key deduplicates onto the id

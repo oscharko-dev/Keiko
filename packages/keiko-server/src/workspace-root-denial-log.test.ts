@@ -7,6 +7,7 @@ import {
   recordManagedRootRequestDenial,
   recordWorkspaceRootDenial,
   recordWorkspaceRootDenied,
+  recordWorkspaceRootUnavailable,
 } from "./workspace-root-denial-log.js";
 import {
   expectActivityLogProof,
@@ -77,6 +78,32 @@ describe("workspace root denial activity", () => {
       errorKind: "internal",
       extra: { failureKind: "Error" },
     });
+  });
+
+  it("records unavailable roots with closed metadata and the caller correlation", () => {
+    const sink = createBufferedServerLogSink();
+    const privateMessage = "unavailable /private/customer/.aws/root secret-canary";
+    recordWorkspaceRootUnavailable(new Error(privateMessage), {
+      activityLog: sink,
+      correlationId: "ordinary-root-unavailable-0001",
+    });
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      op: "workspace.root.denied",
+      correlationId: "ordinary-root-unavailable-0001",
+      level: "error",
+      errorKind: "unavailable",
+      extra: {
+        reason: "ordinary-root-unavailable",
+        failureKind: "WORKSPACE_NOT_FOUND",
+        completeness: "complete",
+        loss: "none",
+      },
+    });
+    expect(JSON.stringify(sink.events)).not.toContain(privateMessage);
+    expect(JSON.stringify(sink.events)).not.toContain("/private/customer");
+    expect(JSON.stringify(sink.events)).not.toContain("secret-canary");
   });
 
   it("rejects unregistered denial fields and excludes them from runtime evidence", () => {

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  MAX_SUPPORT_INCIDENTS,
+  supportIncidentRetentionPolicy,
   listSupportIncidents,
   recordUserReportedIncident,
   closeFileServerLogSinks,
@@ -42,9 +42,9 @@ function fixture(): { ctx: RouteContext; deps: UiHandlerDeps; stateDir: string }
   };
 }
 describe("existing health diagnostic storage projection", () => {
-  it("reports all 32 retained candidates without calling them open defects or mutating their identity", async () => {
+  it("reports retained candidates against the governing byte reservation capacity without calling them open defects or mutating their identity", async () => {
     const { ctx, deps, stateDir } = fixture();
-    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1)
+    for (let slot = 0; slot < 33; slot += 1)
       expect(
         recordUserReportedIncident(stateDir, { correlationId: `retained-${String(slot)}` }).status,
       ).toBe("created");
@@ -54,19 +54,22 @@ describe("existing health diagnostic storage projection", () => {
     if (result === undefined || result === STREAMING)
       throw new Error("Expected JSON health projection");
     expect(result.body).toMatchObject({
-      diagnostics: { retainedDiagnosticCount: 32, diagnosticCapacity: MAX_SUPPORT_INCIDENTS },
+      diagnostics: {
+        retainedDiagnosticCount: 33,
+        diagnosticCapacity: supportIncidentRetentionPolicy(stateDir).capacity,
+      },
     });
     expect(JSON.stringify(result.body)).not.toContain(stateDir);
     expect(JSON.stringify(result.body)).not.toContain("retained-");
     expect(listSupportIncidents(stateDir).map((record) => record.incidentId)).toEqual(ids);
   });
   it("logs only bounded candidate counts when the count changes", () => {
-    const { ctx, deps } = fixture();
+    const { ctx, deps, stateDir } = fixture();
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     expect(supportDiagnosticCapacity(ctx, deps)).toMatchObject({
       retainedDiagnosticCount: 0,
-      diagnosticCapacity: MAX_SUPPORT_INCIDENTS,
+      diagnosticCapacity: supportIncidentRetentionPolicy(stateDir).capacity,
     });
     supportDiagnosticCapacity(ctx, deps);
     const events = sink.events.filter((event) => event.op === "support.diagnostics.capacity");

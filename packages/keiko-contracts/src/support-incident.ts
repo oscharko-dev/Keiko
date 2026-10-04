@@ -109,18 +109,11 @@ export const MAX_SUPPORT_INCIDENT_RECORD_BYTES = 4096;
 
 const INCIDENT_FILE_PATTERN = /^incident-([a-f0-9]{32})\.json$/u;
 const FINGERPRINT_CLAIM_FILE_PATTERN = /^fingerprint-([a-f0-9]{64})\.claim$/u;
-const SLOT_CLAIM_FILE_PATTERN = /^slot-(\d{2})\.claim$/u;
+const SLOT_CLAIM_FILE_PATTERN = /^slot-(\d{2,16})\.claim$/u;
 const OPERATION_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z0-9_-]+)*$/u;
 const MAX_OPERATION_LENGTH = 96;
 
-/**
- * The bounded pool of quota-slot claim files (#3533 review 4050606506): `slot-00.claim` through
- * `slot-<N-1>.claim`. Every candidate -- automatic or user-initiated -- atomically claims exactly
- * one slot (exclusive-create, content the owning incidentId) before its record is written, so the
- * store's total-count quota (`MAX_SUPPORT_INCIDENTS` in keiko-server) holds across processes with
- * no read-then-write race. keiko-server imports this constant rather than repeating the number, so
- * the two can never drift apart.
- */
+/** Legacy compatibility value; runtime reservations derive from the governing byte policy. */
 export const SUPPORT_INCIDENT_SLOT_COUNT = 32;
 
 export function supportIncidentFileName(incidentId: string): string {
@@ -131,7 +124,7 @@ export function supportIncidentFileName(incidentId: string): string {
 }
 
 export function supportIncidentSlotClaimFileName(slotIndex: number): string {
-  if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= SUPPORT_INCIDENT_SLOT_COUNT) {
+  if (!Number.isSafeInteger(slotIndex) || slotIndex < 0) {
     throw new RangeError("invalid SupportIncident quota slot index");
   }
   return `slot-${String(slotIndex).padStart(2, "0")}.claim`;
@@ -142,7 +135,9 @@ export function parseSupportIncidentSlotClaimFileName(name: string): number | un
   const match = SLOT_CLAIM_FILE_PATTERN.exec(name);
   if (match === null) return undefined;
   const slotIndex = Number(match[1]);
-  return slotIndex < SUPPORT_INCIDENT_SLOT_COUNT ? slotIndex : undefined;
+  return Number.isSafeInteger(slotIndex) && supportIncidentSlotClaimFileName(slotIndex) === name
+    ? slotIndex
+    : undefined;
 }
 
 /**
@@ -532,7 +527,7 @@ function validRecordHeader(value: PlainObject): boolean {
     isOneOf(SUPPORT_INCIDENT_TRIGGERS, value.trigger) &&
     isOneOf(SUPPORT_INCIDENT_STATES, value.state) &&
     isCount(value.slotIndex) &&
-    value.slotIndex < SUPPORT_INCIDENT_SLOT_COUNT &&
+    Number.isSafeInteger(value.slotIndex) &&
     isEpochMs(value.createdAtMs) &&
     isEpochMs(value.expiresAtMs) &&
     value.expiresAtMs > value.createdAtMs

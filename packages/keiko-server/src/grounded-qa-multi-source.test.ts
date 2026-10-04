@@ -20,6 +20,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  connectedContextOmittedCounts,
   DEFAULT_EXPLORATION_BUDGET,
   type ConnectedContextPack,
   type ContextCoverageDiagnostics,
@@ -512,6 +513,34 @@ describe("buildConnectedScopes", () => {
 });
 
 describe("buildMultiSourceGatewayMessages", () => {
+  it("keeps exact aggregate omission counts attributed to their own source", () => {
+    const first: ConnectedContextPack = {
+      ...scopePack("src/a.ts", 1, "first"),
+      omitted: [{ scopePath: "manuals/above.txt", reason: "size-exceeded", omittedAtMs: NOW }],
+      omittedCounts: { ...connectedContextOmittedCounts({ omitted: [] }), "size-exceeded": 5000 },
+    };
+    const messages = buildMultiSourceGatewayMessages(
+      "Explain size exclusions",
+      [
+        { label: "handbook", pack: first },
+        { label: "app", pack: scopePack("src/b.ts", 1, "second") },
+      ],
+      buildRedactor({}),
+    );
+    const prompt = messages[1]?.content ?? "";
+    const [handbook, app] = prompt.split("### Source 2");
+    expect(handbook).toContain("omitted files: 5000");
+    expect(handbook).toContain("Files excluded by file-size policy: 5000");
+    expect(handbook).toContain("Additional excluded paths not listed: 4999");
+    expect(app).not.toContain("5000");
+    const summary = mergeContextPackSummaries([
+      buildGroundedAnswerContextPackSummary(first, 1, 0),
+      buildGroundedAnswerContextPackSummary(scopePack("src/b.ts", 1, "second"), 1, 0),
+    ]);
+    expect(summary.omittedCount).toBe(5001);
+    expect(summary.omittedCounts["size-exceeded"]).toBe(5000);
+  });
+
   it("keeps size-exclusion metadata inside its source and redacts sensitive path text", () => {
     const secret = "tenantcredentialvalue987";
     const first: ConnectedContextPack = {

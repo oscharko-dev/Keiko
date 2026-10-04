@@ -15,6 +15,8 @@ import { processServerLogSink } from "./process-log-sink.js";
 
 export type WorkspaceRootDenialReason =
   | "denied-locus"
+  | "ordinary-root-unavailable"
+  | "credential-shaped-root"
   | "managed-root-session-authority-missing"
   | "managed-authority-unavailable"
   | "managed-root-ownership"
@@ -46,6 +48,8 @@ const WORKSPACE_ROOT_DENIED_OPERATION = defineActivityLogOperation({
       required: true,
       values: [
         "denied-locus",
+        "ordinary-root-unavailable",
+        "credential-shaped-root",
         "managed-root-session-authority-missing",
         "managed-authority-unavailable",
         "managed-root-ownership",
@@ -105,7 +109,11 @@ export function recordWorkspaceRootDenied(
     activityLogEvent(
       WORKSPACE_ROOT_DENIED_OPERATION,
       {
-        level: "warn",
+        level:
+          evidence.reason === "ordinary-root-unavailable" ||
+          evidence.reason === "credential-shaped-root"
+            ? "error"
+            : "warn",
         correlationId: correlationIdOrUnknown(context.correlationId),
         errorKind: evidence.errorKind,
       },
@@ -133,6 +141,24 @@ export function recordWorkspaceRootDenial(
       reason: "denied-locus",
       failureKind: error.code,
       errorKind: "permission-denied",
+      ...(frames.length === 0 ? {} : { frames }),
+      ...(causes.length === 0 ? {} : { causeChain: causes }),
+    },
+    context,
+  );
+}
+
+export function recordWorkspaceRootUnavailable(
+  error: unknown,
+  context: WorkspaceRootDenialLogContext,
+): void {
+  const frames = keikoStackFrames(error);
+  const causes = causeChain(error);
+  recordWorkspaceRootDenied(
+    {
+      reason: "ordinary-root-unavailable",
+      failureKind: "WORKSPACE_NOT_FOUND",
+      errorKind: "unavailable",
       ...(frames.length === 0 ? {} : { frames }),
       ...(causes.length === 0 ? {} : { causeChain: causes }),
     },
