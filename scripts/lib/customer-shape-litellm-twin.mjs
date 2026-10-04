@@ -278,6 +278,7 @@ async function transportChat(request, response, requests, options, scenario) {
     status: 0,
     elapsedMs: 0,
     closed: false,
+    completed: false,
   };
   requests.push(observed);
   response.once("close", () => {
@@ -305,6 +306,7 @@ async function transportChat(request, response, requests, options, scenario) {
   if (isDelayedTransport(scenario) && !(await transportWait(response, options.delayMs))) return;
   observed.status = 200;
   transportReply(response, stream);
+  observed.completed = true;
 }
 
 function handleTransportControl(request, response, requests, options) {

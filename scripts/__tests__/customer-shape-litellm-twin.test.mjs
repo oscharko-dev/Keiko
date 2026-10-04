@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { apiKeyHeaderValue } from "../../packages/keiko-model-gateway/dist/index.js";
 import {
   CUSTOMER_SHAPE_API_KEY,
@@ -487,6 +487,26 @@ describe("synthetic gateway transport profile", () => {
     },
   );
 
+  it("distinguishes an aborted pause from a completed stream", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 10_000 });
+    const url = `${new URL(twin.baseUrl).origin}/pause35/v1/chat/completions`;
+    const controller = new globalThis.AbortController();
+    try {
+      const response = await fetch(url, { ...fixtureRequest(true), signal: controller.signal });
+      const reader = response.body.getReader();
+      const first = new TextDecoder().decode((await reader.read()).value);
+      expect(first).toContain("Synthetic gateway stream started.");
+      controller.abort();
+      await expect(reader.read()).rejects.toMatchObject({ name: "AbortError" });
+      reader.releaseLock();
+      await vi.waitFor(() => expect(twin.requests[0].closed).toBe(true));
+      expect(twin.requests[0]).toMatchObject({ status: 200, completed: false });
+    } finally {
+      controller.abort();
+      await twin.close();
+    }
+  });
+
   it("pauses a live stream after the first delta and never echoes the prompt", async () => {
     const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 30 });
     const url = `${new URL(twin.baseUrl).origin}/pause35/v1/chat/completions`;
@@ -503,6 +523,7 @@ describe("synthetic gateway transport profile", () => {
         rest += new TextDecoder().decode(chunk.value);
       }
       expect(twin.requests[0].elapsedMs).toBeGreaterThanOrEqual(30);
+      expect(twin.requests[0]).toMatchObject({ status: 200, completed: true });
       expect(rest).toContain("Synthetic gateway transport test completed.");
       expect(rest).toContain("[DONE]");
       expect(first + rest).not.toContain("private fixture prompt");

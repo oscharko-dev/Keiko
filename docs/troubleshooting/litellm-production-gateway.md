@@ -14,10 +14,11 @@ against a LiteLLM-only configuration. Buffered dictation and read-aloud remain a
 
 ## Context limits and token admission
 
-Configure each LiteLLM route's actual deployed input/output limits in `model_info`. Discovery reads
-the window from the first of `max_input_tokens`, `max_model_len` (what a vLLM `/v1/models` entry
-publishes), `context_length` and `context_window` that holds a positive integer, in the entry itself
-or in its `model_info`, `litellm_params` or `capabilities` record. Keiko intersects
+Configure each LiteLLM route's actual deployed input/output limits in `model_info`. Discovery uses
+the smallest positive whole-window declaration from `max_model_len`, `context_length` and
+`context_window`, in the entry itself or its `model_info`, `litellm_params` or `capabilities` record.
+`max_input_tokens` is a separate prompt-input ceiling; it supplies the legacy window fallback only
+when no whole-window declaration exists. Keiko intersects
 the limits of every backend sharing an alias; missing bounds use conservative defaults, and
 conflicting task kinds are rejected. If every replica omits context/reasoning metadata, same-endpoint
 rediscovery retains previously verified capability evidence. An explicitly empty reasoning list
@@ -25,6 +26,12 @@ clears stored reasoning choices; it is not treated as missing metadata. A mixtur
 context bounds remains conservative. One final event per selected alias records `deploymentCount`,
 `modelIdDigest`, effective bounds, and persistent unknown-bound provenance. A catalog model name alone does not prove that the deployment
 is callable or that a larger context window is available.
+
+Usable input is the smaller of the declared input ceiling and the whole window minus response and
+safety reserves. For example, `context_window: 128000` with `max_input_tokens: 32000` describes a
+128,000-token window with at most 32,000 prompt tokens. The context meter retains the whole-window
+label and shows the remaining input-ineligible share as unavailable for input. Raising an input
+ceiling never enlarges an independently declared window.
 
 Keiko reserves a bounded answer budget rather than the model's full output ceiling. Before a chat
 request, the gateway checks the complete prompt, tool context, and response schema against the
@@ -150,9 +157,11 @@ shows whether the long-context probe ran and which window it verified.
 
 **Resolution**
 
-While the probe runs, wait and start again. If Keiko cannot confirm 32,000 tokens, the model is too
-small for coding runs as the gateway describes it: choose a larger model, or declare the model's
-real `max_input_tokens` in the LiteLLM model configuration.
+While the probe runs, wait and start again. Coding requires at least 32,000 admissible prompt tokens
+after response and safety reserves and any independent input ceiling. If the deployed model cannot
+provide that capacity, choose a larger model. If discovery metadata is incorrect, declare both the
+actual whole window and any separate `max_input_tokens` ceiling in the LiteLLM configuration, then
+refresh discovery. Do not increase either value beyond the deployment's real limits.
 
 ---
 
