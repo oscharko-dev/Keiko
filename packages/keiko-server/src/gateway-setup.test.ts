@@ -12204,6 +12204,61 @@ describe("setup native probe cancellation", () => {
     vi.unstubAllGlobals();
   });
 
+  it("bounds a format probe by its existing candidate deadline and preserves prior verified support", async () => {
+    const deps = await metadataResponsivenessDeps();
+    const stored = deps.gatewayConfig;
+    if (stored === undefined) throw new TypeError("Expected gateway configuration store");
+    const raw = {
+      providers: [
+        {
+          modelId: "selected-small",
+          baseUrl: "https://selected.example.invalid/v1",
+          apiKey: "synthetic-selected-key",
+          capability: {
+            ...createDefaultChatCapability("selected-small"),
+            contextWindow: 128_000,
+            maxOutputTokens: 8_000,
+            structuredOutput: true,
+            supportsResponseFormat: true,
+          },
+        },
+      ],
+    };
+    stored.set(parseGatewayConfig(raw), true);
+    writeFileSync(stored.storagePath, JSON.stringify(raw), "utf8");
+    Object.assign(deps, { gatewaySetupTester: undefined });
+    vi.useFakeTimers();
+    metadataAbortTimers();
+    const pending = pendingSetupProbe("format");
+    vi.stubGlobal("fetch", pending.fetch);
+    const setup = handleGatewaySetup(
+      ctx({
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+        deploymentNames: ["selected-small"],
+        preserveExisting: true,
+      }),
+      deps,
+    );
+    try {
+      await pending.ready;
+      await vi.advanceTimersByTimeAsync(
+        candidateSmokeDeadlineMs(requiredGatewayConfig(deps), "selected-small"),
+      );
+      expect(pending.signals).toHaveLength(1);
+      expect(pending.signals[0]?.aborted).toBe(true);
+      expect((await setup).status).toBe(200);
+      expect(
+        requiredCapability(requiredGatewayConfig(deps), "selected-small").supportsResponseFormat,
+      ).toBe(true);
+    } finally {
+      pending.release();
+      await setup;
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
   it.each(["smoke", "format", "tool", "embedding"] as const)(
     "aborts in-flight %s probes without probing further or reporting a provider failure",
     async (phase) => {

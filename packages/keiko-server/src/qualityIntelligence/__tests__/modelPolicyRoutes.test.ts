@@ -1,8 +1,16 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
-import type { IncomingMessage } from "node:http";
+import { ServerResponse, type IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { parseGatewayConfig, type ModelCapability } from "@oscharko-dev/keiko-model-gateway";
@@ -83,7 +91,9 @@ function depsWith(args: {
 }
 
 function reqFromJson(body: unknown): IncomingMessage {
-  return Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as unknown as IncomingMessage;
+  return Object.assign(Readable.from([Buffer.from(JSON.stringify(body), "utf8")]), {
+    complete: true,
+  }) as unknown as IncomingMessage;
 }
 
 function reqFromText(body: string): IncomingMessage {
@@ -94,7 +104,7 @@ function ctx(req: IncomingMessage = reqFromJson({})): RouteContext {
   return {
     correlationId: undefined,
     req,
-    res: {} as RouteContext["res"],
+    res: new ServerResponse(req),
     params: {},
     url: new URL("http://127.0.0.1/api/quality-intelligence/model-policy"),
   };
@@ -602,6 +612,89 @@ describe("QI model-policy routes", () => {
     expect(JSON.stringify(result.body)).not.toContain("provider.invalid");
     expect(JSON.stringify(result.body)).not.toContain("secret-key");
   });
+
+  it.each([
+    { operation: "preflight", stage: "generate" },
+    { operation: "preflight", stage: "judge" },
+    { operation: "policy-save", stage: "generate" },
+    { operation: "policy-save", stage: "judge" },
+  ] as const)(
+    "aborts an in-flight $operation/$stage request without further probes or policy writes",
+    async ({ operation, stage }) => {
+      const deps = depsWith({
+        evidenceDir,
+        capabilities: [capability("generate-chat"), capability("judge-json")],
+      });
+      let started: (() => void) | undefined;
+      const ready = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      let fetchSignal: AbortSignal | null | undefined;
+      let stopped = false;
+      let rejectPending: ((reason: unknown) => void) | undefined;
+      const fetchImpl = vi.fn((_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        if (stopped) return Promise.resolve(new Response("{}", { status: 401 }));
+        if (
+          stage === "judge" &&
+          (typeof init?.body !== "string" || !init.body.includes("response_format"))
+        ) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+                usage: { prompt_tokens: 1, completion_tokens: 1 },
+              }),
+              { headers: { "content-type": "application/json" } },
+            ),
+          );
+        }
+        fetchSignal = init?.signal;
+        started?.();
+        return new Promise<Response>((_resolve, reject) => {
+          rejectPending = reject;
+          fetchSignal?.addEventListener(
+            "abort",
+            () => {
+              reject(new DOMException("Aborted", "AbortError"));
+            },
+            { once: true },
+          );
+        });
+      });
+      vi.stubGlobal("fetch", fetchImpl);
+      const context = ctx(
+        reqFromJson({
+          modelPolicy: {
+            policyVersion: 1,
+            testDesignModelId: "generate-chat",
+            judgeModelId: "judge-json",
+          },
+        }),
+      );
+      const pending =
+        operation === "preflight"
+          ? handlePreflightQiModelPolicy(context, deps)
+          : handlePutQiModelPolicy(context, deps);
+      await ready;
+      try {
+        context.res.emit("close");
+        expect(fetchSignal?.aborted).toBe(true);
+      } finally {
+        // The pre-fix producer ignores the caller's disconnect; release its fixture without
+        // waiting for the gateway's real long retry budget or leaking work into other cases.
+        if (fetchSignal?.aborted !== true) {
+          stopped = true;
+          rejectPending?.(new DOMException("Fixture cleanup", "AbortError"));
+          await pending;
+        }
+      }
+      if (fetchSignal?.aborted !== true) return;
+      expect((await pending).status).toBe(499);
+      expect(fetchImpl).toHaveBeenCalledTimes(stage === "generate" ? 1 : 2);
+      expect(context.res.listenerCount("close")).toBe(0);
+      expect(existsSync(resolveQiPolicyPath(evidenceDir))).toBe(false);
+    },
+  );
 
   it("fails judge preflight when the provider returns only the old ok schema", async () => {
     const deps = depsWith({

@@ -35,6 +35,7 @@ import type { UiHandlerDeps } from "../deps.js";
 import { currentGateway, currentGatewayConfig } from "../deps.js";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import { readBoundedRequestBody, RequestBodyTooLargeError } from "../bounded-request-body.js";
+import { createRequestCancellation } from "../request-cancellation.js";
 import {
   normaliseQiModelPolicy,
   recommendQiModelPolicy,
@@ -300,9 +301,14 @@ function requestForPreflight(
   modelId: string,
   _capability: ModelCapability,
   correlationId: string | undefined,
+  signal?: AbortSignal,
 ): GatewayCallRequest {
   if (stage === "judge") {
-    return { ...buildQiJudgePreflightRequest(modelId), logContext: { correlationId } };
+    return {
+      ...buildQiJudgePreflightRequest(modelId),
+      logContext: { correlationId },
+      ...(signal === undefined ? {} : { cancellationSignal: signal }),
+    };
   }
   return {
     modelId,
@@ -317,6 +323,7 @@ function requestForPreflight(
       },
     ],
     logContext: { correlationId },
+    ...(signal === undefined ? {} : { cancellationSignal: signal }),
   };
 }
 
@@ -341,13 +348,16 @@ async function runPreflightGatewayCall(
   modelId: string,
   capability: ModelCapability,
   correlationId: string | undefined,
+  signal?: AbortSignal,
 ): Promise<QualityIntelligenceModelPreflightStageResult> {
   try {
+    signal?.throwIfAborted();
     const gateway = currentGateway(deps);
     if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
     const response = await gateway.chat(
-      requestForPreflight(stage, modelId, capability, correlationId),
+      requestForPreflight(stage, modelId, capability, correlationId, signal),
     );
+    signal?.throwIfAborted();
     if (stage === "judge" && tryParseJudgeVerdict(response.content) === null) {
       return {
         stage,
@@ -359,6 +369,7 @@ async function runPreflightGatewayCall(
     }
     return { stage, modelId, status: "passed" };
   } catch (error) {
+    signal?.throwIfAborted();
     const category = classifyPreflightError(error);
     return {
       stage,
@@ -375,6 +386,7 @@ async function preflightStage(
   stage: "generate" | "judge",
   modelId: string | undefined,
   correlationId: string | undefined,
+  signal?: AbortSignal,
 ): Promise<QualityIntelligenceModelPreflightStageResult> {
   const config = currentGatewayConfig(deps);
   if (modelId === undefined || config === undefined) {
@@ -384,7 +396,8 @@ async function preflightStage(
   if (capability?.kind !== "chat") {
     return unavailablePreflightResult(stage, modelId);
   }
-  return runPreflightGatewayCall(deps, stage, modelId, capability, correlationId);
+  signal?.throwIfAborted();
+  return runPreflightGatewayCall(deps, stage, modelId, capability, correlationId, signal);
 }
 
 function preflightSummaryStatus(
@@ -412,6 +425,7 @@ export async function buildQiModelRouting(
   deps: UiHandlerDeps,
   request: Pick<QualityIntelligenceStartRunRequest, "modelId" | "modelPolicy">,
   correlationId?: string,
+  signal?: AbortSignal,
 ): Promise<QualityIntelligenceModelRouting> {
   const requested = policyForRequest(deps, request);
   const resolution = resolveQiModelPolicy(deps, { ...request, modelPolicy: requested });
@@ -426,11 +440,18 @@ export async function buildQiModelRouting(
     "generate",
     resolution.resolved.testDesignModelId,
     correlationId,
+    signal,
   );
   const judge =
     resolution.resolved.judgeModelId === undefined
-      ? await preflightStage(deps, "judge", undefined, correlationId)
-      : await preflightStage(deps, "judge", resolution.resolved.judgeModelId, correlationId);
+      ? await preflightStage(deps, "judge", undefined, correlationId, signal)
+      : await preflightStage(
+          deps,
+          "judge",
+          resolution.resolved.judgeModelId,
+          correlationId,
+          signal,
+        );
   return {
     policyVersion: 1,
     requested,
@@ -467,8 +488,9 @@ export async function buildQiModelRoutingForRun(
   deps: UiHandlerDeps,
   request: Pick<QualityIntelligenceStartRunRequest, "modelId" | "modelPolicy">,
   correlationId?: string,
+  signal?: AbortSignal,
 ): Promise<QualityIntelligenceModelRouting> {
-  const routing = await buildQiModelRouting(deps, request, correlationId);
+  const routing = await buildQiModelRouting(deps, request, correlationId, signal);
   const generation = routing.preflight.generation;
   if (generation?.status !== "passed" && routing.resolved.testDesignModelId !== undefined) {
     throw new QiModelPolicyError(
@@ -516,9 +538,17 @@ export async function handlePutQiModelPolicy(
       "The selected Quality Intelligence model policy is invalid.",
     );
   }
+  const cancellation = createRequestCancellation(ctx, "Quality Intelligence client disconnected.");
   try {
-    await buildQiModelRoutingForRun(deps, { modelPolicy: policy }, ctx.correlationId);
+    await buildQiModelRoutingForRun(
+      deps,
+      { modelPolicy: policy },
+      ctx.correlationId,
+      cancellation.signal,
+    );
   } catch (error) {
+    if (cancellation.signal.aborted)
+      return errorResult(499, "CANCELLED", "Quality Intelligence preflight was cancelled.");
     if (error instanceof QiModelPolicyError) {
       return errorResult(400, error.code, error.message);
     }
@@ -527,6 +557,8 @@ export async function handlePutQiModelPolicy(
       "QI_PREFLIGHT_FAILED",
       "The Quality Intelligence model preflight failed.",
     );
+  } finally {
+    cancellation.dispose();
   }
   const saved = { ...policy, updatedAt: new Date().toISOString() };
   try {
@@ -558,6 +590,7 @@ export async function handlePreflightQiModelPolicy(
       "The Quality Intelligence model policy is malformed.",
     );
   }
+  const cancellation = createRequestCancellation(ctx, "Quality Intelligence client disconnected.");
   try {
     const modelRouting = await buildQiModelRouting(
       deps,
@@ -566,10 +599,13 @@ export async function handlePreflightQiModelPolicy(
         ...(typeof parsed.modelId === "string" ? { modelId: parsed.modelId } : {}),
       },
       ctx.correlationId,
+      cancellation.signal,
     );
     const body: QualityIntelligenceModelPolicyPreflightResponse = { modelRouting };
     return { status: 200, body };
   } catch (error) {
+    if (cancellation.signal.aborted)
+      return errorResult(499, "CANCELLED", "Quality Intelligence preflight was cancelled.");
     if (error instanceof QiModelPolicyError) {
       return errorResult(400, error.code, error.message);
     }
@@ -578,6 +614,8 @@ export async function handlePreflightQiModelPolicy(
       "QI_PREFLIGHT_FAILED",
       "The Quality Intelligence model preflight failed.",
     );
+  } finally {
+    cancellation.dispose();
   }
 }
 

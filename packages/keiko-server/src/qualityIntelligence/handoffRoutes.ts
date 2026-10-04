@@ -370,13 +370,15 @@ const startHandoffRun = (
   const runPromise =
     currentGatewayConfig(deps) === undefined
       ? execute()
-      : buildQiModelRoutingForRun(deps, {}, runId).then((modelRouting) => execute(modelRouting));
+      : buildQiModelRoutingForRun(deps, {}, runId, controller.signal).then((modelRouting) =>
+          execute(modelRouting),
+        );
   void runPromise
     .then((summary) => {
       qiRunRegistry.complete(runId, summary.status);
     })
     .catch(() => {
-      qiRunRegistry.complete(runId, "failed");
+      qiRunRegistry.complete(runId, controller.signal.aborted ? "cancelled" : "failed");
     });
   return runId;
 };

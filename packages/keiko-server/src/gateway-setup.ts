@@ -2469,7 +2469,7 @@ async function verifyTestedChatCandidates(
       const response = await gateway.chat({
         ...buildQiJudgePreflightRequest(modelId),
         logContext: { correlationId },
-        ...(signal === undefined ? {} : { cancellationSignal: signal }),
+        cancellationSignal: candidateSmokeCancellationSignal(config, modelId, signal),
       });
       if (tryParseJudgeVerdict(response.content) === null) {
         throw new Error("response format unsupported");
