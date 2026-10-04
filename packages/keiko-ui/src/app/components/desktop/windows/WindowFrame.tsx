@@ -902,6 +902,20 @@ function delayedFocusStillTargetsWindow(target: EventTarget | null): boolean {
   return target.closest(".window")?.contains(activeElement) === true;
 }
 
+function focusOpenedWindow(id: string): void {
+  noteWindowInteraction();
+  const armedInteraction = windowInteractionCount;
+  requestAnimationFrame(() => {
+    if (windowInteractionCount !== armedInteraction) return;
+    const opened = document.querySelector<HTMLElement>(
+      `.window[data-window-id="${CSS.escape(id)}"]`,
+    );
+    if (opened !== null && !opened.contains(document.activeElement)) {
+      opened.focus({ preventScroll: true });
+    }
+  });
+}
+
 function resizeHandlesAllowed(maximized: boolean, layoutLocked: boolean): boolean {
   return !maximized && !layoutLocked;
 }
@@ -993,21 +1007,18 @@ function WindowFrameImpl({
       // moved, so the new window also stays on top instead of landing behind its opener. Deferred
       // one frame: the element exists only after React has committed the added window.
       if (id !== null) {
-        requestAnimationFrame(() => {
-          const opened = document.querySelector<HTMLElement>(
-            `.window[data-window-id="${CSS.escape(id)}"]`,
-          );
-          if (opened !== null && !opened.contains(document.activeElement)) {
-            opened.focus({ preventScroll: true });
-          }
-        });
+        focusOpenedWindow(id);
       }
       return id;
     },
     [api],
   );
   const openEditorFile = useCallback<WorkspaceApi["openEditorFile"]>(
-    (request) => api.openEditorFile(request),
+    (request) => {
+      const result = api.openEditorFile(request);
+      if (result.ok) focusOpenedWindow(result.windowId);
+      return result;
+    },
     [api],
   );
   const focusWindow = useCallback((id: string): void => api.focus(id), [api]);
@@ -1167,11 +1178,13 @@ function WindowFrameImpl({
         return;
       }
       if (isInteractiveControlTarget(target)) {
+        const armedInteraction = windowInteractionCount;
         window.setTimeout(() => {
           // #3390: a control inside this window may itself have opened ANOTHER window, which
           // took focus and the top of the stack in the meantime. Raising this window regardless
           // put the Coding Workbench back over the Pull Request window its own "Review exact
           // draft" had just opened, every time -- the same guard the text-entry branch applies.
+          if (windowInteractionCount !== armedInteraction) return;
           if (delayedFocusStillTargetsWindow(target)) api.activateWindow(win.id);
         }, 0);
         return;
