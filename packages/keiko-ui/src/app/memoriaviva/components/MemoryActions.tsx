@@ -1,5 +1,6 @@
 "use client";
 
+import { NATIVE_FIELDSET_RESET_STYLE } from "../../components/desktop/native-element-styles";
 import {
   useOptionalWidgetTranslate as useTranslate,
   type OptionalWidgetTranslate as I18nTranslate,
@@ -444,7 +445,11 @@ export function MemoryActions({
   const isForgotten = record.status === "forgotten";
 
   return (
-    <div className="mc-actions" role="group" aria-label={t("memoria.actions")}>
+    <fieldset
+      className="mc-actions"
+      aria-label={t("memoria.actions")}
+      style={NATIVE_FIELDSET_RESET_STYLE}
+    >
       <ProposedActionButtons
         isProposed={isProposed}
         busy={busy}
@@ -520,6 +525,6 @@ export function MemoryActions({
           setShowDelete(false);
         }}
       />
-    </div>
+    </fieldset>
   );
 }

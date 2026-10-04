@@ -22,9 +22,9 @@ import { formatBytes, formatMs } from "@/lib/format";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
+  type WidgetMessageKey as MessageKey,
 } from "@/lib/optional-widget-i18n";
 import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
-import type { WidgetMessageKey as MessageKey } from "@/lib/optional-widget-i18n";
 import {
   RepositoryReferenceInline,
   repositoryReferencePathLabels,

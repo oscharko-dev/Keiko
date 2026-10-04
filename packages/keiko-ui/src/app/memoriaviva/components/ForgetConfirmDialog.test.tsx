@@ -1,6 +1,6 @@
 // Issue #211 — tests for ForgetConfirmDialog: confirmation flow, delete mode, and focus trap.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
@@ -30,6 +30,16 @@ function makeRecord(body = "Use strict mode always."): MemoryRecord {
 }
 
 describe("ForgetConfirmDialog — rendering", () => {
+  it("uses an open native dialog with its existing accessible title and description", () => {
+    render(<ForgetConfirmDialog record={makeRecord()} onComplete={vi.fn()} onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: /forget this memory/i });
+    expect(dialog.tagName).toBe("DIALOG");
+    expect(dialog).toHaveAttribute("open");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).toHaveAttribute("aria-describedby", "forget-dialog-desc");
+    expect(dialog).toHaveStyle({ position: "static", margin: "0px" });
+  });
+
   it("renders the memory body in the blockquote", () => {
     render(
       <ForgetConfirmDialog
@@ -63,6 +73,38 @@ describe("ForgetConfirmDialog — rendering", () => {
 });
 
 describe("ForgetConfirmDialog — interaction", () => {
+  it("closes only for the backdrop and removes event listeners on unmount", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    const view = render(
+      <ForgetConfirmDialog record={makeRecord()} onComplete={vi.fn()} onClose={onClose} />,
+    );
+    const dialog = screen.getByRole("dialog");
+    const backdrop = dialog.parentElement;
+    if (backdrop === null) throw new Error("dialog backdrop unavailable");
+    await user.click(screen.getByLabelText(/memory content to be removed/i));
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(backdrop);
+    expect(onClose).toHaveBeenCalledOnce();
+    view.unmount();
+    fireEvent.click(backdrop);
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("restores focus to the initiating control on unmount", () => {
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    trigger.focus();
+    const view = render(
+      <ForgetConfirmDialog record={makeRecord()} onComplete={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(screen.getByRole("button", { name: /cancel/i })).toHaveFocus();
+    view.unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+  });
+
   it("calls onClose when Cancel is clicked", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();

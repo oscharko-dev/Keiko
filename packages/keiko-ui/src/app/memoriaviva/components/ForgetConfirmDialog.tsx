@@ -9,11 +9,12 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 // Target size ≥ 24×24 px on both buttons.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { deleteMemory, forgetMemory } from "@/lib/memory-api";
 
 import { formatError } from "./format-error";
+import { NATIVE_DIALOG_STYLE } from "../../components/desktop/native-element-styles";
 
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])';
@@ -41,7 +42,7 @@ export function ForgetConfirmDialog({
 
   const cancelRef = useRef<HTMLButtonElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const isDeleteMode = mode === "delete";
 
@@ -55,7 +56,7 @@ export function ForgetConfirmDialog({
   }, []);
 
   const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLDivElement>): void => {
+    (e: KeyboardEvent): void => {
       if (e.key === "Escape") {
         onClose();
         return;
@@ -89,11 +90,22 @@ export function ForgetConfirmDialog({
   );
 
   const handleBackdropClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>): void => {
+    (e: MouseEvent): void => {
       if (e.target === backdropRef.current) onClose();
     },
     [onClose],
   );
+
+  useEffect(() => {
+    const backdrop = backdropRef.current;
+    const dialog = dialogRef.current;
+    backdrop?.addEventListener("click", handleBackdropClick);
+    dialog?.addEventListener("keydown", handleKeyDown);
+    return (): void => {
+      backdrop?.removeEventListener("click", handleBackdropClick);
+      dialog?.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [handleBackdropClick, handleKeyDown]);
 
   const handleConfirm = useCallback(async (): Promise<void> => {
     setSubmitting(true);
@@ -122,22 +134,16 @@ export function ForgetConfirmDialog({
   }
 
   return (
-    <div
-      ref={backdropRef}
-      className="mc-dialog-backdrop"
-      role="presentation"
-      onClick={handleBackdropClick}
-    >
-      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WAI-ARIA dialog pattern: role="dialog" is the canonical key-handler host; tabIndex={-1} makes it focusable for Escape capture */}
-      <div
+    <div ref={backdropRef} className="mc-dialog-backdrop">
+      <dialog
         ref={dialogRef}
-        role="dialog"
+        open
         aria-modal="true"
         aria-labelledby="forget-dialog-title"
         aria-describedby="forget-dialog-desc"
         tabIndex={-1}
         className="mc-dialog"
-        onKeyDown={handleKeyDown}
+        style={NATIVE_DIALOG_STYLE}
       >
         <h2 id="forget-dialog-title" className="mc-dialog-title">
           {isDeleteMode ? t("memoria.delete.title") : t("memoria.forget.title")}
@@ -179,7 +185,7 @@ export function ForgetConfirmDialog({
             {resolveConfirmButtonLabel()}
           </button>
         </div>
-      </div>
+      </dialog>
     </div>
   );
 }
