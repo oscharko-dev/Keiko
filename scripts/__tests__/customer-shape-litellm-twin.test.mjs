@@ -584,4 +584,28 @@ describe("synthetic gateway transport profile", () => {
       await twin.close();
     }
   });
+
+  it("measures transport duration independently of wall-clock corrections", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin({ transportOnly: true, delayMs: 30 });
+    const url = `${new URL(twin.baseUrl).origin}/pause35/v1/chat/completions`;
+    const clock = vi.spyOn(Date, "now");
+    try {
+      const response = await fetch(url, fixtureRequest(true));
+      const reader = response.body.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+        "Synthetic gateway stream started.",
+      );
+      clock.mockReturnValue(twin.requests[0].startedAtMs - 5_000);
+      while (!(await reader.read()).done) {
+        // Drain the real stream through its transport-close measurement.
+      }
+      reader.releaseLock();
+      await vi.waitFor(() => expect(twin.requests[0].closed).toBe(true));
+      expect(twin.requests[0].elapsedMs).toBeGreaterThanOrEqual(30);
+      expect(twin.requests[0].completed).toBe(true);
+    } finally {
+      clock.mockRestore();
+      await twin.close();
+    }
+  });
 });

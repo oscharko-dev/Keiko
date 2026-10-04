@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
+import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { apiKeyHeaderValue } from "../../packages/keiko-model-gateway/dist/index.js";
 
@@ -246,7 +247,10 @@ async function transportWait(response, milliseconds) {
   const cancel = () => controller.abort();
   response.once("close", cancel);
   try {
-    await delay(milliseconds, undefined, { signal: controller.signal });
+    const deadline = performance.now() + milliseconds;
+    for (let remaining = milliseconds; remaining > 0; remaining = deadline - performance.now()) {
+      await delay(Math.ceil(remaining), undefined, { signal: controller.signal });
+    }
     return !response.destroyed;
   } catch (error) {
     if (error?.name === "AbortError") return false;
@@ -272,6 +276,7 @@ function isDelayedTransport(scenario) {
 
 async function transportChat(request, response, requests, options, scenario) {
   const stream = await transportStreamMode(request);
+  const startedAt = performance.now();
   const observed = {
     scenario,
     stream,
@@ -284,7 +289,7 @@ async function transportChat(request, response, requests, options, scenario) {
   requests.push(observed);
   response.once("close", () => {
     observed.closed = true;
-    observed.elapsedMs = Date.now() - observed.startedAtMs;
+    observed.elapsedMs = Math.ceil(performance.now() - startedAt);
   });
   if (scenario.startsWith("retry")) {
     const readyAt = options.readyAt.get(scenario) ?? Date.now() + options.retryAfterSeconds * 1000;
