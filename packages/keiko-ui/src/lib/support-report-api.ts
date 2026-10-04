@@ -14,6 +14,8 @@ export class SupportReportEvidenceUnavailable extends Error {
   }
 }
 
+export class SupportReportResponseInvalid extends TypeError {}
+
 async function ensureReportEvidence(
   correlationId: string,
   signal: AbortSignal,
@@ -26,7 +28,7 @@ async function ensureReportEvidence(
     return await ensureClientDiagnosticDelivery(correlationId, deliverySignal);
   } catch (error) {
     // A stalled acknowledgement cannot consume the entire report deadline. Only the delivery
-    // stage timeout requests a limited artifact; caller cancellation and total expiry still stop.
+    // stage timeout still permits server evidence selection; cancellation and total expiry stop.
     if (
       !signal.aborted &&
       deliverySignal.aborted &&
@@ -48,9 +50,7 @@ export async function createSupportReport(
   const requestSignal = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
   await codingAppSessionPairingSettled();
   requestSignal.throwIfAborted();
-  const clientOnly =
-    correlationId !== undefined &&
-    (await ensureReportEvidence(correlationId, requestSignal)) === false;
+  if (correlationId !== undefined) await ensureReportEvidence(correlationId, requestSignal);
   requestSignal.throwIfAborted();
   return bffFetchJson<DesktopSupportReportResponse>(
     "/api/diagnostics/report",
@@ -58,7 +58,6 @@ export async function createSupportReport(
       method: "POST",
       body: JSON.stringify({
         ...(correlationId === undefined ? {} : { correlationId }),
-        ...(clientOnly ? { evidenceScope: "client-only" } : {}),
       }),
       signal: requestSignal,
     },
@@ -71,6 +70,7 @@ export async function createSupportReport(
 
 export interface SupportReportDownload {
   readonly href: string;
+  readonly fileName?: string | undefined;
   readonly expiresAtMs?: number | undefined;
   readonly dispose: () => void;
 }
@@ -82,6 +82,7 @@ export function createSupportReportDownload(
   if (report.downloadPath !== undefined)
     return {
       href: report.downloadPath,
+      fileName: `${report.fileName}.gz`,
       expiresAtMs: report.downloadExpiresAtMs,
       dispose: (): void => undefined,
     };
@@ -96,14 +97,14 @@ function validateSupportReportResponse(value: unknown): DesktopSupportReportResp
     !("fileName" in value) ||
     !("reportJson" in value)
   )
-    throw new TypeError("Invalid support report response");
+    throw new SupportReportResponseInvalid("Invalid support report response");
   if (
     typeof value.fileName !== "string" ||
     !/^keiko-support-v1-[a-f0-9]{12}-\d{4}-\d{2}-\d{2}\.json$/u.test(value.fileName) ||
     typeof value.reportJson !== "string" ||
     new TextEncoder().encode(value.reportJson).byteLength > MAX_SUPPORT_REPORT_BYTES
   )
-    throw new TypeError("Invalid support report response");
+    throw new SupportReportResponseInvalid("Invalid support report response");
   return {
     fileName: value.fileName,
     reportJson: value.reportJson,
@@ -127,12 +128,13 @@ function validateDownloadTarget(
     !Number.isSafeInteger(value.downloadExpiresAtMs) ||
     value.downloadExpiresAtMs <= Date.now()
   )
-    throw new TypeError("Invalid support report download target");
+    throw new SupportReportResponseInvalid("Invalid support report download target");
   return { downloadPath: value.downloadPath, downloadExpiresAtMs: value.downloadExpiresAtMs };
 }
 
 function validateEvidenceScope(value: object): Pick<DesktopSupportReportResponse, "evidenceScope"> {
   if (!("evidenceScope" in value)) return {};
-  if (value.evidenceScope !== "client-only") throw new TypeError("Invalid report evidence scope");
+  if (value.evidenceScope !== "client-only")
+    throw new SupportReportResponseInvalid("Invalid report evidence scope");
   return { evidenceScope: "client-only" };
 }

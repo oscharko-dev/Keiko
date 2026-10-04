@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,8 @@ import {
   recordUserReportedIncident,
   recordRegisteredFailureIncident,
   setSupportIncidentTriggerForTests,
+  completePreparedSupportIncident,
+  dismissSupportIncident,
 } from "./support-incident.js";
 
 import { supportIncidentRetentionPolicy } from "./support-incident-retention.js";
@@ -178,6 +180,133 @@ describe("rolling diagnostic candidate retention", () => {
       }
     },
   );
+
+  it.each([
+    ["prepared", "manual"],
+    ["dismissed", "manual"],
+    ["prepared", "registered-child"],
+    ["dismissed", "registered-child"],
+  ] as const)("closes a %s %s pin under its original owning correlation", (action, kind) => {
+    const first =
+      kind === "manual"
+        ? recordUserReportedIncident(stateDir, { correlationId: "original-retirement" })
+        : recordRegisteredFailureIncident(stateDir, {
+            op: "client.diagnostic",
+            errorKind: "internal",
+            correlationId: "original-retirement",
+            parentCorrelationId: "original-parent",
+            clientKind: "boundary",
+            renderFailure: "window-body",
+          });
+    if (first?.status !== "created") throw new Error("Expected original candidate");
+    const pinPath = join(stateDir, "logs", `pin-${first.record.pin.pinId ?? "missing"}.json`);
+    expect(existsSync(pinPath)).toBe(true);
+    const retire = action === "prepared" ? completePreparedSupportIncident : dismissSupportIncident;
+    expect(retire(stateDir, first.incidentId, { correlationId: "new-retirement-request" })).toBe(
+      "dismissed",
+    );
+    expect(existsSync(pinPath)).toBe(false);
+    const text = readPersistedActivityLog(stateDir);
+    const releases = persistedActivityLogLines(text, "activity-log.pin.expired").map(
+      (line) => JSON.parse(line) as unknown,
+    );
+    expect(releases).toContainEqual(
+      expect.objectContaining({ correlationId: "original-retirement" }),
+    );
+    expect(releases).not.toContainEqual(
+      expect.objectContaining({ correlationId: "new-retirement-request" }),
+    );
+    const actions = persistedActivityLogLines(text, "support.incident.dismissed").map(
+      (line) => JSON.parse(line) as unknown,
+    );
+    expect(actions).toContainEqual(
+      expect.objectContaining({ correlationId: "new-retirement-request" }),
+    );
+    const analyzed = analyzeSupportReport(
+      createDesktopSupportReport(stateDir, "original-retirement").reportJson,
+    );
+    expect(analyzed.analysis.evidence.classification).toBe("supported");
+    expect(analyzed.analysis.sufficiency.classes.flatMap((entry) => entry.reasons)).not.toContain(
+      "lifecycle-start-missing",
+    );
+  });
+
+  it("preserves a peer slot reclaimed while the original record is being retired", () => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    const capacity = supportIncidentRetentionPolicy(stateDir).capacity;
+    const first = recordUserReportedIncident(stateDir, { correlationId: "original-slot-owner" });
+    if (first.status !== "created") throw new Error("Expected original candidate");
+    for (let index = 1; index < capacity; index += 1) recordUserReportedIncident(stateDir);
+    const oldClaim = listSupportIncidentClaims(stateDir).find(
+      (claim) => claim.incidentId === first.incidentId,
+    );
+    if (oldClaim === undefined) throw new Error("Expected original claim");
+    const abandoned = new Date(Date.now() - 60_000);
+    utimesSync(
+      join(incidentStore.supportIncidentDirectory(stateDir), oldClaim.fileName),
+      abandoned,
+      abandoned,
+    );
+    const originalRemove = incidentStore.removeSupportIncidentRecord;
+    let peer: ReturnType<typeof recordUserReportedIncident> | undefined;
+    vi.spyOn(incidentStore, "removeSupportIncidentRecord").mockImplementationOnce(
+      (directory, id) => {
+        originalRemove(directory, id);
+        peer = recordUserReportedIncident(stateDir, { correlationId: "new-peer-slot-owner" });
+      },
+    );
+    expect(completePreparedSupportIncident(stateDir, first.incidentId)).toBe("dismissed");
+    expect(peer?.status).toBe("created");
+    expect(
+      listSupportIncidentClaims(stateDir).some((claim) => claim.incidentId === peer?.incidentId),
+    ).toBe(true);
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(capacity);
+  });
+
+  it.each(["slot", "fingerprint"] as const)(
+    "preserves a replaced %s claim against the old owner",
+    (kind) => {
+      ensureSupportIncidentDirectory(stateDir);
+      const oldOwner = "a".repeat(32);
+      const peerOwner = "b".repeat(32);
+      const fingerprint = "c".repeat(64);
+      const claim = (owner: string): boolean =>
+        kind === "slot"
+          ? incidentStore.claimSupportIncidentSlot(stateDir, 0, owner)
+          : incidentStore.claimSupportIncidentFingerprint(stateDir, fingerprint, owner);
+      const release = (owner?: string): void => {
+        if (kind === "slot") {
+          incidentStore.releaseSupportIncidentSlot(stateDir, 0, owner);
+        } else {
+          incidentStore.releaseSupportIncidentFingerprintClaim(stateDir, fingerprint, owner);
+        }
+      };
+      expect(claim(oldOwner)).toBe(true);
+      release();
+      expect(claim(peerOwner)).toBe(true);
+      release(oldOwner);
+      expect(listSupportIncidentClaims(stateDir)).toMatchObject([{ incidentId: peerOwner }]);
+      release(peerOwner);
+      expect(listSupportIncidentClaims(stateDir)).toEqual([]);
+    },
+  );
+
+  it("preserves a fresh torn peer claim when an orphan snapshot is stale", () => {
+    ensureSupportIncidentDirectory(stateDir);
+    expect(incidentStore.claimSupportIncidentSlot(stateDir, 0, "a".repeat(32))).toBe(true);
+    const initial = listSupportIncidentClaims(stateDir)[0];
+    if (initial === undefined) throw new Error("Expected original claim");
+    const path = join(incidentStore.supportIncidentDirectory(stateDir), initial.fileName);
+    writeFileSync(path, "", { mode: 0o600 });
+    const abandoned = new Date(Date.now() - 60_000);
+    utimesSync(path, abandoned, abandoned);
+    const stale = listSupportIncidentClaims(stateDir)[0];
+    if (stale === undefined) throw new Error("Expected torn claim");
+    incidentStore.removeSupportIncidentClaimFile(stateDir, stale.fileName);
+    writeFileSync(path, "", { mode: 0o600 });
+    incidentStore.removeSupportIncidentClaimFile(stateDir, stale.fileName, stale);
+    expect(existsSync(path)).toBe(true);
+  });
 
   it("attempts only free reservation candidates without materializing a huge configured pool", () => {
     vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", String(Number.MAX_SAFE_INTEGER));

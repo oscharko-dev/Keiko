@@ -69,6 +69,18 @@ import {
   type DiagnosticSufficiencyStatus,
 } from "./observability.js";
 
+export const SUPPORT_INCIDENT_TTL_MS = 24 * 60 * 60_000;
+export const SUPPORT_INCIDENT_WINDOW_BEFORE_MS = 15 * 60_000;
+export const SUPPORT_INCIDENT_WINDOW_AFTER_MS = 5 * 60_000;
+
+export function supportIncidentWindow(nowMs: number): SupportIncidentWindow {
+  return {
+    fromMs: Math.max(0, nowMs - SUPPORT_INCIDENT_WINDOW_BEFORE_MS),
+    incidentAtMs: nowMs,
+    toMs: nowMs + SUPPORT_INCIDENT_WINDOW_AFTER_MS,
+  };
+}
+
 export const SUPPORT_INCIDENT_SCHEMA_VERSION = 1;
 export const DEFECT_FINGERPRINT_ALGORITHM_VERSION = 1;
 
@@ -630,7 +642,8 @@ export interface SupportIncidentPrivateProjection extends SupportIncidentPublicP
   readonly clientReport?:
     | {
         readonly serverEvidence: "unavailable";
-        readonly availabilityReason: "session-unavailable" | "diagnostic-delivery-unavailable";
+        readonly availabilityReason:
+          "session-unavailable" | "diagnostic-delivery-unavailable" | "service-unavailable";
       }
     | undefined;
   readonly state: SupportIncidentState;
@@ -840,7 +853,10 @@ function validClientReport(value: unknown, projection: PlainObject): boolean {
       hasOnlyKeys(value, ["serverEvidence", "availabilityReason"]) &&
       value.serverEvidence === "unavailable" &&
       clientOnlyProjection(projection) &&
-      isOneOf(["session-unavailable", "diagnostic-delivery-unavailable"], value.availabilityReason))
+      isOneOf(
+        ["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"],
+        value.availabilityReason,
+      ))
   );
 }
 

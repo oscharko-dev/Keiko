@@ -1623,7 +1623,6 @@ function hasCoherentDiagnosticCapacity(value: Record<string, unknown>): boolean 
     typeof capacity === "number" &&
     Number.isSafeInteger(capacity) &&
     capacity > 0 &&
-    capacity <= 1000 &&
     count <= capacity
   );
 }

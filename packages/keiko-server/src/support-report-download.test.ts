@@ -1,7 +1,11 @@
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createClientOnlySupportReport } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  createClientOnlySupportReport,
+  parseSupportReport,
+} from "@oscharko-dev/keiko-activity-log/reader";
 import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   cacheSupportReportDownload,
@@ -41,11 +45,40 @@ function context(downloadPath: string): RouteContext {
     correlationId: "download-test",
   };
 }
+function attachmentBytes(value: unknown): Buffer {
+  if (!Buffer.isBuffer(value)) throw new TypeError("Expected opaque gzip attachment bytes");
+  return value;
+}
+function decodeAttachment(value: unknown): string {
+  return gunzipSync(attachmentBytes(value)).toString("utf8");
+}
 afterEach(() => {
   vi.useRealTimers();
   resetServerLogger();
 });
 describe("authenticated canonical report attachment", () => {
+  it("delivers standard gzip preserving exact canonical producer bytes and strict integrity", () => {
+    const canonicalReport = createClientOnlySupportReport("gzip-attachment", "session-unavailable");
+    const owner = deps(undefined);
+    const cached = cacheSupportReportDownload(owner, undefined, canonicalReport);
+    const ctx = context(cached.downloadPath);
+    const writeHead = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+    expect(writeHead).toHaveBeenCalledWith(
+      200,
+      expect.objectContaining({
+        "Content-Type": "application/gzip",
+        "Content-Disposition": `attachment; filename="${canonicalReport.fileName}.gz"`,
+      }),
+    );
+    const bytes: unknown = end.mock.calls[0]?.[0];
+    if (!Buffer.isBuffer(bytes)) throw new TypeError("Expected opaque gzip attachment bytes");
+    const decoded = gunzipSync(bytes).toString("utf8");
+    expect(decoded).toBe(canonicalReport.reportJson);
+    expect(parseSupportReport(decoded)).toEqual(parseSupportReport(canonicalReport.reportJson));
+    expect(writeHead.mock.calls[0]?.[1]).not.toHaveProperty("Content-Encoding");
+  });
   it("preserves protected artifacts when unauthenticated limited reports fill the shared cache", () => {
     const owner = deps("protected-session");
     const full = cacheSupportReportDownload(owner, "protected-session", report);
@@ -56,7 +89,7 @@ describe("authenticated canonical report attachment", () => {
     vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
     const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
     expect(handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
-    expect(end).toHaveBeenCalledWith(report.reportJson);
+    expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(report.reportJson);
   });
 
   it("refuses limited delivery when protected artifacts occupy the whole existing capacity", () => {
@@ -82,7 +115,7 @@ describe("authenticated canonical report attachment", () => {
     vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
     const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
     expect(handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
-    expect(end).toHaveBeenCalledWith(limited.reportJson);
+    expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(limited.reportJson);
     expect(() => cacheSupportReportDownload(owner, undefined, report)).toThrow();
     expect(() =>
       cacheSupportReportDownload(owner, undefined, { ...report, evidenceScope: "client-only" }),
@@ -104,13 +137,13 @@ describe("authenticated canonical report attachment", () => {
     const writeHead = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
     const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
     expect(handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
-    expect(end).toHaveBeenCalledWith(canonicalReport.reportJson);
+    expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(canonicalReport.reportJson);
     expect(writeHead).toHaveBeenCalledWith(
       200,
       expect.objectContaining({
-        "Content-Disposition": `attachment; filename="${canonicalReport.fileName}"`,
-        "Content-Type": "application/octet-stream",
-        "Content-Length": String(Buffer.byteLength(canonicalReport.reportJson)),
+        "Content-Disposition": `attachment; filename="${canonicalReport.fileName}.gz"`,
+        "Content-Type": "application/gzip",
+        "Content-Length": String(attachmentBytes(end.mock.calls[0]?.[0]).length),
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
       }),
@@ -123,7 +156,7 @@ describe("authenticated canonical report attachment", () => {
     const cached = cacheSupportReportDownload(owner, "owner-session", report);
     const ctx = context(cached.downloadPath);
     vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
-    vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
     handleDownloadSupportReport(ctx, owner);
     const event = sink.events.find((line) => line.op === "support.report.ui.delivered");
     if (event === undefined) throw new Error("Expected body-free attachment delivery evidence");
@@ -132,7 +165,7 @@ describe("authenticated canonical report attachment", () => {
       formatActivityLogProofLine(event),
     );
     expect(proof).toMatchObject({
-      reportBytes: Buffer.byteLength(report.reportJson),
+      reportBytes: attachmentBytes(end.mock.calls[0]?.[0]).length,
       correlationId: "download-test",
       completeness: "complete",
     });

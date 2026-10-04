@@ -13,6 +13,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  fstatSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -2690,6 +2691,65 @@ describe("bounded Activity Log mutations", () => {
       trustedRoot: base,
     });
     expect(existsSync(target)).toBe(false);
+  });
+
+  it("preserves an artifact and closes the held descriptor when the ownership predicate refuses", () => {
+    const base = freshDir();
+    const target = join(base, "claim.json");
+    writeFileSync(target, "peer-owner", { mode: FILE_MODE });
+    let held = -1;
+    removeSafeArtifactFile(
+      target,
+      { artifactClass: "manifest", trustedRoot: base },
+      (descriptor) => {
+        held = descriptor;
+        expect(fstatSync(descriptor).isFile()).toBe(true);
+        return false;
+      },
+    );
+    expect(readFileSync(target, "utf8")).toBe("peer-owner");
+    expect(() => fstatSync(held)).toThrow();
+  });
+
+  it("closes the held descriptor and preserves the artifact when ownership validation throws", () => {
+    const base = freshDir();
+    const target = join(base, "claim.json");
+    writeFileSync(target, "peer-owner", { mode: FILE_MODE });
+    let held = -1;
+    expect(() => {
+      removeSafeArtifactFile(
+        target,
+        { artifactClass: "manifest", trustedRoot: base },
+        (descriptor) => {
+          held = descriptor;
+          throw new TypeError("Ownership unavailable");
+        },
+      );
+    }).toThrow(TypeError);
+    expect(readFileSync(target, "utf8")).toBe("peer-owner");
+    expect(() => fstatSync(held)).toThrow();
+  });
+
+  it("preserves a replacement created after same-descriptor ownership validation", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const target = join(base, "claim.json");
+    writeFileSync(target, "original-owner", { mode: FILE_MODE });
+    let held = -1;
+    expect(() => {
+      removeSafeArtifactFile(
+        target,
+        { artifactClass: "manifest", trustedRoot: base },
+        (descriptor) => {
+          held = descriptor;
+          unlinkSync(target);
+          writeFileSync(target, "peer-owner", { mode: FILE_MODE });
+          return true;
+        },
+      );
+    }).toThrow(expect.objectContaining({ kind: "target-mutated" }));
+    expect(readFileSync(target, "utf8")).toBe("peer-owner");
+    expect(() => fstatSync(held)).toThrow();
   });
 
   it("rejects a group-readable trusted artifact directory before archive or removal", (ctx) => {

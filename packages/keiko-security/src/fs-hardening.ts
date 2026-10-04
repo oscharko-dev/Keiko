@@ -706,6 +706,7 @@ function pathHasIdentity(path: string, identity: BigIntStats): boolean {
 export function removeSafeArtifactFile(
   path: string,
   options: SafeArtifactDirectoryEntryOptions,
+  shouldRemove?: (descriptor: number) => boolean,
 ): void {
   const descriptor = openSafeArtifactFile(path, {
     ...options,
@@ -713,13 +714,15 @@ export function removeSafeArtifactFile(
   });
   try {
     verifySafeArtifactFileDescriptor(descriptor, path, options);
-    unlinkGuardedPath(
-      path,
-      descriptor,
-      options.trustedRoot,
-      options.artifactClass,
-      "owner-only-mutation",
-    );
+    if (shouldRemove === undefined || shouldRemove(descriptor)) {
+      unlinkGuardedPath(
+        path,
+        descriptor,
+        options.trustedRoot,
+        options.artifactClass,
+        "owner-only-mutation",
+      );
+    }
   } catch (error) {
     closeDescriptorIgnoringErrors(descriptor);
     throw error;

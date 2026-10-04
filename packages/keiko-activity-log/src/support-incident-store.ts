@@ -8,7 +8,7 @@
 // file. Only names of the closed grammar (`incident-<32 hex>.json`) are ever opened or removed, so
 // a planted or foreign file is never touched. The residual same-user race window is the one the
 // Activity Log store documents; the store never grows unbounded because the caller enforces the
-// count quota and every record is bounded to MAX_SUPPORT_INCIDENT_RECORD_BYTES.
+// byte-derived reservation capacity and every record is bounded to MAX_SUPPORT_INCIDENT_RECORD_BYTES.
 //
 // Records are immutable once published (exclusive create, never replaced). A crash can leave at
 // most a torn record, which fails the closed-schema parse and is reported as `invalid` so the
@@ -291,10 +291,40 @@ function claimSupportIncidentFile(
 }
 
 /** Best-effort, idempotent removal: a claim that is already gone is not an error. */
-function removeClaimIfPresent(directory: string, fileName: string): void {
+function claimOwnerMatches(descriptor: number, owner: string | undefined): boolean {
+  const text = readBoundedText(descriptor);
+  const current = text !== undefined && isSupportIncidentId(text) ? text : undefined;
+  return current === owner;
+}
+
+interface ExpectedClaimOwner {
+  readonly incidentId: string | undefined;
+  readonly claimedAtMs?: number;
+}
+
+function removeClaimIfPresent(
+  directory: string,
+  fileName: string,
+  expected?: ExpectedClaimOwner,
+): void {
   const path = join(directory, fileName);
   if (regularFileSize(path) === undefined) return;
-  removeSafeArtifactFile(path, { artifactClass: ARTIFACT_CLASS, trustedRoot: directory });
+  removeSafeArtifactFile(
+    path,
+    { artifactClass: ARTIFACT_CLASS, trustedRoot: directory },
+    expected === undefined
+      ? undefined
+      : (descriptor): boolean =>
+          claimOwnerMatches(descriptor, expected.incidentId) &&
+          (expected.claimedAtMs === undefined ||
+            fstatSync(descriptor).mtimeMs === expected.claimedAtMs),
+  );
+}
+
+function expectedClaimOwner(incidentId: string | undefined): ExpectedClaimOwner | undefined {
+  if (incidentId === undefined) return undefined;
+  if (!isSupportIncidentId(incidentId)) throw new TypeError("Invalid incident claim owner");
+  return { incidentId };
 }
 
 /** Atomically claims the defectFingerprint's dedup slot for `incidentId`, or `false` if held. */
@@ -326,10 +356,12 @@ export function readSupportIncidentFingerprintClaim(
 export function releaseSupportIncidentFingerprintClaim(
   stateDir: string,
   defectFingerprint: string,
+  expectedIncidentId?: string,
 ): void {
   removeClaimIfPresent(
     supportIncidentDirectory(stateDir),
     supportIncidentFingerprintClaimFileName(defectFingerprint),
+    expectedClaimOwner(expectedIncidentId),
   );
 }
 
@@ -347,10 +379,15 @@ export function claimSupportIncidentSlot(
   );
 }
 
-export function releaseSupportIncidentSlot(stateDir: string, slotIndex: number): void {
+export function releaseSupportIncidentSlot(
+  stateDir: string,
+  slotIndex: number,
+  expectedIncidentId?: string,
+): void {
   removeClaimIfPresent(
     supportIncidentDirectory(stateDir),
     supportIncidentSlotClaimFileName(slotIndex),
+    expectedClaimOwner(expectedIncidentId),
   );
 }
 
@@ -375,6 +412,10 @@ export function listSupportIncidentClaims(stateDir: string): readonly SupportInc
 }
 
 /** Removes one claim file by its exact, already-validated name (the orphan sweep). */
-export function removeSupportIncidentClaimFile(stateDir: string, fileName: string): void {
-  removeClaimIfPresent(supportIncidentDirectory(stateDir), fileName);
+export function removeSupportIncidentClaimFile(
+  stateDir: string,
+  fileName: string,
+  expected?: SupportIncidentClaim,
+): void {
+  removeClaimIfPresent(supportIncidentDirectory(stateDir), fileName, expected);
 }

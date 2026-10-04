@@ -175,9 +175,9 @@ describe("browser incident delivery before report selection", () => {
     });
   });
 
-  it("downloads an explicitly limited artifact when browser evidence cannot be delivered", async () => {
+  it("requests retained server evidence when browser evidence cannot be delivered", async () => {
     const limited = { ...report, evidenceScope: "client-only" };
-    const fetch = vi.fn((_path: string): Promise<Response> =>
+    const fetch = vi.fn((_path: string, _init: RequestInit): Promise<Response> =>
       _path === "/api/diagnostics/report"
         ? Promise.resolve(new Response(JSON.stringify(limited), { status: 200 }))
         : Promise.resolve(new Response(null, { status: 429 })),
@@ -189,6 +189,7 @@ describe("browser incident delivery before report selection", () => {
     await expect(createSupportReport(correlationId)).resolves.toEqual(limited);
     const call = fetch.mock.calls.find(([path]) => path === "/api/diagnostics/report");
     expect(call).toBeDefined();
+    expect(JSON.parse(call?.[1]?.body as string)).toEqual({ correlationId });
     const serialized = JSON.stringify(call);
     expect(serialized).not.toContain("TypeError");
     expect(serialized).not.toContain("frames");
@@ -208,7 +209,6 @@ describe("browser incident delivery before report selection", () => {
     ]);
     expect(JSON.parse(fetch.mock.calls[2]?.[1]?.body as string)).toEqual({
       correlationId,
-      evidenceScope: "client-only",
     });
     fetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
     fetch.mockResolvedValueOnce(reportResponse());

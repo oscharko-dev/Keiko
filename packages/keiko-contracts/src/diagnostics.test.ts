@@ -581,6 +581,49 @@ describe("isActivityLogReadinessSnapshot", () => {
       expect(isActivityLogReadinessSnapshot({ ...ready, ...fields })).toBe(false);
   });
 
+  it.each([2048, 64527, Number.MAX_SAFE_INTEGER])(
+    "accepts safe byte-derived diagnostic capacity %s without a fixed count ceiling",
+    (diagnosticCapacity) => {
+      for (const retainedDiagnosticCount of [0, 20, diagnosticCapacity]) {
+        expect(
+          isActivityLogReadinessSnapshot({
+            ...ready,
+            diagnosticCapacity,
+            retainedDiagnosticCount,
+          }),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it.each([
+    0,
+    -1,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    "2048",
+    null,
+  ])("rejects unsafe or malformed diagnostic capacity %s", (diagnosticCapacity) => {
+    expect(
+      isActivityLogReadinessSnapshot({ ...ready, diagnosticCapacity, retainedDiagnosticCount: 0 }),
+    ).toBe(false);
+  });
+
+  it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN, Number.POSITIVE_INFINITY, "20", null])(
+    "rejects unsafe or malformed retained diagnostic count %s",
+    (retainedDiagnosticCount) => {
+      expect(
+        isActivityLogReadinessSnapshot({
+          ...ready,
+          diagnosticCapacity: Number.MAX_SAFE_INTEGER,
+          retainedDiagnosticCount,
+        }),
+      ).toBe(false);
+    },
+  );
+
   it("accepts every closed state, reason and writer in a coherent combination", () => {
     for (const writer of ACTIVITY_LOG_WRITER_KINDS) {
       expect(isActivityLogReadinessSnapshot({ ...ready, writer })).toBe(true);

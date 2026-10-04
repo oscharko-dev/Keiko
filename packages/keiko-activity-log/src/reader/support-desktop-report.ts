@@ -1,7 +1,11 @@
 // Desktop composition uses the same incident, query and canonical serializer as CLI export.
-import { randomUUID } from "node:crypto";
-import { incidentCorrelationId } from "../defect-fingerprint.js";
+import { randomBytes, randomUUID } from "node:crypto";
+import { computeDefectFingerprint } from "../defect-fingerprint.js";
+import { serverLogProcessIdentity } from "../server-log.js";
 import {
+  clientOnlySupportReportSections,
+  supportIncidentBuild,
+  UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   MAX_SUPPORT_REPORT_EVENT_BYTES,
   supportIncidentPrivateProjection,
   supportReportFileName,
@@ -14,7 +18,6 @@ import {
   SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   recordUserReportedIncident,
   prepareUnretainedUserReportIncident,
-  prepareUnretainedUserReportDescriptor,
   supportIncidentSegmentFiles,
   type SupportIncidentRejection,
 } from "../support-incident.js";
@@ -22,14 +25,13 @@ import { listSupportIncidentEntries } from "../support-incident-store.js";
 import { attributeUnretainedReportFailure } from "./support-desktop-report-attribution.js";
 import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
-  runSupportQuery,
   type SupportQuerySelection,
   type SupportQueryResult,
 } from "./support-query.js";
 import { executeLocalSupportQuery } from "./support-local-query.js";
-import { ActivityLogScanner, ensureSegmentManifests } from "./support-segment-scan.js";
 import { resolveSelectedSupportIncident } from "./support-incident-resolution.js";
 import {
+  sealSupportReport,
   buildSupportReport,
   serializeSupportReport,
   SupportReportError,
@@ -224,32 +226,18 @@ export function createDesktopSupportReport(
 
 /** Canonical browser availability artifact. No private state directory or log is consulted. */
 export function createClientOnlySupportReport(
-  correlationId: string | undefined,
+  _correlationId: string | undefined,
   availabilityReason: NonNullable<SupportReport["incident"]["clientReport"]>["availabilityReason"],
 ): DesktopSupportReportResponse {
-  const selectedCorrelation = incidentCorrelationId(correlationId) ?? randomUUID();
-  const scanner = new ActivityLogScanner("");
-  const pass = ensureSegmentManifests("", [], scanner, {
-    trigger: "export",
-    persist: false,
-    rebuild: false,
+  const identity = serverLogProcessIdentity();
+  const sections = clientOnlySupportReportSections({
+    incidentId: randomBytes(16).toString("hex"),
+    nowMs: Date.now(),
+    build: supportIncidentBuild(identity.productVersion, identity.platformClass),
+    defectFingerprint: computeDefectFingerprint(UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT),
+    availabilityReason,
   });
-  const query = runSupportQuery({
-    files: [],
-    scanner,
-    manifests: pass.manifests,
-    manifestStats: pass.stats,
-    selection: { ...correlationSelection(selectedCorrelation), roots: [] },
-    limits: REPORT_QUERY_LIMITS,
-  });
-  const incident = incidentDescriptor(
-    prepareUnretainedUserReportDescriptor(selectedCorrelation),
-    query,
-  );
-  const report = buildSupportReport(
-    { ...incident, clientReport: { serverEvidence: "unavailable", availabilityReason } },
-    query,
-  );
+  const report = sealSupportReport(sections.incident, sections.selection, sections.evidence);
   return desktopReportResponse(report, 0, 0, "client-only");
 }
 

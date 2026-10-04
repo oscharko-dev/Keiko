@@ -98,6 +98,10 @@ export {
   parseSupportIncidentRecord,
   parseSupportIncidentPrivateProjection,
   parseSupportIncidentSlotClaimFileName,
+  SUPPORT_INCIDENT_TTL_MS,
+  SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
+  SUPPORT_INCIDENT_WINDOW_AFTER_MS,
+  supportIncidentWindow,
   supportIncidentBuild,
   supportIncidentFileName,
   supportIncidentFingerprintClaimFileName,
@@ -1353,3 +1357,5 @@ export function activityLogEvent<
 }
 
 export * from "./support-report.js";
+export * from "./support-report-json.js";
+export * from "./support-report-producer.js";

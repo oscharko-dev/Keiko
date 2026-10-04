@@ -31,6 +31,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
+  SUPPORT_INCIDENT_TTL_MS,
+  SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
+  SUPPORT_INCIDENT_WINDOW_AFTER_MS,
+  supportIncidentWindow,
   ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
@@ -101,14 +105,11 @@ import {
 } from "./support-incident-store.js";
 
 const MINUTE_MS = 60_000;
-const DAY_MS = 24 * 60 * MINUTE_MS;
-
-/** An unreported candidate (and its pin) expires this long after creation. */
-export const SUPPORT_INCIDENT_TTL_MS = DAY_MS;
-/** The pinned window reaches this far before the incident … */
-export const SUPPORT_INCIDENT_WINDOW_BEFORE_MS = 15 * MINUTE_MS;
-/** … and this far after it, so segments sealed after the incident are retained too. */
-export const SUPPORT_INCIDENT_WINDOW_AFTER_MS = 5 * MINUTE_MS;
+export {
+  SUPPORT_INCIDENT_TTL_MS,
+  SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
+  SUPPORT_INCIDENT_WINDOW_AFTER_MS,
+};
 /** Legacy compatibility value, superseded by the governing byte reservation policy. */
 export const MAX_SUPPORT_INCIDENTS = SUPPORT_INCIDENT_SLOT_COUNT;
 /** Legacy compatibility reserve, superseded by the governing byte reservation policy. */
@@ -595,14 +596,6 @@ interface CandidateContext {
   readonly defectFingerprint: string;
 }
 
-function incidentWindow(nowMs: number): SupportIncidentRecord["window"] {
-  return {
-    fromMs: Math.max(0, nowMs - SUPPORT_INCIDENT_WINDOW_BEFORE_MS),
-    incidentAtMs: nowMs,
-    toMs: nowMs + SUPPORT_INCIDENT_WINDOW_AFTER_MS,
-  };
-}
-
 function pinFromResult(result: ActivityLogPinResult): SupportIncidentPin {
   if (result.status === "rejected") {
     return {
@@ -684,7 +677,7 @@ function buildDescriptor(
     },
     correlation: draft.correlation,
     build: supportIncidentBuild(identity.productVersion, identity.platformClass),
-    window: incidentWindow(context.nowMs),
+    window: supportIncidentWindow(context.nowMs),
     pin,
     createdAtMs: context.nowMs,
     expiresAtMs: context.nowMs + SUPPORT_INCIDENT_TTL_MS,
@@ -893,7 +886,7 @@ function rollDiagnosticPin(context: IncidentPinContext): boolean {
 }
 
 function requestIncidentPin(context: IncidentPinContext): ActivityLogPinResult {
-  const window = incidentWindow(context.nowMs);
+  const window = supportIncidentWindow(context.nowMs);
   const request = {
     scope: { kind: "window" as const, fromMs: window.fromMs, toMs: window.toMs },
     expiresAtMs: context.nowMs + SUPPORT_INCIDENT_TTL_MS,
@@ -912,7 +905,7 @@ function pinIncidentWindow(
   correlationId: string,
   env: ServerLogEnv,
 ): SupportIncidentPin {
-  const window = incidentWindow(nowMs);
+  const window = supportIncidentWindow(nowMs);
   const before = overlappingSealedSegmentNames(stateDir, window, correlationId);
   try {
     const pin = pinFromResult(requestIncidentPin({ stateDir, nowMs, correlationId, env }));
@@ -1159,14 +1152,15 @@ function createCandidate(
   const quota = claimQuotaSlot(context, draft, incidentId, entries);
   if (quota === undefined) {
     if (dedupFingerprint !== undefined) {
-      releaseSupportIncidentFingerprintClaim(stateDir, dedupFingerprint);
+      releaseSupportIncidentFingerprintClaim(stateDir, dedupFingerprint, incidentId);
     }
     return reject(context, draft, "quota-exhausted", entries.length);
   }
 
   const retained = entries.filter((entry) => entry.incidentId !== quota.evictedIncidentId);
   const created = publishCandidate(draft, context, retained, incidentId, quota.slotIndex);
-  if (created.status !== "created") releaseClaims(stateDir, dedupFingerprint, quota.slotIndex);
+  if (created.status !== "created")
+    releaseClaims(stateDir, dedupFingerprint, quota.slotIndex, incidentId);
   return created;
 }
 
@@ -1242,11 +1236,12 @@ function releaseClaims(
   stateDir: string,
   defectFingerprint: string | undefined,
   slotIndex: number,
+  incidentId: string,
 ): void {
   if (defectFingerprint !== undefined) {
-    releaseSupportIncidentFingerprintClaim(stateDir, defectFingerprint);
+    releaseSupportIncidentFingerprintClaim(stateDir, defectFingerprint, incidentId);
   }
-  releaseSupportIncidentSlot(stateDir, slotIndex);
+  releaseSupportIncidentSlot(stateDir, slotIndex, incidentId);
 }
 
 function releaseRecordClaims(stateDir: string, record: SupportIncidentRecord): void {
@@ -1261,6 +1256,7 @@ function releaseRecordClaims(stateDir: string, record: SupportIncidentRecord): v
         )
       : undefined,
     record.slotIndex,
+    record.incidentId,
   );
 }
 
@@ -1312,7 +1308,7 @@ function sweepOrphanedClaims(stateDir: string): void {
       continue;
     }
     try {
-      removeSupportIncidentClaimFile(stateDir, claim.fileName);
+      removeSupportIncidentClaimFile(stateDir, claim.fileName, claim);
     } catch (error) {
       reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
     }
@@ -1448,7 +1444,7 @@ function retireSupportIncident(
   }
   releaseRecordClaims(stateDir, record);
   const pinRelease = releaseIncidentPin(stateDir, record, {
-    correlationId,
+    correlationId: incidentLifecycleCorrelation(record, correlationId),
     env: options.env ?? process.env,
   });
   dismissedEvidence(

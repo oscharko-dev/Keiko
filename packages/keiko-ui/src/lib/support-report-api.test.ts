@@ -103,6 +103,7 @@ describe("support report browser download", () => {
     expect(report).toEqual(response.value);
     const target = createSupportReportDownload(report);
     expect(target.href).toBe(downloadPath);
+    expect(target.fileName).toBe(`${fileName}.gz`);
     target.dispose();
   });
 

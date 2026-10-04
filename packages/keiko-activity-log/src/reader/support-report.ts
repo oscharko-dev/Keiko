@@ -6,6 +6,9 @@ import {
 import { isRedactedLogLabel, projectSupportLogFields } from "../log-redaction.js";
 import { deflateSync, inflateSync } from "node:zlib";
 import {
+  buildSupportReportEnvelope,
+  sealSupportReportEnvelope,
+  serializeSupportReport,
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   SUPPORT_REPORT_KIND,
   SUPPORT_REPORT_SCHEMA_VERSION,
@@ -139,26 +142,18 @@ export function sealSupportReport(
   evidence: SupportReportEvidence,
   minimumAnalyzerVersion: string = KEIKO_PRODUCT_VERSION,
 ): SupportReport {
-  const integrity = {
-    algorithm: "sha256" as const,
-    authenticity: "unknown" as const,
-    incidentDigest: supportReportDigest(canonicalSupportJson(incident)),
-    selectionDigest: supportReportDigest(canonicalSupportJson(selection)),
-    evidenceDigest: supportReportDigest(canonicalSupportJson(evidence)),
-  };
-  const unsigned = {
-    kind: SUPPORT_REPORT_KIND as typeof SUPPORT_REPORT_KIND,
-    schemaVersion: SUPPORT_REPORT_SCHEMA_VERSION as typeof SUPPORT_REPORT_SCHEMA_VERSION,
-    minimumAnalyzerVersion,
+  const unsigned = buildSupportReportEnvelope(
     incident,
     selection,
     evidence,
-    integrity,
-  };
-  return {
-    ...unsigned,
-    integrity: { ...integrity, reportDigest: supportReportDigest(canonicalSupportJson(unsigned)) },
-  };
+    {
+      incidentDigest: supportReportDigest(canonicalSupportJson(incident)),
+      selectionDigest: supportReportDigest(canonicalSupportJson(selection)),
+      evidenceDigest: supportReportDigest(canonicalSupportJson(evidence)),
+    },
+    minimumAnalyzerVersion,
+  );
+  return sealSupportReportEnvelope(unsigned, supportReportDigest(canonicalSupportJson(unsigned)));
 }
 
 function queryEvents(query: SupportQueryResult): readonly SupportReportEvent[] {
@@ -366,9 +361,7 @@ export function buildSupportReport(
   return report;
 }
 
-export function serializeSupportReport(report: SupportReport): string {
-  return `${canonicalSupportJson(report)}\n`;
-}
+export { serializeSupportReport };
 
 // A newer schema may add sections, so its declared minimum analyzer and schema are judged before
 // the closed section set: an unsupported report names the analyzer it needs instead of "unsafe".

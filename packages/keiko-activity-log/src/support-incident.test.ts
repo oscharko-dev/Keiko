@@ -782,7 +782,7 @@ describe("SupportIncident candidates", () => {
       expect(JSON.parse(lines("activity-log.pin.expired")[0] ?? "{}")).toMatchObject({
         pinId: record.pin.pinId,
         expiryReason: "released",
-        correlationId: "dismiss-action-1",
+        correlationId: record.correlation.rootCorrelationId,
       });
     });
 

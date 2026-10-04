@@ -1,6 +1,7 @@
 // Delivery retains the canonical worker output only; it never rebuilds or persists a report.
 import { parseSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 import { randomUUID } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import {
   MAX_SUPPORT_REPORT_BYTES,
   isSupportReportFileName,
@@ -97,15 +98,18 @@ function authorizeDelivery(
 }
 
 function deliverReport(ctx: RouteContext, entry: Delivery): HandlerOutcome {
+  const bytes = gzipSync(Buffer.from(entry.report.reportJson, "utf8"), {
+    maxOutputLength: MAX_SUPPORT_REPORT_BYTES,
+  });
   ctx.res.writeHead(200, {
-    "Content-Type": "application/octet-stream",
-    "Content-Length": String(entry.bytes),
-    "Content-Disposition": `attachment; filename="${entry.report.fileName}"`,
+    "Content-Type": "application/gzip",
+    "Content-Length": String(bytes.length),
+    "Content-Disposition": `attachment; filename="${entry.report.fileName}.gz"`,
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
   });
-  ctx.res.end(entry.report.reportJson);
-  emitSupportReportDelivered(ctx.correlationId, entry.bytes);
+  ctx.res.end(bytes);
+  emitSupportReportDelivered(ctx.correlationId, bytes.length);
   return STREAMING;
 }
 
