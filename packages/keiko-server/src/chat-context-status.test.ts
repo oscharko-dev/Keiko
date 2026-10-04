@@ -625,6 +625,8 @@ describe("composer context status and manual maintenance", () => {
       "corr-input-geometry",
     );
     logChatContextManagement("inspected", status, 0, "corr-input-geometry");
+    expect(status.segments).toBeDefined();
+    if (status.segments === undefined) throw new TypeError("Expected context segments");
     const event = sink.events.find((entry) => entry.op === "chat.context.management");
     expect(event?.extra).toMatchObject({
       contextWindowTokens: 128_000,
