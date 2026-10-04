@@ -1065,7 +1065,10 @@ async function readBoundedRawText(
     recordSizeExceeded(relativePath, candidates);
     return undefined;
   }
-  const decoded = decodeTextFileBytes(read.bytes, { scopePath: relativePath });
+  const decoded = decodeTextFileBytes(read.bytes, {
+    scopePath: relativePath,
+    requireSupportedEncoding: true,
+  });
   if (decoded === undefined) {
     recordCandidateOmission(candidates, relativePath, "binary");
     return undefined;

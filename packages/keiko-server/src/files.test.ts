@@ -1854,6 +1854,51 @@ describe("desktop files browser", () => {
     expect(await readFile(join(root, "invalid"))).toEqual(bytes);
   });
 
+  it.each([
+    Buffer.concat([
+      Buffer.from('<meta charset="ISO-2022-JP">\n'),
+      Buffer.from([0x1b, 0x24, 0x42, 0x24, 0x22, 0x1b, 0x28, 0x42]),
+    ]),
+    Buffer.from('<meta charset="windows-1252">\nASCII handbook text\n'),
+    Buffer.from('<meta charset="Shift_JIS">\nASCII handbook text\n'),
+  ])("refuses editor open/save for explicitly declared legacy HTML (%#)", async (bytes) => {
+    await writeFile(join(root, "legacy-admission.html"), bytes);
+    expect(
+      await readFilesPreview(store, root, "legacy-admission.html", buildRedactor({})),
+    ).toMatchObject({ canEdit: false });
+    await expect(readFilesContent(store, root, "legacy-admission.html")).rejects.toMatchObject({
+      code: "UNSUPPORTED_FILE",
+    });
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "legacy-admission.html",
+        content: "replacement",
+      }),
+    ).rejects.toMatchObject({ code: "UNSUPPORTED_FILE" });
+    expect(await readFile(join(root, "legacy-admission.html"))).toEqual(bytes);
+  });
+
+  it("allows a UTF-8 BOM to override a legacy HTML declaration at a split prefix", async () => {
+    const header = '\ufeff<meta charset="Shift_JIS">\n';
+    const content = `${header}${"a".repeat(4095 - Buffer.byteLength(header))}€ valid tail\n`;
+    await writeFile(join(root, "bom-boundary.html"), content);
+    expect(
+      await readFilesPreview(store, root, "bom-boundary.html", buildRedactor({})),
+    ).toMatchObject({ kind: "text", canEdit: true });
+    expect((await readFilesContent(store, root, "bom-boundary.html")).content).toBe(
+      content.slice(1),
+    );
+    const saved = await writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "bom-boundary.html",
+      content: "updated",
+    });
+    expect(saved.content).toBe("updated");
+  });
+
   it("treats a mostly-printable file containing a supplementary-plane character as editable text", async () => {
     // "😀" (U+1F600) is a 2-UTF-16-code-unit surrogate pair. The printable-ratio scan iterates by
     // Unicode code point and must not misclassify it as a non-printable control character (which

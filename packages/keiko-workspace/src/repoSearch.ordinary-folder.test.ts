@@ -446,15 +446,15 @@ describe("recursive text search in ordinary folders", () => {
     },
   );
 
-  it("keeps unsupported declared codecs outside the accepted text scope without guessing", async () => {
-    put("unsupported.html", '<meta charset="shift-jis">\n<p>UnsupportedProbe</p>\n');
+  it("reports unavailable declared codecs as unreadable eligible text without guessing", async () => {
+    put("unsupported.html", '<meta charset="unknown-encoding">\n<p>UnsupportedProbe</p>\n');
     const selected = scope();
     const result = await searchText(selected, query("UnsupportedProbe"));
     expect(result.atoms).toEqual([]);
     expect(result.coverage.filesSkipped).toBe(1);
-    expect(result.coverage.incomplete).toBe(false);
+    expect(result.coverage.incomplete).toBe(true);
     expect(result.candidates.find((file) => file.scopePath === "unsupported.html")?.omitted).toBe(
-      "binary",
+      "tool-unavailable",
     );
     await expect(
       readExcerpt(selected, {
@@ -463,7 +463,7 @@ describe("recursive text search in ordinary folders", () => {
         endLine: 2,
         maxBytes: 512,
       }),
-    ).rejects.toMatchObject({ reason: "binary" });
+    ).rejects.toMatchObject({ reason: "io-error" });
     await expect(
       executeCodingRepositoryRequest(selected.workspace, {
         kind: "read",

@@ -214,10 +214,15 @@ the accepted file-read budget, preserving primary root manifests before nested s
 manifests share the inclusive 2 MiB eligibility ceiling. Explicit deadlines, cancellation, unavailable
 streaming ports, and failed enumeration remain visible; iterators close on interruption.
 The shared size-admitted decoder accepts UTF-8, BOM or recognizable-pattern UTF-16LE/BE, and declared
-legacy HTML labels that normalize to UTF-8 or Windows-1252. HTML declarations are inspected within
-the first 1,024 bytes; `http-equiv` charset parameters are case-insensitive, and standard aliases such
-as `iso_8859-1` resolve through the platform decoder. Unsupported declared codecs are excluded rather
-than guessed. Whole-file NUL/control checks still apply after decoding, including files with a BOM.
+legacy HTML charsets supported by the platform's fatal `TextDecoder`, including Shift-JIS, Big5,
+and ISO-2022-JP. HTML declarations are inspected within the first 1,024 bytes; `http-equiv` charset
+parameters are case-insensitive, and standard aliases such as `iso_8859-1` resolve through the platform
+decoder. BOM detection retains precedence. No undeclared legacy encoding is guessed. Unknown or
+unavailable declared codecs remain unreadable eligible text: source search records `tool-unavailable`
+with `io-error` incomplete coverage, and source reads refuse as unreadable rather than claiming binary
+absence. Whole-file NUL/control checks still apply after decoding, including files with a BOM. A
+bounded prefix uses a fresh fatal streaming decoder to hold incomplete multibyte or stateful sequences
+without inserting replacement characters; complete-file decoding still rejects incomplete tails.
 The existing Files source preview uses this same decoder and eligibility ceiling so a cited legacy
 HTML or large text source remains inspectable. Preview reads retain the same descriptor identity,
 containment, and redaction checks. Legacy encodings and text above the manual Editor's 1,000,000-byte

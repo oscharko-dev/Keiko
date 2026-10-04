@@ -3715,7 +3715,10 @@ async function readExcerptLines(
         MAX_EXCERPT_FILE_BYTES,
       );
     }
-    const decoded = decodeTextFileBytes(read.bytes, { scopePath: request.scopePath });
+    const decoded = decodeTextFileBytes(read.bytes, {
+      scopePath: request.scopePath,
+      requireSupportedEncoding: true,
+    });
     if (decoded === undefined) {
       throw new RepoSearchUnsupportedFileError(
         `cannot decode excerpt: ${request.scopePath}`,

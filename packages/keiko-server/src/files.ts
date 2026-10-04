@@ -1511,11 +1511,16 @@ function decodedTextLooksPrintable(decoded: string): boolean {
 function isEditableUtf8File(
   extension: string | null,
   buffer: Buffer,
+  scopePath: string,
   incompletePrefix = false,
 ): boolean {
   const decoded = decodeUtf8(buffer, incompletePrefix);
   if (decoded === null || buffer.includes(0)) return false;
-  return isKnownTextExtension(extension) || decodedTextLooksPrintable(decoded);
+  const source = decodeTextFileBytes(buffer, { scopePath, allowIncompleteTail: incompletePrefix });
+  return (
+    source?.encoding === "utf-8" &&
+    (isKnownTextExtension(extension) || decodedTextLooksPrintable(decoded))
+  );
 }
 
 async function readPrefix(
@@ -1705,7 +1710,12 @@ async function textPreview(
     canEdit:
       decoded.encoding === "utf-8" &&
       target.stats.size <= MAX_TEXT_PREVIEW_BYTES &&
-      isEditableUtf8File(base.extension, bytes.buffer),
+      isEditableUtf8File(
+        base.extension,
+        bytes.buffer.subarray(0, 4096),
+        target.relativePath,
+        bytes.buffer.length > 4096,
+      ),
   };
 }
 
@@ -1883,7 +1893,7 @@ export async function readFilesContent(
     target.identity,
     Math.min(target.stats.size, 4096),
   );
-  if (!isEditableUtf8File(base.extension, prefix.buffer, prefix.truncated)) {
+  if (!isEditableUtf8File(base.extension, prefix.buffer, target.relativePath, prefix.truncated)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
   return editableTextContent(target);
@@ -2079,7 +2089,9 @@ async function writeResolvedFilesContent(args: {
     args.target.identity,
     Math.min(args.target.stats.size, 4096),
   );
-  if (!isEditableUtf8File(base.extension, prefix.buffer, prefix.truncated)) {
+  if (
+    !isEditableUtf8File(base.extension, prefix.buffer, args.target.relativePath, prefix.truncated)
+  ) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
   if (Buffer.byteLength(args.content, "utf8") > MAX_TEXT_PREVIEW_BYTES) {

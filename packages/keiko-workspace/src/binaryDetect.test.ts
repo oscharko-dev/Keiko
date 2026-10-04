@@ -141,19 +141,47 @@ describe("declared HTML character encoding", () => {
     const bytes = legacy('<!-- <meta charset="windows-1252"> --><p>Öl</p>');
     expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.html" })).toBeUndefined();
   });
-  it.each(["shift-jis", "utf-16", "unknown-encoding"])(
-    "does not guess declared %s outside the codec allowlist",
-    (charset) => {
-      expect(
-        decodeTextBytes(legacy(`<meta charset="${charset}"><p>Öl</p>`), undefined, {
-          scopePath: "manual.html",
-        }),
-      ).toBeUndefined();
-    },
-  );
+  it.each(["unknown-encoding"])("does not guess unavailable declared %s", (charset) => {
+    expect(
+      decodeTextBytes(legacy(`<meta charset="${charset}"><p>Öl</p>`), undefined, {
+        scopePath: "manual.html",
+      }),
+    ).toBeUndefined();
+  });
+  it.each([
+    ["Shift_JIS", [0x82, 0xa0, 0x82], "あ"],
+    ["Big5", [0xa4, 0xa4, 0xa4], "中"],
+    ["ISO-2022-JP", [0x1b, 0x24, 0x42, 0x24, 0x22, 0x24], "あ"],
+  ] as const)("decodes a capped %s prefix without replacement text", (charset, tail, expected) => {
+    const bytes = Buffer.concat([Buffer.from(`<meta charset="${charset}">`), new Uint8Array(tail)]);
+    expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.html" })).toBeUndefined();
+    const decoded = decodeTextBytes(bytes, undefined, {
+      scopePath: "manual.html",
+      allowIncompleteTail: true,
+    });
+    expect(decoded?.text).toBe(`<meta charset="${charset}">${expected}`);
+    expect(decoded?.text).not.toContain("\ufffd");
+  });
+  it("does not mask malformed trailing UTF-8 bytes in a capped prefix", () => {
+    expect(
+      decodeTextBytes(new Uint8Array([0x61, 0xff]), "utf-8", { allowIncompleteTail: true }),
+    ).toBeUndefined();
+  });
   it("limits character declaration prescan to the first 1024 bytes", () => {
     const bytes = legacy(`${" ".repeat(1024)}<meta charset="windows-1252"><p>Öl</p>`);
     expect(decodeTextBytes(bytes, undefined, { scopePath: "manual.html" })).toBeUndefined();
+  });
+  it("keeps a BOM authoritative when an unavailable declared codec would otherwise reject", () => {
+    const bytes = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from('<meta charset="unavailable-codec"><p>BOM retains precedence</p>'),
+    ]);
+    expect(
+      decodeTextFileBytes(bytes, { scopePath: "manual.html", requireSupportedEncoding: true }),
+    ).toMatchObject({
+      encoding: "utf-8",
+      text: '<meta charset="unavailable-codec"><p>BOM retains precedence</p>',
+    });
   });
   it("gives a UTF-8 BOM precedence over contradictory legacy metadata", () => {
     const bytes = Buffer.concat([

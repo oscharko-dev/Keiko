@@ -69,10 +69,7 @@ function createContext(
   const startedAtMs = nowMs();
   const control = {
     nowMs,
-    deadlineAtMs: Math.min(
-      startedAtMs + (CODING_REPOSITORY_LIMITS.elapsedMs ?? Infinity),
-      options.deadlineAtMs ?? Infinity,
-    ),
+    deadlineAtMs: options.deadlineAtMs ?? Infinity,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
   return {
@@ -115,7 +112,10 @@ async function readCodingText(context: CodingRepositoryContext, path: string): P
       CODING_REPOSITORY_LIMITS.fileBytes,
     );
   }
-  const decoded = decodeTextFileBytes(read.bytes, { scopePath: path });
+  const decoded = decodeTextFileBytes(read.bytes, {
+    scopePath: path,
+    requireSupportedEncoding: true,
+  });
   if (decoded === undefined) {
     throw new WorkspaceReadError("non-text source", path);
   }

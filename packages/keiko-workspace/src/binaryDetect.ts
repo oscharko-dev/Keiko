@@ -2,6 +2,8 @@
 // byte means binary" rule rejected UTF-16 source files, so this module now sniffs BOM/patterned
 // UTF-16 first and then falls back to a bounded control-byte ratio. Pure synchronous scan — no IO.
 
+import { WorkspaceReadError } from "@oscharko-dev/keiko-security/errors/workspace";
+
 export interface BinaryProbeOptions {
   readonly maxProbeBytes: number;
 }
@@ -10,7 +12,8 @@ export const DEFAULT_BINARY_PROBE: BinaryProbeOptions = {
   maxProbeBytes: 4096,
 } as const;
 
-export type TextByteEncoding = "utf-8" | "utf-16le" | "utf-16be" | "windows-1252";
+// Canonical codec names are obtained from the platform decoder, never guessed from arbitrary bytes.
+export type TextByteEncoding = TextDecoder["encoding"];
 
 export interface DecodedTextBytes {
   readonly encoding: TextByteEncoding;
@@ -20,6 +23,7 @@ export interface DecodedTextBytes {
 export interface DecodeTextBytesOptions {
   readonly scopePath?: string | undefined;
   readonly allowIncompleteTail?: boolean | undefined;
+  readonly requireSupportedEncoding?: boolean | undefined;
 }
 
 function probeLimit(bytes: Uint8Array, options?: BinaryProbeOptions): number {
@@ -91,34 +95,6 @@ export function detectTextByteEncoding(
   return utf16PatternEncoding(bytes, limit);
 }
 
-function utf8LeadByteSeqLen(lead: number): number {
-  if ((lead & 0x80) === 0x00) return 1;
-  if ((lead & 0xe0) === 0xc0) return 2;
-  if ((lead & 0xf0) === 0xe0) return 3;
-  if ((lead & 0xf8) === 0xf0) return 4;
-  return 0;
-}
-
-function validUtf8PrefixLength(bytes: Uint8Array): number {
-  const len = bytes.length;
-  if (len === 0) return 0;
-  let i = len - 1;
-  const limit = Math.max(len - 4, -1);
-  while (i > limit && ((bytes[i] ?? 0) & 0xc0) === 0x80) {
-    i -= 1;
-  }
-  const seqLen = utf8LeadByteSeqLen(bytes[i] ?? 0);
-  if (seqLen === 0) return i;
-  return i + seqLen <= len ? len : i;
-}
-
-export function completeTextBytePrefix(bytes: Uint8Array, encoding: TextByteEncoding): Uint8Array {
-  if (encoding === "utf-8") {
-    return bytes.subarray(0, validUtf8PrefixLength(bytes));
-  }
-  return encoding === "windows-1252" ? bytes : bytes.subarray(0, bytes.length - (bytes.length % 2));
-}
-
 function htmlMetaAttributes(tag: string): ReadonlyMap<string, string> {
   const attributes = new Map<string, string>();
   const pattern = /([^\s/>=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gu;
@@ -140,8 +116,7 @@ function htmlMetaCharset(tag: string): string | undefined {
 
 function supportedDeclaredHtmlEncoding(charset: string): TextByteEncoding | false {
   try {
-    const encoding = new TextDecoder(charset).encoding;
-    return encoding === "utf-8" || encoding === "windows-1252" ? encoding : false;
+    return new TextDecoder(charset, { fatal: true }).encoding;
   } catch {
     return false;
   }
@@ -163,23 +138,35 @@ function declaredHtmlEncoding(
   return undefined;
 }
 
-export function decodeTextBytes(
+function selectedTextEncoding(
   bytes: Uint8Array,
-  encoding?: TextByteEncoding,
-  options?: DecodeTextBytesOptions,
-): DecodedTextBytes | undefined {
+  encoding: TextByteEncoding | undefined,
+  options: DecodeTextBytesOptions | undefined,
+): TextByteEncoding | undefined {
   const selected =
     encoding ??
     detectTextByteEncoding(bytes) ??
     declaredHtmlEncoding(bytes, options?.scopePath) ??
     "utf-8";
-  if (selected === false) return undefined;
-  const complete =
-    options?.allowIncompleteTail === true ? completeTextBytePrefix(bytes, selected) : bytes;
+  if (selected !== false) return selected;
+  if (options?.requireSupportedEncoding === true)
+    throw new WorkspaceReadError("declared text encoding is unavailable", options.scopePath ?? "");
+  return undefined;
+}
+
+export function decodeTextBytes(
+  bytes: Uint8Array,
+  encoding?: TextByteEncoding,
+  options?: DecodeTextBytesOptions,
+): DecodedTextBytes | undefined {
+  const selected = selectedTextEncoding(bytes, encoding, options);
+  if (selected === undefined) return undefined;
   try {
     return {
       encoding: selected,
-      text: new TextDecoder(selected, { fatal: true }).decode(complete),
+      text: new TextDecoder(selected, { fatal: true }).decode(bytes, {
+        stream: options?.allowIncompleteTail === true,
+      }),
     };
   } catch {
     return undefined;
