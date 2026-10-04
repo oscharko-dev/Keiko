@@ -32,6 +32,7 @@ import { clientErrorSummary } from "./client-error-summary";
 import { bffFetchJson, bffRequestErrorKind } from "./http";
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
+const LOCAL_SESSION_TIMEOUT_MS = 15_000;
 const LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
 // The pairing requests are the repair: their denial is final and never starts another repair.
 const WITHOUT_SESSION_REPAIR = { repairSession: false } as const;
@@ -62,7 +63,11 @@ function defaultSeams(): CodingAppSessionPairingSeams | undefined {
     postLocalSession: (correlationId: string): Promise<unknown> =>
       bffFetchJson(
         LOCAL_SESSION_PATH,
-        { method: "POST", cache: "no-store" },
+        {
+          method: "POST",
+          cache: "no-store",
+          signal: AbortSignal.timeout(LOCAL_SESSION_TIMEOUT_MS),
+        },
         { ...WITHOUT_SESSION_REPAIR, correlationId },
       ),
   };
@@ -144,13 +149,43 @@ export interface LocalCodingAppSessionRepair {
 
 let localSessionRepair: Promise<LocalCodingAppSessionRepair> | undefined;
 
+function waitForSharedSessionWork<T>(
+  repair: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (signal === undefined) return repair;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject): void => {
+    const abort = (): void => {
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    void repair.then(
+      (outcome): void => {
+        signal.removeEventListener("abort", abort);
+        if (signal.aborted) reject(signal.reason);
+        else resolve(outcome);
+      },
+      (error: unknown): void => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
 /**
  * Confirms the current app session once for concurrent denied surfaces (ADR-0141 D5). An invalid
  * session stays unpaired; surfaces join the one attempt in flight instead of each posting its own, and
  * the next denial after it settled starts a fresh one. Every joiner learns the repair request's
- * correlation id, so its own evidence can name the repair it waited for.
+ * correlation id, so its own evidence can name the repair it waited for. Cancelling a joiner
+ * stops only its wait; the bounded shared request remains available to other consumers.
  */
-export function repairLocalCodingAppSessionWithEvidence(): Promise<LocalCodingAppSessionRepair> {
+export function repairLocalCodingAppSessionWithEvidence(
+  signal?: AbortSignal,
+): Promise<LocalCodingAppSessionRepair> {
+  if (signal?.aborted === true) return Promise.reject(signal.reason);
   if (localSessionRepair === undefined) {
     const correlationId = newClientCorrelationId();
     localSessionRepair = localSessionOutcome(defaultSeams(), correlationId)
@@ -163,7 +198,7 @@ export function repairLocalCodingAppSessionWithEvidence(): Promise<LocalCodingAp
         localSessionRepair = undefined;
       });
   }
-  return localSessionRepair;
+  return waitForSharedSessionWork(localSessionRepair, signal);
 }
 
 /** {@link repairLocalCodingAppSessionWithEvidence}, for callers that need only the verdict. */
@@ -252,8 +287,9 @@ export function redeemCodingAppSessionPairingOnBoot(): Promise<boolean> {
  * this before their first read so a freshly opened window cannot race its own bootstrap into a stale
  * `unpaired` state; no timers, retries, or second session state are involved.
  */
-export function codingAppSessionPairingSettled(): Promise<boolean> {
-  return redeemCodingAppSessionPairingOnBoot();
+export function codingAppSessionPairingSettled(signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted === true) return Promise.reject(signal.reason);
+  return waitForSharedSessionWork(redeemCodingAppSessionPairingOnBoot(), signal);
 }
 
 // F65: a pairing can arrive without a page load (the launcher link opened in the tab that already

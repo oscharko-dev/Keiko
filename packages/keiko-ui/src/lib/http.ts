@@ -283,7 +283,8 @@ async function repairAndReplay<T>(
   opts: BffFetchOptions<T> | undefined,
 ): Promise<T> {
   const { repairLocalCodingAppSessionWithEvidence } = await import("./coding-app-session-client");
-  const repair = await repairLocalCodingAppSessionWithEvidence();
+  const repair = await repairLocalCodingAppSessionWithEvidence(init?.signal ?? undefined);
+  init?.signal?.throwIfAborted();
   const deniedCorrelationId = denied.correlationId ?? newClientCorrelationId();
   if (!repair.repaired) {
     reportSessionRepair(

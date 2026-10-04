@@ -1,3 +1,5 @@
+import { createSupportReport } from "./support-report-api";
+import { bffFetchJson } from "./http";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingAppSessionPairingAttestation } from "@oscharko-dev/keiko-contracts";
@@ -350,6 +352,205 @@ describe("repairLocalCodingAppSessionWithEvidence", () => {
   });
 });
 
+describe("shared session repair cancellation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    resetClientDiagnosticWriter();
+  });
+
+  it("returns a cancelled joiner promptly while another consumer finishes the same repair", async () => {
+    let acknowledge: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          acknowledge = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const caller = new AbortController();
+    const remove = vi.spyOn(caller.signal, "removeEventListener");
+    const cancelled = repairLocalCodingAppSessionWithEvidence(caller.signal);
+    let rejection: unknown;
+    const observed = cancelled.catch((error: unknown) => {
+      rejection = error;
+    });
+    const surviving = repairLocalCodingAppSessionWithEvidence();
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+    try {
+      caller.abort();
+      await vi.waitFor(() => {
+        expect(rejection).toBe(caller.signal.reason);
+      });
+      expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+      expect(fetchMock).toHaveBeenCalledOnce();
+    } finally {
+      acknowledge?.(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 }));
+      await observed;
+      await expect(surviving).resolves.toMatchObject({ repaired: true });
+    }
+  });
+
+  it("returns an aborted report request before its shared confirmation finishes and never posts a report", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+      ),
+    );
+    await codingAppSessionPairingSettled();
+    let acknowledge: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          acknowledge = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const caller = new AbortController();
+    let rejection: unknown;
+    const request = createSupportReport("aborted-shared-report", caller.signal).catch(
+      (error: unknown) => {
+        rejection = error;
+      },
+    );
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+    const surviving = repairLocalCodingAppSessionWithEvidence();
+    try {
+      caller.abort();
+      await vi.waitFor(() => {
+        expect(rejection).toBe(caller.signal.reason);
+      });
+    } finally {
+      acknowledge?.(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 }));
+      await request;
+      await expect(surviving).resolves.toMatchObject({ repaired: true });
+    }
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not replay a cancelled GET after its still-shared repair is acknowledged", async () => {
+    let acknowledge: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn((path: string) => {
+      if (path.endsWith("/local-session"))
+        return new Promise<Response>((resolve) => {
+          acknowledge = resolve;
+        });
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: { code: "DENIED", message: "Denied" } }), {
+          status: 403,
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const caller = new AbortController();
+    let rejection: unknown;
+    const request = bffFetchJson("/api/session-protected-read", { signal: caller.signal }).catch(
+      (error: unknown) => {
+        rejection = error;
+      },
+    );
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+    const surviving = repairLocalCodingAppSessionWithEvidence();
+    try {
+      caller.abort();
+      await vi.waitFor(() => {
+        expect(rejection).toBe(caller.signal.reason);
+      });
+    } finally {
+      acknowledge?.(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 }));
+      await request;
+      await expect(surviving).resolves.toMatchObject({ repaired: true });
+    }
+    expect(
+      fetchMock.mock.calls.filter(([path]) => path === "/api/session-protected-read"),
+    ).toHaveLength(1);
+  });
+
+  it("bounds a stalled shared transport, records its closed timeout, then permits a fresh repair", async () => {
+    const deadline = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const reports: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => {
+      reports.push({ message, meta });
+    });
+    const fetchMock = vi.fn(
+      (_path: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(init.signal?.reason);
+            },
+            { once: true },
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const first = repairLocalCodingAppSessionWithEvidence();
+    const second = repairLocalCodingAppSessionWithEvidence();
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+    deadline.abort(new DOMException("private transport detail", "TimeoutError"));
+    const result = await first;
+    expect(await second).toEqual(result);
+    expect(result).toMatchObject({ repaired: false, errorKind: "timeout" });
+    expect(reports).toEqual([
+      {
+        message: "[keiko] local app session ensure failed: TimeoutError",
+        meta: { correlationId: result.correlationId, errorKind: "timeout" },
+      },
+    ]);
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+    );
+    await expect(repairLocalCodingAppSessionWithEvidence()).resolves.toMatchObject({
+      repaired: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not start a shared repair for an already cancelled caller", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const caller = new AbortController();
+    caller.abort();
+    const result = repairLocalCodingAppSessionWithEvidence(caller.signal);
+    const observed = result.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    expect(await observed).toBe("rejected");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("removes the joiner's abort listener when its shared repair finishes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+      ),
+    );
+    const caller = new AbortController();
+    const add = vi.spyOn(caller.signal, "addEventListener");
+    const remove = vi.spyOn(caller.signal, "removeEventListener");
+    await expect(repairLocalCodingAppSessionWithEvidence(caller.signal)).resolves.toMatchObject({
+      repaired: true,
+    });
+    expect(add).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+});
+
 // #3557 review: a failed repair carries the class of its own failed request.
 describe("repairLocalCodingAppSessionWithEvidence failure class", () => {
   afterEach(() => {
@@ -505,5 +706,48 @@ describe("repairLocalCodingAppSessionForStream", () => {
         },
       },
     });
+  });
+});
+
+describe("shared session bootstrap cancellation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
+  it("returns a cancelled first reader while the same bootstrap finishes for another reader", async () => {
+    vi.resetModules();
+    const owner = await import("./coding-app-session-client");
+    let acknowledge: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          acknowledge = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const caller = new AbortController();
+    let rejection: unknown;
+    const cancelled = owner
+      .codingAppSessionPairingSettled(caller.signal)
+      .catch((error: unknown) => {
+        rejection = error;
+      });
+    const surviving = owner.codingAppSessionPairingSettled();
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce();
+    });
+    try {
+      caller.abort();
+      await vi.waitFor(() => {
+        expect(rejection).toBe(caller.signal.reason);
+      });
+    } finally {
+      acknowledge?.(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 }));
+      await cancelled;
+      await expect(surviving).resolves.toBe(true);
+    }
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

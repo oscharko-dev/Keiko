@@ -81,9 +81,9 @@ export async function createSupportReport(
 ): Promise<DesktopSupportReportResponse> {
   const deadline = AbortSignal.timeout(35_000);
   const requestSignal = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
-  await codingAppSessionPairingSettled();
+  await codingAppSessionPairingSettled(requestSignal);
   requestSignal.throwIfAborted();
-  await repairLocalCodingAppSessionWithEvidence();
+  await repairLocalCodingAppSessionWithEvidence(requestSignal);
   requestSignal.throwIfAborted();
   if (correlationId !== undefined) await ensureReportEvidence(correlationId, requestSignal);
   requestSignal.throwIfAborted();
