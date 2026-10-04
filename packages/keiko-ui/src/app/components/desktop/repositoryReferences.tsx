@@ -82,13 +82,9 @@ const REPOSITORY_REFERENCE_IN_BRACKETS_PATTERN = new RegExp(
   String.raw`\[\s*(${REPOSITORY_REFERENCE_SOURCE})\s*\]`,
   "giu",
 );
-// `[^\]]+` already allows whitespace, so a preceding `\s*` is redundant and only creates an
-// ambiguous split point between two quantified atoms that can consume the same characters
-// (S8786): with no closing bracket, the engine explores every way to divide a run of whitespace
-// between `\s*` and `[^\]]+`, which is quadratic. Dropping the redundant `\s*` matches the exact
-// same set of strings (proof: `\s* [^\]]+` requires >=1 total char, all drawn from `[^\]]`, which
-// is exactly what `[^\]]+` alone requires) while removing the ambiguity entirely.
-const SOURCE_LABEL_FRAGMENT = String.raw`\[source:[^\]]+\]`;
+// An unterminated label must stop at the next opening bracket. Otherwise every repeated
+// `[source:` prefix scans the entire remaining answer again, making streamed rendering quadratic.
+const SOURCE_LABEL_FRAGMENT = String.raw`\[source:[^\[\]]+\]`;
 const BRACKETED_REFERENCE_DUPLICATE_PATTERN = new RegExp(
   String.raw`\[\s*(${REPOSITORY_REFERENCE_SOURCE})\s*\]\s*(?:${SOURCE_LABEL_FRAGMENT}\s*)?(${REPOSITORY_REFERENCE_SOURCE})`,
   "giu",

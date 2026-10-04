@@ -32,10 +32,10 @@ describe("bracketed reference prose and lists", () => {
     expect(parts.map((part) => part.text ?? "").join("")).toContain(prose);
   });
 
-  it.each(["[", "[ ", "[a"])(
+  it.each(["[", "[ ", "[a", "[source: "])(
     "handles an unterminated %j run without repeated bracket scans",
     (start) => {
-      const source = start.repeat(150_000);
+      const source = start.repeat(start === "[source: " ? 20_000 : 150_000);
       const began = performance.now();
       expect(repositoryReferenceTextParts(source)).toEqual([{ kind: "text", text: source }]);
       expect(sanitizeRepositoryEvidenceText(source)).toBe(source);
