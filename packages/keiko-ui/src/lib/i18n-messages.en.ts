@@ -652,7 +652,8 @@ export const EN_MESSAGES = {
   "chat.grounding.readyChatRequired": "Open a ready chat window before connecting a source.",
   "chat.grounding.localFolderRequired": "Choose a local folder before connecting it to chat.",
   "chat.grounding.scopeOwnershipMissing":
-    "This source connection cannot be restored uniquely. Review the chat’s sources, then reconnect the Files window.",
+    "This source connection cannot be restored uniquely. You can remove the connection while keeping the chat’s sources.",
+  "chat.grounding.forgetConnection": "Remove connection only; keep chat sources",
   "chat.grounding.recoveryRequired":
     "Chat grounding recovery failed. Reload the chat before connecting another source.",
   "chat.grounding.timeoutBlocked":

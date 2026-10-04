@@ -1331,24 +1331,28 @@ function AppShellInner(): ReactNode {
   // Release 0.2.0 — user-visible feedback when a connect gesture is rejected because the
   // per-chat source limit is reached. Cleared on the next accepted bind and auto-dismissed.
   const [sourceConnectionNotice, setSourceConnectionNotice] = useState<string | null>(null);
+  const [unownedFilesConnectionId, setUnownedFilesConnectionId] = useState<string | null>(null);
   useEffect(() => {
-    if (sourceConnectionNotice === null) return undefined;
+    if (sourceConnectionNotice === null || unownedFilesConnectionId !== null) return undefined;
     const timer = window.setTimeout(() => setSourceConnectionNotice(null), 10_000);
     return (): void => window.clearTimeout(timer);
-  }, [sourceConnectionNotice]);
+  }, [sourceConnectionNotice, unownedFilesConnectionId]);
   const rejectForLimit = useCallback(
     (connectedCount: number, cap: number): false => {
+      setUnownedFilesConnectionId(null);
       setSourceConnectionNotice(t("chat.grounding.sourceLimit", { connectedCount, cap }));
       return false;
     },
     [t],
   );
   const rejectForConnectionFailure = useCallback((message: string): false => {
+    setUnownedFilesConnectionId(null);
     setSourceConnectionNotice(message);
     return false;
   }, []);
   const reportWindowLimit = useCallback(
     (limit: number): void => {
+      setUnownedFilesConnectionId(null);
       setSourceConnectionNotice(t("workspace.windowLimitReached", { limit }));
     },
     [t],
@@ -1487,6 +1491,7 @@ function AppShellInner(): ReactNode {
           new Error("Scope ownership is not proven"),
         );
         rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
+        setUnownedFilesConnectionId(connection?.id ?? null);
       }
       return false;
     },
@@ -1618,22 +1623,20 @@ function AppShellInner(): ReactNode {
         edgeKey,
         chatKey,
       } = input;
-      if (filesRequestWasSuperseded(input, automaticFilesRequestsRef.current)) return false;
       const confirmed =
         edgeKey === undefined ? undefined : acknowledgedFilesScopesRef.current.get(edgeKey);
-      const accepted = await retryGroundingScopeIntent(
-        () =>
-          replaceFilesScopeNow(
-            chatWindowId,
-            nextScope,
-            attempt,
-            confirmed ?? previousScope,
-            target,
-            connectionId,
-            input.automatic,
-          ),
-        attempt,
-      );
+      const accepted = await retryGroundingScopeIntent(async (): Promise<boolean> => {
+        if (filesRequestWasSuperseded(input, automaticFilesRequestsRef.current)) return false;
+        return replaceFilesScopeNow(
+          chatWindowId,
+          nextScope,
+          attempt,
+          confirmed ?? previousScope,
+          target,
+          connectionId,
+          input.automatic,
+        );
+      }, attempt);
       if (accepted && attempt.isCurrent() && edgeKey !== undefined) {
         return acknowledgeFilesScope({
           correlationId: attempt.correlationId,
@@ -1729,7 +1732,10 @@ function AppShellInner(): ReactNode {
       );
       if (ownedScope === null) {
         const released = reportMissingTeardownOwnership(attempt, connection, current);
-        return released || rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
+        if (released) return true;
+        rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
+        setUnownedFilesConnectionId(connection?.id ?? null);
+        return false;
       }
       reportFilesOwnershipDecision(attempt, connection, current);
       if (connectionId !== undefined) releasedFilesConnectionsRef.current.add(connectionId);
@@ -2044,6 +2050,13 @@ function AppShellInner(): ReactNode {
   });
   wsWinsForBindingRef.current = ws.wins;
   wsConnectionsForBindingRef.current = ws.conns;
+  const forgetUnownedFilesConnection = useCallback((): void => {
+    if (unownedFilesConnectionId === null) return;
+    ws.api.removeConn(unownedFilesConnectionId, { unbind: false });
+    reportFilesScopeDecision(newClientCorrelationId(), { decision: "released" });
+    setUnownedFilesConnectionId(null);
+    setSourceConnectionNotice(null);
+  }, [unownedFilesConnectionId, ws.api]);
 
   // GEN-PERF-WORKSPACE-007 — this rebind scan only depends on the connection set
   // and each endpoint window's type/cfg (filesChatBindScope derives from cfg paths,
@@ -2470,6 +2483,11 @@ function AppShellInner(): ReactNode {
                           {sourceConnectionNotice !== null && (
                             <div className="source-limit-alert" role="alert">
                               <span>{sourceConnectionNotice}</span>
+                              {unownedFilesConnectionId !== null && (
+                                <button type="button" onClick={forgetUnownedFilesConnection}>
+                                  {t("chat.grounding.forgetConnection")}
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className="source-limit-alert-dismiss"

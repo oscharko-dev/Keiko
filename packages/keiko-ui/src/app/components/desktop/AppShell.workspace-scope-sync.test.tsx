@@ -355,6 +355,22 @@ describe("AppShell canonical workspace scope synchronization", () => {
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
   });
 
+  it("lets the user forget an ambiguous connection without changing chat sources", async () => {
+    await mountAmbiguousFiles();
+    const canonical = mocks.serverChat;
+    await act(async () => mocks.workspace?.api.removeConn("edge-0"));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Remove connection only; keep chat sources" }),
+    );
+    await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(0));
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(mocks.serverChat).toEqual(canonical);
+    expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
+      decision: "released",
+    });
+    expect(screen.queryByText(/cannot be restored uniquely/u)).not.toBeInTheDocument();
+  });
+
   it("acknowledges an unchanged sanitized storage replay without scope writes or relationships", async (): Promise<void> => {
     const initial = fixture(["/manuals/Scale", "/manuals/Distinct"]);
     mocks.initialChat = chat([scope("/manuals/Scale"), scope("/manuals/Distinct")]);
@@ -447,6 +463,42 @@ describe("AppShell canonical workspace scope synchronization", () => {
       "/manuals/",
     );
   });
+
+  it("does not retry an automatic scope superseded while its first write conflicts", async () => {
+    const initial = fixture(["/manuals/Scale"]);
+    mocks.initialChat = chat([scope("/manuals/Scale")]);
+    mocks.serverChat = mocks.initialChat;
+    persist(initial.wins, initial.conns);
+    render(<AppShell />);
+    await waitFor(() => expect(mocks.workspace?.conns).toHaveLength(1));
+    let releaseConflict = (): void => undefined;
+    const conflict = new Promise<void>((resolve) => {
+      releaseConflict = resolve;
+    });
+    mocks.updateChatConnectedScopes.mockImplementationOnce(async (): Promise<never> => {
+      await conflict;
+      throw new ApiError("GROUNDING_SCOPE_CHANGED", "Sources changed", 409);
+    });
+    await act(async () =>
+      mocks.workspace?.api.update("files-0", {
+        cfg: { root: "/manuals/Intermediate", rootBinding: "coding-repository" },
+      }),
+    );
+    await waitFor(() => expect(mocks.updateChatConnectedScopes).toHaveBeenCalledOnce());
+    await act(async () =>
+      mocks.workspace?.api.update("files-0", {
+        cfg: { root: "/manuals/Latest", rootBinding: "coding-repository" },
+      }),
+    );
+    await act(async () => releaseConflict());
+    await waitFor(() =>
+      expect(mocks.serverChat?.connectedScopes?.map((item) => item.root)).toEqual([
+        "/manuals/Latest",
+      ]),
+    );
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+  });
+
   it("refuses repeated competing scope writes after one fresh intent retry", async (): Promise<void> => {
     const initial = fixture(["/manuals/Scale"]);
     mocks.initialChat = chat([scope("/manuals/Scale")]);

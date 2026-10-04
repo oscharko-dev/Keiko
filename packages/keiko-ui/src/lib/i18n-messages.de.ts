@@ -674,7 +674,8 @@ export const DE_MESSAGES = {
   "chat.grounding.localFolderRequired":
     "Wähle einen lokalen Ordner aus, bevor du ihn mit dem Chat verbindest.",
   "chat.grounding.scopeOwnershipMissing":
-    "Diese Quellenverbindung lässt sich nicht eindeutig wiederherstellen. Prüfe die Quellen des Chats und verbinde das Dateifenster erneut.",
+    "Diese Quellenverbindung lässt sich nicht eindeutig wiederherstellen. Du kannst die Verbindung entfernen und die Quellen des Chats behalten.",
+  "chat.grounding.forgetConnection": "Nur Verbindung entfernen; Chatquellen behalten",
   "chat.grounding.recoveryRequired":
     "Die Wiederherstellung des Chat-Groundings ist fehlgeschlagen. Lade den Chat neu, bevor du eine weitere Quelle verbindest.",
   "chat.grounding.timeoutBlocked":
