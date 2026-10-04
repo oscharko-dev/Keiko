@@ -98,6 +98,7 @@ import { decodeTextFileBytes } from "./binaryDetect.js";
 import {
   anchoredExcerptByteWindow,
   anchoredExcerptByteWindows,
+  validateExcerptAnchors,
 } from "./repoSearchExcerptWindow.js";
 import {
   collectStreamedSearchText,
@@ -3582,12 +3583,7 @@ function assertExcerptReadableByPolicy(requestPath: string, realScopePath: strin
 
 function assertExcerptAnchors(request: ReadExcerptRequest): void {
   if (request.anchors === undefined) return;
-  if (
-    !Array.isArray(request.anchors) ||
-    request.anchors.some((anchor: unknown) => typeof anchor !== "string" || anchor.length === 0)
-  ) {
-    throw new RepoSearchInvalidRangeError("invalid excerpt anchors");
-  }
+  validateExcerptAnchors(request.anchors);
 }
 
 function assertExcerptWindowLimits(request: ReadExcerptRequest): void {
