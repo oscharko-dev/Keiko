@@ -20,3 +20,24 @@
     max-height: calc(100dvh - 28px);
   }
 }
+
+.sourceAlertStack {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15000;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2, 8px);
+  width: max-content;
+  max-width: min(520px, calc(100% - 28px));
+  pointer-events: none;
+}
+
+.sourceAlertStack :global(.source-limit-alert) {
+  position: static;
+  transform: none;
+  width: 100%;
+  max-width: 100%;
+}

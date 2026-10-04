@@ -5,6 +5,7 @@ import { axe } from "jest-axe";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import {
+  reportClientDiagnostic,
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
   type ClientDiagnosticMeta,
@@ -1209,6 +1210,44 @@ describe("AppShell grounding connections", () => {
     expect(after?.onScopeUnbind).toBe(firstScopeUnbind);
     expect(after?.onConnectorBind).toBe(firstConnectorBind);
     expect(after?.onConnectorUnbind).toBe(firstConnectorUnbind);
+  });
+
+  it("stacks global failure and source notices with independent dismissal", async () => {
+    const cappedChat = chat({
+      connectedScopes: Array.from({ length: 8 }, (_unused, index) =>
+        fileScope(`/repo-${String(index)}`, index),
+      ),
+      localKnowledgeScopes: Array.from({ length: 8 }, (_unused, index) =>
+        capsuleScope(`cap-${String(index)}`),
+      ),
+    });
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      chats: [cappedChat],
+      activeChat: cappedChat,
+    };
+    await renderMounted();
+    await act(async () => {
+      await mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", capsuleScope("cap-17"));
+      reportClientDiagnostic("[keiko] uncaught window error: Error", {
+        kind: "window-error",
+        globalFailure: true,
+        correlationId: "stack-global-failure",
+      });
+    });
+    const sourceNotice = await screen.findByText(/already has 16 of 16 connected sources/u);
+    const globalNotice = screen.getByText("Keiko encountered an error.");
+    const stack = sourceNotice.closest(`.${appShellStyles.sourceAlertStack}`);
+    expect(stack).not.toBeNull();
+    expect(globalNotice.closest(`.${appShellStyles.sourceAlertStack}`)).toBe(stack);
+    expect(stack?.querySelectorAll("[role='alert']")).toHaveLength(2);
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss workspace notice" }));
+    expect(sourceNotice).not.toBeInTheDocument();
+    expect(globalNotice).toBeVisible();
+    const globalAlert = globalNotice.closest("[role='alert']");
+    if (!(globalAlert instanceof HTMLElement)) throw new TypeError("Global alert missing");
+    await userEvent.click(within(globalAlert).getByRole("button", { name: "Close" }));
+    expect(globalNotice).not.toBeInTheDocument();
   });
 
   it("rejects the seventeenth mixed Files/Knowledge source with a visible notice", async () => {

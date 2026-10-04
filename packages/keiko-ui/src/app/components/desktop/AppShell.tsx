@@ -2147,20 +2147,22 @@ function AppShellInner(): ReactNode {
                         </Workspace>
                         {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
-                        <GlobalSupportReportAction onlyForFailure />
-                        {sourceConnectionNotice !== null && (
-                          <div className="source-limit-alert" role="alert">
-                            <span>{sourceConnectionNotice}</span>
-                            <button
-                              type="button"
-                              className="source-limit-alert-dismiss"
-                              aria-label={t("workspace.notice.dismiss")}
-                              onClick={() => setSourceConnectionNotice(null)}
-                            >
-                              ×
-                            </button>
-                          </div>
-                        )}
+                        <div className={styles.sourceAlertStack}>
+                          <GlobalSupportReportAction onlyForFailure />
+                          {sourceConnectionNotice !== null && (
+                            <div className="source-limit-alert" role="alert">
+                              <span>{sourceConnectionNotice}</span>
+                              <button
+                                type="button"
+                                className="source-limit-alert-dismiss"
+                                aria-label={t("workspace.notice.dismiss")}
+                                onClick={() => setSourceConnectionNotice(null)}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       {needsGatewaySetup ? null : (
                         <RightRail openTools={openTools} onTool={onTool} />
