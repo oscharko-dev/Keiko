@@ -12,6 +12,10 @@ import {
 } from "./grounded-orchestrator.js";
 
 const roots: string[] = [];
+const invalidMetadataNames = [
+  "~x.csproj",
+  ...(process.platform === "win32" ? [] : ["x\\y.csproj", "C:old.csproj"]),
+];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -65,6 +69,22 @@ function deps(root: string, overrides: Partial<OrchestratorDeps> = {}): Orchestr
 }
 
 describe("metadata admission before retention", () => {
+  it("completes natural workspace retrieval with unsupported portable filename siblings", async () => {
+    const root = rootFixture();
+    writeFileSync(join(root, "package.json"), "{}");
+    for (const name of invalidMetadataNames) writeFileSync(join(root, name), "<Project/>");
+    const result = await retrieveConnectedContextPack(input(root), deps(root));
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+    expect(result.pack.files.map((file) => file.scopePath)).toEqual(["package.json"]);
+    expect(result.pack.usage.filesRead).toBe(1);
+    expect(result.pack.diagnostics?.coverage).toMatchObject({
+      filesDiscovered: 1,
+      deniedByDiscovery: invalidMetadataNames.length,
+      incomplete: false,
+    });
+    expect(result.pack.omitted).toEqual([]);
+  });
+
   it("does not retain or count sibling manifests outside an explicit files selection", async () => {
     const root = rootFixture();
     const selected: string[] = [];
@@ -110,7 +130,7 @@ describe("metadata admission before retention", () => {
       mkdirSync(join(root, directory), { recursive: true });
       const manifest = directory.length === 0 ? "package.json" : `${directory}/package.json`;
       writeFileSync(join(root, manifest), "{}");
-      for (const name of ["~x.csproj", "x\\y.csproj", "C:old.csproj"])
+      for (const name of invalidMetadataNames)
         writeFileSync(join(root, directory, name), "<Project/>");
       const request = input(root);
       const result = await retrieveConnectedContextPack(

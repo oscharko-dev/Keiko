@@ -36,6 +36,7 @@ import {
   WorkspaceReadError,
 } from "./errors.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_READ_OPTIONS,
@@ -120,7 +121,7 @@ function toRelative(root: string, absolutePath: string): string {
 // Returns false when the entry must be skipped for any security or noise reason, recording
 // which tier rejected it for the discovery stats.
 function isAllowed(walk: Walk, relPath: string, isDir: boolean): boolean {
-  if (isDenied(relPath)) {
+  if (!isValidScopePath(relPath, { mustBeRelative: true }) || isDenied(relPath)) {
     walk.denied += 1;
     return false;
   }
