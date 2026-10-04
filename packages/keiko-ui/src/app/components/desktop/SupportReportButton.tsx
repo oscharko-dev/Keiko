@@ -30,7 +30,6 @@ const MAX_FULFILLED_REPORTS = 128;
 interface ReadyReport {
   readonly report: DesktopSupportReportResponse;
   readonly download: SupportReportDownload | undefined;
-  readonly localDownload: SupportReportDownload | undefined;
   readonly bytes: number;
   readonly pending?: AbortController;
 }
@@ -67,8 +66,8 @@ function releaseReport(key: string, controller: AbortController): void {
     !(outcome instanceof AbortController) &&
     outcome.pending === controller
   ) {
-    const { report, download, localDownload, bytes } = outcome;
-    outcomes.set(key, { report, download, localDownload, bytes });
+    const { report, download, bytes } = outcome;
+    outcomes.set(key, { report, download, bytes });
   } else return;
   notifyOutcomes();
 }
@@ -82,7 +81,6 @@ function fulfilledReports(): readonly (readonly [string, ReadyReport])[] {
 function disposeReadyReport(ready: ReadyReport): void {
   ready.pending?.abort();
   ready.download?.dispose();
-  ready.localDownload?.dispose();
 }
 
 function forgetReadyReport(key: string): void {
@@ -96,10 +94,6 @@ function forgetReadyReport(key: string): void {
 function expireServerDownload(key: string): void {
   const outcome = outcomes.get(key);
   if (outcome === undefined || outcome instanceof AbortController) return;
-  if (outcome.localDownload === undefined) {
-    forgetReadyReport(key);
-    return;
-  }
   outcome.download?.dispose();
   outcomes.set(key, { ...outcome, download: undefined });
   notifyOutcomes();
@@ -109,17 +103,15 @@ function fulfillReport(
   key: string,
   report: DesktopSupportReportResponse,
   download: SupportReportDownload,
-  localDownload: SupportReportDownload | undefined,
 ): void {
   const bytes = new TextEncoder().encode(report.reportJson).byteLength;
   if (bytes > MAX_SUPPORT_REPORT_BYTES) {
     download.dispose();
-    localDownload?.dispose();
     throw new TypeError("Support report cache budget exceeded");
   }
   const prior = outcomes.get(key);
   if (prior !== undefined && !(prior instanceof AbortController)) disposeReadyReport(prior);
-  outcomes.set(key, { report, download, localDownload, bytes });
+  outcomes.set(key, { report, download, bytes });
   let retainedBytes = fulfilledReports().reduce((total, [, ready]) => total + ready.bytes, 0);
   const ready = fulfilledReports();
   for (const [expired, entry] of ready) {
@@ -148,7 +140,7 @@ interface SupportReportButtonProps {
 }
 
 type ReportFailure = "error" | "session-denied" | "service-unavailable" | "rate-limited";
-type ReportStatus = "idle" | "busy" | "saved" | ReportFailure;
+type ReportStatus = "idle" | "busy" | "saved" | "expired" | ReportFailure;
 
 interface ReportFeedback {
   readonly key: string;
@@ -217,7 +209,8 @@ function useReportExpiry(key: string, outcome: ReportOutcome | undefined): void 
 
 function readyReportStatus(ready: ReadyReport, feedback: ReportFeedback["state"]): ReportStatus {
   if (ready.pending !== undefined) return "busy";
-  return feedback === "idle" ? "saved" : feedback;
+  if (feedback !== "idle" && feedback !== "saved") return feedback;
+  return ready.download === undefined ? "expired" : "saved";
 }
 
 function useSupportReportAction({ correlationId, errorKey }: SupportReportButtonProps): {
@@ -275,7 +268,7 @@ async function runReport(
     api.downloadSupportReport(report);
     setFeedback({ key, state: "saved" });
     const download = api.createSupportReportDownload(report);
-    fulfillReport(key, report, download, prepareLocalDownload(api, report, correlationId));
+    fulfillReport(key, report, download);
     reportSupportDownload(correlationId, "automatic");
   } catch (error) {
     if (controller.signal.aborted || request.current !== pending) return;
@@ -290,25 +283,6 @@ async function runReport(
     });
   } finally {
     if (request.current === pending) request.current = null;
-  }
-}
-
-function prepareLocalDownload(
-  api: typeof import("@/lib/support-report-api"),
-  report: DesktopSupportReportResponse,
-  correlationId: string | undefined,
-): SupportReportDownload | undefined {
-  try {
-    return api.createSupportReportDownload(report, "local");
-  } catch (error) {
-    reportClientDiagnostic(
-      `[keiko] local support report target unavailable: ${clientErrorSummary(error)}`,
-      {
-        correlationId,
-        errorKind: bffRequestErrorKind(error),
-      },
-    );
-    return undefined;
   }
 }
 
@@ -339,6 +313,8 @@ function reportFeedbackKey(status: ReportStatus): MessageKey | undefined {
   switch (status) {
     case "saved":
       return "supportReport.saved";
+    case "expired":
+      return "supportReport.expired";
     case "error":
       return "supportReport.failed";
     case "session-denied":
@@ -406,16 +382,6 @@ function ReadyReportActions({
           onClick={() => reportSupportDownload(props.correlationId, "manual")}
         >
           {t("supportReport.download")}
-        </a>
-      ) : null}
-      {ready.localDownload !== undefined ? (
-        <a
-          className={className}
-          href={ready.localDownload.href}
-          download={ready.report.fileName}
-          onClick={() => reportSupportDownload(props.correlationId, "manual")}
-        >
-          {t("supportReport.downloadLocal")}
         </a>
       ) : null}
       <button type="button" className={className} disabled={busy} onClick={() => void regenerate()}>

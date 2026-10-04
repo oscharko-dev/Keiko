@@ -32,17 +32,16 @@ afterEach(() => {
 });
 
 describe("SupportReportButton", () => {
-  it("keeps prepared downloads during failed regeneration and offers a local user gesture", async () => {
+  it("keeps the prepared authenticated download during failed regeneration", async () => {
     const disposeServer = vi.fn();
-    const disposeLocal = vi.fn();
-    vi.mocked(createSupportReportDownload)
-      .mockReturnValueOnce({ href: "/api/prepared-original", dispose: disposeServer })
-      .mockReturnValueOnce({ href: "blob:prepared-original", dispose: disposeLocal });
+    vi.mocked(createSupportReportDownload).mockReturnValueOnce({
+      href: "/api/prepared-original",
+      dispose: disposeServer,
+    });
     create.mockResolvedValueOnce(report);
     render(<SupportReportButton correlationId="prepared-original" />);
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-    await userEvent.click(screen.getByRole("link", { name: "Download locally" }));
-    expect(createSupportReportDownload).toHaveBeenCalledWith(report, "local");
+    await userEvent.click(screen.getByRole("link", { name: "Download report" }));
     expect(reportClientDiagnostic).toHaveBeenLastCalledWith(expect.any(String), {
       correlationId: "prepared-original",
       supportReportDelivery: "manual",
@@ -56,22 +55,17 @@ describe("SupportReportButton", () => {
       "href",
       "/api/prepared-original",
     );
-    expect(screen.getByRole("link", { name: "Download locally" })).toHaveAttribute(
-      "href",
-      "blob:prepared-original",
-    );
     expect(disposeServer).not.toHaveBeenCalled();
-    expect(disposeLocal).not.toHaveBeenCalled();
     expect(create).toHaveBeenLastCalledWith("prepared-original", expect.any(AbortSignal));
     expect(download).toHaveBeenCalledOnce();
   });
 
   it("shares regeneration while retaining prior bytes and releases them only on replacement", async () => {
     const disposeServer = vi.fn();
-    const disposeLocal = vi.fn();
-    vi.mocked(createSupportReportDownload)
-      .mockReturnValueOnce({ href: "/api/prior", dispose: disposeServer })
-      .mockReturnValueOnce({ href: "blob:prior", dispose: disposeLocal });
+    vi.mocked(createSupportReportDownload).mockReturnValueOnce({
+      href: "/api/prior",
+      dispose: disposeServer,
+    });
     create.mockResolvedValueOnce(report);
     render(
       <>
@@ -95,12 +89,10 @@ describe("SupportReportButton", () => {
       "/api/prior",
     );
     expect(disposeServer).not.toHaveBeenCalled();
-    expect(disposeLocal).not.toHaveBeenCalled();
     const replacement = { fileName: "replacement.json", reportJson: "replacement" };
     await act(async () => finish(replacement));
     expect(disposeServer).toHaveBeenCalledOnce();
-    expect(disposeLocal).toHaveBeenCalledOnce();
-    expect(screen.getAllByRole("link", { name: "Download locally" })[0]).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: "Download report" })[0]).toHaveAttribute(
       "download",
       replacement.fileName,
     );
@@ -123,7 +115,7 @@ describe("SupportReportButton", () => {
     expect(signal?.aborted).toBe(true);
     await act(async () => finish({ fileName: "late.json", reportJson: "late" }));
     render(<SupportReportButton correlationId="cancel-regeneration" />);
-    expect(screen.getByRole("link", { name: "Download locally" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
       "download",
       report.fileName,
     );
@@ -141,7 +133,7 @@ describe("SupportReportButton", () => {
     await userEvent.click(screen.getByRole("button", { name: "Regenerate report" }));
     await act(async () => deadline.abort(new DOMException("Deadline expired", "TimeoutError")));
     expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
-    expect(screen.getByRole("link", { name: "Download locally" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
       "download",
       report.fileName,
     );
@@ -149,65 +141,18 @@ describe("SupportReportButton", () => {
     expect(download).toHaveBeenCalledOnce();
   });
 
-  it("disposes both retained download targets when the cache is reset", async () => {
+  it("disposes the retained download target when the cache is reset", async () => {
     const disposeServer = vi.fn();
-    const disposeLocal = vi.fn();
-    vi.mocked(createSupportReportDownload)
-      .mockReturnValueOnce({ href: "/api/reset-report", dispose: disposeServer })
-      .mockReturnValueOnce({ href: "blob:reset-report", dispose: disposeLocal });
+    vi.mocked(createSupportReportDownload).mockReturnValueOnce({
+      href: "/api/reset-report",
+      dispose: disposeServer,
+    });
     create.mockResolvedValueOnce(report);
     render(<SupportReportButton correlationId="reset-prepared" />);
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
     await act(async () => resetSupportReportOutcomesForTests());
     expect(disposeServer).toHaveBeenCalledOnce();
-    expect(disposeLocal).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
-  });
-
-  it("keeps the authenticated download usable when optional local allocation fails", async () => {
-    const dispose = vi.fn();
-    vi.mocked(createSupportReportDownload)
-      .mockReturnValueOnce({ href: "/api/retained", dispose })
-      .mockImplementationOnce(() => {
-        throw new TypeError("private allocation details");
-      });
-    create.mockResolvedValueOnce(report);
-    render(<SupportReportButton correlationId="local-allocation-failure" />);
-    await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Download started.");
-    expect(dispose).not.toHaveBeenCalled();
-    expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
-      "href",
-      "/api/retained",
-    );
-    expect(screen.queryByRole("link", { name: "Download locally" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Regenerate report" })).toBeEnabled();
-    expect(reportClientDiagnostic).toHaveBeenCalledWith(
-      "[keiko] local support report target unavailable: TypeError",
-      {
-        correlationId: "local-allocation-failure",
-        errorKind: "unavailable",
-      },
-    );
-  });
-
-  it("returns to creation on server expiry if local download preparation was unavailable", async () => {
-    vi.useFakeTimers();
-    const dispose = vi.fn();
-    vi.mocked(createSupportReportDownload)
-      .mockReturnValueOnce({ href: "/api/expiry-only", expiresAtMs: Date.now() + 60_000, dispose })
-      .mockImplementationOnce(() => {
-        throw new TypeError("allocation failed");
-      });
-    create.mockResolvedValueOnce(report);
-    render(<SupportReportButton correlationId="expiry-only" />);
-    await act(async () => {
-      screen.getByRole("button", { name: "Create error report" }).click();
-    });
-    await act(async () => vi.advanceTimersByTimeAsync(60_000));
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
-    expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
   });
 
   it("releases a stalled export at the complete action deadline and allows retry", async () => {
@@ -265,7 +210,7 @@ describe("SupportReportButton", () => {
     },
   );
 
-  it("keeps prepared local bytes and regeneration when the authenticated reference expires", async () => {
+  it("removes an expired authenticated link and offers immediate regeneration", async () => {
     vi.useFakeTimers();
     vi.mocked(createSupportReportDownload).mockReturnValueOnce({
       href: "/api/diagnostics/report/download/test",
@@ -280,15 +225,52 @@ describe("SupportReportButton", () => {
     expect(screen.getByRole("link", { name: "Download report" })).toBeInTheDocument();
     await act(async () => vi.advanceTimersByTimeAsync(60_000));
     expect(screen.getByRole("button", { name: "Regenerate report" })).toBeEnabled();
-    expect(screen.getByRole("link", { name: "Download locally" })).toHaveAttribute(
-      "download",
-      report.fileName,
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Download link expired. Regenerate this report.",
     );
     expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
     await act(async () => {
       screen.getByRole("button", { name: "Regenerate report" }).click();
     });
     expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets regeneration finish after its previous authenticated download reference expires", async () => {
+    vi.useFakeTimers();
+    const dispose = vi.fn();
+    vi.mocked(createSupportReportDownload).mockReturnValueOnce({
+      href: "/api/expiring-prior",
+      expiresAtMs: Date.now() + 1000,
+      dispose,
+    });
+    create.mockResolvedValueOnce(report);
+    render(<SupportReportButton correlationId="expiry-during-regeneration" />);
+    await act(async () => {
+      screen.getByRole("button", { name: "Create error report" }).click();
+    });
+    let finish: (value: typeof report) => void = () => undefined;
+    create.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await act(async () => {
+      screen.getByRole("button", { name: "Regenerate report" }).click();
+    });
+    const signal = create.mock.calls.at(-1)?.[1];
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(signal?.aborted).toBe(false);
+    expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Creating report…" })).toBeDisabled();
+    const replacement = { fileName: "fresh.json", reportJson: "fresh" };
+    await act(async () => finish(replacement));
+    expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
+      "download",
+      replacement.fileName,
+    );
+    expect(screen.getByRole("button", { name: "Regenerate report" })).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Download started.");
   });
 
   it("downloads exactly the clicked failure without a second confirmation", async () => {

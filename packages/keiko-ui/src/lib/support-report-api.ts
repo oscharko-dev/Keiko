@@ -54,12 +54,11 @@ export interface SupportReportDownload {
   readonly dispose: () => void;
 }
 
-/** A stable local download target until the report action is dismissed or its cache is evicted. */
+/** A stable download target until the report action is dismissed or its cache is evicted. */
 export function createSupportReportDownload(
   report: DesktopSupportReportResponse,
-  delivery: "server" | "local" = "server",
 ): SupportReportDownload {
-  if (delivery === "server" && report.downloadPath !== undefined)
+  if (report.downloadPath !== undefined)
     return {
       href: report.downloadPath,
       expiresAtMs: report.downloadExpiresAtMs,

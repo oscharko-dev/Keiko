@@ -39,7 +39,7 @@ export const DE_MESSAGES = {
   "supportReport.create": "Fehlerbericht erstellen",
   "supportReport.creating": "Bericht wird erstellt…",
   "supportReport.download": "Bericht herunterladen",
-  "supportReport.downloadLocal": "Lokal herunterladen",
+  "supportReport.expired": "Der Download-Link ist abgelaufen. Bericht erneut erstellen.",
   "supportReport.regenerate": "Bericht erneut erstellen",
   "supportReport.saved": "Download gestartet.",
   "supportReport.failed": "Bericht nicht verfügbar. Erneut versuchen.",

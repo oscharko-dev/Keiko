@@ -131,7 +131,6 @@ describe("Footer — window status trigger", () => {
       "download",
       "report.json",
     );
-    expect(screen.getByRole("link", { name: "Download locally" })).toBeInTheDocument();
     expect(currentGlobalClientFailure()).toBeNull();
   });
 
