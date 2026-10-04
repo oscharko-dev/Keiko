@@ -4875,6 +4875,20 @@ function cachedGroundedPack({
   return assembleOptions.microIndex.get(key);
 }
 
+function selectPackAtoms(
+  atoms: readonly EvidenceAtom[],
+  selectedPaths: ReadonlySet<string>,
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+): readonly EvidenceAtom[] {
+  return selectGroundedEvidenceAtoms(
+    atoms,
+    selectedPaths,
+    input.scope.scopeId,
+    isDirectEvidenceLookup(input.query, plan.anchors),
+  );
+}
+
 function preparePackAssembly(
   input: OrchestratorInput,
   plan: ExplorationPlan,
@@ -4919,7 +4933,7 @@ function preparePackAssembly(
     nowMs: nowMs(),
   });
   const selectedPaths = new Set(ordered.kept.map((candidate) => candidate.scopePath));
-  const selectedAtoms = selectGroundedEvidenceAtoms(atoms, selectedPaths, input.scope.scopeId);
+  const selectedAtoms = selectPackAtoms(atoms, selectedPaths, input, plan);
   return {
     atoms: selectedAtoms,
     initialUsage,

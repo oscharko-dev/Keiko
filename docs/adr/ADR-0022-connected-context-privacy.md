@@ -157,6 +157,11 @@ Definition-line lookup inspects every retained symbol candidate sequentially wit
 Located symbol lines use the existing definition priority for atom and excerpt-window selection;
 requested definitions consume their per-file byte share before unrelated file headers. File-level
 matches without a located line retain ordinary priority and the existing header fallback.
+For direct definition lookups, a located definition replaces its same-query, same-path generic
+filename-discovery header before source reads. Overview headers, independently matched ranges,
+and discovery from other queries remain eligible; actual excerpt truncation remains reported.
+Default Chat queries share the lexical ring's existing retained-match bound rather than imposing
+a separate lower result ceiling. Explicit query limits and the model/excerpt budgets still apply.
 A completed eligible scan with only a retained-match limit reports omitted matching evidence,
 not unchecked source files. I/O failures, traversal pruning, cancellation, and elapsed limits
 continue to report incomplete scope coverage; omitted evidence never proves a fact absent.

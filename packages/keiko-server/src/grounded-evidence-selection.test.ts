@@ -53,6 +53,25 @@ function pathLevelAtom(scopePath: string, score: number): EvidenceAtom {
   return { ...atom(scopePath, score, 1, 1, "path-level"), lineRange: undefined };
 }
 
+function discoveryListing(scopePath: string, queryFingerprint = "query"): EvidenceAtom {
+  const listing = pathLevelAtom(scopePath, 1);
+  return {
+    ...listing,
+    provenance: { kind: "file-listing", tool: "repo.findFiles", queryFingerprint },
+  };
+}
+
+function locatedDefinition(scopePath: string): EvidenceAtom {
+  return {
+    ...atom(scopePath, 1, 301, 301, "definition"),
+    provenance: {
+      kind: "lexical-search",
+      tool: "repo.symbolFileDiscovery",
+      queryFingerprint: "query",
+    },
+  };
+}
+
 function broadCandidates(count = 20): readonly CandidateFile[] {
   return Array.from({ length: count }, (_value, index) =>
     candidate(`src/file-${String(index).padStart(2, "0")}.ts`, 0.5 - index * 0.005),
@@ -246,6 +265,57 @@ describe("selectGroundedCandidateFiles", () => {
 });
 
 describe("selectGroundedEvidenceAtoms", () => {
+  it("substitutes the located definition for its same-query generic discovery header", () => {
+    const definition = locatedDefinition("src/target.ts");
+    const selected = selectGroundedEvidenceAtoms(
+      [discoveryListing("src/target.ts"), definition],
+      new Set(["src/target.ts"]),
+      "scope",
+      true,
+    );
+    expect(selected).toEqual([definition]);
+  });
+
+  it("keeps generic discovery headers for ordinary overview selection", () => {
+    const listing = discoveryListing("src/target.ts");
+    const selected = selectGroundedEvidenceAtoms(
+      [listing, locatedDefinition("src/target.ts")],
+      new Set(["src/target.ts"]),
+      "scope",
+    );
+    expect(selected).toContainEqual(listing);
+  });
+
+  it("keeps same-path listing evidence from an independent query", () => {
+    const listing = discoveryListing("src/target.ts", "independent-query");
+    const selected = selectGroundedEvidenceAtoms(
+      [listing, locatedDefinition("src/target.ts")],
+      new Set(["src/target.ts"]),
+      "scope",
+      true,
+    );
+    expect(selected).toContainEqual(listing);
+  });
+
+  it("preserves actual ranged lexical evidence and headers without a located definition", () => {
+    const lexical = atom("src/target.ts", 0.9, 1, 4, "actual-match");
+    const otherListing = discoveryListing("src/other.ts");
+    const selected = selectGroundedEvidenceAtoms(
+      [
+        discoveryListing("src/target.ts"),
+        locatedDefinition("src/target.ts"),
+        lexical,
+        otherListing,
+      ],
+      new Set(["src/target.ts", "src/other.ts"]),
+      "scope",
+      true,
+    );
+    expect(selected).toContainEqual(lexical);
+    expect(selected).toContainEqual(otherListing);
+    expect(selected.filter((entry) => entry.lineRange === undefined)).toHaveLength(1);
+  });
+
   it("keeps file-level symbol discovery without a located line at ordinary priority", () => {
     const listing = pathLevelAtom("src/target.ts", 1);
     expect(

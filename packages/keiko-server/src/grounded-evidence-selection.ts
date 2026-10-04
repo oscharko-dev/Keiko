@@ -125,8 +125,34 @@ function compareByTracePriority(a: EvidenceAtom, b: EvidenceAtom): number {
   return tracePriority(b) - tracePriority(a) || compareByScore(a, b);
 }
 
-function selectAtomsForPath(atoms: readonly EvidenceAtom[]): readonly EvidenceAtom[] {
-  const unique = deduplicateRanges(atoms);
+function withoutRedundantDiscoveryHeaders(
+  atoms: readonly EvidenceAtom[],
+  preferLocatedDefinitions: boolean,
+): readonly EvidenceAtom[] {
+  if (!preferLocatedDefinitions) return atoms;
+  const locatedQueries = new Set(
+    atoms
+      .filter((atom) => atom.lineRange !== undefined && tracePriority(atom) === 2)
+      .map((atom) => atom.provenance.queryFingerprint),
+  );
+  return atoms.filter(
+    (atom) =>
+      !(
+        atom.lineRange === undefined &&
+        atom.provenance.kind === "file-listing" &&
+        atom.provenance.tool === "repo.findFiles" &&
+        locatedQueries.has(atom.provenance.queryFingerprint)
+      ),
+  );
+}
+
+function selectAtomsForPath(
+  atoms: readonly EvidenceAtom[],
+  preferLocatedDefinitions: boolean,
+): readonly EvidenceAtom[] {
+  const unique = deduplicateRanges(
+    withoutRedundantDiscoveryHeaders(atoms, preferLocatedDefinitions),
+  );
   const selected = new Map<string, EvidenceAtom>();
   for (const atom of [...unique]
     .filter((entry) => tracePriority(entry) > 0)
@@ -161,11 +187,12 @@ export function selectGroundedEvidenceAtoms(
   atoms: readonly EvidenceAtom[],
   selectedPaths: ReadonlySet<string>,
   _scopeId: string,
+  preferLocatedDefinitions = false,
 ): readonly EvidenceAtom[] {
   const grouped = atomsByPath(atoms);
   const selected: EvidenceAtom[] = [];
   for (const scopePath of selectedPaths) {
-    selected.push(...selectAtomsForPath(grouped.get(scopePath) ?? []));
+    selected.push(...selectAtomsForPath(grouped.get(scopePath) ?? [], preferLocatedDefinitions));
   }
   return selected;
 }
