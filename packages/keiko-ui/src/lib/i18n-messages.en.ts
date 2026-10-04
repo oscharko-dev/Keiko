@@ -29,6 +29,15 @@ export const EN_MESSAGES = {
   "rail.quality": "Quality Intelligence",
   "rail.promptEnhancer": "Prompt Enhancer",
   "rail.coding": "Coding Workbench",
+  "rail.diagnostics": "Diagnostics",
+  "window.type.diagnostics.title": "Diagnostics",
+  "window.type.diagnostics.desc": "Check diagnostic recording and create a support report.",
+  "diagnostics.description":
+    "Create and download a report to send to support. Stored diagnostic cases are diagnostic records, not a count of confirmed or unresolved errors.",
+  "diagnostics.recordingReady": "Diagnostic recording ready",
+  "diagnostics.loading": "Checking diagnostic recording…",
+  "diagnostics.unavailable": "Diagnostic status unavailable. You can still create a report.",
+  "diagnostics.noRetainedCases": "No diagnostic cases are currently stored.",
   "rail.localKnowledge": "Local Knowledge",
   "rail.editor": "Editor",
   "editor.empty.opening": "Opening…",
@@ -37,10 +46,11 @@ export const EN_MESSAGES = {
   "supportReport.download": "Download report",
   "supportReport.expired": "Download link expired. Regenerate this report.",
   "supportReport.regenerate": "Regenerate report",
+  "supportReport.limited":
+    "Limited report: server evidence is unavailable. This report contains only the report availability status.",
   "supportReport.saved": "Download started.",
   "supportReport.failed": "Report unavailable. Try again.",
-  "supportReport.sessionDenied":
-    "Report unavailable. Open Keiko from the launcher, then retry this report.",
+  "supportReport.sessionDenied": "Report unavailable in this browser. Try creating it again.",
   "supportReport.serviceUnavailable":
     "Report unavailable. Check that Keiko is running locally, then retry.",
   "supportReport.rateLimited": "Please wait a minute, then retry this report.",

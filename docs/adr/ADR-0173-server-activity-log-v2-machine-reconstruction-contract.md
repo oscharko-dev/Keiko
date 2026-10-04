@@ -738,8 +738,22 @@ reader first place it in a private directory and file according to the receiving
 Browser delivery is reported as initiation, never as an acknowledged operating-system save. The
 report action keeps a **Download report** link after its automatic attempt, allowing a real user
 gesture to retry the same bytes without a second report request. The BFF serves those canonical
-bytes as an HTTP attachment at `/api/diagnostics/report/download/:downloadId`; every request requires
-the exact existing session that generated the artifact. The opaque reference conveys no authority.
+bytes as an HTTP attachment at `/api/diagnostics/report/download/:downloadId`. Full reports always
+require the exact existing session that generated the artifact; their opaque reference conveys no
+authority. If the local session is absent, forged or expired, or browser diagnostic delivery cannot
+be acknowledged, the same canonical producer can return an explicitly insufficient client-only
+availability artifact. This branch never resolves private state, reads a log, creates an incident
+or retention pin, or attributes a registered failure. Its manual header remains unattributed with
+unknown error kind and zero frames; its evidence is empty. The optional closed `clientReport`
+projection contains only `serverEvidence: unavailable` and the availability reason
+`session-unavailable` or `diagnostic-delivery-unavailable`. No original messages, paths, stacks,
+credentials or claimed error facts are collected. The UI labels the report as limited and names the
+absence of server evidence. Only these validated limited bytes can be served under a client-only
+attachment reference without a session; a limited token never grants access to a full report.
+The report remains schema v1 with canonical integrity hashes. Older strict consumers may reject
+the new optional projection, rather than silently claim compatibility; receiving operators use the
+current canonical validator/analyzer. A completely unavailable BFF cannot prepare or deliver this
+artifact, and the UI must report that limitation rather than claim an operating-system save.
 Process-local delivery caching is bounded by 10 MiB of UTF-8 report bytes, 128 entries and a
 15-minute lifetime; expiry makes report creation available again. The response uses `no-store`,
 `nosniff`, and the closed canonical filename. Older-server local object URLs are released on

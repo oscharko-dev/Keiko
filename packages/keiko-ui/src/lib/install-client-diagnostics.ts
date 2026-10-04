@@ -65,6 +65,7 @@ import {
   restoreClientDiagnosticLoss,
   setClientDiagnosticWriter,
   setClientDiagnosticDeliveryRetry,
+  CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS,
   takeClientDiagnosticLoss,
 } from "./client-diagnostics";
 import { ApiError } from "./api-shared-primitives";
@@ -549,7 +550,7 @@ async function sendClientDiagnosticBody(
       method: "POST",
       body: JSON.stringify(body),
       keepalive: true,
-      signal: signal ?? AbortSignal.timeout(15_000),
+      signal: signal ?? AbortSignal.timeout(CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS),
     });
     return true;
   } catch (error) {

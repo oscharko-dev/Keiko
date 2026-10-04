@@ -1,5 +1,6 @@
 // Desktop composition uses the same incident, query and canonical serializer as CLI export.
 import { randomUUID } from "node:crypto";
+import { incidentCorrelationId } from "../defect-fingerprint.js";
 import {
   MAX_SUPPORT_REPORT_EVENT_BYTES,
   supportIncidentPrivateProjection,
@@ -13,6 +14,7 @@ import {
   SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   recordUserReportedIncident,
   prepareUnretainedUserReportIncident,
+  prepareUnretainedUserReportDescriptor,
   supportIncidentSegmentFiles,
   type SupportIncidentRejection,
 } from "../support-incident.js";
@@ -20,10 +22,12 @@ import { listSupportIncidentEntries } from "../support-incident-store.js";
 import { attributeUnretainedReportFailure } from "./support-desktop-report-attribution.js";
 import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
+  runSupportQuery,
   type SupportQuerySelection,
   type SupportQueryResult,
 } from "./support-query.js";
 import { executeLocalSupportQuery } from "./support-local-query.js";
+import { ActivityLogScanner, ensureSegmentManifests } from "./support-segment-scan.js";
 import { resolveSelectedSupportIncident } from "./support-incident-resolution.js";
 import {
   buildSupportReport,
@@ -43,7 +47,9 @@ export class DesktopSupportReportPreparationError extends Error {
   }
 }
 
-function correlationSelection(correlationId: string): SupportQuerySelection {
+function correlationSelection(
+  correlationId: string,
+): Extract<SupportQuerySelection, { kind: "closure" }> {
   return {
     kind: "closure",
     queryClass: "correlation",
@@ -196,23 +202,11 @@ export function createPreparedDesktopSupportReport(
     incidentDescriptor(attributeUnretainedReportFailure(record, evidence.result), evidence.result),
     evidence.result,
   );
-  return {
-    fileName: supportReportFileName(
-      report.schemaVersion,
-      report.incident.incidentId,
-      report.incident.createdAtMs,
-    ),
-    reportJson: serializeSupportReport(report),
-    summary: {
-      status: report.selection.status,
-      reasons: report.selection.reasons,
-      recordCount: report.evidence.recordCount,
-      reportDigest: report.integrity.reportDigest,
-      incidentId: report.incident.incidentId,
-      manifestUnreadableCount: evidence.manifestStats.unreadableCount,
-      manifestReusedCount: evidence.manifestStats.reusedCount,
-    },
-  };
+  return desktopReportResponse(
+    report,
+    evidence.manifestStats.unreadableCount,
+    evidence.manifestStats.reusedCount,
+  );
 }
 
 export function createDesktopSupportReport(
@@ -226,4 +220,61 @@ export function createDesktopSupportReport(
     selected.correlationId,
     selected.evidence,
   );
+}
+
+/** Canonical browser availability artifact. No private state directory or log is consulted. */
+export function createClientOnlySupportReport(
+  correlationId: string | undefined,
+  availabilityReason: NonNullable<SupportReport["incident"]["clientReport"]>["availabilityReason"],
+): DesktopSupportReportResponse {
+  const selectedCorrelation = incidentCorrelationId(correlationId) ?? randomUUID();
+  const scanner = new ActivityLogScanner("");
+  const pass = ensureSegmentManifests("", [], scanner, {
+    trigger: "export",
+    persist: false,
+    rebuild: false,
+  });
+  const query = runSupportQuery({
+    files: [],
+    scanner,
+    manifests: pass.manifests,
+    manifestStats: pass.stats,
+    selection: { ...correlationSelection(selectedCorrelation), roots: [] },
+    limits: REPORT_QUERY_LIMITS,
+  });
+  const incident = incidentDescriptor(
+    prepareUnretainedUserReportDescriptor(selectedCorrelation),
+    query,
+  );
+  const report = buildSupportReport(
+    { ...incident, clientReport: { serverEvidence: "unavailable", availabilityReason } },
+    query,
+  );
+  return desktopReportResponse(report, 0, 0, "client-only");
+}
+
+function desktopReportResponse(
+  report: SupportReport,
+  manifestUnreadableCount: number,
+  manifestReusedCount: number,
+  evidenceScope?: "client-only",
+): DesktopSupportReportResponse {
+  return {
+    ...(evidenceScope === undefined ? {} : { evidenceScope }),
+    fileName: supportReportFileName(
+      report.schemaVersion,
+      report.incident.incidentId,
+      report.incident.createdAtMs,
+    ),
+    reportJson: serializeSupportReport(report),
+    summary: {
+      status: report.selection.status,
+      reasons: report.selection.reasons,
+      recordCount: report.evidence.recordCount,
+      reportDigest: report.integrity.reportDigest,
+      incidentId: report.incident.incidentId,
+      manifestUnreadableCount,
+      manifestReusedCount,
+    },
+  };
 }

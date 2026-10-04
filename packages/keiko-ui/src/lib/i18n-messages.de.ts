@@ -33,6 +33,16 @@ export const DE_MESSAGES = {
   "rail.quality": "Quality Intelligence",
   "rail.promptEnhancer": "Prompt Enhancer",
   "rail.coding": "Coding Workbench",
+  "rail.diagnostics": "Diagnose",
+  "window.type.diagnostics.title": "Diagnose",
+  "window.type.diagnostics.desc": "Diagnoseaufzeichnung prüfen und einen Fehlerbericht erstellen.",
+  "diagnostics.description":
+    "Erstelle einen Bericht, lade ihn herunter und sende ihn an den Support. Gespeicherte Diagnosefälle sind Diagnoseaufzeichnungen, keine Anzahl bestätigter oder ungelöster Fehler.",
+  "diagnostics.recordingReady": "Diagnoseaufzeichnung bereit",
+  "diagnostics.loading": "Diagnoseaufzeichnung wird geprüft…",
+  "diagnostics.unavailable":
+    "Diagnosestatus nicht verfügbar. Du kannst trotzdem einen Bericht erstellen.",
+  "diagnostics.noRetainedCases": "Zurzeit sind keine Diagnosefälle gespeichert.",
   "rail.localKnowledge": "Lokales Wissen",
   "rail.editor": "Editor",
   "editor.empty.opening": "Wird geöffnet…",
@@ -41,10 +51,11 @@ export const DE_MESSAGES = {
   "supportReport.download": "Bericht herunterladen",
   "supportReport.expired": "Der Download-Link ist abgelaufen. Bericht erneut erstellen.",
   "supportReport.regenerate": "Bericht erneut erstellen",
+  "supportReport.limited":
+    "Eingeschränkter Bericht: Server-Belege sind nicht verfügbar. Dieser Bericht enthält nur den Verfügbarkeitsstatus der Berichtserstellung.",
   "supportReport.saved": "Download gestartet.",
   "supportReport.failed": "Bericht nicht verfügbar. Erneut versuchen.",
-  "supportReport.sessionDenied":
-    "Bericht nicht verfügbar. Keiko über den Launcher öffnen, dann diesen Bericht erneut erstellen.",
+  "supportReport.sessionDenied": "Bericht in diesem Browser nicht verfügbar. Erneut erstellen.",
   "supportReport.serviceUnavailable":
     "Bericht nicht verfügbar. Prüfen, ob Keiko lokal läuft, dann erneut versuchen.",
   "supportReport.rateLimited": "Bitte eine Minute warten, dann diesen Bericht erneut erstellen.",

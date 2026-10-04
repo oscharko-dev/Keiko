@@ -426,6 +426,26 @@ describe("received private incident projection", () => {
   const segment = projection.segments[0];
   if (segment === undefined) throw new TypeError("missing production projection segment");
 
+  it.each([
+    { serverEvidence: "available", availabilityReason: "session-unavailable" },
+    { serverEvidence: "unavailable", availabilityReason: "customer private prose" },
+    {
+      serverEvidence: "unavailable",
+      availabilityReason: "session-unavailable",
+      message: "private",
+    },
+  ])("rejects unbounded or invented client report metadata %j", (clientReport) => {
+    expect(parseSupportIncidentPrivateProjection({ ...projection, clientReport })).toBeUndefined();
+  });
+  it("rejects client-only labels attached to retained server evidence", () => {
+    expect(
+      parseSupportIncidentPrivateProjection({
+        ...projection,
+        clientReport: { serverEvidence: "unavailable", availabilityReason: "session-unavailable" },
+      }),
+    ).toBeUndefined();
+  });
+
   it("accepts the owning producer's complete closed projection", () => {
     expect(parseSupportIncidentPrivateProjection(projection)).toEqual(projection);
   });

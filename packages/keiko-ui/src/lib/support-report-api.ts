@@ -1,7 +1,10 @@
 import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { bffFetchJson } from "./http";
-import { ensureClientDiagnosticDelivery } from "./client-diagnostics";
+import {
+  ensureClientDiagnosticDelivery,
+  CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS,
+} from "./client-diagnostics";
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 
 export class SupportReportEvidenceUnavailable extends Error {
@@ -11,13 +14,26 @@ export class SupportReportEvidenceUnavailable extends Error {
   }
 }
 
-async function ensureReportEvidence(correlationId: string, signal: AbortSignal): Promise<void> {
+async function ensureReportEvidence(
+  correlationId: string,
+  signal: AbortSignal,
+): Promise<boolean | undefined> {
+  const deliverySignal = AbortSignal.any([
+    signal,
+    AbortSignal.timeout(CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS),
+  ]);
   try {
-    if ((await ensureClientDiagnosticDelivery(correlationId, signal)) === false)
-      throw new SupportReportEvidenceUnavailable();
+    return await ensureClientDiagnosticDelivery(correlationId, deliverySignal);
   } catch (error) {
-    // The same deadline covers initial acknowledgement and manual redelivery. Expiring while
-    // waiting for evidence is delivery loss, not a second actionable application failure.
+    // A stalled acknowledgement cannot consume the entire report deadline. Only the delivery
+    // stage timeout requests a limited artifact; caller cancellation and total expiry still stop.
+    if (
+      !signal.aborted &&
+      deliverySignal.aborted &&
+      error instanceof DOMException &&
+      error.name === "TimeoutError"
+    )
+      return false;
     if (error instanceof DOMException && error.name === "TimeoutError")
       throw new SupportReportEvidenceUnavailable();
     throw error;
@@ -32,13 +48,18 @@ export async function createSupportReport(
   const requestSignal = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
   await codingAppSessionPairingSettled();
   requestSignal.throwIfAborted();
-  if (correlationId !== undefined) await ensureReportEvidence(correlationId, requestSignal);
+  const clientOnly =
+    correlationId !== undefined &&
+    (await ensureReportEvidence(correlationId, requestSignal)) === false;
   requestSignal.throwIfAborted();
   return bffFetchJson<DesktopSupportReportResponse>(
     "/api/diagnostics/report",
     {
       method: "POST",
-      body: JSON.stringify(correlationId === undefined ? {} : { correlationId }),
+      body: JSON.stringify({
+        ...(correlationId === undefined ? {} : { correlationId }),
+        ...(clientOnly ? { evidenceScope: "client-only" } : {}),
+      }),
       signal: requestSignal,
     },
     {
@@ -99,6 +120,7 @@ function validateSupportReportResponse(value: unknown): DesktopSupportReportResp
     fileName: value.fileName,
     reportJson: value.reportJson,
     ...validateDownloadTarget(value),
+    ...validateEvidenceScope(value),
   };
 }
 
@@ -119,4 +141,10 @@ function validateDownloadTarget(
   )
     throw new TypeError("Invalid support report download target");
   return { downloadPath: value.downloadPath, downloadExpiresAtMs: value.downloadExpiresAtMs };
+}
+
+function validateEvidenceScope(value: object): Pick<DesktopSupportReportResponse, "evidenceScope"> {
+  if (!("evidenceScope" in value)) return {};
+  if (value.evidenceScope !== "client-only") throw new TypeError("Invalid report evidence scope");
+  return { evidenceScope: "client-only" };
 }

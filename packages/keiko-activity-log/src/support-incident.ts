@@ -654,7 +654,7 @@ function overlappingSealedSegmentNames(
 
 function buildDescriptor(
   draft: CandidateDraft,
-  context: CandidateContext,
+  context: Pick<CandidateContext, "nowMs" | "defectFingerprint">,
   pin: SupportIncidentPin,
   incidentId: string,
 ): SupportIncidentDescriptorRecord {
@@ -693,7 +693,14 @@ function buildRecord(
 
 /** A manual export can describe retained evidence without claiming another durable candidate. */
 export function prepareUnretainedUserReportIncident(
-  stateDir: string,
+  _stateDir: string,
+  correlationId: string,
+): SupportIncidentDescriptorRecord {
+  return prepareUnretainedUserReportDescriptor(correlationId);
+}
+
+/** Pure transient descriptor: no store, pin, retention or log access. */
+export function prepareUnretainedUserReportDescriptor(
   correlationId: string,
 ): SupportIncidentDescriptorRecord {
   const safeCorrelationId = incidentCorrelationId(correlationId);
@@ -707,9 +714,7 @@ export function prepareUnretainedUserReportIncident(
       evidenceCorrelationId: safeCorrelationId,
     },
     {
-      stateDir,
       nowMs: Date.now(),
-      env: process.env,
       defectFingerprint: computeDefectFingerprint(input),
     },
     { status: "rejected", pinnedSegmentCount: 0, pinnedBytes: 0, evidenceLostBeforePin: false },

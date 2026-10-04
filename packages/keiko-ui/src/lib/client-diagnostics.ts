@@ -174,6 +174,9 @@ export interface ClientDiagnosticMeta {
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;
 
+/** Bounded acknowledgement wait shared by the diagnostic adapter and explicit report action. */
+export const CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS = 15_000;
+
 export type ClientDiagnosticDeliveryRetry = (
   correlationId: string,
   signal: AbortSignal,

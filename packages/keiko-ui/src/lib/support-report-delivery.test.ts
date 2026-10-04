@@ -175,6 +175,25 @@ describe("browser incident delivery before report selection", () => {
     });
   });
 
+  it("downloads an explicitly limited artifact when browser evidence cannot be delivered", async () => {
+    const limited = { ...report, evidenceScope: "client-only" };
+    const fetch = vi.fn((_path: string): Promise<Response> =>
+      _path === "/api/diagnostics/report"
+        ? Promise.resolve(new Response(JSON.stringify(limited), { status: 200 }))
+        : Promise.resolve(new Response(null, { status: 429 })),
+    );
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    fanOutClientDiagnostic("[keiko] uncaught window error: TypeError", diagnostic);
+    await vi.waitFor(() => expect(clientDiagnosticPostFailureCount()).toBe(1));
+    await expect(createSupportReport(correlationId)).resolves.toEqual(limited);
+    const call = fetch.mock.calls.find(([path]) => path === "/api/diagnostics/report");
+    expect(call).toBeDefined();
+    const serialized = JSON.stringify(call);
+    expect(serialized).not.toContain("TypeError");
+    expect(serialized).not.toContain("frames");
+  });
+
   it("keeps an undeliverable failure retryable without selecting an unrelated report", async () => {
     const fetch = vi.fn().mockRejectedValue(new TypeError("offline"));
     vi.stubGlobal("fetch", fetch);
@@ -185,11 +204,16 @@ describe("browser incident delivery before report selection", () => {
     expect(fetch.mock.calls.map(([path]) => path)).toEqual([
       "/api/diagnostics/client",
       "/api/diagnostics/client",
+      "/api/diagnostics/report",
     ]);
+    expect(JSON.parse(fetch.mock.calls[2]?.[1]?.body as string)).toEqual({
+      correlationId,
+      evidenceScope: "client-only",
+    });
     fetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
     fetch.mockResolvedValueOnce(reportResponse());
     expect(await createSupportReport(correlationId)).toEqual(report);
-    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(fetch).toHaveBeenCalledTimes(5);
   });
 
   it("bounds repeated manual redelivery while the server keeps refusing ingest", async () => {
@@ -206,8 +230,34 @@ describe("browser incident delivery before report selection", () => {
     await vi.waitFor(() => expect(clientDiagnosticPostFailureCount()).toBe(1));
     for (let index = 0; index < 8; index += 1)
       await expect(createSupportReport(correlationId)).rejects.toThrow();
-    expect(fetch).toHaveBeenCalledTimes(7);
-    expect(fetch.mock.calls.every(([path]) => path === "/api/diagnostics/client")).toBe(true);
+    expect(fetch.mock.calls.filter(([path]) => path === "/api/diagnostics/client")).toHaveLength(7);
+    expect(fetch.mock.calls.filter(([path]) => path === "/api/diagnostics/report")).toHaveLength(8);
+  });
+
+  it("exports a limited artifact when only diagnostic acknowledgement stalls", async () => {
+    const stage = new AbortController();
+    const overall = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) =>
+      ms === 15_000 ? stage.signal : overall.signal,
+    );
+    const limited = { ...report, evidenceScope: "client-only" };
+    const fetch = vi.fn((path: string): Promise<Response> =>
+      path === "/api/diagnostics/report"
+        ? Promise.resolve(new Response(JSON.stringify(limited), { status: 200 }))
+        : new Promise(() => undefined),
+    );
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    fanOutClientDiagnostic("[keiko] uncaught window error: TypeError", diagnostic);
+    const delivery = vi.spyOn(clientDiagnostics, "ensureClientDiagnosticDelivery");
+    const pending = createSupportReport(correlationId);
+    await vi.waitFor(() => expect(delivery).toHaveBeenCalled());
+    stage.abort(new DOMException("Diagnostic deadline expired", "TimeoutError"));
+    await expect(pending).resolves.toEqual(limited);
+    expect(fetch.mock.calls.map(([path]) => path)).toEqual([
+      "/api/diagnostics/client",
+      "/api/diagnostics/report",
+    ]);
   });
 
   it("cancels promptly while an original diagnostic is still in flight", async () => {

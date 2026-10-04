@@ -1,3 +1,4 @@
+import { parseSupportIncidentPrivateProjection } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
@@ -18,6 +19,9 @@ vi.mock("./support-report-job.js", async (importOriginal) => {
 });
 import { runSupportReportJob, SupportReportJobError } from "./support-report-job.js";
 import { handleCreateSupportReport } from "./support-report-routes.js";
+import { analyzeSupportReport, parseSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 
 function context(body: string): RouteContext {
   const req = new IncomingMessage(new Socket());
@@ -67,14 +71,49 @@ afterEach(() => {
 });
 
 describe("desktop support report transport", () => {
-  it("requires an existing local session before reading or creating a report", async () => {
-    const ctx = context("invalid private body");
-    expect((await handleCreateSupportReport(ctx, deps(false))).status).toBe(403);
-    expect(ctx.req.readableFlowing).toBeNull();
-    expect(runSupportReportJob).not.toHaveBeenCalled();
-  });
+  it.each(["absent", "forged", "expired"])(
+    "exports only a canonical limited artifact for a %s session without private evidence",
+    async (state) => {
+      let now = Date.now();
+      const registry = createSessionRegistry({ now: () => now, idleTtlMs: 1000 });
+      const mint = registry.mint("local");
+      const owner = {
+        get env(): never {
+          throw new Error("Private configuration cannot be consulted");
+        },
+        codingAppSessionChannel: { verifySession: registry.verify },
+      } as unknown as UiHandlerDeps;
+      const ctx = context('{"correlationId":"original-customer-error"}');
+      if (state !== "absent")
+        ctx.req.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${state === "forged" ? "forged" : mint.cookieToken}`;
+      if (state === "expired") now += 1001;
+      const result = await handleCreateSupportReport(ctx, owner);
+      expect(result.status).toBe(200);
+      expect(runSupportReportJob).not.toHaveBeenCalled();
+      const report = result.body as DesktopSupportReportResponse;
+      expect(report).toMatchObject({
+        evidenceScope: "client-only",
+        downloadPath: expect.any(String) as unknown,
+      });
+      const parsed = parseSupportReport(report.reportJson);
+      expect(parsed.incident).toMatchObject({
+        op: "unattributed",
+        errorKind: "unknown",
+        frameCount: 0,
+        clientReport: { serverEvidence: "unavailable", availabilityReason: "session-unavailable" },
+      });
+      expect(parsed.evidence.recordCount).toBe(0);
+      expect(parsed.selection.status).toBe("insufficient");
+      expect(analyzeSupportReport(report.reportJson).selection.status).toBe("insufficient");
+      expect(report.reportJson).not.toContain("original-customer-error");
+      expect(report.reportJson).not.toContain("private-report-must-never-be-read");
+      if (state === "expired") expect(registry.verify(mint.cookieToken)).toBeUndefined();
+    },
+  );
 
   it.each([
+    '{"evidenceScope":"server"}',
+    '{"clientReport":{"message":"customer-private-prose"}}',
     '{"stateDir":"/other-private-state"}',
     '{"correlationId":"bad"}',
     '{"correlationId":12}',
@@ -96,6 +135,75 @@ describe("desktop support report transport", () => {
         )
       ).status,
     ).toBe(413);
+    expect(runSupportReportJob).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { op: "client.diagnostic" },
+    { surface: "bff" },
+    { errorKind: "internal" },
+    {
+      coverage: {
+        requiredClassCount: 1,
+        presentClassCount: 0,
+        completeClassCount: 0,
+        degradedClassCount: 0,
+        insufficientClassCount: 0,
+      },
+    },
+  ])(
+    "rejects invented server attribution in the actual client-only projection %j",
+    async (patch) => {
+      const response = await handleCreateSupportReport(context("{}"), deps(false));
+      const report = response.body as DesktopSupportReportResponse;
+      const incident = parseSupportReport(report.reportJson).incident;
+      expect(parseSupportIncidentPrivateProjection(incident)).toEqual(incident);
+      expect(parseSupportIncidentPrivateProjection({ ...incident, ...patch })).toBeUndefined();
+    },
+  );
+
+  it("records completed limited availability without inventing activity-log loss", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    expect((await handleCreateSupportReport(context("{}"), deps(false))).status).toBe(200);
+    const index = sink.events.findIndex((event) => event.op === "support.report.ui.completed");
+    const proof = expectActivityLogProof(
+      "support.report.ui.completed.lifecycle",
+      proofLine(sink, index),
+    );
+    expect(proof).toMatchObject({
+      correlationId: "report-route-test",
+      recordCount: 0,
+      sufficiency: "insufficient",
+      completeness: "partial",
+      loss: "none",
+    });
+  });
+
+  it("does not let limited report traffic consume protected full-report request admission", async () => {
+    const owner = deps(false);
+    for (let index = 0; index < 6; index += 1)
+      expect((await handleCreateSupportReport(context("{}"), owner)).status).toBe(200);
+    expect((await handleCreateSupportReport(context("{}"), owner)).status).toBe(429);
+    vi.mocked(runSupportReportJob).mockResolvedValue({
+      fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+      reportJson: "{}",
+    });
+    expect((await handleCreateSupportReport(context("{}"), deps())).status).toBe(200);
+    expect(runSupportReportJob).toHaveBeenCalledOnce();
+  });
+
+  it("honestly exports client-only availability when diagnostic delivery failed in a valid session", async () => {
+    const result = await handleCreateSupportReport(
+      context('{"correlationId":"undelivered-client-error","evidenceScope":"client-only"}'),
+      deps(),
+    );
+    expect(result.status).toBe(200);
+    const report = result.body as DesktopSupportReportResponse;
+    expect(parseSupportReport(report.reportJson).incident.clientReport).toEqual({
+      serverEvidence: "unavailable",
+      availabilityReason: "diagnostic-delivery-unavailable",
+    });
     expect(runSupportReportJob).not.toHaveBeenCalled();
   });
 
@@ -126,8 +234,8 @@ describe("desktop support report transport", () => {
         ...report,
         downloadPath: expect.stringMatching(
           /^\/api\/diagnostics\/report\/download\/[a-f0-9-]{36}$/u,
-        ),
-        downloadExpiresAtMs: expect.any(Number),
+        ) as unknown,
+        downloadExpiresAtMs: expect.any(Number) as unknown,
       },
       headers: { "Cache-Control": "no-store" },
     });

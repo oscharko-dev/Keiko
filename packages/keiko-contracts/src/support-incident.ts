@@ -631,6 +631,13 @@ export interface SupportIncidentPublicProjection {
 
 /** The richer, still body-free private-report projection: the public fields plus analysis inputs. */
 export interface SupportIncidentPrivateProjection extends SupportIncidentPublicProjection {
+  /** Unverified, closed browser availability facts; never registered server failure evidence. */
+  readonly clientReport?:
+    | {
+        readonly serverEvidence: "unavailable";
+        readonly availabilityReason: "session-unavailable" | "diagnostic-delivery-unavailable";
+      }
+    | undefined;
   readonly state: SupportIncidentState;
   readonly frameCount: number;
   readonly build: SupportIncidentBuild;
@@ -809,13 +816,52 @@ function validProjectionEvidence(value: PlainObject): boolean {
   );
 }
 
+function clientOnlyProjection(value: PlainObject): boolean {
+  return (
+    clientOnlyManualHeader(value) &&
+    value.frameCount === 0 &&
+    value.lineCount === 0 &&
+    Array.isArray(value.segments) &&
+    value.segments.length === 0 &&
+    value.sufficiencyStatus === "insufficient" &&
+    isPlainObject(value.coverage) &&
+    Object.values(value.coverage).every((count) => count === 0)
+  );
+}
+
+function clientOnlyManualHeader(value: PlainObject): boolean {
+  return (
+    value.trigger === "user-report" &&
+    value.op === SUPPORT_INCIDENT_UNATTRIBUTED &&
+    value.surface === SUPPORT_INCIDENT_UNATTRIBUTED &&
+    value.errorKind === UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT.errorKind
+  );
+}
+
+function validClientReport(value: unknown, projection: PlainObject): boolean {
+  return (
+    value === undefined ||
+    (isPlainObject(value) &&
+      hasOnlyKeys(value, ["serverEvidence", "availabilityReason"]) &&
+      value.serverEvidence === "unavailable" &&
+      clientOnlyProjection(projection) &&
+      isOneOf(["session-unavailable", "diagnostic-delivery-unavailable"], value.availabilityReason))
+  );
+}
+
 /** Shared closed validator for the private projection crossing the offline support boundary. */
 export function parseSupportIncidentPrivateProjection(
   value: unknown,
 ): SupportIncidentPrivateProjection | undefined {
-  if (!isPlainObject(value) || !hasOnlyKeys(value, PRIVATE_PROJECTION_KEYS)) return undefined;
+  if (!isPlainObject(value) || !hasOnlyKeys(value, PRIVATE_PROJECTION_KEYS, ["clientReport"]))
+    return undefined;
   const record = projectionRecord(value);
-  if (record === undefined || !validProjectionEvidence(value)) return undefined;
+  if (
+    record === undefined ||
+    !validProjectionEvidence(value) ||
+    !validClientReport(value.clientReport, value)
+  )
+    return undefined;
   if (
     diagnosticSufficiencyStatus(value.sufficiencyReasons as DiagnosticSufficiencyReason[]) !==
     value.sufficiencyStatus

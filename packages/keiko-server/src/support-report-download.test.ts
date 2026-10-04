@@ -1,9 +1,11 @@
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createClientOnlySupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   cacheSupportReportDownload,
+  SupportReportDeliveryCapacityError,
   handleDownloadSupportReport,
 } from "./support-report-download.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
@@ -44,6 +46,53 @@ afterEach(() => {
   resetServerLogger();
 });
 describe("authenticated canonical report attachment", () => {
+  it("preserves protected artifacts when unauthenticated limited reports fill the shared cache", () => {
+    const owner = deps("protected-session");
+    const full = cacheSupportReportDownload(owner, "protected-session", report);
+    const limited = createClientOnlySupportReport("limited-flood", "session-unavailable");
+    for (let index = 0; index < 140; index += 1)
+      cacheSupportReportDownload(owner, undefined, limited);
+    const ctx = context(full.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+    expect(end).toHaveBeenCalledWith(report.reportJson);
+  });
+
+  it("refuses limited delivery when protected artifacts occupy the whole existing capacity", () => {
+    const owner = deps("protected-session");
+    const first = cacheSupportReportDownload(owner, "protected-session", report);
+    for (let index = 1; index < 128; index += 1)
+      cacheSupportReportDownload(owner, "protected-session", report);
+    const limited = createClientOnlySupportReport("limited-capacity", "session-unavailable");
+    expect(() => cacheSupportReportDownload(owner, undefined, limited)).toThrow(
+      SupportReportDeliveryCapacityError,
+    );
+    const ctx = context(first.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+  });
+
+  it("delivers only canonical client-only bytes without granting protected report authority", () => {
+    const owner = deps(undefined);
+    const limited = createClientOnlySupportReport("client-report-download", "session-unavailable");
+    const cached = cacheSupportReportDownload(owner, undefined, limited);
+    const ctx = context(cached.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+    expect(end).toHaveBeenCalledWith(limited.reportJson);
+    expect(() => cacheSupportReportDownload(owner, undefined, report)).toThrow();
+    expect(() =>
+      cacheSupportReportDownload(owner, undefined, { ...report, evidenceScope: "client-only" }),
+    ).toThrow();
+    const full = cacheSupportReportDownload(owner, "protected-session", report);
+    expect(handleDownloadSupportReport(context(full.downloadPath), owner)).toMatchObject({
+      status: 403,
+    });
+  });
+
   it("serves exact canonical bytes as an HTTP attachment without another generation", () => {
     const owner = deps("owner-session");
     const cached = cacheSupportReportDownload(owner, "owner-session", report);
@@ -95,7 +144,9 @@ describe("authenticated canonical report attachment", () => {
     expect(
       handleDownloadSupportReport(context(cached.downloadPath), deps("other-session")),
     ).toMatchObject({ status: 404 });
-    vi.spyOn(owner.codingAppSessionChannel!, "verifySession").mockReturnValue({
+    const channel = owner.codingAppSessionChannel;
+    if (channel === undefined) throw new TypeError("Missing session channel");
+    vi.spyOn(channel, "verifySession").mockReturnValue({
       sessionId: "other-session",
     } as never);
     expect(handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({

@@ -32,6 +32,32 @@ afterEach(() => {
 });
 
 describe("SupportReportButton", () => {
+  it.each(["en", "de"])(
+    "labels a %s limited report without pretending server evidence was saved",
+    async (locale) => {
+      window.localStorage.setItem("keiko.locale", locale);
+      create.mockResolvedValue({ ...report, evidenceScope: "client-only" });
+      render(
+        <I18nProvider>
+          <SupportReportButton correlationId="unpaired-client-error" />
+        </I18nProvider>,
+      );
+      const button = await screen.findByRole("button", {
+        name: locale === "de" ? "Fehlerbericht erstellen" : "Create error report",
+      });
+      await userEvent.click(button);
+      expect(
+        await screen.findByText(locale === "de" ? /Eingeschränkter Bericht/u : /Limited report/u),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("link", {
+          name: locale === "de" ? "Bericht herunterladen" : "Download report",
+        }),
+      ).toBeVisible();
+      expect(screen.queryByText(/Launcher/u)).toBeNull();
+    },
+  );
+
   it("keeps the prepared authenticated download during failed regeneration", async () => {
     const disposeServer = vi.fn();
     vi.mocked(createSupportReportDownload).mockReturnValueOnce({
@@ -184,7 +210,7 @@ describe("SupportReportButton", () => {
   });
 
   it.each([
-    [403, "DENIED", "Open Keiko from the launcher, then retry this report."],
+    [403, "DENIED", "Report unavailable in this browser. Try creating it again."],
     [503, "SUPPORT_REPORT_UNAVAILABLE", "Check that Keiko is running locally, then retry."],
     [429, "RATE_LIMITED", "Please wait a minute, then retry this report."],
   ])(

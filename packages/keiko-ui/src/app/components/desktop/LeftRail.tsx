@@ -15,6 +15,7 @@ const CodingWorkbenchIcon = Icons.codingWorkbench;
 const GitIcon = Icons.git;
 const EditorIcon = Icons.editor;
 const LocalKnowledgeIcon = Icons.localKnowledge;
+const DiagnosticsIcon = Icons.activity;
 const LayersIcon = Icons.layers;
 const MoonIcon = Icons.moon;
 const SunIcon = Icons.sun;
@@ -185,6 +186,18 @@ function LeftRailImpl({
           onClick={() => onTool("localKnowledge")}
         >
           <LocalKnowledgeIcon size={19} />
+        </button>
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
+          data-active={openTools.has("diagnostics") ? "true" : "false"}
+          aria-label={t("rail.diagnostics")}
+          aria-pressed={openTools.has("diagnostics")}
+          data-tip={t("rail.diagnostics")}
+          onClick={() => onTool("diagnostics")}
+        >
+          <DiagnosticsIcon size={19} />
         </button>
         <button
           type="button"

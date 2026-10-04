@@ -18,10 +18,13 @@ import {
 } from "../../../../tests/support/activity-log-segments.js";
 import {
   createDesktopSupportReport,
+  createClientOnlySupportReport,
   createPreparedDesktopSupportReport,
   readDesktopSupportReportSelection,
 } from "./support-desktop-report.js";
 import { analyzeSupportReport, parseSupportReport } from "./support-report.js";
+import * as supportLocalQuery from "./support-local-query.js";
+import { ActivityLogScanner } from "./support-segment-scan.js";
 import * as supportAnalysis from "./support-analyze.js";
 import { executeLocalSupportQuery } from "./support-local-query.js";
 import { DEFAULT_SUPPORT_QUERY_LIMITS } from "./support-query.js";
@@ -61,6 +64,43 @@ function writeFailures(): void {
 }
 
 describe("desktop canonical support report", () => {
+  it("omits a credential-shaped client correlation instead of exposing it or reading private evidence", () => {
+    const token = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "c2lnbmF0dXJl"].join(".");
+    const response = createClientOnlySupportReport(token, "session-unavailable");
+    expect(response.reportJson).not.toContain(token);
+    expect(parseSupportReport(response.reportJson).evidence.recordCount).toBe(0);
+  });
+
+  it.each(["session-unavailable", "diagnostic-delivery-unavailable"] as const)(
+    "exports an honest limited %s artifact without opening a private log",
+    (availabilityReason) => {
+      const localQuery = vi.spyOn(supportLocalQuery, "executeLocalSupportQuery");
+      const drain = vi.spyOn(ActivityLogScanner.prototype, "drain");
+      const response = createClientOnlySupportReport(
+        "original-client-support-id",
+        availabilityReason,
+      );
+      expect(localQuery).not.toHaveBeenCalled();
+      expect(drain).not.toHaveBeenCalled();
+      const report = parseSupportReport(response.reportJson);
+      expect(report.evidence.recordCount).toBe(0);
+      expect(report.incident).toMatchObject({
+        op: "unattributed",
+        errorKind: "unknown",
+        frameCount: 0,
+        clientReport: { serverEvidence: "unavailable", availabilityReason },
+      });
+      expect(report.incident.segments).toEqual([]);
+      expect(report.incident.sufficiencyStatus).toBe("insufficient");
+      expect(analyzeSupportReport(response.reportJson).selection.status).toBe("insufficient");
+      expect(response.reportJson).not.toContain("original-client-support-id");
+      expect(() =>
+        parseSupportReport(response.reportJson.replace(availabilityReason, "tampered")),
+      ).toThrow();
+      expect(response.summary).toMatchObject({ status: "insufficient", recordCount: 0 });
+    },
+  );
+
   it("exports historical pin protection failure without inventing missing process evidence", () => {
     const now = Date.now() - 100;
     const process = fixtureProcess(4242, "aabbccdd");

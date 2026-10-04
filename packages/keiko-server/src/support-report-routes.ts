@@ -1,6 +1,10 @@
 import type { DesktopSupportReportRequest } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { createClientOnlySupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 import { resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
-import { cacheSupportReportDownload } from "./support-report-download.js";
+import {
+  cacheSupportReportDownload,
+  SupportReportDeliveryCapacityError,
+} from "./support-report-download.js";
 import { readJsonRequestBody } from "./bounded-request-body.js";
 import { isValidCorrelationId } from "./correlation.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
@@ -22,11 +26,21 @@ const limiter = createInlineCompletionRateLimiter({
 
 function reportRequest(value: unknown): DesktopSupportReportRequest | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  if (Object.keys(value).some((key) => key !== "correlationId")) return undefined;
-  if (!("correlationId" in value)) return {};
-  return typeof value.correlationId === "string" && isValidCorrelationId(value.correlationId)
-    ? { correlationId: value.correlationId }
-    : undefined;
+  if (Object.keys(value).some((key) => key !== "correlationId" && key !== "evidenceScope"))
+    return undefined;
+  if ("evidenceScope" in value && value.evidenceScope !== "client-only") return undefined;
+  if (!validReportCorrelation(value)) return undefined;
+  return {
+    ...("correlationId" in value ? { correlationId: value.correlationId as string } : {}),
+    ...("evidenceScope" in value ? { evidenceScope: "client-only" as const } : {}),
+  };
+}
+
+function validReportCorrelation(value: object): boolean {
+  return (
+    !("correlationId" in value) ||
+    (typeof value.correlationId === "string" && isValidCorrelationId(value.correlationId))
+  );
 }
 
 export async function handleCreateSupportReport(
@@ -34,32 +48,30 @@ export async function handleCreateSupportReport(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   const session = resolveAppSessionReadAuthority(deps, ctx.req);
-  if (session === undefined) {
-    return {
-      status: 403,
-      body: errorBody("DENIED", "Local session unavailable.", ctx.correlationId),
-    };
-  }
-  const parsed = await readJsonRequestBody(ctx.req, 1024, ctx.correlationId);
-  if ("status" in parsed && (parsed.status === 400 || parsed.status === 413) && "body" in parsed) {
-    return {
-      status: parsed.status,
-      body: errorBody(
-        parsed.status === 413 ? "PAYLOAD_TOO_LARGE" : "BAD_REQUEST",
-        "Invalid report request.",
-        ctx.correlationId,
-      ),
-    };
-  }
-  const request = reportRequest(parsed);
-  if (request === undefined)
-    return {
-      status: 400,
-      body: errorBody("BAD_REQUEST", "Invalid report request.", ctx.correlationId),
-    };
-  if (!limiter.tryAcquire("support-report", Date.now()))
+  const request = await readReportRequest(ctx);
+  if ("status" in request) return request;
+  const limited = session === undefined || request.evidenceScope === "client-only";
+  if (!limiter.tryAcquire(limited ? "support-report-client-only" : "support-report", Date.now()))
     return { status: 429, body: errorBody("RATE_LIMITED", "Try again later.", ctx.correlationId) };
+  if (limited) return clientOnlyReportResponse(ctx, deps, request, session !== undefined);
   return createReportResponse(ctx, deps, request, session.sessionId);
+}
+
+async function readReportRequest(
+  ctx: RouteContext,
+): Promise<DesktopSupportReportRequest | RouteResult> {
+  const parsed = await readJsonRequestBody(ctx.req, 1024, ctx.correlationId);
+  const request = reportRequest(parsed);
+  if (request !== undefined) return request;
+  const status = "status" in parsed && parsed.status === 413 ? 413 : 400;
+  return {
+    status,
+    body: errorBody(
+      status === 413 ? "PAYLOAD_TOO_LARGE" : "BAD_REQUEST",
+      "Invalid report request.",
+      ctx.correlationId,
+    ),
+  };
 }
 
 async function createReportResponse(
@@ -98,5 +110,31 @@ async function createReportResponse(
     };
   } finally {
     ctx.res.off("close", cancel);
+  }
+}
+
+function clientOnlyReportResponse(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  request: DesktopSupportReportRequest,
+  hasSession: boolean,
+): RouteResult {
+  emitSupportReportStarted(ctx.correlationId, request.correlationId !== undefined);
+  try {
+    const report = createClientOnlySupportReport(
+      request.correlationId ?? ctx.correlationId,
+      hasSession ? "diagnostic-delivery-unavailable" : "session-unavailable",
+    );
+    const delivery = cacheSupportReportDownload(deps, undefined, report);
+    emitSupportReportCompleted(ctx.correlationId, report);
+    return {
+      status: 200,
+      body: { ...report, ...delivery },
+      headers: { "Cache-Control": "no-store" },
+    };
+  } catch (error) {
+    if (!(error instanceof SupportReportDeliveryCapacityError)) throw error;
+    emitSupportReportFailed(ctx.correlationId, new SupportReportJobError("busy", error));
+    return { status: 429, body: errorBody("RATE_LIMITED", "Try again later.", ctx.correlationId) };
   }
 }

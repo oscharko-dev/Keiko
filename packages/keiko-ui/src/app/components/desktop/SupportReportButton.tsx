@@ -352,6 +352,9 @@ export function SupportReportButton(props: SupportReportButtonProps): ReactNode 
           regenerate={regenerate}
         />
       ) : null}
+      {ready?.report.evidenceScope === "client-only" ? (
+        <output className={styles.cmpFeedback}>{t("supportReport.limited")}</output>
+      ) : null}
       {feedbackKey !== undefined ? (
         <output className={styles.cmpFeedback}>{t(feedbackKey)}</output>
       ) : null}

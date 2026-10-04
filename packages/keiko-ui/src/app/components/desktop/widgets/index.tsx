@@ -76,6 +76,10 @@ const NotificationsPanel = dynamic(
   () => import("./panels/NotificationsPanel").then((mod) => mod.NotificationsPanel),
   { ssr: false, loading: windowChunkFallback },
 );
+const DiagnosticsPanel = dynamic(
+  () => import("./panels/DiagnosticsPanel").then((mod) => mod.DiagnosticsPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
 const ResourcesPanel = dynamic(
   () => import("./panels/ResourcesPanel").then((mod) => mod.ResourcesPanel),
   { ssr: false, loading: windowChunkFallback },
@@ -524,6 +528,7 @@ registerWindowRender("inspector", () => <InspectorPanel />);
 registerWindowRender("notifications", () => <NotificationsPanel />);
 registerWindowRender("resources", () => <ResourcesPanel />);
 registerWindowRender("activity", () => <TimelinePanel />);
+registerWindowRender("diagnostics", () => <DiagnosticsPanel />);
 function SettingsPanelSessionHost({ ctx }: { readonly ctx: WindowRenderContext }): ReactNode {
   const { activeProject } = useChatSessionContext();
   return (

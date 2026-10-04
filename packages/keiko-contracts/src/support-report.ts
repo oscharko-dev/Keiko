@@ -113,11 +113,14 @@ export function isSupportReportFileName(name: string): boolean {
 /** Same-origin desktop export; the state directory and destination are server-owned. */
 export interface DesktopSupportReportRequest {
   readonly correlationId?: string | undefined;
+  readonly evidenceScope?: "client-only" | undefined;
 }
 export interface DesktopSupportReportResponse {
+  /** Explicitly limited browser availability artifact; contains no server-log evidence. */
+  readonly evidenceScope?: "client-only" | undefined;
   readonly fileName: string;
   readonly reportJson: string;
-  /** Session-bound, same-origin HTTP attachment of these exact canonical bytes. */
+  /** Same-origin attachment; full server evidence always requires its original session. */
   readonly downloadPath?: string | undefined;
   readonly downloadExpiresAtMs?: number | undefined;
   readonly summary?:

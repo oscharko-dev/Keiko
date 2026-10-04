@@ -179,7 +179,10 @@ export function emitSupportReportCompleted(
         sufficiency: status,
         reasons: summary?.reasons ?? ["evidence-partial"],
         completeness: status === "complete" ? "complete" : "partial",
-        loss: status === "complete" ? "none" : "event-location-unknown",
+        loss:
+          status === "complete" || report.evidenceScope === "client-only"
+            ? "none"
+            : "event-location-unknown",
       },
     ),
   );

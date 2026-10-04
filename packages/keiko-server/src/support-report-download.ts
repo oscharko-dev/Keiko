@@ -1,4 +1,5 @@
 // Delivery retains the canonical worker output only; it never rebuilds or persists a report.
+import { parseSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 import { randomUUID } from "node:crypto";
 import {
   MAX_SUPPORT_REPORT_BYTES,
@@ -15,7 +16,9 @@ import { errorBody } from "./route-error.js";
 const DELIVERY_TTL_MS = 15 * 60_000;
 const MAX_DELIVERY_ENTRIES = 128;
 interface Delivery {
-  readonly sessionId: string;
+  readonly authority:
+    | { readonly kind: "session-bound"; readonly sessionId: string }
+    | { readonly kind: "client-only" };
   readonly report: DesktopSupportReportResponse;
   readonly bytes: number;
   readonly expiresAtMs: number;
@@ -25,7 +28,12 @@ const caches = new WeakMap<UiHandlerDeps, Map<string, Delivery>>();
 function prune(cache: Map<string, Delivery>, now: number): void {
   for (const [key, entry] of cache) if (entry.expiresAtMs <= now) cache.delete(key);
   let bytes = [...cache.values()].reduce((total, entry) => total + entry.bytes, 0);
-  for (const [key, entry] of cache) {
+  const ordered = [...cache].sort(
+    ([, left], [, right]) =>
+      Number(left.authority.kind === "session-bound") -
+      Number(right.authority.kind === "session-bound"),
+  );
+  for (const [key, entry] of ordered) {
     if (bytes <= MAX_SUPPORT_REPORT_BYTES && cache.size <= MAX_DELIVERY_ENTRIES) break;
     bytes -= entry.bytes;
     cache.delete(key);
@@ -34,7 +42,7 @@ function prune(cache: Map<string, Delivery>, now: number): void {
 
 export function cacheSupportReportDownload(
   deps: UiHandlerDeps,
-  sessionId: string,
+  sessionId: string | undefined,
   report: DesktopSupportReportResponse,
 ): { readonly downloadPath: string; readonly downloadExpiresAtMs: number } {
   const bytes = Buffer.byteLength(report.reportJson);
@@ -44,8 +52,14 @@ export function cacheSupportReportDownload(
   caches.set(deps, cache);
   const id = randomUUID();
   const expiresAtMs = Date.now() + DELIVERY_TTL_MS;
-  cache.set(id, { sessionId, report, bytes, expiresAtMs });
+  if (sessionId === undefined) validateLimitedDelivery(report);
+  const authority =
+    sessionId === undefined
+      ? { kind: "client-only" as const }
+      : { kind: "session-bound" as const, sessionId };
+  cache.set(id, { authority, report, bytes, expiresAtMs });
   prune(cache, Date.now());
+  if (!cache.has(id)) throw new SupportReportDeliveryCapacityError();
   return {
     downloadPath: `/api/diagnostics/report/download/${id}`,
     downloadExpiresAtMs: expiresAtMs,
@@ -56,17 +70,33 @@ export function handleDownloadSupportReport(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): HandlerOutcome {
+  const cache = caches.get(deps);
+  if (cache !== undefined) prune(cache, Date.now());
+  const entry = cache?.get(ctx.params.downloadId ?? "");
+  const denied = authorizeDelivery(ctx, deps, entry);
+  if (denied !== undefined) return denied;
+  if (entry === undefined) throw new TypeError("Missing authorized report delivery");
+  return deliverReport(ctx, entry);
+}
+
+function authorizeDelivery(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  entry: Delivery | undefined,
+): HandlerOutcome | undefined {
+  if (entry?.authority.kind === "client-only") return undefined;
   const session = resolveAppSessionReadAuthority(deps, ctx.req);
   if (session === undefined)
     return {
       status: 403,
       body: errorBody("DENIED", "Local session unavailable.", ctx.correlationId),
     };
-  const cache = caches.get(deps);
-  if (cache !== undefined) prune(cache, Date.now());
-  const entry = cache?.get(ctx.params.downloadId ?? "");
-  if (entry === undefined || entry.sessionId !== session.sessionId)
+  if (entry?.authority.sessionId !== session.sessionId)
     return { status: 404, body: errorBody("NOT_FOUND", "Report unavailable.", ctx.correlationId) };
+  return undefined;
+}
+
+function deliverReport(ctx: RouteContext, entry: Delivery): HandlerOutcome {
   ctx.res.writeHead(200, {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": String(entry.bytes),
@@ -77,4 +107,19 @@ export function handleDownloadSupportReport(
   ctx.res.end(entry.report.reportJson);
   emitSupportReportDelivered(ctx.correlationId, entry.bytes);
   return STREAMING;
+}
+
+function validateLimitedDelivery(report: DesktopSupportReportResponse): void {
+  if (report.evidenceScope !== "client-only")
+    throw new TypeError("Full support report requires session-bound delivery");
+  const parsed = parseSupportReport(report.reportJson);
+  if (parsed.incident.clientReport === undefined || parsed.evidence.recordCount !== 0)
+    throw new TypeError("Limited delivery cannot contain server evidence");
+}
+
+export class SupportReportDeliveryCapacityError extends Error {
+  public constructor() {
+    super("Support report delivery capacity unavailable");
+    this.name = "SupportReportDeliveryCapacityError";
+  }
 }

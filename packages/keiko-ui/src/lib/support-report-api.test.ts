@@ -29,6 +29,16 @@ afterEach(() => {
 const fileName = "keiko-support-v1-aabbccddeeff-2026-10-03.json";
 
 describe("support report browser download", () => {
+  it("preserves the explicit client-only scope returned without launcher authority", async () => {
+    pairing.settled = Promise.resolve(false);
+    response.value = { fileName, reportJson: "{}", evidenceScope: "client-only" };
+    await expect(createSupportReport("unpaired-report-id")).resolves.toEqual(response.value);
+  });
+  it("rejects an unknown evidence scope rather than claiming a complete report", async () => {
+    response.value = { fileName, reportJson: "{}", evidenceScope: "private-log-bypass" };
+    await expect(createSupportReport()).rejects.toThrow("Invalid report evidence scope");
+  });
+
   it("waits for boot pairing before the protected report request", async () => {
     let completePairing: (value: boolean) => void = () => undefined;
     pairing.settled = new Promise((resolve) => {

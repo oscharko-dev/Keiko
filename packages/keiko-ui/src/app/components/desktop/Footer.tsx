@@ -3,8 +3,6 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
-import { GlobalSupportReportAction } from "./SupportReportButton";
-import { DiagnosticReadinessBadge } from "./DiagnosticReadinessBadge";
 import styles from "./Footer.module.css";
 import { useBackendHealth, type BackendHealth } from "./hooks/useBackendHealth";
 import { Icons } from "./Icons";
@@ -116,19 +114,13 @@ function FooterImpl({
       aria-label={t("footer.status")}
       aria-live="polite"
     >
-      <span className={styles.cmpDiagnostics}>
-        <DiagnosticReadinessBadge
-          snapshot={backendHealth.state === "loaded" ? backendHealth.health.diagnostics : undefined}
-        />
-        <GlobalSupportReportAction />
-      </span>
       <span
         className={`ft-brand ${styles.cmpBrand}`}
         aria-label={t("footer.version", { version: installedVersion })}
       >
         Keiko | {installedVersion}
       </span>
-      <span className="ft-window-wrap" ref={windowPaletteRef}>
+      <span className={`ft-window-wrap ${styles.cmpWindows}`} ref={windowPaletteRef}>
         <button
           ref={windowTriggerRef}
           type="button"

@@ -50,6 +50,7 @@ export type WindowType =
   | "mobile"
   | "inspector"
   | "activity"
+  | "diagnostics"
   | "notifications"
   | "resources"
   // Epic #189 Slice 3 — Local Knowledge connector picker window.
@@ -682,6 +683,17 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
+  diagnostics: {
+    titleKey: "window.type.diagnostics.title",
+    icon: "activity",
+    descKey: "window.type.diagnostics.desc",
+    w: 480,
+    h: 420,
+    min: { w: 300, h: 280 },
+    tiny: { w: 280, h: 240 },
+    tool: true,
+    singleton: true,
+  },
   activity: {
     titleKey: "window.type.activity.title",
     icon: "activity",
@@ -1060,6 +1072,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "mobile",
   "inspector",
   "activity",
+  "diagnostics",
   "notifications",
   "resources",
   "settings",

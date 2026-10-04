@@ -1,47 +1,22 @@
 // Tests for the workspace Footer.
 //
-// The footer exposes window status, diagnostic readiness and the canonical support action.
+// The footer keeps the centered installed version and window palette separate from diagnostics.
 
 import type { ComponentProps, ReactNode } from "react";
 import { useState } from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { Footer } from "./Footer";
-import footerStyles from "./Footer.module.css";
 import { I18nProvider } from "@/lib/i18n";
-import { HEALTH_POLL_INTERVAL_MS } from "./hooks/useBackendHealth";
 import type { AppWindow } from "./windows/types";
 import { fetchHealth } from "@/lib/api";
-import {
-  currentGlobalClientFailure,
-  reportClientDiagnostic,
-  resetClientDiagnosticWriter,
-  setClientDiagnosticWriter,
-} from "@/lib/client-diagnostics";
-import { createSupportReport, downloadSupportReport } from "@/lib/support-report-api";
-import { resetSupportReportOutcomesForTests } from "./SupportReportButton";
-
-vi.mock("@/lib/support-report-api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/support-report-api")>()),
-  createSupportReport: vi.fn(),
-  downloadSupportReport: vi.fn(),
-  createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
-}));
-
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   fetchHealth: vi.fn(),
 }));
 
 const fetchHealthMock = vi.mocked(fetchHealth);
-
-function requiredFooterStyle(name: "cmpDiagnostics" | "cmpBrand" | "cmpFooter"): string {
-  const value = footerStyles[name];
-  if (value === undefined) throw new TypeError("Missing scoped footer style");
-  return value;
-}
 
 function footerWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -78,80 +53,15 @@ function renderFooter(
 
 afterEach(() => {
   vi.clearAllMocks();
-  resetClientDiagnosticWriter();
-  resetSupportReportOutcomesForTests();
   vi.useRealTimers();
   window.localStorage.removeItem("keiko.locale");
 });
 
 describe("Footer — window status trigger", () => {
-  it("renders the centered product/version signature from the installed backend version", async () => {
-    fetchHealthMock.mockResolvedValueOnce({ status: "ok", version: "0.2.0-beta.5" });
-    renderFooter();
-
-    expect(screen.getByText("Keiko | version loading")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.getByText("Keiko | 0.2.0-beta.5")).toBeInTheDocument();
-    });
-    expect(fetchHealthMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
-  });
-
-  it("keeps the footer signature present when the version request fails", async () => {
-    fetchHealthMock.mockRejectedValueOnce(new Error("offline"));
-    renderFooter();
-
-    await waitFor(() => {
-      expect(screen.getByText("Keiko | version unavailable")).toBeInTheDocument();
-    });
-  });
-
-  it("keeps reporting available and offers dismissal only for actual global uncaught failures", async () => {
-    renderFooter();
-    await screen.findByText("Keiko | 0.2.0-test");
-    act(() =>
-      reportClientDiagnostic("[keiko] contextual error", {
-        kind: "window-error",
-        errorKind: "internal",
-      }),
-    );
-    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
-    act(() =>
-      reportClientDiagnostic("[keiko] uncaught window error: Error", {
-        kind: "window-error",
-        globalFailure: true,
-        correlationId: "global-error-one",
-      }),
-    );
-    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
-    expect(Object.keys(currentGlobalClientFailure() ?? {})).toEqual(["ordinal", "correlationId"]);
-    await userEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
-  });
-
-  it("offers canonical reporting after reload without requiring an in-memory failure", async () => {
-    vi.mocked(createSupportReport).mockResolvedValueOnce({
-      fileName: "report.json",
-      reportJson: "{}",
-    });
-    expect(currentGlobalClientFailure()).toBeNull();
-    renderFooter();
-    await screen.findByText("Keiko | 0.2.0-test");
-    expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-    expect(createSupportReport).toHaveBeenCalledExactlyOnceWith(undefined, expect.any(AbortSignal));
-    expect(await screen.findByRole("link", { name: "Download report" })).toHaveAttribute(
-      "download",
-      "report.json",
-    );
-    expect(currentGlobalClientFailure()).toBeNull();
-  });
-
-  it("groups retained diagnostics and the complete German reporting failure in a wrapping footer region", async () => {
-    window.localStorage.setItem("keiko.locale", "de");
+  it("keeps diagnostic counts and report actions out of the centered footer", async () => {
     fetchHealthMock.mockResolvedValueOnce({
       status: "ok",
-      version: "0.2.0-test",
+      version: "1.2.3",
       diagnostics: {
         readiness: "ready",
         reasons: [],
@@ -161,53 +71,32 @@ describe("Footer — window status trigger", () => {
         diagnosticCapacity: 32,
       },
     });
-    vi.mocked(createSupportReport).mockResolvedValueOnce({
-      fileName: "report.json",
-      reportJson: "{}",
-    });
-    const view = renderFooter({ winCount: 6 });
-    await userEvent.click(await screen.findByRole("button", { name: "Fehlerbericht erstellen" }));
-    vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("private offline details"));
-    await userEvent.click(screen.getByRole("button", { name: "Bericht erneut erstellen" }));
-    const link = screen.getByRole("link", { name: "Bericht herunterladen" });
-    const region = link.parentElement?.parentElement;
-    expect(region).toHaveClass(requiredFooterStyle("cmpDiagnostics"));
-    expect(region).toContainElement(screen.getByText("32/32 gespeicherte Diagnosefälle"));
-    expect(region).toContainElement(
-      screen.getByRole("button", { name: "Bericht erneut erstellen" }),
-    );
-    expect(region).toContainElement(screen.getByRole("status"));
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Bericht nicht verfügbar. Prüfen, ob Keiko lokal läuft, dann erneut versuchen.",
-    );
-    const version = screen.getByText("Keiko | 0.2.0-test");
-    expect(region).not.toContainElement(version);
-    expect(version).toHaveClass(requiredFooterStyle("cmpBrand"));
-    expect(screen.getByRole("contentinfo")).toHaveClass(requiredFooterStyle("cmpFooter"));
-    expect(screen.getByRole("button", { name: /6 Fenster/u })).toBeEnabled();
-    expect(view.container).not.toHaveTextContent("private offline details");
+    renderFooter({ winCount: 3 });
+    await screen.findByText("Keiko | 1.2.3");
+    expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/stored diagnostic cases/u)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "3 windows" })).toBeInTheDocument();
   });
 
-  it("keeps the global report downloadable until the person dismisses it", async () => {
-    vi.useFakeTimers();
-    vi.mocked(createSupportReport).mockResolvedValue({ fileName: "report.json", reportJson: "{}" });
+  it("renders the centered product/version signature from the installed backend version", async () => {
+    fetchHealthMock.mockResolvedValueOnce({ status: "ok", version: "0.2.0-beta.5" });
     renderFooter();
-    await act(async () => vi.advanceTimersByTimeAsync(0));
-    act(() =>
-      reportClientDiagnostic("[keiko] unhandled promise rejection: Error", {
-        kind: "unhandled-rejection",
-        globalFailure: true,
-        correlationId: "global-error-two",
-      }),
-    );
-    await act(async () => screen.getByRole("button", { name: "Create error report" }).click());
-    expect(downloadSupportReport).toHaveBeenCalledOnce();
-    expect(screen.getByRole("status")).toHaveTextContent("Download started.");
-    await act(async () => vi.advanceTimersByTimeAsync(1500));
-    expect(screen.getByRole("link", { name: "Download report" })).toBeInTheDocument();
-    expect(currentGlobalClientFailure()).not.toBeNull();
-    await act(async () => screen.getByRole("button", { name: "Close" }).click());
-    expect(currentGlobalClientFailure()).toBeNull();
+
+    expect(screen.getByText("Keiko | version loading")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Keiko | 0.2.0-beta.5")).toBeInTheDocument();
+    });
+    expect(fetchHealthMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the footer signature present when the version request fails", async () => {
+    fetchHealthMock.mockRejectedValueOnce(new Error("offline"));
+    renderFooter();
+
+    await waitFor(() => {
+      expect(screen.getByText("Keiko | version unavailable")).toBeInTheDocument();
+    });
   });
 
   it("renders the workflow-readiness indicator showing the active window count", () => {
@@ -367,121 +256,5 @@ describe("Footer — window status trigger", () => {
       ).not.toBeInTheDocument();
       expect(trigger).toHaveFocus();
     });
-  });
-});
-
-// #3532: the footer surfaces the Activity Log's diagnostic readiness from the same health read that
-// carries the installed version, and keeps it current on an interval.
-describe("Footer — diagnostic readiness", () => {
-  const ready: ActivityLogReadinessSnapshot = {
-    readiness: "ready",
-    reasons: [],
-    writer: "production-file",
-    lostEvents: 0,
-  };
-  const degraded: ActivityLogReadinessSnapshot = {
-    ...ready,
-    readiness: "degraded",
-    reasons: ["level-silent"],
-  };
-
-  // Settles the pending health read (and any interval tick) inside React's act scope.
-  async function advance(ms: number): Promise<void> {
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(ms);
-    });
-  }
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("shows no indicator while diagnostic evidence is ready", async () => {
-    fetchHealthMock.mockResolvedValueOnce({ status: "ok", version: "1.0.0", diagnostics: ready });
-    renderFooter();
-
-    expect(await screen.findByText("Keiko | 1.0.0")).toBeInTheDocument();
-    expect(screen.queryByText(/^Diagnostics /u)).not.toBeInTheDocument();
-  });
-
-  it("names a degraded readiness and its reason", async () => {
-    fetchHealthMock.mockResolvedValueOnce({
-      status: "ok",
-      version: "1.0.0",
-      diagnostics: degraded,
-    });
-    renderFooter();
-
-    expect(await screen.findByText("Diagnostics degraded")).toBeInTheDocument();
-    expect(screen.getByText(/: logging is set to silent\./u)).toBeInTheDocument();
-    expect(screen.getByText("Keiko | 1.0.0")).toBeInTheDocument();
-  });
-
-  it("re-reads health on its interval and follows a readiness transition", async () => {
-    vi.useFakeTimers();
-    fetchHealthMock
-      .mockResolvedValueOnce({ status: "ok", version: "1.0.0", diagnostics: ready })
-      .mockResolvedValueOnce({ status: "ok", version: "1.0.0", diagnostics: degraded });
-    renderFooter();
-    await advance(0);
-    expect(screen.getByText("Keiko | 1.0.0")).toBeInTheDocument();
-    expect(screen.queryByText("Diagnostics degraded")).not.toBeInTheDocument();
-
-    await advance(HEALTH_POLL_INTERVAL_MS);
-
-    expect(fetchHealthMock).toHaveBeenCalledTimes(2);
-    expect(screen.getByText("Diagnostics degraded")).toBeInTheDocument();
-  });
-
-  it("drops the indicator it can no longer vouch for when a later read fails", async () => {
-    vi.useFakeTimers();
-    fetchHealthMock
-      .mockResolvedValueOnce({ status: "ok", version: "1.0.0", diagnostics: degraded })
-      .mockRejectedValueOnce(new Error("offline"));
-    renderFooter();
-    await advance(0);
-    expect(screen.getByText("Diagnostics degraded")).toBeInTheDocument();
-
-    await advance(HEALTH_POLL_INTERVAL_MS);
-
-    expect(screen.getByText("Keiko | version unavailable")).toBeInTheDocument();
-    expect(screen.queryByText("Diagnostics degraded")).not.toBeInTheDocument();
-  });
-
-  it("reports a failed health read once per failure streak, by class only", async () => {
-    vi.useFakeTimers();
-    const reports: string[] = [];
-    setClientDiagnosticWriter((message) => reports.push(message));
-    try {
-      fetchHealthMock
-        .mockRejectedValueOnce(new TypeError("offline at /Users/alice"))
-        .mockRejectedValueOnce(new TypeError("offline at /Users/alice"))
-        .mockResolvedValueOnce({ status: "ok", version: "1.0.0", diagnostics: ready })
-        .mockRejectedValueOnce(new TypeError("offline at /Users/alice"));
-      renderFooter();
-      await advance(0);
-      await advance(HEALTH_POLL_INTERVAL_MS);
-      expect(reports).toEqual(["[keiko] health read failed: TypeError"]);
-
-      await advance(HEALTH_POLL_INTERVAL_MS);
-      await advance(HEALTH_POLL_INTERVAL_MS);
-      expect(reports).toEqual([
-        "[keiko] health read failed: TypeError",
-        "[keiko] health read failed: TypeError",
-      ]);
-    } finally {
-      resetClientDiagnosticWriter();
-    }
-  });
-
-  it("stops reading health once the footer unmounts", async () => {
-    vi.useFakeTimers();
-    const { unmount } = renderFooter();
-    await advance(0);
-    unmount();
-
-    await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS * 3);
-
-    expect(fetchHealthMock).toHaveBeenCalledTimes(1);
   });
 });
