@@ -69,6 +69,7 @@ import {
   RepoSearchUnsupportedFileError,
   WorkspaceNotFoundError,
   detectWorkspaceAt,
+  decodeTextFileBytes,
   endpointContractAdapter,
   findFiles,
   gitHistoryAdapter,
@@ -2091,9 +2092,7 @@ const REPOSITORY_OVERVIEW_FILENAMES = [
   "docs/adr/README.md",
 ] as const;
 const WORKSPACE_PACKAGE_DIRS = ["packages", "apps", "services", "libs"] as const;
-const MAX_WORKSPACE_MANIFESTS = 24;
-const WORKSPACE_MANIFEST_BYTES_MAX = 1_048_576;
-const WORKSPACE_PATTERN_COUNT_MAX = 32;
+const WORKSPACE_MANIFEST_BYTES_MAX = DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned;
 const WORKSPACE_PATTERN_CHARS_MAX = 1_024;
 const SYMBOL_FILE_EXTENSIONS = [
   "cs",
@@ -2252,7 +2251,6 @@ type MetadataCoverageIssue =
   | "workspace-manifest-byte-limit"
   | "workspace-manifest-read-unavailable"
   | "workspace-manifest-shape-unsupported"
-  | "workspace-pattern-count-limit"
   | "workspace-pattern-length-limit"
   | "workspace-pattern-shape-unsupported";
 
@@ -2289,9 +2287,8 @@ function readBoundedWorkspaceManifest(
       return undefined;
     }
     const read = boundedRead(absolutePath, WORKSPACE_MANIFEST_BYTES_MAX, "reject", stat);
-    return isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
-      ? read.rawText
-      : undefined;
+    if (!isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)) return undefined;
+    return decodeTextFileBytes(Buffer.from(read.rawText, "utf8"))?.text;
   } catch (error) {
     rethrowMetadataCancellation(error);
     recordMetadataCoverageIssue(
@@ -2324,13 +2321,8 @@ function boundedWorkspacePatterns(
   entries: readonly unknown[],
   cache?: FileExistenceCache,
 ): readonly string[] {
-  recordMetadataCoverageIssue(
-    cache,
-    "workspace-pattern-count-limit",
-    Math.max(0, entries.length - WORKSPACE_PATTERN_COUNT_MAX),
-  );
   const patterns: string[] = [];
-  for (const entry of entries.slice(0, WORKSPACE_PATTERN_COUNT_MAX)) {
+  for (const entry of entries) {
     if (typeof entry !== "string") {
       recordMetadataCoverageIssue(cache, "workspace-pattern-shape-unsupported");
     } else if (entry.length > WORKSPACE_PATTERN_CHARS_MAX) {
@@ -2455,6 +2447,7 @@ function metadataTraversalFs(fs: WorkspaceFs, control: MetadataTraversalControl)
   const canonicalRoot = fs.canonicalWorkspaceRoot;
   const run = <T>(operation: () => T): T => metadataTraversalOperation(control, operation);
   return preserveOwnedRootAuthority(fs, {
+    ...(fs.iterateDirectory === undefined ? {} : { iterateDirectory: fs.iterateDirectory }),
     readFileUtf8: (path): string => run(() => fs.readFileUtf8(path)),
     stat: (path): WorkspaceStat => run(() => fs.stat(path)),
     readDir: (path, maxEntries): readonly WorkspaceDirEntry[] =>
@@ -2546,37 +2539,105 @@ function safeReadDir(
   }
 }
 
-// Bound on how many service subdirectories under a `dir/*` pattern are scanned, so a monorepo with
-// thousands of packages cannot trigger an unbounded directory fan-out (the per-result cap in the
-// caller is MAX_WORKSPACE_MANIFESTS; this caps the WORK, not just the output).
-const MAX_MONOREPO_SERVICE_DIRS = 96;
+// Directory breadth is streamed independently of the bounded evidence retained for the model.
+function retainMetadataPath(paths: string[], path: string, limit: number): void {
+  if (paths.includes(path)) return;
+  paths.push(path);
+  paths.sort((left, right) => left.localeCompare(right));
+  if (paths.length > limit) paths.pop();
+}
 
-// Canonical project manifests of ANY ecosystem present directly inside `dir` (one bounded readDir,
-// realpath-contained, no symlink following). Replaces the prior package.json-only probe so a
-// polyglot monorepo surfaces service-local pom.xml / go.mod / Cargo.toml / *.csproj, not just
-// JS packages. isDenied is applied even though the registry is deny-clean (defence in depth), and
-// the result is sorted for deterministic evidence ordering.
-function canonicalManifestScopePathsInDir(
+function metadataDirectoryPath(
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  scopePath: string,
+): string | undefined {
+  if (scopePath.length > 0 && !isValidScopePath(scopePath, { mustBeRelative: true }))
+    throw new Error("invalid metadata directory");
+  const root = searchScope.workspace.root;
+  const absolute = resolveWithinWorkspace(root, scopePath);
+  const contained = containedRealPathInfo(fs, root, absolute);
+  if (!isCanonicalAllowedContainedPath(contained, root, scopePath)) {
+    if (isAllowedContainedPathParent(contained, root, scopePath) && !fs.exists(absolute))
+      return undefined;
+    throw new Error("metadata directory unavailable");
+  }
+  const stat = fs.stat(contained.path);
+  if (stat.isSymbolicLink) throw new Error("metadata directory is a symbolic link");
+  return stat.isDirectory ? contained.path : undefined;
+}
+
+async function visitMetadataDirectory(
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  scopePath: string,
+  control: MetadataTraversalControl,
+  cache: FileExistenceCache | undefined,
+  visit: (entry: WorkspaceDirEntry) => void | Promise<void>,
+): Promise<boolean> {
+  try {
+    assertMetadataTraversalActive(control);
+    const path = metadataDirectoryPath(searchScope, fs, scopePath);
+    if (path === undefined) return true;
+    const iterate = fs.iterateDirectory;
+    if (iterate === undefined) throw new Error("streaming directory inspection unavailable");
+    for await (const entry of iterate.call(fs, path)) {
+      assertMetadataTraversalActive(control);
+      await visit(entry);
+    }
+    assertMetadataTraversalActive(control);
+    if (metadataDirectoryPath(searchScope, fs, scopePath) !== path)
+      throw new Error("metadata directory changed");
+    return true;
+  } catch (error) {
+    rethrowMetadataCancellation(error);
+    if (cache !== undefined) cache.unavailableDirectoryInspections += 1;
+    return false;
+  }
+}
+
+async function canonicalManifestScopePathsInDir(
   dir: string,
   searchScope: SearchScope,
   fs: WorkspaceFs,
-  maxEntries: number,
+  maxResults: number,
+  control: MetadataTraversalControl,
   existsCache?: FileExistenceCache,
-): readonly string[] {
-  return cachedDirectoryEntries(searchScope, fs, dir, maxEntries, existsCache)
-    .entries.filter((entry) => !entry.isDirectory && !entry.isSymbolicLink)
-    .map((entry) => joinScopePath(dir, entry.name))
-    .filter((scopePath) => isCanonicalMetadataFile(scopePath) && !isDenied(scopePath))
-    .sort((a, b) => a.localeCompare(b));
+  cacheAbsentNames = false,
+): Promise<readonly string[]> {
+  const paths: string[] = [];
+  const present = new Set<string>();
+  const complete = await visitMetadataDirectory(
+    searchScope,
+    fs,
+    dir,
+    control,
+    existsCache,
+    (entry): void => {
+      if (entry.isSymbolicLink || !entry.isFile) return;
+      if (cacheAbsentNames && PROJECT_METADATA_FILENAMES.includes(entry.name))
+        present.add(entry.name);
+      const path = joinScopePath(dir, entry.name);
+      if (!isCanonicalMetadataFile(path) || isDenied(path)) return;
+      if (fileExistsByContainedStat(searchScope, fs, path))
+        retainMetadataPath(paths, path, maxResults);
+    },
+  );
+  if (complete && cacheAbsentNames) {
+    for (const name of PROJECT_METADATA_FILENAMES)
+      if (!present.has(name)) existsCache?.files.set(joinScopePath(dir, name), false);
+  }
+  return paths;
 }
 
-function expandWorkspacePattern(
+async function expandWorkspacePattern(
   pattern: string,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   control: MetadataTraversalControl,
+  maxResults: number,
   existsCache?: FileExistenceCache,
-): readonly string[] {
+): Promise<readonly string[]> {
   if (!metadataTraversalCanContinue(control)) return [];
   const normalized = normalizeWorkspacePattern(pattern);
   if (normalized === undefined) {
@@ -2587,13 +2648,7 @@ function expandWorkspacePattern(
     const dir = normalized.endsWith("/package.json")
       ? normalized.slice(0, -"/package.json".length)
       : normalized;
-    return canonicalManifestScopePathsInDir(
-      dir,
-      searchScope,
-      fs,
-      MAX_WORKSPACE_MANIFESTS,
-      existsCache,
-    );
+    return canonicalManifestScopePathsInDir(dir, searchScope, fs, maxResults, control, existsCache);
   }
   if (!normalized.endsWith("/*") || normalized.slice(0, -2).includes("*")) {
     recordMetadataCoverageIssue(existsCache, "workspace-pattern-shape-unsupported");
@@ -2604,82 +2659,68 @@ function expandWorkspacePattern(
     searchScope,
     fs,
     control,
+    maxResults,
     existsCache,
   );
 }
 
-function workspacePatternServiceManifests(
+async function workspacePatternServiceManifests(
   base: string,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   control: MetadataTraversalControl,
+  maxResults: number,
   existsCache?: FileExistenceCache,
-): readonly string[] {
-  if (!metadataTraversalCanContinue(control)) return [];
-  const serviceNames = cachedDirectoryEntries(
+): Promise<readonly string[]> {
+  const manifests: string[] = [];
+  await visitMetadataDirectory(
     searchScope,
     fs,
     base,
-    MAX_MONOREPO_SERVICE_DIRS,
+    control,
     existsCache,
-  )
-    .entries.filter((entry) => entry.isDirectory && !entry.isSymbolicLink)
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b))
-    .slice(0, MAX_MONOREPO_SERVICE_DIRS);
-  const manifests: string[] = [];
-  for (const name of serviceNames) {
-    if (!metadataTraversalCanContinue(control)) break;
-    const remaining = MAX_WORKSPACE_MANIFESTS - manifests.length;
-    if (remaining <= 0) break;
-    manifests.push(
-      ...canonicalManifestScopePathsInDir(
-        joinScopePath(base, name),
+    async (entry): Promise<void> => {
+      if (!entry.isDirectory || entry.isSymbolicLink) return;
+      const dir = joinScopePath(base, entry.name);
+      if (!isValidScopePath(dir, { mustBeRelative: true }) || isDenied(dir)) return;
+      for (const path of await canonicalManifestScopePathsInDir(
+        dir,
         searchScope,
         fs,
-        remaining,
+        maxResults,
+        control,
         existsCache,
-      ),
-    );
-  }
+      ))
+        retainMetadataPath(manifests, path, maxResults);
+    },
+  );
   return manifests;
 }
 
-function workspacePackageManifestPaths(
+async function workspacePackageManifestPaths(
   input: OrchestratorInput,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   control: MetadataTraversalControl,
+  maxResults: number,
   existsCache?: FileExistenceCache,
-): readonly string[] {
-  if (input.scope.kind !== "workspace-root" || input.scope.relativePaths.length !== 0) {
-    return [];
-  }
+): Promise<readonly string[]> {
+  if (input.scope.kind !== "workspace-root" || input.scope.relativePaths.length !== 0) return [];
   if (!metadataTraversalCanContinue(control)) return [];
   const patterns = new Set<string>(readWorkspacePatterns(searchScope, fs, control, existsCache));
-  for (const dir of WORKSPACE_PACKAGE_DIRS) {
-    patterns.add(`${dir}/*`);
-  }
+  for (const dir of WORKSPACE_PACKAGE_DIRS) patterns.add(`${dir}/*`);
   const paths: string[] = [];
-  const seen = new Set<string>();
   for (const pattern of [...patterns].sort((a, b) => a.localeCompare(b))) {
     if (!metadataTraversalCanContinue(control)) break;
-    for (const scopePath of expandWorkspacePattern(
+    for (const path of await expandWorkspacePattern(
       pattern,
       searchScope,
       fs,
       control,
+      maxResults,
       existsCache,
-    )) {
-      if (seen.has(scopePath)) {
-        continue;
-      }
-      seen.add(scopePath);
-      paths.push(scopePath);
-      if (paths.length >= MAX_WORKSPACE_MANIFESTS) {
-        return paths;
-      }
-    }
+    ))
+      retainMetadataPath(paths, path, maxResults);
   }
   return paths;
 }
@@ -3356,7 +3397,7 @@ function fileExistsInSearchScope(
     searchScope,
     fs,
     parentScopePath,
-    MAX_WORKSPACE_MANIFESTS,
+    PROJECT_METADATA_FILENAMES.length,
     existsCache,
   );
   const entry = directory.entries.find((candidate) => candidate.name === entryName);
@@ -3411,8 +3452,7 @@ function containedPathIsSafeRegularFile(
 interface FileExistenceCache {
   readonly files: Map<string, boolean>;
   readonly directories: Map<string, BoundedDirectoryRead>;
-  readonly truncatedDirectories: Set<string>;
-  readonly unavailableDirectories: Set<string>;
+  unavailableDirectoryInspections: number;
   readonly metadataCoverageIssues: Map<MetadataCoverageIssue, number>;
 }
 
@@ -3420,8 +3460,7 @@ function createFileExistenceCache(): FileExistenceCache {
   return {
     files: new Map(),
     directories: new Map(),
-    truncatedDirectories: new Set(),
-    unavailableDirectories: new Set(),
+    unavailableDirectoryInspections: 0,
     metadataCoverageIssues: new Map(),
   };
 }
@@ -3443,8 +3482,6 @@ function cachedDirectoryEntries(
   if (cached !== undefined) return cached;
   const read = safeReadDir(searchScope, fs, scopePath, maxEntries);
   existsCache?.directories.set(cacheKey, read);
-  if (read.status === "truncated") existsCache?.truncatedDirectories.add(scopePath);
-  if (read.status === "unavailable") existsCache?.unavailableDirectories.add(scopePath);
   return read;
 }
 
@@ -3505,38 +3542,26 @@ function acceptInjectionScopePath(scopePath: string, seen: Set<string>): boolean
   return true;
 }
 
-// Bound on glob-manifest atoms injected per metadata root from a single directory listing (M4,
-// risk #1). The exact-name loop above handles fixed basenames; this catches GLOB manifests at the
-// root/scope dir (e.g. *.csproj, *.tf) that have no fixed name. Deny-checked + deduped + capped.
-const MAX_ROOT_GLOB_MANIFESTS = 16;
-
-// Bounded glob-manifest sweep of a single directory: returns the accepted (deduped, deny-clean,
-// shape-valid) scope paths, capped at MAX_ROOT_GLOB_MANIFESTS. Mutates `seen` via the gate.
-function rootGlobManifestPaths(
+async function rootGlobManifestPaths(
   root: string,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   seen: Set<string>,
   control: MetadataTraversalControl,
+  maxResults: number,
   existsCache?: FileExistenceCache,
-): readonly string[] {
+): Promise<readonly string[]> {
   if (!metadataTraversalCanContinue(control)) return [];
-  const paths: string[] = [];
-  for (const scopePath of canonicalManifestScopePathsInDir(
+  const paths = await canonicalManifestScopePathsInDir(
     root,
     searchScope,
     fs,
-    MAX_ROOT_GLOB_MANIFESTS,
+    maxResults,
+    control,
     existsCache,
-  )) {
-    if (paths.length >= MAX_ROOT_GLOB_MANIFESTS) {
-      break;
-    }
-    if (acceptInjectionScopePath(scopePath, seen)) {
-      paths.push(scopePath);
-    }
-  }
-  return paths;
+    true,
+  );
+  return paths.filter((path) => acceptInjectionScopePath(path, seen));
 }
 
 // The request-scoped input set both deterministic metadata passes read, built once per request so
@@ -3551,6 +3576,7 @@ interface MetadataDiscoveryInputs {
   readonly queryFingerprint: string;
   readonly control: MetadataTraversalControl;
   readonly existsCache: FileExistenceCache;
+  readonly maxResults: number;
 }
 
 // `seen` is added per pass, not shared: each pass de-duplicates injection scope paths within its
@@ -3559,45 +3585,70 @@ interface MetadataAtomCollectionContext extends MetadataDiscoveryInputs {
   readonly seen: Set<string>;
 }
 
-function projectMetadataRootAtoms(
+async function projectMetadataRootAtoms(
   root: string,
   context: MetadataAtomCollectionContext,
-): readonly EvidenceAtom[] {
-  const { input, searchScope, fs, nowMs, queryFingerprint, control, existsCache, seen } = context;
+): Promise<readonly EvidenceAtom[]> {
+  const {
+    input,
+    searchScope,
+    fs,
+    nowMs,
+    queryFingerprint,
+    control,
+    existsCache,
+    seen,
+    maxResults,
+  } = context;
   const atoms: EvidenceAtom[] = [];
-  for (const filename of PROJECT_METADATA_FILENAMES) {
-    if (!metadataTraversalCanContinue(control)) break;
-    const scopePath = joinScopePath(root, filename);
-    if (
-      acceptInjectionScopePath(scopePath, seen) &&
-      fileExistsInSearchScope(searchScope, fs, scopePath, existsCache)
-    ) {
-      atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
-    }
-  }
-  for (const scopePath of rootGlobManifestPaths(
+  const globPaths = await rootGlobManifestPaths(
     root,
     searchScope,
     fs,
     seen,
     control,
+    maxResults,
     existsCache,
+  );
+  for (const filename of PROJECT_METADATA_FILENAMES) {
+    if (!metadataTraversalCanContinue(control)) break;
+    const scopePath = joinScopePath(root, filename);
+    if (
+      (globPaths.includes(scopePath) || acceptInjectionScopePath(scopePath, seen)) &&
+      fileExistsInSearchScope(searchScope, fs, scopePath, existsCache)
+    ) {
+      atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
+    }
+  }
+  for (const scopePath of globPaths.filter(
+    (path) => !atoms.some((atom) => atom.scopePath === path),
   )) {
     atoms.push(metadataAtom(input.scope, scopePath, queryFingerprint, nowMs));
   }
   return atoms;
 }
 
-function workspacePackageMetadataAtoms(
+async function workspacePackageMetadataAtoms(
   context: MetadataAtomCollectionContext,
-): readonly EvidenceAtom[] {
-  const { input, searchScope, fs, nowMs, queryFingerprint, control, existsCache, seen } = context;
+): Promise<readonly EvidenceAtom[]> {
+  const {
+    input,
+    searchScope,
+    fs,
+    nowMs,
+    queryFingerprint,
+    control,
+    existsCache,
+    seen,
+    maxResults,
+  } = context;
   const atoms: EvidenceAtom[] = [];
-  for (const scopePath of workspacePackageManifestPaths(
+  for (const scopePath of await workspacePackageManifestPaths(
     input,
     searchScope,
     fs,
     control,
+    maxResults,
     existsCache,
   )) {
     if (!metadataTraversalCanContinue(control)) break;
@@ -3608,7 +3659,14 @@ function workspacePackageMetadataAtoms(
   return atoms;
 }
 
-function projectMetadataAtoms(inputs: MetadataDiscoveryInputs): readonly EvidenceAtom[] {
+function retainMetadataAtom(atoms: EvidenceAtom[], atom: EvidenceAtom, limit: number): void {
+  if (atoms.some((existing) => existing.scopePath === atom.scopePath)) return;
+  if (atoms.length < limit) atoms.push(atom);
+}
+
+async function projectMetadataAtoms(
+  inputs: MetadataDiscoveryInputs,
+): Promise<readonly EvidenceAtom[]> {
   const { input, intent, control } = inputs;
   if (!wantsProjectMetadata(input, intent) || !metadataTraversalCanContinue(control)) {
     return [];
@@ -3617,9 +3675,11 @@ function projectMetadataAtoms(inputs: MetadataDiscoveryInputs): readonly Evidenc
   const context: MetadataAtomCollectionContext = { ...inputs, seen: new Set<string>() };
   for (const root of metadataRootsForScope(input.scope)) {
     if (!metadataTraversalCanContinue(control)) break;
-    atoms.push(...projectMetadataRootAtoms(root, context));
+    for (const atom of await projectMetadataRootAtoms(root, context))
+      retainMetadataAtom(atoms, atom, inputs.maxResults);
   }
-  atoms.push(...workspacePackageMetadataAtoms(context));
+  for (const atom of await workspacePackageMetadataAtoms(context))
+    retainMetadataAtom(atoms, atom, inputs.maxResults);
   return atoms;
 }
 
@@ -3665,22 +3725,12 @@ function metadataDirectoryCoverageUncertainty(
   nowMs: number,
 ): readonly UncertaintyMarker[] {
   const markers: UncertaintyMarker[] = [];
-  if (cache.truncatedDirectories.size > 0) {
-    markers.push({
-      kind: "scope-incomplete",
-      claim:
-        `project metadata discovery was truncated by bounded directory reads in ` +
-        `${String(cache.truncatedDirectories.size)} directory path(s); relevant manifests may be missing`,
-      impactedAtomIds: [],
-      emittedAtMs: nowMs,
-    });
-  }
-  if (cache.unavailableDirectories.size > 0) {
+  if (cache.unavailableDirectoryInspections > 0) {
     markers.push({
       kind: "scope-incomplete",
       claim:
         `project metadata discovery could not enumerate ` +
-        `${String(cache.unavailableDirectories.size)} directory path(s); ` +
+        `${String(cache.unavailableDirectoryInspections)} directory inspection(s); ` +
         `exact manifest probes were used but glob manifests may be missing`,
       impactedAtomIds: [],
       emittedAtMs: nowMs,
@@ -3710,7 +3760,7 @@ function metadataManifestCoverageUncertainty(
   ];
 }
 
-function deterministicMetadataEvidence(
+async function deterministicMetadataEvidence(
   input: OrchestratorInput,
   plan: ExplorationPlan,
   searchScope: SearchScope,
@@ -3718,7 +3768,7 @@ function deterministicMetadataEvidence(
   nowMs: () => number,
   signal: AbortSignal | undefined,
   deadlineAtMs: number,
-): DeterministicContextEvidence {
+): Promise<DeterministicContextEvidence> {
   const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs };
   const existsCache = createFileExistenceCache();
   const discovery: MetadataDiscoveryInputs = {
@@ -3730,8 +3780,9 @@ function deterministicMetadataEvidence(
     queryFingerprint: projectMetadataQueryFingerprint(input.query),
     control,
     existsCache,
+    maxResults: plan.budget.filesReadMax,
   };
-  const atoms = [...projectMetadataAtoms(discovery), ...repositoryOverviewAtoms(discovery)];
+  const atoms = [...(await projectMetadataAtoms(discovery)), ...repositoryOverviewAtoms(discovery)];
   const emittedAtMs = nowMs();
   return {
     atoms,
@@ -3792,15 +3843,11 @@ async function collectParallelDeterministicEvidence(
   ]);
 }
 
-// Project-metadata discovery (package.json/pom.xml et al.) intentionally reads directly against
-// `metadataFs` — the request's plain, unwrapped fs — rather than the ring-retrieval discovery cache
-// `deterministicContextEvidence` otherwise shares: it deliberately re-probes a directory at
-// escalating small caps to detect and report a genuine enumeration failure (#3347 P1), and it is
-// not bound to `structuralContexts`, so it never needs to match that pool's fs identity for
-// assertGraphBinding.
-function deterministicMetadataAtoms(
+// Project metadata streams the admitted filesystem directly, retaining only the accepted evidence
+// budget. It does not depend on structural inventories or their filesystem identity binding.
+async function deterministicMetadataAtoms(
   inputs: DeterministicContextInputs,
-): DeterministicContextEvidence {
+): Promise<DeterministicContextEvidence> {
   return inputs.budget.canContinue()
     ? deterministicMetadataEvidence(
         inputs.input,
@@ -3821,7 +3868,7 @@ async function deterministicContextEvidence(
   const traceContext = inputs.structuralContexts.forLimits(GROUNDED_TRACE_SEARCH_LIMITS);
   const [traceEvidence, symbolDiscovery, referencedDocuments] =
     await collectParallelDeterministicEvidence(inputs, fileSearchContext, traceContext);
-  const metadata = deterministicMetadataAtoms(inputs);
+  const metadata = await deterministicMetadataAtoms(inputs);
   return mergeDeterministicEvidence([
     symbolDiscovery,
     traceEvidence,

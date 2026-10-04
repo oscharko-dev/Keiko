@@ -809,49 +809,6 @@ function deadlineFsProbe(
   };
 }
 
-function syntheticDirectoryEntries(
-  count: number,
-  prefix: string,
-  kind: "directory" | "file",
-): readonly WorkspaceDirEntry[] {
-  return Array.from({ length: count }, (_, index) => ({
-    name: `${prefix}-${index.toString().padStart(6, "0")}`,
-    isDirectory: kind === "directory",
-    isFile: kind === "file",
-    isSymbolicLink: false,
-  }));
-}
-
-const METADATA_DIRECTORY_READ_CAPS = new Set([17, 25, 97]);
-
-function hugeMetadataDirectoryEntries(
-  absolutePath: string,
-  maxEntries: number,
-  realRoot: string,
-): readonly WorkspaceDirEntry[] | undefined {
-  if (absolutePath === realRoot && (maxEntries === 17 || maxEntries === 25)) {
-    return syntheticDirectoryEntries(maxEntries, "root-noise", "file");
-  }
-  if (absolutePath === join(realRoot, "packages") && maxEntries === 97) {
-    return [
-      {
-        name: "service-000000",
-        isDirectory: true,
-        isFile: false,
-        isSymbolicLink: false,
-      },
-      ...syntheticDirectoryEntries(maxEntries - 1, "service", "directory"),
-    ];
-  }
-  if (absolutePath === join(realRoot, "packages/service-000000") && maxEntries === 25) {
-    return [
-      { name: "pom.xml", isDirectory: false, isFile: true, isSymbolicLink: false },
-      ...syntheticDirectoryEntries(maxEntries - 1, "manifest-noise", "file"),
-    ];
-  }
-  return undefined;
-}
-
 interface TraversalMeasurement {
   readonly directoryCount: number;
   readonly fileCount: number;
@@ -861,6 +818,7 @@ interface TraversalMeasurement {
   readonly searchBudgetClipped: boolean;
   readonly packValid: boolean;
   readonly operations: FsOperationCounts;
+  readonly excerptReadOperations: FsOperationCounts;
   readonly workspaceIo: WorkspaceIoCounts;
   readonly searchCalls: number;
   readonly contextCount: number;
@@ -980,6 +938,9 @@ async function measureRetrievalTraversal(
   const completedDetails = activityLog.events.find(
     (event) => event.op === "search.connected-context.completion-details",
   );
+  const completed = activityLog.events.find(
+    (event) => event.op === "search.connected-context.completed",
+  );
   const structural = recordEventExtra(completedDetails?.extra, "structural");
   const workspaceIo = recordEventExtra(completedDetails?.extra, "workspaceIo");
   const packPaths = out.pack.files.map((file) => file.scopePath);
@@ -999,6 +960,7 @@ async function measureRetrievalTraversal(
     ),
     packValid: validateConnectedContextPack(out.pack).ok,
     operations: counted.counts(),
+    excerptReadOperations: await measureAcceptedExcerptReads(fixtureRoot, out, completed?.extra),
     workspaceIo: workspaceIoCounts(workspaceIo),
     searchCalls: out.pack.usage.searchCalls,
     contextCount: numericEventExtra(structural, "contextCount"),
@@ -1009,6 +971,39 @@ async function measureRetrievalTraversal(
     endpointGraphBuildCount: numericEventExtra(structural, "endpointGraphBuildCount"),
     fileSearchCount: numericEventExtra(structural, "fileSearchCount"),
   };
+}
+
+async function measureAcceptedExcerptReads(
+  fixtureRoot: string,
+  output: RetrievalOnlyOutput,
+  completion: Readonly<Record<string, unknown>> | undefined,
+): Promise<FsOperationCounts> {
+  const counted = countingNodeFs();
+  const reads = await _readKeptExcerptsForTests(
+    output.pack.files.map((file) => file.scopePath),
+    {
+      searchScope: {
+        workspace: { ...fakeWorkspace(), root: fixtureRoot, selectedRoot: fixtureRoot },
+        scopeId: "scope-1",
+        relativePaths: [],
+      },
+      fs: counted.fs,
+      budget: output.plan.budget,
+      initialUsage: ZERO_EXPLORATION_USAGE,
+      atomsByPath: new Map(
+        output.pack.files.map((file) => [
+          file.scopePath,
+          file.excerpts.map((excerpt) => excerpt.atom),
+        ]),
+      ),
+      nowMs: () => NOW,
+      deadlineAtMs: Number.POSITIVE_INFINITY,
+    },
+  );
+  expect(reads.excerpts.size).toBe(output.pack.usage.filesRead);
+  expect(reads.readWindowCount).toBe(numericEventExtra(completion, "excerptReadWindowCount"));
+  expect(counted.counts().readDir).toBe(0);
+  return counted.counts();
 }
 
 function expectBoundedRetrievalProducts(measurement: TraversalMeasurement): void {
@@ -2404,7 +2399,7 @@ describe("runGroundedExploration", () => {
       },
     );
 
-    expect(descriptorCaps).toContain(1_048_576);
+    expect(descriptorCaps).toContain(2_097_152);
     expect(out.pack.files.map((file) => file.scopePath)).toContain(
       "custom-services/payments/pom.xml",
     );
@@ -2565,7 +2560,7 @@ describe("runGroundedExploration", () => {
       ...compatibilityFs,
       stat: (absolutePath): WorkspaceStat => {
         const stat = compatibilityFs.stat(absolutePath);
-        return absolutePath === packagePath ? { ...stat, size: 1_048_577 } : stat;
+        return absolutePath === packagePath ? { ...stat, size: 2_097_153 } : stat;
       },
     };
 
@@ -2590,6 +2585,58 @@ describe("runGroundedExploration", () => {
           marker.claim.includes("workspace-manifest-byte-limit:1"),
       ),
     ).toBe(true);
+  });
+
+  it.each([1_200_000, 2_097_152])("admits valid workspace manifests of %i bytes", async (size) => {
+    mkdirSync(join(ROOT, "custom-services/payments"), { recursive: true });
+    const manifest = JSON.stringify({ workspaces: ["custom-services/*"] });
+    writeFileSync(join(ROOT, "package.json"), manifest.padEnd(size, " "));
+    writeFileSync(
+      join(ROOT, "custom-services/payments/pom.xml"),
+      "<project><java.version>21</java.version></project>\n",
+    );
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Welche Technologien und Abhängigkeiten verwendet dieses Projekt?",
+        }),
+      }),
+      { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW },
+    );
+    expect(
+      out.pack.files.some((file) => file.scopePath === "custom-services/payments/pom.xml"),
+    ).toBe(true);
+    expect(
+      out.pack.uncertainty.some((marker) => marker.claim.includes("workspace-manifest-byte-limit")),
+    ).toBe(false);
+  });
+
+  it("excludes physical workspace manifests above the shared 2 MiB eligibility ceiling", async () => {
+    mkdirSync(join(ROOT, "custom-services/payments"), { recursive: true });
+    const manifest = JSON.stringify({ workspaces: ["custom-services/*"] });
+    writeFileSync(join(ROOT, "package.json"), manifest.padEnd(2_097_153, " "));
+    writeFileSync(
+      join(ROOT, "custom-services/payments/pom.xml"),
+      "<project><java.version>21</java.version></project>\n",
+    );
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Welche Technologien und Abhängigkeiten verwendet dieses Projekt?",
+        }),
+      }),
+      { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW },
+    );
+    expect(out.pack.files.some((file) => file.scopePath === "package.json")).toBe(false);
+    expect(
+      out.pack.files.some((file) => file.scopePath === "custom-services/payments/pom.xml"),
+    ).toBe(false);
+    expect(
+      out.pack.uncertainty.some((marker) => marker.claim.includes("workspace-manifest-byte-limit")),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
   it("omits manifest metadata rather than reading it unbounded without a same-descriptor lane", async () => {
@@ -2630,7 +2677,7 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("caps workspace patterns before normalization and reports only body-free reasons", async () => {
+  it("checks every admitted workspace pattern and reports only supported-shape failures", async () => {
     mkdirSync(join(ROOT, "custom-services/payments"), { recursive: true });
     mkdirSync(join(ROOT, "overflow-services/hidden"), { recursive: true });
     writeFileSync(
@@ -2667,11 +2714,11 @@ describe("runGroundedExploration", () => {
     const paths = out.pack.files.map((file) => file.scopePath);
     const marker = out.pack.uncertainty.find(
       (entry) =>
-        entry.kind === "scope-incomplete" && entry.claim.includes("workspace-pattern-count-limit"),
+        entry.kind === "scope-incomplete" && entry.claim.includes("workspace-pattern-length-limit"),
     );
     expect(paths).toContain("custom-services/payments/pom.xml");
-    expect(paths).not.toContain("overflow-services/hidden/pom.xml");
-    expect(marker?.claim).toContain("workspace-pattern-count-limit:1");
+    expect(paths).toContain("overflow-services/hidden/pom.xml");
+    expect(marker?.claim).not.toContain("workspace-pattern-count-limit");
     expect(marker?.claim).toContain("workspace-pattern-length-limit:1");
     expect(marker?.claim).toContain("workspace-pattern-shape-unsupported:2");
     expect(marker?.claim).not.toContain("sensitive-pattern");
@@ -2714,13 +2761,22 @@ describe("runGroundedExploration", () => {
       "<project><properties><maven.compiler.release>21</maven.compiler.release></properties></project>\n",
     );
     const rootPath = realpathSync(ROOT);
+    let rootIterations = 0;
+    let metadataClosed = false;
+    const iterate = nodeWorkspaceFs.iterateDirectory;
+    if (iterate === undefined) throw new Error("streaming port missing");
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
-      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
-        if (absolutePath === rootPath && (maxEntries === 17 || maxEntries === 25)) {
-          throw new Error("simulated metadata enumeration failure");
+      iterateDirectory: async function* (path): AsyncIterable<WorkspaceDirEntry> {
+        const metadata = path === rootPath && ++rootIterations === 2;
+        try {
+          for await (const entry of iterate(path)) {
+            yield entry;
+            if (metadata) throw new Error("simulated metadata enumeration failure");
+          }
+        } finally {
+          if (metadata) metadataClosed = true;
         }
-        return nodeWorkspaceFs.readDir(absolutePath, maxEntries);
       },
     };
 
@@ -2751,6 +2807,7 @@ describe("runGroundedExploration", () => {
           marker.claim.includes("exact manifest probes were used"),
       ),
     ).toBe(true);
+    expect(metadataClosed).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -2791,67 +2848,53 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("bounds huge metadata directory reads and reports truncated coverage", async () => {
-    mkdirSync(join(ROOT, "packages/service-000000"), { recursive: true });
-    writeFileSync(join(ROOT, "package.json"), JSON.stringify({ workspaces: ["packages/*"] }));
-    writeFileSync(
-      join(ROOT, "packages/service-000000/pom.xml"),
-      "<project><properties><maven.compiler.release>21</maven.compiler.release></properties></project>\n",
-    );
-    const base = countingNodeFs();
+  it("streams every metadata entry while retaining bounded manifest output", async () => {
     const realRoot = realpathSync(ROOT);
-    const requestedCaps: number[] = [];
-    let syntheticEntriesReturned = 0;
-    const activityLog = createBufferedServerLogSink();
+    writeFileSync(
+      join(ROOT, "zproject.csproj"),
+      "<Project><TargetFramework>net8.0</TargetFramework></Project>\n",
+    );
+    const iterate = nodeWorkspaceFs.iterateDirectory;
+    if (iterate === undefined) throw new Error("streaming port missing");
+    let rootIterations = 0;
+    let streamedNoise = 0;
+    let metadataClosed = false;
     const fs: WorkspaceFs = {
-      ...base.fs,
-      readDir: (absolutePath, maxEntries): readonly WorkspaceDirEntry[] => {
-        if (maxEntries === undefined) return base.fs.readDir(absolutePath);
-        requestedCaps.push(maxEntries);
-        const entries =
-          hugeMetadataDirectoryEntries(absolutePath, maxEntries, realRoot) ??
-          base.fs.readDir(absolutePath, maxEntries);
-        if (entries.length > maxEntries) throw new Error("fake exceeded requested directory cap");
-        if (entries.length === maxEntries && METADATA_DIRECTORY_READ_CAPS.has(maxEntries)) {
-          syntheticEntriesReturned += entries.length;
+      ...nodeWorkspaceFs,
+      iterateDirectory: async function* (path): AsyncIterable<WorkspaceDirEntry> {
+        const metadata = path === realRoot && ++rootIterations === 2;
+        try {
+          if (metadata)
+            for (let index = 0; index < 10_000; index += 1) {
+              streamedNoise += 1;
+              yield {
+                name: `noise-${index.toString()}.txt`,
+                isFile: true,
+                isDirectory: false,
+                isSymbolicLink: false,
+              };
+            }
+          yield* iterate(path);
+        } finally {
+          if (metadata) metadataClosed = true;
         }
-        return entries;
       },
     };
-
     const out = await retrieveConnectedContextPack(
       input({
         scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
-        query: happyQuery({ text: "Which Java version does the service use?" }),
+        query: happyQuery({
+          text: "Welche Technologien und Abhängigkeiten verwendet dieses Projekt?",
+        }),
       }),
-      {
-        correlationId: undefined,
-        answerer: echoAnswerer,
-        nowMs: () => NOW,
-        detectWorkspace: () => fakeWorkspace(),
-        fs,
-        activityLog,
-      },
+      { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW, fs },
     );
-
-    expect(requestedCaps).toEqual(expect.arrayContaining([17, 25, 97]));
-    expect(syntheticEntriesReturned).toBeLessThan(512);
+    expect(streamedNoise).toBe(10_000);
+    expect(metadataClosed).toBe(true);
+    expect(out.pack.files.some((file) => file.scopePath === "zproject.csproj")).toBe(true);
     expect(
-      out.pack.uncertainty.some(
-        (marker) =>
-          marker.kind === "scope-incomplete" &&
-          marker.claim.includes("project metadata discovery was truncated"),
-      ),
-    ).toBe(true);
-    const completed = activityLog.events.find(
-      (event) => event.op === "search.connected-context.completed",
-    );
-    expect(
-      numericEventExtra(
-        recordEventExtra(completed?.extra, "uncertainty"),
-        "scopeIncompleteUncertaintyCount",
-      ),
-    ).toBeGreaterThan(0);
+      out.pack.uncertainty.some((marker) => marker.claim.includes("bounded directory reads")),
+    ).toBe(false);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -3035,6 +3078,94 @@ describe("runGroundedExploration", () => {
       },
     );
     expect(out.pack.files.map((file) => file.scopePath)).toContain("Service.csproj");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("finds glob manifests in ordinary directories with many unrelated entries", async () => {
+    writeFileSync(
+      join(ROOT, "zproject.csproj"),
+      "<Project><TargetFramework>net8.0</TargetFramework></Project>\n",
+    );
+    for (let index = 0; index < 120; index += 1)
+      writeFileSync(join(ROOT, `filler-${index.toString()}.txt`), "plain text\n");
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Welche Technologien und Abhängigkeiten verwendet dieses Projekt?",
+        }),
+      }),
+      { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW },
+    );
+    expect(out.pack.files.some((file) => file.scopePath === "zproject.csproj")).toBe(true);
+    expect(
+      out.pack.uncertainty.some((marker) => marker.claim.includes("bounded directory reads")),
+    ).toBe(false);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("finds a late service manifest beyond unrelated workspace directory counts", async () => {
+    mkdirSync(join(ROOT, "packages"));
+    for (let index = 0; index < 120; index += 1)
+      mkdirSync(join(ROOT, "packages", `filler-${index.toString()}`));
+    const target = join(ROOT, "packages/z-service");
+    mkdirSync(target);
+    writeFileSync(
+      join(target, "pom.xml"),
+      "<project><properties><java.version>21</java.version></properties></project>\n",
+    );
+    for (let index = 0; index < 40; index += 1)
+      writeFileSync(join(target, `filler-${index.toString()}.txt`), "plain text\n");
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Welche Technologien und Abhängigkeiten verwendet dieses Projekt?",
+        }),
+      }),
+      { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW },
+    );
+    expect(out.pack.files.some((file) => file.scopePath === "packages/z-service/pom.xml")).toBe(
+      true,
+    );
+    expect(
+      out.pack.uncertainty.some((marker) => marker.claim.includes("bounded directory reads")),
+    ).toBe(false);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("retains primary root manifests when nested manifests exceed the accepted evidence budget", async () => {
+    writeFileSync(
+      join(ROOT, "zproject.csproj"),
+      "<Project><TargetFramework>net8.0</TargetFramework></Project>\n",
+    );
+    for (let index = 0; index < 40; index += 1) {
+      const dir = join(ROOT, "packages", `service-${index.toString()}`);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "pom.xml"), "<project><java.version>21</java.version></project>\n");
+    }
+    const iterate = nodeWorkspaceFs.iterateDirectory;
+    if (iterate === undefined) throw new Error("streaming port missing");
+    let serviceInspections = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      iterateDirectory: async function* (path): AsyncIterable<WorkspaceDirEntry> {
+        if (path.startsWith(join(realpathSync(ROOT), "packages/service-"))) serviceInspections += 1;
+        yield* iterate(path);
+      },
+    };
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Welche Technologien und Abhängigkeiten verwendet dieses Projekt?",
+        }),
+      }),
+      { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW, fs },
+    );
+    expect(out.pack.files.some((file) => file.scopePath === "zproject.csproj")).toBe(true);
+    expect(out.pack.files.length).toBeLessThanOrEqual(out.pack.budget.filesReadMax);
+    expect(serviceInspections).toBe(80);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -3404,15 +3535,25 @@ describe("runGroundedExploration", () => {
     expect(
       multi.operations.contentReadBytes - single.operations.contentReadBytes,
     ).toBeLessThanOrEqual(32 * multi.maxReadableFixtureFileBytes);
-    const additionalContentReads =
+    // Replay the production excerpt-read phase for the actually selected files and ranges. Its
+    // containment and identity checks scale with the accepted read budget, not discovery work.
+    const discoveryStatDelta =
+      multi.operations.stat -
+      multi.excerptReadOperations.stat -
+      (single.operations.stat - single.excerptReadOperations.stat);
+    const additionalDiscoveryContentReads =
       workspaceContentReadOperationCount(multi.operations) -
-      workspaceContentReadOperationCount(single.operations);
-    // Every additional bounded read now earns one post-read stat revalidation. Keep the original
-    // discovery-work ceiling and account only for that mandatory trust check.
-    expect(multi.operations.stat - single.operations.stat).toBeLessThanOrEqual(
-      16 + additionalContentReads,
-    );
-    expect(multi.operations.realPath - single.operations.realPath).toBeLessThanOrEqual(32);
+      workspaceContentReadOperationCount(multi.excerptReadOperations) -
+      (workspaceContentReadOperationCount(single.operations) -
+        workspaceContentReadOperationCount(single.excerptReadOperations));
+    // Other bounded content reads retain their post-read snapshot allowance; directory discovery
+    // keeps the original ceiling. The replay does not spend or repeat any directory traversal.
+    expect(discoveryStatDelta).toBeLessThanOrEqual(16 + additionalDiscoveryContentReads);
+    const discoveryRealPathDelta =
+      multi.operations.realPath -
+      multi.excerptReadOperations.realPath -
+      (single.operations.realPath - single.excerptReadOperations.realPath);
+    expect(discoveryRealPathDelta).toBeLessThanOrEqual(32);
     expect(multi.operations.unboundedReadDir - single.operations.unboundedReadDir).toBe(0);
   });
 
@@ -4230,12 +4371,22 @@ describe("runGroundedExploration", () => {
     let nowMs = NOW;
     const baseFs = countingNodeFs().fs;
     const canonicalRoot = realpathSync(ROOT);
+    const iterate = baseFs.iterateDirectory;
+    if (iterate === undefined) throw new Error("streaming port missing");
+    let rootIterations = 0;
+    let metadataClosed = false;
     const crossingFs: WorkspaceFs = {
       ...baseFs,
-      readDir: (path, maxEntries): readonly WorkspaceDirEntry[] => {
-        const entries = baseFs.readDir(path, maxEntries);
-        if (path === canonicalRoot && maxEntries === 25) nowMs = deadlineAtMs;
-        return entries;
+      iterateDirectory: async function* (path): AsyncIterable<WorkspaceDirEntry> {
+        const metadata = path === canonicalRoot && ++rootIterations === 2;
+        try {
+          for await (const entry of iterate(path)) {
+            if (metadata) nowMs = deadlineAtMs;
+            yield entry;
+          }
+        } finally {
+          if (metadata) metadataClosed = true;
+        }
       },
     };
     const fs = deadlineFsProbe(crossingFs, () => nowMs >= deadlineAtMs);
@@ -4260,6 +4411,7 @@ describe("runGroundedExploration", () => {
     );
 
     expect(nowMs).toBe(deadlineAtMs);
+    expect(metadataClosed).toBe(true);
     expect(fs.accessesAfterDeadline()).toBe(0);
     expect(out.pack.usage.elapsedMs).toBe(elapsedMsMax);
     expect(out.pack.uncertainty.some((marker) => marker.claim.includes("elapsedMs"))).toBe(true);
@@ -4270,12 +4422,22 @@ describe("runGroundedExploration", () => {
     const controller = new AbortController();
     const baseFs = countingNodeFs().fs;
     const canonicalRoot = realpathSync(ROOT);
+    const iterate = baseFs.iterateDirectory;
+    if (iterate === undefined) throw new Error("streaming port missing");
+    let rootIterations = 0;
+    let metadataClosed = false;
     const cancellingFs: WorkspaceFs = {
       ...baseFs,
-      readDir: (path, maxEntries): readonly WorkspaceDirEntry[] => {
-        const entries = baseFs.readDir(path, maxEntries);
-        if (path === canonicalRoot && maxEntries === 25) controller.abort();
-        return entries;
+      iterateDirectory: async function* (path): AsyncIterable<WorkspaceDirEntry> {
+        const metadata = path === canonicalRoot && ++rootIterations === 2;
+        try {
+          for await (const entry of iterate(path)) {
+            if (metadata) controller.abort();
+            yield entry;
+          }
+        } finally {
+          if (metadata) metadataClosed = true;
+        }
       },
     };
     const fs = deadlineFsProbe(cancellingFs, () => controller.signal.aborted);
@@ -4301,6 +4463,7 @@ describe("runGroundedExploration", () => {
 
     await expect(expectation).rejects.toBeInstanceOf(CancelledError);
     expect(controller.signal.aborted).toBe(true);
+    expect(metadataClosed).toBe(true);
     expect(fs.accessesAfterDeadline()).toBe(0);
   });
 

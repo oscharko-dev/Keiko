@@ -144,6 +144,11 @@ source bytes are processed with bounded concurrency, and only bounded best match
 summaries survive the scan. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
 Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
+Advisory project metadata also streams every admitted directory entry and supported workspace
+pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
+the accepted file-read budget, preserving primary root manifests before nested services. Workspace
+manifests share the inclusive 2 MiB eligibility ceiling. Explicit deadlines, cancellation, unavailable
+streaming ports, and failed enumeration remain visible; iterators close on interruption.
 The shared size-admitted decoder accepts UTF-8, BOM or recognizable-pattern UTF-16LE/BE, and declared
 legacy HTML labels that normalize to UTF-8 or Windows-1252. HTML declarations are inspected within
 the first 1,024 bytes; `http-equiv` charset parameters are case-insensitive, and standard aliases such
