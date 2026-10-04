@@ -997,7 +997,7 @@ async function expectGroundingParityUi(page: Page, chat: GroundingParityChat): P
   await expect(
     chatWindow
       .getByRole("list", { name: "Evidence citations" })
-      .getByTitle(/^Evidence citation in src\/repository-parity\.ts at lines 2-2 — relevance /u),
+      .getByTitle("Evidence citation in src/repository-parity.ts at lines 2-2", { exact: true }),
   ).toHaveCount(1);
 }
 
