@@ -2402,6 +2402,27 @@ function resolveSendMessageAdmission(input: {
   return { kind: "accepted", canonicalTarget, chat, project, content, modelId };
 }
 
+function nonRetryableFailure(userPersisted: boolean): SendMessageOutcome {
+  return userPersisted
+    ? { status: "failed", retryable: false, userPersisted: true }
+    : { status: "failed", retryable: false };
+}
+
+function terminalFailureRefusal(
+  terminal: FailedSendOutcome,
+  persistence: UserPersistenceProof,
+  canonicalTarget: boolean,
+): SendMessageOutcome | undefined {
+  if (terminal.scopeChanged === true) {
+    return nonRetryableFailure(canonicalTarget || persistence === "persisted");
+  }
+  if (!canonicalTarget) return undefined;
+  if (terminal.chatClosed === true) return { status: "failed", suspend: true };
+  return terminal.permanentFailure === true
+    ? nonRetryableFailure(persistence === "persisted")
+    : undefined;
+}
+
 function settledSendMessageOutcome(input: {
   readonly settled: SendAttemptOutcome;
   readonly terminal: SendAttemptOutcome;
@@ -2416,25 +2437,9 @@ function settledSendMessageOutcome(input: {
       ? { status: "cancelled", userPersisted, interrupted: true }
       : { status: "cancelled", userPersisted };
   }
-  const canonicalFailure =
-    settled.status === "failed" && terminal.status === "failed" && canonicalTarget !== undefined;
-  if (canonicalFailure && terminal.scopeChanged === true) {
-    return { status: "failed", retryable: false, userPersisted: true };
-  }
-  if (canonicalFailure && terminal.chatClosed === true) return { status: "failed", suspend: true };
-  if (canonicalFailure && terminal.permanentFailure === true) {
-    return persistence === "persisted"
-      ? { status: "failed", retryable: false, userPersisted: true }
-      : { status: "failed", retryable: false };
-  }
-  if (
-    settled.status === "failed" &&
-    terminal.status === "failed" &&
-    terminal.scopeChanged === true
-  ) {
-    return persistence === "persisted"
-      ? { status: "failed", retryable: false, userPersisted: true }
-      : { status: "failed", retryable: false };
+  if (settled.status === "failed" && terminal.status === "failed") {
+    const refusal = terminalFailureRefusal(terminal, persistence, canonicalTarget !== undefined);
+    if (refusal !== undefined) return refusal;
   }
   if (settled.status === "failed" && persistence === "persisted") {
     return { status: "in-progress" };

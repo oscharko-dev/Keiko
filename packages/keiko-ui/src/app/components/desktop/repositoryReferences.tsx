@@ -72,7 +72,7 @@ const EXACT_REPOSITORY_REFERENCE_PATTERN = new RegExp(
   String.raw`^@?([^:[\]\r\n]{1,4096}?)(?:${REFERENCE_LINE_RANGE})?$`,
   "u",
 );
-const REPOSITORY_REFERENCE_SOURCE = String.raw`@?${REPOSITORY_REFERENCE_PATH_CORE}(?:${referenceLineRange(false)})?`;
+const REPOSITORY_REFERENCE_SOURCE = `@?${REPOSITORY_REFERENCE_PATH_CORE}(?:${referenceLineRange(false)})?`;
 const REPOSITORY_REFERENCE_IN_BRACKETS_PATTERN = new RegExp(
   String.raw`\[\s*(${REPOSITORY_REFERENCE_SOURCE})\s*\]`,
   "giu",
