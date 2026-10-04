@@ -432,7 +432,7 @@ function PreviewKindContent(props: PreviewKindContentProps): ReactNode {
   }
 }
 
-export function initialPreviewLineWindow(
+function initialPreviewLineWindow(
   lineCount: number,
   revealLineStart?: number,
 ): { readonly start: number; readonly end: number } {
