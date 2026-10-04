@@ -16,7 +16,7 @@ function rule(selector: string): string {
 
 describe("workspace error notice stack", () => {
   it("positions the stack once while preserving the existing single-alert placement", () => {
-    const stack = rule(".sourceAlertStack {");
+    const stack = rule(".cmpSourceAlertStack {");
     expect(stack).toMatch(/position:\s*absolute/u);
     expect(stack).toMatch(/bottom:\s*14px/u);
     expect(stack).toMatch(/left:\s*50%/u);
@@ -25,7 +25,7 @@ describe("workspace error notice stack", () => {
   });
 
   it("keeps independently actionable alerts in flow inside the stack", () => {
-    const alert = rule(".sourceAlertStack :global(.source-limit-alert)");
+    const alert = rule('.cmpSourceAlertStack > [role="alert"]');
     expect(alert).toMatch(/position:\s*static/u);
     expect(alert).toMatch(/transform:\s*none/u);
     expect(alert).toMatch(/width:\s*100%/u);

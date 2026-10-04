@@ -1237,9 +1237,9 @@ describe("AppShell grounding connections", () => {
     });
     const sourceNotice = await screen.findByText(/already has 16 of 16 connected sources/u);
     const globalNotice = screen.getByText("Keiko encountered an error.");
-    const stack = sourceNotice.closest(`.${appShellStyles.sourceAlertStack}`);
+    const stack = sourceNotice.closest(`.${appShellStyles.cmpSourceAlertStack}`);
     expect(stack).not.toBeNull();
-    expect(globalNotice.closest(`.${appShellStyles.sourceAlertStack}`)).toBe(stack);
+    expect(globalNotice.closest(`.${appShellStyles.cmpSourceAlertStack}`)).toBe(stack);
     expect(stack?.querySelectorAll("[role='alert']")).toHaveLength(2);
     await userEvent.click(screen.getByRole("button", { name: "Dismiss workspace notice" }));
     expect(sourceNotice).not.toBeInTheDocument();

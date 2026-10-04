@@ -616,6 +616,16 @@ interface ChatMutationAttempt {
 
 type ChatLookupTarget = ChatBindingTarget | ChatUnbindTarget;
 
+function latestGroundingChat(
+  sessionChat: Chat | undefined,
+  confirmed: Chat | undefined,
+): Chat | undefined {
+  if (confirmed === undefined) return sessionChat;
+  return sessionChat === undefined || confirmed.updatedAt >= sessionChat.updatedAt
+    ? confirmed
+    : sessionChat;
+}
+
 function runtimeProjectPathForChat(chatWindowId: string, chatId: string): string | undefined {
   const runtimeTarget = chatWindowRuntimeTarget(chatWindowId);
   return runtimeTarget?.conversationId === chatId ? runtimeTarget.projectPath : undefined;
@@ -712,9 +722,12 @@ async function persistCurrentChatScopes<T>(
     scopes: readonly T[] | null,
     expectedIdentity?: string,
   ) => Promise<{ readonly chat: Chat }>,
-  remember: (chat: Chat) => void,
-  expectedIdentity?: string,
+  confirmation: {
+    readonly remember: (chat: Chat) => void;
+    readonly expectedIdentity?: string | undefined;
+  },
 ): Promise<Chat | undefined> {
+  const { remember, expectedIdentity } = confirmation;
   if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return undefined;
   const response = await persistScopeSnapshot(persist, chatId, next, expectedIdentity);
   remember(response.chat);
@@ -1151,11 +1164,7 @@ function AppShellInner(): ReactNode {
         session.chats.find((chat) => chat.id === chatId) ??
         (session.activeChat?.id === chatId ? session.activeChat : undefined);
       const confirmed = confirmedGroundingChatsRef.current.get(chatId);
-      const chat =
-        confirmed !== undefined &&
-        (sessionChat === undefined || confirmed.updatedAt >= sessionChat.updatedAt)
-          ? confirmed
-          : sessionChat;
+      const chat = latestGroundingChat(sessionChat, confirmed);
       if (chat !== undefined && !refresh) return chat.status === "closed" ? undefined : chat;
       const projectPath =
         chat?.projectPath ??
@@ -1191,6 +1200,58 @@ function AppShellInner(): ReactNode {
       `window:${chatWindowId}`,
     [],
   );
+  const retainConnectedFilesScope = useCallback(
+    async (
+      chat: Chat,
+      ownedScope: ChatConnectedScope | null,
+      current: readonly ChatConnectedScope[],
+      attempt: ChatMutationAttempt,
+      target: ChatBindingTarget | undefined,
+    ): Promise<boolean> => {
+      rememberGroundingChat(chat);
+      if (ownedScope === null) return true;
+      const persisted = await persistCurrentChatScopes(
+        target,
+        attempt,
+        chat.id,
+        effectiveScopes(chat),
+        current,
+        updateChatConnectedScopes,
+        { remember: rememberGroundingChat, expectedIdentity: chat.groundingScopeIdentity },
+      );
+      if (persisted === undefined) return false;
+      session.replaceChat(persisted);
+      return true;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the stable session member is used
+    [rememberGroundingChat, session.replaceChat],
+  );
+  const rejectMissingFilesScopeOwnership = useCallback(
+    (
+      connection: Connection | undefined,
+      chat: Chat,
+      nextScope: ChatConnectedScope,
+      automatic: boolean,
+    ): false => {
+      if (
+        shouldReportAutomaticFilesAmbiguity(
+          automaticFilesAmbiguitiesRef.current,
+          connection,
+          chat,
+          nextScope,
+          automatic,
+        )
+      ) {
+        reportGroundingMutationFailure(
+          "Files scope ownership unavailable",
+          new Error("Scope ownership is not proven"),
+        );
+        rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
+      }
+      return false;
+    },
+    [rejectForConnectionFailure, t],
+  );
   // Files↔Chat edges bind the Files window's visible scope: repository root, opened folder, or
   // previewed file. The green edge is now the only UI affordance for this binding.
   // Release 0.2.0 — returns whether the bind was accepted: at the source limit the bind is
@@ -1225,22 +1286,7 @@ function AppShellInner(): ReactNode {
         canonicalScopes,
       );
       if (missingFilesScopeOwnership(connection, ownedScope, nextScope, canonicalScopes)) {
-        if (
-          shouldReportAutomaticFilesAmbiguity(
-            automaticFilesAmbiguitiesRef.current,
-            connection,
-            chat,
-            nextScope,
-            automatic,
-          )
-        ) {
-          reportGroundingMutationFailure(
-            "Files scope ownership unavailable",
-            new Error("Scope ownership is not proven"),
-          );
-          rejectForConnectionFailure(t("chat.grounding.scopeOwnershipMissing"));
-        }
-        return false;
+        return rejectMissingFilesScopeOwnership(connection, chat, nextScope, automatic);
       }
       if (connectionId !== undefined) automaticFilesAmbiguitiesRef.current.delete(connectionId);
       if (
@@ -1257,22 +1303,7 @@ function AppShellInner(): ReactNode {
           : removeConnectedScope(canonicalScopes, ownedScope);
       const lkScopes = effectiveLocalKnowledgeScopes(chat);
       if (isScopeConnected(current, nextScope)) {
-        rememberGroundingChat(chat);
-        if (ownedScope !== null) {
-          const persisted = await persistCurrentChatScopes(
-            target,
-            attempt,
-            chat.id,
-            effectiveScopes(chat),
-            current,
-            updateChatConnectedScopes,
-            rememberGroundingChat,
-            chat.groundingScopeIdentity,
-          );
-          if (persisted === undefined) return false;
-          session.replaceChat(persisted);
-        }
-        return true;
+        return retainConnectedFilesScope(chat, ownedScope, current, attempt, target);
       }
       const cap = totalSourceCap(groundingLimits);
       if (current.length + lkScopes.length >= cap) {
@@ -1294,8 +1325,7 @@ function AppShellInner(): ReactNode {
           effectiveScopes(chat),
           next,
           updateChatConnectedScopes,
-          rememberGroundingChat,
-          chat.groundingScopeIdentity,
+          { remember: rememberGroundingChat, expectedIdentity: chat.groundingScopeIdentity },
         );
         if (persisted === undefined) return false;
         session.replaceChat(persisted);
@@ -1322,6 +1352,8 @@ function AppShellInner(): ReactNode {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       resolveChatForWindow,
+      rejectMissingFilesScopeOwnership,
+      retainConnectedFilesScope,
       session.replaceChat,
       groundingLimits,
       rejectForLimit,
@@ -1431,8 +1463,7 @@ function AppShellInner(): ReactNode {
         current,
         next,
         updateChatConnectedScopes,
-        rememberGroundingChat,
-        chat.groundingScopeIdentity,
+        { remember: rememberGroundingChat, expectedIdentity: chat.groundingScopeIdentity },
       );
       if (persisted === undefined) {
         if (connectionId !== undefined) releasedFilesConnectionsRef.current.delete(connectionId);
@@ -1513,7 +1544,7 @@ function AppShellInner(): ReactNode {
           current,
           next,
           updateChatLocalKnowledgeScopes,
-          rememberGroundingChat,
+          { remember: rememberGroundingChat },
         );
         if (persisted === undefined) return false;
         session.replaceChat(persisted);
@@ -1583,7 +1614,7 @@ function AppShellInner(): ReactNode {
               current,
               next,
               updateChatLocalKnowledgeScopes,
-              rememberGroundingChat,
+              { remember: rememberGroundingChat },
             );
             if (persisted === undefined) return false;
             session.replaceChat(persisted);
@@ -1684,7 +1715,7 @@ function AppShellInner(): ReactNode {
               current,
               next,
               updateChatGitChangeScopes,
-              rememberGroundingChat,
+              { remember: rememberGroundingChat },
             );
             if (persisted === undefined) return false;
             session.replaceChat(persisted);
@@ -1782,20 +1813,20 @@ function AppShellInner(): ReactNode {
     }
     pruneFilesAcknowledgements(acknowledgedFilesScopesRef.current, liveEdges);
     pruneFilesAcknowledgements(automaticFilesAmbiguitiesRef.current, liveEdges);
-    for (const conn of ws.conns) {
+    ws.conns.forEach((conn): void => {
       const a = ws.winsById.get(conn.a);
       const b = ws.winsById.get(conn.b);
-      if (a === undefined || b === undefined) continue;
+      if (a === undefined || b === undefined) return;
       const chatWindowId = chatWindowIdOf(conn, a, b);
-      if (chatWindowId === null || changedChatWindowIdsRef.current.has(chatWindowId)) continue;
+      if (chatWindowId === null || changedChatWindowIdsRef.current.has(chatWindowId)) return;
       const nextScope = filesChatBindScope(a, b, Date.now());
-      if (nextScope === null) continue;
+      if (nextScope === null) return;
       const previousScope = boundScopeOf(conn);
-      if (connectedScopeKey(previousScope) === connectedScopeKey(nextScope)) continue;
+      if (connectedScopeKey(previousScope) === connectedScopeKey(nextScope)) return;
       const chatWindow = a.type === "chat" ? a : b;
       const conversationId =
         chatIdFromWindow(chatWindow) ?? chatWindowRuntimeTarget(chatWindowId)?.conversationId;
-      if (conversationId === undefined) continue;
+      if (conversationId === undefined) return;
       const target: ChatBindingTarget = {
         conversationId,
         projectPath:
@@ -1817,7 +1848,7 @@ function AppShellInner(): ReactNode {
             ws.api.updateConnBoundScope(conn.id, acknowledged);
         },
       );
-    }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- workspaceLinkRevision is the cfg/conn-change signal; ws.wins/winsById/conns are read fresh when it bumps (geometry-only frames must not re-run the scan)
   }, [replaceFilesScope, ws.api, workspaceLinkRevision]);
 
@@ -2150,7 +2181,7 @@ function AppShellInner(): ReactNode {
                         </Workspace>
                         {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
-                        <div className={styles.sourceAlertStack}>
+                        <div className={styles.cmpSourceAlertStack}>
                           <DiagnosticReadinessNotice health={backendHealth} />
                           <GlobalSupportReportAction onlyForFailure />
                           {sourceConnectionNotice !== null && (

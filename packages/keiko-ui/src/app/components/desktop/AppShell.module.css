@@ -21,7 +21,7 @@
   }
 }
 
-.sourceAlertStack {
+.cmpSourceAlertStack {
   position: absolute;
   bottom: 14px;
   left: 50%;
@@ -35,7 +35,8 @@
   pointer-events: none;
 }
 
-.sourceAlertStack :global(.source-limit-alert) {
+.cmpSourceAlertStack > [role="alert"],
+.cmpSourceAlertStack > [role="status"] {
   position: static;
   transform: none;
   width: 100%;
