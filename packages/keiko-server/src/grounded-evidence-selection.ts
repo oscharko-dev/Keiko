@@ -5,7 +5,6 @@ import type {
   SelectedScope,
 } from "@oscharko-dev/keiko-contracts";
 
-const MAX_WORKSPACE_CANDIDATE_FILES = 12;
 const MIN_RELATIVE_CANDIDATE_SCORE = 0.55;
 const MAX_EVIDENCE_ATOMS_PER_FILE = 12;
 const TRACE_RANGE_SLOTS_PER_FILE = 4;
@@ -25,10 +24,7 @@ export interface GroundedCandidateSelection {
 }
 
 function boundedFileLimit(input: GroundedCandidateSelectionInput): number {
-  const budgetLimit = Math.max(0, Math.floor(input.filesReadMax));
-  return input.scopeKind === "files"
-    ? budgetLimit
-    : Math.min(MAX_WORKSPACE_CANDIDATE_FILES, budgetLimit);
+  return Math.max(0, Math.floor(input.filesReadMax));
 }
 
 function selectedWorkspaceCandidates(

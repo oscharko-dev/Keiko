@@ -4,7 +4,12 @@ import type {
   EvidenceAtom,
   OmittedContextEntry,
 } from "@oscharko-dev/keiko-contracts";
-import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import {
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
+  DEFAULT_EXPLORATION_BUDGET,
+  validateConnectedContextPack,
+} from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { assembleContextPack, type AssembleInput } from "@oscharko-dev/keiko-workflows";
 
 import {
   selectGroundedCandidateFiles,
@@ -43,6 +48,54 @@ function atom(
 
 function pathLevelAtom(scopePath: string, score: number): EvidenceAtom {
   return { ...atom(scopePath, score, 1, 1, "path-level"), lineRange: undefined };
+}
+
+function broadCandidates(count = 20): readonly CandidateFile[] {
+  return Array.from({ length: count }, (_value, index) =>
+    candidate(`src/file-${String(index).padStart(2, "0")}.ts`, 0.5 - index * 0.005),
+  );
+}
+
+async function assembleSelectedCandidates(
+  budget: AssembleInput["budget"],
+  initialUsage?: AssembleInput["initialUsage"],
+): Promise<Awaited<ReturnType<typeof assembleContextPack>>> {
+  const kept = broadCandidates();
+  const selection = selectGroundedCandidateFiles({
+    kept,
+    omitted: [],
+    scopeKind: "workspace-root",
+    filesReadMax: budget.filesReadMax,
+    nowMs: NOW,
+  });
+  return assembleContextPack(
+    {
+      scope: {
+        schemaVersion: "1",
+        scopeId: "scope",
+        workspaceRoot: "/workspace",
+        kind: "workspace-root",
+        relativePaths: [],
+        conversationId: "chat",
+        connectedAtMs: NOW,
+        explicitConnection: true,
+      },
+      query: {
+        kind: "natural-language",
+        text: "describe the modules",
+        caseSensitive: false,
+        maxResults: 50,
+        emittedAtMs: NOW,
+      },
+      budget,
+      atoms: kept.map((entry) => atom(entry.scopePath, entry.score, 1)),
+      ranked: selection.kept,
+      omittedFromRanking: selection.omitted,
+      excerpts: new Map(kept.map((entry) => [entry.scopePath, `module ${entry.scopePath}`])),
+      ...(initialUsage === undefined ? {} : { initialUsage }),
+    },
+    { nowMs: () => NOW },
+  );
 }
 
 describe("selectGroundedCandidateFiles", () => {
@@ -93,23 +146,74 @@ describe("selectGroundedCandidateFiles", () => {
     ] satisfies readonly OmittedContextEntry[]);
   });
 
-  it("caps broad workspace evidence while preserving deterministic score order", () => {
-    const kept = Array.from({ length: 20 }, (_value, index) =>
-      candidate(`src/file-${String(index).padStart(2, "0")}.ts`, 0.5 - index * 0.005),
-    );
+  it.each(["workspace-root", "directory"] as const)(
+    "uses the accepted read budget beyond twelve relevant %s candidates",
+    (scopeKind) => {
+      const kept = broadCandidates();
+      const result = selectGroundedCandidateFiles({
+        kept,
+        omitted: [],
+        scopeKind,
+        filesReadMax: 32,
+        nowMs: NOW,
+      });
+      expect(result.kept).toEqual(kept);
+      expect(result.omitted).toEqual([]);
+    },
+  );
+
+  it("reports a real accepted read limit while preserving existing relevance order", () => {
+    const kept = broadCandidates(40);
     const result = selectGroundedCandidateFiles({
       kept,
       omitted: [],
       scopeKind: "workspace-root",
-      filesReadMax: 32,
+      filesReadMax: 16,
       nowMs: NOW,
     });
+    expect(result.kept).toEqual(kept.slice(0, 16));
+    expect(result.omitted.filter((entry) => entry.reason === "budget-exhausted")).toHaveLength(24);
+  });
 
-    expect(result.kept).toHaveLength(12);
-    expect(result.kept.map((entry) => entry.scopePath)).toEqual(
-      kept.slice(0, 12).map((entry) => entry.scopePath),
+  it("assembles all relevant files beyond twelve when actual read and byte budgets fit", async () => {
+    const { pack } = await assembleSelectedCandidates(DEFAULT_EXPLORATION_BUDGET);
+    expect(pack.files).toHaveLength(20);
+    expect(pack.usage.filesRead).toBe(20);
+    expect(pack.usage.excerptBytes).toBeLessThan(DEFAULT_EXPLORATION_BUDGET.excerptBytesMax);
+    expect(pack.omitted).toEqual([]);
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it("retains the actual excerpt byte bound after broader candidate selection", async () => {
+    const { pack } = await assembleSelectedCandidates({
+      ...DEFAULT_EXPLORATION_BUDGET,
+      excerptBytesMax: 100,
+    });
+    expect(pack.files.length).toBeGreaterThan(0);
+    expect(pack.files.length).toBeLessThan(20);
+    expect(pack.usage.excerptBytes).toBeLessThanOrEqual(100);
+    expect(pack.omitted.some((entry) => entry.reason === "budget-exhausted")).toBe(true);
+    expect(pack.uncertainty.some((entry) => entry.kind === "budget-clipped")).toBe(true);
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it("preserves the remaining read quota when earlier stages consumed accepted reads", async () => {
+    const { pack } = await assembleSelectedCandidates(
+      { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 4 },
+      {
+        searchCalls: 1,
+        filesRead: 3,
+        excerptBytes: 0,
+        modelInputTokens: 0,
+        modelOutputTokens: 0,
+        elapsedMs: 0,
+        rerankCalls: 0,
+      },
     );
-    expect(result.omitted.filter((entry) => entry.reason === "budget-exhausted")).toHaveLength(8);
+    expect(pack.files).toHaveLength(1);
+    expect(pack.usage.filesRead).toBe(4);
+    expect(pack.uncertainty.some((entry) => entry.kind === "budget-clipped")).toBe(true);
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
 
   it("does not relative-score-filter files the user selected explicitly", () => {
