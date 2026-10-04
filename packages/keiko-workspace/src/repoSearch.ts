@@ -88,6 +88,10 @@ import {
   type SearchPolicy,
 } from "./repoSearchPolicy.js";
 import type { WorkspaceInfo } from "./types.js";
+import {
+  requestedSourceInspectionExtensions,
+  sourceInspectionPathMatches,
+} from "./repoSearchSourceInspection.js";
 import { decodeTextFileBytes } from "./binaryDetect.js";
 import {
   anchoredExcerptByteWindow,
@@ -537,13 +541,27 @@ type SearchTextRunnerDeps = Required<Pick<FacadeDeps, "fs" | "nowMs">> &
     | "queryInterpretation"
   >;
 
+function sourceInspectionCandidateSelection(
+  query: RetrievalQuery,
+  deps: SearchTextRunnerDeps,
+): Pick<SearchTextRunner, "candidatePathPredicate" | "sourceInspection"> {
+  const extensions =
+    query.kind === "natural-language" && deps.queryInterpretation === undefined
+      ? requestedSourceInspectionExtensions(query.text)
+      : [];
+  const predicate = buildCandidatePathPredicate(deps.candidatePathGlobs, extensions);
+  return {
+    ...(extensions.length === 0 ? {} : { sourceInspection: true }),
+    ...(predicate === undefined ? {} : { candidatePathPredicate: predicate }),
+  };
+}
+
 function buildSearchTextRunner(
   scope: SearchScope,
   query: RetrievalQuery,
   limits: SearchLimits,
   deps: SearchTextRunnerDeps,
 ): SearchTextRunner {
-  const candidatePathPredicate = buildCandidatePathPredicate(deps.candidatePathGlobs);
   return {
     scope,
     limits: {
@@ -562,6 +580,7 @@ function buildSearchTextRunner(
     fingerprint: fingerprintFor(query, deps.queryInterpretation),
     policy: resolveWorkspaceSearchPolicy(scope, deps.fs, deps.searchHints),
     query,
+    ...sourceInspectionCandidateSelection(query, deps),
     contentLane: deps.contentLane ?? "evidence",
     ...(deps.candidatePathGlobs === undefined
       ? {}
@@ -569,7 +588,6 @@ function buildSearchTextRunner(
     ...(deps.candidateContentFor === undefined
       ? {}
       : { candidateContentFor: deps.candidateContentFor }),
-    ...(candidatePathPredicate === undefined ? {} : { candidatePathPredicate }),
     // A semantic session ships file text to an embedding provider — an evidence-lane egress path.
     // The editor lane reads RAW bytes and is lexical only, so it never opens one: fail closed here so
     // a future caller cannot combine the raw lane with a provider and turn a read into an egress.
@@ -588,15 +606,23 @@ function buildSearchTextRunner(
 
 function buildCandidatePathPredicate(
   globs: FacadeDeps["candidatePathGlobs"],
+  sourceExtensions: readonly string[] = [],
 ): ((scopePath: string) => boolean) | undefined {
-  if (globs === undefined || (globs.include.length === 0 && globs.exclude.length === 0)) {
+  if (
+    sourceExtensions.length === 0 &&
+    (globs === undefined || (globs.include.length === 0 && globs.exclude.length === 0))
+  ) {
     return undefined;
   }
-  const includes = globs.include.map((glob) => compileGlob(glob, true));
-  const excludes = globs.exclude.map((glob) => compileGlob(glob, true));
+  const includes = (globs?.include ?? []).map((glob) => compileGlob(glob, true));
+  const excludes = (globs?.exclude ?? []).map((glob) => compileGlob(glob, true));
   return (scopePath: string): boolean => {
     const included = includes.length === 0 || includes.some((pattern) => pattern.test(scopePath));
-    return included && !excludes.some((pattern) => pattern.test(scopePath));
+    return (
+      included &&
+      !excludes.some((pattern) => pattern.test(scopePath)) &&
+      (sourceExtensions.length === 0 || sourceInspectionPathMatches(scopePath, sourceExtensions))
+    );
   };
 }
 

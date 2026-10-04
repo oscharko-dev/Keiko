@@ -711,6 +711,7 @@ export interface SearchTextRunner {
   readonly fingerprint: string;
   readonly policy: SearchPolicy;
   readonly query: RetrievalQuery;
+  readonly sourceInspection?: boolean | undefined;
   // Which bytes the per-file matcher sees. REQUIRED, never defaulted here: every runner has to state
   // its lane so a new call site cannot inherit the wrong one silently.
   //   "evidence" — text is redacted at the IO boundary (context packs, grounded answers, evidence
@@ -1319,7 +1320,11 @@ function cachedPreviewFileMatches(
 
 function canUseCachedLexicalMatches(runner: SearchTextRunner): boolean {
   // Hashed natural-language records cannot prove atomic phrase/alternative matching.
-  return runner.literalTerms === undefined && runner.semantic === undefined;
+  return (
+    runner.literalTerms === undefined &&
+    runner.semantic === undefined &&
+    runner.sourceInspection !== true
+  );
 }
 
 function cachedFileMatches(
@@ -1474,10 +1479,11 @@ function textFileMatches(
   text: string,
 ): FileMatches | undefined {
   collectSemanticSearchDocument(runner.semantic, { scopePath: file.relativePath, text });
-  if (!shouldScoreContent(runner.query, text, runner.policy)) {
+  if (runner.sourceInspection !== true && !shouldScoreContent(runner.query, text, runner.policy)) {
     return undefined;
   }
-  const best = scanLines(runner, text, state, file.relativePath);
+  const matched = scanLines(runner, text, state, file.relativePath);
+  const best = sourceInspectionOrMatchedLines(runner, text, state, matched);
   if (best.length === 0) {
     return undefined;
   }
@@ -1500,6 +1506,31 @@ function textFileMatches(
         ),
       ),
   };
+}
+
+// Filename inspection still yields actual admitted text, never an inferred symbol or file body.
+// The ordinary excerpt reader applies the same evidence budgets to this bounded source window.
+function sourceInspectionOrMatchedLines(
+  runner: SearchTextRunner,
+  text: string,
+  state: RunState,
+  matched: readonly ScoredLine[],
+): readonly ScoredLine[] {
+  if (runner.sourceInspection !== true || matched.length > 0) return matched;
+  if (abortScanFile(runner, state)) return [];
+  const lines = text.split(/\r?\n/u);
+  if (text.endsWith("\n")) lines.pop();
+  const first = lines.findIndex((line) => line.trim().length > 0);
+  return first < 0
+    ? []
+    : [
+        {
+          line: first + 1,
+          startLine: first + 1,
+          endLine: Math.min(lines.length, first + 200),
+          score: 1,
+        },
+      ];
 }
 
 export function emitFileMatches(
