@@ -657,12 +657,17 @@ function workflowCapabilityFields(
   };
 }
 
-// A successful declaration replaces its optional input ceiling; unavailable discovery preserves it.
+// Only declared context geometry replaces a stored optional input ceiling; a degraded list preserves it.
 function refreshedSetupCapability(
   existing: ModelCapability | undefined,
   discovered: GatewayDiscoveredModelMetadata | undefined,
 ): ModelCapability | undefined {
-  if (existing === undefined || discovered === undefined) return existing;
+  if (
+    existing === undefined ||
+    discovered?.contextWindow === undefined ||
+    discovered.contextWindowUndeclared === true
+  )
+    return existing;
   const { maxInputTokens, ...retained } = existing;
   return retained;
 }
@@ -1951,11 +1956,19 @@ async function discoverLiteLlmModelInfo(
   egress: GatewayEgressConfig | undefined,
   correlationId: string | undefined,
   signal: AbortSignal,
+  deadlineAt: number,
 ): Promise<GatewayDiscoveredModels | undefined> {
-  for (const endpoint of modelInfoEndpointCandidates(baseUrl)) {
+  const endpoints = modelInfoEndpointCandidates(baseUrl);
+  for (const [index, endpoint] of endpoints.entries()) {
     try {
       const discovered = parseModelDiscovery(
-        await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName, egress, signal),
+        await fetchDiscoveryJson(
+          endpoint,
+          apiKey,
+          apiKeyHeaderName,
+          egress,
+          discoveryManagementSignal(signal, deadlineAt, endpoints.length - index),
+        ),
         correlationId,
       );
       return {
@@ -1976,6 +1989,20 @@ async function discoverLiteLlmModelInfo(
   return undefined;
 }
 
+// Reserve an equal share of the remaining discovery budget for each fallback, including /models.
+function discoveryManagementSignal(
+  signal: AbortSignal,
+  deadlineAt: number,
+  routesLeft: number,
+): AbortSignal {
+  signal.throwIfAborted();
+  const remaining = Math.max(1, deadlineAt - Date.now());
+  return AbortSignal.any([
+    signal,
+    AbortSignal.timeout(Math.max(1, Math.floor(remaining / (routesLeft + 1)))),
+  ]);
+}
+
 async function defaultGatewayModelDiscovery(
   baseUrl: string,
   apiKey: string,
@@ -1985,6 +2012,7 @@ async function defaultGatewayModelDiscovery(
   callerSignal?: AbortSignal,
 ): Promise<GatewayDiscoveredModels> {
   // One existing discovery budget covers the management fallbacks and model list together.
+  const deadlineAt = Date.now() + 30_000;
   const signal = AbortSignal.any([
     AbortSignal.timeout(30_000),
     ...(callerSignal === undefined ? [] : [callerSignal]),
@@ -1996,6 +2024,7 @@ async function defaultGatewayModelDiscovery(
     egress,
     correlationId,
     signal,
+    deadlineAt,
   );
   if (litellmModels !== undefined) {
     return litellmModels;

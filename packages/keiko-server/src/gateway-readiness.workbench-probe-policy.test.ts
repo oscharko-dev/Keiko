@@ -190,7 +190,12 @@ describe("probeInconclusive", () => {
 // transport whose behaviour each test chooses. Generation is unique per call so the module-level
 // probe map never collides across tests.
 let nextGeneration = 500;
-function workbenchDeps(answer: () => Promise<Response>): {
+function workbenchDeps(
+  answer: () => Promise<Response>,
+  geometry: Partial<
+    Pick<ModelCapability, "contextWindow" | "contextWindowAssumed" | "maxInputTokens">
+  > = {},
+): {
   readonly deps: UiHandlerDeps;
   readonly calls: () => number;
 } {
@@ -201,6 +206,8 @@ function workbenchDeps(answer: () => Promise<Response>): {
     id: "hosted-chat",
     kind: "chat",
     contextWindow: 4_096,
+    contextWindowAssumed: true,
+    ...geometry,
     maxOutputTokens: 0,
     toolCalling: true,
     toolCallingVerification: {
@@ -244,6 +251,60 @@ function workbenchDeps(answer: () => Promise<Response>): {
 }
 
 describe("automatic Workbench probes — inconclusive runs are retried soon", () => {
+  it.each([false, true])(
+    "lifts a successful proof cooldown only for changed configuration: %s",
+    async (changed) => {
+      const { deps, calls } = workbenchDeps(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              choices: [{ message: { content: "OK KEIKO_LONG_CONTEXT_SENTINEL" } }],
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        ),
+      );
+      const holder = deps.gatewayConfig;
+      if (holder === undefined) throw new TypeError("Missing gateway holder");
+      let generation = holder.generation();
+      holder.generation = (): number => generation;
+      const originalFetch = deps.gatewayReadinessFetch;
+      if (originalFetch === undefined) throw new TypeError("Missing readiness fetch");
+      Object.assign(deps, {
+        gatewayReadinessFetch: (...args: Parameters<typeof fetch>): Promise<Response> => {
+          if (changed && calls() === 1) generation += 1;
+          return originalFetch(...args);
+        },
+      });
+      await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+      await codingWorkbenchProbesSettledForTests();
+      expect(calls()).toBe(2);
+      await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+      await codingWorkbenchProbesSettledForTests();
+      expect(calls()).toBe(changed ? 4 : 2);
+    },
+  );
+
+  it.each([
+    { contextWindow: 16_000, contextWindowAssumed: false },
+    { contextWindow: 128_000, maxInputTokens: 16_000 },
+  ])(
+    "does not repeatedly probe a declared geometry that cannot meet the minimum: %j",
+    async (geometry) => {
+      const { deps, calls } = workbenchDeps(
+        () =>
+          Promise.resolve(
+            new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] })),
+          ),
+        geometry,
+      );
+      await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+      await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+      await codingWorkbenchProbesSettledForTests();
+      expect(calls()).toBe(0);
+    },
+  );
+
   afterEach(() => {
     vi.useRealTimers();
     resetCodingWorkbenchContextWindowProbesForTests();

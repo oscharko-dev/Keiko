@@ -11835,7 +11835,7 @@ describe("selected deployment discovery metadata", () => {
     expect(requiredCapability(config, "selected-vectorizer").contextWindowAssumed).not.toBe(true);
   });
 
-  it.each(["reported", "unavailable"] as const)(
+  it.each(["reported", "unavailable", "model-list", "no-limits"] as const)(
     "refreshes an omitted input ceiling only when selected metadata is %s",
     async (state) => {
       const directory = await tempDir("keiko-refresh-input-ceiling-");
@@ -11847,6 +11847,21 @@ describe("selected deployment discovery metadata", () => {
         uiDbPath: join(directory, "ui.db"),
         gatewayModelDiscovery: () => {
           if (!first && state === "unavailable") return Promise.reject(new Error("No discovery"));
+          if (!first && state === "model-list") {
+            return Promise.resolve(parseModelDiscovery({ data: [{ id: "selected-small" }] }));
+          }
+          if (!first && state === "no-limits") {
+            return Promise.resolve(
+              parseModelDiscovery({
+                data: [
+                  {
+                    model_name: "selected-small",
+                    model_info: { mode: "chat" },
+                  },
+                ],
+              }),
+            );
+          }
           return Promise.resolve(
             parseModelDiscovery({
               data: [
@@ -12017,6 +12032,50 @@ describe("selected metadata responsiveness", () => {
     resetServerLogger();
   });
 
+  it("falls back to the healthy model list within the shared budget after management routes hang", async () => {
+    const deps = await metadataResponsivenessDeps();
+    Object.assign(deps, { gatewayModelDiscovery: undefined });
+    vi.useFakeTimers();
+    metadataAbortTimers();
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const endpoint = fetchInputUrl(url);
+        requests.push(endpoint);
+        if (endpoint.endsWith("/models")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ data: [{ id: "selected-small" }] }), {
+              headers: { "content-type": "application/json" },
+            }),
+          );
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(new DOMException("Timed out", "TimeoutError"));
+            },
+            { once: true },
+          );
+        });
+      }),
+    );
+    const setup = handleGatewaySetup(
+      ctx({
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+      }),
+      deps,
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect((await setup).status).toBe(200);
+    expect(requests.some((endpoint) => endpoint.endsWith("/models"))).toBe(true);
+    expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
+      "selected-small",
+    ]);
+  });
+
   it("spends the existing discovery timeout once before probing explicit deployments", async () => {
     const deps = await metadataResponsivenessDeps();
     Object.assign(deps, { gatewayModelDiscovery: undefined });
@@ -12045,7 +12104,11 @@ describe("selected metadata responsiveness", () => {
     expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
       "selected-small",
     ]);
-    expect(requests).toHaveLength(1);
+    expect(requests.map((endpoint) => new URL(endpoint).pathname)).toEqual([
+      "/v1/model/info",
+      "/v1/model_group/info",
+      "/v1/models",
+    ]);
     expect((await setup).status).toBe(200);
   });
 

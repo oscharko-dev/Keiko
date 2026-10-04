@@ -1683,6 +1683,17 @@ describe("gateway readiness route", () => {
 });
 
 describe("longContextTokens (KEIKO-0358)", () => {
+  it("does not treat an assumed placeholder as the deployment's declared ceiling", () => {
+    const capability = {
+      ...createDefaultChatCapability("probe-model"),
+      contextWindow: 4_096,
+      contextWindowAssumed: true,
+    };
+    expect(longContextTokens(undefined, capability)).toBe(32_000);
+    expect(longContextTokens({ maxContextTokens: 64_000 }, capability)).toBe(64_000);
+    expect(longContextTokens(undefined, { ...capability, maxInputTokens: 16_000 })).toBe(16_000);
+  });
+
   it("never probes beyond a declared input ceiling in a larger total window", () => {
     const capped = {
       ...createDefaultChatCapability("probe-model"),
