@@ -1387,6 +1387,18 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "grounded.detail.entailmentUnavailable":
     "Citation support could not be verified for part of this answer.",
   "grounded.detail.incomplete": "The answer was cut off before completion and may be partial.",
+  "grounded.detail.noEvidence": "No matching evidence is available for this part of the answer.",
+  "grounded.detail.staleEvidence":
+    "Some evidence may be outdated. Check these statements against the current source.",
+  "grounded.detail.scopeIncomplete":
+    "Some connected sources could not be fully inspected. The answer may omit details.",
+  "grounded.detail.budgetClipped":
+    "A configured limit restricted the information considered. Some sources or answer details may be missing.",
+  "grounded.detail.toolUnavailable":
+    "A required tool was unavailable. The related check or source search could not complete.",
+  "grounded.detail.lowConfidence":
+    "The available evidence is not strong enough to reliably confirm this part of the answer.",
+  "grounded.uncertainty.original": "Technical original details",
   "grounded.uncertainty.summary": "Uncertainty ({count} markers — {kinds})",
   "grounded.uncertainty.kind.noEvidence": "no evidence",
   "grounded.uncertainty.kind.staleEvidence": "stale evidence",

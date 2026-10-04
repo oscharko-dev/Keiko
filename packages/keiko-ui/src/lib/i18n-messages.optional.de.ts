@@ -1441,6 +1441,18 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die Quellenbelege konnten für einen Teil dieser Antwort nicht geprüft werden.",
   "grounded.detail.incomplete":
     "Die Antwort wurde vor dem Ende abgebrochen und ist möglicherweise unvollständig.",
+  "grounded.detail.noEvidence": "Für diesen Teil der Antwort liegen keine passenden Belege vor.",
+  "grounded.detail.staleEvidence":
+    "Ein Teil der Belege ist möglicherweise veraltet. Prüfe diese Angaben anhand der aktuellen Quelle.",
+  "grounded.detail.scopeIncomplete":
+    "Ein Teil der verbundenen Quellen konnte nicht vollständig untersucht werden. Die Antwort kann Details auslassen.",
+  "grounded.detail.budgetClipped":
+    "Ein festgelegtes Limit hat die berücksichtigten Informationen begrenzt. Ein Teil der Quellen oder Antwortdetails kann fehlen.",
+  "grounded.detail.toolUnavailable":
+    "Ein benötigtes Werkzeug war nicht verfügbar. Die zugehörige Prüfung oder Quellensuche konnte nicht abgeschlossen werden.",
+  "grounded.detail.lowConfidence":
+    "Die verfügbaren Belege reichen nicht aus, um diesen Teil der Antwort zuverlässig zu bestätigen.",
+  "grounded.uncertainty.original": "Technische Originaldetails",
   "grounded.uncertainty.summary": "Unsicherheit ({count}) — {kinds}",
   "grounded.uncertainty.kind.noEvidence": "keine Evidenz",
   "grounded.uncertainty.kind.staleEvidence": "veraltete Evidenz",

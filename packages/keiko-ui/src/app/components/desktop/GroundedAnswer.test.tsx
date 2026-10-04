@@ -778,9 +778,14 @@ describe("GroundedAnswer", () => {
     expect(
       screen.getByText("Uncertainty (3 markers — no evidence, budget clipped)"),
     ).toBeInTheDocument();
-    expect(screen.getByText("no evidence: excerpt unavailable for src/baz.ts")).toBeInTheDocument();
-    expect(screen.getByText("no evidence: other")).toBeInTheDocument();
-    expect(screen.getByText("budget clipped: clipped at foo")).toBeInTheDocument();
+    expect(
+      screen.getAllByText(
+        "no evidence: No matching evidence is available for this part of the answer.",
+      ),
+    ).toHaveLength(2);
+    expect(screen.getByText("excerpt unavailable for src/baz.ts")).not.toBeVisible();
+    expect(screen.getByText("other")).not.toBeVisible();
+    expect(screen.getByText("clipped at foo")).not.toBeVisible();
   });
 
   it("does not render an uncertainty line when there are no markers", () => {
@@ -1876,6 +1881,96 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     expect(warning?.textContent).not.toContain("could not be verified");
     expect(screen.getByText("Knowledge-Evidenz")).toBeInTheDocument();
     expect(screen.getByText("1 Quellenangabe · 1 / 10 Referenzen")).toBeInTheDocument();
+  });
+
+  it("localizes incomplete search hints while retaining exact original diagnostics behind disclosure", async () => {
+    const claims = [
+      "repository search coverage was incomplete (reasons io-error)",
+      "project metadata discovery was incomplete for the connected scope",
+      "No evidence matched the requested question.",
+    ];
+    const { container } = renderInLocale("de", {
+      ...localKnowledgeAnswer(),
+      uncertainty: claims.map((claim, index) => ({
+        kind: index === 2 ? "no-evidence" : "scope-incomplete",
+        claim,
+      })),
+    });
+    await screen.findByText("Knowledge-Evidenz");
+    openEvidenceDisclosure(container);
+    expect(
+      screen.getAllByText(
+        "Umfang unvollständig: Ein Teil der verbundenen Quellen konnte nicht vollständig untersucht werden. Die Antwort kann Details auslassen.",
+      ),
+    ).toHaveLength(2);
+    expect(
+      screen.getByText(
+        "keine Evidenz: Für diesen Teil der Antwort liegen keine passenden Belege vor.",
+      ),
+    ).toBeVisible();
+    const summaries = screen.getAllByText("Technische Originaldetails");
+    expect(summaries).toHaveLength(3);
+    for (const claim of claims) expect(screen.getByText(claim)).not.toBeVisible();
+    const first = summaries[0];
+    if (first === undefined) throw new TypeError("Missing original-details control.");
+    fireEvent.click(first);
+    expect(screen.getByText(claims[0] ?? "")).toBeVisible();
+  });
+
+  it("preserves original diagnostic text as escaped English disclosure content", async () => {
+    const claim = "<script>privateExample()</script>\nsource: docs/manual.html";
+    const { container } = renderInLocale("en", {
+      ...localKnowledgeAnswer(),
+      uncertainty: [{ kind: "scope-incomplete", claim }],
+    });
+    await screen.findByText("Knowledge evidence");
+    openEvidenceDisclosure(container);
+    const original = screen.getByText(
+      (_, element) => element?.tagName === "P" && element.textContent === claim,
+    );
+    expect(original).not.toBeVisible();
+    const summary = screen.getByText("Technical original details");
+    summary.focus();
+    expect(summary).toHaveFocus();
+    fireEvent.click(summary);
+    expect(original).toBeVisible();
+    expect(container.querySelector("script")).toBeNull();
+    expect(original.textContent).toBe(claim);
+  });
+
+  it.each([
+    ["no-evidence", "keine Evidenz"],
+    ["stale-evidence", "veraltete Evidenz"],
+    ["scope-incomplete", "Umfang unvollständig"],
+    ["budget-clipped", "Budget gekürzt"],
+    ["tool-unavailable", "Werkzeug nicht verfügbar"],
+    ["low-confidence", "geringe Sicherheit"],
+  ])("localizes %s without parsing or discarding its exact original", async (kind, label) => {
+    const claim = "Opaque exact original: special <>& text.";
+    const { container } = renderInLocale("de", {
+      ...localKnowledgeAnswer(),
+      uncertainty: [{ kind, claim }],
+    });
+    await screen.findByText("Knowledge-Evidenz");
+    openEvidenceDisclosure(container);
+    const line = screen.getByText((text) => text.startsWith(`${label}: `));
+    expect(line).toBeVisible();
+    expect(line.textContent).not.toContain(claim);
+    expect(screen.getByText(claim)).not.toBeVisible();
+    fireEvent.click(screen.getByText("Technische Originaldetails"));
+    expect(screen.getByText(claim)).toBeVisible();
+  });
+
+  it("preserves unknown uncertainty details without inventing a localized explanation", async () => {
+    const claim = "Future diagnostic with context that must remain available.";
+    const { container } = renderInLocale("de", {
+      ...localKnowledgeAnswer(),
+      uncertainty: [{ kind: "future-uncertainty", claim }],
+    });
+    await screen.findByText("Knowledge-Evidenz");
+    openEvidenceDisclosure(container);
+    expect(screen.getByText(`future uncertainty: ${claim}`)).toBeVisible();
+    expect(screen.queryByText("Technische Originaldetails")).not.toBeInTheDocument();
   });
 
   it("localises the uncertainty disclosure lines by kind instead of the server's English claim", async () => {

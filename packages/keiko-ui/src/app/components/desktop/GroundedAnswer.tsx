@@ -1041,9 +1041,19 @@ const UNCERTAINTY_KIND_LABEL_KEYS: ReadonlyMap<string, MessageKey> = new Map([
   ["entailment-unavailable", "grounded.uncertainty.kind.entailmentUnavailable"],
 ]);
 
+const RETRIEVAL_UNCERTAINTY_DETAIL_KEYS: ReadonlyMap<string, MessageKey> = new Map([
+  ["no-evidence", "grounded.detail.noEvidence"],
+  ["stale-evidence", "grounded.detail.staleEvidence"],
+  ["scope-incomplete", "grounded.detail.scopeIncomplete"],
+  ["budget-clipped", "grounded.detail.budgetClipped"],
+  ["tool-unavailable", "grounded.detail.toolUnavailable"],
+  ["low-confidence", "grounded.detail.lowConfidence"],
+]);
+
 // The kinds whose meaning is fixed by the kind alone: their line is the localised description, not
-// the server's English claim text. Any other kind keeps its claim (it can carry answer-specific text).
+// the server's English claim text. Retrieval originals remain available in a separate disclosure.
 const UNCERTAINTY_KIND_DETAIL_KEYS: ReadonlyMap<string, MessageKey> = new Map([
+  ...RETRIEVAL_UNCERTAINTY_DETAIL_KEYS,
   ["unsupported-citation", "grounded.detail.unsupportedCitation"],
   ["uncited-answer", "grounded.detail.uncitedAnswer"],
   ["incomplete-answer", "grounded.detail.incomplete"],
@@ -1072,6 +1082,22 @@ function uncertaintyLineText(marker: GroundedUncertainty, t: I18nTranslate): str
   return `${detail} ${named.join(", ")}${unlisted ? ", …" : ""}`;
 }
 
+function OriginalUncertaintyDetails({
+  marker,
+  t,
+}: {
+  readonly marker: GroundedUncertainty;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (!RETRIEVAL_UNCERTAINTY_DETAIL_KEYS.has(marker.kind)) return null;
+  return (
+    <details>
+      <summary>{t("grounded.uncertainty.original")}</summary>
+      <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{marker.claim}</p>
+    </details>
+  );
+}
+
 function UncertaintyLine({
   markers,
 }: {
@@ -1086,7 +1112,8 @@ function UncertaintyLine({
       <ul className="grounded-uncertainty-list">
         {markers.map((marker, index) => (
           <li key={`${marker.kind}-${String(index)}`}>
-            {`${uncertaintyKindLabel(marker.kind, t)}: ${uncertaintyLineText(marker, t)}`}
+            <span>{`${uncertaintyKindLabel(marker.kind, t)}: ${uncertaintyLineText(marker, t)}`}</span>
+            <OriginalUncertaintyDetails marker={marker} t={t} />
           </li>
         ))}
       </ul>
