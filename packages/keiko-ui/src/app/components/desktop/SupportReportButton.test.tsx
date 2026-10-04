@@ -17,7 +17,10 @@ vi.mock("@/lib/support-report-api", async (importOriginal) => ({
   createSupportReport: vi.fn(),
   createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
 }));
-vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
+vi.mock("@/lib/client-diagnostics", () => ({
+  reportClientDiagnostic: vi.fn(),
+  retainedClientDiagnosticFailure: vi.fn(() => undefined),
+}));
 const create = vi.mocked(createSupportReport);
 let automaticClick: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {

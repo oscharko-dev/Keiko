@@ -88,6 +88,7 @@ export {
   defectFingerprintPreimage,
   isDefectFingerprint,
   isSupportIncidentId,
+  isClientReportFailure,
   isSupportIncidentSurface,
   normalizeKeikoFrame,
   normalizeKeikoFrameSignature,

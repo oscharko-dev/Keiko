@@ -13,7 +13,8 @@ vi.mock("@/lib/support-report-api", async (original) => ({
   createSupportReport: vi.fn(),
   createSupportReportDownload: vi.fn(),
 }));
-vi.mock("@/lib/support-report-local", () => ({
+vi.mock("@/lib/support-report-local", async (original) => ({
+  ...(await original<typeof import("@/lib/support-report-local")>()),
   prepareLocalSupportReport: vi.fn(),
   prepareCachedSupportReport: vi.fn(),
 }));
@@ -210,4 +211,19 @@ it("does not duplicate server preparation with a browser fallback state", async 
   expect(
     diagnostic.mock.calls.some(([, meta]) => meta?.supportReportPreparation !== undefined),
   ).toBe(false);
+});
+
+it("forwards original closed failure facts when the live endpoint returns a limited report", async () => {
+  const failure = { errorKind: "timeout" as const, context: ["kind:sse-error"] };
+  vi.mocked(createSupportReport).mockResolvedValueOnce(local.report);
+  vi.mocked(createSupportReportDownload).mockReturnValueOnce(local.download);
+  render(<SupportReportButton correlationId="live-unpaired-original" failure={failure} />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(createSupportReport).toHaveBeenCalledWith(
+    "live-unpaired-original",
+    expect.any(AbortSignal),
+    failure,
+  );
+  expect(prepareLocalSupportReport).not.toHaveBeenCalled();
 });

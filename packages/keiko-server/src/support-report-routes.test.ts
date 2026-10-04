@@ -13,6 +13,8 @@ import {
 import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { gunzipSync } from "node:zlib";
+import { handleDownloadSupportReport } from "./support-report-download.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
@@ -126,6 +128,55 @@ describe("desktop support report transport", () => {
     },
   );
 
+  it.each(["absent", "forged", "expired"])(
+    "preserves the original closed client cause in the downloadable %s-session artifact",
+    async (state) => {
+      let now = Date.now();
+      const registry = createSessionRegistry({ now: () => now, idleTtlMs: 1000 });
+      const mint = registry.mint("local");
+      const owner = {
+        get env(): never {
+          throw new Error("Private state must not be read");
+        },
+        codingAppSessionChannel: { verifySession: registry.verify },
+      } as unknown as UiHandlerDeps;
+      const failure = {
+        errorKind: "unavailable",
+        context: ["kind:sse-error"],
+        errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+      };
+      const ctx = context(JSON.stringify({ correlationId: "original-customer-error", failure }));
+      if (state !== "absent")
+        ctx.req.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${state === "forged" ? "forged" : mint.cookieToken}`;
+      if (state === "expired") now += 1001;
+      const result = await handleCreateSupportReport(ctx, owner);
+      expect(result.status).toBe(200);
+      const report = result.body as DesktopSupportReportResponse;
+      const download: RouteContext = {
+        ...context(""),
+        params: { downloadId: report.downloadPath?.split("/").at(-1) ?? "" },
+      };
+      const end = vi.spyOn(download.res, "end").mockReturnValue(download.res);
+      vi.spyOn(download.res, "writeHead").mockReturnValue(download.res);
+      handleDownloadSupportReport(download, owner);
+      const bytes: unknown = end.mock.calls[0]?.[0];
+      if (!Buffer.isBuffer(bytes)) throw new TypeError("Expected gzip attachment");
+      const canonical = gunzipSync(bytes).toString("utf8");
+      expect(canonical).toBe(report.reportJson);
+      const parsed = parseSupportReport(canonical);
+      expect(parsed.incident.correlation.rootCorrelationId).toBe("original-customer-error");
+      expect(parsed.incident.clientReport?.failure).toEqual(failure);
+      expect(parsed.incident).toMatchObject({
+        op: "unattributed",
+        errorKind: "unknown",
+        frameCount: 0,
+      });
+      expect(parsed.evidence.recordCount).toBe(0);
+      expect(analyzeSupportReport(canonical).selection.status).toBe("insufficient");
+      expect(runSupportReportJob).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     '{"evidenceScope":"server"}',
     '{"clientReport":{"message":"customer-private-prose"}}',
@@ -139,6 +190,60 @@ describe("desktop support report transport", () => {
   ])("rejects closed-shape or malformed input %s", async (body) => {
     expect((await handleCreateSupportReport(context(body), deps())).status).toBe(400);
     expect(runSupportReportJob).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { errorKind: "invented", context: [] },
+    { errorKind: "internal", context: ["customer-private-root"] },
+    { errorKind: "internal", context: [], message: "private customer question" },
+    {
+      errorKind: "internal",
+      context: [],
+      errorEvidence: {
+        errorClass: "Error",
+        frames: ["/private/customer/file.ts:1:2"],
+        causeChain: [],
+      },
+    },
+    {
+      errorKind: "internal",
+      context: [],
+      errorEvidence: { errorClass: "Error", frames: [], causeChain: [], stack: "private stack" },
+    },
+  ])(
+    "rejects forged client failure metadata without consulting private evidence %j",
+    async (failure) => {
+      expect(
+        (await handleCreateSupportReport(context(JSON.stringify({ failure })), deps(false))).status,
+      ).toBe(400);
+      expect(runSupportReportJob).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps authenticated server evidence authoritative over browser supplied facts", async () => {
+    const serverReport = {
+      fileName: "keiko-support-v1-aabbccddeeff-2026-10-03.json",
+      reportJson: "{}",
+    };
+    vi.mocked(runSupportReportJob).mockResolvedValue(serverReport);
+    const result = await handleCreateSupportReport(
+      context(
+        JSON.stringify({
+          correlationId: "server-failure-root",
+          failure: { errorKind: "timeout", context: ["kind:sse-error"] },
+        }),
+      ),
+      deps(),
+    );
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject(serverReport);
+    expect(result.body).not.toHaveProperty("evidenceScope");
+    expect(runSupportReportJob).toHaveBeenCalledWith(
+      "/server-private-report-state",
+      "server-failure-root",
+      expect.any(AbortSignal),
+      "report-route-test",
+    );
   });
 
   it("rejects an oversized request without starting a scan", async () => {

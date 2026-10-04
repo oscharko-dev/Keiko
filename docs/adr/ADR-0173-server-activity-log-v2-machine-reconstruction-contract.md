@@ -751,10 +751,13 @@ can be produced without reading private server state. An explicit client-only pr
 uses the same branch. It never reads a log, creates an incident or retention pin, or attributes a
 registered server failure. The manual header remains unattributed with unknown error kind and zero
 frames; server evidence is empty. The optional closed `clientReport` projection records
-`serverEvidence: unavailable` and the availability reason. A browser-produced report also preserves
-the validated original Support-ID and available closed client failure descriptors. Those
-unverified client descriptors remain separate from registered server attribution. Original
-messages, paths, stacks and credentials are excluded. The UI presents ordinary report readiness
+`serverEvidence: unavailable` and the availability reason. Both the live BFF's limited branch and
+the browser-produced report preserve the validated original Support-ID and available closed
+client failure descriptors. The bounded 1024-byte request includes complete optional stack evidence
+when it fits; otherwise that optional evidence is absent, never represented as an observed empty
+stack. Kind and closed context remain available. Unverified client descriptors stay separate from
+registered server attribution, and authenticated full reports use authoritative server evidence.
+Original messages, paths, stacks and credentials are excluded. The UI presents ordinary report readiness
 and a download action; detailed evidence availability belongs inside the report.
 
 Only validated limited bytes can be served under a client-only attachment reference without a

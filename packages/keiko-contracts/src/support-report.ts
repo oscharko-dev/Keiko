@@ -13,6 +13,7 @@ export const SUPPORT_REPORT_KIND = "keiko.support.report";
 /** The default export directory under the state directory. */
 export const SUPPORT_REPORT_DIRECTORY_NAME = "support-reports";
 export const SUPPORT_REPORT_SCHEMA_VERSION = 1;
+export const MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES = 1024;
 export const MAX_SUPPORT_REPORT_BYTES = 10 * 1024 * 1024;
 export const MAX_SUPPORT_REPORT_EVENT_BYTES = 16 * 1024 * 1024;
 export const MAX_SUPPORT_REPORT_INCIDENT_BYTES = 1024 * 1024;
@@ -122,6 +123,8 @@ export function isSupportReportFileName(name: string): boolean {
 export interface DesktopSupportReportRequest {
   readonly correlationId?: string | undefined;
   readonly evidenceScope?: "client-only" | undefined;
+  /** Unverified closed browser cause; ignored for authenticated server evidence. */
+  readonly failure?: NonNullable<SupportIncidentPrivateProjection["clientReport"]>["failure"];
 }
 export interface DesktopSupportReportResponse {
   /** Explicitly limited browser availability artifact; contains no server-log evidence. */

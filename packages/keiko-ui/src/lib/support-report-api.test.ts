@@ -30,6 +30,54 @@ describe("support report browser download", () => {
     response.value = { fileName, reportJson: "{}", evidenceScope: "client-only" };
     await expect(createSupportReport("unpaired-report-id")).resolves.toEqual(response.value);
   });
+  it("forwards only the original closed cause through the same bounded report request", async () => {
+    response.value = { fileName, reportJson: "{}", evidenceScope: "client-only" };
+    const failure = {
+      errorKind: "unavailable" as const,
+      context: ["kind:sse-error"],
+      errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+    };
+    await createSupportReport("unpaired-cause", undefined, failure);
+    const body = vi.mocked(bffFetchJson).mock.calls.at(-1)?.[1]?.body;
+    expect(body).toBe(JSON.stringify({ correlationId: "unpaired-cause", failure }));
+    expect(new TextEncoder().encode(String(body)).byteLength).toBeLessThanOrEqual(1024);
+  });
+
+  it("omits oversized optional frames without inventing an empty observed stack", async () => {
+    response.value = { fileName, reportJson: "{}", evidenceScope: "client-only" };
+    const failure = {
+      errorKind: "timeout" as const,
+      context: [
+        "kind:sse-error",
+        "render:window-body",
+        "module:git-history",
+        "stage:files-directory-navigation",
+      ],
+      errorEvidence: {
+        errorClass: "ApiError",
+        frames: Array.from(
+          { length: 8 },
+          () => `dist/ui/static/_next/static/chunks/${"a".repeat(32)}.js:12345678:12345678`,
+        ),
+        causeChain: ["Error"],
+      },
+    };
+    expect(
+      new TextEncoder().encode(JSON.stringify({ correlationId: "b".repeat(128), failure }))
+        .byteLength,
+    ).toBeGreaterThan(1030);
+    await createSupportReport("b".repeat(128), undefined, failure);
+    const body = vi.mocked(bffFetchJson).mock.calls.at(-1)?.[1]?.body;
+    expect(body).toBe(
+      JSON.stringify({
+        correlationId: "b".repeat(128),
+        failure: { errorKind: failure.errorKind, context: failure.context },
+      }),
+    );
+    expect(new TextEncoder().encode(String(body)).byteLength).toBeLessThanOrEqual(1024);
+    expect(String(body)).not.toContain("frames");
+  });
+
   it("rejects an unknown evidence scope rather than claiming a complete report", async () => {
     response.value = { fileName, reportJson: "{}", evidenceScope: "private-log-bypass" };
     await expect(createSupportReport()).rejects.toThrow("Invalid report evidence scope");

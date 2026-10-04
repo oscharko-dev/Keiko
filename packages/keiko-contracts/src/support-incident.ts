@@ -862,7 +862,10 @@ function validClientReportErrorEvidence(value: unknown): boolean {
   );
 }
 
-function validClientReportFailure(value: unknown): boolean {
+/** Closed browser failure facts; neither messages nor raw stack content cross this boundary. */
+export function isClientReportFailure(
+  value: unknown,
+): value is NonNullable<SupportIncidentPrivateProjection["clientReport"]>["failure"] {
   if (value === undefined) return true;
   if (!isPlainObject(value) || !hasOnlyKeys(value, ["errorKind", "context"], ["errorEvidence"]))
     return false;
@@ -888,7 +891,7 @@ function validClientReport(value: unknown, projection: PlainObject): boolean {
     value === undefined ||
     (isPlainObject(value) &&
       hasOnlyKeys(value, ["serverEvidence", "availabilityReason"], ["failure"]) &&
-      validClientReportFailure(value.failure) &&
+      isClientReportFailure(value.failure) &&
       value.serverEvidence === "unavailable" &&
       clientOnlyProjection(projection) &&
       isOneOf(

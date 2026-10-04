@@ -45,7 +45,9 @@ function mergeFailure(
   };
 }
 
-function originalFailure(context: LocalFailureContext): ClientOnlySupportReportInput["failure"] {
+export function originalSupportReportFailure(
+  context: LocalFailureContext,
+): ClientOnlySupportReportInput["failure"] {
   if (context.correlationId === undefined) return context.failure;
   const retained = retainedClientDiagnosticFailure(context.correlationId);
   return retained === undefined ? context.failure : mergeFailure(retained, context.failure);
@@ -65,7 +67,7 @@ async function localReport(
     ),
     availabilityReason: "service-unavailable",
     ...context,
-    failure: originalFailure(context),
+    failure: originalSupportReportFailure(context),
   });
   const [incidentDigest, selectionDigest, evidenceDigest] = await Promise.all([
     browserDigest(canonicalSupportJson(sections.incident)),

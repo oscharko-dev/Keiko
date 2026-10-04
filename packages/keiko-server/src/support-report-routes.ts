@@ -1,4 +1,8 @@
-import type { DesktopSupportReportRequest } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  isClientReportFailure,
+  MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES,
+  type DesktopSupportReportRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createClientOnlySupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   completePreparedSupportIncident,
@@ -27,14 +31,31 @@ const limiter = createInlineCompletionRateLimiter({
   minIntervalMs: 0,
 });
 
+const REPORT_REQUEST_KEYS: ReadonlySet<string> = new Set([
+  "correlationId",
+  "evidenceScope",
+  "failure",
+]);
+
 function reportRequest(value: unknown): DesktopSupportReportRequest | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  if (Object.keys(value).some((key) => key !== "correlationId" && key !== "evidenceScope"))
-    return undefined;
+  if (Object.keys(value).some((key) => !REPORT_REQUEST_KEYS.has(key))) return undefined;
   if ("evidenceScope" in value && value.evidenceScope !== "client-only") return undefined;
   if (!validReportCorrelation(value)) return undefined;
+  const failure = "failure" in value ? value.failure : undefined;
+  if (!isClientReportFailure(failure)) return undefined;
+  return reportRequestFields(value, failure);
+}
+
+function reportRequestFields(
+  value: object,
+  failure: DesktopSupportReportRequest["failure"],
+): DesktopSupportReportRequest {
   return {
-    ...("correlationId" in value ? { correlationId: value.correlationId as string } : {}),
+    ...(failure === undefined ? {} : { failure }),
+    ...("correlationId" in value && typeof value.correlationId === "string"
+      ? { correlationId: value.correlationId }
+      : {}),
     ...("evidenceScope" in value ? { evidenceScope: "client-only" as const } : {}),
   };
 }
@@ -63,7 +84,11 @@ export async function handleCreateSupportReport(
 async function readReportRequest(
   ctx: RouteContext,
 ): Promise<DesktopSupportReportRequest | RouteResult> {
-  const parsed = await readJsonRequestBody(ctx.req, 1024, ctx.correlationId);
+  const parsed = await readJsonRequestBody(
+    ctx.req,
+    MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES,
+    ctx.correlationId,
+  );
   const request = reportRequest(parsed);
   if (request !== undefined) return request;
   const status = "status" in parsed && parsed.status === 413 ? 413 : 400;
@@ -142,6 +167,7 @@ function clientOnlyReportResponse(
     const report = createClientOnlySupportReport(
       request.correlationId ?? ctx.correlationId,
       hasSession ? "diagnostic-delivery-unavailable" : "session-unavailable",
+      request.failure,
     );
     const delivery = cacheSupportReportDownload(deps, undefined, report);
     emitSupportReportCompleted(ctx.correlationId, report, request.correlationId);

@@ -231,6 +231,7 @@ export function createDesktopSupportReport(
 export function createClientOnlySupportReport(
   correlationId: string | undefined,
   availabilityReason: NonNullable<SupportReport["incident"]["clientReport"]>["availabilityReason"],
+  failure?: NonNullable<SupportReport["incident"]["clientReport"]>["failure"],
 ): DesktopSupportReportResponse {
   const identity = serverLogProcessIdentity();
   const sections = clientOnlySupportReportSections({
@@ -239,6 +240,7 @@ export function createClientOnlySupportReport(
     build: supportIncidentBuild(identity.productVersion, identity.platformClass),
     defectFingerprint: computeDefectFingerprint(UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT),
     availabilityReason,
+    ...(failure === undefined ? {} : { failure }),
     ...(isActivityLogCorrelationId(correlationId) && isRedactedLogLabel(correlationId)
       ? { correlationId }
       : {}),

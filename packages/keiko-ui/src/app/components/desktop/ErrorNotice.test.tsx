@@ -51,7 +51,11 @@ describe("ErrorNoticeFromError — correlation support id", () => {
     expect(link).toHaveAttribute("download", report.fileName);
     expect(link).toHaveAttribute("href", "blob:report");
     expect(automaticClick).not.toHaveBeenCalled();
-    expect(create).toHaveBeenCalledWith("chat-search-failed", expect.any(AbortSignal));
+    expect(create).toHaveBeenCalledWith("chat-search-failed", expect.any(AbortSignal), {
+      errorKind: "invalid-request",
+      context: [],
+      errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+    });
   });
 
   it("renders the EN support id line for an ApiError carrying a correlationId", () => {

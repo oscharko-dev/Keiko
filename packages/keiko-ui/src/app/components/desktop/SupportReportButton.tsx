@@ -16,7 +16,11 @@ import {
   type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SupportReportDownload } from "@/lib/support-report-api";
-import { prepareCachedSupportReport, prepareLocalSupportReport } from "@/lib/support-report-local";
+import {
+  originalSupportReportFailure,
+  prepareCachedSupportReport,
+  prepareLocalSupportReport,
+} from "@/lib/support-report-local";
 import { ApiError } from "@/lib/api";
 import {
   currentGlobalClientFailure,
@@ -345,7 +349,12 @@ async function runReport(
   let api: typeof import("@/lib/support-report-api") | undefined;
   try {
     api = await waitForReportStep(import("@/lib/support-report-api"), signal);
-    const report = await waitForReportStep(api.createSupportReport(correlationId, signal), signal);
+    const original = originalSupportReportFailure({ correlationId, failure });
+    const creation =
+      original === undefined
+        ? api.createSupportReport(correlationId, signal)
+        : api.createSupportReport(correlationId, signal, original);
+    const report = await waitForReportStep(creation, signal);
     if (!reportRequestIsCurrent(request, pending)) return;
     signal.throwIfAborted();
     const download = api.createSupportReportDownload(report);

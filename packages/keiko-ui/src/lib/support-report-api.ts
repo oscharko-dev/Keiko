@@ -1,5 +1,12 @@
-import type { DesktopSupportReportResponse } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type {
+  DesktopSupportReportRequest,
+  DesktopSupportReportResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  isClientReportFailure,
+  MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES,
+  MAX_SUPPORT_REPORT_BYTES,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { bffFetchJson } from "./http";
 import {
   ensureClientDiagnosticDelivery,
@@ -45,6 +52,7 @@ async function ensureReportEvidence(
 export async function createSupportReport(
   correlationId?: string,
   signal?: AbortSignal,
+  failure?: DesktopSupportReportRequest["failure"],
 ): Promise<DesktopSupportReportResponse> {
   const deadline = AbortSignal.timeout(35_000);
   const requestSignal = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
@@ -56,9 +64,7 @@ export async function createSupportReport(
     "/api/diagnostics/report",
     {
       method: "POST",
-      body: JSON.stringify({
-        ...(correlationId === undefined ? {} : { correlationId }),
-      }),
+      body: reportRequestBody(correlationId, failure),
       signal: requestSignal,
     },
     {
@@ -66,6 +72,30 @@ export async function createSupportReport(
         validateSupportReportResponse(value),
     },
   );
+}
+
+function reportRequestBody(
+  correlationId: string | undefined,
+  failure: DesktopSupportReportRequest["failure"],
+): string {
+  if (!isClientReportFailure(failure)) throw new TypeError("Invalid support report failure");
+  const request = {
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(failure === undefined ? {} : { failure }),
+  };
+  const complete = JSON.stringify(request);
+  if (new TextEncoder().encode(complete).byteLength <= MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES)
+    return complete;
+  // Optional stack evidence is unavailable on this bounded transport, never manufactured empty.
+  const limited = JSON.stringify({
+    ...request,
+    ...(failure === undefined
+      ? {}
+      : { failure: { errorKind: failure.errorKind, context: failure.context } }),
+  });
+  if (new TextEncoder().encode(limited).byteLength > MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES)
+    throw new TypeError("Support report request budget exceeded");
+  return limited;
 }
 
 export interface SupportReportDownload {
