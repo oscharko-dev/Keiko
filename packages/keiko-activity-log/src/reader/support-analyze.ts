@@ -1504,13 +1504,22 @@ export function lineSequenceAnomalies(
   return anomalies;
 }
 
-function detectSequenceAnomalies(lines: readonly ParsedLine[]): readonly ProcessSequenceAnomaly[] {
+function detectSequenceAnomalies(
+  lines: readonly ParsedLine[],
+  kind: SourceKind,
+): readonly ProcessSequenceAnomaly[] {
   const states = new Map<string, SequenceState>();
   const anomalies: ProcessSequenceAnomaly[] = [];
   for (const line of lines) {
     const key = lifetimeKey(line);
     if (key === undefined) continue;
-    const state = states.get(key) ?? createSequenceState();
+    const existing = states.get(key);
+    const state = existing ?? createSequenceState();
+    // Canonical reports select causal evidence, so their first process event need not be seq 1.
+    // Subsequent gaps and identity violations still use the same strict sequence detector.
+    if (existing === undefined && kind === "support-report") {
+      state.previous = orZero(line.view.seq) - 1;
+    }
     anomalies.push(...lineSequenceAnomalies(line, state));
     states.set(key, state);
   }
@@ -1695,7 +1704,7 @@ function analyzeParsedLines(
     buildTimeline(correlationId, group),
   );
   const processes = buildProcessSummaries(parsedLines);
-  const sequenceAnomalies = detectSequenceAnomalies(parsedLines);
+  const sequenceAnomalies = detectSequenceAnomalies(parsedLines, kind);
   const evidence = evidenceSummary(evidenceCounts, sequenceAnomalies);
   const legacyLineCount = evidence.legacyLineCount;
   const warnings = evidenceWarnings(evidence);

@@ -17,6 +17,7 @@ import {
   type SupportIncidentRejection,
 } from "../support-incident.js";
 import { listSupportIncidentEntries } from "../support-incident-store.js";
+import { attributeUnretainedReportFailure } from "./support-desktop-report-attribution.js";
 import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
   type SupportQuerySelection,
@@ -209,7 +210,11 @@ export function createPreparedDesktopSupportReport(
       persist: false,
     });
   const report = buildSupportReport(
-    incidentDescriptor(stateDir, record, correlationId === undefined ? undefined : evidence.result),
+    incidentDescriptor(
+      stateDir,
+      attributeUnretainedReportFailure(record, evidence.result),
+      correlationId === undefined ? undefined : evidence.result,
+    ),
     evidence.result,
   );
   return {

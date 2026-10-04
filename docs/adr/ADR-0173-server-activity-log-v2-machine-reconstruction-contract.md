@@ -756,6 +756,13 @@ A full 32-candidate store must not prevent manual export of already retained evi
 export may prepare the canonical user-report descriptor without a persistent slot or retention pin,
 then compose and validate the same bounded report. Existing candidates are never evicted for this
 purpose, and the descriptor reports its rejected pin rather than implying protected retention.
+When that transient descriptor's supported causal selection retains a registry-eligible failure
+under the requested root or its direct child, desktop composition derives a registered-failure
+identity from that retained event using the existing fingerprint, frame and correlation rules.
+Error diagnostics take priority over warning summaries; framed diagnostics take priority over
+unframed events at the same level. No durable candidate, pin or quota slot is created by this
+attribution. A selection without an eligible failing event keeps the unattributed manual identity;
+deeper descendant failures remain in evidence without inventing a direct parent edge.
 Unknown selected correlations remain refused before any descriptor is created. The existing
 `support.incident.rejected`, `support.report.ui.*`, HTTP request and client diagnostic events retain
 the quota, export outcome and closed recovery failure class.
@@ -875,6 +882,10 @@ fields against the generated runtime schema. Within each `(pid, instanceId)` lif
 gaps, duplicates, decreasing/reset values, and reorder deterministically. These machine states are
 included in human and JSON output; a line cannot become trusted v2 evidence merely because its JSON
 parsed successfully.
+Canonical support reports intentionally select causal evidence, so the first observed event of
+each process supplies the sequence baseline rather than declaring its unselected prefix missing.
+Subsequent internal gaps, duplicates, resets and decreasing values retain the same detection.
+Raw-log and bundle analysis still reports a missing prefix from sequence one.
 
 The compatibility and deprecation contract is explicit:
 

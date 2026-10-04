@@ -102,6 +102,21 @@ function fixture(
 }
 
 describe("canonical body-free offline report", () => {
+  it("does not report an intentionally unselected process prefix as a canonical report anomaly", () => {
+    const { report } = fixture(1, {}, undefined, (process) => {
+      process.seq = 339;
+      return [];
+    });
+    const analyzed = analyzeSupportReport(serializeSupportReport(report));
+    expect(analyzed.selection.lifetimes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ pid: 4242, start: "absent" })]),
+    );
+    expect(analyzed.analysis.timelines[0]?.lines[0]?.seq).toBe(340);
+    expect(analyzed.analysis.evidence.sequenceAnomalies).not.toContainEqual(
+      expect.objectContaining({ kind: "gap", pid: 4242, previousSeq: 0, seq: 340 }),
+    );
+  });
+
   beforeEach(() => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-support-report-"));
   });

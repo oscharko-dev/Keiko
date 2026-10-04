@@ -3,14 +3,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_SUPPORT_INCIDENTS, listSupportIncidents, recordUserReportedIncident, recordRegisteredFailureIncident } from "../support-incident.js";
+import {
+  MAX_SUPPORT_INCIDENTS,
+  listSupportIncidents,
+  recordUserReportedIncident,
+  recordRegisteredFailureIncident,
+  prepareUnretainedUserReportIncident,
+} from "../support-incident.js";
 import {
   fixtureLine,
   fixtureProcess,
   segmentIdentity,
   writeFixtureSegment,
 } from "../../../../tests/support/activity-log-segments.js";
-import { createDesktopSupportReport } from "./support-desktop-report.js";
+import {
+  createDesktopSupportReport,
+  createPreparedDesktopSupportReport,
+  readDesktopSupportReportSelection,
+} from "./support-desktop-report.js";
 import { analyzeSupportReport, parseSupportReport } from "./support-report.js";
 import * as supportAnalysis from "./support-analyze.js";
 import {
@@ -37,6 +47,7 @@ function writeFailures(): void {
       correlationId: "desktop-failure-1",
       errorKind: "timeout",
       level: "error",
+      fields: { frames: ["packages/keiko-server/dist/chat-stream-handlers.js:42:7"] },
     }),
     fixtureLine(process, now + 1, {
       op: "client.diagnostic",
@@ -48,18 +59,136 @@ function writeFailures(): void {
 }
 
 describe("desktop canonical support report", () => {
+  function transientReport(correlationId: string): ReturnType<typeof analyzeSupportReport> {
+    const selected = readDesktopSupportReportSelection(stateDir, correlationId);
+    const response = createPreparedDesktopSupportReport(
+      stateDir,
+      prepareUnretainedUserReportIncident(stateDir, correlationId),
+      correlationId,
+      selected.evidence,
+    );
+    return analyzeSupportReport(response.reportJson);
+  }
+
+  it.each(["warn", "error"] as const)(
+    "prefers a framed error diagnostic over a %s summary in the selected child closure",
+    (level) => {
+      const now = Date.now();
+      const process = fixtureProcess(4242, "aabbccdd");
+      writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+        fixtureLine(process, now, {
+          op: "client.diagnostic",
+          correlationId: "selected-root",
+          level,
+          errorKind: "timeout",
+        }),
+        fixtureLine(process, now + 1, {
+          op: "client.diagnostic",
+          correlationId: "selected-child",
+          parentCorrelationId: "selected-root",
+          level: "error",
+          errorKind: "internal",
+          fields: { frames: ["packages/keiko-server/dist/chat-stream-handlers.js:42:7"] },
+        }),
+      ]);
+      const analyzed = transientReport("selected-root");
+      expect(analyzed.incident).toMatchObject({
+        trigger: "registered-failure",
+        op: "client.diagnostic",
+        errorKind: "internal",
+        frameCount: 1,
+      });
+      expect(analyzed.incident.correlation.childCorrelationIds).toHaveLength(1);
+      expect(listSupportIncidents(stateDir)).toHaveLength(0);
+    },
+  );
+
+  it("retains a grandchild failure without inventing a direct parent edge from the requested root", () => {
+    const now = Date.now();
+    const process = fixtureProcess(4242, "aabbccdd");
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, { op: "client.diagnostic", correlationId: "selected-root" }),
+      fixtureLine(process, now + 1, {
+        op: "client.diagnostic",
+        correlationId: "selected-child",
+        parentCorrelationId: "selected-root",
+      }),
+      fixtureLine(process, now + 2, {
+        op: "client.diagnostic",
+        correlationId: "selected-grandchild",
+        parentCorrelationId: "selected-child",
+        level: "error",
+        errorKind: "internal",
+        fields: { frames: ["packages/keiko-server/dist/chat-stream-handlers.js:42:7"] },
+      }),
+    ]);
+    const analyzed = transientReport("selected-root");
+    expect(analyzed.incident).toMatchObject({
+      trigger: "user-report",
+      op: "unattributed",
+      frameCount: 0,
+    });
+    const failure = analyzed.analysis.timelines
+      .flatMap((timeline) => timeline.lines)
+      .find((line) => line.level === "error");
+    expect(failure?.errorKind).toBe("internal");
+    expect(failure?.frames).toHaveLength(1);
+    expect(listSupportIncidents(stateDir)).toHaveLength(0);
+  });
+
+  it.each(["non-failure", "no-error", "unrelated"])(
+    "preserves manual identity for a selected %s event",
+    (caseName) => {
+      const now = Date.now();
+      const process = fixtureProcess(4242, "aabbccdd");
+      writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+        fixtureLine(process, now, {
+          op: caseName === "non-failure" ? "support.report.ui.delivered" : "client.diagnostic",
+          correlationId: "manual-root",
+          level: caseName === "non-failure" ? "error" : "info",
+          ...(caseName === "non-failure" ? { errorKind: "internal" as const } : {}),
+          ...(caseName === "non-failure" ? { fields: { reportBytes: 10 } } : {}),
+        }),
+        fixtureLine(process, now + 1, {
+          op: "client.diagnostic",
+          correlationId: "other-root",
+          level: "error",
+          errorKind: "internal",
+        }),
+      ]);
+      expect(transientReport("manual-root").incident).toMatchObject({
+        trigger: "user-report",
+        op: "unattributed",
+        errorKind: "unknown",
+        frameCount: 0,
+      });
+      expect(listSupportIncidents(stateDir)).toHaveLength(0);
+    },
+  );
+
   it("exports retained error evidence even when every incident slot is occupied", () => {
     writeFailures();
     for (let index = 0; index < MAX_SUPPORT_INCIDENTS; index += 1) {
-      expect(recordUserReportedIncident(stateDir, { correlationId: `previous-report-${String(index)}` }).status).toBe("created");
+      expect(
+        recordUserReportedIncident(stateDir, { correlationId: `previous-report-${String(index)}` })
+          .status,
+      ).toBe("created");
     }
     const response = createDesktopSupportReport(stateDir, "desktop-failure-1");
     const analyzed = analyzeSupportReport(response.reportJson);
-    expect(analyzed.analysis.timelines.flatMap((timeline) => timeline.lines).some((line) =>
-      line.op === "client.diagnostic" && line.errorKind === "timeout",
-    )).toBe(true);
+    expect(
+      analyzed.analysis.timelines
+        .flatMap((timeline) => timeline.lines)
+        .some((line) => line.op === "client.diagnostic" && line.errorKind === "timeout"),
+    ).toBe(true);
     expect(listSupportIncidents(stateDir)).toHaveLength(MAX_SUPPORT_INCIDENTS);
-    expect(parseSupportReport(response.reportJson).incident.pin.status).toBe("rejected");
+    expect(parseSupportReport(response.reportJson).incident).toMatchObject({
+      trigger: "registered-failure",
+      op: "client.diagnostic",
+      errorKind: "timeout",
+      frameCount: 1,
+      pin: { status: "rejected" },
+    });
   });
 
   it("exports the selected failure through the canonical analyzer without unrelated evidence or paths", () => {
