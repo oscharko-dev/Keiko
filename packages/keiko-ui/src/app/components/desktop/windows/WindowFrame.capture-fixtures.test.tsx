@@ -29,7 +29,10 @@ interface CaptureHarness {
 
 function captureHarness(): CaptureHarness {
   const source = readFileSync(
-    resolve(process.cwd(), "../../docs/design-system/evidence/1300/browser/capture.mjs"),
+    resolve(
+      import.meta.dirname,
+      "../../../../../../../docs/design-system/evidence/1300/browser/capture.mjs",
+    ),
     "utf8",
   );
   // Evaluate the actual fixtures/router only; never run its build, server or screenshot entrypoint.
