@@ -264,13 +264,13 @@ async function recoverLocalReport(
     const bytes = fulfillReport(key, prepared.report, prepared.download);
     reportLocalPreparation(prepared.report, context.correlationId, bytes);
     return true;
-  } catch (failure) {
+  } catch (error_) {
     if (!controller.signal.aborted)
       reportClientDiagnostic("Keiko local support report preparation failed.", {
         correlationId: context.correlationId,
         supportReportPreparation: {
           outcome: "failed",
-          errorKind: bffRequestErrorKind(failure),
+          errorKind: bffRequestErrorKind(error_),
           durationMs: Math.round(Math.max(0, performance.now() - startedAt)),
         },
       });

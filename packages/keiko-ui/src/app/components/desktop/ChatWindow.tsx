@@ -146,7 +146,7 @@ import type {
   OpenEditorFileResult,
   WorkspaceLinkedGitChangeComparison,
 } from "./hooks/useWorkspace.types";
-import { fetchFilesSearch, updateChat } from "@/lib/api";
+import { fetchFilesSearch } from "@/lib/api";
 import { GitChangeScopePill } from "./GitChangeScopePill";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { ConnectorScopePill } from "./ConnectorScopePill";
