@@ -88,7 +88,37 @@ function baseInput(): AssembleInput {
   };
 }
 
+function largeCacheInput(): AssembleInput {
+  const paths = Array.from({ length: 4000 }, (_, index) => `facts/entry-${String(index)}.ts`);
+  return {
+    ...baseInput(),
+    scope: { ...scope(), kind: "workspace-root", relativePaths: [] },
+    atoms: paths.map((path, index) => atom(path, `atom-${String(index)}`)),
+    ranked: paths.map((path) => candidate(path, 0.7)),
+    excerpts: new Map(paths.map((path) => [path, `export const fact = "${"x".repeat(8192)}";`])),
+  };
+}
+
 describe("assembleContextPack", () => {
+  it("avoids enumerating unused excerpt content without an index while preserving the indexed pack", async () => {
+    const input = largeCacheInput();
+    const enumerate = vi.spyOn(input.excerpts, "entries");
+    const uncached = await assembleContextPack(input, { nowMs: fixedNow });
+    expect(validateConnectedContextPack(uncached.pack)).toEqual({ ok: true });
+    expect(uncached.pack.files.length).toBeGreaterThan(0);
+    expect(uncached.pack.omitted.length).toBeGreaterThan(0);
+    expect(enumerate).not.toHaveBeenCalled();
+    const index = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
+    const indexed = await assembleContextPack(input, { nowMs: fixedNow, microIndex: index });
+    expect(enumerate).toHaveBeenCalledOnce();
+    expect(indexed.pack).toEqual(uncached.pack);
+    expect(indexed.fromIndex).toBe(false);
+    const hit = await assembleContextPack(input, { nowMs: fixedNow, microIndex: index });
+    expect(hit.fromIndex).toBe(true);
+    expect(hit.pack).toBe(indexed.pack);
+    enumerate.mockRestore();
+  });
+
   it("preserves separately identified partial windows on the same real source line", async () => {
     const input: AssembleInput = {
       ...baseInput(),

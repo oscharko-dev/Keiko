@@ -763,8 +763,8 @@ export async function assembleContextPack(
   options?: AssembleOptions,
 ): Promise<AssembleResult> {
   const resolved = resolveOptions(options);
-  const key = contextPackIndexKey(input, options);
-  const cached = resolved.microIndex?.get(key);
+  const key = resolved.microIndex === undefined ? undefined : contextPackIndexKey(input, options);
+  const cached = key === undefined ? undefined : resolved.microIndex?.get(key);
   if (cached !== undefined) {
     return { pack: cached, fromIndex: true };
   }
@@ -797,6 +797,6 @@ export async function assembleContextPack(
     plan.usage = { ...plan.usage, rerankCalls: plan.usage.rerankCalls + 1 };
   }
   const pack = buildPack(input, plan, now);
-  resolved.microIndex?.set(key, pack);
+  if (key !== undefined) resolved.microIndex?.set(key, pack);
   return { pack, fromIndex: false };
 }
