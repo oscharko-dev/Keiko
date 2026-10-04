@@ -36,13 +36,13 @@ export const DE_MESSAGES = {
   "rail.diagnostics": "Diagnose",
   "window.type.diagnostics.title": "Diagnose",
   "window.type.diagnostics.desc": "Diagnoseaufzeichnung prüfen und einen Fehlerbericht erstellen.",
-  "diagnostics.description":
-    "Erstelle einen Bericht, lade ihn herunter und sende ihn an den Support. Gespeicherte Diagnosefälle sind Diagnoseaufzeichnungen, keine Anzahl bestätigter oder ungelöster Fehler.",
+  "diagnostics.description": "Lade einen Bericht herunter und sende ihn an den Support.",
+  "diagnostics.recordsHelp": "Gespeicherte Einträge sind Diagnosebelege, keine bestätigten Fehler.",
   "diagnostics.recordingReady": "Diagnoseaufzeichnung bereit",
   "diagnostics.loading": "Diagnoseaufzeichnung wird geprüft…",
   "diagnostics.unavailable":
     "Diagnosestatus nicht verfügbar. Du kannst trotzdem einen Bericht erstellen.",
-  "diagnostics.noRetainedCases": "Zurzeit sind keine Diagnosefälle gespeichert.",
+  "diagnostics.noRetainedCases": "Keine Diagnoseeinträge gespeichert.",
   "rail.localKnowledge": "Lokales Wissen",
   "rail.editor": "Editor",
   "editor.empty.opening": "Wird geöffnet…",
@@ -53,7 +53,7 @@ export const DE_MESSAGES = {
   "supportReport.regenerate": "Bericht erneut erstellen",
   "supportReport.limited":
     "Eingeschränkter Bericht: Server-Belege sind nicht verfügbar. Dieser Bericht enthält nur den Verfügbarkeitsstatus der Berichtserstellung.",
-  "supportReport.saved": "Download gestartet.",
+  "supportReport.saved": "Bericht bereit.",
   "supportReport.failed": "Bericht nicht verfügbar. Erneut versuchen.",
   "supportReport.sessionDenied": "Bericht in diesem Browser nicht verfügbar. Erneut erstellen.",
   "supportReport.serviceUnavailable":
@@ -1072,9 +1072,10 @@ export const DE_MESSAGES = {
   "footer.version": "Keiko-Version {version}",
   "footer.versionLoading": "Version wird geladen",
   "footer.versionUnavailable": "Version nicht verfügbar",
-  "footer.diagnosticsRetained": "{count}/{capacity} gespeicherte Diagnosefälle",
+  "footer.diagnosticsRetained": "{count} gespeicherte Diagnoseeinträge",
+  "footer.diagnosticsRetentionCapacity": "Der Speicher behält bis zu {capacity} aktuelle Einträge.",
   "footer.diagnosticsRetainedDetail":
-    "Gespeicherte Diagnosekandidaten, keine bestätigten oder offenen Fehler. Fehlerberichte bleiben auch bei vollem Speicher verfügbar.",
+    "Gespeicherte Diagnoseeinträge, keine bestätigten oder offenen Fehler. Fehlerberichte bleiben auch bei vollem Speicher verfügbar.",
   "footer.diagnosticsDegraded": "Diagnose eingeschränkt",
   "footer.diagnosticsUnavailable": "Diagnose nicht verfügbar",
   "footer.diagnosticsDetail":

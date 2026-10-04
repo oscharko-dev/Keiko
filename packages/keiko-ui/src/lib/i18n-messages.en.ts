@@ -32,12 +32,12 @@ export const EN_MESSAGES = {
   "rail.diagnostics": "Diagnostics",
   "window.type.diagnostics.title": "Diagnostics",
   "window.type.diagnostics.desc": "Check diagnostic recording and create a support report.",
-  "diagnostics.description":
-    "Create and download a report to send to support. Stored diagnostic cases are diagnostic records, not a count of confirmed or unresolved errors.",
+  "diagnostics.description": "Download a report to send to support.",
+  "diagnostics.recordsHelp": "Saved records are diagnostic evidence, not confirmed errors.",
   "diagnostics.recordingReady": "Diagnostic recording ready",
   "diagnostics.loading": "Checking diagnostic recording…",
   "diagnostics.unavailable": "Diagnostic status unavailable. You can still create a report.",
-  "diagnostics.noRetainedCases": "No diagnostic cases are currently stored.",
+  "diagnostics.noRetainedCases": "No diagnostic records saved.",
   "rail.localKnowledge": "Local Knowledge",
   "rail.editor": "Editor",
   "editor.empty.opening": "Opening…",
@@ -48,7 +48,7 @@ export const EN_MESSAGES = {
   "supportReport.regenerate": "Regenerate report",
   "supportReport.limited":
     "Limited report: server evidence is unavailable. This report contains only the report availability status.",
-  "supportReport.saved": "Download started.",
+  "supportReport.saved": "Report ready.",
   "supportReport.failed": "Report unavailable. Try again.",
   "supportReport.sessionDenied": "Report unavailable in this browser. Try creating it again.",
   "supportReport.serviceUnavailable":
@@ -1043,9 +1043,10 @@ export const EN_MESSAGES = {
   "footer.version": "Keiko version {version}",
   "footer.versionLoading": "version loading",
   "footer.versionUnavailable": "version unavailable",
-  "footer.diagnosticsRetained": "{count}/{capacity} retained diagnostic cases",
+  "footer.diagnosticsRetained": "{count} saved diagnostic records",
+  "footer.diagnosticsRetentionCapacity": "Storage retains up to {capacity} recent records.",
   "footer.diagnosticsRetainedDetail":
-    "Retained diagnostic candidates, not confirmed or open bugs. Error reports remain available even when this storage is full.",
+    "Saved diagnostic records, not confirmed or open errors. Error reports remain available even when storage is full.",
   "footer.diagnosticsDegraded": "Diagnostics degraded",
   "footer.diagnosticsUnavailable": "Diagnostics unavailable",
   "footer.diagnosticsDetail":

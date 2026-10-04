@@ -2,7 +2,7 @@
 // underlying failure carried a correlation id, using the same "{feature}.supportId" i18n key
 // pattern already proven at VoiceDictation.tsx and WorkspaceTrustSurfaces.tsx.
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
@@ -33,11 +33,11 @@ function renderInLocale(error: unknown, locale: "en" | "de"): ReturnType<typeof 
 }
 
 describe("ErrorNoticeFromError — correlation support id", () => {
-  it("downloads a report for the support id displayed in the chat error", async () => {
+  it("prepares a direct download for the support id displayed in the chat error", async () => {
     const report = { fileName: "report.json", reportJson: "{}" };
     const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
-    const download = vi
-      .spyOn(reportApi, "downloadSupportReport")
+    const automaticClick = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
       .mockImplementation(() => undefined);
     vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
       href: "blob:report",
@@ -47,7 +47,10 @@ describe("ErrorNoticeFromError — correlation support id", () => {
     error.correlationId = "chat-search-failed";
     renderInLocale(error, "en");
     fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
-    await waitFor(() => expect(download).toHaveBeenCalledExactlyOnceWith(report));
+    const link = await screen.findByRole("link", { name: "Download report" });
+    expect(link).toHaveAttribute("download", report.fileName);
+    expect(link).toHaveAttribute("href", "blob:report");
+    expect(automaticClick).not.toHaveBeenCalled();
     expect(create).toHaveBeenCalledWith("chat-search-failed", expect.any(AbortSignal));
   });
 

@@ -12,13 +12,12 @@ import {
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
 } from "@/lib/client-diagnostics";
-import { createSupportReport, downloadSupportReport } from "@/lib/support-report-api";
+import { createSupportReport } from "@/lib/support-report-api";
 import { resetSupportReportOutcomesForTests } from "../../SupportReportButton";
 
 vi.mock("@/lib/support-report-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/support-report-api")>()),
   createSupportReport: vi.fn(),
-  downloadSupportReport: vi.fn(),
   createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
 }));
 vi.mock("@/lib/api", async (importOriginal) => ({
@@ -47,6 +46,14 @@ afterEach(() => {
 });
 
 describe("Diagnostics — canonical support reports", () => {
+  it("uses the window title once and keeps report instructions brief", async () => {
+    renderDiagnostics();
+    await screen.findByText("Diagnostic recording ready");
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument();
+    expect(screen.getByText("Download a report to send to support.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
+  });
+
   it("keeps reporting available and offers dismissal only for actual global uncaught failures", async () => {
     renderDiagnostics();
     await screen.findByText("Diagnostic recording ready");
@@ -111,8 +118,8 @@ describe("Diagnostics — canonical support reports", () => {
     vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("private offline details"));
     await userEvent.click(screen.getByRole("button", { name: "Bericht erneut erstellen" }));
     const link = screen.getByRole("link", { name: "Bericht herunterladen" });
-    const region = link.parentElement?.parentElement;
-    expect(region).toContainElement(screen.getByText("32/32 gespeicherte Diagnosefälle"));
+    const region = screen.getByRole("region", { name: "Diagnose" });
+    expect(region).toContainElement(screen.getByText("32 gespeicherte Diagnoseeinträge"));
     expect(region).toContainElement(
       screen.getByRole("button", { name: "Bericht erneut erstellen" }),
     );
@@ -138,8 +145,15 @@ describe("Diagnostics — canonical support reports", () => {
       }),
     );
     await act(async () => screen.getByRole("button", { name: "Create error report" }).click());
-    expect(downloadSupportReport).toHaveBeenCalledOnce();
-    expect(screen.getByRole("status")).toHaveTextContent("Download started.");
+    expect(screen.getByRole("status")).toHaveTextContent("Report ready.");
+    expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
+      "download",
+      "report.json",
+    );
+    expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
+      "href",
+      "blob:keiko-report",
+    );
     await act(async () => vi.advanceTimersByTimeAsync(1500));
     expect(screen.getByRole("link", { name: "Download report" })).toBeInTheDocument();
     expect(currentGlobalClientFailure()).not.toBeNull();
@@ -158,8 +172,10 @@ describe("Diagnostics — canonical support reports", () => {
   it("explains stored diagnostic counts as records rather than confirmed open errors", async () => {
     renderDiagnostics();
     await screen.findByText("Diagnostic recording ready");
-    expect(screen.getByText(/not a count of confirmed or unresolved errors/u)).toBeInTheDocument();
-    expect(screen.getByText("No diagnostic cases are currently stored.")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Saved records are diagnostic evidence, not confirmed errors/u),
+    ).toBeInTheDocument();
+    expect(screen.getByText("No diagnostic records saved.")).toBeInTheDocument();
   });
 });
 

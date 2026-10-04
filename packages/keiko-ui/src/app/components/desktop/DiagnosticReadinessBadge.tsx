@@ -1,9 +1,7 @@
 "use client";
 
-// The footer's Activity Log readiness indicator (#3532). It renders nothing while diagnostic
-// evidence is complete, or when no valid snapshot arrived, and otherwise an icon and a word with the
-// closed reasons as its description, so a degraded evidence path is visible in the product and not
-// only in a terminal. Component-scoped styling per the design-system styling register.
+// Activity Log readiness and saved-record status. Diagnostic retention is distinct from
+// confirmed errors; degraded recording remains visible alongside the saved-record count.
 
 import type { ReactNode } from "react";
 import type {
@@ -19,7 +17,7 @@ import styles from "./DiagnosticReadinessBadge.module.css";
 const ActivityIcon = Icons.activity;
 
 // One message per closed reason: a reason added to the contract fails the typecheck here until the
-// footer can name it.
+// diagnostics surface can name it.
 const READINESS_REASON_MESSAGES: Readonly<Record<ActivityLogReadinessReason, MessageKey>> = {
   "catalog-mismatch": "footer.diagnosticsReasonCatalogMismatch",
   "sink-unwritable": "footer.diagnosticsReasonSinkUnwritable",
@@ -55,17 +53,26 @@ function readinessText(
   return { label, detail };
 }
 
+function retentionDetail(
+  snapshot: ActivityLogReadinessSnapshot,
+  t: ReturnType<typeof useTranslate>,
+): string {
+  const capacity = snapshot.diagnosticCapacity;
+  const capacityDetail =
+    capacity !== undefined && capacity > 0
+      ? t("footer.diagnosticsRetentionCapacity", { capacity })
+      : undefined;
+  return [t("footer.diagnosticsRetainedDetail"), capacityDetail].filter(Boolean).join(" ");
+}
+
 export function DiagnosticReadinessBadge({ snapshot }: DiagnosticReadinessBadgeProps): ReactNode {
   const t = useTranslate();
   if (snapshot === undefined) return null;
   const count = snapshot.retainedDiagnosticCount ?? 0;
   if (snapshot.readiness === "ready" && count === 0) return null;
-  const countLabel =
-    count > 0
-      ? t("footer.diagnosticsRetained", { count, capacity: snapshot.diagnosticCapacity ?? 0 })
-      : undefined;
+  const countLabel = count > 0 ? t("footer.diagnosticsRetained", { count }) : undefined;
   const { label: readinessLabel, detail: readinessDetail } = readinessText(snapshot, t);
-  const detail = [readinessDetail, count > 0 ? t("footer.diagnosticsRetainedDetail") : undefined]
+  const detail = [readinessDetail, count > 0 ? retentionDetail(snapshot, t) : undefined]
     .filter(Boolean)
     .join(" ");
   return (

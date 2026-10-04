@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createSupportReport,
-  downloadSupportReport,
-  createSupportReportDownload,
-} from "./support-report-api";
+import { createSupportReport, createSupportReportDownload } from "./support-report-api";
 import { bffFetchJson } from "./http";
 import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -142,37 +138,6 @@ describe("support report browser download", () => {
       target.dispose();
       expect(revoke).toHaveBeenCalledExactlyOnceWith(target.href);
     } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("starts a local download and releases its temporary object URL", () => {
-    vi.useFakeTimers();
-    const objectUrl = vi.fn(() => "blob:report");
-    const revoke = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = objectUrl;
-        static override revokeObjectURL = revoke;
-      },
-    );
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
-      this: HTMLAnchorElement,
-    ): void {
-      expect(this.download).toBe(fileName);
-      expect(this.getAttribute("href")).toBe("blob:report");
-      expect(document.body.contains(this)).toBe(true);
-    });
-    try {
-      downloadSupportReport({ fileName, reportJson: "{}" });
-      expect(click).toHaveBeenCalledOnce();
-      expect(objectUrl).toHaveBeenCalledWith(expect.any(Blob));
-      expect(document.querySelector("a[download]")).toBeNull();
-      vi.runAllTimers();
-      expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:report");
-    } finally {
-      vi.useRealTimers();
       vi.unstubAllGlobals();
     }
   });

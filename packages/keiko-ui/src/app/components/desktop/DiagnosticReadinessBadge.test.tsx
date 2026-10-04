@@ -36,7 +36,7 @@ describe("DiagnosticReadinessBadge", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("shows full retained capacity neutrally while reporting remains available", () => {
+  it("shows saved records without presenting retention capacity as a quota", () => {
     const { container } = render(
       <DiagnosticReadinessBadge
         snapshot={snapshot({
@@ -47,10 +47,12 @@ describe("DiagnosticReadinessBadge", () => {
         })}
       />,
     );
-    expect(screen.getByText("32/32 retained diagnostic cases")).toBeInTheDocument();
+    expect(screen.getByText("32 saved diagnostic records")).toBeInTheDocument();
     expect(container.firstElementChild).toHaveAttribute("data-readiness", "ready");
+    expect(container).not.toHaveTextContent("32/32");
+    expect(screen.getByText(/Storage retains up to 32 recent records/u)).toBeInTheDocument();
     expect(
-      screen.getByText(/Retained diagnostic candidates, not confirmed or open bugs/u),
+      screen.getByText(/Saved diagnostic records, not confirmed or open errors/u),
     ).toBeInTheDocument();
     expect(screen.getByText(/Error reports remain available/u)).toBeInTheDocument();
     expect(screen.queryByText("Diagnostics degraded")).toBeNull();
@@ -70,7 +72,7 @@ describe("DiagnosticReadinessBadge", () => {
         />
       </I18nProvider>,
     );
-    expect(await screen.findByText("32/32 gespeicherte Diagnosefälle")).toBeInTheDocument();
+    expect(await screen.findByText("32 gespeicherte Diagnoseeinträge")).toBeInTheDocument();
     expect(screen.getByText(/keine bestätigten oder offenen Fehler/u)).toBeInTheDocument();
     expect(
       screen.getByText(/Fehlerberichte bleiben auch bei vollem Speicher verfügbar/u),
@@ -84,7 +86,7 @@ describe("DiagnosticReadinessBadge", () => {
       />,
     );
     expect(screen.getByText(/Diagnostics degraded/u)).toBeInTheDocument();
-    expect(screen.getByText(/3\/32 retained diagnostic cases/u)).toBeInTheDocument();
+    expect(screen.getByText(/3 saved diagnostic records/u)).toBeInTheDocument();
   });
 
   it("names a degraded state and describes it with its reason", () => {

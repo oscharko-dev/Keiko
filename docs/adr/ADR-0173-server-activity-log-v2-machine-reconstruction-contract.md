@@ -735,9 +735,10 @@ downloads. Keiko performs no automatic upload or disclosure. A downloaded report
 the canonical offline validator before it is analyzed; operators who use the owner-private CLI
 reader first place it in a private directory and file according to the receiving-file contract.
 
-Browser delivery is reported as initiation, never as an acknowledged operating-system save. The
-report action keeps a **Download report** link after its automatic attempt, allowing a real user
-gesture to retry the same bytes without a second report request. The BFF serves those canonical
+Report creation is reported as readiness, never as download initiation or an acknowledged
+operating-system save. The report action exposes a persistent **Download report** link for a real
+user gesture; it performs no asynchronous synthetic-anchor download. The same link retries the
+prepared bytes without a second report request. The BFF serves those canonical
 bytes as an HTTP attachment at `/api/diagnostics/report/download/:downloadId`. Full reports always
 require the exact existing session that generated the artifact; their opaque reference conveys no
 authority. If the local session is absent, forged or expired, or browser diagnostic delivery cannot
@@ -764,7 +765,7 @@ server, without claiming that the operating system saved them. The routine
 selected error's correlation; it records no report body, destination, filename or saved claim.
 
 The shared desktop report action preserves the selected error when reporting itself fails. A
-session refusal names launcher recovery, a local service failure names application recovery, and a
+session refusal offers report regeneration, a local service failure names application recovery, and a
 rate refusal names the bounded retry delay; none grants authority or automatically replays a write.
 A full 32-candidate store must not prevent manual export of already retained evidence. Desktop and CLI
 export may prepare the canonical user-report descriptor without a persistent slot or retention pin,

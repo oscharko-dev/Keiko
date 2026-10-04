@@ -7,14 +7,13 @@ const api = vi.hoisted(() => {
   const ready = new Promise<void>((resolve) => {
     release = resolve;
   });
-  return { imports: 0, ready, release, create: vi.fn(), download: vi.fn() };
+  return { imports: 0, ready, release, create: vi.fn() };
 });
 vi.mock("@/lib/support-report-api", async () => {
   api.imports += 1;
   await api.ready;
   return {
     createSupportReport: api.create,
-    downloadSupportReport: api.download,
     createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
     SupportReportEvidenceUnavailable: class extends Error {},
   };
@@ -22,6 +21,9 @@ vi.mock("@/lib/support-report-api", async () => {
 afterEach(() => vi.restoreAllMocks());
 
 it("renders before the report chunk loads, bounds its wait, and ignores cancelled late imports", async () => {
+  const automaticClick = vi
+    .spyOn(HTMLAnchorElement.prototype, "click")
+    .mockImplementation(() => undefined);
   let loaded = false;
   const component = import("./SupportReportButton").then((value) => {
     loaded = true;
@@ -45,11 +47,16 @@ it("renders before the report chunk loads, bounds its wait, and ignores cancelle
   view.unmount();
   await act(async () => api.release());
   expect(api.create).not.toHaveBeenCalled();
-  expect(api.download).not.toHaveBeenCalled();
+  expect(automaticClick).not.toHaveBeenCalled();
   const report = { fileName: "report.json", reportJson: "{}" };
   api.create.mockResolvedValueOnce(report);
   render(<SupportReportButton correlationId="late-report-chunk" />);
   await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-  await waitFor(() => expect(api.download).toHaveBeenCalledExactlyOnceWith(report));
+  expect(await screen.findByRole("link", { name: "Download report" })).toHaveAttribute(
+    "download",
+    report.fileName,
+  );
+  expect(api.create).toHaveBeenCalledExactlyOnceWith("late-report-chunk", expect.any(AbortSignal));
+  expect(automaticClick).not.toHaveBeenCalled();
   resetSupportReportOutcomesForTests();
 });

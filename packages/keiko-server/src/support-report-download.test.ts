@@ -94,19 +94,23 @@ describe("authenticated canonical report attachment", () => {
   });
 
   it("serves exact canonical bytes as an HTTP attachment without another generation", () => {
+    const canonicalReport = createClientOnlySupportReport(
+      "opaque-canonical",
+      "session-unavailable",
+    );
     const owner = deps("owner-session");
-    const cached = cacheSupportReportDownload(owner, "owner-session", report);
+    const cached = cacheSupportReportDownload(owner, "owner-session", canonicalReport);
     const ctx = context(cached.downloadPath);
     const writeHead = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
     const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
     expect(handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
-    expect(end).toHaveBeenCalledWith(report.reportJson);
+    expect(end).toHaveBeenCalledWith(canonicalReport.reportJson);
     expect(writeHead).toHaveBeenCalledWith(
       200,
       expect.objectContaining({
-        "Content-Disposition": `attachment; filename="${report.fileName}"`,
-        "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(Buffer.byteLength(report.reportJson)),
+        "Content-Disposition": `attachment; filename="${canonicalReport.fileName}"`,
+        "Content-Type": "application/octet-stream",
+        "Content-Length": String(Buffer.byteLength(canonicalReport.reportJson)),
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff",
       }),

@@ -1,12 +1,11 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import { ApiError } from "@/lib/api";
 import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createSupportReport,
-  downloadSupportReport,
   createSupportReportDownload,
   SupportReportEvidenceUnavailable,
 } from "@/lib/support-report-api";
@@ -16,12 +15,16 @@ import { SupportReportButton, resetSupportReportOutcomesForTests } from "./Suppo
 vi.mock("@/lib/support-report-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/support-report-api")>()),
   createSupportReport: vi.fn(),
-  downloadSupportReport: vi.fn(),
   createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
 }));
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
 const create = vi.mocked(createSupportReport);
-const download = vi.mocked(downloadSupportReport);
+let automaticClick: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  automaticClick = vi
+    .spyOn(HTMLAnchorElement.prototype, "click")
+    .mockImplementation(() => undefined);
+});
 const report = { fileName: "report.json", reportJson: "{}" };
 afterEach(() => {
   vi.clearAllMocks();
@@ -32,6 +35,45 @@ afterEach(() => {
 });
 
 describe("SupportReportButton", () => {
+  it.each(["en", "de"])(
+    "prepares a %s report for direct download without claiming a file was saved",
+    async (locale) => {
+      window.localStorage.setItem("keiko.locale", locale);
+      create.mockResolvedValue(report);
+      vi.mocked(createSupportReportDownload).mockReturnValueOnce({
+        href: "/api/diagnostics/report/download/prepared",
+        dispose: vi.fn(),
+      });
+      render(
+        <I18nProvider>
+          <SupportReportButton correlationId="direct-download" />
+        </I18nProvider>,
+      );
+      await userEvent.click(
+        await screen.findByRole("button", {
+          name: locale === "de" ? "Fehlerbericht erstellen" : "Create error report",
+        }),
+      );
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        locale === "de" ? "Bericht bereit." : "Report ready.",
+      );
+      const link = screen.getByRole("link", {
+        name: locale === "de" ? "Bericht herunterladen" : "Download report",
+      });
+      expect(link).toHaveAttribute("href", "/api/diagnostics/report/download/prepared");
+      expect(link).toHaveAttribute("download", report.fileName);
+      expect(automaticClick).not.toHaveBeenCalled();
+      expect(reportClientDiagnostic).not.toHaveBeenCalled();
+      await userEvent.click(link);
+      expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+        correlationId: "direct-download",
+        supportReportDelivery: "manual",
+      });
+      expect(automaticClick).not.toHaveBeenCalled();
+      expect(create).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["en", "de"])(
     "labels a %s limited report without pretending server evidence was saved",
     async (locale) => {
@@ -83,7 +125,7 @@ describe("SupportReportButton", () => {
     );
     expect(disposeServer).not.toHaveBeenCalled();
     expect(create).toHaveBeenLastCalledWith("prepared-original", expect.any(AbortSignal));
-    expect(download).toHaveBeenCalledOnce();
+    expect(automaticClick).not.toHaveBeenCalled();
   });
 
   it("shares regeneration while retaining prior bytes and releases them only on replacement", async () => {
@@ -122,7 +164,7 @@ describe("SupportReportButton", () => {
       "download",
       replacement.fileName,
     );
-    expect(download).toHaveBeenLastCalledWith(replacement);
+    expect(automaticClick).not.toHaveBeenCalled();
   });
 
   it("cancels regeneration on unmount while preserving the prior prepared report", async () => {
@@ -146,7 +188,7 @@ describe("SupportReportButton", () => {
       report.fileName,
     );
     expect(screen.getByRole("button", { name: "Regenerate report" })).toBeEnabled();
-    expect(download).toHaveBeenCalledOnce();
+    expect(automaticClick).not.toHaveBeenCalled();
   });
 
   it("preserves prepared bytes when regeneration reaches its deadline", async () => {
@@ -164,7 +206,7 @@ describe("SupportReportButton", () => {
       report.fileName,
     );
     expect(screen.getByRole("button", { name: "Regenerate report" })).toBeEnabled();
-    expect(download).toHaveBeenCalledOnce();
+    expect(automaticClick).not.toHaveBeenCalled();
   });
 
   it("disposes the retained download target when the cache is reset", async () => {
@@ -191,12 +233,14 @@ describe("SupportReportButton", () => {
     await act(async () => deadline.abort(new DOMException("Deadline expired", "TimeoutError")));
     expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
     expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
-    expect(download).not.toHaveBeenCalled();
+    expect(automaticClick).not.toHaveBeenCalled();
     expect(reportClientDiagnostic).not.toHaveBeenCalled();
     create.mockResolvedValueOnce(report);
     vi.spyOn(AbortSignal, "timeout").mockReturnValue(new AbortController().signal);
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-    await waitFor(() => expect(download).toHaveBeenCalledExactlyOnceWith(report));
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "Download report" })).toBeVisible(),
+    );
   });
 
   it("keeps missing diagnostic delivery retryable without creating a reporting incident", async () => {
@@ -206,7 +250,7 @@ describe("SupportReportButton", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
     expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
     expect(reportClientDiagnostic).not.toHaveBeenCalled();
-    expect(download).not.toHaveBeenCalled();
+    expect(automaticClick).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -223,7 +267,7 @@ describe("SupportReportButton", () => {
       await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
       expect(await screen.findByRole("status")).toHaveTextContent(hint);
       expect(view.container).not.toHaveTextContent("private response body");
-      expect(download).not.toHaveBeenCalled();
+      expect(automaticClick).not.toHaveBeenCalled();
       expect(reportClientDiagnostic).toHaveBeenCalledWith(expect.any(String), {
         correlationId: "report-request-refused",
         errorKind:
@@ -232,7 +276,9 @@ describe("SupportReportButton", () => {
       create.mockResolvedValueOnce(report);
       await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
       expect(create).toHaveBeenLastCalledWith("original-failure", expect.any(AbortSignal));
-      await waitFor(() => expect(download).toHaveBeenCalledExactlyOnceWith(report));
+      await waitFor(() =>
+        expect(screen.getByRole("link", { name: "Download report" })).toBeVisible(),
+      );
     },
   );
 
@@ -296,20 +342,20 @@ describe("SupportReportButton", () => {
       replacement.fileName,
     );
     expect(screen.getByRole("button", { name: "Regenerate report" })).toBeEnabled();
-    expect(screen.getByRole("status")).toHaveTextContent("Download started.");
+    expect(screen.getByRole("status")).toHaveTextContent("Report ready.");
   });
 
-  it("downloads exactly the clicked failure without a second confirmation", async () => {
+  it("prepares exactly the clicked failure for its direct download link", async () => {
     create.mockResolvedValue(report);
     render(<SupportReportButton correlationId="failure-1" />);
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-    await waitFor(() => expect(download).toHaveBeenCalledWith(report));
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "Download report" })).toBeVisible(),
+    );
     expect(create).toHaveBeenCalledExactlyOnceWith("failure-1", expect.any(AbortSignal));
-    expect(screen.getByRole("status")).toHaveTextContent("Download started.");
-    expect(reportClientDiagnostic).toHaveBeenCalledWith(expect.any(String), {
-      correlationId: "failure-1",
-      supportReportDelivery: "automatic",
-    });
+    expect(screen.getByRole("status")).toHaveTextContent("Report ready.");
+    expect(reportClientDiagnostic).not.toHaveBeenCalled();
+    expect(automaticClick).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("link", { name: "Download report" }));
     expect(reportClientDiagnostic).toHaveBeenLastCalledWith(expect.any(String), {
       correlationId: "failure-1",
@@ -330,7 +376,7 @@ describe("SupportReportButton", () => {
     await act(async () => {
       screen.getByRole("button", { name: "Create error report" }).click();
     });
-    expect(screen.getByRole("status")).toHaveTextContent("Download started.");
+    expect(screen.getByRole("status")).toHaveTextContent("Report ready.");
     await act(async () => vi.advanceTimersByTimeAsync(1500));
     expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
       "href",
@@ -340,7 +386,7 @@ describe("SupportReportButton", () => {
     const sameError = render(<SupportReportButton correlationId="completed-error" />);
     expect(sameError.container).toHaveTextContent("Download report");
     expect(create).toHaveBeenCalledOnce();
-    expect(download).toHaveBeenCalledOnce();
+    expect(automaticClick).not.toHaveBeenCalled();
   });
 
   it("evicts cached report bytes and releases the object URL while leaving that error retryable", async () => {
@@ -381,7 +427,7 @@ describe("SupportReportButton", () => {
     view.unmount();
     expect(signal?.aborted).toBe(true);
     await act(async () => resolve(report));
-    expect(download).not.toHaveBeenCalled();
+    expect(automaticClick).not.toHaveBeenCalled();
     render(<SupportReportButton correlationId="cancelled-error" />);
     expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
   });
@@ -402,7 +448,9 @@ describe("SupportReportButton", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Report unavailable. Try again.");
     create.mockResolvedValueOnce(report);
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-    await waitFor(() => expect(download).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "Download report" })).toBeVisible(),
+    );
   });
 
   it("uses short German text and clears feedback for a new failure", async () => {
@@ -414,7 +462,7 @@ describe("SupportReportButton", () => {
       </I18nProvider>,
     );
     await userEvent.click(await screen.findByRole("button", { name: "Fehlerbericht erstellen" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Download gestartet.");
+    expect(await screen.findByRole("status")).toHaveTextContent("Bericht bereit.");
     rerender(
       <I18nProvider>
         <SupportReportButton correlationId="two" />
@@ -423,7 +471,7 @@ describe("SupportReportButton", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Fehlerbericht erstellen" }));
     expect(create).toHaveBeenLastCalledWith("two", expect.any(AbortSignal));
-    expect(download).toHaveBeenCalledTimes(2);
+    expect(automaticClick).not.toHaveBeenCalled();
   });
 
   it("cancels the old correlation and ignores its late report after a pending switch", async () => {
@@ -452,11 +500,15 @@ describe("SupportReportButton", () => {
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
     expect(create).toHaveBeenLastCalledWith("pending-new", expect.any(AbortSignal));
     await act(async () => finishOld(oldReport));
-    expect(download).not.toHaveBeenCalled();
+    expect(automaticClick).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Creating report…" })).toBeDisabled();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     await act(async () => finishNew(newReport));
-    expect(download).toHaveBeenCalledExactlyOnceWith(newReport);
+    expect(automaticClick).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
+      "download",
+      newReport.fileName,
+    );
     view.rerender(<SupportReportButton correlationId="pending-old" />);
     expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
     expect(create).toHaveBeenCalledTimes(2);
@@ -481,7 +533,7 @@ describe("SupportReportButton", () => {
       expect(button).toBeDisabled();
     await act(async () => resolve(report));
     expect(create).toHaveBeenCalledOnce();
-    expect(download).toHaveBeenCalledOnce();
+    expect(automaticClick).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
   });
 });

@@ -15,6 +15,9 @@
   background: color-mix(in oklch, var(--feedback-warning-surface) 68%, transparent);
   white-space: normal;
   flex-wrap: wrap;
+  font-family: var(--font-ui);
+  font-size: var(--text-label);
+  line-height: var(--leading-normal);
 }
 
 .cmpReadinessBadge[data-readiness="ready"] {

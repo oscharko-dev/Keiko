@@ -98,7 +98,7 @@ function authorizeDelivery(
 
 function deliverReport(ctx: RouteContext, entry: Delivery): HandlerOutcome {
   ctx.res.writeHead(200, {
-    "Content-Type": "application/json; charset=utf-8",
+    "Content-Type": "application/octet-stream",
     "Content-Length": String(entry.bytes),
     "Content-Disposition": `attachment; filename="${entry.report.fileName}"`,
     "Cache-Control": "no-store",

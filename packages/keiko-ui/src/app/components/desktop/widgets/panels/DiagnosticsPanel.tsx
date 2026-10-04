@@ -21,7 +21,6 @@ export function DiagnosticsPanel(): ReactNode {
           : undefined;
   return (
     <section className={styles.cmpPanel} aria-label={t("window.type.diagnostics.title")}>
-      <h2>{t("window.type.diagnostics.title")}</h2>
       <p>{t("diagnostics.description")}</p>
       <div className={styles.cmpStatus} aria-live="polite">
         {status === undefined ? null : <p>{status}</p>}
@@ -30,7 +29,10 @@ export function DiagnosticsPanel(): ReactNode {
           <p>{t("diagnostics.noRetainedCases")}</p>
         ) : null}
       </div>
-      <GlobalSupportReportAction />
+      <p className={styles.cmpHelp}>{t("diagnostics.recordsHelp")}</p>
+      <div className={styles.cmpActions}>
+        <GlobalSupportReportAction />
+      </div>
     </section>
   );
 }

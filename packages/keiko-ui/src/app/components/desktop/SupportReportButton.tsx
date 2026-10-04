@@ -265,11 +265,9 @@ async function runReport(
     const report = await waitForReportStep(api.createSupportReport(correlationId, signal), signal);
     if (controller.signal.aborted || request.current !== pending) return;
     signal.throwIfAborted();
-    api.downloadSupportReport(report);
-    setFeedback({ key, state: "saved" });
     const download = api.createSupportReportDownload(report);
     fulfillReport(key, report, download);
-    reportSupportDownload(correlationId, "automatic");
+    setFeedback({ key, state: "saved" });
   } catch (error) {
     if (controller.signal.aborted || request.current !== pending) return;
     releaseReport(key, controller);
@@ -286,13 +284,10 @@ async function runReport(
   }
 }
 
-function reportSupportDownload(
-  correlationId: string | undefined,
-  deliveryMode: "automatic" | "manual",
-): void {
+function reportSupportDownload(correlationId: string | undefined): void {
   reportClientDiagnostic("[keiko] support report download initiated", {
     correlationId,
-    supportReportDelivery: deliveryMode,
+    supportReportDelivery: "manual",
   });
 }
 
@@ -382,7 +377,7 @@ function ReadyReportActions({
           className={className}
           href={ready.download.href}
           download={ready.report.fileName}
-          onClick={() => reportSupportDownload(props.correlationId, "manual")}
+          onClick={() => reportSupportDownload(props.correlationId)}
         >
           {t("supportReport.download")}
         </a>

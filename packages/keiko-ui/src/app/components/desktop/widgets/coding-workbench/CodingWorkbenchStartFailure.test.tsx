@@ -7,7 +7,7 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createSupportReport, downloadSupportReport } from "@/lib/support-report-api";
+import { createSupportReport } from "@/lib/support-report-api";
 import { resetSupportReportOutcomesForTests } from "../../SupportReportButton";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
@@ -17,7 +17,6 @@ import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
 vi.mock("@/lib/support-report-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/support-report-api")>()),
   createSupportReport: vi.fn(),
-  downloadSupportReport: vi.fn(),
   createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
 }));
 
@@ -274,6 +273,13 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
       CORRELATION_ID,
       expect.any(AbortSignal),
     );
-    expect(downloadSupportReport).toHaveBeenCalledExactlyOnceWith(report);
+    expect(await screen.findByRole("link", { name: "Download report" })).toHaveAttribute(
+      "download",
+      report.fileName,
+    );
+    expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
+      "href",
+      "blob:keiko-report",
+    );
   });
 });

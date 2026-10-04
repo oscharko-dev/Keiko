@@ -89,18 +89,6 @@ export function createSupportReportDownload(
   return { href, dispose: (): void => URL.revokeObjectURL(href) };
 }
 
-export function downloadSupportReport(report: DesktopSupportReportResponse): void {
-  const target = createSupportReportDownload(report);
-  const url = target.href;
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = report.fileName;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(target.dispose, 1000);
-}
-
 function validateSupportReportResponse(value: unknown): DesktopSupportReportResponse {
   if (
     typeof value !== "object" ||
