@@ -99,3 +99,9 @@ it("retains the exact-symbol fast path for an explicitly typed literal lookup", 
   expect(pack.files.map((file) => file.scopePath)).toEqual(["source/failure.ts"]);
   expect(completion?.augmentationSkipReason).toBe("complete-exact-lookup");
 });
+
+it("does not turn an explicit missing error-literal lookup into diagnostic similarity", async () => {
+  const { pack, semanticCalls } = await retrieve('Find the exact literal "Missing failure".');
+  expect(semanticCalls).toBe(0);
+  expect(pack.files).toEqual([]);
+});

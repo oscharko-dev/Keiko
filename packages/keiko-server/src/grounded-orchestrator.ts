@@ -1571,7 +1571,7 @@ function primaryLexicalAnchors(
   if (
     query.kind !== "natural-language" ||
     retrievalIntent === "repository-overview" ||
-    retrievalIntent === "diagnostic-search"
+    needsDiagnosticContext(query, anchors, retrievalIntent)
   )
     return [];
   const factual =
@@ -1670,6 +1670,7 @@ function lexicalSemanticProvider(
   definitionSymbol: string | undefined,
 ): SemanticSearchProvider | undefined {
   if (inputs.query.kind === "exact-symbol") return undefined;
+  if (isExplicitLiteralRequest(inputs.query, inputs.anchors)) return undefined;
   if (inputs.retrievalIntent === "diagnostic-search") return inputs.repoSemanticSearchProvider;
   const explicitLiteral = inputs.anchors.some(
     (anchor) =>
@@ -2168,6 +2169,14 @@ function isExplicitLiteralRequest(
   );
 }
 
+function needsDiagnosticContext(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+  retrievalIntent: RetrievalIntent,
+): boolean {
+  return retrievalIntent === "diagnostic-search" && !isExplicitLiteralRequest(query, anchors);
+}
+
 function isCompleteExactLiteralLookup(
   query: RetrievalQuery,
   anchors: readonly SearchAnchor[],
@@ -2225,7 +2234,7 @@ function lookupAugmentationSkipReason(
   diagnostics: ContextPackDiagnostics | undefined,
   retrievalIntent: RetrievalIntent,
 ): RingSkipReason | undefined {
-  if (retrievalIntent === "diagnostic-search") return undefined;
+  if (needsDiagnosticContext(query, anchors, retrievalIntent)) return undefined;
   if (isCompleteExactLiteralLookup(query, anchors, diagnostics)) return "complete-exact-lookup";
   if (isOrdinaryDocumentLookup(query, hasGitMetadata, diagnostics)) return "ordinary-document";
   if (isOrdinaryLiteralAbsence(query, hasGitMetadata, anchors, diagnostics))
@@ -2240,7 +2249,7 @@ function optionalRingSkipReason(
 ): RingSkipReason | undefined {
   if (requiresRelationshipOrHistoryRings(inputs.query) || ring.kind === "lexical") return undefined;
   if (
-    inputs.retrievalIntent !== "diagnostic-search" &&
+    !needsDiagnosticContext(inputs.query, inputs.anchors, inputs.retrievalIntent) &&
     isCompleteExactLiteralLookup(inputs.query, inputs.anchors, diagnostics)
   )
     return "complete-exact-lookup";
