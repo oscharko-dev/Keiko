@@ -386,6 +386,7 @@ describe("Footer selectedModel visibility", () => {
   it("does not show the selected model id when a model is configured", () => {
     render(
       <Footer
+        backendHealth={{ state: "loaded", health: { status: "ok", version: "1.2.3" } }}
         winCount={1}
         windows={[]}
         windowPaletteOpen={false}
@@ -401,6 +402,7 @@ describe("Footer selectedModel visibility", () => {
   it("does not show 'No model selected' when selectedModel is undefined", () => {
     render(
       <Footer
+        backendHealth={{ state: "loaded", health: { status: "ok", version: "1.2.3" } }}
         winCount={1}
         windows={[]}
         windowPaletteOpen={false}

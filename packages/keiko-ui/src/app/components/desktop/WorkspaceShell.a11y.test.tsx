@@ -94,6 +94,7 @@ describe("Workspace shell accessibility", () => {
           <RightRail openTools={new Set(["inspector"])} onTool={vi.fn()} />
         </div>
         <Footer
+          backendHealth={{ state: "loaded", health: { status: "ok", version: "1.2.3" } }}
           winCount={1}
           windows={[reviewWindow]}
           windowPaletteOpen={false}
@@ -150,6 +151,7 @@ describe("Workspace shell accessibility", () => {
             <RightRail openTools={new Set(["inspector"])} onTool={vi.fn()} />
           </div>
           <Footer
+            backendHealth={{ state: "loaded", health: { status: "ok", version: "1.2.3" } }}
             winCount={1}
             windows={[reviewWindow]}
             windowPaletteOpen={false}
@@ -169,6 +171,7 @@ describe("Workspace shell accessibility", () => {
   it("passes jest-axe for the autonomous-mode footer window trigger", async () => {
     const { container } = render(
       <Footer
+        backendHealth={{ state: "loaded", health: { status: "ok", version: "1.2.3" } }}
         winCount={2}
         windows={[]}
         windowPaletteOpen={false}

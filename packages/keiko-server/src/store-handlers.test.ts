@@ -1195,6 +1195,31 @@ describe("DELETE /api/projects", () => {
 
 // ─── Route 17: GET /api/chats ────────────────────────────────────────────────
 describe("GET /api/chats", () => {
+  it("reads one chat by identity beyond the default recency page without listing siblings", async () => {
+    store.createProject(projDir);
+    const oldest = store.createChat(projDir, "Oldest", "m1");
+    for (let i = 0; i < DEFAULT_CHAT_LIST_PAGE; i++)
+      store.createChat(projDir, `New ${String(i)}`, "m1");
+    const listSpy = vi.spyOn(store, "listChats");
+    const res = await fetch(
+      url(`/api/chats?projectPath=${encodeURIComponent(projDir)}&id=${oldest.id}`),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ chats: [oldest] });
+    expect(listSpy).not.toHaveBeenCalled();
+    listSpy.mockRestore();
+  });
+
+  it("does not return an identified chat from a different project", async () => {
+    store.createProject(projDir);
+    const owned = store.createChat(projDir, "Owned", "m1");
+    const res = await fetch(
+      url(`/api/chats?projectPath=${encodeURIComponent(projDir + "/other")}&id=${owned.id}`),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ chats: [] });
+  });
+
   it("lists chats for a project", async () => {
     store.createProject(projDir);
     store.createChat(projDir, "Chat A", "m1");

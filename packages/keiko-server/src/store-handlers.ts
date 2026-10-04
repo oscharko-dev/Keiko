@@ -627,6 +627,11 @@ export function handleListChats(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
       DEFAULT_CHAT_LIST_LIMIT,
       MAX_CHAT_LIST_LIMIT,
     );
+    if (ctx.url.searchParams.has("id")) {
+      const selected = findChatById(deps, requireQuery(ctx, "id"));
+      const chats = selected?.projectPath === projectPath ? [selected] : [];
+      return { status: 200, body: { chats } };
+    }
     const chats = deps.store.listChats(projectPath, limit);
     return { status: 200, body: { chats } };
   });

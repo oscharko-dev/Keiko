@@ -3,6 +3,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "@/lib/api";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import {
   reportClientDiagnostic,
@@ -150,6 +151,10 @@ function restoreDialogMethod(
   }
   Object.defineProperty(HTMLDialogElement.prototype, name, descriptor);
 }
+
+vi.mock("./hooks/useBackendHealth", () => ({
+  useBackendHealth: (): { state: "loading" } => ({ state: "loading" }),
+}));
 
 vi.mock("@/lib/api", async (importOriginal) => ({
   ApiError: (await importOriginal<typeof import("@/lib/api")>()).ApiError,
@@ -912,7 +917,7 @@ describe("AppShell grounding connections", () => {
     );
 
     expect(accepted).toBe(true);
-    expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
+    expect(mocks.fetchChats).toHaveBeenCalledWith("/private", undefined, "chat-private");
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
       privateChat.id,
       expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
@@ -946,7 +951,7 @@ describe("AppShell grounding connections", () => {
       );
 
       expect(accepted).toBe(true);
-      expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
+      expect(mocks.fetchChats).toHaveBeenCalledWith("/private", undefined, "chat-private");
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
         privateChat.id,
         expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
@@ -980,7 +985,7 @@ describe("AppShell grounding connections", () => {
       );
 
       expect(accepted).toBe(true);
-      expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
+      expect(mocks.fetchChats).toHaveBeenCalledWith("/private", undefined, "chat-private");
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
         privateChat.id,
         expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
@@ -988,6 +993,23 @@ describe("AppShell grounding connections", () => {
     } finally {
       unregister();
     }
+  });
+
+  it("retains the server correlation when a scoped chat lookup fails", async (): Promise<void> => {
+    mocks.state.workspaceResult = workspaceResult([
+      win("chat", { chatId: "chat-private", projectPath: "/private" }, "private-window"),
+    ]);
+    const failure = new ApiError("SERVER_ERROR", "private detail", 503);
+    failure.correlationId = "scope-lookup-test";
+    mocks.fetchChats.mockRejectedValueOnce(failure);
+    await renderMounted();
+    await mocks.state.workspaceOptions?.onScopeBind?.("private-window", fileScope("/repo"));
+    expect(reportedDiagnostics).toEqual([
+      {
+        message: "[keiko] Chat lookup failed: ChatLookupFailure",
+        meta: { correlationId: "scope-lookup-test" },
+      },
+    ]);
   });
 
   it("surfaces a redacted client diagnostic when a private chat lookup fails", async (): Promise<void> => {
@@ -1407,7 +1429,7 @@ describe("AppShell grounding connections", () => {
     await waitFor((): void => {
       expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(privateChat.id, null);
     });
-    expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
+    expect(mocks.fetchChats).toHaveBeenCalledWith("/private", undefined, "chat-private");
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
   });
 

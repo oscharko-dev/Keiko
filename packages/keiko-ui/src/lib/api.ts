@@ -1169,9 +1169,11 @@ export async function deleteProject(path: string): Promise<void> {
 export async function fetchChats(
   projectPath: string,
   correlationId?: string,
+  chatId?: string,
 ): Promise<ChatsResponse> {
+  const selected = chatId === undefined ? "" : `&id=${encodeURIComponent(chatId)}`;
   return fetchJson(
-    `/api/chats?projectPath=${encodeURIComponent(projectPath)}`,
+    `/api/chats?projectPath=${encodeURIComponent(projectPath)}${selected}`,
     undefined,
     undefined,
     correlationId,

@@ -1,6 +1,6 @@
 "use client";
 
-// The footer's view of `GET /api/health`: the installed version and, since #3532, the Activity
+// The workspace's shared view of `GET /api/health`: the installed version and, since #3532, the Activity
 // Log's diagnostic readiness. Read on mount and then every HEALTH_POLL_INTERVAL_MS, so a degraded
 // evidence path that appears while the page is open reaches the workspace within one interval (the
 // server re-evaluates readiness on its own heartbeat). Lives in its own module for the same reason
@@ -27,7 +27,14 @@ export function useBackendHealth(): BackendHealth {
       try {
         const health = await fetchHealth();
         failureReported = false;
-        if (!cancelled) setBackendHealth({ state: "loaded", health });
+        if (!cancelled) {
+          setBackendHealth((previous) =>
+            previous.state === "loaded" &&
+            JSON.stringify(previous.health) === JSON.stringify(health)
+              ? previous
+              : { state: "loaded", health },
+          );
+        }
       } catch (error) {
         if (cancelled) return;
         // The footer shows the version as unavailable and drops a readiness it can no longer vouch
@@ -39,7 +46,9 @@ export function useBackendHealth(): BackendHealth {
             correlationId: correlationIdOf(error),
           });
         }
-        if (!cancelled) setBackendHealth({ state: "unavailable" });
+        setBackendHealth((previous) =>
+          previous.state === "unavailable" ? previous : { state: "unavailable" },
+        );
       }
     }
     void readHealth();

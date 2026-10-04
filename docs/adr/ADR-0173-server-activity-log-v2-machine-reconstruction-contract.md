@@ -51,7 +51,7 @@ parseable or partially identified line as valid v2 evidence.
 Amended by #3532 on 2026-09-18: every production process now reaches the registry-validated writer
 or reports that it cannot (D6). Lost events are counted in one bounded, closed ledger and persisted
 as summaries. Diagnostic readiness is a closed state that `/api/health`, `keiko status`,
-`keiko support export` and the desktop footer report. Every exit leaves one `process.exiting` line,
+`keiko support export` and the desktop workspace report. Every exit leaves one `process.exiting` line,
 and a fatal crash leaves `process.fatal` (D7). The raw `ui.log` channel is retired, and the support
 report never carries it (D8, D9).
 
@@ -532,8 +532,10 @@ that writes or reads evidence, so their state cannot make evidence unwritable or
 `keiko support manifest verify` reports it. The heartbeat re-evaluates without a probe
 and logs every transition. A persistence loss since the last evaluation degrades readiness with
 `sink-unwritable`. `GET /api/health` returns the snapshot as `diagnostics`. `keiko status` prints
-it, and so does `keiko support export` for the exported directory. The desktop footer shows a
-degraded or unavailable state with its reasons.
+it, and so does `keiko support export` for the exported directory. The desktop workspace shows a compact notice when readiness is degraded or unavailable,
+with an error-report action. Closed technical reasons remain in the health response, Activity
+Log and exported report; the notice uses plain language. The shell owns the health poll, so
+readiness does not depend on the lazy footer module. The footer displays the installed version.
 
 **Sufficiency is proven compositionally (#3532).** Four mechanisms close the gap between declared
 and demonstrated evidence. Each is derived from the registry, never maintained beside it.
@@ -638,7 +640,7 @@ The desktop exposes the same canonical report as a local JSON download at action
 The healthy workspace footer has no report action. Exact browser resize notifications and Monaco
 cancellations are classified before failure caps; they do not create incidents or report actions.
 An uncaught browser error or rejected promise
-reveals a compact, dismissible footer action tied to that failure; handled contextual errors retain
+reveals a compact, dismissible workspace notice tied to that failure; handled contextual errors retain
 their own action. Each active failure shares one bounded report generation, keeps a download link
 available for repeated attempts, and remains visible until human dismissal. Failed creation remains
 retryable and unmounting cancels pending work. The selected

@@ -19,6 +19,20 @@ afterEach(() => {
 });
 
 describe("useBackendHealth", () => {
+  it("keeps the same snapshot identity for unchanged successful and failed polls", async () => {
+    const view = renderHook(useBackendHealth);
+    await act(async () => await Promise.resolve());
+    const loaded = view.result.current;
+    fetch.mockResolvedValueOnce({ ...ready });
+    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+    expect(view.result.current).toBe(loaded);
+    fetch.mockRejectedValue(new TypeError("offline"));
+    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+    const unavailable = view.result.current;
+    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+    expect(view.result.current).toBe(unavailable);
+  });
+
   it("polls once per interval and clears the timer on unmount", async () => {
     const view = renderHook(useBackendHealth);
     await act(async () => await Promise.resolve());

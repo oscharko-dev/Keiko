@@ -10,6 +10,7 @@ import {
   createDesktopChat,
   createProject,
   fetchChatMessages,
+  fetchChats,
   fetchConfig,
   fetchEvidenceList,
   fetchEvidenceManifest,
@@ -76,6 +77,15 @@ function streamResponse(text: string): Response {
 }
 
 describe("API BFF boundary helpers", () => {
+  it("selects a chat by encoded identity without requesting a larger list page", async () => {
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse({ chats: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchChats("/workspace/with space", "scoped-chat-read", "chat&one");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/chats?projectPath=%2Fworkspace%2Fwith%20space&id=chat%26one",
+    );
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });

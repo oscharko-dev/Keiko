@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   serverChat: undefined as Chat | undefined,
   workspace: undefined as UseWorkspaceResult | undefined,
   fetchChats: vi.fn(),
+  fetchHealth: vi.fn(),
   updateChatConnectedScopes: vi.fn(),
   recordReadsContextRelationship: vi.fn(),
 }));
@@ -40,6 +41,7 @@ vi.mock("./hooks/useChatSession", () => ({ useChatSession: useTestChatSession })
 vi.mock("@/lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api")>()),
   fetchChats: mocks.fetchChats,
+  fetchHealth: mocks.fetchHealth,
   fetchConfig: vi.fn(async () => ({ effectiveGroundingLimits: DEFAULT_GROUNDING_LIMITS })),
   fetchStartupUpdatePreflight: vi.fn(async () => ({})),
   updateChatConnectedScopes: mocks.updateChatConnectedScopes,
@@ -199,6 +201,7 @@ beforeEach((): void => {
   vi.clearAllMocks();
   window.localStorage.clear();
   mocks.workspace = undefined;
+  mocks.fetchHealth.mockResolvedValue({ status: "ok", version: "1.2.3" });
   Object.defineProperty(navigator, "webdriver", { configurable: true, value: true });
   vi.stubGlobal(
     "fetch",
@@ -231,6 +234,22 @@ afterEach((): void => {
 });
 
 describe("AppShell canonical workspace scope synchronization", () => {
+  it("shows diagnostic readiness even when the lazy footer renders nothing", async (): Promise<void> => {
+    mocks.fetchHealth.mockResolvedValue({
+      status: "ok",
+      version: "1.2.3",
+      diagnostics: {
+        readiness: "degraded",
+        reasons: ["sink-unwritable"],
+        writer: "production-file",
+        lostEvents: 1,
+      },
+    });
+    render(<AppShell />);
+    await screen.findByText("Error reports may currently be incomplete.");
+    expect(mocks.fetchHealth).toHaveBeenCalledOnce();
+  });
+
   it("does not reannounce a dismissed unchanged automatic scope ambiguity on unrelated changes", async () => {
     await mountAmbiguousFiles();
     const initialReports = vi.mocked(reportClientDiagnostic).mock.calls.length;

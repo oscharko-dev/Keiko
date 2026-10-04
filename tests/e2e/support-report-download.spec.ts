@@ -255,3 +255,62 @@ test("saves an HTTP limited report preserving the displayed cause without a pair
   expect(artifact.analysis.evidence.supportedLineCount).toBe(0);
   expect(artifact.selection.status).toBe("insufficient");
 });
+
+async function assertScrollableNoticeStack(stack: Locator): Promise<void> {
+  const bounds = await stack.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const parent = element.parentElement?.getBoundingClientRect();
+    return {
+      top: rect.top,
+      bottom: rect.bottom,
+      parentTop: parent?.top,
+      parentBottom: parent?.bottom,
+      scrollable: element.scrollHeight > element.clientHeight,
+    };
+  });
+  expect(bounds.parentTop).toBeDefined();
+  expect(bounds.top).toBeGreaterThanOrEqual(bounds.parentTop ?? 0);
+  expect(bounds.bottom).toBeLessThanOrEqual(bounds.parentBottom ?? 0);
+  expect(bounds.scrollable).toBe(true);
+  await expect(stack).toHaveCSS("overflow-y", "auto");
+}
+
+test("keeps stacked workspace error reports reachable on a short narrow viewport @smoke", async ({
+  page,
+}, info): Promise<void> => {
+  await page.setViewportSize({ width: 320, height: 240 });
+  await page.route("**/api/health", async (route) => {
+    await route.fulfill({
+      json: {
+        status: "ok",
+        version: "1.2.3",
+        diagnostics: {
+          readiness: "degraded",
+          reasons: ["sink-unwritable"],
+          writer: "production-file",
+          lostEvents: 1,
+        },
+      },
+    });
+  });
+  await page.goto(`/${editorM11PairingFragment("support-download")}`);
+  const readiness = page
+    .getByRole("status")
+    .filter({ hasText: "Error reports may currently be incomplete." });
+  await expect(readiness).toBeVisible();
+  await page.evaluate(() => {
+    window.dispatchEvent(
+      new ErrorEvent("error", { error: new Error("Synthetic viewport failure") }),
+    );
+  });
+  const failure = page.getByRole("alert").filter({ hasText: "Keiko encountered an error." });
+  await expect(failure).toBeVisible();
+  const stack = readiness.locator("..");
+  await assertScrollableNoticeStack(stack);
+  await prepareReport(failure);
+  await saveClickedReport(page, failure, info, "short-viewport");
+  await failure.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(readiness).toBeVisible();
+  await page.screenshot({ path: info.outputPath("short-viewport.png") });
+});

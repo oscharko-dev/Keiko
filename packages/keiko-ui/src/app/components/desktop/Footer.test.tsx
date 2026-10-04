@@ -4,20 +4,12 @@
 
 import type { ComponentProps, ReactNode } from "react";
 import { useState } from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Footer } from "./Footer";
 import { I18nProvider } from "@/lib/i18n";
 import type { AppWindow } from "./windows/types";
-import { fetchHealth } from "@/lib/api";
-vi.mock("@/lib/api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/api")>()),
-  fetchHealth: vi.fn(),
-}));
-
-const fetchHealthMock = vi.mocked(fetchHealth);
-
 function footerWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
     x: 40,
@@ -35,10 +27,10 @@ function footerWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">
 function renderFooter(
   patch: Partial<ComponentProps<typeof Footer>> = {},
 ): ReturnType<typeof render> {
-  fetchHealthMock.mockResolvedValue({ status: "ok", version: "0.2.0-test" });
   return render(
     <I18nProvider>
       <Footer
+        backendHealth={{ state: "loaded", health: { status: "ok", version: "0.2.0-test" } }}
         winCount={0}
         windows={[]}
         windowPaletteOpen={false}
@@ -58,57 +50,44 @@ afterEach(() => {
 });
 
 describe("Footer — window status trigger", () => {
-  it("shares the existing health poll with the workspace readiness notice", async () => {
-    const onBackendHealth = vi.fn();
-    renderFooter({ onBackendHealth });
-    await waitFor(() => {
-      expect(onBackendHealth).toHaveBeenLastCalledWith({
+  it("keeps diagnostic counts and report actions out of the centered footer", () => {
+    renderFooter({
+      winCount: 3,
+      backendHealth: {
         state: "loaded",
-        health: { status: "ok", version: "0.2.0-test" },
-      });
-    });
-    expect(fetchHealthMock).toHaveBeenCalledOnce();
-  });
-
-  it("keeps diagnostic counts and report actions out of the centered footer", async () => {
-    fetchHealthMock.mockResolvedValueOnce({
-      status: "ok",
-      version: "1.2.3",
-      diagnostics: {
-        readiness: "ready",
-        reasons: [],
-        writer: "production-file",
-        lostEvents: 0,
-        retainedDiagnosticCount: 32,
-        diagnosticCapacity: 32,
+        health: {
+          status: "ok",
+          version: "1.2.3",
+          diagnostics: {
+            readiness: "ready",
+            reasons: [],
+            writer: "production-file",
+            lostEvents: 0,
+            retainedDiagnosticCount: 32,
+            diagnosticCapacity: 32,
+          },
+        },
       },
     });
-    renderFooter({ winCount: 3 });
-    await screen.findByText("Keiko | 1.2.3");
+    expect(screen.getByText("Keiko | 1.2.3")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
     expect(screen.queryByText(/stored diagnostic cases/u)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "3 windows" })).toBeInTheDocument();
   });
 
-  it("renders the centered product/version signature from the installed backend version", async () => {
-    fetchHealthMock.mockResolvedValueOnce({ status: "ok", version: "0.2.0-beta.5" });
-    renderFooter();
-
-    expect(screen.getByText("Keiko | version loading")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.getByText("Keiko | 0.2.0-beta.5")).toBeInTheDocument();
+  it("renders the version from the shell's shared health snapshot", () => {
+    renderFooter({
+      backendHealth: { state: "loaded", health: { status: "ok", version: "0.2.0-beta.5" } },
     });
-    expect(fetchHealthMock).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
+    expect(screen.getByText("Keiko | 0.2.0-beta.5")).toBeInTheDocument();
   });
 
-  it("keeps the footer signature present when the version request fails", async () => {
-    fetchHealthMock.mockRejectedValueOnce(new Error("offline"));
-    renderFooter();
-
-    await waitFor(() => {
-      expect(screen.getByText("Keiko | version unavailable")).toBeInTheDocument();
-    });
+  it.each([
+    ["loading", "Keiko | version loading"],
+    ["unavailable", "Keiko | version unavailable"],
+  ] as const)("keeps the footer present while health is %s", (state, text) => {
+    renderFooter({ backendHealth: { state } });
+    expect(screen.getByText(text)).toBeInTheDocument();
   });
 
   it("renders the workflow-readiness indicator showing the active window count", () => {
@@ -228,9 +207,9 @@ describe("Footer — window status trigger", () => {
   describe("open-windows palette focus management", () => {
     function ControlledFooter(props: Partial<ComponentProps<typeof Footer>> = {}): ReactNode {
       const [open, setOpen] = useState(false);
-      fetchHealthMock.mockResolvedValue({ status: "ok", version: "0.2.0-test" });
       return (
         <Footer
+          backendHealth={{ state: "loaded", health: { status: "ok", version: "0.2.0-test" } }}
           winCount={1}
           windows={[footerWindow({ id: "files-1", type: "files", cfg: { root: "/repo" } })]}
           windowPaletteOpen={open}

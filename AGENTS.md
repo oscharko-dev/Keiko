@@ -485,7 +485,9 @@ system that exists, never beside it:
   available; otherwise use the existing independent body-free diagnostic fallbacks and state their
   loss ceiling honestly. Every lost event is counted in the closed loss ledger and persisted as
   `activity-log.loss`, and diagnostic readiness (`ready`, `degraded`, `unavailable`) is reported in
-  `/api/health`, `keiko status` and the UI. An explicit `silent` log level suppresses ordinary events
+  `/api/health`, `keiko status` and the UI. The workspace shows a plain-language notice for
+  degraded or unavailable readiness; closed technical reasons stay in health, logs and reports,
+  and the footer keeps its installed-version display. An explicit `silent` log level suppresses ordinary events
   only: lifecycle, loss and readiness evidence is still written, and readiness reports `degraded`
   (`level-silent`) so a silent interval never passes for an active complete writer.
 - **Body-free, always.** §7's redaction rule applies to every new field: counts, statuses, scopes,

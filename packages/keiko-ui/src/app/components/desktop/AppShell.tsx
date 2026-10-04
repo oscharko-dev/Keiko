@@ -8,7 +8,7 @@ import type { ReactNode, SyntheticEvent } from "react";
 import "@/lib/install-client-diagnostics";
 import { GlobalSupportReportAction } from "./SupportReportButton";
 import { DiagnosticReadinessNotice } from "./DiagnosticReadinessNotice";
-import type { BackendHealth } from "./hooks/useBackendHealth";
+import { useBackendHealth } from "./hooks/useBackendHealth";
 import { AppShellBoundary } from "./AppShellBoundary";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
@@ -642,9 +642,12 @@ function reportGroundingMutationFailure(message: string, error: unknown): void {
 }
 
 class ChatLookupFailure extends Error {
-  constructor() {
-    super("Chat lookup failed.");
+  readonly correlationId: string | undefined;
+
+  constructor(cause: unknown) {
+    super("Chat lookup failed.", { cause });
     this.name = "ChatLookupFailure";
+    this.correlationId = correlationIdOf(cause);
   }
 }
 
@@ -1173,7 +1176,7 @@ function AppShellInner(): ReactNode {
         runtimeProjectPathForChat(chatWindowId, chatId);
       if (projectPath === undefined) return undefined;
       try {
-        const response = await fetchChats(projectPath);
+        const response = await fetchChats(projectPath, undefined, chatId);
         if (!chatLookupTargetIsCurrent(target)) return undefined;
         if (chatLookupRequiresMountedWindow(target)) {
           const currentWindow = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
@@ -1183,8 +1186,8 @@ function AppShellInner(): ReactNode {
         if (resolved === undefined || resolved.status === "closed") return undefined;
         rememberGroundingChat(resolved);
         return resolved;
-      } catch {
-        throw new ChatLookupFailure();
+      } catch (error: unknown) {
+        throw new ChatLookupFailure(error);
       }
     },
     [rememberGroundingChat, session.activeChat, session.chats],
@@ -1858,7 +1861,7 @@ function AppShellInner(): ReactNode {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandPaletteOpener, setCommandPaletteOpener] = useState<HTMLElement | null>(null);
   const [windowPaletteOpen, setWindowPaletteOpen] = useState(false);
-  const [backendHealth, setBackendHealth] = useState<BackendHealth>({ state: "loading" });
+  const backendHealth = useBackendHealth();
   const [editorHosts, setEditorHosts] = useState<ReadonlyMap<string, EditorPaletteHost>>(
     () => new Map(),
   );
@@ -2211,7 +2214,7 @@ function AppShellInner(): ReactNode {
                       onSelectWindow={selectFooterWindow}
                       onCloseWindowPalette={closeWindowPalette}
                       statusRef={setStatusRef}
-                      onBackendHealth={setBackendHealth}
+                      backendHealth={backendHealth}
                     />
                   </div>
                   {pending !== null && (
