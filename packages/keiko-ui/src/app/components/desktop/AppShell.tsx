@@ -1551,7 +1551,29 @@ function AppShellInner(): ReactNode {
       chat: Chat,
       nextScope: ChatConnectedScope,
       automatic: boolean,
+      evidence: {
+        readonly attempt: ChatMutationAttempt;
+        readonly scopes: readonly ChatConnectedScope[];
+      },
     ): false => {
+      if (
+        automatic &&
+        automaticFilesAmbiguityIsCurrent(
+          automaticFilesAmbiguitiesRef.current,
+          connection,
+          chat,
+          nextScope,
+        )
+      ) {
+        reportFilesScopeDecision(evidence.attempt.correlationId, {
+          decision: "automatic-suppressed",
+        });
+        return false;
+      }
+      reportFilesScopeDecision(evidence.attempt.correlationId, {
+        decision: "blocked-ambiguous",
+        ...filesScopeOwnershipEvidence(connection, evidence.scopes),
+      });
       if (
         shouldReportAutomaticFilesAmbiguity(
           automaticFilesAmbiguitiesRef.current,
@@ -1606,23 +1628,10 @@ function AppShellInner(): ReactNode {
         canonicalScopes,
       );
       if (missingFilesScopeOwnership(connection, ownedScope, nextScope, canonicalScopes)) {
-        if (
-          automatic &&
-          automaticFilesAmbiguityIsCurrent(
-            automaticFilesAmbiguitiesRef.current,
-            connection,
-            chat,
-            nextScope,
-          )
-        ) {
-          reportFilesScopeDecision(attempt.correlationId, { decision: "automatic-suppressed" });
-          return false;
-        }
-        reportFilesScopeDecision(attempt.correlationId, {
-          decision: "blocked-ambiguous",
-          ...filesScopeOwnershipEvidence(connection, canonicalScopes),
+        return rejectMissingFilesScopeOwnership(connection, chat, nextScope, automatic, {
+          attempt,
+          scopes: canonicalScopes,
         });
-        return rejectMissingFilesScopeOwnership(connection, chat, nextScope, automatic);
       }
       reportFilesOwnershipDecision(attempt, connection, canonicalScopes);
       if (connectionId !== undefined) automaticFilesAmbiguitiesRef.current.delete(connectionId);
