@@ -130,11 +130,33 @@ describe("grounded auxiliary discovery traverses the complete admitted scope", (
     );
     expect(output.plan.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
     expect(output.pack.usage.searchCalls).toBe(3);
-    // The fixture's 110 repeated neighboring implementations legitimately clip lexical output;
-    // retain that disclosure while avoiding any unrequested structural/history warning.
-    expect(output.pack.diagnostics?.coverage?.reasons).toEqual(["match-cap"]);
-    expect(output.pack.uncertainty).toHaveLength(1);
-    expect(output.pack.uncertainty[0]?.claim).toContain("repository search coverage");
+    // Neighboring implementations share token fragments, but are not requested identifiers.
+    expect(output.pack.diagnostics?.coverage?.reasons).toEqual([]);
+    expect(output.pack.uncertainty).toEqual([]);
+    expect(validateConnectedContextPack(output.pack).ok).toBe(true);
+  }, 60_000);
+
+  it("keeps independently named CamelCase targets literal without unrelated shared-token matches", async () => {
+    const output = await retrieveConnectedContextPack(
+      request(
+        "Wo sind DeepAuxiliaryProbe und FairBetaProbe implementiert, und welche Werte liefern sie?",
+      ),
+      {
+        correlationId: undefined,
+        answerer: { answer: () => Promise.reject(new Error("Retrieval must not call the model.")) },
+        nowMs: () => NOW,
+        detectWorkspace: workspace,
+      },
+    );
+    expect(output.pack.files.map((file) => file.scopePath).sort()).toEqual(
+      [`${deepDirectory}/DeepAuxiliaryProbe.ts`, "fair-targets/zzzz/FairBetaProbe.ts"].sort(),
+    );
+    expect(output.pack.diagnostics?.coverage?.filesDiscovered).toBeGreaterThan(10_000);
+    expect(output.pack.diagnostics?.coverage?.incomplete).toBe(false);
+    expect(output.pack.diagnostics?.coverage?.reasons).toEqual([]);
+    expect(output.pack.uncertainty).toEqual([]);
+    expect(output.pack.usage.searchCalls).toBe(2);
+    expect(output.pack.usage.filesRead).toBe(2);
     expect(validateConnectedContextPack(output.pack).ok).toBe(true);
   }, 60_000);
 
@@ -178,6 +200,8 @@ describe("grounded auxiliary discovery traverses the complete admitted scope", (
     const beta = output.pack.files.find((file) => file.scopePath.endsWith("/FairBetaProbe.ts"));
     expect(beta?.excerpts.some((excerpt) => excerpt.content.includes("return 91"))).toBe(true);
     expect(output.pack.usage.filesRead).toBeLessThanOrEqual(output.plan.budget.filesReadMax);
+    expect(output.pack.diagnostics?.coverage?.reasons).toContain("match-cap");
+    expect(output.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(true);
     expect(validateConnectedContextPack(output.pack).ok).toBe(true);
   });
 

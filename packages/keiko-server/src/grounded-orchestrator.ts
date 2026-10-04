@@ -49,6 +49,7 @@ import {
   DEFAULT_FILTER_OPTIONS,
   planAndGovern,
   rankCandidates,
+  isDirectEvidenceLookup,
   requiresRelationshipOrHistoryRings,
   type ClarificationPrompt,
   type ClarificationReason,
@@ -1493,11 +1494,14 @@ type NonLexicalRing = Omit<RetrievalRing, "kind"> & {
 
 function anchoredLexicalTargets(inputs: SearchInputs): readonly string[] {
   if (inputs.query.kind !== "natural-language") return [];
+  const directLookup = isDirectEvidenceLookup(inputs.query, inputs.anchors);
   return inputs.anchors
     .filter(
       (anchor) =>
         anchor.kind === "quoted" ||
-        (anchor.kind === "identifier" && anchor.weight >= 0.85 && anchor.term.includes("_")),
+        (anchor.kind === "identifier" &&
+          anchor.weight >= 0.85 &&
+          (directLookup || anchor.term.includes("_"))),
     )
     .map((anchor) => anchor.term);
 }
