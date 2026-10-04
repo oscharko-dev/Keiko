@@ -1647,7 +1647,12 @@ or after its first heartbeat; the selection is `evidence-not-retained` and carri
 first heartbeat, when one is retained, as the proof a receiver recomputes. Legacy files carry no
 segment index and prove no beginning. The result accounts for each selected lifetime's start as
 `selected`, `absent` or `lost`, and a report carries that account. A user-reported incident also
-selects its pinned window and takes every correlation in it as a root.
+selects diagnostic correlations in its pinned window as roots. Independently correlated, registered
+HTTP transport with no causal parent, an explicit successful numeric status (200–399), no warning, error, error kind
+or aborted flag is optional context under the existing 256-event cap; unknown or failed transport
+remains mandatory. Transport ancestors and descendants of a selected diagnostic root remain part
+of its complete causal closure. The incident header evaluates the evidence actually exported,
+including declared selection loss and budget reasons, rather than a separate unexported window.
 
 **Nothing required is truncated.** A closure that does not fit the budget returns no events and is
 `insufficient` with `report-budget-exceeded`. Its `requiredBytes` counts the closure with every

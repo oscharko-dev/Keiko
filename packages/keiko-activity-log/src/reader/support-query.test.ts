@@ -71,6 +71,38 @@ function signal(process: FixtureProcess, atMs: number): string {
   return fixtureLine(process, atMs, { op: SIGNAL });
 }
 
+function requestLine(
+  process: FixtureProcess,
+  correlationId: string,
+  parentCorrelationId?: string,
+  status = 200,
+): string {
+  return fixtureLine(process, T0 + 100, {
+    op: "request",
+    correlationId,
+    parentCorrelationId,
+    status,
+    fields: {
+      method: "GET",
+      path: "/api/health",
+      queryParamNames: [],
+      responseBytes: 0,
+      aborted: false,
+    },
+  });
+}
+
+function manualSelection(): SupportQuerySelection {
+  return {
+    kind: "closure",
+    queryClass: "incident",
+    roots: [],
+    windows: [{ fromMs: T0, toMs: T0 + 1000 }],
+    requiredClasses: { kind: "observed-failures" },
+    unresolved: false,
+  };
+}
+
 function writeGraph(stateDir: string): GraphFixture {
   const a = fixtureProcess(4101, "aaaaaaa1");
   const b = fixtureProcess(4202, "bbbbbbb2");
@@ -680,7 +712,104 @@ describe("support query causal closure (#3531)", () => {
     expect(result.events.map((event) => event.parsed.correlationId)).toEqual([IDS.root, IDS.root]);
   });
 
-  it("selects a user-reported window and the closure of every correlation inside it", () => {
+  it("keeps useful manual evidence despite more than 8036 independent successful requests", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    const noise = Array.from({ length: 8100 }, (_, index) =>
+      requestLine(process, `routine-request-${String(index)}`),
+    );
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      ...noise,
+      diagnostic(process, T0 + 101, IDS.root),
+      requestLine(process, "causal-request", IDS.root),
+      requestLine(process, "failed-request", undefined, 500),
+      fixtureLine(process, T0 + 102, {
+        op: "search.connected-context.completed",
+        correlationId: IDS.child,
+        parentCorrelationId: IDS.root,
+        fields: {
+          scopeIdentitySha256: "a".repeat(64),
+          queryIdentitySha256: "b".repeat(64),
+          activityDetailStatus: "complete",
+        },
+      }),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(DEFAULT_SUPPORT_QUERY_LIMITS.maxClosureCorrelations).toBe(4096);
+    expect(result.truncation.state).not.toBe("budget-exceeded");
+    expect(result.events.length).toBeGreaterThan(4);
+    expect(result.events.length).toBeLessThanOrEqual(261);
+    for (const id of [IDS.root, IDS.child, "causal-request", "failed-request"])
+      expect(eventCorrelations(result).has(id)).toBe(true);
+    expect(result.truncation.omittedContextEventCount).toBeGreaterThan(7800);
+    expect(result.diagnosticSufficiency.reasons).toContain("context-truncated");
+  });
+
+  it("still rejects an explicit causal closure exceeding 4096 request children", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      diagnostic(process, T0, IDS.root),
+      ...Array.from({ length: 4100 }, (_, index) =>
+        requestLine(process, `causal-request-${String(index)}`, IDS.root),
+      ),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root));
+    expect(result.events).toEqual([]);
+    expect(result.diagnosticSufficiency.reasons).toContain("report-budget-exceeded");
+  });
+
+  it.each([
+    { status: 500 },
+    { status: 200, level: "warn" as const },
+    { status: 200, level: "error" as const },
+    { status: 200, errorKind: "internal" as const },
+    { status: 200, fields: { aborted: true } },
+    { status: undefined },
+  ])("keeps failed or uncertain HTTP transport mandatory: %j", (overrides) => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0 + 100, {
+        op: "request",
+        correlationId: "important-transport",
+        status: 200,
+        ...overrides,
+        fields: {
+          method: "GET",
+          path: "/api/health",
+          queryParamNames: [],
+          responseBytes: 0,
+          aborted: false,
+          ...overrides.fields,
+        },
+      }),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.role).toBe("closure");
+  });
+
+  it("keeps successful transport ancestors of a selected failure mandatory", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      requestLine(process, IDS.parent),
+      diagnostic(process, T0 + 101, IDS.root, IDS.parent),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(result.events.map((event) => event.role)).toEqual(["closure", "closure"]);
+    expect(eventCorrelations(result)).toEqual(new Set([IDS.parent, IDS.root]));
+  });
+
+  it("keeps a linked successful request and its outside-window ancestor mandatory", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      diagnostic(process, T0 - 1000, IDS.parent),
+      requestLine(process, IDS.root, IDS.parent),
+    ]);
+    const { result } = query(stateDir, manualSelection());
+    expect(result.events.map((event) => event.role)).toEqual(["closure", "closure"]);
+    expect(eventCorrelations(result)).toEqual(new Set([IDS.parent, IDS.root]));
+  });
+
+  it("selects a user-reported window and the closure of every diagnostic correlation inside it", () => {
     writeGraph(stateDir);
     const files = listActivityLogStoreFiles(stateDir);
     const firstSegment = files.find((file) => file.name.includes("-4101-"));

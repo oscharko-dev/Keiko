@@ -23,6 +23,8 @@ import {
 } from "./support-desktop-report.js";
 import { analyzeSupportReport, parseSupportReport } from "./support-report.js";
 import * as supportAnalysis from "./support-analyze.js";
+import { executeLocalSupportQuery } from "./support-local-query.js";
+import { DEFAULT_SUPPORT_QUERY_LIMITS } from "./support-query.js";
 import {
   MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
   MAX_SUPPORT_REPORT_TIMELINE_BYTES,
@@ -59,6 +61,83 @@ function writeFailures(): void {
 }
 
 describe("desktop canonical support report", () => {
+  it("describes an empty budget-rejected manual export instead of its unexported complete window", () => {
+    writeFailures();
+    const record = prepareUnretainedUserReportIncident(stateDir, "manual-report");
+    const evidence = executeLocalSupportQuery(
+      stateDir,
+      {
+        kind: "closure",
+        queryClass: "incident",
+        roots: [],
+        windows: [{ fromMs: record.window.fromMs, toMs: record.window.toMs }],
+        requiredClasses: { kind: "observed-failures" },
+        unresolved: false,
+      },
+      { ...DEFAULT_SUPPORT_QUERY_LIMITS, maxResultBytes: 1 },
+      { trigger: "export", persist: false },
+    );
+    const response = createPreparedDesktopSupportReport(stateDir, record, undefined, evidence);
+    const report = parseSupportReport(response.reportJson);
+    expect(report.evidence.recordCount).toBe(0);
+    expect(report.incident.sufficiencyStatus).toBe("insufficient");
+    expect(report.incident.sufficiencyReasons).toContain("report-budget-exceeded");
+    expect(report.incident.coverage).toMatchObject({
+      requiredClassCount: 0,
+      completeClassCount: 0,
+    });
+    expect(analyzeSupportReport(response.reportJson).selection.status).toBe("insufficient");
+  });
+
+  it("exports actual manual-window diagnostics despite 8100 unrelated successful requests", () => {
+    const now = Date.now() - 1000;
+    const process = fixtureProcess(4242, "aabbccdd");
+    const requests = Array.from({ length: 8100 }, (_, index) =>
+      fixtureLine(process, now, {
+        op: "request",
+        correlationId: `routine-request-${String(index)}`,
+        status: 200,
+        fields: {
+          method: "GET",
+          path: "/api/health",
+          queryParamNames: [],
+          responseBytes: 0,
+          aborted: false,
+        },
+      }),
+    );
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      ...requests,
+      fixtureLine(process, now + 1, {
+        op: "client.diagnostic",
+        correlationId: "manual-failure",
+        level: "error",
+        errorKind: "internal",
+      }),
+      fixtureLine(process, now + 2, {
+        op: "search.connected-context.completed",
+        correlationId: "manual-search",
+        parentCorrelationId: "manual-failure",
+        fields: {
+          scopeIdentitySha256: "a".repeat(64),
+          queryIdentitySha256: "b".repeat(64),
+          activityDetailStatus: "complete",
+        },
+      }),
+    ]);
+    const response = createDesktopSupportReport(stateDir);
+    const report = parseSupportReport(response.reportJson);
+    const analyzed = analyzeSupportReport(response.reportJson);
+    expect(report.evidence.recordCount).toBeGreaterThan(2);
+    expect(report.incident.op).toBe("unattributed");
+    expect(report.selection.reasons).not.toContain("report-budget-exceeded");
+    expect(analyzed.analysis.clusters.map((cluster) => cluster.op)).toEqual(
+      expect.arrayContaining(["client.diagnostic", "search.connected-context.completed"]),
+    );
+    expect(report.incident.sufficiencyReasons).toContain("context-truncated");
+    expect(report.incident.sufficiencyStatus).toBe(report.selection.status);
+  });
+
   function transientReport(correlationId: string): ReturnType<typeof analyzeSupportReport> {
     const selected = readDesktopSupportReportSelection(stateDir, correlationId);
     const response = createPreparedDesktopSupportReport(
@@ -266,6 +345,7 @@ describe("desktop canonical support report", () => {
     const response = createDesktopSupportReport(stateDir, "bounded-analysis");
     const report = parseSupportReport(response.reportJson);
     expect(selectedAnalysis).toHaveBeenCalledWith(expect.any(Array), {
+      sourceKind: "support-report",
       maxTimelineRecords: MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
       maxTimelineBytes: MAX_SUPPORT_REPORT_TIMELINE_BYTES,
     });

@@ -1,6 +1,7 @@
 // Shared incident resolution for desktop and CLI support reports.
 import {
   activityLogOperationSchema,
+  diagnosticSufficiencyStatus,
   MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
   MAX_SUPPORT_REPORT_TIMELINE_BYTES,
   type SupportIncident,
@@ -239,11 +240,23 @@ export function resolveSelectedSupportIncident(
     const analysis = analyzeLogLines(
       selected.events.map((event) => ({ text: event.text, terminated: true })),
       {
+        sourceKind: "support-report",
         maxTimelineRecords: MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
         maxTimelineBytes: MAX_SUPPORT_REPORT_TIMELINE_BYTES,
       },
     );
-    return resolveSupportIncidentAnalysis(record, segments, analysis);
+    const incident = resolveSupportIncidentAnalysis(record, segments, analysis);
+    const reasons = [
+      ...new Set([...incident.sufficiency.reasons, ...selected.diagnosticSufficiency.reasons]),
+    ];
+    return {
+      ...incident,
+      sufficiency: {
+        ...incident.sufficiency,
+        status: diagnosticSufficiencyStatus(reasons),
+        reasons,
+      },
+    };
   } catch (error) {
     if (!(error instanceof ActivityLogAnalyzeBudgetError)) throw error;
     // Reuse the canonical budget-exceeded descriptor; retain the query's selected evidence.

@@ -24,12 +24,7 @@ import {
   type SupportQueryResult,
 } from "./support-query.js";
 import { executeLocalSupportQuery } from "./support-local-query.js";
-import {
-  resolveSupportIncident,
-  resolveSelectedSupportIncident,
-  unresolvedSupportIncident,
-  SupportIncidentWindowError,
-} from "./support-incident-resolution.js";
+import { resolveSelectedSupportIncident } from "./support-incident-resolution.js";
 import {
   buildSupportReport,
   serializeSupportReport,
@@ -75,22 +70,10 @@ export function prepareManualSupportReportIncident(
 }
 
 function incidentDescriptor(
-  stateDir: string,
   record: SupportIncidentDescriptorRecord,
-  selected?: SupportQueryResult,
+  selected: SupportQueryResult,
 ): SupportReport["incident"] {
-  const segments = selected === undefined ? supportIncidentSegmentFiles(stateDir, record) : [];
-  if (selected !== undefined) {
-    return supportIncidentPrivateProjection(resolveSelectedSupportIncident(record, selected));
-  }
-  try {
-    return supportIncidentPrivateProjection(resolveSupportIncident(record, segments, stateDir));
-  } catch (error) {
-    if (!(error instanceof SupportIncidentWindowError)) throw error;
-    return supportIncidentPrivateProjection(
-      unresolvedSupportIncident(record, segments, error.reason),
-    );
-  }
+  return supportIncidentPrivateProjection(resolveSelectedSupportIncident(record, selected));
 }
 
 function incidentSelection(
@@ -210,11 +193,7 @@ export function createPreparedDesktopSupportReport(
       persist: false,
     });
   const report = buildSupportReport(
-    incidentDescriptor(
-      stateDir,
-      attributeUnretainedReportFailure(record, evidence.result),
-      correlationId === undefined ? undefined : evidence.result,
-    ),
+    incidentDescriptor(attributeUnretainedReportFailure(record, evidence.result), evidence.result),
     evidence.result,
   );
   return {

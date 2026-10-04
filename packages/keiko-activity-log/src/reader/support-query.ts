@@ -17,8 +17,8 @@
 //             [first closure event - contextMs, last closure event + contextMs], plus each of those
 //             lifetimes' own `process.started` (its runtime) wherever it lies, and nothing else. A
 //             lifetime without a start is complete only while its segments still run unbroken and
-//             intact from its first one. A user-reported incident also selects every event of its
-//             pinned window and takes every correlation that appears there as a root.
+//             intact from its first one. A user-reported incident also selects its pinned window's
+//             diagnostic roots; independent successful HTTP transport is bounded optional context.
 //   events  — registered operation, error kind, failure class, parent correlation, and a bounded time
 //             window, combined with AND; matching events only.
 //
@@ -128,7 +128,7 @@ export interface SupportClosureSelection {
   readonly kind: "closure";
   readonly queryClass: "correlation" | "incident" | "defect-fingerprint";
   readonly roots: readonly string[];
-  // Pinned windows whose events are selected and whose correlations become roots.
+  // Pinned windows whose diagnostic events are selected and whose correlations become roots.
   readonly windows: readonly SupportQueryWindow[];
   readonly requiredClasses: SupportRequiredClasses;
   // True when the selection's descriptor could not be resolved (no open incident record).
@@ -449,7 +449,27 @@ function windowCandidate(
   );
 }
 
-/** Every known correlation that appears inside the windows, in first-seen order (bounded). */
+function successfulHttpStatus(status: unknown): boolean {
+  return typeof status === "number" && status >= 200 && status < 400;
+}
+
+/** Independent successful transport is optional context, never a mandatory diagnostic root. */
+function routineHttpSuccess(accepted: AcceptedLine): boolean {
+  const view = accepted.parsed.view;
+  const schema = activityLogOperationSchema(view.op);
+  return (
+    schema?.category === "http" &&
+    schema.lifecycle !== "failure" &&
+    view.level !== "warn" &&
+    view.level !== "error" &&
+    view.errorKind === undefined &&
+    !knownCorrelation(view.parentCorrelationId) &&
+    successfulHttpStatus(view.status) &&
+    view.extra?.aborted !== true
+  );
+}
+
+/** Every diagnostic correlation inside the windows, in first-seen order (bounded). */
 function windowRoots(
   state: EngineState,
   windows: readonly SupportQueryWindow[],
@@ -459,7 +479,11 @@ function windowRoots(
   const files = candidateFiles(state, (loaded, file) => windowCandidate(windows, loaded, file));
   for (const accepted of acceptedLines(state, files, true)) {
     const id = accepted.parsed.correlationId;
-    if (!knownCorrelation(id) || !windows.some((window) => lineInWindow(window, accepted)))
+    if (
+      !knownCorrelation(id) ||
+      routineHttpSuccess(accepted) ||
+      !windows.some((window) => lineInWindow(window, accepted))
+    )
       continue;
     roots.add(id);
     if (roots.size > state.input.limits.maxClosureCorrelations) {
@@ -490,6 +514,7 @@ function closureRole(
 ): SupportQueryEventRole | undefined {
   const id = accepted.parsed.correlationId;
   if (knownCorrelation(id) && members.has(id)) return "closure";
+  if (routineHttpSuccess(accepted)) return undefined;
   return windows.some((window) => lineInWindow(window, accepted)) ? "window" : undefined;
 }
 
@@ -772,8 +797,16 @@ function manifestMayHoldLifetimes(
   );
 }
 
-function isContextLine(accepted: AcceptedLine, scope: ContextScope): boolean {
-  if (knownCorrelation(accepted.parsed.correlationId)) return false;
+function isContextLine(
+  accepted: AcceptedLine,
+  scope: ContextScope,
+  windows: readonly SupportQueryWindow[],
+): boolean {
+  if (
+    knownCorrelation(accepted.parsed.correlationId) &&
+    !(routineHttpSuccess(accepted) && windows.some((window) => lineInWindow(window, accepted)))
+  )
+    return false;
   const key = lifetimeKey(accepted.parsed);
   if (key === undefined || !scope.lifetimes.has(key)) return false;
   const ms = lineMs(accepted.parsed);
@@ -791,6 +824,7 @@ function collectContext(
   events: readonly SupportSelectedEvent[],
   selectedEvents: readonly SupportSelectedEvent[],
   budgetBytes: number,
+  windows: readonly SupportQueryWindow[],
 ): ContextSelection {
   const { contextMs, maxContextEvents } = state.input.limits;
   const scope = contextScope(events, selectedEvents, contextMs);
@@ -804,7 +838,7 @@ function collectContext(
   const collector = new EventCollector(budgetBytes);
   let omitted = 0;
   for (const accepted of acceptedLines(state, files, true)) {
-    if (!isContextLine(accepted, scope)) continue;
+    if (!isContextLine(accepted, scope, windows)) continue;
     if (collector.candidateCount < maxContextEvents) collector.add(accepted, "context");
     else omitted += 1;
   }
@@ -1206,7 +1240,13 @@ function runClosureSelection(
   const overflow = closureOverflow(state, selection, closure, collected);
   if (overflow !== undefined) return overflow;
   const remaining = state.input.limits.maxResultBytes - collected.collector.requiredBytes;
-  const context = collectContext(state, closureEvents, collected.collector.events, remaining);
+  const context = collectContext(
+    state,
+    closureEvents,
+    collected.collector.events,
+    remaining,
+    selection.windows,
+  );
   const reasons: DiagnosticSufficiencyReason[] = [
     ...missingClosureReasons(closure, collected.observed),
   ];
