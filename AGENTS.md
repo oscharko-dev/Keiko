@@ -553,6 +553,12 @@ Gateway admission additionally records `imageCount`, the selected `imageAccounti
 replaces the image reserve even when the local text/tool/schema floor determines the final total;
 a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
 
+Circuit admission that cannot fit a caller's remaining budget emits `gateway.circuit.wait` with
+`budget-refused`, `remainingMs` and `delayMs`; it does not fabricate a provider attempt or retry.
+Parallel retryable responses may extend the recovery minimum of the same open outage, while probe
+ownership and later circuit generations remain protected. Unchanged admission state does not wake
+every waiting caller.
+
 On retries, `reportedPromptTokens` always describes only the current counter response and is
 absent when that response has no count. `providerPromptTokens` adds the current response-schema
 cost to that raw count; `retainedPromptTokens` separately records the carried measurement floor

@@ -593,6 +593,26 @@ function logRetryScheduled(
   );
 }
 
+// Admission did not call the provider: retrying this refusal would invent another attempt.
+// Retry callers retain their actual provider failure; fresh callers receive the existing
+// non-retryable circuit error taxonomy. The wait event carries the closed refusal reason.
+class CircuitAdmissionRefusal extends CircuitOpenError {
+  constructor(readonly originalError: Error | undefined) {
+    super("request budget cannot accommodate provider admission");
+  }
+}
+
+class AdmissionBudgetExhausted extends TimeoutError {
+  constructor(readonly originalError: Error | undefined) {
+    super("request budget exhausted before provider admission");
+  }
+}
+
+function rethrowTerminalAdmission(error: unknown): void {
+  if (error instanceof CircuitAdmissionRefusal || error instanceof AdmissionBudgetExhausted)
+    throw error.originalError ?? error;
+}
+
 export async function executeWithRetry<T>(
   // Each attempt gets its own bound and what is left of the call's budget, which a streamed read
   // may spend while the provider keeps producing (ADR-0003).
@@ -620,6 +640,7 @@ export async function executeWithRetry<T>(
     try {
       return await operation(attemptTimeoutFor(config, remaining), remaining, lastError);
     } catch (error) {
+      rethrowTerminalAdmission(error);
       lastError = asError(error);
       const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
       const decision = retryDecision(lastError, attempt, config, remainingMs, random);
@@ -724,9 +745,10 @@ const GATEWAY_CIRCUIT_WAIT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["started", "changed", "timer", "cancelled", "failed"],
+      values: ["started", "changed", "timer", "cancelled", "failed", "budget-refused"],
     },
     delayMs: { type: "number", dataClass: "duration", required: true },
+    remainingMs: { type: "number", dataClass: "duration", required: false },
   },
   causal: "none",
   lifecycle: "state",
@@ -833,21 +855,30 @@ export class CircuitBreaker {
     for (;;) {
       assertNotAborted(options.signal);
       const remainingMs = Math.max(0, options.remainingMs - (this.clock.now() - start));
-      if (remainingMs <= 0) throw this.waitBudgetError(options);
       const blocked = this.blockedWait(recovering, options.jitterMs);
+      if (remainingMs <= 0) throw this.waitBudgetError(options, blocked, remainingMs);
       if (blocked === undefined)
         return { admission: this.assertAllowed(options.correlationId), remainingMs };
       if (blocked.delayMs >= remainingMs && blocked.reason !== "probe-saturated")
-        throw this.waitBudgetError(options);
+        throw this.waitBudgetError(options, blocked, remainingMs);
       await this.waitForChange(Math.min(blocked.delayMs, remainingMs), blocked.reason, options);
     }
   }
 
-  private waitBudgetError(options: CircuitAdmissionWait): Error {
-    return (
-      options.previousError ??
-      new TimeoutError("request budget exhausted while waiting for provider admission")
+  private waitBudgetError(
+    options: CircuitAdmissionWait,
+    blocked: { readonly reason: CircuitWaitReason; readonly delayMs: number } | undefined,
+    remainingMs: number,
+  ): Error {
+    if (blocked === undefined) return new AdmissionBudgetExhausted(options.previousError);
+    this.logWait(
+      blocked.reason,
+      "budget-refused",
+      Math.min(blocked.delayMs, MAX_TIMER_DELAY_MS),
+      options.correlationId,
+      remainingMs,
     );
+    return new CircuitAdmissionRefusal(options.previousError);
   }
 
   private blockedWait(
@@ -915,21 +946,28 @@ export class CircuitBreaker {
 
   private logWait(
     reason: CircuitWaitReason,
-    outcome: "started" | "changed" | "timer" | "cancelled" | "failed",
+    outcome: "started" | "changed" | "timer" | "cancelled" | "failed" | "budget-refused",
     delayMs: number,
     correlationId: string | undefined,
+    remainingMs?: number,
   ): void {
     this.log.write(
       activityLogEvent(
         GATEWAY_CIRCUIT_WAIT_OPERATION,
         { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
-        { modelId: logModelId(this.modelId), reason, outcome, delayMs },
+        {
+          modelId: logModelId(this.modelId),
+          reason,
+          outcome,
+          delayMs,
+          ...(remainingMs === undefined ? {} : { remainingMs }),
+        },
       ),
     );
   }
 
-  // Each admission settles once and only within the circuit generation that admitted it.
-  // A late response or cancellation from a previous outage cannot touch another call's probe.
+  // Each admission settles once. Circuit state and probe ownership stay generation-bound;
+  // parallel recovery minima may extend only the open outage caused by that generation.
   private createAdmission(correlationId: string | undefined): CircuitBreakerAdmission {
     const generation = this.generation;
     let settled = false;
@@ -938,21 +976,47 @@ export class CircuitBreaker {
       settle: (outcome, error): void => {
         if (settled) return;
         settled = true;
-        if (generation !== this.generation) return;
-        const cooldown =
-          error instanceof Error ? providerErrorDetail(error).retryAfterMs : undefined;
-        if (outcome === "failure" && cooldown !== undefined && cooldown > 0) {
-          this.providerCooldownUntil = Math.max(
-            this.providerCooldownUntil,
-            this.clock.now() + Math.min(cooldown, MAX_TIMER_DELAY_MS),
-          );
-        }
-        if (outcome === "success") this.recordSuccess(correlationId);
-        else if (outcome === "failure") this.recordFailure(correlationId);
-        else this.recordNonProviderFault();
-        for (const notify of this.waiters) notify();
+        this.settleAdmission(generation, outcome, error, correlationId);
       },
     };
+  }
+
+  private settleAdmission(
+    generation: number,
+    outcome: "success" | "failure" | "non-provider-fault",
+    error: unknown,
+    correlationId: string | undefined,
+  ): void {
+    const current = generation === this.generation;
+    // Parallel responses from the generation that opened this outage still announce recovery
+    // minima. Once a probe generation has begun, earlier responses have no authority over it.
+    if (!current && !(this.state === "open" && this.generation === generation + 1)) return;
+    const before = this.admissionState();
+    this.announceProviderCooldown(outcome, error);
+    if (current) {
+      if (outcome === "success") this.recordSuccess(correlationId);
+      else if (outcome === "failure") this.recordFailure(correlationId);
+      else this.recordNonProviderFault();
+    }
+    if (before !== this.admissionState()) {
+      for (const notify of this.waiters) notify();
+    }
+  }
+
+  private announceProviderCooldown(outcome: string, error: unknown): void {
+    if (outcome !== "failure") return;
+    if (!(error instanceof ProviderError || error instanceof RateLimitError) || !error.retryable)
+      return;
+    const cooldown = error.retryAfterMs;
+    if (cooldown === null || !Number.isFinite(cooldown) || cooldown <= 0) return;
+    this.providerCooldownUntil = Math.max(
+      this.providerCooldownUntil,
+      this.clock.now() + Math.min(cooldown, MAX_TIMER_DELAY_MS),
+    );
+  }
+
+  private admissionState(): string {
+    return [this.state, this.openedAt, this.probesInFlight, this.providerCooldownUntil].join(":");
   }
 
   private enterHalfOpenOrReject(correlationId: string | undefined): void {

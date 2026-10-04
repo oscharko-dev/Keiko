@@ -666,6 +666,12 @@ States:
   callers recovering from an announced cooldown also wait out the remaining breaker cooldown
   inside their original request budget; if admission cannot fit, they retain their own original
   provider error rather than replacing it with `CircuitOpenError`.
+  Refused admission terminates retry accounting without inventing another provider attempt.
+  A fresh blocked caller receives `CircuitOpenError`; an exhausted caller with no circuit
+  blockage retains `TimeoutError`. Retryable parallel responses from the generation that opened
+  the current outage may extend its announced recovery minimum. They cannot alter probe ownership
+  or a later half-open, recovered or reopened generation. Terminal HTTP failures do not announce
+  a shared recovery minimum, and waiters are notified only when admission state changes.
   When `clock.now() - openedAt >= cooldownMs`, transition to **Half-Open**.
 - **Half-Open**: the next `halfOpenProbes` calls are forwarded as probes. Each success decrements the
   probe counter. When the counter reaches zero, transition to **Closed** and reset all counters. Any
@@ -673,7 +679,9 @@ States:
   Recovering cooldown callers wait for a saturated probe slot instead of failing immediately.
   Cancellation, expiry and settlement dispose the wait timer and notification subscription.
   Generation checks still prevent an older admission from changing a later circuit generation;
-  waiting and its outcome emit body-free `gateway.circuit.wait` lifecycle evidence.
+  waiting and its outcome emit body-free `gateway.circuit.wait` lifecycle evidence. A blocked
+  admission that cannot fit its caller budget records `budget-refused`, with the remaining budget
+  and proposed delay, even when no wait timer starts.
 
 Circuit state is observable via `gateway.circuitStatus(modelId): CircuitBreakerStatus`.
 

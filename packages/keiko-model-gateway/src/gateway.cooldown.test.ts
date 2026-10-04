@@ -205,6 +205,7 @@ describe("concurrent provider cooldown admission", () => {
   it("preserves each original provider cause when the breaker wait cannot fit the actual request budget", async () => {
     vi.useFakeTimers();
     const errors: ProviderError[] = [];
+    const events: ModelGatewayLogEvent[] = [];
     const config = gatewayConfig();
     const provider = gateway(
       () => {
@@ -214,21 +215,54 @@ describe("concurrent provider cooldown admission", () => {
       },
       {
         ...config,
+        providers: config.providers.map((entry) => ({ ...entry, maxRetries: 3 })),
         circuitBreaker: {
           ...config.circuitBreaker,
           failureThreshold: 2,
-          cooldownMs: 2_000_000,
+          cooldownMs: 3_000_000,
           halfOpenProbes: 1,
         },
       },
+      events,
     );
     const results = Promise.allSettled(Array.from({ length: 3 }, () => provider.chat(REQUEST)));
-    await vi.advanceTimersByTimeAsync(120_001);
+    await vi.runAllTimersAsync();
     for (const [index, result] of (await results).entries()) {
       expect(result.status).toBe("rejected");
       if (result.status === "rejected") expect(result.reason).toBe(errors[index]);
     }
     expect(errors).toHaveLength(3);
+    expect(
+      events.filter((event) => event.op.startsWith("gateway.retry.")).map((event) => event.op),
+    ).toEqual(Array.from({ length: 3 }, () => "gateway.retry.scheduled"));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not retry a fresh buffered request refused before any provider attempt", async () => {
+    vi.useFakeTimers();
+    const events: ModelGatewayLogEvent[] = [];
+    const config = gatewayConfig();
+    const call = vi.fn(() =>
+      Promise.reject(new ProviderError("Synthetic outage", 503, [], 3_000_000)),
+    );
+    const provider = gateway(
+      call,
+      {
+        ...config,
+        providers: config.providers.map((entry) => ({ ...entry, maxRetries: 3 })),
+      },
+      events,
+    );
+    await expect(provider.chat(REQUEST)).rejects.toBeInstanceOf(ProviderError);
+    events.length = 0;
+    const result = provider.chat(REQUEST).catch((error: unknown) => error);
+    await vi.runAllTimersAsync();
+    expect(await result).toBeInstanceOf(CircuitOpenError);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.op.startsWith("gateway.retry."))).toEqual([]);
+    expect(events.find((event) => event.op === "gateway.circuit.wait")).toMatchObject({
+      extra: { outcome: "budget-refused" },
+    });
     expect(vi.getTimerCount()).toBe(0);
   });
 
