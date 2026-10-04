@@ -68,6 +68,7 @@ export function startFilesNavigationEvidence(
   stage: ClientStageId,
   correlationId = newClientCorrelationId(),
 ): (response?: unknown, navigationOutcome?: ClientNavigationOutcome) => void {
+  if (stage === "files source preview" && !readStageAvailable()) return (): void => undefined;
   const ordinal = ++nextOrdinal;
   const startedAt = performance.now();
   reportClientDiagnostic("Workspace navigation started", {

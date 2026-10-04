@@ -2,6 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, fetchFilesPreview } from "@/lib/api";
 import type { FilesPreviewResponse } from "@/lib/types";
+import { resetFilesNavigationEvidenceForTests } from "@/lib/files-navigation-evidence";
+import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import { FilePreview } from "./FilePreview";
 
 vi.mock("@/lib/api", async (importOriginal) => ({
@@ -33,12 +35,113 @@ function textPreview(
 
 beforeEach(() => {
   vi.mocked(fetchFilesPreview).mockReset();
+  resetFilesNavigationEvidenceForTests();
 });
 afterEach(() => {
   vi.clearAllMocks();
+  resetClientDiagnosticWriter();
 });
 
 describe("read-only cited source preview", () => {
+  it("aborts a pending source read on retarget and settles its original stage once", async () => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    let resolveFirst: ((value: FilesPreviewResponse) => void) | undefined;
+    vi.mocked(fetchFilesPreview).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirst = resolve;
+      }),
+    );
+    const view = render(<FilePreview root="/repo" path="first.html" onClose={() => undefined} />);
+    const first = vi.mocked(fetchFilesPreview).mock.calls[0];
+    expect(first?.[3]?.aborted).toBe(false);
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce(textPreview("/repo", "second.html"));
+    view.rerender(<FilePreview root="/repo" path="second.html" onClose={() => undefined} />);
+    await screen.findByRole("region", { name: "File preview: second.html" });
+    expect(first?.[3]?.aborted).toBe(true);
+    resolveFirst?.(textPreview("/repo", "first.html", "stale confidential body"));
+    await waitFor(() =>
+      expect(
+        writer.mock.calls.filter(
+          (call) =>
+            call[1]?.correlationId === first?.[2] && call[1]?.stageReport?.phase === "settled",
+        ),
+      ).toHaveLength(1),
+    );
+    expect(
+      writer.mock.calls.find(
+        (call) =>
+          call[1]?.correlationId === first?.[2] && call[1]?.stageReport?.phase === "settled",
+      )?.[1]?.stageReport,
+    ).toMatchObject({ navigationOutcome: "cancelled" });
+    expect(JSON.stringify(writer.mock.calls)).not.toContain("confidential");
+    expect(document.body).not.toHaveTextContent("stale confidential body");
+  });
+
+  it.each(["text", "image", "binary"] as const)(
+    "records the actual %s preview lifecycle",
+    async (kind) => {
+      const writer = vi.fn();
+      setClientDiagnosticWriter(writer);
+      const base = textPreview();
+      const response: FilesPreviewResponse =
+        kind === "text"
+          ? base
+          : kind === "image"
+            ? { ...base, kind, url: "/api/files/image" }
+            : { ...base, kind, reason: "unsupported" };
+      vi.mocked(fetchFilesPreview).mockResolvedValueOnce(response);
+      render(<FilePreview root="/repo" path="manual.html" onClose={() => undefined} />);
+      await waitFor(() => expect(writer.mock.calls).toHaveLength(2));
+      const id = vi.mocked(fetchFilesPreview).mock.calls[0]?.[2];
+      expect(writer.mock.calls[0]?.[1]).toMatchObject({
+        correlationId: id,
+        stageReport: { stage: "files source preview", phase: "started" },
+      });
+      expect(writer.mock.calls[1]?.[1]).toMatchObject({
+        correlationId: id,
+        stageReport: {
+          stage: "files source preview",
+          phase: "settled",
+          navigationOutcome: "applied",
+          preview: {
+            previewKind: kind,
+            sourceTextBytesRead: kind === "text" ? base.sizeBytes : 0,
+            canEdit: false,
+          },
+        },
+      });
+      expect(JSON.stringify(writer.mock.calls)).not.toContain(base.content);
+      expect(JSON.stringify(writer.mock.calls)).not.toContain(base.path);
+    },
+  );
+
+  it.each([false, true])(
+    "settles rejected or mismatched previews as failed (mismatch=%s)",
+    async (mismatch) => {
+      const writer = vi.fn();
+      setClientDiagnosticWriter(writer);
+      if (mismatch) vi.mocked(fetchFilesPreview).mockResolvedValueOnce(textPreview("/other"));
+      else
+        vi.mocked(fetchFilesPreview).mockRejectedValueOnce(new TypeError("private read failure"));
+      render(<FilePreview root="/repo" path="manual.html" onClose={() => undefined} />);
+      await screen.findByRole("alert");
+      const stages = writer.mock.calls.filter((call) => call[1]?.stageReport !== undefined);
+      const id = vi.mocked(fetchFilesPreview).mock.calls[0]?.[2];
+      expect(stages).toHaveLength(2);
+      expect(stages[1]?.[1]).toMatchObject({
+        correlationId: id,
+        stageReport: {
+          stage: "files source preview",
+          phase: "settled",
+          navigationOutcome: "failed",
+        },
+      });
+      expect(stages[1]?.[1]?.stageReport.preview).toBeUndefined();
+      expect(JSON.stringify(writer.mock.calls)).not.toContain("private read failure");
+    },
+  );
+
   it("keeps expanded source lines when a manual refresh returns identical content", async () => {
     const content = Array.from(
       { length: 1_200 },

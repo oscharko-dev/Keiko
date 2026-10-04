@@ -548,6 +548,7 @@ export function FilePreview({
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     const previousTarget = loadTargetRef.current;
     const targetChanged = previousTarget?.root !== root || previousTarget.path !== path;
     const isManualRefresh = previousTarget !== null && !targetChanged && refreshKey > 0;
@@ -560,22 +561,17 @@ export function FilePreview({
 
     const correlationId = newClientCorrelationId();
     const settle = startFilesNavigationEvidence("files source preview", correlationId);
-    void fetchFilesPreview(root, path, correlationId)
+    void fetchFilesPreview(root, path, correlationId, controller.signal)
       .then((response) => {
-        if (cancelled) {
-          settle(undefined, "dropped");
-          return;
-        }
+        if (cancelled) return;
         const selected = validatedPreview(response, root, path);
         settle(selected, "applied");
-        if (!cancelled) {
-          setPreview(selected);
-          updateManualRefreshStatus(isManualRefresh, "refreshed", setRefreshStatus);
-        }
+        setPreview(selected);
+        updateManualRefreshStatus(isManualRefresh, "refreshed", setRefreshStatus);
       })
       .catch((err: unknown) => {
-        settle(undefined, cancelled ? "dropped" : "failed");
         if (cancelled) return;
+        settle(undefined, "failed");
         if (previewFailureInvalidatesResponse(err)) setPreview(null);
         setError(classifyError(err, correlationId));
         updateManualRefreshStatus(isManualRefresh, "failed", setRefreshStatus);
@@ -585,6 +581,7 @@ export function FilePreview({
       });
     return () => {
       cancelled = true;
+      controller.abort();
       settle(undefined, "cancelled");
     };
   }, [path, root, refreshKey]);

@@ -1811,11 +1811,17 @@ export async function fetchFilesPreview(
   root: string,
   path: string,
   correlationId?: string,
+  signal?: AbortSignal,
 ): Promise<FilesPreviewResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
   params.set("path", path);
-  return fetchJson(`/api/files/preview?${params.toString()}`, undefined, undefined, correlationId);
+  return fetchJson(
+    `/api/files/preview?${params.toString()}`,
+    signal === undefined ? undefined : { signal },
+    undefined,
+    correlationId,
+  );
 }
 
 export async function fetchFilesContent(

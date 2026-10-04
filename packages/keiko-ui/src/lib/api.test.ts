@@ -1387,7 +1387,12 @@ describe("files API helpers", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
       "X-Keiko-Correlation-Id": "ui-directory-0001",
     });
-    await fetchFilesPreview("/repo space", "src/app.ts", "ui-preview-0001");
+    const previewAbort = new AbortController();
+    await fetchFilesPreview("/repo space", "src/app.ts", "ui-preview-0001", previewAbort.signal);
+    const previewSignal = fetchMock.mock.calls[1]?.[1]?.signal;
+    expect(previewSignal?.aborted).toBe(false);
+    previewAbort.abort();
+    expect(previewSignal?.aborted).toBe(true);
     await fetchFilesContent("/repo space", "src/app.ts", "ui-content-0001");
     await saveFilesContent({
       root: "/repo space",

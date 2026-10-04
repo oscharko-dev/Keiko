@@ -107,3 +107,19 @@ describe("body-free source preview evidence", () => {
     expect(writer.mock.calls.at(-1)?.[1]?.stageReport?.preview).toBeUndefined();
   });
 });
+
+it("admits preview starts and settles within the shared read-stage allowance", () => {
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  for (let index = 0; index < 20; index += 1)
+    startFilesNavigationEvidence("files source preview")(undefined, "cancelled");
+  expect(writer.mock.calls).toHaveLength(16);
+  expect(takeClientDiagnosticLoss()).toEqual({ postsThrottled: 24 });
+  for (let index = 0; index < writer.mock.calls.length; index += 2) {
+    const start = writer.mock.calls[index]?.[1];
+    expect(writer.mock.calls[index + 1]?.[1]).toMatchObject({
+      correlationId: start?.correlationId,
+      stageReport: { phase: "settled", navigationOutcome: "cancelled" },
+    });
+  }
+});
