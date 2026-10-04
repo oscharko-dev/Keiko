@@ -1031,6 +1031,34 @@ function toPackDiagnostics(result: Awaited<ReturnType<typeof searchText>>): Cont
   };
 }
 
+function onlyRetainedMatchesLimited(coverage: ContextCoverageDiagnostics): boolean {
+  return (
+    coverage.reasons.length === 1 &&
+    coverage.reasons[0] === "match-cap" &&
+    coverage.filesScanned === coverage.filesAfterPolicy &&
+    coverage.filesSkipped === 0 &&
+    coverage.depthPrunedByDiscovery === 0 &&
+    coverage.maxFilesPrunedByDiscovery === 0
+  );
+}
+
+function discoveryCoverageMarker(
+  subject: string,
+  coverage: ContextCoverageDiagnostics,
+  details: string,
+  nowMs: number,
+): UncertaintyMarker {
+  const retainedMatchesLimited = onlyRetainedMatchesLimited(coverage);
+  return {
+    kind: retainedMatchesLimited ? "budget-clipped" : "scope-incomplete",
+    claim: retainedMatchesLimited
+      ? `${subject}: all eligible files were searched; additional matching results were omitted from retained evidence (${details}); missing retained evidence does not prove a file or fact absent`
+      : `${subject} coverage was incomplete (${details}); relevant files may be missing from the context pack`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
 function coverageUncertainty(
   result: Awaited<ReturnType<typeof searchText>>,
   nowMs: number,
@@ -1056,14 +1084,7 @@ function coverageUncertainty(
           `depth-pruned ${String(coverage.depthPrunedByDiscovery)}`,
           `max-files-pruned ${String(coverage.maxFilesPrunedByDiscovery)}`,
         ].join(", ");
-  return [
-    {
-      kind: "scope-incomplete",
-      claim: `repository search coverage was incomplete (${details}); relevant files may be missing from the context pack`,
-      impactedAtomIds: [],
-      emittedAtMs: nowMs,
-    },
-  ];
+  return [discoveryCoverageMarker("repository search", coverage, details, nowMs)];
 }
 
 function throwIfCancelled(signal: AbortSignal | undefined): void {
@@ -2131,10 +2152,6 @@ const SYMBOL_FILE_EXTENSIONS = [
   "vue",
 ] as const;
 const SYMBOL_FILE_EXTENSION_SET: ReadonlySet<string> = new Set(SYMBOL_FILE_EXTENSIONS);
-// Aggregate cap on firstSymbolLine reads across ALL terms in one question, so a vague code question
-// on a large customer repo can never trigger an unbounded number of full-file reads even if many
-// files match the symbol globs (each read also re-stats + splits the file — see firstSymbolLine).
-const MAX_SYMBOL_LINE_READS = 64;
 const SYMBOL_FILE_MATCHES_MAX = 96;
 const DOCUMENT_REFERENCE_MATCHES_MAX = 8;
 const MAX_DOCUMENT_REFERENCE_ANCHORS = 4;
@@ -2819,17 +2836,15 @@ function documentReferenceCoverageMarker(
   nowMs: () => number,
 ): UncertaintyMarker | undefined {
   if (!coverage.incomplete) return undefined;
-  return {
-    kind: "scope-incomplete",
-    claim:
-      `Document reference discovery for "${term}" was incomplete: ` +
-      `reasons=${coverage.reasons.join(",")}; ` +
+  return discoveryCoverageMarker(
+    `Document reference discovery for "${term}"`,
+    coverage,
+    `reasons=${coverage.reasons.join(",")}; ` +
       `filesScanned=${String(coverage.filesScanned)}, ` +
       `filesSkipped=${String(coverage.filesSkipped)}, ` +
-      `matchesReturned=${String(coverage.matchesReturned)}.`,
-    impactedAtomIds: [],
-    emittedAtMs: nowMs(),
-  };
+      `matchesReturned=${String(coverage.matchesReturned)}`,
+    nowMs(),
+  );
 }
 
 function reserveAugmentationSearchTerms(
@@ -3087,20 +3102,18 @@ function symbolCoverageIncomplete(
   if (coverage?.incomplete !== true) {
     return undefined;
   }
-  return {
-    kind: "scope-incomplete",
-    claim:
-      `Symbol file discovery for "${term}" was incomplete: ` +
-      `reasons=${coverage.reasons.join(",")}; ` +
+  return discoveryCoverageMarker(
+    `Symbol file discovery for "${term}"`,
+    coverage,
+    `reasons=${coverage.reasons.join(",")}; ` +
       `filesScanned=${String(coverage.filesScanned)}, ` +
       `filesSkipped=${String(coverage.filesSkipped)}, ` +
       `matchesReturned=${String(coverage.matchesReturned)}, ` +
       `limits=maxFilesScanned:${String(coverage.limits.maxFilesScanned)},` +
       `maxMatchesReturned:${String(coverage.limits.maxMatchesReturned)},` +
-      `elapsedMsMax:${String(coverage.limits.elapsedMsMax)}.`,
-    impactedAtomIds: [],
-    emittedAtMs: nowMs(),
-  };
+      `elapsedMsMax:${String(coverage.limits.elapsedMsMax)}`,
+    nowMs(),
+  );
 }
 
 function symbolDefinitionPriority(scopePath: string, term: string): number {
@@ -3119,25 +3132,6 @@ function compareSymbolMatches(a: SymbolDefinitionMatch, b: SymbolDefinitionMatch
     return priorityDelta;
   }
   return a.atom.scopePath.localeCompare(b.atom.scopePath);
-}
-
-function symbolLineReadOverflow(
-  overflowCount: number,
-  terms: readonly string[],
-  nowMs: () => number,
-): UncertaintyMarker | undefined {
-  if (overflowCount === 0) {
-    return undefined;
-  }
-  return {
-    kind: "scope-incomplete",
-    claim:
-      `Symbol line lookup skipped ${String(overflowCount)} definition file(s) after ` +
-      `${String(MAX_SYMBOL_LINE_READS)} prioritized line reads; ` +
-      `file-level symbol matches remain available for terms=${terms.join(",")}.`,
-    impactedAtomIds: [],
-    emittedAtMs: nowMs(),
-  };
 }
 
 function symbolLineDeadlineMarker(
@@ -3266,8 +3260,6 @@ function collectPrioritizedSymbolAtoms(
 ): SymbolDiscoveryResult {
   const atoms: EvidenceAtom[] = [];
   const seen = new Set<string>();
-  let remainingLineReads = MAX_SYMBOL_LINE_READS;
-  let overflowCount = 0;
   let deadlineSkippedCount = 0;
   let lineDeadlineReached = false;
   const control: SymbolLineScanControl = {
@@ -3280,20 +3272,16 @@ function collectPrioritizedSymbolAtoms(
     pushUniqueAtom(atoms, seen, match.atom);
     if (lineDeadlineReached) {
       deadlineSkippedCount += 1;
-    } else if (remainingLineReads <= 0) {
-      overflowCount += 1;
     } else {
-      remainingLineReads -= 1;
       lineDeadlineReached = pushSymbolLineAtom(inputs, { match, atoms, seen, control });
       if (lineDeadlineReached) deadlineSkippedCount += 1;
     }
   }
   return {
     atoms,
-    uncertainty: [
-      symbolLineReadOverflow(overflowCount, terms, inputs.nowMs),
-      symbolLineDeadlineMarker(deadlineSkippedCount, inputs.nowMs),
-    ].filter((marker): marker is UncertaintyMarker => marker !== undefined),
+    uncertainty: [symbolLineDeadlineMarker(deadlineSkippedCount, inputs.nowMs)].filter(
+      (marker): marker is UncertaintyMarker => marker !== undefined,
+    ),
   };
 }
 

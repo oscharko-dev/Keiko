@@ -209,7 +209,12 @@ describe("grounded auxiliary discovery traverses the complete admitted scope", (
     expect(output.plan.budget.filesReadMax).toBe(32);
     expect(output.pack.usage.filesRead).toBeLessThanOrEqual(32);
     expect(output.pack.diagnostics?.coverage?.reasons).toContain("match-cap");
-    expect(output.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(true);
+    const symbolCoverage = output.pack.uncertainty.find((marker) =>
+      marker.claim.startsWith("Symbol file discovery"),
+    );
+    expect(symbolCoverage?.kind).toBe("budget-clipped");
+    expect(symbolCoverage?.claim).toContain("all eligible files were searched");
+    expect(symbolCoverage?.claim).toContain("additional matching results were omitted");
     expect(validateConnectedContextPack(output.pack).ok).toBe(true);
   });
 
@@ -229,6 +234,8 @@ describe("grounded auxiliary discovery traverses the complete admitted scope", (
     );
     expect(marker?.claim).toContain("match-cap");
     expect(marker?.claim).not.toContain("file-cap");
+    expect(marker?.kind).toBe("budget-clipped");
+    expect(marker?.claim).toContain("all eligible files were searched");
   }, 60_000);
 
   it.each([

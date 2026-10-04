@@ -152,6 +152,11 @@ policy. Each requested filename pattern retains a bounded independent result buc
 shared traversal per batch. Actual source-line inspection and final candidate ordering preserve
 distinct requested targets before the accepted read and context budgets select answer evidence;
 a popular first target must not displace every result for another explicitly requested target.
+Definition-line lookup inspects every retained symbol candidate sequentially with the existing
+2 MiB descriptor bound and cancellation/deadline checks, without a second read-count cutoff.
+A completed eligible scan with only a retained-match limit reports omitted matching evidence,
+not unchecked source files. I/O failures, traversal pruning, cancellation, and elapsed limits
+continue to report incomplete scope coverage; omitted evidence never proves a fact absent.
 Direct named implementation and ADR/RFC fact questions use lexical evidence plus the required
 filename batches; they do not schedule unrelated graph or history traversal. Explicit relationship,
 caller, import, test, integration, history, and diagnostic questions retain their structural routing.

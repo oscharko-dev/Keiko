@@ -142,6 +142,36 @@ function seedOverflowImplementations(root: string, count: number): void {
   }
 }
 
+function coverageLimitedReadFs(ioError: boolean): WorkspaceFs {
+  const read = nodeWorkspaceFs.readFileBytes;
+  if (read === undefined) throw new Error("physical read fixture missing");
+  return {
+    ...nodeWorkspaceFs,
+    readFileBytes: (...args): Promise<Uint8Array> =>
+      ioError && args[0].endsWith("/c.ts")
+        ? Promise.reject(Object.assign(new Error("fixture read failed"), { code: "EIO" }))
+        : read(...args),
+  };
+}
+
+function expectRetainedMatchCoverage(pack: ConnectedContextPack, ioError: boolean): void {
+  const coverage = pack.diagnostics?.coverage;
+  const marker = pack.uncertainty.find((entry) => entry.claim.startsWith("repository search"));
+  if (coverage === undefined || marker === undefined) throw new Error("coverage fixture missing");
+  expect(coverage.reasons).toContain("match-cap");
+  expect(marker.kind).toBe(ioError ? "scope-incomplete" : "budget-clipped");
+  if (ioError) {
+    expect(coverage.reasons).toContain("io-error");
+    expect(marker.claim).toContain("coverage was incomplete");
+    expect(marker.claim).not.toContain("all eligible files were searched");
+  } else {
+    expect(coverage.filesScanned).toBe(3);
+    expect(coverage.filesAfterPolicy).toBe(3);
+    expect(marker.claim).toContain("all eligible files were searched");
+    expect(marker.claim).toContain("additional matching results were omitted");
+  }
+}
+
 const TRAVERSAL_SYMBOLS = [
   "TraversalAlpha",
   "TraversalBeta",
@@ -3079,6 +3109,38 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it.each([false, true])(
+    "distinguishes retained-match limits from unread files (ioError=%s)",
+    async (ioError) => {
+      mkdirSync(join(ROOT, "coverage-matches"));
+      for (const name of ["a.ts", "b.ts", "c.ts"]) {
+        writeFileSync(
+          join(ROOT, "coverage-matches", name),
+          "export const CoverageOnlyMatchesProbe = 17;\n",
+        );
+      }
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "directory",
+            relativePaths: ["coverage-matches"],
+            explicitConnection: true,
+          }),
+          query: happyQuery({ text: "Find CoverageOnlyMatchesProbe", maxResults: 1 }),
+        }),
+        {
+          correlationId: undefined,
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+          fs: coverageLimitedReadFs(ioError),
+        },
+      );
+      expectRetainedMatchCoverage(out.pack, ioError);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    },
+  );
+
   it("excludes files above the per-file limit instead of citing a scanned prefix", async () => {
     writeFileSync(join(ROOT, "src/oversized.ts"), `oversizedNeedle\n${"x".repeat(2_200_000)}`);
     const counted = countingNodeFs();
@@ -3632,8 +3694,11 @@ describe("runGroundedExploration", () => {
     expect(multi.operations.unboundedReadDir - single.operations.unboundedReadDir).toBe(0);
   });
 
-  it("surfaces symbol line-read overflow after prioritized definition lookup", async () => {
-    seedOverflowImplementations(ROOT, 65);
+  it("inspects definition lines for all 96 retained symbol candidates without a second count cap", async () => {
+    seedOverflowImplementations(ROOT, 96);
+    const read = nodeWorkspaceFs.readFileUtf8SameDescriptor;
+    if (read === undefined) throw new Error("bounded descriptor fixture missing");
+    let definitionReads = 0;
 
     const out = await retrieveConnectedContextPack(
       input({
@@ -3649,15 +3714,33 @@ describe("runGroundedExploration", () => {
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
+        fs: {
+          ...nodeWorkspaceFs,
+          readFileUtf8SameDescriptor: (
+            ...args
+          ): ReturnType<NonNullable<WorkspaceFs["readFileUtf8SameDescriptor"]>> => {
+            // Shared FS primitives also perform eligibility/excerpt reads; count this production
+            // stage alone rather than imposing an incorrect total-I/O expectation.
+            if (new Error().stack?.includes("boundedSymbolFileText") === true) definitionReads += 1;
+            return read(...args);
+          },
+        },
       },
     );
 
-    const marker = out.pack.uncertainty.find(
-      (entry) =>
-        entry.kind === "scope-incomplete" && entry.claim.includes("Symbol line lookup skipped"),
+    const definitions = out.pack.files.filter((file) =>
+      file.scopePath.endsWith("/OverflowProbe.ts"),
     );
-    expect(marker?.claim).toContain("prioritized line reads");
-    expect(out.pack.files.some((file) => file.scopePath.endsWith("/OverflowProbe.ts"))).toBe(true);
+    expect(definitions).toHaveLength(96);
+    expect(definitionReads).toBe(96);
+    expect(
+      definitions.filter((file) =>
+        file.excerpts.some((excerpt) => excerpt.content.includes("export function OverflowProbe")),
+      ),
+    ).toHaveLength(96);
+    expect(
+      out.pack.uncertainty.some((entry) => entry.claim.includes("Symbol line lookup skipped")),
+    ).toBe(false);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   }, 15_000);
 
