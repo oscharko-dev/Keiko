@@ -236,6 +236,11 @@ The governed model prompt describes the actual search result: bounded hits and
 more selective query or `includeGlobs`, reads the matched line window before editing, and cannot
 infer absence from an empty result whose coverage is incomplete. Literal mode matches an exact
 phrase; lexical mode searches concepts; symbol and safe-regex modes retain their explicit semantics.
+Unreadable eligible files disclose `io-error`, including when other files produce valid hits.
+Whole-scan binary, oversized, and unreadable counts are independent of the bounded omitted-path
+sample. The existing handler settlement records the policy mode, applied low-value rescue,
+coverage reasons and exclusion counts without queries or paths. Cancellation retains available
+scan observations and labels unavailable progress explicitly rather than implying zero work.
 `keiko_workspace_discover` stays path-only. Optional semantic reranking follows #3416/#2554 below;
 its availability never gates recursive lexical search. The same prompt distinguishes existing-file
 reads from new-file creation: existing edits bind the latest whole-file read digest; creation uses

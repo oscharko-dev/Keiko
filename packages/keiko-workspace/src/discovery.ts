@@ -77,6 +77,7 @@ interface Walk {
   ignored: number;
   depthPruned: number;
   maxFilesPruned: number;
+  ioErrors?: number;
 }
 
 function unavailableWalkRoot(error: unknown, failOnReadError: boolean): undefined {
@@ -270,6 +271,7 @@ function currentEntryStat(
     if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
       throw error;
     }
+    if (skipDisappearedStreamingEntry(walk, error)) return undefined;
     if (walk.failOnReadError) {
       throw new WorkspaceReadError(
         `cannot stat discovered path: ${relativePath} (${describe(error)})`,
@@ -278,6 +280,18 @@ function currentEntryStat(
     }
     return undefined;
   }
+}
+
+function skipDisappearedStreamingEntry(walk: Walk, error: unknown): boolean {
+  if (
+    walk.retainMembership !== false ||
+    !(error instanceof Error) ||
+    !("code" in error) ||
+    error.code !== "ENOENT"
+  )
+    return false;
+  walk.ioErrors = (walk.ioErrors ?? 0) + 1;
+  return true;
 }
 
 function recordSkippedSymbolicLink(walk: Walk, relPath: string): void {
@@ -302,6 +316,7 @@ function rejectContainedEntry(walk: Walk, relativePath: string, error: unknown):
   if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
     throw error;
   }
+  if (skipDisappearedStreamingEntry(walk, error)) return undefined;
   if (walk.failOnReadError) {
     if (error instanceof PathEscapeError) throw error;
     throw new WorkspaceReadError(
@@ -614,6 +629,7 @@ export interface StreamingDiscoveryStats {
   readonly filesDiscovered: number;
   readonly ignored: number;
   readonly denied: number;
+  readonly ioErrors: number;
 }
 
 interface StreamingWalk {
@@ -671,6 +687,13 @@ async function visitStreamingDirectory(
     }
     currentContainedDirectory(state.walk, current, relativeDir);
   } catch (error) {
+    if (
+      error instanceof WorkspaceDescriptorReadError &&
+      error.reason === "directory-membership-changed"
+    ) {
+      state.walk.ioErrors = (state.walk.ioErrors ?? 0) + 1;
+      return;
+    }
     throw directoryReadFailure(relativeDir, error);
   }
 }
@@ -735,12 +758,18 @@ export async function visitWorkspaceFiles(
         continue;
       await visitSelectedStreamingPath(state, path);
     }
-    return { filesDiscovered: state.filesDiscovered, ignored: walk.ignored, denied: walk.denied };
+    return {
+      filesDiscovered: state.filesDiscovered,
+      ignored: walk.ignored,
+      denied: walk.denied,
+      ioErrors: walk.ioErrors ?? 0,
+    };
   } finally {
     onStats?.({
       filesDiscovered: state.filesDiscovered,
       ignored: walk.ignored,
       denied: walk.denied,
+      ioErrors: walk.ioErrors ?? 0,
     });
   }
 }

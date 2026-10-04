@@ -46,7 +46,13 @@ export interface WorkspaceStat {
 }
 
 export type WorkspaceDescriptorReadFailureReason =
-  "changed" | "hard-link" | "not-regular" | "outside-root" | "symbolic-link" | "too-large";
+  | "changed"
+  | "directory-membership-changed"
+  | "hard-link"
+  | "not-regular"
+  | "outside-root"
+  | "symbolic-link"
+  | "too-large";
 
 export class WorkspaceDescriptorReadError extends Error {
   public constructor(
@@ -801,6 +807,18 @@ function assertDirectorySnapshot(reference: BigIntStats, candidate: BigIntStats)
   }
 }
 
+function assertStreamingDirectoryIdentity(reference: BigIntStats, candidate: BigIntStats): void {
+  if (
+    !candidate.isDirectory() ||
+    !sameKnownDeviceId(reference.dev, candidate.dev) ||
+    reference.ino !== candidate.ino ||
+    (reference.birthtimeNs > 0n &&
+      candidate.birthtimeNs > 0n &&
+      reference.birthtimeNs !== candidate.birthtimeNs)
+  )
+    throw new WorkspaceDescriptorReadError("changed");
+}
+
 function collectDirectoryEntries(
   absolutePath: string,
   cap: number | undefined,
@@ -864,9 +882,12 @@ async function* iterateDirectoryEntries(absolutePath: string): AsyncIterable<Wor
   if (!before.isDirectory()) throw new WorkspaceDescriptorReadError("not-regular");
   const directory = await opendir(absolutePath, { bufferSize: 32 });
   let entries = 0;
+  let membershipChanged = false;
   for await (const entry of directory) {
     if (entries % 32 === 0) {
-      assertDirectorySnapshot(before, await lstat(absolutePath, { bigint: true }));
+      const current = await lstat(absolutePath, { bigint: true });
+      assertStreamingDirectoryIdentity(before, current);
+      membershipChanged ||= !sameDescriptorSnapshot(before, current);
     }
     entries += 1;
     yield {
@@ -876,7 +897,10 @@ async function* iterateDirectoryEntries(absolutePath: string): AsyncIterable<Wor
       isSymbolicLink: entry.isSymbolicLink(),
     };
   }
-  assertDirectorySnapshot(before, await lstat(absolutePath, { bigint: true }));
+  const after = await lstat(absolutePath, { bigint: true });
+  assertStreamingDirectoryIdentity(before, after);
+  if (membershipChanged || !sameDescriptorSnapshot(before, after))
+    throw new WorkspaceDescriptorReadError("directory-membership-changed");
 }
 
 export const nodeWorkspaceFs: WorkspaceFs = {

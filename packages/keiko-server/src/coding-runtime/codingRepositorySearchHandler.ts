@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   captureCodingRepositoryRequest,
   type CodingRepositoryResult,
+  type CodingRepositorySearchObservation,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import {
   activityLogEvent,
@@ -73,6 +74,48 @@ const CODING_REPOSITORY_HANDLER_SETTLED_OPERATION = defineActivityLogOperation({
     resultCount: { type: "integer", dataClass: "count", required: false },
     outputBytes: { type: "integer", dataClass: "count", required: false },
     truncationCount: { type: "integer", dataClass: "count", required: false },
+    truncationReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 7,
+      values: [
+        "result-limit",
+        "file-limit",
+        "inventory-limit",
+        "output-limit",
+        "depth-limit",
+        "io-error",
+        "file-too-large",
+      ],
+    },
+    progressStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["available", "unavailable", "not-applicable"],
+    },
+    policyMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["workspace-root-default", "explicit-scope"],
+    },
+    lowValuePolicyApplied: { type: "boolean", dataClass: "closed-enum", required: false },
+    lowValueRescueApplied: { type: "boolean", dataClass: "closed-enum", required: false },
+    coverageIncomplete: { type: "boolean", dataClass: "closed-enum", required: false },
+    coverageReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 6,
+      values: ["aborted", "file-cap", "match-cap", "timeout", "depth-pruned", "io-error"],
+    },
+    ignoredEntries: { type: "integer", dataClass: "count", required: false },
+    deniedEntries: { type: "integer", dataClass: "count", required: false },
+    binaryFilesSkipped: { type: "integer", dataClass: "count", required: false },
+    oversizedFilesSkipped: { type: "integer", dataClass: "count", required: false },
+    unreadableFilesSkipped: { type: "integer", dataClass: "count", required: false },
     resultPathSha256: {
       type: "string-array",
       dataClass: "digest",
@@ -147,6 +190,7 @@ function terminalEvent(
   correlationId: string,
   durationMs: number,
   error?: unknown,
+  observation?: CodingRepositorySearchObservation,
 ): ServerLogEvent {
   return activityLogEvent(
     CODING_REPOSITORY_HANDLER_SETTLED_OPERATION,
@@ -158,12 +202,16 @@ function terminalEvent(
     {
       state: result.ok ? "completed" : "failed",
       reason: result.ok ? "none" : result.reason,
+      progressStatus: observationStatus(result, observation),
+      ...observation?.metrics,
+      ...observation?.diagnostics,
       ...(result.ok
         ? {
             ...result.metrics,
             resultCount: result.kind === "search" ? result.hits.length : 1,
             outputBytes: Buffer.byteLength(JSON.stringify(result)),
             truncationCount: result.truncationReasons.length,
+            truncationReasons: result.truncationReasons,
             ...(result.kind === "search"
               ? {
                   resultPathSha256: result.hits.map((hit) =>
@@ -180,6 +228,14 @@ function terminalEvent(
   );
 }
 
+function observationStatus(
+  result: CodingRepositoryResult,
+  observation: CodingRepositorySearchObservation | undefined,
+): "available" | "unavailable" | "not-applicable" {
+  if (observation !== undefined) return "available";
+  return result.ok && result.kind === "read" ? "not-applicable" : "unavailable";
+}
+
 async function invoke(
   options: CodingRepositorySearchHandlerOptions,
   request: unknown,
@@ -193,6 +249,7 @@ async function invoke(
   );
   let result: CodingRepositoryResult;
   let failure: unknown;
+  let observation: CodingRepositorySearchObservation | undefined;
   try {
     const captured = captureCodingRepositoryRequest(request);
     if (captured === undefined) throw new CodingRepositorySearchError("invalid-request");
@@ -203,6 +260,10 @@ async function invoke(
         options.signal === undefined
           ? context.signal
           : AbortSignal.any([options.signal, context.signal]),
+      onSearchObservation: (observed): void => {
+        observation = observed;
+        options.onSearchObservation?.(observed);
+      },
     });
     if (!result.ok) throw new CodingRepositorySearchError(result.reason);
     if (!options.isCurrent()) throw new CodingRepositorySearchError("authority-stale");
@@ -214,7 +275,7 @@ async function invoke(
     };
   }
   options.log.write(
-    terminalEvent(result, correlationId, Math.max(0, nowMs() - startedAtMs), failure),
+    terminalEvent(result, correlationId, Math.max(0, nowMs() - startedAtMs), failure, observation),
   );
   return result;
 }

@@ -80,6 +80,7 @@ import {
 import {
   lowValueRescuePolicy,
   policyOmissionReason,
+  querySupportsLowValueRescue,
   resolveWorkspaceSearchPolicy,
   routeQueryTermsForSearch,
   withSemanticRankingDiagnostics,
@@ -1914,14 +1915,7 @@ function shouldConsiderLowValueRescue(
   if (primary.state.filesScanned >= (runner.limits.maxFilesScanned ?? Infinity)) {
     return false;
   }
-  if (runner.query.kind === "exact-symbol") {
-    return true;
-  }
-  return (
-    runner.query.kind === "natural-language" &&
-    runner.policy.intent !== "repository-overview" &&
-    runner.policy.intent !== "project-metadata"
-  );
+  return querySupportsLowValueRescue(runner.query, runner.policy);
 }
 
 function hasLowValueEvidenceSkipped(
@@ -1956,6 +1950,7 @@ function rescueRunner(runner: SearchTextRunner, maxFilesScanned: number): Search
     limits: { ...runner.limits, maxFilesScanned },
     policy: lowValueRescuePolicy(runner.policy),
     semantic: createSemanticSearchSession(runner.semantic?.provider, runner.query),
+    eligibleTextObserver: undefined,
   };
 }
 

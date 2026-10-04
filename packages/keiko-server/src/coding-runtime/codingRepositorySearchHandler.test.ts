@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { afterEach, describe, expect, it } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
@@ -84,6 +85,50 @@ const request = {
 };
 
 describe("production coding repository handler composition", () => {
+  it("records actual closed search policy and exclusions without a sampled path dependency", async () => {
+    const { root, handler, events } = fixture();
+    writeFileSync(join(root, "src", "ignored.png"), "binary image");
+    const result = await handler.invoke(request, context());
+    expect(result.ok).toBe(true);
+    expect(events[1]?.extra).toMatchObject({
+      progressStatus: "available",
+      policyMode: "workspace-root-default",
+      lowValuePolicyApplied: false,
+      lowValueRescueApplied: false,
+      coverageIncomplete: false,
+      coverageReasons: [],
+      binaryFilesSkipped: 1,
+      oversizedFilesSkipped: 0,
+      unreadableFilesSkipped: 0,
+    });
+  });
+
+  it("preserves actual partial scan counters when cancellation follows a safe file read", async () => {
+    const controller = new AbortController();
+    const read = nodeWorkspaceFs.readFileBytes;
+    if (read === undefined) throw new Error("fixture byte reader missing");
+    const { handler, events } = fixture(() => true, {
+      fs: {
+        ...nodeWorkspaceFs,
+        readFileBytes: async (...args): Promise<Uint8Array> => {
+          const bytes = await read(...args);
+          controller.abort();
+          return bytes;
+        },
+      },
+    });
+    expect(await handler.invoke(request, { ...context(), signal: controller.signal })).toEqual({
+      ok: false,
+      reason: "cancelled",
+    });
+    expect(events[1]?.extra).toMatchObject({
+      progressStatus: "available",
+      candidatesDiscovered: 1,
+      coverageIncomplete: true,
+      coverageReasons: ["aborted"],
+    });
+  });
+
   it("uses the real workspace producer and records a reconstructable body-free operation", async () => {
     const { root, handler, events } = fixture();
     expect(handler.readiness()).toBe("ready");

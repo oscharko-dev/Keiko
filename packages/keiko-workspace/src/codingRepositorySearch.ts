@@ -7,12 +7,18 @@ import {
   type CodingRepositoryRequest,
   type CodingRepositoryResult,
   type CodingRepositorySearchRequest,
+  type CodingRepositorySearchObservation,
   type CodingRepositoryTruncationReason,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { readWorkspaceFileBytesPrefixForInternalUse } from "./discovery.js";
 import { FileTooLargeError, WorkspaceReadError } from "./errors.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
-import { searchText, type SearchLimits, type SearchScope } from "./repoSearch.js";
+import {
+  searchText,
+  type SearchLimits,
+  type SearchScope,
+  type SearchResult,
+} from "./repoSearch.js";
 import { isImageScopePath } from "./repoSearchScan.js";
 import {
   assertStructuralExecutionActive,
@@ -36,6 +42,8 @@ export interface CodingRepositorySearchOptions {
   readonly signal?: AbortSignal | undefined;
   readonly nowMs?: (() => number) | undefined;
   readonly deadlineAtMs?: number | undefined;
+  readonly onSearchObservation?:
+    ((observation: CodingRepositorySearchObservation) => void) | undefined;
 }
 
 export function codingRepositoryBackendReady(options: CodingRepositorySearchOptions = {}): boolean {
@@ -52,6 +60,7 @@ interface CodingRepositoryContext {
   readonly fs: WorkspaceFs;
   readonly control: StructuralExecutionControl;
   readonly startedAtMs: number;
+  readonly onSearchObservation: CodingRepositorySearchOptions["onSearchObservation"];
 }
 
 const LIMITS: SearchLimits = {
@@ -77,6 +86,7 @@ function createContext(
     fs: executionControlledWorkspaceFs(options.fs ?? nodeWorkspaceFs, control),
     control,
     startedAtMs,
+    onSearchObservation: options.onSearchObservation,
   };
 }
 
@@ -148,27 +158,83 @@ async function searchHits(
     searchHints: { retrievalIntent: "targeted-code-search" },
     candidatePathGlobs: { include: request.includeGlobs, exclude: request.excludeGlobs },
   });
+  const observation = searchObservation(result, context);
+  context.onSearchObservation?.(observation);
   assertStructuralExecutionActive(context.control);
   const hits: CodingRepositoryHit[] = [];
   for (const atom of result.atoms) {
     hits.push(await projectSearchHit(context, query, atom, request.mode === "literal"));
   }
   const truncationReasons: CodingRepositoryTruncationReason[] = [];
-  if (result.candidates.some((file) => file.omitted === "size-exceeded"))
-    truncationReasons.push("file-too-large");
+  if (observation.diagnostics.oversizedFilesSkipped > 0) truncationReasons.push("file-too-large");
   if (result.coverage.reasons.includes("match-cap")) truncationReasons.push("result-limit");
+  if (result.coverage.reasons.includes("io-error")) truncationReasons.push("io-error");
   return boundCodingRepositoryResult({
     ok: true,
     kind: "search",
     hits,
     truncationReasons,
+    metrics: observation.metrics,
+    diagnostics: observation.diagnostics,
+  });
+}
+
+function searchObservation(
+  result: SearchResult,
+  context: CodingRepositoryContext,
+): CodingRepositorySearchObservation {
+  return {
     metrics: {
       candidatesDiscovered: result.coverage.filesDiscovered,
       filesScanned: result.filesScanned,
       skippedFiles: result.coverage.filesSkipped,
       durationMs: Math.max(0, context.control.nowMs() - context.startedAtMs),
     },
-  });
+    diagnostics: { ...searchPolicyObservation(result), ...searchExclusionObservation(result) },
+  };
+}
+
+function searchPolicyObservation(
+  result: SearchResult,
+): Pick<
+  CodingRepositorySearchObservation["diagnostics"],
+  | "policyMode"
+  | "lowValuePolicyApplied"
+  | "lowValueRescueApplied"
+  | "coverageIncomplete"
+  | "coverageReasons"
+> {
+  return {
+    policyMode: result.diagnostics?.policyMode ?? "workspace-root-default",
+    lowValuePolicyApplied: result.diagnostics?.lowValuePolicyApplied === true,
+    lowValueRescueApplied: result.diagnostics?.lowValueRescueFilesScanned !== undefined,
+    coverageIncomplete: result.coverage.incomplete,
+    coverageReasons: result.coverage.reasons,
+  };
+}
+
+function searchExclusionObservation(
+  result: SearchResult,
+): Pick<
+  CodingRepositorySearchObservation["diagnostics"],
+  | "ignoredEntries"
+  | "deniedEntries"
+  | "binaryFilesSkipped"
+  | "oversizedFilesSkipped"
+  | "unreadableFilesSkipped"
+> {
+  const exclusions = result.diagnostics?.fileExclusionCounts ?? {
+    binary: 0,
+    oversized: 0,
+    unreadable: 0,
+  };
+  return {
+    ignoredEntries: result.diagnostics?.ignoredByDiscovery ?? 0,
+    deniedEntries: result.diagnostics?.deniedByDiscovery ?? 0,
+    binaryFilesSkipped: exclusions.binary,
+    oversizedFilesSkipped: exclusions.oversized,
+    unreadableFilesSkipped: exclusions.unreadable,
+  };
 }
 
 async function readLines(

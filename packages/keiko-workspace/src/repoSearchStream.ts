@@ -6,6 +6,7 @@ import {
   orderCandidatesForSearch,
   candidateBucketForPath,
   policyOmissionReason,
+  querySupportsLowValueRescue,
   type SearchDiagnostics,
   type CandidateBucket,
   type RankedCandidateDiagnostic,
@@ -205,6 +206,7 @@ class StreamingSearchCollector {
     other: 0,
   };
   private readonly rankedCandidates: RankedCandidateDiagnostic[] = [];
+  private readonly fileExclusionCounts = { binary: 0, oversized: 0, unreadable: 0 };
 
   private readonly groups: GroupedListingAtoms | undefined;
 
@@ -282,7 +284,12 @@ class StreamingSearchCollector {
   }
 
   private retainOmissions(omitted: readonly CandidateFile[]): void {
-    for (const candidate of omitted) this.omissions.retain(candidate);
+    for (const candidate of omitted) {
+      this.omissions.retain(candidate);
+      if (candidate.omitted === "binary") this.fileExclusionCounts.binary += 1;
+      if (candidate.omitted === "size-exceeded") this.fileExclusionCounts.oversized += 1;
+      if (candidate.omitted === "tool-unavailable") this.fileExclusionCounts.unreadable += 1;
+    }
   }
 
   private retainMatches(file: DiscoveredFile, matches: FileMatches): void {
@@ -355,6 +362,8 @@ class StreamingSearchCollector {
       maxFilesPrunedByDiscovery: 0,
       candidateBuckets: this.bucketCounts,
       rankedCandidates: this.rankedCandidates,
+      fileExclusionCounts: { ...this.fileExclusionCounts },
+      lowValuePolicyApplied: this.runner.policy.omitLowValueWorkspaceFiles,
     };
   }
 
@@ -422,6 +431,10 @@ async function collectPrimaryStream(
       (stats): void => {
         ignored = stats.ignored;
         denied = stats.denied;
+        if (stats.ioErrors > 0) {
+          collector.state.truncated = true;
+          collector.state.truncationReasons?.add("io-error");
+        }
       },
     );
     await collector.settle();
@@ -443,7 +456,11 @@ async function collectRescueStream(
   filePatternGroups?: StreamedFilePatternGroups,
 ): Promise<StreamingSearchCollector> {
   const rescue = new StreamingSearchCollector(
-    { ...runner, policy: { ...runner.policy, omitLowValueWorkspaceFiles: false } },
+    {
+      ...runner,
+      policy: { ...runner.policy, omitLowValueWorkspaceFiles: false },
+      eligibleTextObserver: undefined,
+    },
     pathPattern,
     filePatternGroups,
   );
@@ -457,6 +474,12 @@ async function collectRescueStream(
       async (file): Promise<void> => {
         if (policyOmissionReason(file.relativePath, runner.policy) !== undefined)
           await rescue.enqueue(file);
+      },
+      (stats): void => {
+        if (stats.ioErrors > 0) {
+          rescue.state.truncated = true;
+          rescue.state.truncationReasons?.add("io-error");
+        }
       },
     );
     await rescue.settle();
@@ -495,7 +518,21 @@ function rescuedResult(
       ...primary.diagnostics,
       lowValueRescueFilesDiscovered: rescue.filesDiscovered,
       lowValueRescueFilesScanned: rescue.state.filesScanned,
+      fileExclusionCounts: combinedExclusionCounts(primary.diagnostics, rescue.diagnostics(0, 0)),
     },
+  };
+}
+
+function combinedExclusionCounts(
+  primary: SearchDiagnostics,
+  rescue: SearchDiagnostics,
+): NonNullable<SearchDiagnostics["fileExclusionCounts"]> {
+  const before = primary.fileExclusionCounts ?? { binary: 0, oversized: 0, unreadable: 0 };
+  const after = rescue.fileExclusionCounts ?? { binary: 0, oversized: 0, unreadable: 0 };
+  return {
+    binary: before.binary + after.binary,
+    oversized: before.oversized + after.oversized,
+    unreadable: before.unreadable + after.unreadable,
   };
 }
 
@@ -511,7 +548,10 @@ export async function collectStreamedSearchText(
   if (
     primary.atoms.length > 0 ||
     !runner.policy.omitLowValueWorkspaceFiles ||
-    primary.state.truncated
+    primary.state.truncated ||
+    !querySupportsLowValueRescue(runner.query, runner.policy, pathPattern !== undefined) ||
+    (primary.ignored === 0 &&
+      !primary.candidates.some((candidate) => candidate.omitted === "generated"))
   )
     return primary;
   return rescuedResult(

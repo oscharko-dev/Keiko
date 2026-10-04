@@ -9,6 +9,37 @@ import {
 } from "./redaction.js";
 
 describe("redact", () => {
+  it("redacts an unterminated private-key body rather than leaving its contents", () => {
+    const header = ["-----", "BEGIN PRIVATE KEY-----"].join("");
+    const payload = "UnfinishedPrivateBody";
+    expect(redact(`${header}\n${payload}`)).toBe("[REDACTED]");
+  });
+
+  it("preserves arbitrarily long valid schemes while removing their credentials", () => {
+    const scheme = `${"safe-".repeat(500)}transport`;
+    expect(redact(`${scheme}://user:private-pass@host/path`)).toBe(
+      `${scheme}://[REDACTED]@host/path`,
+    );
+    const prose = `${"safe-".repeat(500)}transport without authority`;
+    expect(redact(prose)).toBe(prose);
+  });
+
+  it("handles long non-URL scheme-shaped text without quadratic backtracking", () => {
+    const input = "abcd-".repeat(13_108);
+    const started = performance.now();
+    expect(redact(input)).toBe(input);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it("keeps the full two-MiB text boundary responsive for malformed headers and non-URLs", () => {
+    const header = ["-----", "BEGIN PRIVATE KEY-----\n"].join("");
+    const started = performance.now();
+    expect(redact(header.repeat(Math.floor((2 * 1024 * 1024) / header.length)))).toBe("[REDACTED]");
+    const nonUrl = "abcd-".repeat(Math.floor((2 * 1024 * 1024) / 5));
+    expect(redact(nonUrl)).toBe(nonUrl);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
   it("redacts a bearer token while keeping the scheme", () => {
     const token = ["sk-", "abc123DEF456ghi789jkl012mno345"].join("");
     const result = redact(`Authorization: Bearer ${token}`);

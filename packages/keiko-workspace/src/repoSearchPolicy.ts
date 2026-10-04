@@ -100,6 +100,14 @@ export interface SearchDiagnostics {
   readonly candidateBuckets: Readonly<Record<CandidateBucket, number>>;
   // Top-ranked candidates with their ranking-signal breakdown, bounded for audit readability.
   readonly rankedCandidates: readonly RankedCandidateDiagnostic[];
+  readonly fileExclusionCounts?:
+    | {
+        readonly binary: number;
+        readonly oversized: number;
+        readonly unreadable: number;
+      }
+    | undefined;
+  readonly lowValuePolicyApplied?: boolean | undefined;
 }
 
 // Upper bound on how many ranked candidates carry an explainability breakdown in diagnostics. The
@@ -1026,6 +1034,20 @@ export function lowValueRescuePolicy(policy: SearchPolicy): SearchPolicy {
     ...policy,
     omitLowValueWorkspaceFiles: false,
   };
+}
+
+export function querySupportsLowValueRescue(
+  query: RetrievalQuery,
+  policy: SearchPolicy,
+  fileListing = false,
+): boolean {
+  if (fileListing) return query.kind === "file-pattern";
+  if (query.kind === "exact-symbol") return true;
+  return (
+    query.kind === "natural-language" &&
+    policy.intent !== "repository-overview" &&
+    policy.intent !== "project-metadata"
+  );
 }
 
 export function policyOmissionReason(

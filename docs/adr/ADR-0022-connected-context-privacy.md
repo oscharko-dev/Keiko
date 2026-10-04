@@ -182,6 +182,12 @@ bounds. An unlimited default lookup uses the live traversal rather than treating
 index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
 Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
+Streaming directory enumeration distinguishes membership changes from directory identity changes.
+Concurrent additions or disappeared entries retain safely observed evidence and sibling traversal,
+with `io-error` incomplete coverage; they never certify a stable snapshot. Replaced inode/device
+identity, unsafe aliases, and root containment changes still fail closed. Secret redaction uses
+one private-key boundary scan and scheme-start guards, including conservative redaction of an
+unterminated private-key body, so eligible large text does not trigger repeated suffix scans.
 Auxiliary symbol and document filename discovery follows the same complete streaming traversal
 policy. Each requested filename pattern retains a bounded independent result bucket within one
 shared traversal per batch. Actual source-line inspection and final candidate ordering preserve
@@ -248,6 +254,9 @@ An eligible file that becomes unreadable or disappears during inspection remains
 `io-error` makes coverage incomplete even when other files produce valid matches. The existing
 scope-incomplete marker and body-free coverage/skipped counters carry this failure; unreadability
 must never prove that an exact target is absent. Intentional eligibility exclusions remain distinct.
+Generated-source rescue runs only for supported targeted queries after a complete no-hit scan
+actually observed low-value exclusions. It does not repeat a Git traversal for an overview,
+project-metadata request, regex, or a scope with no skipped low-value evidence.
 Validated, policy-allowed, redacted relative paths and `size-exceeded` reasons are projected into
 the existing model prompt within its input budget. This metadata proves eligibility exclusions
 only: it contains no unread body and cannot establish file-content citations or line references.
