@@ -1,3 +1,4 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +19,6 @@ import { gunzipSync } from "node:zlib";
 import { handleDownloadSupportReport } from "./support-report-download.js";
 import * as reportDownload from "./support-report-download.js";
 vi.mock("./support-report-download.js", { spy: true });
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
@@ -677,6 +677,17 @@ describe("desktop support report transport", () => {
     const failed = sink.events.find((event) => event.op === "support.report.ui.failed");
     expect(failed?.level).toBe("warn");
     expect(failed?.errorKind).not.toBe("internal");
+  });
+
+  it.each([
+    ["selection-unavailable", "SUPPORT_REPORT_SELECTION_UNAVAILABLE"],
+    ["unavailable", "SUPPORT_REPORT_UNAVAILABLE"],
+  ] as const)("preserves the closed %s preparation cause in the response", async (reason, code) => {
+    vi.mocked(runSupportReportJob).mockRejectedValueOnce(new SupportReportJobError(reason));
+    expect(await handleCreateSupportReport(context("{}"), deps())).toMatchObject({
+      status: 503,
+      body: { error: { code, correlationId: "report-route-test" } },
+    });
   });
 
   it("bounds repeated downloads without queueing scans", async () => {

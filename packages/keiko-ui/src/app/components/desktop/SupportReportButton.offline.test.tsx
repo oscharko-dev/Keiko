@@ -103,6 +103,7 @@ it.each([new TypeError("private network failure"), new ApiError("INTERNAL", "pri
     expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {
       correlationId: "original-offline-error",
       failure: undefined,
+      availabilityReason: "service-unavailable",
     });
   },
 );
@@ -155,6 +156,7 @@ it("passes the original error correlation and safe class to the offline producer
   await screen.findByRole("link", { name: "Download report" });
   expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {
     correlationId: error.correlationId,
+    availabilityReason: "service-unavailable",
     failure: {
       errorKind: "authority-denied",
       errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
@@ -177,6 +179,7 @@ it("preserves the normal Chat string Support-ID and its known BAD_REQUEST classi
   await screen.findByRole("link", { name: "Download report" });
   expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {
     correlationId: "original-chat-request-123",
+    availabilityReason: "service-unavailable",
     failure: {
       errorKind: "invalid-request",
       errorEvidence: { errorClass: "string", frames: [], causeChain: [] },
@@ -318,15 +321,15 @@ it("diagnoses a local artifact TypeError instead of inventing a service outage",
 
 it("diagnoses a malformed successful server response as an internal contract failure", async () => {
   const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
-  vi.mocked(createSupportReport).mockRejectedValueOnce(
-    new SupportReportResponseInvalid("Invalid report response"),
-  );
+  const invalid = new SupportReportResponseInvalid("Invalid report response");
+  invalid.correlationId = "malformed-report-request";
+  vi.mocked(createSupportReport).mockRejectedValueOnce(invalid);
   render(<SupportReportButton correlationId="original-invalid-response" />);
   await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
   expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
   expect(prepareLocalSupportReport).not.toHaveBeenCalled();
   expect(diagnostic).toHaveBeenCalledWith(expect.any(String), {
-    correlationId: undefined,
+    correlationId: "malformed-report-request",
     parentCorrelationId: "original-invalid-response",
     errorKind: "internal",
   });
@@ -340,6 +343,21 @@ it("passes diagnostic-delivery unavailability to local preparation without claim
   await screen.findByRole("link", { name: "Download report" });
   expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {
     correlationId: "original-delivery-unavailable",
+    failure: undefined,
+    availabilityReason: "diagnostic-delivery-unavailable",
+  });
+});
+
+it("retains a refused server evidence selection in the local report availability reason", async () => {
+  const error = new ApiError("SUPPORT_REPORT_SELECTION_UNAVAILABLE", "Report unavailable.", 503);
+  error.correlationId = "selection-report-request";
+  vi.mocked(createSupportReport).mockRejectedValueOnce(error);
+  vi.mocked(prepareLocalSupportReport).mockResolvedValueOnce(local);
+  render(<SupportReportButton correlationId="original-selection-unavailable" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {
+    correlationId: "original-selection-unavailable",
     failure: undefined,
     availabilityReason: "diagnostic-delivery-unavailable",
   });

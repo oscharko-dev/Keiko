@@ -195,6 +195,12 @@ function reportPreparationFailure(ctx: RouteContext, error: unknown): RouteResul
   );
   return {
     status: failure.reason === "busy" ? 429 : 503,
-    body: errorBody("SUPPORT_REPORT_UNAVAILABLE", "Report unavailable.", ctx.correlationId),
+    body: errorBody(
+      failure.reason === "selection-unavailable"
+        ? "SUPPORT_REPORT_SELECTION_UNAVAILABLE"
+        : "SUPPORT_REPORT_UNAVAILABLE",
+      "Report unavailable.",
+      ctx.correlationId,
+    ),
   };
 }

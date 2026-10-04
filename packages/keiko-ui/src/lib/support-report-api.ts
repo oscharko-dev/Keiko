@@ -1,4 +1,5 @@
 import type {
+  ClientOnlySupportReportInput,
   DesktopSupportReportRequest,
   DesktopSupportReportResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -11,6 +12,7 @@ import {
   MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES,
   MAX_SUPPORT_REPORT_BYTES,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 import {
   ensureClientDiagnosticDelivery,
@@ -28,7 +30,20 @@ export class SupportReportEvidenceUnavailable extends Error {
   }
 }
 
-export class SupportReportResponseInvalid extends TypeError {}
+export class SupportReportResponseInvalid extends ApiError {
+  constructor(message: string) {
+    super("CONTRACT_VALIDATION_FAILED", message, 502);
+  }
+}
+
+export function supportReportAvailabilityReason(
+  error: unknown,
+): ClientOnlySupportReportInput["availabilityReason"] {
+  return error instanceof SupportReportEvidenceUnavailable ||
+    (error instanceof ApiError && error.code === "SUPPORT_REPORT_SELECTION_UNAVAILABLE")
+    ? "diagnostic-delivery-unavailable"
+    : "service-unavailable";
+}
 
 async function ensureReportEvidence(
   correlationId: string,

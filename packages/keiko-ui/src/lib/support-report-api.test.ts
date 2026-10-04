@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSupportReport, createSupportReportDownload } from "./support-report-api";
+import {
+  createSupportReport,
+  createSupportReportDownload,
+  SupportReportResponseInvalid,
+  SupportReportEvidenceUnavailable,
+  supportReportAvailabilityReason,
+} from "./support-report-api";
 import { bffFetchJson } from "./http";
+import { ApiError } from "./api";
 import { canonicalSupportReportFixture } from "../test-utils/support-report-fixture";
 import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
@@ -183,14 +190,14 @@ describe("support report browser download", () => {
 
   it("rejects a response with an unsafe filename or missing report", async () => {
     response.value = { fileName: "../../private.json", reportJson: "{}" };
-    await expect(createSupportReport()).rejects.toThrow(TypeError);
+    await expect(createSupportReport()).rejects.toBeInstanceOf(SupportReportResponseInvalid);
     response.value = { fileName };
-    await expect(createSupportReport()).rejects.toThrow(TypeError);
+    await expect(createSupportReport()).rejects.toBeInstanceOf(SupportReportResponseInvalid);
   });
 
   it("bounds a report response by UTF-8 bytes before creating any download", async () => {
     response.value = { fileName, reportJson: "é".repeat(MAX_SUPPORT_REPORT_BYTES / 2 + 1) };
-    await expect(createSupportReport()).rejects.toThrow(TypeError);
+    await expect(createSupportReport()).rejects.toBeInstanceOf(SupportReportResponseInvalid);
   });
 
   it("propagates cancellation through the bounded report request", async () => {
@@ -231,7 +238,7 @@ describe("support report browser download", () => {
       downloadPath,
       downloadExpiresAtMs: Date.now() + 60_000,
     };
-    await expect(createSupportReport()).rejects.toThrow(TypeError);
+    await expect(createSupportReport()).rejects.toBeInstanceOf(SupportReportResponseInvalid);
   });
 
   it("keeps a real download target stable until the cache explicitly releases it", () => {
@@ -273,4 +280,54 @@ it.each([
     ...(observedExpiry === undefined ? {} : { downloadExpiresAtMs: observedExpiry }),
   };
   await expect(createSupportReport()).rejects.toThrow("Invalid support report download target");
+});
+
+it("preserves the actual malformed-response request correlation using the shared HTTP validation convention", async () => {
+  const realHttp = await vi.importActual<typeof import("./http")>("./http");
+  vi.mocked(bffFetchJson).mockImplementationOnce(realHttp.bffFetchJson);
+  const canonical = await canonicalSupportReportFixture();
+  const fetchSpy = vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        ...canonical,
+        evidenceScope: "unsupported",
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Keiko-Correlation-Id": "report-request-malformed-body",
+        },
+      },
+    ),
+  );
+  vi.stubGlobal("fetch", fetchSpy);
+  try {
+    await expect(createSupportReport()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+      correlationId: "report-request-malformed-body",
+    });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+describe("closed support report availability causes", () => {
+  it.each([
+    [new SupportReportEvidenceUnavailable(), "diagnostic-delivery-unavailable"],
+    [
+      new ApiError("SUPPORT_REPORT_SELECTION_UNAVAILABLE", "Unavailable", 503),
+      "diagnostic-delivery-unavailable",
+    ],
+    [
+      new ApiError("SUPPORT_REPORT_UNAVAILABLE", "selection-unavailable", 503),
+      "service-unavailable",
+    ],
+    [new TypeError("SUPPORT_REPORT_SELECTION_UNAVAILABLE"), "service-unavailable"],
+    [{ code: "SUPPORT_REPORT_SELECTION_UNAVAILABLE" }, "service-unavailable"],
+  ] as const)("maps only validated closed causes ($1)", (error, reason) => {
+    expect(supportReportAvailabilityReason(error)).toBe(reason);
+  });
 });

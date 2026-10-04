@@ -1,9 +1,9 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { gunzipSync } from "node:zlib";
 import * as zlib from "node:zlib";
 vi.mock("node:zlib", { spy: true });
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createClientOnlySupportReport,
   parseSupportReport,

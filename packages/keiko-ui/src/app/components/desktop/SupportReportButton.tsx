@@ -250,8 +250,8 @@ function localPreparationContext(
   Partial<Pick<ClientOnlySupportReportInput, "availabilityReason">> {
   return {
     ...context,
-    ...(api !== undefined && error instanceof api.SupportReportEvidenceUnavailable
-      ? { availabilityReason: "diagnostic-delivery-unavailable" as const }
+    ...(api !== undefined
+      ? { availabilityReason: api.supportReportAvailabilityReason(error) }
       : {}),
   };
 }
