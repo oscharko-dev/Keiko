@@ -350,9 +350,7 @@ describe("MultiRootEditorHost", () => {
         false,
       );
       await userEvent.click(screen.getByRole("button", { name: "Change layout" }));
-      const patch = updateCfg.mock.calls.find(
-        ([value]) => value["file"] === "src/changed.ts",
-      )?.[0];
+      const patch = updateCfg.mock.calls.find(([value]) => value["file"] === "src/changed.ts")?.[0];
       if (file === "src/original.ts") {
         expect(patch).toMatchObject({
           revealLineStart: undefined,
