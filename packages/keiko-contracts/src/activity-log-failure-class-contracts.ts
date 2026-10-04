@@ -909,6 +909,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-citation-activation",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["client.citation.activated"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.citation.activated"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.citation.activated"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["client.citation.activated"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-select",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

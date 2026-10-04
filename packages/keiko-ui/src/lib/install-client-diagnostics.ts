@@ -285,6 +285,7 @@ function clientMessagePostBody(
     knowledgeCatalog: meta.knowledgeCatalog,
     answerCopy: meta.answerCopy,
     answerSpeech: meta.answerSpeech,
+    citationActivation: meta.citationActivation,
     supportReportDelivery: meta.supportReportDelivery,
     supportReportPreparation: meta.supportReportPreparation,
     filesScopeDecision: meta.filesScopeDecision,
@@ -372,7 +373,8 @@ function routineSupportReportEvidence(meta: ClientDiagnosticMeta): boolean {
   return (
     meta.supportReportDelivery !== undefined ||
     meta.supportReportPreparation !== undefined ||
-    meta.filesScopeDecision !== undefined
+    meta.filesScopeDecision !== undefined ||
+    meta.citationActivation !== undefined
   );
 }
 

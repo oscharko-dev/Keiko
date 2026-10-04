@@ -13,6 +13,9 @@ import {
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { FileIcon } from "./widgets/shared/projectTree";
 import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import type { ClientDiagnosticCitationActivation } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { ChatConnectedScope } from "@/lib/types";
@@ -631,6 +634,7 @@ interface RepositoryReferenceInlineProps {
   readonly sourceLabel?: string | undefined;
   readonly requireRootChoice?: boolean | undefined;
   readonly rootRelative?: boolean | undefined;
+  readonly citationActivation?: Omit<ClientDiagnosticCitationActivation, "outcome"> | undefined;
 }
 
 function sourceChoiceLabel(
@@ -692,10 +696,23 @@ export function RepositoryReferenceInline({
   sourceLabel,
   requireRootChoice = false,
   rootRelative,
+  citationActivation,
 }: RepositoryReferenceInlineProps): ReactNode {
   const t = useTranslate();
   const pickerId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const activationCorrelation = useRef<string | undefined>(undefined);
+  const recordActivation = useCallback(
+    (outcome: ClientDiagnosticCitationActivation["outcome"]): void => {
+      if (citationActivation === undefined) return;
+      activationCorrelation.current ??= newClientCorrelationId();
+      reportClientDiagnostic("[keiko] citation activation settled", {
+        correlationId: activationCorrelation.current,
+        citationActivation: { ...citationActivation, outcome },
+      });
+    },
+    [citationActivation],
+  );
   const [status, setStatus] = useState<"idle" | "choosing" | "opening" | "opened" | "failed">(
     "idle",
   );
@@ -746,26 +763,31 @@ export function RepositoryReferenceInline({
         ...(reference.lineEnd === undefined ? {} : { lineEnd: reference.lineEnd }),
       });
       if (result.ok) {
+        recordActivation("opened");
         setStatus("opened");
         setMessage(t("chat.repository.opened", { path: repositoryReferenceDisplayPath(path) }));
         scheduleIdleReset(OPENED_CONFIRMATION_MS);
         return;
       }
+      recordActivation("open-refused");
       setStatus("failed");
       setMessage(result.message);
     },
-    [openReference, reference, scheduleIdleReset, t],
+    [openReference, recordActivation, reference, scheduleIdleReset, t],
   );
 
   const activate = useCallback((): void => {
+    if (status !== "choosing") activationCorrelation.current = undefined;
     if (openReference === undefined || rootOptions.length === 0) {
       setStatus("failed");
       setMessage(t("chat.repository.connectFirst"));
+      recordActivation("refused");
       return;
     }
     if (rankedRootOptions.length === 0) {
       setStatus("failed");
       setMessage(t("chat.repository.sourceMismatch"));
+      recordActivation("refused");
       return;
     }
     if (bestRootOptions.length === 1 && !requireRootChoice) {
@@ -773,6 +795,7 @@ export function RepositoryReferenceInline({
       if (root !== undefined) openForRoot(root);
       return;
     }
+    recordActivation(status === "choosing" ? "picker-dismissed" : "picker-opened");
     setStatus((current) => (current === "choosing" ? "idle" : "choosing"));
     setMessage(t("chat.repository.chooseSource"));
   }, [
@@ -780,6 +803,8 @@ export function RepositoryReferenceInline({
     openForRoot,
     openReference,
     rankedRootOptions.length,
+    recordActivation,
+    status,
     requireRootChoice,
     rootOptions.length,
     t,
@@ -788,6 +813,7 @@ export function RepositoryReferenceInline({
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>): void => {
       if (event.key === "Escape") {
+        if (status === "choosing") recordActivation("picker-dismissed");
         setStatus("idle");
         setMessage("");
         return;
@@ -797,17 +823,18 @@ export function RepositoryReferenceInline({
         activate();
       }
     },
-    [activate],
+    [activate, recordActivation, status],
   );
 
   const onPickerKeyDown = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>): void => {
       if (event.key !== "Escape") return;
       event.stopPropagation();
+      recordActivation("picker-dismissed");
       resetToIdle();
       triggerRef.current?.focus();
     },
-    [resetToIdle],
+    [recordActivation, resetToIdle],
   );
 
   if (openReference === undefined) {

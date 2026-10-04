@@ -29,6 +29,12 @@ import {
 } from "./repositoryReferences";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticWriter,
+} from "@/lib/client-diagnostics";
+
 describe("current repository scope navigation identities", () => {
   it("retains all selected scope identities on one root and resolves a legacy project root", () => {
     const scopes = ["src", "manuals"].map((path) => ({
@@ -477,5 +483,44 @@ describe("RepositoryReferenceInline opened-confirmation timer", () => {
 
     expect(screen.getByRole("button")).toHaveAttribute("data-state", "idle");
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("citation activation navigation evidence", () => {
+  afterEach(resetClientDiagnosticWriter);
+  it("records unavailable root refusal without opening or leaking target text", () => {
+    const writer = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(writer);
+    const opened = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <RepositoryReferenceInline
+        reference={{ path: "private/file.ts", label: "private/file.ts" }}
+        roots={[]}
+        openReference={opened}
+        citationActivation={{ reason: "absent", rootCount: 0, matchCount: 0 }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Open private\/file.ts/ }));
+    expect(opened).not.toHaveBeenCalled();
+    expect(writer).toHaveBeenCalledWith("[keiko] citation activation settled", {
+      correlationId: expect.any(String),
+      citationActivation: { reason: "absent", outcome: "refused", rootCount: 0, matchCount: 0 },
+    });
+    expect(JSON.stringify(writer.mock.calls)).not.toContain("private/file.ts");
+  });
+  it("does not invent citation attribution for ordinary inline file links", () => {
+    const writer = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(writer);
+    const opened = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+    render(
+      <RepositoryReferenceInline
+        reference={{ path: "src/file.ts", label: "src/file.ts" }}
+        roots={[{ root: "/repo", label: "Repo" }]}
+        openReference={opened}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Open src\/file.ts/ }));
+    expect(opened).toHaveBeenCalledWith({ root: "/repo", path: "src/file.ts" });
+    expect(writer).not.toHaveBeenCalled();
   });
 });

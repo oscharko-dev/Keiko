@@ -2829,3 +2829,37 @@ describe("reviewed navigation and render evidence", () => {
     },
   );
 });
+
+describe("citation activation ingestion", () => {
+  it.each(["opened", "open-refused", "picker-opened", "picker-dismissed", "refused"])(
+    "persists %s as routine citation evidence rather than a new failure incident",
+    async (outcome) => {
+      const sink = captureServerLog();
+      const activation = { reason: "absent", outcome, rootCount: 2, matchCount: 0 };
+      const body = JSON.stringify({
+        message: "[keiko] citation activation settled",
+        clientTs: CLIENT_TS,
+        correlationId: "ui_citation-activation-0001",
+        citationActivation: activation,
+      });
+      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+        status: 204,
+        body: null,
+      });
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+      const event = sink.events.find((candidate) => candidate.op === "client.citation.activated");
+      const record = expectActivityLogProof(
+        "client.citation.activated.line",
+        formatActivityLogProofLine(event ?? {}),
+      );
+      expect(record).toMatchObject({
+        ...activation,
+        correlationId: "ui_citation-activation-0001",
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(event?.level).toBe("info");
+      expect(JSON.stringify(event)).not.toContain("citation activation settled");
+    },
+  );
+});

@@ -468,6 +468,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly knowledgeCatalog?: ClientDiagnosticKnowledgeCatalog | undefined;
   readonly answerCopy?: ClientDiagnosticAnswerCopy | undefined;
   readonly answerSpeech?: ClientDiagnosticAnswerSpeech | undefined;
+  readonly citationActivation?: ClientDiagnosticCitationActivation | undefined;
   readonly supportReportDelivery?: ClientSupportReportDelivery | undefined;
   readonly supportReportPreparation?: ClientSupportReportPreparation | undefined;
   readonly filesScopeDecision?: ClientFilesScopeDecision | undefined;
@@ -678,6 +679,7 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
     isOptional(value.knowledgeCatalog, isClientDiagnosticKnowledgeCatalog) &&
     isOptional(value.answerCopy, isClientDiagnosticAnswerCopy) &&
     isOptional(value.answerSpeech, isClientDiagnosticAnswerSpeech) &&
+    hasValidCitationActivationContext(value) &&
     isOptional(value.supportReportDelivery, isClientSupportReportDelivery) &&
     hasValidSupportPreparationContext(value) &&
     hasValidFilesScopeDecisionContext(value)
@@ -1810,6 +1812,7 @@ const FILES_SCOPE_DECISION_EXCLUSIVE_KEYS = [
   "knowledgeCatalog",
   "answerCopy",
   "answerSpeech",
+  "citationActivation",
   "gitClientOperation",
   "composerActivity",
   "gitChangeDescription",
@@ -1841,5 +1844,64 @@ function hasValidFilesScopeDecisionContext(value: Record<string, unknown>): bool
     isClientFilesScopeDecision(value.filesScopeDecision) &&
     isActivityLogCorrelationId(value.correlationId) &&
     FILES_SCOPE_DECISION_EXCLUSIVE_KEYS.every((key) => value[key] === undefined)
+  );
+}
+
+/** Citation attribution and the actual navigation decision, without paths or fingerprints. */
+export interface ClientDiagnosticCitationActivation {
+  readonly reason: "matched" | "unmatched" | "absent" | "malformed" | "ambiguous";
+  readonly outcome: "opened" | "open-refused" | "picker-opened" | "picker-dismissed" | "refused";
+  readonly rootCount: number;
+  readonly matchCount: number;
+}
+const CITATION_ACTIVATION_REASONS: ReadonlySet<unknown> = new Set([
+  "matched",
+  "unmatched",
+  "absent",
+  "malformed",
+  "ambiguous",
+]);
+const CITATION_ACTIVATION_OUTCOMES: ReadonlySet<unknown> = new Set([
+  "opened",
+  "open-refused",
+  "picker-opened",
+  "picker-dismissed",
+  "refused",
+]);
+const CITATION_ACTIVATION_KEYS = new Set(["reason", "outcome", "rootCount", "matchCount"]);
+
+function coherentCitationMatchCount(value: Record<string, unknown>): boolean {
+  if (value.reason === "matched") return value.matchCount === 1;
+  if (value.reason === "ambiguous")
+    return typeof value.matchCount === "number" && value.matchCount > 1;
+  return value.matchCount === 0;
+}
+
+function isClientDiagnosticCitationActivation(
+  value: unknown,
+): value is ClientDiagnosticCitationActivation {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (
+    keys.length !== CITATION_ACTIVATION_KEYS.size ||
+    keys.some((key) => !CITATION_ACTIVATION_KEYS.has(key))
+  )
+    return false;
+  return (
+    CITATION_ACTIVATION_REASONS.has(value.reason) &&
+    CITATION_ACTIVATION_OUTCOMES.has(value.outcome) &&
+    isBoundedNonNegativeInteger(value.rootCount, Number.MAX_SAFE_INTEGER) &&
+    isBoundedNonNegativeInteger(value.matchCount, value.rootCount) &&
+    coherentCitationMatchCount(value)
+  );
+}
+
+function hasValidCitationActivationContext(value: Record<string, unknown>): boolean {
+  if (value.citationActivation === undefined) return true;
+  return (
+    isClientDiagnosticCitationActivation(value.citationActivation) &&
+    [...FILES_SCOPE_DECISION_EXCLUSIVE_KEYS, "filesScopeDecision"].every(
+      (key) => key === "citationActivation" || value[key] === undefined,
+    )
   );
 }

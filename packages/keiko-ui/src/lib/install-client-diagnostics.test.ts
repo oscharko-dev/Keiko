@@ -1405,3 +1405,38 @@ it("posts failed local preparation through routine capacity without replacing fa
   expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
   expect(clientDiagnosticPostThrottledCount()).toBe(0);
 });
+
+it("delivers citation activation as routine closed evidence without consuming failure capacity", async () => {
+  vi.spyOn(console, "debug").mockImplementation(() => undefined);
+  vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  setClientDiagnosticWriter(fanOutClientDiagnostic);
+  for (let index = 0; index < 8; index++) {
+    reportClientDiagnostic("[keiko] citation activation settled", {
+      correlationId: `ui_citation-${String(index)}`,
+      citationActivation: {
+        reason: "absent",
+        outcome: "picker-opened",
+        rootCount: 2,
+        matchCount: 0,
+      },
+    });
+  }
+  reportClientDiagnostic("[keiko] error boundary caught Error", {
+    kind: "window-error",
+    errorKind: "unavailable",
+  });
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(9));
+  const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as unknown;
+  expect(isClientDiagnosticIngestRequest(body)).toBe(true);
+  expect(body).toMatchObject({
+    citationActivation: { reason: "absent", outcome: "picker-opened", rootCount: 2, matchCount: 0 },
+    correlationId: "ui_citation-0",
+  });
+  expect(lastPostedBody(fetchMock)).toMatchObject({
+    kind: "window-error",
+    errorKind: "unavailable",
+  });
+  expect(clientDiagnosticPostThrottledCount()).toBe(0);
+});

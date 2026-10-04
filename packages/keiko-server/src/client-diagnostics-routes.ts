@@ -1109,6 +1109,39 @@ const CLIENT_ANSWER_SPEECH_PREPARED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const CLIENT_CITATION_ACTIVATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.citation.activated",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientCitationActivation",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["matched", "unmatched", "absent", "malformed", "ambiguous"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["opened", "open-refused", "picker-opened", "picker-dismissed", "refused"],
+    },
+    rootCount: { type: "integer", dataClass: "count", required: true },
+    matchCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-citation-activation"],
+  proofIds: ["client.citation.activated.line"],
+  releaseImpact: "patch",
+});
+
 const CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -1880,6 +1913,22 @@ function logClientFilesScopeDecision(
   return true;
 }
 
+function logClientCitationActivation(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const activation = request.citationActivation;
+  if (activation === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_CITATION_ACTIVATED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      { ...activation, completeness: "complete", loss: "none" },
+    ),
+  );
+  return true;
+}
+
 // The closed report shapes, each of which owns its own registered line.
 function logClosedClientReport(
   request: ClientDiagnosticIngestRequest,
@@ -1892,7 +1941,8 @@ function logClosedClientReport(
     logClientAnswerSpeech(request, correlationId) ||
     logClientSupportReportDownload(request, correlationId) ||
     logClientSupportReportPrepared(request, correlationId) ||
-    logClientFilesScopeDecision(request, correlationId)
+    logClientFilesScopeDecision(request, correlationId) ||
+    logClientCitationActivation(request, correlationId)
   );
 }
 
@@ -2424,7 +2474,8 @@ function closedReportBudget(report: ClientDiagnosticIngestRequest): ClientReport
     report.answerSpeech !== undefined ||
     report.supportReportDelivery !== undefined ||
     report.supportReportPreparation !== undefined ||
-    report.filesScopeDecision !== undefined
+    report.filesScopeDecision !== undefined ||
+    report.citationActivation !== undefined
   ) {
     return "routine";
   }

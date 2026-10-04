@@ -9,6 +9,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { GroundedAnswer } from "./GroundedAnswer";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticWriter,
+} from "@/lib/client-diagnostics";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 import { I18N_STORAGE_KEY, I18nProvider, resetLoadedMessageCatalogs } from "@/lib/i18n";
 import activityBadgeStyles from "./GroundedAnswer.module.css";
@@ -22,6 +27,8 @@ import type {
   KnowledgePodRetrievalActivity,
   LocalKnowledgeEvidenceCitation,
 } from "@/lib/types";
+
+afterEach(resetClientDiagnosticWriter);
 
 function scopeFingerprint(scope: ChatConnectedScope): string {
   const fingerprint = connectedScopeFingerprint(scope);
@@ -2891,5 +2898,128 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
       ),
     ).toBeInTheDocument();
     expect(container.textContent).not.toContain("English server claim text.");
+  });
+});
+
+describe("attributed citation activation evidence", () => {
+  it.each(["absent", "malformed", "matched", "unmatched", "ambiguous"] as const)(
+    "records %s identity separately from the actual picker/open outcome",
+    (reason) => {
+      const writer = vi.fn<ClientDiagnosticWriter>();
+      setClientDiagnosticWriter(writer);
+      const fingerprint = "a1".repeat(32);
+      const roots = [
+        { root: "/private/first", label: "First", scopeFingerprints: [fingerprint] },
+        {
+          root: "/private/second",
+          label: "Second",
+          scopeFingerprints: reason === "ambiguous" ? [fingerprint] : [],
+        },
+      ];
+      const identities = {
+        absent: undefined,
+        malformed: "private-invalid",
+        matched: fingerprint,
+        unmatched: "b2".repeat(32),
+        ambiguous: fingerprint,
+      };
+      const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+      render(
+        <GroundedAnswer
+          answer={answer({ citations: [citation({ sourceScopeFingerprint: identities[reason] })] })}
+          busy={false}
+          repositoryRoots={roots}
+          openRepositoryReference={openReference}
+        />,
+      );
+      openEvidenceDisclosure(document.body);
+      expect(writer).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: /Open src\/foo.ts/ }));
+      const outcome = reason === "matched" ? "opened" : "picker-opened";
+      const matchCount = { matched: 1, ambiguous: 2, absent: 0, malformed: 0, unmatched: 0 }[
+        reason
+      ];
+      expect(writer).toHaveBeenLastCalledWith("[keiko] citation activation settled", {
+        correlationId: expect.any(String),
+        citationActivation: { reason, outcome, rootCount: 2, matchCount },
+      });
+      if (reason !== "matched")
+        fireEvent.click(screen.getByRole("button", { name: "Select repository source: Second" }));
+      expect(writer).toHaveBeenLastCalledWith("[keiko] citation activation settled", {
+        correlationId: expect.any(String),
+        citationActivation: { reason, outcome: "opened", rootCount: 2, matchCount },
+      });
+      const correlations = writer.mock.calls.map((call) => call[1]?.correlationId);
+      expect(new Set(correlations).size).toBe(1);
+      expect(JSON.stringify(writer.mock.calls)).not.toContain("/private/");
+      expect(JSON.stringify(writer.mock.calls)).not.toContain(fingerprint);
+    },
+  );
+
+  it("records a refused editor open without labeling attribution as a failure", () => {
+    const writer = vi.fn<ClientDiagnosticWriter>();
+    setClientDiagnosticWriter(writer);
+    render(
+      <GroundedAnswer
+        answer={answer({ citations: [citation()] })}
+        busy={false}
+        repositoryRoots={[{ root: "/private/first", label: "First" }]}
+        openRepositoryReference={() => ({ ok: false, message: "Editor unavailable" })}
+      />,
+    );
+    openEvidenceDisclosure(document.body);
+    fireEvent.click(screen.getByRole("button", { name: /Open src\/foo.ts/ }));
+    expect(writer).toHaveBeenCalledWith("[keiko] citation activation settled", {
+      correlationId: expect.any(String),
+      citationActivation: {
+        reason: "absent",
+        outcome: "open-refused",
+        rootCount: 1,
+        matchCount: 0,
+      },
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("Editor unavailable");
+  });
+});
+
+it("joins citation picker dismissal and selection to their actual activation", () => {
+  const writer = vi.fn<ClientDiagnosticWriter>();
+  setClientDiagnosticWriter(writer);
+  const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+  render(
+    <GroundedAnswer
+      answer={answer({ citations: [citation()] })}
+      busy={false}
+      repositoryRoots={[
+        { root: "/first", label: "First" },
+        { root: "/second", label: "Second" },
+      ]}
+      openRepositoryReference={openReference}
+    />,
+  );
+  openEvidenceDisclosure(document.body);
+  const trigger = screen.getByRole("button", { name: /Open src\/foo.ts/ });
+  fireEvent.click(trigger);
+  const first = writer.mock.calls[0]?.[1]?.correlationId;
+  fireEvent.keyDown(screen.getByRole("button", { name: "Select repository source: First" }), {
+    key: "Escape",
+  });
+  expect(writer.mock.calls[1]?.[1]).toMatchObject({
+    correlationId: first,
+    citationActivation: {
+      reason: "absent",
+      outcome: "picker-dismissed",
+      rootCount: 2,
+      matchCount: 0,
+    },
+  });
+  expect(openReference).not.toHaveBeenCalled();
+  fireEvent.click(trigger);
+  const second = writer.mock.calls[2]?.[1]?.correlationId;
+  expect(second).not.toBe(first);
+  fireEvent.click(screen.getByRole("button", { name: "Select repository source: Second" }));
+  expect(writer.mock.calls[3]?.[1]).toMatchObject({
+    correlationId: second,
+    citationActivation: { outcome: "opened" },
   });
 });

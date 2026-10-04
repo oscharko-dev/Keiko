@@ -1759,3 +1759,69 @@ describe("Files scope ownership decision evidence", () => {
       ).toBe(false);
   });
 });
+
+describe("citation activation diagnostic contract", () => {
+  const activation = { reason: "matched", outcome: "opened", rootCount: 2, matchCount: 1 };
+  it("accepts only declared decisions, outcomes and safe coherent counts", () => {
+    for (const reason of ["matched", "unmatched", "absent", "malformed", "ambiguous"]) {
+      const matchCount = reason === "ambiguous" ? 2 : reason === "matched" ? 1 : 0;
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          citationActivation: { ...activation, reason, matchCount },
+        }),
+      ).toBe(true);
+    }
+    for (const outcome of [
+      "opened",
+      "open-refused",
+      "picker-opened",
+      "picker-dismissed",
+      "refused",
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          citationActivation: { ...activation, outcome },
+        }),
+      ).toBe(true);
+    }
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        citationActivation: { ...activation, rootCount: Number.MAX_SAFE_INTEGER },
+      }),
+    ).toBe(true);
+  });
+  it.each([
+    { reason: "private/path" },
+    { outcome: "unknown" },
+    { rootCount: -1 },
+    { rootCount: 1.5 },
+    { rootCount: Number.MAX_SAFE_INTEGER + 1 },
+    { matchCount: 3 },
+    { matchCount: -1 },
+    { matchCount: 0 },
+    { path: "secret.txt" },
+    { fingerprint: "a1".repeat(32) },
+  ])("rejects hostile or incoherent activation metadata %j", (overrides) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        citationActivation: { ...activation, ...overrides },
+      }),
+    ).toBe(false);
+  });
+  it.each(["kind", "errorKind", "filesScopeDecision", "answerCopy", "selectDismissal"])(
+    "does not mix citation activation with a different diagnostic family: %s",
+    (key) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          citationActivation: activation,
+          [key]: key === "kind" ? "other" : {},
+        }),
+      ).toBe(false);
+    },
+  );
+});

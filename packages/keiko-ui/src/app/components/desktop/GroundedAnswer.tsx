@@ -8,6 +8,7 @@
 // them to the Files-window preview at the cited line range.
 
 import { useMemo, useState } from "react";
+import type { ClientDiagnosticCitationActivation } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { ReactNode } from "react";
 import {
   citationFindingTotal,
@@ -469,18 +470,37 @@ function attributedCitationLabel(label: string, sourceLabel: string | undefined)
   return sourceLabel === undefined ? label : `${sourceLabel} · ${label}`;
 }
 
+function citationIdentityReason(
+  fingerprint: string | undefined,
+  matchCount: number,
+): ClientDiagnosticCitationActivation["reason"] {
+  if (fingerprint === undefined) return "absent";
+  if (!isConnectedScopeFingerprint(fingerprint)) return "malformed";
+  if (matchCount === 1) return "matched";
+  return matchCount === 0 ? "unmatched" : "ambiguous";
+}
+
 function citationRootOptions(
   citation: GroundedEvidenceCitation,
   roots: readonly RepositoryReferenceRoot[],
-): { readonly roots: readonly RepositoryReferenceRoot[]; readonly requireRootChoice: boolean } {
+): {
+  readonly roots: readonly RepositoryReferenceRoot[];
+  readonly requireRootChoice: boolean;
+  readonly citationActivation: Omit<ClientDiagnosticCitationActivation, "outcome">;
+} {
   const fingerprint = citation.sourceScopeFingerprint;
-  if (fingerprint === undefined) return { roots, requireRootChoice: roots.length > 1 };
   const matching = isConnectedScopeFingerprint(fingerprint)
     ? roots.filter((root) => root.scopeFingerprints?.includes(fingerprint) === true)
     : [];
-  return matching.length === 1
-    ? { roots: matching, requireRootChoice: false }
-    : { roots, requireRootChoice: true };
+  const reason = citationIdentityReason(fingerprint, matching.length);
+  const activation = { reason, rootCount: roots.length, matchCount: matching.length };
+  if (reason === "matched")
+    return { roots: matching, requireRootChoice: false, citationActivation: activation };
+  return {
+    roots,
+    requireRootChoice: reason !== "absent" || roots.length > 1,
+    citationActivation: activation,
+  };
 }
 
 function CitationReference({
@@ -515,8 +535,7 @@ function CitationReference({
         {canOpenRepositoryCitation ? (
           <RepositoryReferenceInline
             reference={citationRepositoryReference(citation)}
-            roots={options.roots}
-            requireRootChoice={options.requireRootChoice}
+            {...options}
             rootRelative
             sourceLabel={sourceLabel}
             openReference={openRepositoryReference}

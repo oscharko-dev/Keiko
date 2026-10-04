@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "eef756917537e3729558924f403a6b78ee90a477c5a0f85d498c979ee6dec40b"
+    "catalogDigest": "3d217d101b4afeb7fc59171f7dbf1a021f81242bbab4176f3b43cd5dfa6a342f"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,10 +55,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 513,
-    "proofCount": 520,
-    "resolvedProofCount": 520,
-    "failureClassCount": 335,
+    "operationCount": 514,
+    "proofCount": 521,
+    "resolvedProofCount": 521,
+    "failureClassCount": 336,
     "scenarioCount": 31,
     "resolvedScenarioCount": 31
   },
@@ -136,6 +136,7 @@
         "client.binding.choice-withdrawn",
         "client.binding.resolved",
         "client.binding.target-missing",
+        "client.citation.activated",
         "client.composer.activity",
         "client.diagnostic",
         "client.diagnostic.rate-limited",
@@ -718,6 +719,7 @@
     "client-answer-copy": ["client-diagnostics.dependency-failure"],
     "client-answer-speech": ["client-diagnostics.dependency-failure"],
     "client-knowledge-catalog": ["client-diagnostics.dependency-failure"],
+    "client-citation-activation": ["client-diagnostics.dependency-failure"],
     "client-select": ["client-diagnostics.dependency-failure"],
     "client-session-repair": ["client-diagnostics.dependency-failure"],
     "client-stage": ["client-diagnostics.dependency-failure"],
@@ -1143,6 +1145,9 @@
     "client.binding.resolved.line": ["packages/keiko-server/src/client-diagnostics-loss.test.ts"],
     "client.binding.target-missing.line": [
       "packages/keiko-server/src/client-diagnostics-loss.test.ts"
+    ],
+    "client.citation.activated.line": [
+      "packages/keiko-server/src/client-diagnostics-routes.test.ts"
     ],
     "client.composer.activity.line": [
       "packages/keiko-server/src/client-diagnostics-routes.test.ts"

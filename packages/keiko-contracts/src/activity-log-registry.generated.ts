@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "eef756917537e3729558924f403a6b78ee90a477c5a0f85d498c979ee6dec40b" as const;
+  "3d217d101b4afeb7fc59171f7dbf1a021f81242bbab4176f3b43cd5dfa6a342f" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -2757,6 +2757,54 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["client-binding"],
     proofIds: ["client.binding.target-missing.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "client.citation.activated",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "client-diagnostics-routes.logClientCitationActivation",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["matched", "unmatched", "absent", "malformed", "ambiguous"],
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["opened", "open-refused", "picker-opened", "picker-dismissed", "refused"],
+      },
+      rootCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      matchCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["client-citation-activation"],
+    proofIds: ["client.citation.activated.line"],
     releaseImpact: "patch",
   },
   {
@@ -31459,8 +31507,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 335,
-  completeClassCount: 335,
+  supportedClassCount: 336,
+  completeClassCount: 336,
   completeness: "complete",
   classes: [
     {
@@ -34847,6 +34895,74 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["client.files-scope.decision.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "client-citation-activation",
+      requirementContract: "client-citation-activation",
+      productSurfaces: ["keiko-server"],
+      lifecycleTransitions: ["state"],
+      lifecycleOperations: {
+        start: [],
+        state: ["client.citation.activated"],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "client.citation.activated",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["client.citation.activated"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "client.citation.activated",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "matchCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "rootCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["client.citation.activated.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -68989,6 +69105,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "client.binding.choice-withdrawn": "client-diagnostics",
     "client.binding.resolved": "client-diagnostics",
     "client.binding.target-missing": "client-diagnostics",
+    "client.citation.activated": "client-diagnostics",
     "client.composer.activity": "client-diagnostics",
     "client.diagnostic": "client-diagnostics",
     "client.diagnostic.rate-limited": "client-diagnostics",
