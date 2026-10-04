@@ -1480,12 +1480,7 @@ function CoverageNotice({
 }
 
 function incompleteSearchCoverage(coverage: SearchCoverage): boolean {
-  return (
-    coverage !== undefined &&
-    (coverage.incomplete ||
-      coverage.reasons.includes("io-error") ||
-      coverage.reasons.includes("timeout"))
-  );
+  return coverage?.incomplete === true && !hasOnlyOmittedMatches(coverage);
 }
 
 function hasCoverageWarning(pack: GroundedAnswerContextPackSummary): boolean {

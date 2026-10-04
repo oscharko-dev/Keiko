@@ -2519,6 +2519,78 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     expect(container).not.toHaveTextContent("Kein festes Dateianzahllimit");
   });
 
+  it("keeps a fully inspected match-limited search informational without a review alert", async () => {
+    const { container } = renderInLocale(
+      "en",
+      answer({ contextPack: contextPack({ coverage: fullMatchLimitedCoverage() }) }),
+    );
+    await screen.findAllByText("Evidence");
+    expect(container.querySelector(".grounded-uncertainty[role='alert']")).toBeNull();
+    expect(container.querySelector(".grounded-evidence-summary-badge")).toBeNull();
+    openEvidenceDisclosure(container);
+    expect(container).toHaveTextContent("Additional matching results omitted");
+    expect(container).toHaveTextContent("112 / 112");
+  });
+
+  it("retains other genuine review warnings with a fully inspected match-limited search", async () => {
+    const { container } = renderInLocale(
+      "en",
+      answer({
+        uncertainty: [uncertainty({ kind: "unsupported-citation" })],
+        contextPack: contextPack({ coverage: fullMatchLimitedCoverage() }),
+      }),
+    );
+    const warning = await screen.findByRole("alert");
+    expect(warning).toHaveTextContent("citation");
+    expect(warning).not.toHaveTextContent("Additional matching results omitted");
+    expect(container.querySelector(".grounded-evidence-summary-badge")).toHaveTextContent(
+      "Needs review",
+    );
+  });
+
+  it("warns with the generic scope detail when incomplete coverage has no detailed reason", async () => {
+    renderInLocale(
+      "en",
+      answer({
+        contextPack: contextPack({
+          coverage: fullMatchLimitedCoverage({ reasons: [] }),
+        }),
+      }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("selected evidence is incomplete");
+  });
+
+  it.each(["match-cap", "io-error"] as const)(
+    "uses the hybrid folder coverage for the %s summary warning",
+    async (reason) => {
+      const a: GroundedAnswerType = {
+        ...answer(),
+        groundingKind: "hybrid",
+        citations: [citation()],
+        knowledgeCitations: [knowledgeCitation()],
+        contextPack: {
+          kind: "hybrid",
+          folderSourceCount: 1,
+          connectorSourceCount: 1,
+          folder: contextPack({ coverage: fullMatchLimitedCoverage({ reasons: [reason] }) }),
+          knowledge: localKnowledgeAnswer().contextPack,
+        },
+      };
+      const { container } = renderInLocale("en", a);
+      await screen.findAllByText("Evidence");
+      const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+      if (reason === "match-cap") expect(warning).toBeNull();
+      else expect(warning).toHaveTextContent("error occurred");
+    },
+  );
+
+  it("does not infer a folder coverage warning for a local-knowledge-only answer", async () => {
+    const { container } = renderInLocale("en", localKnowledgeAnswer());
+    await screen.findAllByText("Knowledge evidence");
+    expect(container.querySelector(".grounded-uncertainty[role='alert']")).toBeNull();
+    expect(container.querySelector(".grounded-evidence-summary-badge")).toBeNull();
+  });
+
   it.each(["io-error", "timeout"] as const)(
     "shows %s coverage gaps before evidence is expanded, even with no omissions",
     async (reason) => {
