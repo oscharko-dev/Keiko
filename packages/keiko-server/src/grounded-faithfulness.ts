@@ -85,7 +85,8 @@ export interface ParsedInlineCitation {
 // The shared path bound plus bounded source ordinal and safe-integer line suffixes.
 const CITATION_TOKEN_MAX_CHARS = WORKSPACE_PORTABLE_PATH_MAX_BYTES + 64;
 const BRACKET_RE = new RegExp(String.raw`\[([^\]\n]{1,${CITATION_TOKEN_MAX_CHARS}})\]`, "g");
-const LINE_RANGE_SUFFIX_RE = /:(\d+)(?:-(\d+))?$/;
+// Normalize only the numeric range separator; the cited path and raw token remain unchanged.
+const LINE_RANGE_SUFFIX_RE = /:(\d+)(?:[-\u2010-\u2014\u2212](\d+))?$/u;
 const SOURCE_QUALIFIER_RE = /^source:(\d+)\|/u;
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {

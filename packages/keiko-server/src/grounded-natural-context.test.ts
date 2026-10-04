@@ -233,6 +233,22 @@ describe("natural connected-folder context", () => {
     ).toEqual([]);
   });
 
+  it("reads complete known-fit ranges once instead of clipping redundant anchor views", async () => {
+    const root = ordinaryApp();
+    const overview =
+      "# Werkstatthandbuch\nDieser Ordner dokumentiert drei Anlagen: eine Wasserpumpe, ein Förderband und einen Messplatz.\nDie jeweiligen Betriebsgrenzen und Wartungsfristen stehen in den HTML-Handbüchern der Anlagen.\n";
+    writeFileSync(join(root, "README.md"), overview);
+    const out = await retrieve(
+      root,
+      "Welche Anlagen beschreibt dieser Handbuchordner? Nenne für jede Anlage die Wartungsfrist und die zugehörige Betriebsgrenze. Belege alle Angaben mit Datei und Zeile.",
+    );
+    const file = out.pack.files.find((entry) => entry.scopePath === "README.md");
+    expect(file?.excerpts.some((excerpt) => excerpt.content === overview)).toBe(true);
+    expect(out.pack.uncertainty.filter((marker) => marker.kind === "scope-incomplete")).toEqual([]);
+    expect(out.pack.usage.filesRead).toBe(5);
+    expect(out.pack.usage.excerptBytes).toBeLessThanOrEqual(out.pack.budget.excerptBytesMax);
+  });
+
   it("uses the accepted byte capacity independently of the model token capacity", async () => {
     const root = ordinaryApp();
     const text = `${"<!-- source material -->\n".repeat(5_000)}<p>actual final fact: AZALEA</p>\n`;

@@ -210,6 +210,26 @@ describe("SafeMarkdown — safe link", () => {
 });
 
 describe("SafeMarkdown — repository references", () => {
+  it("opens a native model's non-breaking-hyphen range at the exact cited lines", () => {
+    const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-unicode-range" }));
+    render(
+      <SafeMarkdown
+        source={"Price [src/domain/shipping.ts:1\u20116]."}
+        repositoryRoots={[{ root: "/repo", label: "Fixture" }]}
+        openRepositoryReference={openReference}
+      />,
+    );
+    const reference = screen.getByRole("button", {
+      name: "Open src/domain/shipping.ts at lines 1-6 in editor",
+    });
+    fireEvent.click(reference);
+    expect(openReference).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "src/domain/shipping.ts",
+      lineStart: 1,
+      lineEnd: 6,
+    });
+  });
   it("renders conservative repository references as editor-open controls", () => {
     const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
     render(

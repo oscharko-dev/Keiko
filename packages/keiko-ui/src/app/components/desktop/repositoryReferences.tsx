@@ -55,14 +55,14 @@ export interface RepositoryReferenceTextPart {
 const REPOSITORY_REFERENCE_SEGMENT = String.raw`[\p{L}\p{N}\p{M}_.-]{1,255}`;
 const REPOSITORY_REFERENCE_PATH_CORE = String.raw`(?:${REPOSITORY_REFERENCE_SEGMENT}\/){0,1000}${REPOSITORY_REFERENCE_SEGMENT}\.[A-Za-z0-9][A-Za-z0-9]{0,15}`;
 const REPOSITORY_REFERENCE_PATTERN = new RegExp(
-  String.raw`\[[^\]]{1,4096}\]|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?::(\d{1,7})(?:-(\d{1,7}))?)?`,
+  String.raw`\[[^\]]{1,4096}\]|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?::(\d{1,7})(?:[-\u2010-\u2014\u2212](\d{1,7}))?)?`,
   "gu",
 );
 // Exact/bracketed references have a known boundary, so their filenames may contain spaces or
 // other Unicode characters. The shared portable-path contract still owns path validity.
 const EXACT_REPOSITORY_REFERENCE_PATTERN =
-  /^@?([^:[\]\r\n]{1,4096})(?::(\d{1,7})(?:-(\d{1,7}))?)?$/u;
-const REPOSITORY_REFERENCE_SOURCE = String.raw`@?${REPOSITORY_REFERENCE_PATH_CORE}(?::\d{1,7}(?:-\d{1,7})?)?`;
+  /^@?([^:[\]\r\n]{1,4096})(?::(\d{1,7})(?:[-\u2010-\u2014\u2212](\d{1,7}))?)?$/u;
+const REPOSITORY_REFERENCE_SOURCE = String.raw`@?${REPOSITORY_REFERENCE_PATH_CORE}(?::\d{1,7}(?:[-\u2010-\u2014\u2212]\d{1,7})?)?`;
 const REPOSITORY_REFERENCE_IN_BRACKETS_PATTERN = new RegExp(
   String.raw`\[\s*(${REPOSITORY_REFERENCE_SOURCE})\s*\]`,
   "giu",
@@ -148,7 +148,7 @@ function boundaryBefore(value: string, index: number): boolean {
 function boundaryAfter(value: string, index: number): boolean {
   if (index >= value.length) return true;
   const next = value.slice(index, index + 2);
-  return !/^[\p{L}\p{N}\p{M}\p{S}_/:+-]/u.test(next);
+  return !/^[\p{L}\p{N}\p{M}\p{S}_/:+\u2010-\u2014\u2212-]/u.test(next);
 }
 
 // Plain string scans (not regexes) for leading/trailing slash trimming: an unanchored-at-start
@@ -248,6 +248,15 @@ function parseLine(value: string | undefined): number | undefined {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function validMatchedLineRange(
+  match: RegExpExecArray,
+  start: number | undefined,
+  end: number | undefined,
+): boolean {
+  if (match[2] === undefined) return match[3] === undefined;
+  return start !== undefined && (match[3] === undefined || (end !== undefined && end >= start));
+}
+
 function referenceFromMatch(match: RegExpExecArray, source: string): RepositoryReference | null {
   const raw = match[0] ?? "";
   const matchIndex = match.index;
@@ -258,8 +267,8 @@ function referenceFromMatch(match: RegExpExecArray, source: string): RepositoryR
   if (!validRepositoryPath(path)) return null;
   const lineStart = parseLine(match[2]);
   const rawLineEnd = parseLine(match[3]);
-  const lineEnd =
-    lineStart === undefined ? undefined : Math.max(lineStart, rawLineEnd ?? lineStart);
+  if (!validMatchedLineRange(match, lineStart, rawLineEnd)) return null;
+  const lineEnd = rawLineEnd ?? lineStart;
   return {
     label: raw,
     path,

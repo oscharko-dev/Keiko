@@ -4520,6 +4520,23 @@ interface ReadPathExcerptTaskResult {
   readonly skippedReason?: ExcerptSkippedReason | undefined;
 }
 
+function isQualifiedWholeFileWindow(
+  scopePath: string,
+  window: LineWindow,
+  inputs: ExcerptInputs,
+): boolean {
+  return (
+    inputs.knownFitFileBytes?.has(scopePath) === true &&
+    (inputs.atomsByPath.get(scopePath) ?? []).some(
+      (atom) =>
+        atom.provenance.kind === "file-listing" &&
+        atom.provenance.tool === "repo.findFiles" &&
+        atom.lineRange !== undefined &&
+        windowContainsAtom(window, atom),
+    )
+  );
+}
+
 function readExcerptWindow(
   scopePath: string,
   window: LineWindow,
@@ -4535,7 +4552,7 @@ function readExcerptWindow(
       startLine: window.startLine,
       endLine: window.endLine,
       maxBytes,
-      anchors: inputs.anchors,
+      ...(isQualifiedWholeFileWindow(scopePath, window, inputs) ? {} : { anchors: inputs.anchors }),
       maxTotalBytes,
       maxWindows,
     },

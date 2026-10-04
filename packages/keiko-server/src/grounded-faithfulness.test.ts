@@ -125,6 +125,76 @@ function packWith(
 }
 
 describe("parseInlineCitations", () => {
+  it.each(["-", "\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212"])(
+    "parses numeric line ranges with the typographic separator %s without changing paths",
+    (separator) => {
+      expect(parseInlineCitations(`[src/domain/shipping.ts:1${separator}6]`)).toMatchObject([
+        { scopePath: "src/domain/shipping.ts", lineRange: { startLine: 1, endLine: 6 } },
+      ]);
+      expect(parseInlineCitations(`[src/part\u2011name.ts:1${separator}2]`)).toMatchObject([
+        { scopePath: "src/part\u2011name.ts", lineRange: { startLine: 1, endLine: 2 } },
+      ]);
+    },
+  );
+
+  it("reconciles actual non-breaking-hyphen citations against unchanged source windows", () => {
+    const index = buildPackCitationIndex([
+      packWith([
+        {
+          scopePath: "src/domain/shipping.ts",
+          excerpts: [excerpt("src/domain/shipping.ts", 1, 6)],
+        },
+        { scopePath: "README.md", excerpts: [excerpt("README.md", 1, 5)] },
+        {
+          scopePath: "handbook/services/parcel.html",
+          excerpts: [excerpt("handbook/services/parcel.html", 1, 2)],
+        },
+      ]),
+    ]);
+    const answer =
+      "Price [src/domain/shipping.ts:1\u20116]. Weight [README.md:1\u20115]. Collection [handbook/services/parcel.html:1\u20112].";
+    const result = reconcileInlineCitations(answer, index);
+    expect(result.unsupported).toEqual([]);
+    expect([...result.citedScopePaths]).toEqual([
+      "src/domain/shipping.ts",
+      "README.md",
+      "handbook/services/parcel.html",
+    ]);
+    expect(
+      parseInlineCitations(
+        "[src/a.ts:0\u20112] [src/a.ts:9\u20112] [src/a.ts:1\u20119007199254740992]",
+      ),
+    ).toEqual([]);
+    expect(
+      reconcileInlineCitations("[src/domain/shipping.ts:1\u20117] [missing.ts:1\u20112]", index)
+        .unsupported,
+    ).toHaveLength(2);
+  });
+
+  it("keeps native typographic citations outside actual source lines unsupported", () => {
+    const index = buildPackCitationIndex([
+      packWith([
+        {
+          scopePath: "src/domain/shipping.ts",
+          excerpts: [excerpt("src/domain/shipping.ts", 1, 6)],
+        },
+        { scopePath: "README.md", excerpts: [excerpt("README.md", 1, 4)] },
+        {
+          scopePath: "handbook/services/parcel.html",
+          excerpts: [excerpt("handbook/services/parcel.html", 1, 1)],
+        },
+      ]),
+    ]);
+    const result = reconcileInlineCitations(
+      "Price [src/domain/shipping.ts:1\u20116]. Weight [README.md:1\u20115]. Collection [handbook/services/parcel.html:1\u20112].",
+      index,
+    );
+    expect([...result.citedScopePaths]).toEqual(["src/domain/shipping.ts"]);
+    expect(result.unsupported.map((citation) => citation.scopePath)).toEqual([
+      "README.md",
+      "handbook/services/parcel.html",
+    ]);
+  });
   it("accepts a maximum portable path with qualified safe-integer line references", () => {
     const path = `${"d/".repeat((WORKSPACE_PORTABLE_PATH_MAX_BYTES - 12) / 2)}manuals.html`;
     const lastLine = Number.MAX_SAFE_INTEGER;

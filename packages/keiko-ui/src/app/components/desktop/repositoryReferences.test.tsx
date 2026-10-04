@@ -67,6 +67,39 @@ describe("repository source path labels", () => {
 });
 
 describe("parseExactRepositoryReference / repositoryReferenceTextParts (S8786 regression)", () => {
+  it.each(["-", "\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2212"])(
+    "links exact numeric ranges with separator %s without changing the filename",
+    (separator) => {
+      const text = `src/domain/shipping.ts:1${separator}6`;
+      expect(parseExactRepositoryReference(text)).toEqual({
+        label: text,
+        path: "src/domain/shipping.ts",
+        lineStart: 1,
+        lineEnd: 6,
+      });
+      expect(repositoryReferenceTextParts(`[${text}]`)).toEqual([
+        {
+          kind: "reference",
+          reference: { label: text, path: "src/domain/shipping.ts", lineStart: 1, lineEnd: 6 },
+        },
+      ]);
+      expect(parseExactRepositoryReference(`src/part\u2011name.ts:1${separator}2`)?.path).toBe(
+        "src/part\u2011name.ts",
+      );
+    },
+  );
+
+  it("rejects malformed and reversed typographic ranges instead of linking a partial endpoint", () => {
+    for (const text of [
+      "src/a.ts:0\u20112",
+      "src/a.ts:9\u20112",
+      "src/a.ts:1\u2011wrong",
+      "src/a.ts:1\u20119007199254740992",
+    ]) {
+      expect(parseExactRepositoryReference(text)).toBeNull();
+      expect(repositoryReferenceTextParts(text).every((part) => part.kind === "text")).toBe(true);
+    }
+  });
   it("completes within budget for a slash-run with no valid extension", () => {
     // The former `(?:segment\/)*segment` core let the star and the trailing atom both consume the
     // same characters; retried at every offset of a non-matching string this was O(n^2). At this
