@@ -18,7 +18,12 @@ import {
 // definition, imported inward, so planner classification and candidate ranking cannot drift.
 import { hasSymbolRelationshipQuery, type SearchLimits } from "@oscharko-dev/keiko-workspace";
 
-import { extractAnchors, type SearchAnchor, type SearchAnchorKind } from "./anchors.js";
+import {
+  extractAnchors,
+  queryContextOutsideQuotes,
+  type SearchAnchor,
+  type SearchAnchorKind,
+} from "./anchors.js";
 import {
   classifyRetrievalIntent,
   type RetrievalIntent,
@@ -310,6 +315,20 @@ export function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boole
 const DIRECT_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
 const REQUESTED_TEST_RELATION_RE =
   /\b(?:tests?|testing|tested|specs?|integration|integrations|integrationstests?|testet|getestet)\b/iu;
+const CONTEXTUAL_EXPLANATION_RE =
+  /\b(?:why|how|explain|explains|explanation|meaning|warum|weshalb|wieso|erkl[äa]re(?:n)?|bedeut(?:et|en|ung)|funktioniert)\b|\bwhat\s+does\b|\bwas\s+macht\b/iu;
+
+/** Contextual questions retain their full query; ambiguous wording cannot justify literal-only IO. */
+export function requiresContextualEvidence(query: RetrievalQuery): boolean {
+  if (query.kind === "exact-symbol") return false;
+  const context = queryContextOutsideQuotes(query.text);
+  return (
+    requiresRelationshipOrHistoryRings({ ...query, text: context }) ||
+    REQUESTED_TEST_RELATION_RE.test(context) ||
+    classifyRetrievalIntent(context).intent === "diagnostic-search" ||
+    CONTEXTUAL_EXPLANATION_RE.test(context)
+  );
+}
 
 // Direct named evidence needs definition/document discovery, while requested relationships and
 // diagnostics retain their structural/history routing. The single-symbol narrowing API below
@@ -321,7 +340,7 @@ export function isDirectEvidenceLookup(
   if (
     requiresRelationshipOrHistoryRings(query) ||
     REQUESTED_TEST_RELATION_RE.test(query.text) ||
-    classifyRetrievalIntent(query.text).intent === "diagnostic-search"
+    requiresContextualEvidence(query)
   )
     return false;
   const targets = anchors.filter(
@@ -341,6 +360,7 @@ export function directDefinitionSymbol(
   anchors: readonly SearchAnchor[],
 ): string | undefined {
   if (
+    requiresContextualEvidence(query) ||
     !hasDefinitionLookup(query.text) ||
     hasHistoryQuery(query.text) ||
     hasSymbolRelation(query.text)

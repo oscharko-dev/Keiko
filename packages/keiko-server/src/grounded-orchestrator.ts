@@ -55,6 +55,7 @@ import {
   rankCandidates,
   isDirectEvidenceLookup,
   requiresRelationshipOrHistoryRings,
+  requiresContextualEvidence,
   type ClarificationPrompt,
   type ClarificationReason,
   type ExcerptWindow,
@@ -1571,7 +1572,7 @@ function primaryLexicalAnchors(
   if (
     query.kind !== "natural-language" ||
     retrievalIntent === "repository-overview" ||
-    needsDiagnosticContext(query, anchors, retrievalIntent)
+    requiresContextualEvidence(query)
   )
     return [];
   const factual =
@@ -1670,8 +1671,8 @@ function lexicalSemanticProvider(
   definitionSymbol: string | undefined,
 ): SemanticSearchProvider | undefined {
   if (inputs.query.kind === "exact-symbol") return undefined;
+  if (requiresContextualEvidence(inputs.query)) return inputs.repoSemanticSearchProvider;
   if (isExplicitLiteralRequest(inputs.query, inputs.anchors)) return undefined;
-  if (inputs.retrievalIntent === "diagnostic-search") return inputs.repoSemanticSearchProvider;
   const explicitLiteral = inputs.anchors.some(
     (anchor) =>
       anchor.kind === "quoted" || (anchor.kind === "identifier" && anchor.term.includes("_")),
@@ -1786,7 +1787,7 @@ function withoutNamedSemanticSubstitution(
   inputs: SearchInputs,
 ): ContextSearchResult {
   if (
-    inputs.retrievalIntent === "diagnostic-search" ||
+    requiresContextualEvidence(inputs.query) ||
     requiresRelationshipOrHistoryRings(inputs.query) ||
     anchoredLexicalTargets(inputs).length === 0 ||
     certifiedLexicalContent(result, inputs).length > 0 ||
@@ -2159,7 +2160,8 @@ function isExplicitLiteralRequest(
 ): boolean {
   return (
     query.kind === "exact-symbol" ||
-    (LITERAL_LOOKUP_REQUEST_RE.test(query.text.trim()) &&
+    (!requiresContextualEvidence(query) &&
+      LITERAL_LOOKUP_REQUEST_RE.test(query.text.trim()) &&
       EXPLICIT_LITERAL_LOOKUP_RE.test(query.text) &&
       anchors.some(
         (anchor) =>
@@ -2167,14 +2169,6 @@ function isExplicitLiteralRequest(
           (anchor.kind === "identifier" && anchor.weight >= 0.85 && anchor.term.includes("_")),
       ))
   );
-}
-
-function needsDiagnosticContext(
-  query: RetrievalQuery,
-  anchors: readonly SearchAnchor[],
-  retrievalIntent: RetrievalIntent,
-): boolean {
-  return retrievalIntent === "diagnostic-search" && !isExplicitLiteralRequest(query, anchors);
 }
 
 function isCompleteExactLiteralLookup(
@@ -2232,9 +2226,8 @@ function lookupAugmentationSkipReason(
   anchors: readonly SearchAnchor[],
   hasGitMetadata: boolean,
   diagnostics: ContextPackDiagnostics | undefined,
-  retrievalIntent: RetrievalIntent,
 ): RingSkipReason | undefined {
-  if (needsDiagnosticContext(query, anchors, retrievalIntent)) return undefined;
+  if (requiresContextualEvidence(query)) return undefined;
   if (isCompleteExactLiteralLookup(query, anchors, diagnostics)) return "complete-exact-lookup";
   if (isOrdinaryDocumentLookup(query, hasGitMetadata, diagnostics)) return "ordinary-document";
   if (isOrdinaryLiteralAbsence(query, hasGitMetadata, anchors, diagnostics))
@@ -2249,7 +2242,7 @@ function optionalRingSkipReason(
 ): RingSkipReason | undefined {
   if (requiresRelationshipOrHistoryRings(inputs.query) || ring.kind === "lexical") return undefined;
   if (
-    !needsDiagnosticContext(inputs.query, inputs.anchors, inputs.retrievalIntent) &&
+    !requiresContextualEvidence(inputs.query) &&
     isCompleteExactLiteralLookup(inputs.query, inputs.anchors, diagnostics)
   )
     return "complete-exact-lookup";
@@ -2259,7 +2252,6 @@ function optionalRingSkipReason(
     inputs.anchors,
     inputs.hasGitMetadata,
     diagnostics,
-    inputs.retrievalIntent,
   );
 }
 
@@ -5822,7 +5814,6 @@ function recordAugmentationSkip(args: AssembleGroundedPackInputs, rings: RingRun
     args.plan.anchors,
     args.hasGitMetadata,
     rings.diagnostics,
-    args.plan.retrievalIntent,
   );
   if (reason === undefined) return false;
   markAugmentationSkipped(rings, reason);

@@ -367,6 +367,18 @@ function freeze(anchors: readonly MutableAnchor[]): readonly SearchAnchor[] {
   return anchors.map((a) => ({ term: a.term, weight: a.weight, kind: a.kind }));
 }
 
+function collectQuotedTargets(text: string, collected: MutableAnchor[]): string {
+  let remaining = collectMatches(text, QUOTED_DOUBLE_RE, "quoted", 1, collected);
+  remaining = collectMatches(remaining, QUOTED_SINGLE_RE, "quoted", 1, collected);
+  return collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected);
+}
+
+// Internal planner seam: quoted target contents are data, not instructions or diagnostic intent.
+// Extraction and contextual classification use the same contraction-safe quotation grammar.
+export function queryContextOutsideQuotes(text: string): string {
+  return collectQuotedTargets(text, []);
+}
+
 export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionResult {
   const { text, maxAnchors } = input;
   if (text.length === 0) {
@@ -376,9 +388,7 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
     return { anchors: [], truncated: true, tokensConsidered: 0 };
   }
   const collected: MutableAnchor[] = [];
-  let remaining = collectMatches(text, QUOTED_DOUBLE_RE, "quoted", 1, collected);
-  remaining = collectMatches(remaining, QUOTED_SINGLE_RE, "quoted", 1, collected);
-  remaining = collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected);
+  let remaining = collectQuotedTargets(text, collected);
   remaining = collectMatches(remaining, DOCUMENT_REFERENCE_RE, "identifier", 0.95, collected);
   remaining = collectMatches(remaining, API_ROUTE_RE, "path", 0.95, collected);
   remaining = collectMatches(remaining, PATH_RE, "path", 0.95, collected);

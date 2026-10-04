@@ -288,7 +288,13 @@ into generic fragments. A named literal fact with no actual content match cannot
 semantic-only evidence. Diagnostic requests retain the original question and semantic provider,
 including questions with quoted errors or snake-case identifiers; they cannot take ordinary-document
 or literal-absence augmentation shortcuts. Relationship lookup and augmentation of actual primary
-evidence remain available. Multiple targets share the same
+evidence remain available. The planner owns one contextual-evidence predicate shared by definition
+narrowing and the server's literal/absence shortcuts. It reuses anchor quotation parsing so quoted
+target contents do not create diagnostic instructions. Explanatory questions and commands retain
+the full natural-language query and broader evidence, even when they request an implementation or
+contain quoted concepts; ambiguous prose cannot establish literal-only completion. Explicit typed
+literal queries and genuine literal-only requests retain strict absence semantics.
+Multiple targets share the same
 recursive scan. Their literal interpretation participates in the query fingerprint and uses live
 matching rather than fuzzy hashed lexical records; approximate semantic evidence cannot substitute
 for a requested exact occurrence. Internal literal query text and aggregate unique target characters
