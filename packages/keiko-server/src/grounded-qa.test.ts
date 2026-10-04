@@ -113,6 +113,7 @@ import {
   canonicalChatTurnIdentityContent,
 } from "./chat-turn-identity.js";
 import { handleUpdateChat } from "./store-handlers.js";
+import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { createChatTurnSerializer, type ChatTurnSerializer } from "./chat-turn-serializer.js";
 import {
   CONVERSATION_MEMORY_FENCE_END,
@@ -586,8 +587,12 @@ function assertAttributablePackReport(
 ): void {
   const report = parseSupportReport(reportJson);
   const analyzed = analyzeSupportReport(reportJson);
-  expect(report.incident.trigger).toBe("user-report");
-  expect(report.incident.op).toBe("unattributed");
+  expect(report.incident).toMatchObject({
+    trigger: "registered-failure",
+    op: "server.diagnostic.failure",
+    errorKind: "internal",
+  });
+  expect(report.incident.frameCount).toBeGreaterThan(0);
   expect(analyzed.analysis.timelines.flatMap((timeline) => timeline.lines)).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ op: "server.diagnostic.failure", errorKind: "internal" }),
@@ -1692,6 +1697,122 @@ describe("handleGroundedAsk", () => {
     expect(store.listMessages(chatId)).toMatchObject([
       { role: "user", content: "scope-sensitive request" },
     ]);
+  });
+
+  it.each(["scope-identity-mismatch", "grounding-mode-changed"] as const)(
+    "diagnoses grounded %s before retrieval or a model call",
+    async (reason) => {
+      const { chatId } = await setupChatWithScope();
+      const capturedIdentity = deriveChatGroundingScopeIdentity(requiredChat(chatId));
+      store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
+      const expectedGroundingScopeIdentity =
+        reason === "scope-identity-mismatch"
+          ? capturedIdentity
+          : deriveChatGroundingScopeIdentity(requiredChat(chatId));
+      const diagnostics: ServerDiagnosticRecord[] = [];
+      const seenRequests: GatewayRequest[] = [];
+      const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(
+            JSON.stringify({
+              chatId,
+              content: "private-scope-refusal-canary",
+              expectedGroundingScopeIdentity,
+            }),
+          ),
+          correlationId: "scope-refusal-correlation",
+        },
+        deps(
+          fakeModel("must not run", seenRequests),
+          {},
+          {
+            diagnostics: { record: (record) => diagnostics.push(record) },
+          },
+        ),
+        scopedRunner,
+      );
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+      });
+      expect(scopedRunner).not.toHaveBeenCalled();
+      expect(seenRequests).toEqual([]);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        correlationId: "scope-refusal-correlation",
+        source: `grounded.qa.${reason}`,
+        code: "GROUNDING_SCOPE_CHANGED",
+        httpStatus: 409,
+        errorClass: "invalid-request",
+      });
+      expect(diagnostics[0]?.frames?.length).toBeGreaterThan(0);
+      for (const canary of ["private-scope-refusal-canary", tmp, capturedIdentity])
+        expect(JSON.stringify(diagnostics)).not.toContain(canary);
+    },
+  );
+
+  it("exports the scope admission cause through the real diagnostic sink and worker at full quota", async () => {
+    const { chatId } = await setupChatWithScope();
+    const expectedGroundingScopeIdentity = deriveChatGroundingScopeIdentity(requiredChat(chatId));
+    store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
+    const stateDir = join(tmp, "scope-refusal-report-state");
+    for (let slot = 0; slot < MAX_SUPPORT_INCIDENTS; slot += 1)
+      expect(
+        recordUserReportedIncident(stateDir, { correlationId: `occupied-scope-${String(slot)}` })
+          .status,
+      ).toBe("created");
+    const retainedIds = listSupportIncidents(stateDir).map((incident) => incident.incidentId);
+    const correlationId = "quota-scope-refusal-correlation";
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(
+            JSON.stringify({
+              chatId,
+              content: "private-scope-report-canary",
+              expectedGroundingScopeIdentity,
+            }),
+          ),
+          correlationId,
+        },
+        deps(undefined, {}, { diagnostics: defaultServerDiagnosticSink }),
+        scopedRunner,
+      );
+      expect(result.status).toBe(409);
+      expect(scopedRunner).not.toHaveBeenCalled();
+      closeFileServerLogSinks();
+      const response = await runSupportReportJob(stateDir, correlationId);
+      const report = parseSupportReport(response.reportJson);
+      const analyzed = analyzeSupportReport(response.reportJson);
+      expect(report.incident).toMatchObject({
+        op: "server.diagnostic.failure",
+        errorKind: "invalid-request",
+      });
+      expect(report.incident.frameCount).toBeGreaterThan(0);
+      expect(analyzed.selection.status).toBe("complete");
+      const evidence = inflateSync(Buffer.from(report.evidence.payload, "base64")).toString("utf8");
+      for (const field of ['"reason":"grounding-scope"', '"httpStatus":409', '"frames":['])
+        expect(evidence).toContain(field);
+      for (const canary of [
+        "private-scope-report-canary",
+        tmp,
+        expectedGroundingScopeIdentity,
+        correlationId,
+      ])
+        expect(response.reportJson + evidence).not.toContain(canary);
+      expect(listSupportIncidents(stateDir).map((incident) => incident.incidentId)).toEqual(
+        retainedIds,
+      );
+    } finally {
+      stderr.mockRestore();
+      vi.unstubAllEnvs();
+      closeFileServerLogSinks();
+      resetServerLogger();
+    }
   });
 
   it("rejects a queued grounded turn before memory or retrieval when its captured scope changed", async () => {

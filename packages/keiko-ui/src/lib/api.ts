@@ -1190,6 +1190,7 @@ export async function createChat(input: CreateChatInput): Promise<ChatResponse> 
 }
 
 export interface UpdateChatInput {
+  expectedGroundingScopeIdentity?: string;
   title?: string;
   selectedModel?: string;
   branchLabel?: string;
@@ -1216,10 +1217,14 @@ export async function updateChat(id: string, patch: UpdateChatInput): Promise<Ch
 export async function updateChatConnectedScopes(
   chatId: string,
   scopes: readonly ChatConnectedScope[] | null,
+  expectedGroundingScopeIdentity?: string,
 ): Promise<ChatResponse> {
   return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
     method: "PATCH",
-    body: JSON.stringify({ connectedScopes: scopes }),
+    body: JSON.stringify({
+      connectedScopes: scopes,
+      ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
+    }),
   });
 }
 

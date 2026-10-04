@@ -1369,6 +1369,98 @@ describe("POST /api/chats", () => {
 
 // ─── Route 19: PATCH /api/chats ──────────────────────────────────────────────
 describe("PATCH /api/chats", () => {
+  it.each(["invalid", null, 42])("rejects malformed scope preconditions %s", async (identity) => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    const result = await handleUpdateChat(
+      directRouteContext(
+        `/api/chats?id=${chat.id}`,
+        JSON.stringify({ connectedScopes: null, expectedGroundingScopeIdentity: identity }),
+      ).ctx,
+      deps(),
+    );
+    expect(result.status).toBe(400);
+    expect(store.findChatById(chat.id)?.updatedAt).toBe(chat.updatedAt);
+  });
+
+  it("rejects a stale clearing patch without removing the current source", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    const current = store.updateChat(chat.id, {
+      connectedScopes: [
+        {
+          kind: "workspace-root",
+          relativePaths: [],
+          root: projDir,
+          connectedAtMs: 1,
+        },
+      ],
+    });
+    const result = await handleUpdateChat(
+      directRouteContext(
+        `/api/chats?id=${chat.id}`,
+        JSON.stringify({
+          connectedScopes: null,
+          expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
+        }),
+      ).ctx,
+      deps(),
+    );
+    expect(result.status).toBe(409);
+    expect(store.findChatById(chat.id)?.connectedScopes).toEqual(current.connectedScopes);
+  });
+
+  it("checks competing scope baselines after acquiring the serialized turn", async () => {
+    store.createProject(projDir);
+    for (const path of ["a", "b", "c"]) mkdirSync(join(projDir, path));
+    const created = store.createChat(projDir, "t", "m");
+    const scope = (path: string): import("./store/index.js").ChatConnectedScope => ({
+      kind: "directory",
+      root: projDir,
+      relativePaths: [path],
+      connectedAtMs: 1,
+    });
+    const baseline = store.updateChat(created.id, { connectedScopes: [scope("a")] });
+    const serializer = createChatTurnSerializer();
+    const release = deferred<undefined>();
+    const predecessor = serializer.runExclusive(
+      created.id,
+      new AbortController().signal,
+      async () => release.promise,
+    );
+    const runExclusive = vi.spyOn(serializer, "runExclusive");
+    const handlerDeps = deps({ chatTurnSerializer: serializer });
+    const patch = (paths: string[]): Promise<import("./routes.js").RouteResult> =>
+      handleUpdateChat(
+        directRouteContext(
+          `/api/chats?id=${created.id}`,
+          JSON.stringify({
+            connectedScopes: paths.map(scope),
+            expectedGroundingScopeIdentity: baseline.groundingScopeIdentity,
+          }),
+        ).ctx,
+        handlerDeps,
+      );
+    const first = patch(["b"]);
+    const stale = patch(["a", "c"]);
+    await vi.waitFor((): void => {
+      expect(runExclusive).toHaveBeenCalledTimes(2);
+    });
+    release.resolve(undefined);
+    await predecessor;
+    const [accepted, rejected] = await Promise.all([first, stale]);
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).not.toHaveProperty("chat.expectedGroundingScopeIdentity");
+    expect(store.findChatById(created.id)).not.toHaveProperty("expectedGroundingScopeIdentity");
+    expect(rejected).toMatchObject({
+      status: 409,
+      body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+    });
+    expect(
+      store.findChatById(created.id)?.connectedScopes?.map((item) => item.relativePaths),
+    ).toEqual([["b"]]);
+  });
+
   it("persists clearing git-change scopes from the disconnect patch", async () => {
     store.createProject(projDir);
     const chat = store.createChat(projDir, "t", "m");

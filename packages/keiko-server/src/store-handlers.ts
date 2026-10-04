@@ -22,6 +22,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { isGroundingScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { redactString } from "./grounded-qa.js";
+import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentGroundingLimits } from "./deps.js";
@@ -1114,7 +1117,17 @@ function groundingScopePatchFields(
   };
 }
 
+function optionalExpectedScopeIdentity(body: Record<string, unknown>): string | undefined {
+  const identity = body.expectedGroundingScopeIdentity;
+  if (identity === undefined) return undefined;
+  if (!isGroundingScopeIdentity(identity)) {
+    throw new InvalidRequest('Field "expectedGroundingScopeIdentity" must be a scope identity.');
+  }
+  return identity;
+}
+
 function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): UpdateChatPatch {
+  const expectedGroundingScopeIdentity = optionalExpectedScopeIdentity(body);
   const title = optionalString(body, "title");
   const selectedModel = optionalChatModelId(deps, body, "selectedModel");
   const branchLabel = optionalString(body, "branchLabel");
@@ -1124,6 +1137,7 @@ function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): Upd
     ...(selectedModel !== undefined ? { selectedModel } : {}),
     ...(branchLabel !== undefined ? { branchLabel } : {}),
     ...groundingScopePatchFields(body, deps),
+    ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
   };
   if (statusRaw === undefined) return patch;
   if (statusRaw !== "open" && statusRaw !== "closed") {
@@ -1212,8 +1226,13 @@ export async function handleUpdateChat(
       const id = requireQuery(ctx, "id");
       const body = await readJsonObject(ctx.req);
       const patch = buildChatPatch(deps, body);
-      const apply = (): RouteResult => applyChatUpdate(deps, id, patch, ctx.req);
-      if (!patchTouchesGroundingScope(patch) && patch.status === undefined) return apply();
+      const apply = (): RouteResult => applyChatUpdate(deps, id, patch, ctx.req, ctx.correlationId);
+      if (
+        !patchTouchesGroundingScope(patch) &&
+        patch.status === undefined &&
+        patch.expectedGroundingScopeIdentity === undefined
+      )
+        return apply();
       const result = await runSerializedChatTurn(deps, id, cancellation.signal, apply);
       return result === CHAT_TURN_WAIT_CANCELLED
         ? { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") }
@@ -1224,12 +1243,41 @@ export async function handleUpdateChat(
   }
 }
 
+function groundingPatchConflict(
+  deps: UiHandlerDeps,
+  id: string,
+  patch: UpdateChatPatch,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  if (patch.expectedGroundingScopeIdentity === undefined) return undefined;
+  const existing = findChatById(deps, id);
+  if (existing === undefined) return notFoundResult("Chat not found.");
+  if (patch.expectedGroundingScopeIdentity === deriveChatGroundingScopeIdentity(existing))
+    return undefined;
+  const message = "The connected sources changed before this update could run.";
+  emitServerDiagnostic(deps.diagnostics, {
+    ...serverDiagnosticFromError({
+      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+      operation: "PATCH /api/chats",
+      source: "chat.scope-update-conflict",
+      error: Object.assign(new Error(message), { code: "GROUNDING_SCOPE_CHANGED" }),
+      redact: (value): string => redactString(deps.redactor, value),
+    }),
+    errorClass: "invalid-request",
+    httpStatus: 409,
+  });
+  return { status: 409, body: errorBody("GROUNDING_SCOPE_CHANGED", message) };
+}
+
 function applyChatUpdate(
   deps: UiHandlerDeps,
   id: string,
   patch: UpdateChatPatch,
   req: IncomingMessage,
+  correlationId: string | undefined,
 ): RouteResult {
+  const conflict = groundingPatchConflict(deps, id, patch, correlationId);
+  if (conflict !== undefined) return conflict;
   const scopesToCheck = scopesRequiringAccessValidation(patch);
   const needsGitChangeCheck = gitChangeScopePatchNeedsAccessValidation(patch);
   let safePatch = patch;

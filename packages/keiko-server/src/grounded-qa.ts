@@ -141,6 +141,7 @@ import {
   parseClientTurnId,
   parseExpectedGroundingScopeIdentity,
   parseMemoryRequest,
+  logChatRejection,
   runPostCommitCanonicalTurnMemorySideEffects,
   type CanonicalTurnMemoryRequest,
   type ParsedConversationMemoryRequest,
@@ -2413,6 +2414,40 @@ async function prepareGroundedMemory(
   }
 }
 
+function groundedScopeRefusal(
+  admitted: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  reason: "scope-identity-mismatch" | "grounding-mode-changed",
+): RouteResult {
+  const message =
+    reason === "scope-identity-mismatch"
+      ? "The grounded source scope changed before the turn could run."
+      : "The chat grounding mode changed before the turn could run.";
+  logChatRejection(
+    "chat.send.rejected",
+    admitted.correlationId,
+    groundedModelId(admitted),
+    deps,
+    409,
+    "grounding-scope",
+  );
+  emitServerDiagnostic(deps.diagnostics, {
+    ...serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(admitted.correlationId),
+      operation: "POST /api/chats/messages/grounded",
+      source: `grounded.qa.${reason}`,
+      error: Object.assign(new Error(message), { code: "GROUNDING_SCOPE_CHANGED" }),
+      redact: (value): string => redactString(deps.redactor, value),
+    }),
+    errorClass: "invalid-request",
+    httpStatus: 409,
+  });
+  return settleGroundedChatTurn(admitted, deps, {
+    status: 409,
+    body: errorBody("GROUNDING_SCOPE_CHANGED", message),
+  });
+}
+
 function admittedGroundingScopeFailure(
   admitted: PreparedGroundedAsk,
   deps: UiHandlerDeps,
@@ -2422,13 +2457,7 @@ function admittedGroundingScopeFailure(
     expectedIdentity !== undefined &&
     expectedIdentity !== deriveChatGroundingScopeIdentity(admitted.chat)
   ) {
-    return settleGroundedChatTurn(admitted, deps, {
-      status: 409,
-      body: errorBody(
-        "GROUNDING_SCOPE_CHANGED",
-        "The grounded source scope changed before the turn could run.",
-      ),
-    });
+    return groundedScopeRefusal(admitted, deps, "scope-identity-mismatch");
   }
   if (
     expectedIdentity === undefined ||
@@ -2437,13 +2466,7 @@ function admittedGroundingScopeFailure(
   ) {
     return undefined;
   }
-  return settleGroundedChatTurn(admitted, deps, {
-    status: 409,
-    body: errorBody(
-      "GROUNDING_SCOPE_CHANGED",
-      "The chat grounding mode changed before the turn could run.",
-    ),
-  });
+  return groundedScopeRefusal(admitted, deps, "grounding-mode-changed");
 }
 
 function withHistoryCompactionSummary(

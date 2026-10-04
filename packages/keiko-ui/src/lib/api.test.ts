@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
+  updateChatConnectedScopes,
   streamAssistantSpeech,
   applyWorkspaceReplace,
   applyGatewayVerifiedCapabilities,
@@ -135,6 +136,41 @@ const MANAGED_LSP_VALIDATORS_SOURCE = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), "managed-lsp-response-validators.ts"),
   "utf8",
 );
+
+describe("connected source update preconditions", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([undefined, "gsi-v1:" + "a".repeat(64)])(
+    "forwards the optional canonical baseline %s",
+    async (identity) => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ chat: {} }));
+      vi.stubGlobal("fetch", fetchMock);
+      await updateChatConnectedScopes("chat-source", null, identity);
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      expect(JSON.parse(init.body as string)).toEqual({
+        connectedScopes: null,
+        ...(identity === undefined ? {} : { expectedGroundingScopeIdentity: identity }),
+      });
+    },
+  );
+
+  it("preserves the closed scope-conflict status for intent rebasing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: { code: "GROUNDING_SCOPE_CHANGED", message: "Connected sources changed." },
+          }),
+          { status: 409, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    await expect(
+      updateChatConnectedScopes("chat-source", null, "gsi-v1:" + "a".repeat(64)),
+    ).rejects.toMatchObject({ code: "GROUNDING_SCOPE_CHANGED", status: 409 });
+  });
+});
 
 describe("managed language settings API", () => {
   afterEach(() => {
