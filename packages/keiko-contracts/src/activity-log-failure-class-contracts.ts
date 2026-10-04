@@ -3669,7 +3669,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-model-gateway"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["gateway.circuit.half-open"],
+      state: ["gateway.circuit.half-open", "gateway.circuit.wait"],
       end: ["gateway.circuit.closed"],
       failure: ["gateway.circuit.opened", "gateway.circuit.rejected"],
       loss: [],
@@ -3681,9 +3681,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "gateway.circuit.half-open",
       "gateway.circuit.opened",
       "gateway.circuit.rejected",
+      "gateway.circuit.wait",
     ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["gateway.circuit.closed", "gateway.circuit.half-open"],
+    requiredResourceOperations: [
+      "gateway.circuit.closed",
+      "gateway.circuit.half-open",
+      "gateway.circuit.wait",
+    ],
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",
