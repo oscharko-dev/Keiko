@@ -979,7 +979,7 @@ export const ASSEMBLE_INPUT_CACHE_FIELD_COVERAGE = {
   ranked: "fingerprint key `ranked` (via cacheCandidate)",
   omittedFromRanking: "fingerprint key `omittedFromRanking` (via cacheOmitted)",
   excerpts: "fingerprint key `excerpts` (via cacheExcerptIdentity)",
-  cacheIdentity: "folded into `excerpts`/`initialUncertainty` via cacheExcerptIdentity",
+  cacheIdentity: "folded into `excerpts` via cacheExcerptIdentity",
   initialUsage: "fingerprint key `initialUsage` (via cacheUsage)",
   initialUncertainty: "fingerprint key `initialUncertainty` (via cacheUncertainty)",
   diagnostics: "fingerprint key `diagnostics` (via cacheDiagnostics)",
