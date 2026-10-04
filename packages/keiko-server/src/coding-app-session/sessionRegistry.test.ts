@@ -49,6 +49,38 @@ describe("createSessionRegistry", () => {
     expect(registry.sessionCount()).toBe(0);
   });
 
+  it("removes expired sessions before evicting an active operation", () => {
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({ now: clock.now, idleTtlMs: 100, maxSessions: 2 });
+    const active = registry.mint("active");
+    const release = registry.beginOperation(active.cookieToken);
+    clock.advance(1);
+    const expired = registry.mint("expired");
+    clock.advance(101);
+    const replacement = registry.mint("replacement");
+    expect(registry.inspect(active.cookieToken)).toBeDefined();
+    expect(registry.inspect(expired.cookieToken)).toBeUndefined();
+    expect(registry.inspect(replacement.cookieToken)).toBeDefined();
+    expect(registry.sessionCount()).toBe(2);
+    release?.();
+  });
+
+  it("prefers an idle session over a valid active operation at capacity", () => {
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({ now: clock.now, maxSessions: 2 });
+    const active = registry.mint("active");
+    const release = registry.beginOperation(active.cookieToken);
+    clock.advance(1);
+    const idle = registry.mint("idle");
+    clock.advance(1);
+    const replacement = registry.mint("replacement");
+    expect(registry.inspect(active.cookieToken)).toBeDefined();
+    expect(registry.inspect(idle.cookieToken)).toBeUndefined();
+    expect(registry.inspect(replacement.cookieToken)).toBeDefined();
+    expect(registry.sessionCount()).toBe(2);
+    release?.();
+  });
+
   it("keeps capacity eviction authoritative during an active operation", () => {
     const clock = fixedClock(0);
     const registry = createSessionRegistry({ now: clock.now, maxSessions: 1 });

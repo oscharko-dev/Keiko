@@ -26,6 +26,10 @@ export interface AppSession {
 export interface SessionMint {
   readonly session: AppSession;
   readonly cookieToken: string;
+  readonly capacityDecision?: {
+    readonly expiredSessionCount: number;
+    readonly evictedSessionClass: "none" | "inactive" | "active";
+  };
 }
 
 export interface SessionRegistry {
@@ -33,6 +37,8 @@ export interface SessionRegistry {
   readonly verify: (cookieToken: string | undefined) => AppSession | undefined;
   /** Non-touching validity check for persistent server streams; never refreshes idle expiry. */
   readonly inspect: (cookieToken: string | undefined) => AppSession | undefined;
+  /** Confirm existing authority and return its remaining absolute cookie lifetime. */
+  readonly verifyForCookieRepair: (cookieToken: string | undefined) => number | undefined;
   /** Protect a valid session from idle expiry only while an explicit operation remains active. */
   readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
   readonly rotate: (sessionId: string) => SessionMint | undefined;
@@ -113,13 +119,32 @@ function isExpired(state: RegistryState, stored: StoredSession, nowMs: number): 
   );
 }
 
-function evictOldestIfFull(state: RegistryState): void {
-  if (state.sessions.size < state.maxSessions) return;
-  let oldest: StoredSession | undefined;
+function sweepExpiredSessions(state: RegistryState): number {
+  let expiredSessionCount = 0;
+  const nowMs = state.now();
   for (const stored of state.sessions.values()) {
+    if (isExpired(state, stored, nowMs)) {
+      state.sessions.delete(stored.sessionId);
+      expiredSessionCount += 1;
+    }
+  }
+  return expiredSessionCount;
+}
+
+function evictOldestIfFull(state: RegistryState): NonNullable<SessionMint["capacityDecision"]> {
+  if (state.sessions.size < state.maxSessions)
+    return { expiredSessionCount: 0, evictedSessionClass: "none" };
+  const expiredSessionCount = sweepExpiredSessions(state);
+  if (state.sessions.size < state.maxSessions)
+    return { expiredSessionCount, evictedSessionClass: "none" };
+  const candidates = [...state.sessions.values()];
+  const inactive = candidates.filter((stored) => stored.activeOperationCount === 0);
+  let oldest: StoredSession | undefined;
+  for (const stored of inactive.length > 0 ? inactive : candidates) {
     if (oldest === undefined || stored.lastSeenAtMs < oldest.lastSeenAtMs) oldest = stored;
   }
   if (oldest !== undefined) state.sessions.delete(oldest.sessionId);
+  return { expiredSessionCount, evictedSessionClass: inactive.length > 0 ? "inactive" : "active" };
 }
 
 function storeSession(
@@ -144,8 +169,8 @@ function storeSession(
 }
 
 function mintSession(state: RegistryState, principalLabel: string): SessionMint {
-  evictOldestIfFull(state);
-  return storeSession(state, state.mintSessionId(), principalLabel, 0);
+  const capacityDecision = evictOldestIfFull(state);
+  return { ...storeSession(state, state.mintSessionId(), principalLabel, 0), capacityDecision };
 }
 
 function verifySession(
@@ -166,6 +191,16 @@ function verifySession(
   if (!timingSafeEqual(saltedHash(state.salt, parsed.secret), stored.secretHash)) return undefined;
   if (touch) stored.lastSeenAtMs = nowMs;
   return describe(stored);
+}
+
+function verifyForCookieRepair(
+  state: RegistryState,
+  cookieToken: string | undefined,
+): number | undefined {
+  const verified = verifySession(state, cookieToken, true);
+  return verified === undefined
+    ? undefined
+    : Math.max(0, state.absoluteTtlMs - (state.now() - verified.issuedAtMs));
 }
 
 function rotateSession(state: RegistryState, sessionId: string): SessionMint | undefined {
@@ -216,6 +251,8 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
       verifySession(state, cookieToken, true),
     inspect: (cookieToken: string | undefined): AppSession | undefined =>
       verifySession(state, cookieToken, false),
+    verifyForCookieRepair: (cookieToken: string | undefined): number | undefined =>
+      verifyForCookieRepair(state, cookieToken),
     beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>
       beginSessionOperation(state, cookieToken),
     rotate: (sessionId: string): SessionMint | undefined => rotateSession(state, sessionId),

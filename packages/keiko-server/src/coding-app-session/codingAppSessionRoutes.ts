@@ -85,7 +85,15 @@ const CODING_APP_SESSION_PAIRED_OPERATION = defineActivityLogOperation({
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionPair",
-  fields: {},
+  fields: {
+    expiredSessionCount: { type: "integer", dataClass: "count", required: false },
+    evictedSessionClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      values: ["none", "inactive", "active"],
+      required: false,
+    },
+  },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -101,7 +109,10 @@ const CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION = defineActivityLogOp
   category: "http",
   owner: "keiko-server",
   emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionLocalSession",
-  fields: {},
+  fields: {
+    cookieMaxAgeSeconds: { type: "integer", dataClass: "duration", required: true },
+    projectionCount: { type: "integer", dataClass: "count", required: true },
+  },
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
@@ -255,11 +266,12 @@ function ackResult(headers?: RouteResult["headers"]): RouteResult {
 function issuedCookie(
   req: IncomingMessage,
   cookieToken: string,
+  maxAgeSeconds = APP_SESSION_COOKIE_MAX_AGE_SECONDS,
 ): Readonly<Record<string, readonly string[]>> {
   return {
     "Set-Cookie": serializeSessionCookies(cookieToken, {
       secure: requestIsSecure(req),
-      maxAgeSeconds: APP_SESSION_COOKIE_MAX_AGE_SECONDS,
+      maxAgeSeconds,
     }),
   };
 }
@@ -284,7 +296,7 @@ export async function handleCodingAppSessionPair(
     activityLogEvent(
       CODING_APP_SESSION_PAIRED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      {},
+      result.capacityDecision ?? {},
     ),
   );
   return ackResult(issuedCookie(ctx.req, result.cookieToken));
@@ -303,14 +315,18 @@ export function handleCodingAppSessionLocalSession(
   const cookieToken = readSessionCookie(ctx.req);
   const result = deps.codingAppSessionChannel?.ensureLocalSession(cookieToken);
   if (result?.status !== "active" || cookieToken === undefined) return ackResult();
+  const maxAgeSeconds = Math.min(APP_SESSION_COOKIE_MAX_AGE_SECONDS, result.maxAgeSeconds);
+  const headers = issuedCookie(ctx.req, cookieToken, maxAgeSeconds);
+  const projectionCount =
+    headers["Set-Cookie"]?.filter((cookie) => !cookie.includes("Max-Age=0")).length ?? 0;
   appSessionActivity(deps).write(
     activityLogEvent(
       CODING_APP_SESSION_LOCAL_SESSION_CONFIRMED_OPERATION,
       { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
-      {},
+      { cookieMaxAgeSeconds: maxAgeSeconds, projectionCount },
     ),
   );
-  return ackResult(issuedCookie(ctx.req, cookieToken));
+  return ackResult(headers);
 }
 
 function currentSnapshot(

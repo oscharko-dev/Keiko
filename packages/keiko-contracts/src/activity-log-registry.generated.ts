@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "73576d019620f91cfdd2fb58417f441f23c94f0f3fcf5272d79297757a903a29" as const;
+  "e42a8140deb1d3330806f26183ac128cce3af29ba21239a910b5eedf00e5ea13" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -4030,6 +4030,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      cookieMaxAgeSeconds: {
+        type: "integer",
+        dataClass: "duration",
+        required: true,
+      },
+      projectionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -4055,6 +4065,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "loss-state",
         required: true,
+      },
+      expiredSessionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      evictedSessionClass: {
+        type: "string",
+        dataClass: "closed-enum",
+        values: ["none", "inactive", "active"],
+        required: false,
       },
     },
     causal: "correlation",
@@ -35839,8 +35860,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           lifecycle: "end",
           causal: "correlation",
           analyzerProjection: "timeline",
-          safeContextFields: [],
-          evidenceClasses: ["completeness-state", "loss-state"],
+          safeContextFields: [
+            {
+              name: "cookieMaxAgeSeconds",
+              type: "integer",
+              dataClass: "duration",
+              required: true,
+            },
+            {
+              name: "projectionCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "count", "duration", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -35856,8 +35890,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           lifecycle: "end",
           causal: "correlation",
           analyzerProjection: "timeline",
-          safeContextFields: [],
-          evidenceClasses: ["completeness-state", "loss-state"],
+          safeContextFields: [
+            {
+              name: "evictedSessionClass",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "expiredSessionCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

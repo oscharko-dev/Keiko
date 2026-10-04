@@ -96,7 +96,10 @@ finalized with the UI plumbing in W1.5; the server-side authority, the session, 
 complete and independently testable through the port here.
 
 The local-session restore route only confirms an existing valid bearer and refreshes its exact
-scoped cookie projections. It neither mints a session nor extends the server-owned absolute lifetime. This repairs
+scoped cookie projections. Their browser Max-Age is bounded by the verified registry lifetime
+remaining on its own clock and the existing cookie lifetime ceiling. The registered confirmation
+records the actual Max-Age and projection count, without bearer material. It neither mints a session
+nor extends the server-owned absolute lifetime. This repairs
 missing projections after an upgrade, including the authenticated support-report route. Composing a launcher
 pairing port is never itself client attestation: an absent, forged, revoked or expired cookie cannot
 mint a new session. The launcher fragment is redeemed only by the existing single-use `/pair`
@@ -147,7 +150,11 @@ independent. Pre-admission queue waits do not acquire protection. Completion and
 idempotently. While a valid operation is pending the session is active, even during a long provider
 wait. The last release starts the normal inactivity window from completion. Revocation, rotation,
 process restart, capacity eviction and the absolute lifetime still invalidate authority immediately;
-release cannot revive a removed or replaced session. No timer, polling or passive SSE renews it.
+release cannot revive a removed or replaced session. At capacity, admission first removes expired
+sessions, then prefers the oldest inactive session over a valid active operation. If every session
+is active, the existing bounded capacity remains authoritative and evicts the oldest session. The
+registered pairing result records expired-session count and a closed eviction class, without IDs.
+No timer, polling or passive SSE renews it.
 
 ### D6 — Fail closed to the content-free projection, never to an error that reveals content
 

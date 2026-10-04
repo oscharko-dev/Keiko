@@ -472,7 +472,7 @@ function pairedRouteAppSessionChannel(): CodingAppSessionChannel {
     pair: () => ({ paired: false }),
     ensureLocalSession: (cookieToken) =>
       cookieToken === ROUTE_APP_SESSION_COOKIE_TOKEN
-        ? { status: "active" }
+        ? { status: "active", maxAgeSeconds: 3600 }
         : { status: "unavailable" },
     snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
     rotate: () => ({ rotated: false }),

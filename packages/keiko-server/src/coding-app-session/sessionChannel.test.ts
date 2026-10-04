@@ -88,7 +88,7 @@ describe("createCodingAppSessionChannel", () => {
     expect(channel.sessionCount()).toBe(0);
     const paired = channel.pair(fakePairingRequestBody());
     if (!paired.paired) throw new TypeError("expected launcher pairing");
-    expect(channel.ensureLocalSession(paired.cookieToken)).toEqual({ status: "active" });
+    expect(channel.ensureLocalSession(paired.cookieToken)).toMatchObject({ status: "active" });
     expect(channel.sessionCount()).toBe(1);
     channel.signOut(paired.cookieToken);
     expect(channel.ensureLocalSession(paired.cookieToken)).toEqual({ status: "unavailable" });

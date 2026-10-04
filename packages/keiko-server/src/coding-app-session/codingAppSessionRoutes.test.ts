@@ -22,7 +22,11 @@ import {
   readPairingBody,
 } from "./codingAppSessionRoutes.js";
 import { createCodingAppSessionChannel, type CodingAppSessionChannel } from "./sessionChannel.js";
-import { APP_SESSION_COOKIE_NAME } from "./sessionCookie.js";
+import {
+  APP_SESSION_COOKIE_NAME,
+  APP_SESSION_COOKIE_MAX_AGE_SECONDS,
+  serializeSessionCookies,
+} from "./sessionCookie.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -117,7 +121,9 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const count = channel.sessionCount();
     const headers = handleCodingAppSessionLocalSession(ctx(cookie), deps(channel)).headers;
     const projections = headers?.["Set-Cookie"];
-    expect(projections).toHaveLength(14);
+    expect(projections).toHaveLength(
+      serializeSessionCookies("test", { secure: false, maxAgeSeconds: 1 }).length,
+    );
     expect(String(projections)).toContain("Path=/api/diagnostics/report;");
     expect(String(projections)).toContain("Path=/api/chats/messages/grounded;");
     const values = typeof projections === "string" || projections === undefined ? [] : projections;
@@ -125,6 +131,29 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
       if (!projection.includes("Max-Age=0")) expect(projection.split(";")[0]).toBe(cookie);
     }
     expect(channel.sessionCount()).toBe(count);
+  });
+
+  it("bounds restored cookie projections by the registry's remaining absolute lifetime", () => {
+    let now = 0;
+    const registry = createSessionRegistry({ now: () => now, absoluteTtlMs: 10_000 });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("Pairing failed");
+    now = 2500;
+    const projections = handleCodingAppSessionLocalSession(
+      ctx(`${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`),
+      deps(channel),
+    ).headers?.["Set-Cookie"];
+    if (typeof projections === "string" || projections === undefined)
+      throw new TypeError("Expected scoped cookie projections");
+    const active = projections.filter((projection) => !projection.includes("Max-Age=0"));
+    expect(active.length).toBeGreaterThan(0);
+    for (const projection of active)
+      expect(/(?:^|; )Max-Age=(\d+)/u.exec(projection)?.[1]).toBe("7");
+    expect(registry.inspect(paired.cookieToken)?.issuedAtMs).toBe(0);
   });
 
   it("scoped cookie repair never extends absolute expiry or revives a revoked session", () => {
@@ -161,7 +190,9 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionRotate(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(14);
+    expect(setCookie).toHaveLength(
+      serializeSessionCookies("test", { secure: false, maxAgeSeconds: 1 }).length,
+    );
     expect(String(setCookie)).toContain("Path=/api/chats/messages/grounded;");
     expect(String(setCookie)).toContain("Path=/api/task-workspaces;");
     expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
@@ -181,7 +212,9 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionSignOut(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(14);
+    expect(setCookie).toHaveLength(
+      serializeSessionCookies("test", { secure: false, maxAgeSeconds: 1 }).length,
+    );
     expect(String(setCookie)).toContain("Path=/api/chats/messages/grounded;");
     expect(String(setCookie)).toContain("Path=/api/task-workspaces;");
     expect(String(setCookie)).toContain("Path=/api/editor/local-history");
@@ -254,7 +287,12 @@ describe("app-session lifecycle lines (F65)", () => {
         category: "http",
         op: "coding-app-session.paired",
         correlationId: "pair-correlation",
-        extra: { completeness: "complete", loss: "none" },
+        extra: {
+          expiredSessionCount: 0,
+          evictedSessionClass: "none",
+          completeness: "complete",
+          loss: "none",
+        },
       },
     ]);
     expectActivityLogProof(
@@ -263,22 +301,59 @@ describe("app-session lifecycle lines (F65)", () => {
     );
   });
 
+  it("records expiry cleanup and active-session protection during capacity admission", async () => {
+    let now = 0;
+    const registry = createSessionRegistry({ now: () => now, idleTtlMs: 100, maxSessions: 2 });
+    const active = registry.mint("active");
+    const release = registry.beginOperation(active.cookieToken);
+    now = 1;
+    registry.mint("expired");
+    now = 102;
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const { deps: logDeps, events } = logged(channel);
+    await handleCodingAppSessionPair(pairingRequest(fakePairingRequestBody()), logDeps);
+    expect(events[0]?.extra).toMatchObject({ expiredSessionCount: 1, evictedSessionClass: "none" });
+    expect(
+      expectActivityLogProof(
+        "coding-app-session.paired.request",
+        formatActivityLogProofLine(events[0] ?? {}),
+      ),
+    ).toMatchObject({ expiredSessionCount: 1, evictedSessionClass: "none" });
+    expect(registry.inspect(active.cookieToken)).toBeDefined();
+    release?.();
+  });
+
   it("logs a confirmed existing session with body-free lifecycle evidence", () => {
     const { channel, cookie } = pairedChannel();
     const { deps: logDeps, events } = logged(channel);
-    handleCodingAppSessionLocalSession(
+    const result = handleCodingAppSessionLocalSession(
       { ...ctx(cookie), correlationId: "local-correlation" },
       logDeps,
     );
-    expect(events).toEqual([
+    const projections = result.headers?.["Set-Cookie"];
+    if (typeof projections === "string" || projections === undefined)
+      throw new TypeError("Expected repaired cookie projections");
+    const projectionCount = projections.filter((value) => !value.includes("Max-Age=0")).length;
+    expect(events).toMatchObject([
       {
         level: "info",
         category: "http",
         op: "coding-app-session.local-session.confirmed",
         correlationId: "local-correlation",
-        extra: { completeness: "complete", loss: "none" },
+        extra: {
+          projectionCount,
+          completeness: "complete",
+          loss: "none",
+        },
       },
     ]);
+    expect(events[0]?.extra?.cookieMaxAgeSeconds).toBeGreaterThan(0);
+    expect(events[0]?.extra?.cookieMaxAgeSeconds).toBeLessThanOrEqual(
+      APP_SESSION_COOKIE_MAX_AGE_SECONDS,
+    );
     expectActivityLogProof(
       "coding-app-session.local-session.confirmed.request",
       formatActivityLogProofLine(events[0] ?? {}),
