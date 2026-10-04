@@ -307,7 +307,13 @@ describe("desktop report privacy through real producers and compressed evidence"
       PRIVATE_VERSION,
       ClientAcmePayrollError.name,
     ]);
-    expect(analyzeSupportReport(response.reportJson).selection.status).toBe("degraded");
+    const analyzed = analyzeSupportReport(response.reportJson);
+    // The private failure cannot survive export as registered evidence. The analyzer must not
+    // claim useful failure reconstruction merely because its pre-export source was retained.
+    expect(analyzed.selection.status).toBe("insufficient");
+    expect(analyzed.selection.reasons).toContain("no-registered-failure");
+    expect(analyzed.selection.reasons).toContain("evidence-not-retained");
+    expect(report.incident.frameCount).toBe(1);
     expect(report.selection.reasons).toContain("evidence-partial");
     expect(report.selection.reasons).not.toContain("unsupported-evidence");
   });

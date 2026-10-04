@@ -23,6 +23,7 @@ import {
 import { createFileServerLogSink, closeFileServerLogSinks } from "./server-log.js";
 import { createDesktopSupportReport } from "./reader/support-desktop-report.js";
 import { parseSupportReport, analyzeSupportReport } from "./reader/support-report.js";
+import { supportIncidentRetentionPolicy } from "./support-incident-retention.js";
 
 const race = vi.hoisted(() => ({ hook: undefined as (() => void) | undefined }));
 vi.mock("./support-incident-store.js", async (original) => {
@@ -47,6 +48,7 @@ beforeEach((): void => {
 afterEach((): void => {
   race.hook = undefined;
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   setSupportIncidentTriggerForTests(undefined);
   closeFileServerLogSinks();
   rmSync(stateDir, { recursive: true, force: true });
@@ -173,6 +175,8 @@ describe("canonical client incident version compatibility and occurrence claims"
     ).toBe(true);
   });
   it("reserves automatic retention slots for server failures across browser noise windows", (): void => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    const policy = supportIncidentRetentionPolicy(stateDir);
     setSupportIncidentTriggerForTests(true);
     const start = Date.now();
     const clock = vi.spyOn(Date, "now");
@@ -187,9 +191,13 @@ describe("canonical client incident version compatibility and occurrence claims"
     expect(
       records.some((record) => record.fingerprint.op === "coding-runtime.readiness.failed"),
     ).toBe(true);
-    expect(
-      records.filter((record) => record.fingerprint.op === "client.diagnostic").length,
-    ).toBeLessThanOrEqual(8);
+    expect(records.filter((record) => record.fingerprint.op === "client.diagnostic").length).toBe(
+      policy.browserCapacity,
+    );
+    const server = records.find(
+      (record) => record.fingerprint.op === "coding-runtime.readiness.failed",
+    );
+    expect(server?.slotIndex).toBeGreaterThanOrEqual(policy.browserCapacity);
     clock.mockRestore();
   });
   it("exports a raw browser chunk failure through the real sink and automatic trigger", (): void => {

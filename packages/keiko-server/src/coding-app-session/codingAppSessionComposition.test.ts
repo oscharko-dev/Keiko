@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
@@ -14,9 +14,14 @@ import {
   SESSION_PAIRING_LAUNCHER_SECRET_ENV,
   mintLauncherPairingAttestation,
 } from "./launcherSessionPairingPort.js";
-import { APP_SESSION_COOKIE_NAME } from "./sessionCookie.js";
+import {
+  APP_SESSION_COOKIE_NAME,
+  APP_SESSION_COOKIE_MAX_AGE_SECONDS,
+  serializeSessionCookies,
+} from "./sessionCookie.js";
 
 const LAUNCHER_SECRET = "launcher-secret-that-is-long-enough-32+chars";
+afterEach(() => vi.restoreAllMocks());
 
 function productionDeps(env: EnvSource): UiHandlerDeps {
   return buildUiHandlerDeps({
@@ -69,7 +74,9 @@ describe("production composition of the app-session channel (ADR-0141 D7)", () =
     },
   );
 
-  it("handleCodingAppSessionLocalSession honors a valid app-session cookie without issuing a fresh one", () => {
+  it("handleCodingAppSessionLocalSession repairs the existing bearer within its remaining absolute lifetime", () => {
+    const nowMs = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(nowMs);
     const deps = productionDeps({ [SESSION_PAIRING_LAUNCHER_SECRET_ENV]: LAUNCHER_SECRET });
     const channel = deps.codingAppSessionChannel;
     if (channel === undefined) throw new Error("channel missing");
@@ -81,12 +88,21 @@ describe("production composition of the app-session channel (ADR-0141 D7)", () =
       }),
     );
     if (!pair.paired) throw new Error("pair failed");
+    clock.mockReturnValue(nowMs + 1000);
     const before = channel.sessionCount();
+    const active = channel.ensureLocalSession(pair.cookieToken);
+    if (active.status !== "active") throw new TypeError("Expected the existing live session");
+    expect(active.maxAgeSeconds).toBeLessThan(APP_SESSION_COOKIE_MAX_AGE_SECONDS);
     const result = handleCodingAppSessionLocalSession(
       routeCtx(`${APP_SESSION_COOKIE_NAME}=${pair.cookieToken}`),
       deps,
     );
-    expect(result.headers).toBeUndefined();
+    expect(result.headers).toEqual({
+      "Set-Cookie": serializeSessionCookies(pair.cookieToken, {
+        secure: false,
+        maxAgeSeconds: active.maxAgeSeconds,
+      }),
+    });
     expect(channel.sessionCount()).toBe(before);
   });
 
