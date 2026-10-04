@@ -1219,6 +1219,155 @@ describe("handleGroundedAsk", () => {
     expect(channel.verifySession(paired.cookieToken)).toMatchObject({ lastSeenAtMs: clock });
   });
 
+  it.each(["malformed", "unknown-chat", "scope-changed"] as const)(
+    "does not renew session activity for a rejected %s grounded request",
+    async (kind) => {
+      const { chatId } = await setupChatWithScope();
+      const expectedGroundingScopeIdentity = deriveChatGroundingScopeIdentity(requiredChat(chatId));
+      let clock = 0;
+      const registry = createSessionRegistry({ now: () => clock });
+      const channel = createCodingAppSessionChannel({
+        registry,
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const paired = channel.pair(fakePairingRequestBody());
+      if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+      if (kind === "scope-changed")
+        store.updateChat(chatId, { connectedScope: null, connectedScopes: null });
+      const body =
+        kind === "malformed"
+          ? "{"
+          : JSON.stringify({
+              chatId: kind === "unknown-chat" ? "missing-chat" : chatId,
+              content: "Inspect the connected folder.",
+              expectedGroundingScopeIdentity,
+            });
+      clock = 10 * 60_000;
+      const retrieve = vi.fn(runner(emptyPack()));
+      const result = await handleGroundedAsk(
+        ctx(body, fakeRes(), `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`),
+        deps(undefined, {}, { codingAppSessionChannel: channel }),
+        retrieve,
+      );
+      expect(result.status).toBeGreaterThanOrEqual(400);
+      expect(retrieve).not.toHaveBeenCalled();
+      expect(registry.inspect(paired.cookieToken)?.lastSeenAtMs).toBe(0);
+      clock = 31 * 60_000;
+      expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+    },
+  );
+
+  it("does not protect idle expiry while a grounded request body remains unparsed", async () => {
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+    const req = new PassThrough() as unknown as IncomingMessage;
+    req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}` };
+    const res = fakeRes();
+    const outcome = handleGroundedAsk(
+      { ...ctx("", res), req },
+      deps(undefined, {}, { codingAppSessionChannel: channel }),
+      runner(emptyPack()),
+    );
+    expect(req.listenerCount("data")).toBe(1);
+    (req as unknown as PassThrough).write("{");
+    clock = 31 * 60_000;
+    const authorityWhileUnparsed = registry.inspect(paired.cookieToken);
+    res.emit("close");
+    expect((await outcome).status).toBe(499);
+    expect(authorityWhileUnparsed).toBeUndefined();
+    expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+    (req as unknown as PassThrough).destroy();
+  });
+
+  it.each(["success", "failure", "exception"] as const)(
+    "keeps report authority during a long active grounded turn ending in %s",
+    async (outcome) => {
+      const { chatId } = await setupChatWithScope();
+      let clock = 0;
+      const registry = createSessionRegistry({ now: () => clock });
+      const channel = createCodingAppSessionChannel({
+        registry,
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const paired = channel.pair(fakePairingRequestBody());
+      if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+      const started = deferred<undefined>();
+      const completion = deferred<undefined>();
+      const slowRunner: GroundedRunner = async (input) => {
+        started.resolve(undefined);
+        await completion.promise;
+        if (outcome === "failure")
+          throw new RateLimitError("Synthetic deferred gateway failure.", 0);
+        if (outcome === "exception") throw new Error("Synthetic unexpected runner failure.");
+        return runner(emptyPack())(input);
+      };
+      const request = handleGroundedAsk(
+        ctx(
+          JSON.stringify({ chatId, content: "Inspect the connected folder." }),
+          fakeRes(),
+          `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
+        ),
+        deps(undefined, {}, { codingAppSessionChannel: channel }),
+        slowRunner,
+      );
+      await started.promise;
+      clock = 31 * 60_000;
+      const authorityWhilePending = registry.inspect(paired.cookieToken);
+      completion.resolve(undefined);
+      if (outcome === "exception") {
+        await expect(request).rejects.toThrow("Synthetic unexpected runner failure.");
+      } else {
+        expect((await request).status).toBe(outcome === "success" ? 200 : 503);
+      }
+      expect(authorityWhilePending).toBeDefined();
+      expect(channel.verifySession(paired.cookieToken)).toBeDefined();
+      clock = 62 * 60_000;
+      expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+    },
+  );
+
+  it("releases session activity on disconnect before an uncooperative runner completes", async () => {
+    const { chatId } = await setupChatWithScope();
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+    const started = deferred<undefined>();
+    const completion = deferred<OrchestratorOutput>();
+    const res = fakeRes();
+    const request = handleGroundedAsk(
+      ctx(
+        JSON.stringify({ chatId, content: "Inspect the connected folder." }),
+        res,
+        `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
+      ),
+      deps(undefined, {}, { codingAppSessionChannel: channel }),
+      () => {
+        started.resolve(undefined);
+        return completion.promise;
+      },
+    );
+    await started.promise;
+    clock = 31 * 60_000;
+    expect(registry.inspect(paired.cookieToken)).toBeDefined();
+    res.emit("close");
+    clock = 62 * 60_000;
+    expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+    completion.resolve({ pack: emptyPack(), assistantContent: "late", elapsedMs: 1 });
+    expect((await request).status).toBe(499);
+    expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+  });
+
   it.each(["absent", "forged", "revoked", "idle-expired", "absolute-expired"] as const)(
     "keeps ordinary grounded Chat compatible without reviving %s session authority",
     async (kind) => {

@@ -23,3 +23,22 @@ export function resolveAppSessionReadAuthority(
 ): AppSession | undefined {
   return deps.codingAppSessionChannel?.verifySession(readSessionCookie(req));
 }
+
+/** Keep a valid existing session active only for this explicit request, including cancellation. */
+export function beginAppSessionOperation(
+  deps: Pick<UiHandlerDeps, "codingAppSessionChannel">,
+  req: IncomingMessage | undefined,
+  signal: AbortSignal,
+): () => void {
+  const release =
+    req === undefined
+      ? undefined
+      : deps.codingAppSessionChannel?.beginOperation(readSessionCookie(req));
+  if (release === undefined) return (): void => undefined;
+  if (signal.aborted) release();
+  else signal.addEventListener("abort", release, { once: true });
+  return (): void => {
+    signal.removeEventListener("abort", release);
+    release();
+  };
+}

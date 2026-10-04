@@ -30,6 +30,7 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { DEFAULT_LEXICAL_MATCH_LIMIT } from "@oscharko-dev/keiko-workflows";
 import {
   persistConnectedContextEvidence,
   type ConnectedContextEvidenceInput,
@@ -153,7 +154,10 @@ import {
 } from "./chat-turn-identity.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { createRequestCancellation } from "./request-cancellation.js";
-import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
+import {
+  beginAppSessionOperation,
+  resolveAppSessionReadAuthority,
+} from "./coding-app-session/appSessionReadAuthority.js";
 import {
   createOrdinaryWorkspaceRootAccess,
   requiresConfiguredManagedWorkspaceAuthority,
@@ -635,7 +639,7 @@ export function buildQuery(content: string, nowMs: () => number): RetrievalQuery
     kind: "natural-language",
     text: content,
     caseSensitive: false,
-    maxResults: 50,
+    maxResults: DEFAULT_LEXICAL_MATCH_LIMIT,
     emittedAtMs: nowMs(),
   };
 }
@@ -2573,7 +2577,13 @@ async function executeGroundedAskInTurn(
   const admitted = admitGroundedUser(modelAdmitted, deps);
   if (isRouteResult(admitted)) return admitted;
   const scopeFailure = admittedGroundingScopeFailure(admitted, deps);
-  return scopeFailure ?? runAdmittedGroundedAsk(admitted, deps, runner, multiSource, hybrid);
+  if (scopeFailure !== undefined) return scopeFailure;
+  const releaseSession = beginAppSessionOperation(deps, admitted.request, admitted.signal);
+  try {
+    return await runAdmittedGroundedAsk(admitted, deps, runner, multiSource, hybrid);
+  } finally {
+    releaseSession();
+  }
 }
 
 async function executeGroundedAsk(
@@ -2809,8 +2819,6 @@ export async function handleGroundedAsk(
     const prepared = await prepareGroundedAsk(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return groundedCancelledResult();
     if ("status" in prepared) return prepared;
-    // Explicit activity refreshes only a valid existing session; ordinary Chat needs no pairing.
-    resolveAppSessionReadAuthority(deps, ctx.req);
     const result = await executeGroundedAsk(prepared, deps, runner, multiSource, hybrid);
     if (result.status === 200 && groundedAnswerBody(result.body)) {
       logChatResponseMessage(result.body.assistantMessageId, ctx.correlationId);

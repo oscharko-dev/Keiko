@@ -237,7 +237,10 @@ import {
   withGatewayConversationImages,
 } from "./conversation-gateway.js";
 import type { GatewayConversationMessage } from "./conversation-gateway.js";
-import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
+import {
+  beginAppSessionOperation,
+  resolveAppSessionReadAuthority,
+} from "./coding-app-session/appSessionReadAuthority.js";
 import { ConversationAttachmentStoreError } from "./conversation-attachment-store.js";
 export {
   MAX_CONTEXT_MESSAGES,
@@ -2322,12 +2325,14 @@ async function persistModelChatTurn(
   prepared: PreparedDesktopChatSend,
   abortSignal: AbortSignal,
   correlationId: string | undefined,
+  httpRequest: IncomingMessage,
 ): Promise<RouteResult> {
   const { request } = prepared;
   // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage stores the turn, so the
   // compaction-evidence runId is collision-free and matches the streaming path's lifecycle moment.
   const messageCountBeforeTurn = deps.store.countMessages(request.chatId);
   const startedAt = Date.now();
+  let releaseSession = (): void => undefined;
   try {
     return await executeBufferedModelTurn(
       deps,
@@ -2336,6 +2341,9 @@ async function persistModelChatTurn(
       messageCountBeforeTurn,
       startedAt,
       correlationId,
+      (): void => {
+        releaseSession = beginAppSessionOperation(deps, httpRequest, abortSignal);
+      },
     );
   } catch (error) {
     const cancelled = requestSignalAborted(abortSignal);
@@ -2343,6 +2351,8 @@ async function persistModelChatTurn(
     return cancelled
       ? requestCancelledResult()
       : desktopChatErrorResult(error, deps, correlationId);
+  } finally {
+    releaseSession();
   }
 }
 
@@ -2482,10 +2492,12 @@ async function executeBufferedModelTurn(
   messageCountBeforeTurn: number,
   startedAt: number,
   correlationId: string | undefined,
+  onAdmitted: () => void,
 ): Promise<RouteResult> {
   const { modelId } = prepared;
   const outcome = admitBufferedModelTurn(deps, prepared, correlationId);
   if (isRouteResult(outcome)) return outcome;
+  onAdmitted();
   const { admitted } = outcome;
   const { userMessage } = admitted;
   const snapshot = captureAdmittedSnapshot(deps, prepared, admitted, abortSignal, correlationId);
@@ -2800,23 +2812,28 @@ export async function persistGitChangeDescriptionTurn(
   const admission = admitDesktopChatTurn(deps, prepared);
   if (admission.kind === "replay") return { status: 200, body: admission.response };
   if (admission.kind === "rejected") return admission.result;
-  const memory = await resolveBufferedMemory(
-    deps,
-    prepared,
-    admission,
-    abortSignal,
-    ctx.correlationId,
-  );
-  if (isRouteResult(memory)) return memory;
-  return completeGitChangeDescriptionTurn(
-    ctx,
-    deps,
-    prepared,
-    scope,
-    admission,
-    memory,
-    abortSignal,
-  );
+  const releaseSession = beginAppSessionOperation(deps, ctx.req, abortSignal);
+  try {
+    const memory = await resolveBufferedMemory(
+      deps,
+      prepared,
+      admission,
+      abortSignal,
+      ctx.correlationId,
+    );
+    if (isRouteResult(memory)) return memory;
+    return await completeGitChangeDescriptionTurn(
+      ctx,
+      deps,
+      prepared,
+      scope,
+      admission,
+      memory,
+      abortSignal,
+    );
+  } finally {
+    releaseSession();
+  }
 }
 
 async function completeGitChangeDescriptionTurn(
@@ -2997,10 +3014,9 @@ export async function parseDesktopChatSend(
   const parsedRequest = sendRequestFromBody(body);
   if (isRouteResult(parsedRequest)) return parsedRequest;
   const hasImages = parsedRequest.attachments.some((attachment) => attachment.kind === "image");
-  // Plaintext activity refreshes an existing session without granting attachment authority.
-  const session = resolveAppSessionReadAuthority(deps, ctx.req);
+  const session = hasImages ? resolveAppSessionReadAuthority(deps, ctx.req) : undefined;
   const request: SendDesktopChatRequest =
-    session === undefined || !hasImages
+    session === undefined
       ? parsedRequest
       : {
           ...parsedRequest,
@@ -3630,6 +3646,22 @@ export const createHandleGitChangeReviewDescription = (
   };
 };
 
+async function admitPreparedDesktopChatSend(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+): Promise<RouteResult | undefined> {
+  if (activeGitChangeScope(prepared.chat) === undefined) {
+    await awaitInitializedConversationReadiness(deps, prepared.modelId, ctx.correlationId);
+  }
+  return admitGitChangeScopedTurn(
+    deps,
+    prepared.chat,
+    acceptedGitChangeChatMode(deps, prepared.request),
+    ctx.correlationId,
+  );
+}
+
 export async function handleSendDesktopChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -3641,15 +3673,7 @@ export async function handleSendDesktopChat(
     if (isRouteResult(parsed)) return parsed;
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
-    if (activeGitChangeScope(prepared.chat) === undefined) {
-      await awaitInitializedConversationReadiness(deps, prepared.modelId, ctx.correlationId);
-    }
-    const gitChangeDenial = admitGitChangeScopedTurn(
-      deps,
-      prepared.chat,
-      acceptedGitChangeChatMode(deps, prepared.request),
-      ctx.correlationId,
-    );
+    const gitChangeDenial = await admitPreparedDesktopChatSend(ctx, deps, prepared);
     if (gitChangeDenial !== undefined) return gitChangeDenial;
     const inspection = inspectDesktopChatTurn(deps, prepared);
     if (inspection.kind === "replay")
@@ -3672,7 +3696,7 @@ export async function handleSendDesktopChat(
         );
         if (gitChangeDenial !== undefined) return gitChangeDenial;
         return activeGitChangeScope(current.chat) === undefined
-          ? persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId)
+          ? persistModelChatTurn(deps, current, cancellation.signal, ctx.correlationId, ctx.req)
           : persistGitChangeDescriptionTurn(ctx, deps, current, cancellation.signal);
       },
     );

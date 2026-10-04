@@ -139,7 +139,15 @@ Explicit normal Chat sends verify an optionally presented existing session so ac
 refreshes the inactivity window. Ordinary Chat does not require a launcher session, and verification
 cannot mint, revive or extend an expired or revoked session. Passive SSE, polling and unrelated
 reads do not count as conversation activity. The absolute lifetime remains unchanged; an in-flight
-turn does not acquire an expiry exemption or background renewal lease.
+turn has scoped activity protection only for inactivity, not absolute expiry. The existing session
+registry counts Chat operations only after parsing, validation and turn admission succeed. Unparsed
+bodies, rejected plaintext requests and replay responses do not acquire protection or renew idle
+expiry through this activity path. Existing protected image or workspace authority checks remain
+independent. Pre-admission queue waits do not acquire protection. Completion and request abort release the count
+idempotently. While a valid operation is pending the session is active, even during a long provider
+wait. The last release starts the normal inactivity window from completion. Revocation, rotation,
+process restart, capacity eviction and the absolute lifetime still invalidate authority immediately;
+release cannot revive a removed or replaced session. No timer, polling or passive SSE renews it.
 
 ### D6 — Fail closed to the content-free projection, never to an error that reveals content
 

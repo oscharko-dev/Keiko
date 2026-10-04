@@ -56,6 +56,19 @@ function pairedChannel(contentSource?: CodingAppSessionContentSource): {
 }
 
 describe("createCodingAppSessionChannel", () => {
+  it("exposes scoped operation protection only for valid paired authority", () => {
+    const { channel, cookieToken } = pairedChannel();
+    expect(channel.beginOperation(undefined)).toBeUndefined();
+    expect(channel.beginOperation("invalid")).toBeUndefined();
+    const release = channel.beginOperation(cookieToken);
+    expect(release).toBeDefined();
+    release?.();
+    release?.();
+    expect(channel.verifySession(cookieToken)).toBeDefined();
+    expect(channel.signOut(cookieToken)).toBe(true);
+    expect(channel.beginOperation(cookieToken)).toBeUndefined();
+  });
+
   it("cannot pair without a pairing authority (fail closed)", () => {
     const channel = createCodingAppSessionChannel({ registry: createSessionRegistry() });
     expect(channel.pair(fakePairingRequestBody())).toEqual({ paired: false });

@@ -65,6 +65,8 @@ export interface CodingAppSessionChannel {
    * successful verification refreshes the session's inactivity window.
    */
   readonly verifySession: (cookieToken: string | undefined) => AppSession | undefined;
+  /** Explicit request activity protects only idle expiry and returns idempotent cleanup. */
+  readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
   readonly subscribe: (
     cookieToken: string | undefined,
     listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
@@ -397,6 +399,8 @@ export function createCodingAppSessionChannel(
     sessionCount: (): number => registry.sessionCount(),
     verifySession: (cookieToken: string | undefined): AppSession | undefined =>
       registry.verify(cookieToken),
+    beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>
+      registry.beginOperation(cookieToken),
     subscribe: (cookieToken, listener, options) =>
       subscribeToContent(
         registry,

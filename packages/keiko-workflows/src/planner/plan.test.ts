@@ -10,6 +10,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 
 import {
+  DEFAULT_LEXICAL_MATCH_LIMIT,
   createExplorationPlan,
   directDefinitionSymbol,
   isDirectEvidenceLookup,
@@ -497,7 +498,10 @@ describe("createExplorationPlan", () => {
         expect(v).toBeGreaterThanOrEqual(1);
       }
       expect(limits.elapsedMsMax).toBeNull();
-      if (ring.kind === "lexical") expect(limits.maxFilesScanned).toBeNull();
+      if (ring.kind === "lexical") {
+        expect(limits.maxFilesScanned).toBeNull();
+        expect(limits.maxMatchesReturned).toBe(DEFAULT_LEXICAL_MATCH_LIMIT);
+      }
       expect(limits.maxBytesPerFileScanned).toBeGreaterThanOrEqual(8192);
     }
   });

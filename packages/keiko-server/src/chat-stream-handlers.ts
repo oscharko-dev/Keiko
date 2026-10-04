@@ -1,4 +1,5 @@
 import { gatewayAssemblyOutputAllocation } from "./chat-prompt-budget.js";
+import { beginAppSessionOperation } from "./coding-app-session/appSessionReadAuthority.js";
 import {
   withAdoptedContextWindowRetry,
   type ContextWindowAttempt,
@@ -485,6 +486,7 @@ export async function handleSendDesktopChatStream(
   deps: UiHandlerDeps,
 ): Promise<HandlerOutcome> {
   const cancellation = createRequestCancellation(ctx, "desktop chat stream cancelled");
+  let releaseSession = (): void => undefined;
   try {
     // GEN-PERF-CHATSTREAM-001 — reject before any work (and before any SSE header) so the
     // client degrades to the buffered path instead of stacking an unbounded upstream fan-out.
@@ -500,11 +502,14 @@ export async function handleSendDesktopChatStream(
     }
     activeChatStreams += 1;
     try {
-      return await runDesktopChatStream(ctx, deps, cancellation.controller);
+      return await runDesktopChatStream(ctx, deps, cancellation.controller, (): void => {
+        releaseSession = beginAppSessionOperation(deps, ctx.req, cancellation.signal);
+      });
     } finally {
       activeChatStreams -= 1;
     }
   } finally {
+    releaseSession();
     cancellation.dispose();
   }
 }
@@ -816,6 +821,7 @@ async function runAdmittedDesktopChatStream(
   start: PreparedDesktopChatStream,
   controller: AbortController,
   markStreamStarted: () => void,
+  onAdmitted: () => void,
 ): Promise<HandlerOutcome> {
   const resolved = resolveStreamedChatPreflight(ctx, deps, start);
   if ("status" in resolved) return resolved;
@@ -828,6 +834,7 @@ async function runAdmittedDesktopChatStream(
     settleRejectedDesktopChatTurn(deps, prepared, admission);
     return executionAdmission;
   }
+  onAdmitted();
   const provider = await prepareDesktopChatProviderStream(
     deps,
     prepared,
@@ -912,6 +919,7 @@ async function runDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   controller: AbortController,
+  onAdmitted: () => void,
 ): Promise<HandlerOutcome> {
   const start = await prepareDesktopChatStream(ctx, deps, controller.signal);
   if (controller.signal.aborted) {
@@ -934,9 +942,16 @@ async function runDesktopChatStream(
     start.parsed.request.chatId,
     controller.signal,
     () =>
-      runAdmittedDesktopChatStream(ctx, deps, start, controller, () => {
-        streamState.started = true;
-      }),
+      runAdmittedDesktopChatStream(
+        ctx,
+        deps,
+        start,
+        controller,
+        () => {
+          streamState.started = true;
+        },
+        onAdmitted,
+      ),
   );
   if (result !== CHAT_TURN_WAIT_CANCELLED) return result;
   return streamState.started

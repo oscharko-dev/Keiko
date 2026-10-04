@@ -24,6 +24,7 @@ export type {
   RetrievalRingKind,
 } from "./plan.js";
 export {
+  DEFAULT_LEXICAL_MATCH_LIMIT,
   createExplorationPlan,
   directDefinitionSymbol,
   isDirectEvidenceLookup,

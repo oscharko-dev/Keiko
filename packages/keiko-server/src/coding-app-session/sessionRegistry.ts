@@ -33,6 +33,8 @@ export interface SessionRegistry {
   readonly verify: (cookieToken: string | undefined) => AppSession | undefined;
   /** Non-touching validity check for persistent server streams; never refreshes idle expiry. */
   readonly inspect: (cookieToken: string | undefined) => AppSession | undefined;
+  /** Protect a valid session from idle expiry only while an explicit operation remains active. */
+  readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
   readonly rotate: (sessionId: string) => SessionMint | undefined;
   readonly revoke: (sessionId: string) => void;
   readonly sessionCount: () => number;
@@ -54,6 +56,7 @@ interface StoredSession {
   readonly principalLabel: string;
   readonly issuedAtMs: number;
   lastSeenAtMs: number;
+  activeOperationCount: number;
   readonly rotationCount: number;
 }
 
@@ -105,7 +108,8 @@ function describe(stored: StoredSession): AppSession {
 
 function isExpired(state: RegistryState, stored: StoredSession, nowMs: number): boolean {
   return (
-    nowMs - stored.issuedAtMs > state.absoluteTtlMs || nowMs - stored.lastSeenAtMs > state.idleTtlMs
+    nowMs - stored.issuedAtMs > state.absoluteTtlMs ||
+    (stored.activeOperationCount === 0 && nowMs - stored.lastSeenAtMs > state.idleTtlMs)
   );
 }
 
@@ -132,6 +136,7 @@ function storeSession(
     principalLabel,
     issuedAtMs: nowMs,
     lastSeenAtMs: nowMs,
+    activeOperationCount: 0,
     rotationCount,
   };
   state.sessions.set(sessionId, stored);
@@ -170,6 +175,30 @@ function rotateSession(state: RegistryState, sessionId: string): SessionMint | u
   return storeSession(state, sessionId, stored.principalLabel, stored.rotationCount + 1);
 }
 
+function beginSessionOperation(
+  state: RegistryState,
+  cookieToken: string | undefined,
+): (() => void) | undefined {
+  const session = verifySession(state, cookieToken, true);
+  if (session === undefined) return undefined;
+  const stored = state.sessions.get(session.sessionId);
+  if (stored === undefined) return undefined;
+  stored.activeOperationCount += 1;
+  let released = false;
+  return (): void => {
+    if (released) return;
+    released = true;
+    stored.activeOperationCount -= 1;
+    const nowMs = state.now();
+    if (
+      state.sessions.get(stored.sessionId) === stored &&
+      nowMs - stored.issuedAtMs <= state.absoluteTtlMs
+    ) {
+      stored.lastSeenAtMs = nowMs;
+    }
+  };
+}
+
 export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRegistry {
   const state: RegistryState = {
     sessions: new Map<string, StoredSession>(),
@@ -187,6 +216,8 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
       verifySession(state, cookieToken, true),
     inspect: (cookieToken: string | undefined): AppSession | undefined =>
       verifySession(state, cookieToken, false),
+    beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>
+      beginSessionOperation(state, cookieToken),
     rotate: (sessionId: string): SessionMint | undefined => rotateSession(state, sessionId),
     revoke: (sessionId: string): void => {
       state.sessions.delete(sessionId);

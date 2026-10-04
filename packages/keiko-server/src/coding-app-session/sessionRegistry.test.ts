@@ -13,6 +13,82 @@ function fixedClock(startMs: number): { now: () => number; advance: (ms: number)
 }
 
 describe("createSessionRegistry", () => {
+  it("protects concurrent explicit operations until their final idempotent release", () => {
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({ now: clock.now, idleTtlMs: 100, absoluteTtlMs: 1000 });
+    const mint = registry.mint("p");
+    const first = registry.beginOperation(mint.cookieToken);
+    const second = registry.beginOperation(mint.cookieToken);
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    clock.advance(150);
+    expect(registry.inspect(mint.cookieToken)).toBeDefined();
+    first?.();
+    clock.advance(150);
+    expect(registry.inspect(mint.cookieToken)).toBeDefined();
+    second?.();
+    expect(registry.inspect(mint.cookieToken)?.lastSeenAtMs).toBe(300);
+    clock.advance(80);
+    first?.();
+    second?.();
+    expect(registry.inspect(mint.cookieToken)?.lastSeenAtMs).toBe(300);
+    clock.advance(21);
+    expect(registry.inspect(mint.cookieToken)).toBeUndefined();
+  });
+
+  it("cannot acquire operation protection for invalid or idle-expired authority", () => {
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({ now: clock.now, idleTtlMs: 100 });
+    const mint = registry.mint("p");
+    for (const token of [undefined, "malformed", `${mint.session.sessionId}.wrong`]) {
+      expect(registry.beginOperation(token)).toBeUndefined();
+    }
+    expect(registry.inspect(mint.cookieToken)?.lastSeenAtMs).toBe(0);
+    clock.advance(101);
+    expect(registry.beginOperation(mint.cookieToken)).toBeUndefined();
+    expect(registry.sessionCount()).toBe(0);
+  });
+
+  it("keeps capacity eviction authoritative during an active operation", () => {
+    const clock = fixedClock(0);
+    const registry = createSessionRegistry({ now: clock.now, maxSessions: 1 });
+    const first = registry.mint("first");
+    const release = registry.beginOperation(first.cookieToken);
+    clock.advance(1);
+    const replacement = registry.mint("replacement");
+    clock.advance(10);
+    release?.();
+    expect(registry.inspect(first.cookieToken)).toBeUndefined();
+    expect(registry.inspect(replacement.cookieToken)?.lastSeenAtMs).toBe(1);
+    expect(registry.sessionCount()).toBe(1);
+  });
+
+  it.each(["revocation", "rotation", "absolute-expiry"] as const)(
+    "never revives authority after %s during an active operation",
+    (cause) => {
+      const clock = fixedClock(0);
+      const registry = createSessionRegistry({
+        now: clock.now,
+        idleTtlMs: 100,
+        absoluteTtlMs: 200,
+      });
+      const mint = registry.mint("p");
+      const release = registry.beginOperation(mint.cookieToken);
+      clock.advance(50);
+      if (cause === "revocation") registry.revoke(mint.session.sessionId);
+      const rotated = cause === "rotation" ? registry.rotate(mint.session.sessionId) : undefined;
+      clock.advance(cause === "absolute-expiry" ? 151 : 70);
+      expect(registry.inspect(mint.cookieToken)).toBeUndefined();
+      release?.();
+      expect(registry.inspect(mint.cookieToken)).toBeUndefined();
+      if (rotated !== undefined) {
+        expect(registry.inspect(rotated.cookieToken)?.lastSeenAtMs).toBe(50);
+        clock.advance(31);
+        expect(registry.inspect(rotated.cookieToken)).toBeUndefined();
+      }
+    },
+  );
+
   it("mints a cookie token that verifies to the issued session", () => {
     const registry = createSessionRegistry();
     const mint = registry.mint("local-app-session");

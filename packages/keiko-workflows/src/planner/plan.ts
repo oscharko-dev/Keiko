@@ -145,6 +145,13 @@ function atLeastOne(value: number): number {
   return Math.max(1, Math.floor(value));
 }
 
+function ringMatchReturnLimit(kind: RetrievalRingKind): number {
+  return atLeastOne(MATCH_RETURN_CEILING * RING_WEIGHTS[kind]);
+}
+
+/** The existing lexical ring's retained-result bound, shared by default Chat queries. */
+export const DEFAULT_LEXICAL_MATCH_LIMIT = ringMatchReturnLimit("lexical");
+
 function sliceLimits(
   budget: ExplorationBudget,
   weight: number,
@@ -160,7 +167,7 @@ function sliceLimits(
   // excerptBytesMax when it incorporates file content into the pack.
   return {
     maxFilesScanned: kind === "lexical" ? null : atLeastOne(STRUCTURAL_SCAN_FILE_CEILING * weight),
-    maxMatchesReturned: atLeastOne(MATCH_RETURN_CEILING * weight),
+    maxMatchesReturned: ringMatchReturnLimit(kind),
     maxBytesPerFileScanned: SCAN_BYTES_PER_FILE,
     elapsedMsMax: budget.elapsedMsMax === null ? null : atLeastOne(budget.elapsedMsMax * weight),
   };
