@@ -1046,13 +1046,16 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-function appendGitChangeScope(
-  current: readonly ChatGitChangeScope[],
-  scope: ChatGitChangeScope,
-): readonly ChatGitChangeScope[] {
-  return current.some((candidate) => candidate.relationshipId === scope.relationshipId)
-    ? current
-    : [...current, scope];
+function acceptedGitChangeScope(
+  chat: Chat | undefined,
+  chatId: string,
+  relationshipId: string,
+  attempt: ChatMutationAttempt,
+  target: ChatLookupTarget | undefined,
+): ChatGitChangeScope | false {
+  if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return false;
+  if (chat?.id !== chatId) return false;
+  return chat.gitChangeScopes?.find((scope) => scope.relationshipId === relationshipId) ?? false;
 }
 
 function removeGitChangeScope(
@@ -1971,8 +1974,7 @@ function AppShellInner(): ReactNode {
           async (attempt): Promise<ChatGitChangeScope | false> => {
             const chat = await resolveChatForWindow(chatWindowId, target);
             if (chat === undefined) {
-              rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
-              return false;
+              return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
             }
             if ((target?.conversationId ?? chat.id) !== chat.id) return false;
             const result = await connectGitChangeToChat({
@@ -1981,35 +1983,40 @@ function AppShellInner(): ReactNode {
               ...selection,
             });
             if (result.status === "blocked") {
-              rejectForConnectionFailure(t("chat.grounding.connectGitChangeFailed"));
-              return false;
+              return rejectForConnectionFailure(t("chat.grounding.connectGitChangeFailed"));
             }
             if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return false;
-            const updated = {
-              ...chat,
-              gitChangeScopes: appendGitChangeScope(chat.gitChangeScopes ?? [], result.scope),
-              updatedAt: Date.now(),
-            };
-            rememberGroundingChat(updated);
-            session.replaceChat(updated);
+            const updated = await resolveChatForWindow(
+              chatWindowId,
+              target,
+              true,
+              attempt.correlationId,
+            );
+            const connected = acceptedGitChangeScope(
+              updated,
+              chat.id,
+              result.scope.relationshipId,
+              attempt,
+              target,
+            );
+            if (connected === false || updated === undefined) return false;
+            publishRefreshedGroundingChat(updated);
             setSourceConnectionNotice(null);
-            return result.scope;
+            return connected;
           },
         );
       } catch (error: unknown) {
-        rejectForConnectionFailure(
+        return rejectForConnectionFailure(
           t(groundingMutationFailureKey(error, "chat.grounding.connectGitChangeFailed")),
         );
-        return false;
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
     [
       groundingMutationKey,
-      rememberGroundingChat,
+      publishRefreshedGroundingChat,
       rejectForConnectionFailure,
       resolveChatForWindow,
-      session.replaceChat,
       t,
     ],
   );

@@ -130,7 +130,23 @@ describe("ConnectToChatDialog", () => {
       scope,
     }));
     const onClose = vi.fn();
-    const listChats = vi.fn(async (): Promise<ChatsResponse> => oneChat());
+    const selected = oneChat().chats[0];
+    if (selected === undefined) throw new Error("Missing fixture chat.");
+    const original = {
+      ...selected,
+      groundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+    };
+    const canonical = {
+      ...original,
+      title: "Renamed on the server",
+      groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+      gitChangeScopes: [scope],
+      updatedAt: 4,
+    };
+    const listChats = vi
+      .fn()
+      .mockResolvedValueOnce({ chats: [original] })
+      .mockResolvedValue({ chats: [canonical] });
     const user = userEvent.setup();
     render(
       <ConnectToChatDialog
@@ -152,9 +168,8 @@ describe("ConnectToChatDialog", () => {
         baseRef: "main",
       } satisfies ConnectGitChangeInput);
     });
-    expect(onConnected).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "chat-1", gitChangeScopes: [scope] }),
-    );
+    await waitFor(() => expect(onConnected).toHaveBeenCalledWith(canonical));
+    expect(listChats).toHaveBeenLastCalledWith("/repos/alpha", expect.any(String), "chat-1");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

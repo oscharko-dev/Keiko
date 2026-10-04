@@ -5,6 +5,21 @@ import { reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
 import type { Chat, ChatResponse } from "./types";
 
+// Source-mutation replies describe the scope; the targeted chat response owns its identity.
+export async function canonicalGroundingChat(
+  chat: Chat,
+  listChats: typeof fetchChats = fetchChats,
+): Promise<Chat> {
+  const response = await listChats(chat.projectPath, newClientCorrelationId(), chat.id);
+  const current = response.chats.find(
+    (candidate) => candidate.id === chat.id && candidate.projectPath === chat.projectPath,
+  );
+  if (current === undefined || (current.status !== undefined && current.status !== "open")) {
+    throw new ApiError("NOT_FOUND", "The connected chat is no longer available.", 404);
+  }
+  return current;
+}
+
 // A source conflict refreshes only this chat and never replays a stale replacement list.
 // The original refusal stays visible so the user can review the canonical sources and retry.
 export async function withGroundingScopeRefresh(

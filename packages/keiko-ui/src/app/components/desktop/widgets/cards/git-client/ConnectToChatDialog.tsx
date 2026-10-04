@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, SubmitEventHandler, ReactNode, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { connectGitChangeToChat, fetchChats } from "@/lib/api";
+import { canonicalGroundingChat } from "@/lib/chat-grounding-mutation";
 import type { ConnectGitChangeInput, GitChangeConnectResponse } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { Chat } from "@/lib/types";
@@ -379,7 +380,7 @@ interface SubmitInput {
   readonly currentBranch: string | undefined;
   readonly baseRef: string;
   readonly connect: typeof connectGitChangeToChat;
-  readonly onConnected: (chatId: string, result: GitChangeConnectResponse) => void;
+  readonly onConnected: (chatId: string, result: GitChangeConnectResponse) => Promise<void>;
   readonly onClose: () => void;
   readonly t: I18nTranslate;
 }
@@ -412,7 +413,7 @@ function useSubmit({
         setError(gitChangeBlockedReasonMessage(result.reason, t));
         return;
       }
-      onConnected(chatId, result);
+      await onConnected(chatId, result);
       onClose();
     } catch (error_) {
       setError(blockedOrNetworkError(error_, t));
@@ -490,7 +491,7 @@ function useConnectDialogState(
   baseBranchName: string | undefined,
   baseBranchChoices: readonly string[],
   connect: typeof connectGitChangeToChat,
-  onConnected: (chatId: string, result: GitChangeConnectResponse) => void,
+  onConnected: (chatId: string, result: GitChangeConnectResponse) => Promise<void>,
   onClose: () => void,
   t: I18nTranslate,
 ): ConnectDialogState {
@@ -518,21 +519,6 @@ function useConnectDialogState(
     t,
   });
   return { chatId, setChatId, mode, setMode, baseRef, setBaseRef, busy, error, canSubmit, submit };
-}
-
-function projectConnectedChat(
-  chats: readonly Chat[],
-  chatId: string,
-  result: GitChangeConnectResponse,
-): Chat | undefined {
-  if (result.status !== "connected") return undefined;
-  const chat = chats.find((candidate) => candidate.id === chatId);
-  if (chat === undefined) return undefined;
-  return {
-    ...chat,
-    gitChangeScopes: [...(chat.gitChangeScopes ?? []), result.scope],
-    updatedAt: Date.now(),
-  };
 }
 
 // The server accepts a safe, resolvable ref even when it is not among the local
@@ -614,9 +600,10 @@ export function ConnectToChatDialog({
     () => usableBaseBranchChoices(currentBranch, baseBranchChoices),
     [baseBranchChoices, currentBranch],
   );
-  const recordConnection = (chatId: string, result: GitChangeConnectResponse): void => {
-    const connected = projectConnectedChat(catalog.chats, chatId, result);
-    if (connected !== undefined) onConnected(connected);
+  const recordConnection = async (chatId: string): Promise<void> => {
+    const selected = catalog.chats.find((candidate) => candidate.id === chatId);
+    if (selected === undefined) throw new TypeError("The selected chat is unavailable.");
+    onConnected(await canonicalGroundingChat(selected, listChats));
   };
   const state = useConnectDialogState(
     currentBranch,

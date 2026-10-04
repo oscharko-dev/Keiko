@@ -14,6 +14,7 @@ import {
 import type {
   Chat,
   ChatConnectedScope,
+  ChatGitChangeScope,
   ChatLocalKnowledgeScope,
   GroundingLimits,
 } from "@/lib/types";
@@ -27,6 +28,11 @@ import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 interface WorkspaceHookOptions {
   readonly onWindowLimitReached?: (limit: number) => void;
+  readonly onGitChangeBind?: (
+    chatWindowId: string,
+    selection: { readonly baseRef: string; readonly headRef: string },
+    target?: ChatBindingTarget,
+  ) => false | ChatGitChangeScope | Promise<false | ChatGitChangeScope>;
   readonly onScopeBind?: (
     chatWindowId: string,
     scope: ChatConnectedScope,
@@ -86,6 +92,7 @@ const mocks = vi.hoisted(() => ({
     rightRailRendered: false,
     rightRailOnTool: undefined as ((id: string) => void) | undefined,
   },
+  connectGitChangeToChat: vi.fn(),
   fetchConfig: vi.fn(),
   fetchChats: vi.fn(),
   fetchStartupUpdatePreflight: vi.fn(),
@@ -159,6 +166,7 @@ vi.mock("./hooks/useBackendHealth", () => ({
 vi.mock("@/lib/api", async (importOriginal) => ({
   ApiError: (await importOriginal<typeof import("@/lib/api")>()).ApiError,
   fetchChats: mocks.fetchChats,
+  connectGitChangeToChat: mocks.connectGitChangeToChat,
   fetchConfig: mocks.fetchConfig,
   fetchStartupUpdatePreflight: mocks.fetchStartupUpdatePreflight,
   updateChatConnectedScopes: async (
@@ -615,6 +623,45 @@ describe("AppShell grounding connections", () => {
     mocks.state.rightRailRendered = false;
     mocks.state.rightRailOnTool = undefined;
     document.documentElement.removeAttribute("data-input-modality");
+  });
+
+  it("adopts the canonical chat after a Git connection instead of retaining the old identity", async () => {
+    const scope: ChatGitChangeScope = {
+      kind: "git-change",
+      relationshipId: "git-rel",
+      remoteDigest: "d".repeat(64),
+      comparisonLabel: "dev...feature",
+      baseRef: "dev",
+      headRef: "feature",
+      baseSha: "a".repeat(40),
+      headSha: "b".repeat(40),
+      mergeBaseSha: "a".repeat(40),
+      snapshotDigest: "e".repeat(64),
+      fileCount: 1,
+      totalFiles: 1,
+      omittedFiles: 0,
+      truncatedFiles: 0,
+      descriptionStatus: "current",
+      connectedAtMs: 3,
+    };
+    const canonical = chat({
+      title: "Concurrent server rename",
+      gitChangeScopes: [scope],
+      updatedAt: 4,
+      groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+    });
+    mocks.connectGitChangeToChat.mockImplementation(() => {
+      mocks.state.canonicalChats.set(canonical.id, canonical);
+      return Promise.resolve({ status: "connected", scope });
+    });
+    await renderMounted();
+    const result = await mocks.state.workspaceOptions?.onGitChangeBind?.("chat-window", {
+      baseRef: "dev",
+      headRef: "feature",
+    });
+    expect(result).toEqual(scope);
+    expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(canonical);
+    expect(mocks.fetchChats).toHaveBeenLastCalledWith("/repo", expect.any(String), "chat-1");
   });
 
   it("does not load the gateway setup implementation during ordinary shell startup", async () => {

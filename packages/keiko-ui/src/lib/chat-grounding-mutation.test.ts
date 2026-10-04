@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, fetchChats } from "./api";
 import { reportClientDiagnostic } from "./client-diagnostics";
-import { replaceGroundingScopeList } from "./chat-grounding-mutation";
+import { canonicalGroundingChat, replaceGroundingScopeList } from "./chat-grounding-mutation";
 import type { Chat } from "./types";
 
 vi.mock("./api", async (importOriginal) => ({
@@ -84,5 +84,27 @@ describe("grounding source mutation conflicts", () => {
       replaceGroundingScopeList(chat, null, vi.fn().mockRejectedValue(refusal), vi.fn()),
     ).rejects.toBe(refusal);
     expect(fetchChats).not.toHaveBeenCalled();
+  });
+});
+
+describe("canonical source-mutation adoption", () => {
+  it.each([
+    { ...chat, id: "another-chat" },
+    { ...chat, projectPath: "/other-project" },
+    { ...chat, status: "closed" as const },
+  ])("rejects an unavailable or foreign canonical chat", async (candidate) => {
+    const listChats = vi.fn().mockResolvedValue({ chats: [candidate] });
+    await expect(canonicalGroundingChat(chat, listChats)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      status: 404,
+    });
+    expect(listChats).toHaveBeenCalledWith(chat.projectPath, expect.any(String), chat.id);
+  });
+
+  it("propagates a failed canonical read instead of synthesizing a chat", async () => {
+    const failure = new ApiError("INTERNAL", "The service is unavailable.", 503);
+    await expect(canonicalGroundingChat(chat, vi.fn().mockRejectedValue(failure))).rejects.toBe(
+      failure,
+    );
   });
 });

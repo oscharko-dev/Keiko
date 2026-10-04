@@ -1,6 +1,6 @@
 "use client";
 
-import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
+import { canonicalGroundingChat, replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
 
 // Issue #3400 (epic #3384) — git-change scope pills for the chat header.
 //
@@ -24,6 +24,7 @@ import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { ClientDiagnosticGitChangeDescription } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
+  fetchChats,
   applyGitChangeChatDescription,
   approveGitChangeChatDescription,
   refreshGitChangeScope,
@@ -81,6 +82,7 @@ export interface GitChangeScopePillProps {
   /** Injectable wire seams for tests. Default to the real BFF helpers. */
   readonly updateScopes?: typeof updateChatGitChangeScopes;
   readonly refreshScope?: typeof refreshGitChangeScope;
+  readonly listChats?: typeof fetchChats;
   readonly approveDescription?: ApproveGitChangeDescriptionFn;
   readonly applyDescription?: ApplyGitChangeDescriptionFn;
   readonly reviewDescription?: ReviewGitChangeDescriptionFn;
@@ -642,6 +644,7 @@ interface GitChangePillItemProps {
   readonly onRefreshed: ((chat: Chat) => void) | undefined;
   readonly updateScopes: typeof updateChatGitChangeScopes;
   readonly refreshScope: typeof refreshGitChangeScope;
+  readonly listChats: typeof fetchChats | undefined;
   readonly approveDescription: ApproveGitChangeDescriptionFn;
   readonly applyDescription: ApplyGitChangeDescriptionFn;
   readonly reviewDescription: ReviewGitChangeDescriptionFn;
@@ -685,17 +688,15 @@ async function runGuardedPillAction(
   }
 }
 
-// Owner audit b1-6 — merges onto the freshest chat, not the one captured when the refresh button
-// was clicked: every field the refresh itself did not change survives whatever landed (a title
-// rename, a connector disconnect, a model switch) while the round trip was in flight.
-function mergeRefreshedChat(
-  latestChat: Chat,
-  allScopes: readonly ChatGitChangeScope[],
-  relationshipId: string,
-  resultScope: ChatGitChangeScope,
-): Chat {
-  const remaining = otherScopes(latestChat.gitChangeScopes ?? allScopes, relationshipId);
-  return { ...latestChat, gitChangeScopes: [...remaining, resultScope] };
+function adoptCanonicalGitChat(
+  latest: Chat,
+  original: Chat,
+  canonical: Chat,
+  onRefreshed: ((chat: Chat) => void) | undefined,
+): void {
+  if (latest.id !== original.id || latest.projectPath !== original.projectPath) return;
+  if (latest.updatedAt > canonical.updatedAt) return;
+  onRefreshed?.(canonical);
 }
 
 interface GitChangePillActions {
@@ -709,8 +710,7 @@ interface GitChangePillActions {
 // Extracted from GitChangePillItem so the component body stays under the max-lines-per-function
 // bar; both handlers share the same busy/error state and scope-list derivation.
 function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillActions {
-  const { chat, scope, allScopes, onDisconnect, onRefreshed, updateScopes, refreshScope, t } =
-    props;
+  const { chat, scope, allScopes, onDisconnect, onRefreshed, updateScopes, t } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const disconnectRef = useRef<HTMLButtonElement | null>(null);
@@ -734,14 +734,13 @@ function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillAc
 
   async function runRefresh(): Promise<void> {
     await runGuardedPillAction(setBusy, setError, formatRefreshErrorMessage, t, async () => {
-      const result = await refreshScope(chat.id, scope.relationshipId);
+      const result = await props.refreshScope(chat.id, scope.relationshipId);
       if (result.status === "blocked") {
         setError(gitChangeBlockedReasonMessage(result.reason, t));
         return;
       }
-      onRefreshed?.(
-        mergeRefreshedChat(latestChatRef.current, allScopes, scope.relationshipId, result.scope),
-      );
+      const canonical = await canonicalGroundingChat(chat, props.listChats);
+      adoptCanonicalGitChat(latestChatRef.current, chat, canonical, onRefreshed);
     });
   }
 
@@ -992,6 +991,7 @@ interface GitChangeScopePillContentProps {
   readonly onRefreshed: ((chat: Chat) => void) | undefined;
   readonly updateScopes: typeof updateChatGitChangeScopes;
   readonly refreshScope: typeof refreshGitChangeScope;
+  readonly listChats: typeof fetchChats | undefined;
   readonly approveDescription: ApproveGitChangeDescriptionFn;
   readonly applyDescription: ApplyGitChangeDescriptionFn;
   readonly reviewDescription: ReviewGitChangeDescriptionFn;
@@ -1007,6 +1007,7 @@ function GitChangeScopePillContent({
   onRefreshed,
   updateScopes,
   refreshScope,
+  listChats,
   approveDescription,
   applyDescription,
   reviewDescription,
@@ -1032,6 +1033,7 @@ function GitChangeScopePillContent({
           onRefreshed={onRefreshed}
           updateScopes={updateScopes}
           refreshScope={refreshScope}
+          listChats={listChats}
           approveDescription={approveDescription}
           applyDescription={applyDescription}
           reviewDescription={reviewDescription}
@@ -1053,6 +1055,7 @@ export function GitChangeScopePill({
   onRefreshed,
   updateScopes = updateChatGitChangeScopes,
   refreshScope = refreshGitChangeScope,
+  listChats,
   approveDescription = defaultApproveDescription,
   applyDescription = defaultApplyDescription,
   reviewDescription = defaultReviewDescription,
@@ -1081,6 +1084,7 @@ export function GitChangeScopePill({
       onRefreshed={onRefreshed}
       updateScopes={updateScopes}
       refreshScope={refreshScope}
+      listChats={listChats}
       approveDescription={approveDescription}
       applyDescription={applyDescription}
       reviewDescription={reviewDescription}
