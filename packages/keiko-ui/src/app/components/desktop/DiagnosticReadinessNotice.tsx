@@ -17,9 +17,9 @@ export function DiagnosticReadinessNotice({
     if (readiness === undefined || readiness === "ready") return null;
   }
   return (
-    <div className="source-limit-alert" role="status">
+    <output className="source-limit-alert">
       <span>{t("supportReport.readinessUnavailable")}</span>
       <SupportReportButton compact failure={{ errorKind: "unavailable", context: [] }} />
-    </div>
+    </output>
   );
 }

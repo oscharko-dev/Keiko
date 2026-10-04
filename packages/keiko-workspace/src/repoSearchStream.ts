@@ -48,7 +48,7 @@ class RetainedAtomHeap<T> {
     private readonly compareValues: (left: T, right: T) => number,
   ) {}
 
-  private compare = (left: RetainedAtomEntry<T>, right: RetainedAtomEntry<T>): number =>
+  private readonly compare = (left: RetainedAtomEntry<T>, right: RetainedAtomEntry<T>): number =>
     this.compareValues(left.value, right.value) || left.order - right.order;
 
   public retain(value: T): void {
@@ -95,7 +95,7 @@ class RetainedAtomHeap<T> {
       const right = this.entries[child + 1];
       const current = this.entries[index];
       if (left === undefined || current === undefined) return;
-      if (right !== undefined && this.compare(right, left) > 0) child += 1;
+      if (right !== undefined && this.compare(left, right) < 0) child += 1;
       const worstChild = this.entries[child];
       if (worstChild === undefined || this.compare(current, worstChild) >= 0) return;
       this.swap(index, child);
@@ -366,11 +366,12 @@ class StreamingSearchCollector {
       atoms.push(entry.atom);
       grouped.set(entry.atom.scopePath, atoms);
     }
-    const atoms = [...grouped.values()].flatMap((group) =>
+    const atoms = [...grouped.values()].flatMap((group) => {
       group.sort(
         (left, right) => (left.lineRange?.startLine ?? 0) - (right.lineRange?.startLine ?? 0),
-      ),
-    );
+      );
+      return group;
+    });
     this.state.matchesReturned = atoms.length;
     if (this.matchesFound > atoms.length) {
       this.state.truncated = true;

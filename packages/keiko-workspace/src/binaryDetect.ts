@@ -97,7 +97,7 @@ export function detectTextByteEncoding(
 
 function htmlMetaAttributes(tag: string): ReadonlyMap<string, string> {
   const attributes = new Map<string, string>();
-  const pattern = /([^\s/>=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gu;
+  const pattern = /(?<=\s)([^\s/>=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gu;
   for (const match of tag.matchAll(pattern)) {
     const name = match[1]?.toLowerCase();
     if (name !== undefined && !attributes.has(name))
@@ -111,14 +111,15 @@ function htmlMetaCharset(tag: string): string | undefined {
   const direct = attributes.get("charset");
   if (direct !== undefined) return direct;
   if (attributes.get("http-equiv")?.toLowerCase() !== "content-type") return undefined;
-  return /\bcharset\s*=\s*([a-zA-Z0-9_-]+)/iu.exec(attributes.get("content") ?? "")?.[1];
+  return /\bcharset\s*=\s*([a-z0-9_-]+)/iu.exec(attributes.get("content") ?? "")?.[1];
 }
 
 function supportedDeclaredHtmlEncoding(charset: string): TextByteEncoding | false {
   try {
     return new TextDecoder(charset, { fatal: true }).encoding;
-  } catch {
-    return false;
+  } catch (error) {
+    if (error instanceof RangeError) return false;
+    throw error;
   }
 }
 
@@ -215,12 +216,13 @@ export function looksBinary(bytes: Uint8Array, options?: BinaryProbeOptions): bo
 }
 
 function decodedTextLooksBinary(text: string): boolean {
+  if (text.length === 0) return false;
   let controls = 0;
   for (let index = 0; index < text.length; index += 1) {
-    const code = text.charCodeAt(index);
+    const code = text.codePointAt(index) ?? 0;
     if (code < 32 && !isAllowedControlByte(code)) controls += 1;
   }
-  return exceedsBinaryControlThreshold(text.charCodeAt(0), 0, controls, text.length);
+  return exceedsBinaryControlThreshold(text.codePointAt(0) ?? 0, 0, controls, text.length);
 }
 
 /** Classify the complete, size-admitted file consistently for search and source reads. */

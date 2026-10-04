@@ -166,6 +166,20 @@ function currentContainedDirectory(
   return contained.path;
 }
 
+function directoryReadFailure(relativeDir: string, error: unknown): Error {
+  if (
+    error instanceof PathDeniedError ||
+    error instanceof StructuralExecutionStoppedError ||
+    error instanceof PathEscapeError ||
+    error instanceof WorkspaceReadError
+  )
+    return error;
+  return new WorkspaceReadError(
+    `cannot read directory: ${relativeDir || "."} (${describe(error)})`,
+    relativeDir,
+  );
+}
+
 function failedDirectoryRead(
   walk: Walk,
   relativeDir: string,
@@ -175,11 +189,7 @@ function failedDirectoryRead(
     throw error;
   }
   if (!walk.failOnReadError) return [];
-  if (error instanceof PathEscapeError || error instanceof WorkspaceReadError) throw error;
-  throw new WorkspaceReadError(
-    `cannot read directory: ${relativeDir || "."} (${describe(error)})`,
-    relativeDir,
-  );
+  throw directoryReadFailure(relativeDir, error);
 }
 
 // #3347 (owner P1): a single directory must never be materialized (and then sorted) in full before
@@ -661,7 +671,7 @@ async function visitStreamingDirectory(
     }
     currentContainedDirectory(state.walk, current, relativeDir);
   } catch (error) {
-    failedDirectoryRead(state.walk, relativeDir, error);
+    throw directoryReadFailure(relativeDir, error);
   }
 }
 

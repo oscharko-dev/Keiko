@@ -300,12 +300,17 @@ export const SYMBOL_RELATION_TERMS: ReadonlySet<string> = new Set([
   "exportiert",
 ]);
 
-const EVIDENCE_ONLY_USE_DIRECTIVE_RE =
-  /\b(?:use\s+only\s+(?:read|verified|cited)\s+(?:values|evidence|sources)|verwende\s+nur\s+(?:gelesene|belegte|verifizierte)\s+(?:werte|evidenz|quellen))\b/giu;
+const EVIDENCE_ONLY_USE_DIRECTIVE_PATTERNS = [
+  /\buse\s+only\s+(?:read|verified|cited)\s+(?:values|evidence|sources)\b/giu,
+  /\bverwende\s+nur\s+(?:gelesene|belegte|verifizierte)\s+(?:werte|evidenz|quellen)\b/giu,
+];
 
 /** Output evidence instructions do not ask which source symbols use another symbol. */
 export function hasSymbolRelationshipQuery(text: string): boolean {
-  const relationshipText = text.replace(EVIDENCE_ONLY_USE_DIRECTIVE_RE, " ").toLowerCase();
+  const relationshipText = EVIDENCE_ONLY_USE_DIRECTIVE_PATTERNS.reduce(
+    (value, pattern) => value.replace(pattern, " "),
+    text,
+  ).toLowerCase();
   return [...relationshipText.matchAll(/[\p{L}\p{N}_]+/gu)].some((match) =>
     SYMBOL_RELATION_TERMS.has(match[0]),
   );

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_BINARY_PROBE,
   decodeTextBytes,
@@ -8,6 +8,15 @@ import {
 } from "./binaryDetect.js";
 
 describe("looksBinary", () => {
+  it.each([
+    { bytes: new Uint8Array(), encoding: "utf-8" },
+    { bytes: new Uint8Array([0xef, 0xbb, 0xbf]), encoding: "utf-8" },
+    { bytes: new Uint8Array([0xff, 0xfe]), encoding: "utf-16le" },
+    { bytes: new Uint8Array([0xfe, 0xff]), encoding: "utf-16be" },
+  ])("admits empty decoded text with $encoding encoding", ({ bytes, encoding }) => {
+    expect(decodeTextFileBytes(bytes)).toEqual({ encoding, text: "" });
+  });
+
   it("returns false on empty input", () => {
     expect(looksBinary(new Uint8Array(0))).toBe(false);
   });
@@ -147,6 +156,30 @@ describe("declared HTML character encoding", () => {
         scopePath: "manual.html",
       }),
     ).toBeUndefined();
+  });
+  it("propagates unexpected decoder initialization failures instead of reporting unavailable text", () => {
+    const NativeDecoder = TextDecoder;
+    const failure = new TypeError("decoder initialization failed");
+    class FaultingDecoder extends NativeDecoder {
+      public constructor(label?: string, options?: TextDecoderOptions) {
+        if (label === "shift_jis") throw failure;
+        super(label, options);
+      }
+    }
+    vi.stubGlobal("TextDecoder", FaultingDecoder);
+    try {
+      expect(() =>
+        decodeTextBytes(
+          new TextEncoder().encode('<meta charset="Shift_JIS"><p>source</p>'),
+          undefined,
+          {
+            scopePath: "manual.html",
+          },
+        ),
+      ).toThrow(failure);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
   it.each([
     ["Shift_JIS", [0x82, 0xa0, 0x82], "あ"],

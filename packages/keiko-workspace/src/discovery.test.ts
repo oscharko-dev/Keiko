@@ -20,6 +20,7 @@ import {
   discoverWithStats,
   readWorkspaceFile,
   readWorkspaceFileForEditing,
+  visitWorkspaceFiles,
 } from "./discovery.js";
 import { detectWorkspace, detectWorkspaceAt } from "./detect.js";
 import { memFs } from "./_memfs.js";
@@ -36,6 +37,10 @@ import {
   type WorkspaceStat,
 } from "./fs.js";
 import { DEFAULT_DISCOVERY_OPTIONS, type WorkspaceInfo } from "./types.js";
+import {
+  createStructuralExecutionControl,
+  StructuralExecutionStoppedError,
+} from "./structuralExecution.js";
 
 let dir: string;
 
@@ -71,6 +76,72 @@ function fakeWorkspace(root: string): WorkspaceInfo {
     ignoreLines: [],
   };
 }
+
+describe("streamed discovery failure propagation", () => {
+  it.each([
+    new Error("directory read unavailable"),
+    new WorkspaceReadError("read unavailable", ""),
+  ])("propagates an observable workspace read failure and closes the iterator", async (failure) => {
+    let closed = false;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      iterateDirectory: async function* (): AsyncIterable<WorkspaceDirEntry> {
+        try {
+          yield await Promise.resolve({
+            name: "package.json",
+            isDirectory: false,
+            isFile: true,
+            isSymbolicLink: false,
+          });
+          throw failure;
+        } finally {
+          closed = true;
+        }
+      },
+    };
+    const visited: string[] = [];
+    await expect(
+      visitWorkspaceFiles(
+        fakeWorkspace(dir),
+        [],
+        false,
+        fs,
+        createStructuralExecutionControl(null),
+        (entry): Promise<void> => {
+          visited.push(entry.relativePath);
+          return Promise.resolve();
+        },
+      ),
+    ).rejects.toBeInstanceOf(WorkspaceReadError);
+    expect(visited).toEqual(["package.json"]);
+    expect(closed).toBe(true);
+  });
+  it("preserves cancellation identity instead of normalizing it into an IO failure", async () => {
+    const failure = new StructuralExecutionStoppedError("aborted");
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      iterateDirectory: async function* (): AsyncIterable<WorkspaceDirEntry> {
+        yield await Promise.resolve({
+          name: "package.json",
+          isDirectory: false,
+          isFile: true,
+          isSymbolicLink: false,
+        });
+        throw failure;
+      },
+    };
+    await expect(
+      visitWorkspaceFiles(
+        fakeWorkspace(dir),
+        [],
+        false,
+        fs,
+        createStructuralExecutionControl(null),
+        (): Promise<void> => Promise.resolve(),
+      ),
+    ).rejects.toBe(failure);
+  });
+});
 
 function mutableRootDiscoveryFs(): {
   readonly fs: WorkspaceFs;

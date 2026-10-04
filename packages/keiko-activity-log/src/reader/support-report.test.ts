@@ -103,6 +103,13 @@ function fixture(
 }
 
 describe("canonical body-free offline report", () => {
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-support-report-"));
+  });
+  afterEach(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
   it("refuses client-only availability headers attached to retained server evidence", () => {
     const limited = parseSupportReport(
       createClientOnlySupportReport(CORRELATION, "session-unavailable").reportJson,
@@ -176,13 +183,6 @@ describe("canonical body-free offline report", () => {
     expect(analyzed.analysis.evidence.sequenceAnomalies).not.toContainEqual(
       expect.objectContaining({ kind: "gap", pid: 4242, previousSeq: 0, seq: 340 }),
     );
-  });
-
-  beforeEach(() => {
-    stateDir = mkdtempSync(join(tmpdir(), "keiko-support-report-"));
-  });
-  afterEach(() => {
-    rmSync(stateDir, { recursive: true, force: true });
   });
 
   it("roundtrips a production incident and query, preserving reconstruction and unknown authenticity", () => {

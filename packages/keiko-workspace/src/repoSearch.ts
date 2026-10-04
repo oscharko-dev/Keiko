@@ -581,6 +581,8 @@ function buildSearchTextRunner(
   limits: SearchLimits,
   deps: SearchTextRunnerDeps,
 ): SearchTextRunner {
+  const semanticBounds =
+    limits.maxFilesScanned === null ? { maxDocumentBytes: 131_072, maxDocuments: 32 } : undefined;
   return {
     scope,
     limits: {
@@ -616,13 +618,7 @@ function buildSearchTextRunner(
     semantic:
       deps.contentLane === "editor"
         ? undefined
-        : createSemanticSearchSession(
-            deps.semanticSearchProvider,
-            query,
-            limits.maxFilesScanned === null
-              ? { maxDocumentBytes: 131_072, maxDocuments: 32 }
-              : undefined,
-          ),
+        : createSemanticSearchSession(deps.semanticSearchProvider, query, semanticBounds),
   };
 }
 
