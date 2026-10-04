@@ -102,6 +102,8 @@ export interface RerankSelectionInput<T> {
    * documents it is allowed to send. Provider indices are resolved against this subset.
    */
   readonly providerCandidates?: readonly T[] | undefined;
+  /** Keep candidates outside the provider-visible batch in their original order. */
+  readonly preserveUnsubmittedCandidates?: boolean | undefined;
   readonly documentFor: (candidate: T) => string;
   readonly topN: number;
   readonly signal?: AbortSignal | undefined;
@@ -392,15 +394,40 @@ async function configuredSelection<T>(
     };
   }
   const diagnostics = appliedDiagnostics(requestInput, transport.outcome, transport.latencyMs);
-  const selected = applyRerankMapping(
+  return configuredMappingSelection(
+    input,
     providerCandidates,
+    fallback,
     transport.outcome.value.results,
-    input.topN,
-    input.applyScore,
+    diagnostics,
   );
+}
+
+function configuredMappingSelection<T>(
+  input: RerankSelectionInput<T>,
+  providerCandidates: readonly T[],
+  fallback: readonly T[],
+  results: readonly RerankResult[],
+  diagnostics: GroundedRerankerDiagnostics,
+): RerankSelection<T> {
+  const selected = applyRerankMapping(providerCandidates, results, input.topN, input.applyScore);
+  if (incompleteIdentityMapping(input, selected, providerCandidates.length)) {
+    return {
+      selected: fallback,
+      diagnostics: invalidMappingDiagnostics(diagnostics, fallback.length),
+    };
+  }
   return selected === undefined
     ? { selected: fallback, diagnostics: invalidMappingDiagnostics(diagnostics, fallback.length) }
     : { selected, diagnostics: withKeptCount(diagnostics, selected.length) };
+}
+
+function incompleteIdentityMapping<T>(
+  input: RerankSelectionInput<T>,
+  selected: readonly T[] | undefined,
+  submittedCount: number,
+): boolean {
+  return input.preserveUnsubmittedCandidates === true && (selected?.length ?? 0) < submittedCount;
 }
 
 // Every non-applied outcome below is a SILENT degradation from the caller's point of view: the
@@ -456,7 +483,7 @@ export async function rerankSelection<T>(
   input: RerankSelectionInput<T>,
 ): Promise<RerankSelection<T>> {
   const elapsed = startLogTimer();
-  const selection = await resolveRerankSelection(input);
+  const selection = retainUnsubmittedCandidates(input, await resolveRerankSelection(input));
   logRerankOutcome(
     selection.diagnostics,
     input.fallbackMode,
@@ -465,6 +492,30 @@ export async function rerankSelection<T>(
     elapsed(),
   );
   return selection;
+}
+
+function retainUnsubmittedCandidates<T>(
+  input: RerankSelectionInput<T>,
+  selection: RerankSelection<T>,
+): RerankSelection<T> {
+  if (input.preserveUnsubmittedCandidates !== true) return selection;
+  let selected = selection.selected;
+  if (selection.diagnostics.status === "applied") {
+    const submitted = new Set(input.providerCandidates ?? input.candidates);
+    const complete = [...selected];
+    for (const candidate of input.candidates) {
+      if (!submitted.has(candidate)) complete.push(candidate);
+    }
+    selected = complete;
+  }
+  return {
+    selected,
+    diagnostics: {
+      ...selection.diagnostics,
+      candidateCount: input.candidates.length,
+      keptCount: selected.length,
+    },
+  };
 }
 
 async function resolveRerankSelection<T>(

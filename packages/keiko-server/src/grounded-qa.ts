@@ -1336,11 +1336,16 @@ function runDefaultGroundedExploration(
 ): Promise<OrchestratorOutput> {
   const { deps, modelId, signal, contextProfile, model, entailmentStage } = runnerCtx;
   const nowMs = Date.now;
-  const budgetedInput =
-    input.budget === undefined
-      ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
-      : input;
-  const contextPackReranker = configuredContextPackRerankerFor(deps, budgetedInput.query, signal);
+  const budgetedInput = {
+    ...input,
+    budget: input.budget ?? modelWindowAwareBudget(deps, modelId),
+  };
+  const contextPackReranker = configuredContextPackRerankerFor(
+    deps,
+    budgetedInput.query,
+    signal,
+    budgetedInput.budget.excerptBytesMax,
+  );
   const semanticLease = configuredRepoSemanticSearchProviderLeaseFor(
     deps,
     signal,
