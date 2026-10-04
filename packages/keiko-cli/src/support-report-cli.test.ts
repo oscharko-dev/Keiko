@@ -23,7 +23,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { inflateSync } from "node:zlib";
+import { gzipSync, inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeFileServerLogSinks, listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -754,6 +754,29 @@ describe("support report CLI and private publication", () => {
         chmodSync(path, 0o644);
       }
       expect(() => readSupportReportFile(path)).toThrow();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "explains how to analyze a public-permission browser download without changing it",
+    async () => {
+      await exportReport();
+      const original = readSupportReportFile(path);
+      path = join(root, "download.json.gz");
+      const bytes = gzipSync(original);
+      writeFileSync(path, bytes, { mode: 0o644 });
+      chmodSync(path, 0o644);
+      const result = await analyze(["--json"]);
+      expect(result.code).toBe(1);
+      expect(result.output).toEqual([]);
+      expect(result.errors.join("")).toBe(
+        "keiko support: permission-unsafe\n" +
+          "Analyze a copy owned by your account in a private directory. On macOS/Linux, " +
+          "use chmod 700 on that directory and chmod 600 on the copied report, then retry.\n",
+      );
+      expect(readFileSync(path)).toEqual(bytes);
+      expect(statSync(path).mode & 0o777).toBe(0o644);
+      expectFailureEvidence(controlStateDir, "analyze", "unsafe-target");
     },
   );
 

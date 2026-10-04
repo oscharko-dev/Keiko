@@ -299,11 +299,21 @@ const LEGACY_HINT =
   "Only canonical keiko-support-v1 reports are accepted. Regenerate the report on its " +
   "originating installation with keiko support export.\n";
 
-function reportFailure(error: unknown, io: CliIo): number {
+const PRIVATE_COPY_HINT =
+  "Analyze a copy owned by your account in a private directory. On macOS/Linux, " +
+  "use chmod 700 on that directory and chmod 600 on the copied report, then retry.\n";
+
+function reportFailure(error: unknown, io: CliIo, surface: SupportReportSurface): number {
   io.err(`keiko support: ${supportReportFailureReason(error)}\n`);
   if (error instanceof SupportReportError && error.minimumAnalyzerVersion !== undefined)
     io.err(`Minimum analyzer version: ${error.minimumAnalyzerVersion}\n`);
   if (error instanceof SupportReportError && error.reason === "legacy-input") io.err(LEGACY_HINT);
+  if (
+    surface === "analyze" &&
+    error instanceof SafeArtifactFileError &&
+    error.kind === "permission-unsafe"
+  )
+    io.err(PRIVATE_COPY_HINT);
   return 1;
 }
 
@@ -324,7 +334,7 @@ function reportSupportReportFailure(context: ReportRunContext, error: unknown): 
       loss: "event-dropped",
     });
   }
-  return reportFailure(error, context.io);
+  return reportFailure(error, context.io, context.surface);
 }
 
 // The Activity Log is the command's own evidence: without it the command fails closed, naming the
@@ -358,7 +368,7 @@ function reportRejectedDestination(
   try {
     const controlStateDir = analysisControlState(deps);
     if (cliControlStateConflictsWithTarget(controlStateDir, stateDir))
-      return reportFailure(error, io);
+      return reportFailure(error, io, "export");
     const sink = createFileServerLogSink(controlStateDir, { env });
     try {
       emitSupportReportStarted(sink, correlationId, "export", maxBytes);
@@ -372,7 +382,7 @@ function reportRejectedDestination(
       correlationId,
       loss: "event-dropped",
     });
-    return reportFailure(error, io);
+    return reportFailure(error, io, "export");
   }
 }
 

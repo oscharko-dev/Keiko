@@ -17,11 +17,16 @@ import { gzipSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  canonicalSupportJson,
+  MAX_SUPPORT_REPORT_BYTES,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { publishSupportReportFile, readSupportReportFile } from "./support-export.js";
 import {
   analyzeSupportReport,
   createClientOnlySupportReport,
+  parseSupportReport,
+  SupportReportError,
 } from "@oscharko-dev/keiko-activity-log/reader";
 import { closeFileServerLogSinks } from "@oscharko-dev/keiko-activity-log";
 import { runSupportCli } from "./support.js";
@@ -148,20 +153,32 @@ describe("bounded standard gzip report transport", () => {
     expect(readFileSync(path)).toEqual(before);
   });
 
-  it("keeps canonical whitespace, schema and integrity tampering fail closed after decompression", () => {
-    const canonical = canonicalReport();
-    for (const changed of [
-      JSON.stringify(JSON.parse(canonical), null, 2),
-      canonical.replace('"schemaVersion":1', '"schemaVersion":999'),
-      canonical.replace(
-        '"availabilityReason":"session-unavailable"',
-        '"availabilityReason":"diagnostic-delivery-unavailable"',
-      ),
-    ]) {
+  it.each(["whitespace", "schema", "integrity"] as const)(
+    "pins the exact %s refusal after gzip decompression",
+    (kind) => {
+      const canonical = canonicalReport();
+      const report = parseSupportReport(canonical);
+      const modified =
+        kind === "schema"
+          ? { ...report, schemaVersion: 999 }
+          : { ...report, integrity: { ...report.integrity, reportDigest: "f".repeat(64) } };
+      const changed =
+        kind === "whitespace"
+          ? JSON.stringify(report, null, 2) + "\n"
+          : canonicalSupportJson(modified) + "\n";
+      expect(changed).not.toBe(canonical);
       const decoded = readSupportReportFile(writeGzip(changed));
-      expect(() => analyzeSupportReport(decoded)).toThrow();
-    }
-  });
+      expect(decoded).toBe(changed);
+      expect(JSON.parse(decoded)).toMatchObject({
+        schemaVersion: kind === "schema" ? 999 : report.schemaVersion,
+        incident: report.incident,
+      });
+      expect(() => analyzeSupportReport(decoded)).toThrow(SupportReportError);
+      expect(() => analyzeSupportReport(decoded)).toThrow(
+        new SupportReportError(kind === "schema" ? "unsupported-report" : "corrupt-report"),
+      );
+    },
+  );
 });
 let root: string;
 beforeEach(() => {
