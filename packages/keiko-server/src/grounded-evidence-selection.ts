@@ -4,6 +4,7 @@ import type {
   OmittedContextEntry,
   SelectedScope,
 } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 export interface ContentEvidenceIdentity {
   readonly stableId: string;
@@ -40,6 +41,9 @@ export interface GroundedCandidateSelectionInput {
   readonly scopeKind: SelectedScope["kind"];
   readonly filesReadMax: number | null;
   readonly protectedContentPaths?: ReadonlySet<string>;
+  // Recorded by explicit target/implementation ordering, never inferred from array position.
+  readonly priorityPaths?: ReadonlySet<string>;
+  readonly pathOnlyPaths?: ReadonlySet<string>;
   readonly nowMs: number;
 }
 
@@ -55,60 +59,86 @@ function boundedFileLimit(input: GroundedCandidateSelectionInput): number {
 }
 
 function selectedWorkspaceCandidates(
-  kept: readonly CandidateFile[],
+  input: GroundedCandidateSelectionInput,
   limit: number,
-  protectedContentPaths: ReadonlySet<string> | undefined,
+  relativeFloor: number | undefined,
 ): readonly CandidateFile[] {
-  const bestScore = kept[0]?.score;
-  if (bestScore === undefined || limit === 0) return [];
-  const relativeFloor = bestScore * MIN_RELATIVE_CANDIDATE_SCORE;
-  return kept
-    .filter(
-      (candidate) =>
-        candidate.score >= relativeFloor ||
-        protectedContentPaths?.has(candidate.scopePath) === true,
-    )
-    .slice(0, limit);
+  if (relativeFloor === undefined || limit === 0) return [];
+  const priorities: CandidateFile[] = [];
+  const evidence: CandidateFile[] = [];
+  const paths: CandidateFile[] = [];
+  const remaining: CandidateFile[] = [];
+  for (const candidate of input.kept) {
+    if (input.priorityPaths?.has(candidate.scopePath) === true) priorities.push(candidate);
+    else if (clearsRelativeFloor(candidate, input, relativeFloor)) remaining.push(candidate);
+  }
+  for (const candidate of remaining) {
+    if (input.pathOnlyPaths?.has(candidate.scopePath) === true) paths.push(candidate);
+    else evidence.push(candidate);
+  }
+  return [...priorities, ...evidence, ...paths].slice(0, limit);
+}
+
+function clearsRelativeFloor(
+  candidate: CandidateFile,
+  input: GroundedCandidateSelectionInput,
+  relativeFloor: number,
+): boolean {
+  return (
+    candidate.score >= relativeFloor ||
+    input.protectedContentPaths?.has(candidate.scopePath) === true
+  );
+}
+
+export function pathOnlyEvidencePaths(atoms: readonly EvidenceAtom[]): ReadonlySet<string> {
+  return new Set(
+    [...atomsByPath(atoms)]
+      .filter(([, entries]) =>
+        entries.every(
+          (atom) => atom.lineRange === undefined && atom.provenance.kind === "file-listing",
+        ),
+      )
+      .map(([scopePath]) => scopePath),
+  );
+}
+
+function relativeScoreFloor(input: GroundedCandidateSelectionInput): number | undefined {
+  if (input.scopeKind === "files" || input.kept.length === 0) return undefined;
+  const strongest = input.kept.reduce((score, candidate) => Math.max(score, candidate.score), 0);
+  return strongest * MIN_RELATIVE_CANDIDATE_SCORE;
 }
 
 function selectionReasonFor(
   candidate: CandidateFile,
   selectedPaths: ReadonlySet<string>,
   relativeFloor: number | undefined,
-  protectedContentPaths: ReadonlySet<string> | undefined,
+  input: GroundedCandidateSelectionInput,
 ): OmittedContextEntry["reason"] | undefined {
   if (selectedPaths.has(candidate.scopePath)) return undefined;
   return relativeFloor !== undefined &&
     candidate.score < relativeFloor &&
-    protectedContentPaths?.has(candidate.scopePath) !== true
+    input.protectedContentPaths?.has(candidate.scopePath) !== true &&
+    input.priorityPaths?.has(candidate.scopePath) !== true
     ? "low-relevance"
     : "budget-exhausted";
 }
 
 function compareOmitted(a: OmittedContextEntry, b: OmittedContextEntry): number {
-  return a.scopePath.localeCompare(b.scopePath);
+  return compareStrings(a.scopePath, b.scopePath);
 }
 
 export function selectGroundedCandidateFiles(
   input: GroundedCandidateSelectionInput,
 ): GroundedCandidateSelection {
   const limit = boundedFileLimit(input);
+  const relativeFloor = relativeScoreFloor(input);
   const selected =
     input.scopeKind === "files"
       ? input.kept.slice(0, limit)
-      : selectedWorkspaceCandidates(input.kept, limit, input.protectedContentPaths);
+      : selectedWorkspaceCandidates(input, limit, relativeFloor);
   const selectedPaths = new Set(selected.map((candidate) => candidate.scopePath));
-  const relativeFloor =
-    input.scopeKind === "files" || input.kept[0] === undefined
-      ? undefined
-      : input.kept[0].score * MIN_RELATIVE_CANDIDATE_SCORE;
   const newlyOmitted = input.kept.flatMap((candidate) => {
-    const reason = selectionReasonFor(
-      candidate,
-      selectedPaths,
-      relativeFloor,
-      input.protectedContentPaths,
-    );
+    const reason = selectionReasonFor(candidate, selectedPaths, relativeFloor, input);
     return reason === undefined
       ? []
       : [{ scopePath: candidate.scopePath, reason, omittedAtMs: input.nowMs }];

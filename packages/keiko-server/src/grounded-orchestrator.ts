@@ -162,6 +162,7 @@ import {
   certifiedContentPaths,
   type ContentEvidenceIdentity,
   selectGroundedCandidateFiles,
+  pathOnlyEvidencePaths,
   selectGroundedEvidenceAtoms,
   tracePriority,
 } from "./grounded-evidence-selection.js";
@@ -2399,6 +2400,7 @@ export interface ExcerptReadSummary {
 type PackCacheIdentity = readonly string[];
 
 interface CandidateOrdering {
+  readonly priorityPaths?: ReadonlySet<string>;
   readonly kept: readonly CandidateFile[];
   readonly omitted: readonly OmittedContextEntry[];
 }
@@ -2547,7 +2549,7 @@ function basename(scopePath: string): string {
 }
 
 function compareByScopePath(a: OmittedContextEntry, b: OmittedContextEntry): number {
-  return a.scopePath.localeCompare(b.scopePath);
+  return compareStrings(a.scopePath, b.scopePath);
 }
 
 function isKeikoEvidenceArtifact(scopePath: string): boolean {
@@ -4390,15 +4392,19 @@ function explicitlyTargetsLockfile(
 function orderForDistinctEvidencePaths(
   kept: readonly CandidateFile[],
   anchors: readonly SearchAnchor[],
+  priorityPaths: Set<string>,
 ): readonly CandidateFile[] {
   const selected = new Set(kept.slice(0, 1));
   for (const anchor of anchors) {
     if (anchor.kind === "literal" || anchor.weight < 0.7) continue;
     const term = anchor.term.toLowerCase();
-    if ([...selected].some((candidate) => candidate.scopePath.toLowerCase().includes(term)))
-      continue;
-    const candidate = kept.find((entry) => entry.scopePath.toLowerCase().includes(term));
-    if (candidate !== undefined) selected.add(candidate);
+    const candidate =
+      [...selected].find((entry) => entry.scopePath.toLowerCase().includes(term)) ??
+      kept.find((entry) => entry.scopePath.toLowerCase().includes(term));
+    if (candidate !== undefined) {
+      selected.add(candidate);
+      priorityPaths.add(candidate.scopePath);
+    }
   }
   const names = new Set(
     [...selected].map((candidate) => basename(candidate.scopePath).toLowerCase()),
@@ -4445,23 +4451,35 @@ function refineCandidateOrdering(
     return { kept, omitted };
   }
 
-  const nextOmitted = [...omitted];
-  for (const candidate of runtimeArtifacts) {
-    nextOmitted.push({
+  const nextOmitted = runtimeArtifactOmissions(omitted, runtimeArtifacts, nowMs);
+  const priorityPaths = new Set<string>();
+  const useSearchOrder = candidateOrderingUsesSearchOrder(query, anchors, diagnostics);
+  const orderedPreferred = useSearchOrder
+    ? orderPreferredCandidates(preferred, diagnostics, priorityPaths)
+    : preferred;
+  return {
+    kept: [
+      ...orderForDistinctEvidencePaths(orderedPreferred, anchors, priorityPaths),
+      ...lockfiles,
+    ],
+    omitted: nextOmitted,
+    priorityPaths,
+  };
+}
+
+function runtimeArtifactOmissions(
+  omitted: readonly OmittedContextEntry[],
+  artifacts: readonly CandidateFile[],
+  nowMs: number,
+): readonly OmittedContextEntry[] {
+  return [
+    ...omitted,
+    ...artifacts.map((candidate): OmittedContextEntry => ({
       scopePath: candidate.scopePath,
       reason: "low-relevance",
       omittedAtMs: nowMs,
-    });
-  }
-  nextOmitted.sort(compareByScopePath);
-  const useSearchOrder = candidateOrderingUsesSearchOrder(query, anchors, diagnostics);
-  const orderedPreferred = useSearchOrder
-    ? orderPreferredCandidates(preferred, diagnostics)
-    : preferred;
-  return {
-    kept: [...orderForDistinctEvidencePaths(orderedPreferred, anchors), ...lockfiles],
-    omitted: nextOmitted,
-  };
+    })),
+  ].sort(compareByScopePath);
 }
 
 function candidateOrderingUsesSearchOrder(
@@ -4496,6 +4514,7 @@ function queryTargetsRouteImplementation(queryText: string): boolean {
 function orderPreferredCandidates(
   kept: readonly CandidateFile[],
   diagnostics: ContextPackDiagnostics | undefined,
+  priorityPaths: Set<string>,
 ): readonly CandidateFile[] {
   const ranked = diagnostics?.rankedCandidates ?? [];
   if (ranked.length === 0 || kept.length <= 1) {
@@ -4506,6 +4525,7 @@ function orderPreferredCandidates(
     .map((candidate) => byPath.get(candidate.scopePath))
     .find((candidate) => candidate !== undefined);
   if (routeCandidate === undefined) return kept;
+  priorityPaths.add(routeCandidate.scopePath);
   return [routeCandidate, ...kept.filter((candidate) => candidate !== routeCandidate)];
 }
 
@@ -5544,6 +5564,7 @@ function preparePackAssembly(
     ...refined,
     scopeKind: input.scope.kind,
     protectedContentPaths: primaryContentPaths(rings),
+    pathOnlyPaths: pathOnlyEvidencePaths(atoms),
     filesReadMax: plan.budget.filesReadMax,
     nowMs: nowMs(),
   });

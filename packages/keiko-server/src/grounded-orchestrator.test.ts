@@ -2056,6 +2056,42 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it.each([
+    [
+      "Where is handleGroundedAsk defined? Cite the exact file.",
+      "grounded-qa.ts",
+      "function handleGroundedAsk",
+    ],
+    [
+      "Which file implements the POST /api/chats/messages/grounded route? Cite evidence.",
+      "routes.ts",
+      'method: "POST"',
+    ],
+  ])(
+    "preserves the explicit implementation priority under a one-file budget: %s",
+    async (question, filename, evidence) => {
+      seedIssue672Repo();
+      const requested = issue672Input(question);
+      const out = await retrieveConnectedContextPack(
+        { ...requested, budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1 } },
+        {
+          correlationId: undefined,
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => issue672Workspace(),
+        },
+      );
+      expect(out.pack.files.map((file) => file.scopePath)).toEqual([
+        `packages/keiko-server/src/${filename}`,
+      ]);
+      expect(
+        out.pack.files[0]?.excerpts.some((excerpt) => excerpt.content.includes(evidence)),
+      ).toBe(true);
+      expect(out.pack.usage.filesRead).toBe(1);
+      expect(validateConnectedContextPack(out.pack)).toEqual({ ok: true });
+    },
+  );
+
   it("prefers routes.ts for exact route-implementation questions from issue #672", async () => {
     seedIssue672Repo();
     const out = await retrieveConnectedContextPack(

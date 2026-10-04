@@ -13,6 +13,7 @@ import { assembleContextPack, type AssembleInput } from "@oscharko-dev/keiko-wor
 
 import {
   certifiedContentPaths,
+  pathOnlyEvidencePaths,
   selectGroundedCandidateFiles,
   selectGroundedEvidenceAtoms,
   tracePriority,
@@ -82,13 +83,19 @@ function broadCandidates(count = 20): readonly CandidateFile[] {
 async function assembleSelectedCandidates(
   budget: AssembleInput["budget"],
   initialUsage?: AssembleInput["initialUsage"],
+  kept: readonly CandidateFile[] = broadCandidates(),
+  evidenceAtoms: readonly EvidenceAtom[] = kept.map((entry) =>
+    atom(entry.scopePath, entry.score, 1),
+  ),
+  protectedContentPaths?: ReadonlySet<string>,
 ): Promise<Awaited<ReturnType<typeof assembleContextPack>>> {
-  const kept = broadCandidates();
   const selection = selectGroundedCandidateFiles({
     kept,
     omitted: [],
     scopeKind: "workspace-root",
     filesReadMax: budget.filesReadMax,
+    ...(protectedContentPaths === undefined ? {} : { protectedContentPaths }),
+    pathOnlyPaths: pathOnlyEvidencePaths(evidenceAtoms),
     nowMs: NOW,
   });
   return assembleContextPack(
@@ -111,7 +118,7 @@ async function assembleSelectedCandidates(
         emittedAtMs: NOW,
       },
       budget,
-      atoms: kept.map((entry) => atom(entry.scopePath, entry.score, 1)),
+      atoms: evidenceAtoms,
       ranked: selection.kept,
       omittedFromRanking: selection.omitted,
       excerpts: new Map(kept.map((entry) => [entry.scopePath, `module ${entry.scopePath}`])),
@@ -122,6 +129,94 @@ async function assembleSelectedCandidates(
 }
 
 describe("selectGroundedCandidateFiles", () => {
+  it("uses the strongest score after priority reordering for both selection and omission reasons", () => {
+    const promoted = candidate("promoted.ts", 0.2);
+    const strongest = candidate("strongest.ts", 1);
+    const noise = candidate("noise.ts", 0.3);
+    const result = selectGroundedCandidateFiles({
+      kept: [promoted, strongest, noise],
+      omitted: [],
+      scopeKind: "workspace-root",
+      filesReadMax: null,
+      protectedContentPaths: new Set([promoted.scopePath]),
+      nowMs: NOW,
+    });
+    expect(result.kept).toEqual([promoted, strongest]);
+    expect(result.omitted).toEqual([
+      { scopePath: noise.scopePath, reason: "low-relevance", omittedAtMs: NOW },
+    ]);
+  });
+
+  it("gives certified actual content capacity before an incidental path-only candidate", async () => {
+    const content = atom("fact.txt", 0.1, 1);
+    const evidence = [discoveryListing("path-only.txt"), content];
+    const protectedPaths = certifiedContentPaths(evidence, [
+      { stableId: content.stableId, queryFingerprint: content.provenance.queryFingerprint },
+    ]);
+    const { pack } = await assembleSelectedCandidates(
+      { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1 },
+      undefined,
+      [candidate("path-only.txt", 0.8), candidate("fact.txt", 0.1)],
+      evidence,
+      protectedPaths,
+    );
+    expect(pack.files.map((entry) => entry.scopePath)).toEqual(["fact.txt"]);
+    expect(pack.usage.filesRead).toBe(1);
+    expect(pack.omitted).toContainEqual({
+      scopePath: "path-only.txt",
+      reason: "budget-exhausted",
+      omittedAtMs: NOW,
+    });
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it("orders complete omission details by shared code-unit order rather than host locale", () => {
+    const result = selectGroundedCandidateFiles({
+      kept: [candidate("z.ts", 1), candidate("ä.ts", 1), candidate("Z.ts", 1)],
+      omitted: [{ scopePath: "中.ts", reason: "ignored", omittedAtMs: NOW }],
+      scopeKind: "files",
+      filesReadMax: 0,
+      nowMs: NOW,
+    });
+    expect(result.omitted.map((entry) => entry.scopePath)).toEqual([
+      "Z.ts",
+      "z.ts",
+      "ä.ts",
+      "中.ts",
+    ]);
+    expect(result.omitted.map((entry) => entry.reason)).toEqual([
+      "budget-exhausted",
+      "budget-exhausted",
+      "budget-exhausted",
+      "ignored",
+    ]);
+  });
+
+  it("retains the complete certified fact before path-only context under the actual byte budget", async () => {
+    const content = atom("fact.txt", 0.1, 1);
+    const evidence = [discoveryListing("path-only.txt"), content];
+    const protectedPaths = certifiedContentPaths(evidence, [
+      { stableId: content.stableId, queryFingerprint: content.provenance.queryFingerprint },
+    ]);
+    const bytes = new TextEncoder().encode("module fact.txt").byteLength;
+    const { pack } = await assembleSelectedCandidates(
+      { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: bytes },
+      undefined,
+      [candidate("path-only.txt", 0.8), candidate("fact.txt", 0.1)],
+      evidence,
+      protectedPaths,
+    );
+    expect(pack.files.map((entry) => entry.scopePath)).toEqual(["fact.txt"]);
+    expect(pack.files[0]?.excerpts[0]?.content).toBe("module fact.txt");
+    expect(pack.usage.excerptBytes).toBe(bytes);
+    expect(
+      pack.omitted.some(
+        (entry) => entry.scopePath === "path-only.txt" && entry.reason === "budget-exhausted",
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
   it("requires the certified producer identity and actual query fingerprint", () => {
     const exact = atom("exact.txt", 0.1, 1);
     const otherQuery = {
@@ -154,9 +249,13 @@ describe("selectGroundedCandidateFiles", () => {
       scopeKind: "workspace-root",
       filesReadMax: null,
       protectedContentPaths: new Set(["fact.txt"]),
+      pathOnlyPaths: pathOnlyEvidencePaths([
+        discoveryListing("row-256.txt"),
+        atom("fact.txt", 0.1, 1),
+      ]),
       nowMs: NOW,
     });
-    expect(selected.kept.map((file) => file.scopePath)).toEqual(["row-256.txt", "fact.txt"]);
+    expect(selected.kept.map((file) => file.scopePath)).toEqual(["fact.txt", "row-256.txt"]);
     expect(selected.omitted).toEqual([
       { scopePath: "noise.txt", reason: "low-relevance", omittedAtMs: NOW },
     ]);
@@ -166,14 +265,84 @@ describe("selectGroundedCandidateFiles", () => {
       scopeKind: "workspace-root",
       filesReadMax: 1,
       protectedContentPaths: new Set(["fact.txt"]),
+      pathOnlyPaths: pathOnlyEvidencePaths([
+        discoveryListing("row-256.txt"),
+        atom("fact.txt", 0.1, 1),
+      ]),
       nowMs: NOW,
     });
-    expect(finite.kept).toHaveLength(1);
+    expect(finite.kept.map((file) => file.scopePath)).toEqual(["fact.txt"]);
     expect(finite.omitted).toContainEqual({
-      scopePath: "fact.txt",
+      scopePath: "row-256.txt",
       reason: "budget-exhausted",
       omittedAtMs: NOW,
     });
+  });
+
+  it("preserves producer-marked explicit priorities before certified content and score filtering", () => {
+    const target = candidate("requested-definition.ts", 0.1);
+    const content = candidate("incidental-content.ts", 0.8);
+    const result = selectGroundedCandidateFiles({
+      kept: [target, content],
+      omitted: [],
+      scopeKind: "workspace-root",
+      filesReadMax: 1,
+      priorityPaths: new Set([target.scopePath]),
+      protectedContentPaths: new Set([content.scopePath]),
+      nowMs: NOW,
+    });
+    expect(result.kept).toEqual([target]);
+    expect(result.omitted).toEqual([
+      { scopePath: content.scopePath, reason: "budget-exhausted", omittedAtMs: NOW },
+    ]);
+  });
+
+  it("preserves explicit Files selection order even when later files have certified content", () => {
+    const manual = candidate("manual.ts", 0.1);
+    const content = candidate("content.ts", 1);
+    const result = selectGroundedCandidateFiles({
+      kept: [manual, content],
+      omitted: [],
+      scopeKind: "files",
+      filesReadMax: 1,
+      protectedContentPaths: new Set([content.scopePath]),
+      nowMs: NOW,
+    });
+    expect(result.kept).toEqual([manual]);
+    expect(result.omitted).toEqual([
+      { scopePath: content.scopePath, reason: "budget-exhausted", omittedAtMs: NOW },
+    ]);
+  });
+
+  it("preserves real semantic evidence ahead of certified README content and only demotes pure listings", async () => {
+    const readme = atom("README.md", 0.8, 1);
+    const semantic: EvidenceAtom = {
+      ...atom("implementation.ts", 0.98, 1),
+      provenance: {
+        kind: "model-rerank",
+        tool: "repo.semanticSearch:fixture",
+        queryFingerprint: "query",
+      },
+    };
+    const evidence = [semantic, readme, discoveryListing("listing.txt")];
+    const protectedPaths = certifiedContentPaths(evidence, [
+      { stableId: readme.stableId, queryFingerprint: readme.provenance.queryFingerprint },
+    ]);
+    const { pack } = await assembleSelectedCandidates(
+      { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1 },
+      undefined,
+      [
+        candidate("implementation.ts", 0.98),
+        candidate("README.md", 0.8),
+        candidate("listing.txt", 0.7),
+      ],
+      evidence,
+      protectedPaths,
+    );
+    expect([...pathOnlyEvidencePaths(evidence)]).toEqual(["listing.txt"]);
+    expect(pack.files.map((entry) => entry.scopePath)).toEqual(["implementation.ts"]);
+    expect(pack.files[0]?.excerpts[0]?.atom.provenance.kind).toBe("model-rerank");
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
 
   it("returns an empty selection for empty input and for a zero file budget", () => {
