@@ -43,6 +43,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/editor-session";
 import type {
   FilesContentResponse as FilesContentWireResponse,
+  FilesPreviewResponse as FilesPreviewWireResponse,
   FilesEntryKind,
   FilesSymlinkTargetKind,
   FilesTreeEntry,
@@ -63,6 +64,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import { decodeTextFileBytes, DEFAULT_SEARCH_LIMITS } from "@oscharko-dev/keiko-workspace";
 import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   createOrdinaryWorkspaceRootAccess,
@@ -79,6 +81,7 @@ const MAX_FILE_SEARCH_LIMIT = 50;
 const MAX_FILE_SEARCH_QUERY_CHARS = 120;
 const MAX_FILE_SEARCH_SCAN = 20_000;
 const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
+const MAX_SOURCE_PREVIEW_BYTES = DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned;
 const MAX_IMAGE_PREVIEW_BYTES = 3_000_000;
 const STABLE_CONTENT_READ_ATTEMPTS = 3;
 const TREE_CLASSIFY_CONCURRENCY = 32;
@@ -136,23 +139,7 @@ interface FilesPreviewBase {
   readonly symlink: boolean;
 }
 
-export type FilesPreviewResponse =
-  | (FilesPreviewBase & {
-      readonly kind: "text";
-      readonly content: string;
-      readonly truncated: boolean;
-      readonly maxBytes: number;
-    })
-  | (FilesPreviewBase & {
-      readonly kind: "image";
-      readonly url: string;
-      readonly maxBytes: number;
-    })
-  | (FilesPreviewBase & {
-      readonly kind: "binary";
-      readonly reason: "unsupported" | "too_large";
-      readonly maxBytes?: number | undefined;
-    });
+export type FilesPreviewResponse = FilesPreviewWireResponse;
 
 export type FilesContentResponse = FilesContentWireResponse;
 
@@ -1695,23 +1682,28 @@ async function textPreview(
   base: FilesPreviewBase,
   redactor: UiHandlerDeps["redactor"],
 ): Promise<FilesPreviewResponse> {
-  const prefix = await readContainedPrefixOrStale(
+  if (target.stats.size > MAX_SOURCE_PREVIEW_BYTES) {
+    return { ...base, kind: "binary", reason: "too_large", maxBytes: MAX_SOURCE_PREVIEW_BYTES };
+  }
+  const bytes = await readContainedPrefixOrStale(
     target.path,
     target.fs,
     target.identity,
-    MAX_TEXT_PREVIEW_BYTES,
+    MAX_SOURCE_PREVIEW_BYTES,
   );
-  const content = decodeUtf8(prefix.buffer);
-  if (content === null || prefix.buffer.includes(0)) {
-    return { ...base, kind: "binary", reason: "unsupported" };
-  }
-  const redacted = redactor(content);
+  const decoded = decodeTextFileBytes(bytes.buffer, { scopePath: target.relativePath });
+  if (decoded === undefined) return { ...base, kind: "binary", reason: "unsupported" };
+  const redacted = redactor(decoded.text);
   return {
     ...base,
     kind: "text",
-    content: typeof redacted === "string" ? redacted : content,
-    truncated: prefix.truncated,
-    maxBytes: MAX_TEXT_PREVIEW_BYTES,
+    content: typeof redacted === "string" ? redacted : decoded.text,
+    truncated: bytes.truncated,
+    maxBytes: MAX_SOURCE_PREVIEW_BYTES,
+    canEdit:
+      decoded.encoding === "utf-8" &&
+      target.stats.size <= MAX_TEXT_PREVIEW_BYTES &&
+      isEditableUtf8File(base.extension, bytes.buffer.subarray(0, 4096)),
   };
 }
 
@@ -2725,16 +2717,7 @@ export async function readFilesPreview(
   }
   const base = basePreview(target);
   if (isImageExtension(base.extension)) return imagePreview(target, base);
-  const prefix = await readContainedPrefixOrStale(
-    target.path,
-    target.fs,
-    target.identity,
-    Math.min(target.stats.size, 4096),
-  );
-  if (isEditableUtf8File(base.extension, prefix.buffer)) {
-    return textPreview(target, base, redactor);
-  }
-  return { ...base, kind: "binary", reason: "unsupported" };
+  return textPreview(target, base, redactor);
 }
 
 export async function handleFilesTree(

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { SupportReportButton } from "../../SupportReportButton";
+import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
@@ -30,6 +31,7 @@ interface FilePreviewProps {
   readonly root: string;
   readonly path: string;
   readonly onClose: () => void;
+  readonly revealLineStart?: number | undefined;
   readonly onOpenInEditor?: ((root: string, path: string) => void) | undefined;
 }
 
@@ -241,7 +243,12 @@ function canOpenPreviewInEditor(
   preview: FilesPreviewResponse | null,
   onOpenInEditor: FilePreviewProps["onOpenInEditor"],
 ): boolean {
-  return onOpenInEditor !== undefined && preview?.kind === "text" && !preview.truncated;
+  return (
+    onOpenInEditor !== undefined &&
+    preview?.kind === "text" &&
+    !preview.truncated &&
+    preview.canEdit !== false
+  );
 }
 
 function highlightedTokenSpans(tokens: readonly Token[]): ReactNode {
@@ -266,13 +273,18 @@ interface TextFilePreviewProps {
     readonly tokens: readonly Token[];
   }[];
   readonly hiddenLineCount: number;
+  readonly precedingLineCount: number;
+  readonly onShowPrevious: () => void;
   readonly onShowMore: () => void;
   readonly t: I18nTranslate;
 }
 
-function TextFilePreview(props: TextFilePreviewProps): ReactNode {
+function TextPreviewBanners(props: TextFilePreviewProps): ReactNode {
   return (
     <>
+      {props.preview.canEdit === false ? (
+        <div className="fpv-banner">{props.t("filePreview.readOnlyBanner")}</div>
+      ) : null}
       {props.preview.truncated ? (
         <div className="fpv-banner">
           {props.t("filePreview.truncatedBanner", {
@@ -283,6 +295,14 @@ function TextFilePreview(props: TextFilePreviewProps): ReactNode {
       {!props.shouldHighlight ? (
         <div className="fpv-banner">{props.t("filePreview.syntaxHighlightDisabled")}</div>
       ) : null}
+    </>
+  );
+}
+
+function TextFilePreview(props: TextFilePreviewProps): ReactNode {
+  return (
+    <>
+      <TextPreviewBanners {...props} />
       <section
         className={`fpv-code mono ${selectableTextStyles["cmp-selectable-text"]}`}
         // Issue #2710 — the preview text must be selectable (and its copy must
@@ -297,6 +317,13 @@ function TextFilePreview(props: TextFilePreviewProps): ReactNode {
           } as CSSProperties
         }
       >
+        {props.precedingLineCount > 0 ? (
+          <button type="button" className="fpv-retry fpv-show-more" onClick={props.onShowPrevious}>
+            {props.t("filePreview.showPreviousLines", {
+              count: Math.min(PREVIEW_LINE_BATCH, props.precedingLineCount),
+            })}
+          </button>
+        ) : null}
         {props.visibleLineRows.map((row) => (
           <div className="fpv-line" key={`line-${String(row.lineNumber)}`}>
             <span className={`fpv-num ${selectableTextStyles["cmp-selectable-text-chrome"]}`}>
@@ -387,6 +414,8 @@ interface PreviewKindContentProps {
     readonly tokens: readonly Token[];
   }[];
   readonly hiddenLineCount: number;
+  readonly precedingLineCount: number;
+  readonly onShowPrevious: () => void;
   readonly onShowMore: () => void;
   readonly t: I18nTranslate;
 }
@@ -403,7 +432,40 @@ function PreviewKindContent(props: PreviewKindContentProps): ReactNode {
   }
 }
 
-export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreviewProps): ReactNode {
+export function initialPreviewLineWindow(
+  lineCount: number,
+  revealLineStart?: number,
+): { readonly start: number; readonly end: number } {
+  const validLine =
+    revealLineStart !== undefined && Number.isSafeInteger(revealLineStart) && revealLineStart > 0;
+  const start = validLine ? Math.max(0, Math.min(lineCount - 1, revealLineStart - 1) - 5) : 0;
+  return { start, end: Math.min(lineCount, start + PREVIEW_LINE_BATCH) };
+}
+
+function validatedPreview(
+  response: FilesPreviewResponse,
+  root: string,
+  path: string,
+): FilesPreviewResponse {
+  if (response.root !== root || response.path !== path)
+    throw new ApiError("BAD_RESPONSE", "File preview target mismatch.", 502);
+  if (response.kind !== "text") return response;
+  if (
+    typeof response.content !== "string" ||
+    typeof response.truncated !== "boolean" ||
+    (response.canEdit !== undefined && typeof response.canEdit !== "boolean")
+  )
+    throw new ApiError("BAD_RESPONSE", "Invalid file preview content.", 502);
+  return response;
+}
+
+export function FilePreview({
+  root,
+  path,
+  onClose,
+  onOpenInEditor,
+  revealLineStart,
+}: FilePreviewProps): ReactNode {
   const t = useTranslate();
   const [preview, setPreview] = useState<FilesPreviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -443,15 +505,28 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
     if (!isManualRefresh) setPreview(null);
 
     const correlationId = newClientCorrelationId();
+    const settle = startFilesNavigationEvidence("files source preview", correlationId);
     void fetchFilesPreview(root, path, correlationId)
       .then((response) => {
+        if (cancelled) {
+          settle(undefined, "dropped");
+          return;
+        }
+        const selected = validatedPreview(response, root, path);
+        settle(selected, "applied");
         if (!cancelled) {
-          setPreview(response);
+          setPreview(selected);
           if (isManualRefresh) setRefreshStatus("refreshed");
         }
       })
       .catch((err: unknown) => {
+        settle(undefined, cancelled ? "dropped" : "failed");
         if (!cancelled) {
+          if (
+            err instanceof ApiError &&
+            (err.code === "DENIED" || err.code === "STALE_SESSION" || err.code === "BAD_RESPONSE")
+          )
+            setPreview(null);
           setError(classifyError(err, correlationId));
           if (isManualRefresh) setRefreshStatus("failed");
         }
@@ -461,6 +536,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       });
     return () => {
       cancelled = true;
+      settle(undefined, "cancelled");
     };
   }, [path, root, refreshKey]);
 
@@ -481,36 +557,51 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
     );
   };
 
+  const activePreview = preview?.root === root && preview.path === path ? preview : null;
   const denied = error?.denied === true;
-  const lang = previewLanguageLabel(preview, error, t);
-  const headerName = previewHeaderName(preview, error, t);
+  const lang = previewLanguageLabel(activePreview, error, t);
+  const headerName = previewHeaderName(activePreview, error, t);
   const headerTitle = headerName;
-  const shouldHighlight = preview?.kind === "text" && preview.content.length <= MAX_HIGHLIGHT_BYTES;
-  const canOpenInEditor = canOpenPreviewInEditor(preview, onOpenInEditor);
+  const shouldHighlight =
+    activePreview?.kind === "text" && activePreview.content.length <= MAX_HIGHLIGHT_BYTES;
+  const canOpenInEditor = canOpenPreviewInEditor(activePreview, onOpenInEditor);
   const refreshStatusText = refreshStatusLabel(refreshStatus, t);
   const lines: readonly (readonly Token[])[] = useMemo(
-    () => previewTokenLines(preview, shouldHighlight),
-    [preview, shouldHighlight],
+    () => previewTokenLines(activePreview, shouldHighlight),
+    [activePreview, shouldHighlight],
   );
 
   // GEN-PERF-WIDGET-005 — bounded initial render window over `lines`. Reset whenever the
   // underlying content changes so a new file always starts at the first batch.
-  const [visibleLineCount, setVisibleLineCount] = useState(PREVIEW_LINE_BATCH);
+  const [lineWindow, setLineWindow] = useState(() =>
+    initialPreviewLineWindow(
+      Math.max(PREVIEW_LINE_BATCH, revealLineStart ?? 0) + PREVIEW_LINE_BATCH,
+      revealLineStart,
+    ),
+  );
   useEffect(() => {
-    setVisibleLineCount(PREVIEW_LINE_BATCH);
-  }, [lines]);
+    if (lines.length > 0) setLineWindow(initialPreviewLineWindow(lines.length, revealLineStart));
+  }, [lines, revealLineStart]);
   const visibleLines = useMemo(
-    () => (lines.length > visibleLineCount ? lines.slice(0, visibleLineCount) : lines),
-    [lines, visibleLineCount],
+    () => lines.slice(lineWindow.start, lineWindow.end),
+    [lines, lineWindow],
   );
   const visibleLineRows = useMemo(
-    () => visibleLines.map((tokens, index) => ({ lineNumber: index + 1, tokens })),
-    [visibleLines],
+    () =>
+      visibleLines.map((tokens, index) => ({ lineNumber: lineWindow.start + index + 1, tokens })),
+    [visibleLines, lineWindow.start],
   );
-  const hiddenLineCount = Math.max(0, lines.length - visibleLineCount);
-  const showMoreLines = (): void => {
-    setVisibleLineCount((count) => Math.min(lines.length, count + PREVIEW_LINE_BATCH));
-  };
+  const hiddenLineCount = Math.max(0, lines.length - lineWindow.end);
+  const showMoreLines = (): void =>
+    setLineWindow((window) => ({
+      ...window,
+      end: Math.min(lines.length, window.end + PREVIEW_LINE_BATCH),
+    }));
+  const showPreviousLines = (): void =>
+    setLineWindow((window) => ({
+      ...window,
+      start: Math.max(0, window.start - PREVIEW_LINE_BATCH),
+    }));
 
   return (
     // The keydown listener is a keyboard shortcut for the Back/Close buttons inside this
@@ -528,11 +619,11 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         >
           <BackIcon size={15} />
         </button>
-        <FileIcon name={denied || preview === null ? "" : preview.name} />
+        <FileIcon name={denied || activePreview === null ? "" : activePreview.name} />
         <span className="fpv-name" title={headerTitle}>
           {headerName}
         </span>
-        {preview !== null ? (
+        {activePreview !== null ? (
           <>
             <button
               className="fpv-back fpv-copy"
@@ -595,7 +686,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         </button>
       </div>
 
-      {loading && preview === null ? (
+      {loading && activePreview === null ? (
         <output className="fpv-state" style={NATIVE_BLOCK_STYLE}>
           {t("filePreview.loadingState")}
         </output>
@@ -616,11 +707,13 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       ) : null}
 
       <PreviewKindContent
-        preview={preview}
+        preview={activePreview}
         shouldHighlight={shouldHighlight}
         lines={lines}
         visibleLineRows={visibleLineRows}
         hiddenLineCount={hiddenLineCount}
+        precedingLineCount={lineWindow.start}
+        onShowPrevious={showPreviousLines}
         onShowMore={showMoreLines}
         t={t}
       />

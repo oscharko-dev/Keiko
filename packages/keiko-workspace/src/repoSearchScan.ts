@@ -36,6 +36,7 @@ import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import {
   containedRealPathInfo,
+  isAllowedContainedPathParent,
   isCanonicalAllowedContainedPath,
   realRootIsDeniedViaSymlink,
 } from "./realpath.js";
@@ -962,8 +963,10 @@ function recordCandidateOmission(
   candidates: CandidateFile[],
   relativePath: string,
   omitted: CandidateOmissionReason,
+  state?: RunState,
 ): void {
   candidates.push(buildCandidate(relativePath, omitted));
+  if (omitted === "tool-unavailable" && state !== undefined) markTruncated(state, "io-error");
 }
 
 function persistWorkspaceIndexRecord(
@@ -1018,7 +1021,7 @@ async function readRawTextForScan(
     return await readBoundedRawText(runner, relativePath, state, candidates);
   } catch (err) {
     if (isIoError(err)) {
-      recordCandidateOmission(candidates, relativePath, "tool-unavailable");
+      recordCandidateOmission(candidates, relativePath, "tool-unavailable", state);
       return undefined;
     }
     throw err;
@@ -1107,7 +1110,7 @@ function readUtf8TextForScan(
     // TOCTOU: permissions or availability may change between discovery and read.
     // A single unreadable file must degrade to a skip, not crash the whole scan.
     if (isIoError(err)) {
-      recordCandidateOmission(candidates, relativePath, "tool-unavailable");
+      recordCandidateOmission(candidates, relativePath, "tool-unavailable", state);
       return undefined;
     }
     throw err;
@@ -1223,9 +1226,8 @@ function filePolicyOmission(
   }
   const abs = resolveWithinWorkspace(runner.scope.workspace.root, file.relativePath);
   const contained = containedRealPathInfo(runner.fs, runner.scope.workspace.root, abs);
-  if (!isCanonicalAllowedContainedPath(contained, runner.scope.workspace.root, file.relativePath)) {
-    return { omitted: "ignored" };
-  }
+  const containmentOmission = fileContainmentOmission(runner, file.relativePath, contained);
+  if (containmentOmission !== undefined) return { omitted: containmentOmission };
   try {
     const stat = runner.fs.stat(contained.path);
     if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
@@ -1238,6 +1240,21 @@ function filePolicyOmission(
     throw err;
   }
   return { omitted: policyOmissionReason(file.relativePath, runner.policy), path: contained.path };
+}
+
+function fileContainmentOmission(
+  runner: SearchTextRunner,
+  relativePath: string,
+  contained: ReturnType<typeof containedRealPathInfo>,
+): CandidateOmissionReason | undefined {
+  const root = runner.scope.workspace.root;
+  if (isCanonicalAllowedContainedPath(contained, root, relativePath)) return undefined;
+  if (
+    isAllowedContainedPathParent(contained, root, relativePath) &&
+    !runner.fs.exists(contained.path)
+  )
+    return "tool-unavailable";
+  return "ignored";
 }
 
 async function binaryOmission(
@@ -1362,7 +1379,7 @@ export async function fileListingTextIsReadable(
 ): Promise<boolean> {
   const policy = filePolicyOmission(runner, file);
   if (policy.omitted !== undefined) {
-    recordCandidateOmission(candidates, file.relativePath, policy.omitted);
+    recordCandidateOmission(candidates, file.relativePath, policy.omitted, state);
     if (policy.omitted === "size-exceeded") markSizeExclusion(runner, state, file.sizeBytes);
     return false;
   }
@@ -1416,7 +1433,7 @@ async function collectLiveFileMatches(
   candidates: CandidateFile[],
   order: number,
 ): Promise<FileMatches | undefined> {
-  const policyPath = await readablePolicyPath(runner, file, candidates);
+  const policyPath = await readablePolicyPath(runner, file, state, candidates);
   if (policyPath === undefined || abortScanFile(runner, state)) {
     return undefined;
   }
@@ -1430,11 +1447,12 @@ async function collectLiveFileMatches(
 async function readablePolicyPath(
   runner: SearchTextRunner,
   file: DiscoveredFile,
+  state: RunState,
   candidates: CandidateFile[],
 ): Promise<string | undefined> {
   const policy = filePolicyOmission(runner, file);
   if (policy.omitted !== undefined) {
-    recordCandidateOmission(candidates, file.relativePath, policy.omitted);
+    recordCandidateOmission(candidates, file.relativePath, policy.omitted, state);
     return undefined;
   }
   if (runner.limits.maxFilesScanned === null && runner.fs.readFileBytes !== undefined)
@@ -1442,7 +1460,7 @@ async function readablePolicyPath(
   const binary =
     policy.path === undefined ? "binary" : await binaryOmission(runner, file, policy.path);
   if (binary !== undefined) {
-    recordCandidateOmission(candidates, file.relativePath, binary);
+    recordCandidateOmission(candidates, file.relativePath, binary, state);
     return undefined;
   }
   return policy.path;

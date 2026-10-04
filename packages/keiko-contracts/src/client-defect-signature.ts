@@ -15,6 +15,7 @@ const CLIENT_CONTEXT_VALUES: ReadonlySet<string> = new Set([
   "module:git-sync",
   "module:git-history",
   "stage:files-directory-load",
+  "stage:files-source-preview",
   "stage:files-directory-navigation",
   "stage:files-project-selection",
   "stage:editor-project-selection",

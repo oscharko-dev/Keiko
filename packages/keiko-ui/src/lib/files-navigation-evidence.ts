@@ -1,6 +1,7 @@
 import type {
   ClientStageId,
   ClientNavigationOutcome,
+  ClientSourcePreviewCounts,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { CLIENT_STAGE_DURATION_MS_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "./bff-correlation";
@@ -35,6 +36,34 @@ export interface FilesNavigationRead {
   readonly settle: (response?: unknown, outcome?: ClientNavigationOutcome) => void;
 }
 
+function validSourceByteCount(value: unknown): value is number {
+  return (
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 2_097_152
+  );
+}
+
+function previewResponseRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && "kind" in value;
+}
+
+function sourcePreviewCounts(
+  stage: ClientStageId,
+  response: unknown,
+): ClientSourcePreviewCounts | undefined {
+  if (stage !== "files source preview" || !previewResponseRecord(response)) return undefined;
+  if (response.kind === "image" || response.kind === "binary")
+    return { previewKind: response.kind, sourceTextBytesRead: 0, canEdit: false };
+  if (response.kind !== "text" || !("sizeBytes" in response) || !("canEdit" in response))
+    return undefined;
+  if (!validSourceByteCount(response.sizeBytes) || typeof response.canEdit !== "boolean")
+    return undefined;
+  return {
+    previewKind: "text",
+    sourceTextBytesRead: response.sizeBytes,
+    canEdit: response.canEdit,
+  };
+}
+
 export function startFilesNavigationEvidence(
   stage: ClientStageId,
   correlationId = newClientCorrelationId(),
@@ -46,7 +75,7 @@ export function startFilesNavigationEvidence(
     stageReport: { stage, phase: "started", ordinal },
   });
   let settled = false;
-  return (_response?: unknown, navigationOutcome?: ClientNavigationOutcome): void => {
+  return (response?: unknown, navigationOutcome?: ClientNavigationOutcome): void => {
     if (settled) return;
     settled = true;
     reportClientDiagnostic("Workspace navigation settled", {
@@ -56,6 +85,7 @@ export function startFilesNavigationEvidence(
         phase: "settled",
         ordinal,
         ...(navigationOutcome === undefined ? {} : { navigationOutcome }),
+        preview: sourcePreviewCounts(stage, response),
         durationMs: Math.min(
           CLIENT_STAGE_DURATION_MS_MAX,
           Math.max(0, Math.round(performance.now() - startedAt)),

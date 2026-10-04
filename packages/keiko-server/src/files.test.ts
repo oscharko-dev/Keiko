@@ -1781,12 +1781,20 @@ describe("desktop files browser", () => {
     });
   });
 
-  it("refuses invalid UTF-8 even for known text extensions and preserves bytes on save", async () => {
+  it("refuses malformed UTF-16 without admitting replacement decoding", async () => {
+    await writeFile(join(root, "malformed.txt"), Buffer.from([0xff, 0xfe, 0x61]));
+    expect(await readFilesPreview(store, root, "malformed.txt", buildRedactor({}))).toMatchObject({
+      kind: "binary",
+      reason: "unsupported",
+    });
+  });
+
+  it("previews valid UTF-16 while refusing editing and preserving bytes on save", async () => {
     const badBytes = Buffer.from([0xff, 0xfe, 0x61, 0x0a]);
     await writeFile(join(root, "bad.txt"), badBytes);
 
     const preview = await readFilesPreview(store, root, "bad.txt", buildRedactor({}));
-    expect(preview).toMatchObject({ kind: "binary", reason: "unsupported", extension: "txt" });
+    expect(preview).toMatchObject({ kind: "text", canEdit: false, extension: "txt" });
 
     await expect(readFilesContent(store, root, "bad.txt")).rejects.toMatchObject({
       status: 400,
@@ -1818,18 +1826,56 @@ describe("desktop files browser", () => {
     expect(opened.content).toBe(content);
   });
 
-  it("caps large text previews", async () => {
-    const content = `${"a".repeat(1_000_050)}tail`;
-    await writeFile(join(root, "large.txt"), content);
+  it.each([
+    [
+      "legacy.html",
+      Buffer.concat([
+        Buffer.from('<meta charset="windows-1252">'),
+        Buffer.from([0xd6]),
+        Buffer.from("lwechsel 425 Stunden"),
+      ]),
+    ],
+    ["wide.txt", Buffer.from("\ufeffÖlwechsel 600 Stunden", "utf16le")],
+  ])("previews searchable legacy text without permitting editing (%s)", async (name, bytes) => {
+    await writeFile(join(root, name), bytes);
+    const preview = await readFilesPreview(store, root, name, buildRedactor({}));
+    expect(preview).toMatchObject({ kind: "text", canEdit: false, truncated: false });
+    if (preview.kind === "text") expect(preview.content).toContain("Ölwechsel");
+    await expect(readFilesContent(store, root, name, buildRedactor({}))).rejects.toMatchObject({
+      code: "UNSUPPORTED_FILE",
+    });
+  });
 
+  it("previews the complete eligible source up to 2 MiB without widening editing", async () => {
+    const content = `${"a".repeat(2_097_152 - 9)}ENDSOURCE`;
+    await writeFile(join(root, "eligible.txt"), content);
+    const preview = await readFilesPreview(store, root, "eligible.txt", buildRedactor({}));
+    expect(preview).toMatchObject({
+      kind: "text",
+      canEdit: false,
+      truncated: false,
+      maxBytes: 2_097_152,
+    });
+    if (preview.kind === "text") expect(preview.content).toBe(content);
+    await expect(
+      readFilesContent(store, root, "eligible.txt", buildRedactor({})),
+    ).rejects.toMatchObject({ code: "FILE_TOO_LARGE" });
+  });
+
+  it("rejects a binary tail before displaying an apparently textual source", async () => {
+    await writeFile(
+      join(root, "late-binary.html"),
+      Buffer.concat([Buffer.from("a".repeat(6000)), Buffer.from([0]), Buffer.from("tail")]),
+    );
+    expect(
+      await readFilesPreview(store, root, "late-binary.html", buildRedactor({})),
+    ).toMatchObject({ kind: "binary", reason: "unsupported" });
+  });
+
+  it("caps source previews above the complete eligible file limit", async () => {
+    await writeFile(join(root, "large.txt"), "a".repeat(2_097_153));
     const preview = await readFilesPreview(store, root, "large.txt", buildRedactor({}));
-
-    expect(preview.kind).toBe("text");
-    if (preview.kind === "text") {
-      expect(preview.truncated).toBe(true);
-      expect(preview.content).toHaveLength(1_000_000);
-      expect(preview.maxBytes).toBe(1_000_000);
-    }
+    expect(preview).toMatchObject({ kind: "binary", reason: "too_large", maxBytes: 2_097_152 });
   });
 
   it("caps large image previews to metadata", async () => {

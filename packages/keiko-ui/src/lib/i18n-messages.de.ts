@@ -1996,6 +1996,9 @@ export const DE_MESSAGES = {
   "filePreview.syntaxHighlightDisabled": "Syntaxhervorhebung für große Vorschauen deaktiviert.",
   "filePreview.previewRegionLabel": "Dateivorschau: {name}",
   "filePreview.showMoreLines": "{count} weitere Zeilen anzeigen",
+  "filePreview.showPreviousLines": "{count} vorherige Zeilen anzeigen",
+  "filePreview.readOnlyBanner":
+    "Schreibgeschützte Quellenvorschau. Diese Datei kann hier nicht bearbeitet werden.",
   "filePreview.hiddenFile": "Verborgene Datei",
   "filePreview.previewUnavailable": "Vorschau nicht verfügbar",
   "filePreview.headerLoading": "Vorschau wird geladen",

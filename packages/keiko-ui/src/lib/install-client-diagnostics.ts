@@ -147,6 +147,7 @@ function clientStagePostBody(
         phase: "settled",
         ordinal: report.ordinal,
         durationMs: report.durationMs,
+        preview: report.preview,
         ...(report.navigationOutcome === undefined
           ? {}
           : { navigationOutcome: report.navigationOutcome }),

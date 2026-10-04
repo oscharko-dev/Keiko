@@ -1399,6 +1399,7 @@ describe("closed diagnostic navigation and render context", () => {
       };
       expect(isClientStageIngestRequest({ ...base, stage: "editor project selection" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files directory load" })).toBe(true);
+      expect(isClientStageIngestRequest({ ...base, stage: "files source preview" })).toBe(true);
       expect(isClientStageIngestRequest({ ...base, stage: "files directory navigation" })).toBe(
         true,
       );
@@ -1456,5 +1457,39 @@ describe("support report download evidence", () => {
       expect(isClientDiagnosticIngestRequest({ ...validRequest(), supportReportDelivery })).toBe(
         false,
       );
+  });
+});
+
+describe("bounded source-preview stage evidence", () => {
+  const stage = {
+    kind: "stage",
+    stage: "files source preview",
+    phase: "settled",
+    ordinal: 1,
+    durationMs: 1,
+    navigationOutcome: "applied",
+  };
+  it("accepts the bounded text-only byte count and independent editing capability", () => {
+    expect(
+      isClientStageIngestRequest({
+        ...stage,
+        preview: { previewKind: "text", sourceTextBytesRead: 2_097_152, canEdit: false },
+      }),
+    ).toBe(true);
+  });
+  it.each([
+    { previewKind: "text", sourceTextBytesRead: -1, canEdit: false },
+    { previewKind: "text", sourceTextBytesRead: 2_097_153, canEdit: false },
+    { previewKind: "binary", sourceTextBytesRead: 1, canEdit: false },
+    { previewKind: "image", sourceTextBytesRead: 0, canEdit: true },
+    { previewKind: "customer.html", sourceTextBytesRead: 0, canEdit: false },
+    { previewKind: "text", sourceTextBytesRead: 1, canEdit: false, content: "private" },
+  ])("rejects unsafe preview metadata %j", (preview) => {
+    expect(isClientStageIngestRequest({ ...stage, preview })).toBe(false);
+  });
+  it("refuses preview metadata on another stage or before a response", () => {
+    const preview = { previewKind: "text", sourceTextBytesRead: 10, canEdit: false };
+    expect(isClientStageIngestRequest({ ...stage, stage: "chat bind", preview })).toBe(false);
+    expect(isClientStageIngestRequest({ ...stage, phase: "started", preview })).toBe(false);
   });
 });

@@ -1354,7 +1354,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "grounded.inspection.timeLimit": "Suchzeitlimit",
   "grounded.inspection.noTimeLimit": "Kein Suchzeitlimit",
   "grounded.inspection.timeHint":
-    "Dieses Limit gilt für die Quellensuche. Modellaufrufe haben eigene Wartezeiten; Stopp bricht die aktuelle Anfrage ab.",
+    "Modellaufrufe haben eigene Wartezeiten. Stopp bricht die aktuelle Anfrage ab.",
   "grounded.inspection.readHint":
     "{max} ist das Lesebudget für diese Antwort, nicht die Anzahl der Dateien im Ordner. Rekursive Prüfung und Antwortauszüge werden getrennt gezählt.",
   "grounded.inspection.searchCount": "{used} / {max} Suchvorgänge",

@@ -399,7 +399,7 @@ export interface RankedCandidateExplanation {
 }
 
 export type ContextCoverageTruncationReason =
-  "aborted" | "file-cap" | "match-cap" | "timeout" | "depth-pruned";
+  "aborted" | "file-cap" | "match-cap" | "timeout" | "depth-pruned" | "io-error";
 
 export const CONTEXT_COVERAGE_TRUNCATION_REASONS: readonly ContextCoverageTruncationReason[] = [
   "aborted",
@@ -407,6 +407,7 @@ export const CONTEXT_COVERAGE_TRUNCATION_REASONS: readonly ContextCoverageTrunca
   "match-cap",
   "timeout",
   "depth-pruned",
+  "io-error",
 ] as const;
 
 export interface ContextCoverageLimits {
@@ -592,6 +593,11 @@ export function isValidLineRange(range: unknown): boolean {
   return endLine >= startLine;
 }
 
+function isWithinElapsedBudget(used: number, cap: number | null): boolean {
+  if (!isFiniteNonNegativeInteger(used)) return false;
+  return cap === null || (isFiniteNonNegativeInteger(cap) && used <= cap);
+}
+
 export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudget): boolean {
   if (!isRecord(usage) || !isRecord(budget)) {
     return false;
@@ -621,11 +627,7 @@ export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudge
       return false;
     }
   }
-  if (!isFiniteNonNegativeInteger(usage.elapsedMs)) return false;
-  return (
-    budget.elapsedMsMax === null ||
-    (isFiniteNonNegativeInteger(budget.elapsedMsMax) && usage.elapsedMs <= budget.elapsedMsMax)
-  );
+  return isWithinElapsedBudget(usage.elapsedMs, budget.elapsedMsMax);
 }
 
 function pushIf(reasons: string[], condition: boolean, reason: string): void {

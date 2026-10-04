@@ -686,6 +686,29 @@ describe("fanOutClientDiagnostic stage evidence", () => {
     expect(isClientDiagnosticIngestRequest(body)).toBe(true);
   });
 
+  it("preserves closed source-preview counts through the existing stage transport", () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    fanOutClientDiagnostic("private document body", {
+      stageReport: {
+        stage: "files source preview",
+        phase: "settled",
+        ordinal: 1,
+        durationMs: 3,
+        navigationOutcome: "applied",
+        preview: { previewKind: "text", sourceTextBytesRead: 2048, canEdit: false },
+      },
+    });
+    const body = lastPostedBody(fetchMock);
+    expect(body.preview).toEqual({
+      previewKind: "text",
+      sourceTextBytesRead: 2048,
+      canEdit: false,
+    });
+    expect(isClientStageIngestRequest(body)).toBe(true);
+    expect(JSON.stringify(body)).not.toContain("private");
+  });
   it("preserves correlated body-free bulk-deletion counts through the stage transport", () => {
     const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());

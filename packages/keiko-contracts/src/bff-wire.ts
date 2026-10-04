@@ -1964,6 +1964,8 @@ export type FilesPreviewResponse =
       readonly kind: "text";
       readonly content: string;
       readonly truncated: boolean;
+      /** Editing remains independently admitted through the UTF-8 editor route. */
+      readonly canEdit?: boolean;
       readonly maxBytes: number;
     })
   | (FilesPreviewBase & {

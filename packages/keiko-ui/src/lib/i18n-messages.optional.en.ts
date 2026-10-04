@@ -1302,7 +1302,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "grounded.inspection.timeLimit": "Source search time limit",
   "grounded.inspection.noTimeLimit": "No source search time limit",
   "grounded.inspection.timeHint":
-    "This bound applies to source search. Model calls have their own waiting budgets; Stop cancels the current request.",
+    "Model calls have their own waiting budgets. Stop cancels the current request.",
   "grounded.inspection.readHint":
     "{max} is the read budget for this answer, not the number of files in the folder. Recursive checks and answer excerpts are counted separately.",
   "grounded.inspection.searchCount": "{used} / {max} searches",

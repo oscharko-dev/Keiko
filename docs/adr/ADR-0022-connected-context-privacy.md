@@ -82,7 +82,9 @@ already taken by a dormant 13-field declaration in `connected-context.ts` shippe
 `GroundedAnswerContextPackSummary`; the #178 type stays untouched. The two types serve
 different audiences: the #178 type is the in-process UI-safe projection of the full
 pack; the wire type is the grounded-answer-scoped projection that adds
-`citationCount` and `elapsedMs` from the orchestrator output.
+`citationCount` and `elapsedMs` from the orchestrator output. The answer duration measures wall-clock
+time through retrieval, model waiting, and entailment; concurrent source work is not summed into
+that duration. Per-source exploration usage remains a separate work counter.
 
 ### D3 — Evidence runs survive chat deletion
 
@@ -147,9 +149,20 @@ legacy HTML labels that normalize to UTF-8 or Windows-1252. HTML declarations ar
 the first 1,024 bytes; `http-equiv` charset parameters are case-insensitive, and standard aliases such
 as `iso_8859-1` resolve through the platform decoder. Unsupported declared codecs are excluded rather
 than guessed. Whole-file NUL/control checks still apply after decoding, including files with a BOM.
+The existing Files source preview uses this same decoder and eligibility ceiling so a cited legacy
+HTML or large text source remains inspectable. Preview reads retain the same descriptor identity,
+containment, and redaction checks. Legacy encodings and text above the manual Editor's 1,000,000-byte
+ceiling open as read-only previews; Editor editing, saving, sessions, and dirty-buffer ownership keep
+their existing UTF-8 admission rules. A cited late line starts a bounded preview window at that range.
+The existing client stage lifecycle records preview kind, admitted text bytes, and edit capability
+without source content or paths. Denied, stale, or mismatched targets never fall back to cached content.
 Files above the 2 MiB eligibility ceiling remain visible as excluded candidates and skipped counts;
 they do not make an otherwise complete eligible-text scan incomplete. An explicitly narrower
 caller byte cap still reports incomplete coverage when it excludes otherwise eligible text.
+An eligible file that becomes unreadable or disappears during inspection remains uncertainty:
+`io-error` makes coverage incomplete even when other files produce valid matches. The existing
+scope-incomplete marker and body-free coverage/skipped counters carry this failure; unreadability
+must never prove that an exact target is absent. Intentional eligibility exclusions remain distinct.
 Validated, policy-allowed, redacted relative paths and `size-exceeded` reasons are projected into
 the existing model prompt within its input budget. This metadata proves eligibility exclusions
 only: it contains no unread body and cannot establish file-content citations or line references.

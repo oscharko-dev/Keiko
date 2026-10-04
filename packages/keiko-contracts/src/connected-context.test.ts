@@ -1306,6 +1306,16 @@ describe("validateConnectedContextPack", () => {
 
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
+  it("accepts closed IO-error coverage without content or raw error details", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: coverageDiagnostics({ reasons: ["io-error"] }),
+      },
+    };
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
 
   it("accepts complete streamed coverage with no count or time ceiling", () => {
     const pack: ConnectedContextPack = {

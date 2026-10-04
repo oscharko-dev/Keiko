@@ -78,3 +78,32 @@ it("bounds successful read stages separately while preserving failed read correl
   expect(correlationIdOf(error)).toBe(failureMeta?.correlationId);
   expect(failureMeta?.errorEvidence.errorClass).toBe("TypeError");
 });
+
+describe("body-free source preview evidence", () => {
+  it("records admitted text bytes and editing capability without document identity or content", () => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    startFilesNavigationEvidence("files source preview")(
+      {
+        kind: "text",
+        sizeBytes: 2048,
+        canEdit: false,
+        root: "/private/customer",
+        path: "private.html",
+        content: "private body",
+      },
+      "applied",
+    );
+    expect(writer.mock.calls.at(-1)?.[1]?.stageReport).toMatchObject({
+      phase: "settled",
+      preview: { previewKind: "text", sourceTextBytesRead: 2048, canEdit: false },
+    });
+    expect(JSON.stringify(writer.mock.calls)).not.toContain("private");
+  });
+  it("does not invent read counts for a failed request", () => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    startFilesNavigationEvidence("files source preview")(undefined, "failed");
+    expect(writer.mock.calls.at(-1)?.[1]?.stageReport?.preview).toBeUndefined();
+  });
+});

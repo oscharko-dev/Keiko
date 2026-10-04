@@ -269,7 +269,14 @@ function coverageReasons(
   reasons: ReadonlySet<ContextCoverageTruncationReason>,
 ): readonly ContextCoverageTruncationReason[] {
   const ordered: ContextCoverageTruncationReason[] = [];
-  for (const reason of ["aborted", "file-cap", "match-cap", "timeout", "depth-pruned"] as const) {
+  for (const reason of [
+    "aborted",
+    "file-cap",
+    "match-cap",
+    "timeout",
+    "depth-pruned",
+    "io-error",
+  ] as const) {
     if (reasons.has(reason)) {
       ordered.push(reason);
     }

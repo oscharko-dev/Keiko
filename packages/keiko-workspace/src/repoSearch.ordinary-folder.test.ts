@@ -6,7 +6,7 @@ import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-con
 import { executeCodingRepositoryRequest } from "./codingRepositorySearch.js";
 import { detectWorkspaceAt } from "./detect.js";
 import { createWorkspaceIndex } from "./workspaceIndex.js";
-import { nodeWorkspaceFs, type WorkspaceDirEntry } from "./fs.js";
+import { nodeWorkspaceFs, type WorkspaceDirEntry, type WorkspaceFs } from "./fs.js";
 import {
   DEFAULT_SEARCH_LIMITS,
   findFiles,
@@ -35,6 +35,19 @@ function query(text: string): RetrievalQuery {
   return { kind: "exact-symbol", text, maxResults: 50, caseSensitive: false, emittedAtMs: 0 };
 }
 
+function unavailableFileFs(code: string): WorkspaceFs {
+  const read = nodeWorkspaceFs.readFileBytes;
+  if (read === undefined) throw new Error("missing bounded production byte reader");
+  return {
+    ...nodeWorkspaceFs,
+    readFileBytes: async (...args): Promise<Uint8Array> => {
+      if (args[0].endsWith("/unreadable.html"))
+        throw Object.assign(new Error("fixture file unavailable"), { code });
+      return read(...args);
+    },
+  };
+}
+
 function exactSizeText(bytes: number): string {
   const tail = "\nmanualNeedle\n";
   const row = "ordinary handbook text\n";
@@ -52,6 +65,72 @@ afterEach(() => {
 });
 
 describe("recursive text search in ordinary folders", () => {
+  it.each(["EACCES", "EIO", "ENOENT"])(
+    "reports incomplete coverage when an eligible file becomes unreadable: %s",
+    async (code) => {
+      put("unreadable.html", "<p>UnavailableProbe 750 hours</p>\n");
+      const result = await searchText(scope(), query("UnavailableProbe"), undefined, {
+        fs: unavailableFileFs(code),
+      });
+      expect(result.atoms).toEqual([]);
+      expect(result.coverage.incomplete).toBe(true);
+      expect(result.coverage.reasons).toContain("io-error");
+      expect(result.coverage.filesSkipped).toBe(1);
+      expect(result.candidates[0]?.omitted).toBe("tool-unavailable");
+    },
+  );
+  it("retains valid hits while marking coverage incomplete for another unreadable eligible file", async () => {
+    put("unreadable.html", "<p>UnavailableProbe 750 hours</p>\n");
+    put("valid.html", "<p>UnavailableProbe 1250 hours</p>\n");
+    const result = await searchText(scope(), query("UnavailableProbe"), undefined, {
+      fs: unavailableFileFs("EACCES"),
+    });
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["valid.html"]);
+    expect(result.coverage.incomplete).toBe(true);
+    expect(result.coverage.reasons).toEqual(["io-error"]);
+    expect(result.coverage.filesSkipped).toBe(1);
+  });
+  it("does not classify a file disappearing after discovery as an intentional exclusion", async () => {
+    put("unreadable.html", "<p>UnavailableProbe 750 hours</p>\n");
+    const selected = { ...scope(), relativePaths: ["unreadable.html"] };
+    let removed = false;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      stat: (path) => {
+        const stat = nodeWorkspaceFs.stat(path);
+        if (!removed && path.endsWith("/unreadable.html")) {
+          removed = true;
+          rmSync(path);
+        }
+        return stat;
+      },
+    };
+    const result = await searchText(selected, query("UnavailableProbe"), undefined, { fs });
+    expect(removed).toBe(true);
+    expect(result.atoms).toEqual([]);
+    expect(result.coverage.incomplete).toBe(true);
+    expect(result.coverage.reasons).toContain("io-error");
+    expect(result.candidates[0]?.omitted).toBe("tool-unavailable");
+  });
+  it("preserves unreadable coverage in finite search and file listing lanes", async () => {
+    put("unreadable.html", "<p>UnavailableProbe</p>\n");
+    const selected = scope();
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 32 };
+    const options = { fs: unavailableFileFs("EIO") };
+    const content = await searchText(selected, query("UnavailableProbe"), limits, options);
+    const paths = await findFiles(
+      selected,
+      { ...query("**/*.html"), kind: "file-pattern" },
+      undefined,
+      options,
+    );
+    for (const result of [content, paths]) {
+      expect(result.atoms).toEqual([]);
+      expect(result.coverage.incomplete).toBe(true);
+      expect(result.coverage.reasons).toContain("io-error");
+    }
+  });
+
   it.each([["x".repeat(4097)], ["x".repeat(2048), "y".repeat(2048)]])(
     "rejects oversized trusted literal targets before accessing the filesystem port",
     async (...terms) => {

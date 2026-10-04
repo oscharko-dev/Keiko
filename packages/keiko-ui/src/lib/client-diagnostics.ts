@@ -58,6 +58,7 @@ import {
   type ClientDiagnosticWorkspaceTrustBinding,
   type ClientDiagnosticCodingHistoryScope,
   type ClientStageId,
+  type ClientSourcePreviewCounts,
   type ClientNavigationOutcome,
   type ClientComposerActivity,
   type ClientComposerCodeStage,
@@ -79,6 +80,7 @@ export type ClientDiagnosticStageReport = (
       readonly ordinal: number;
       readonly durationMs: number;
       readonly navigationOutcome?: ClientNavigationOutcome | undefined;
+      readonly preview?: ClientSourcePreviewCounts | undefined;
     }
 ) & { readonly deletion?: ClientChatHistoryDeletionCounts | undefined };
 

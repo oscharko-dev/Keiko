@@ -1168,6 +1168,61 @@ describe("scanFirstSymbolLine", () => {
 });
 
 describe("runGroundedExploration", () => {
+  it.each([false, true])(
+    "keeps unreadable eligible HTML uncertain with valid matches present: %s",
+    async (withValid) => {
+      writeFileSync(join(ROOT, "unreadable.html"), "<p>LAB_UNAVAILABLE_PROBE 750 hours</p>\n");
+      if (withValid)
+        writeFileSync(join(ROOT, "valid.html"), "<p>LAB_UNAVAILABLE_PROBE 1250 hours</p>\n");
+      const read = nodeWorkspaceFs.readFileBytes;
+      if (read === undefined) throw new Error("missing bounded production byte reader");
+      const fs: WorkspaceFs = {
+        ...nodeWorkspaceFs,
+        readFileBytes: async (...args): Promise<Uint8Array> => {
+          if (args[0].endsWith("/unreadable.html"))
+            throw Object.assign(new Error("fixture read failed"), { code: "EACCES" });
+          return read(...args);
+        },
+      };
+      const activityLog = createBufferedServerLogSink();
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({
+            text: "Find the exact identifier LAB_UNAVAILABLE_PROBE and its documented value.",
+          }),
+        }),
+        {
+          answerer: echoAnswerer,
+          fs,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+          activityLog,
+        },
+      );
+      expect(out.pack.diagnostics?.coverage?.incomplete).toBe(true);
+      expect(out.pack.diagnostics?.coverage?.reasons).toContain("io-error");
+      expect(
+        out.pack.uncertainty.some(
+          (marker) => marker.kind === "scope-incomplete" && marker.claim.includes("io-error"),
+        ),
+      ).toBe(true);
+      expect(out.pack.files.some((file) => file.scopePath === "valid.html")).toBe(withValid);
+      expect(out.pack.files.some((file) => file.scopePath === "unreadable.html")).toBe(false);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+      const extra = activityLog.events.find(
+        (event) => event.op === "search.connected-context.completed",
+      )?.extra;
+      expect(extra?.coverageStatus).toBe("incomplete");
+      expect(extra?.coverageReasons).toContain("io-error");
+      expect(JSON.stringify(activityLog.events)).not.toContain("LAB_UNAVAILABLE_PROBE");
+    },
+  );
+
   it("avoids unrelated graph and history work for a complete exact factual lookup in Git", async () => {
     mkdirSync(join(ROOT, ".git"));
     mkdirSync(join(ROOT, "src/überprüfung"), { recursive: true });

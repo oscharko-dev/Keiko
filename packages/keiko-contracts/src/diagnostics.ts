@@ -731,6 +731,7 @@ export const CLIENT_STAGE_IDS = [
   "command palette",
   "chat history deletion",
   "files directory load",
+  "files source preview",
   "files directory navigation",
   "files project selection",
   "editor project selection",
@@ -766,6 +767,12 @@ export interface ClientStageStartedIngestRequest {
   readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
 }
 
+export interface ClientSourcePreviewCounts {
+  readonly previewKind: "text" | "image" | "binary";
+  readonly sourceTextBytesRead: number;
+  readonly canEdit: boolean;
+}
+
 export interface ClientStageSettledIngestRequest {
   readonly kind: "stage";
   readonly stage: ClientStageId;
@@ -775,6 +782,7 @@ export interface ClientStageSettledIngestRequest {
   readonly correlationId?: string | undefined;
   readonly deletion?: ClientChatHistoryDeletionCounts | undefined;
   readonly navigationOutcome?: ClientNavigationOutcome | undefined;
+  readonly preview?: ClientSourcePreviewCounts | undefined;
 }
 
 /** The wire shape `useWindowStageEvidence` sends instead of a free-text diagnostic message. */
@@ -791,6 +799,7 @@ const CLIENT_STAGE_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "correlationId",
   "deletion",
   "navigationOutcome",
+  "preview",
 ]);
 
 export const CLIENT_NAVIGATION_OUTCOMES = [
@@ -807,6 +816,7 @@ const NAVIGATION_OUTCOMES: ReadonlySet<string> = new Set(CLIENT_NAVIGATION_OUTCO
 const NAVIGATION_OUTCOME_STAGES: ReadonlySet<string> = new Set([
   "editor project selection",
   "files directory load",
+  "files source preview",
   "files directory navigation",
   "files project selection",
 ]);
@@ -840,8 +850,42 @@ function hasValidStageDeletion(value: Record<string, unknown>): boolean {
   return counts.deletedCount + counts.failedCount === counts.requestedCount;
 }
 
+const SOURCE_PREVIEW_COUNT_KEYS: ReadonlySet<string> = new Set([
+  "previewKind",
+  "sourceTextBytesRead",
+  "canEdit",
+]);
+
+function isSourcePreviewCounts(value: unknown): value is ClientSourcePreviewCounts {
+  if (!isRecord(value) || Object.keys(value).some((key) => !SOURCE_PREVIEW_COUNT_KEYS.has(key)))
+    return false;
+  if (
+    value.previewKind !== "text" &&
+    value.previewKind !== "image" &&
+    value.previewKind !== "binary"
+  )
+    return false;
+  if (
+    typeof value.canEdit !== "boolean" ||
+    !isBoundedNonNegativeInteger(value.sourceTextBytesRead, 2_097_152)
+  )
+    return false;
+  return value.previewKind === "text" || (value.sourceTextBytesRead === 0 && !value.canEdit);
+}
+
+function hasValidSourcePreview(value: Record<string, unknown>): boolean {
+  return (
+    value.preview === undefined ||
+    (value.stage === "files source preview" &&
+      value.phase === "settled" &&
+      isSourcePreviewCounts(value.preview))
+  );
+}
+
 function hasValidStageContext(value: Record<string, unknown>): boolean {
-  return hasValidStageDeletion(value) && hasValidNavigationOutcome(value);
+  return (
+    hasValidStageDeletion(value) && hasValidNavigationOutcome(value) && hasValidSourcePreview(value)
+  );
 }
 
 function isClientStageId(value: unknown): value is ClientStageId {

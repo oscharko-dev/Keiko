@@ -1936,6 +1936,8 @@ export const EN_MESSAGES = {
   "filePreview.syntaxHighlightDisabled": "Syntax highlighting disabled for large previews.",
   "filePreview.previewRegionLabel": "File preview: {name}",
   "filePreview.showMoreLines": "Show {count} more lines",
+  "filePreview.showPreviousLines": "Show {count} previous lines",
+  "filePreview.readOnlyBanner": "Read-only source preview. This file cannot be edited here.",
   "filePreview.hiddenFile": "Hidden file",
   "filePreview.previewUnavailable": "Preview unavailable",
   "filePreview.headerLoading": "Loading preview",

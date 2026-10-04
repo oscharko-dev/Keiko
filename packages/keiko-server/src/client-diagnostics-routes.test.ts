@@ -2484,6 +2484,25 @@ describe("reviewed navigation and render evidence", () => {
       expect(analyzeLogText(encoded).sufficiency.status).toBe("complete");
     },
   );
+  it("persists a source-preview capability with only closed counts", async () => {
+    const sink = captureServerLog();
+    const body = {
+      kind: "stage",
+      stage: "files source preview",
+      phase: "settled",
+      ordinal: 1,
+      durationMs: 2,
+      navigationOutcome: "applied",
+      preview: { previewKind: "text", sourceTextBytesRead: 2048, canEdit: false },
+    };
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(body)))).status).toBe(204);
+    expect(sink.events.find((event) => event.op === "client.stage.settled")?.extra).toMatchObject({
+      stage: "files-source-preview",
+      previewKind: "text",
+      sourceTextBytesRead: 2048,
+      canEdit: false,
+    });
+  });
   it("persists file-read transport and stage lifecycle under one minted correlation", async () => {
     const stateDir = await mkdtemp(join(tmpdir(), "keiko-navigation-stage-"));
     const sink = createActivityLogSink(stateDir, { level: "debug" });

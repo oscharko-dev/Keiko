@@ -554,6 +554,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "command-palette",
   "chat-history-deletion",
   "files-directory-load",
+  "files-source-preview",
   "files-directory-navigation",
   "files-project-selection",
   "editor-project-selection",
@@ -568,6 +569,7 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "command palette": "command-palette",
   "chat history deletion": "chat-history-deletion",
   "files directory load": "files-directory-load",
+  "files source preview": "files-source-preview",
   "files directory navigation": "files-directory-navigation",
   "files project selection": "files-project-selection",
   "editor project selection": "editor-project-selection",
@@ -616,6 +618,14 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
   emitter: "client-diagnostics-routes.logClientStageSettled",
   fields: {
     ...CLIENT_STAGE_FIELDS,
+    previewKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["text", "image", "binary"],
+    },
+    sourceTextBytesRead: { type: "integer", dataClass: "count", required: false },
+    canEdit: { type: "boolean", dataClass: "closed-enum", required: false },
     navigationOutcome: {
       type: "string",
       dataClass: "closed-enum",
@@ -1810,6 +1820,7 @@ function logClientStageSettled(
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
         ...request.deletion,
+        ...request.preview,
         ...(request.navigationOutcome === undefined
           ? {}
           : { navigationOutcome: request.navigationOutcome }),
