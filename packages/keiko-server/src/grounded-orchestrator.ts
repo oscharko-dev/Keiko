@@ -3033,6 +3033,23 @@ function cacheAbsentMetadataNames(
     if (!present.has(name)) cache.files.set(joinScopePath(dir, name), false);
 }
 
+function isAdmittedMetadataPath(
+  path: string,
+  scope: SearchScope,
+  cache: FileExistenceCache | undefined,
+): boolean {
+  if (!isValidScopePath(path, { mustBeRelative: true }) || isDenied(path)) return false;
+  if (scope.relativePaths.length === 0) return true;
+  const selected = cache?.metadataScopePaths ?? new Set(scope.relativePaths);
+  let ancestor = path;
+  for (;;) {
+    if (selected.has(ancestor)) return true;
+    const separator = ancestor.lastIndexOf("/");
+    if (separator < 0) return false;
+    ancestor = ancestor.slice(0, separator);
+  }
+}
+
 function retainCanonicalMetadataPath(
   path: string,
   scope: SearchScope,
@@ -3042,7 +3059,7 @@ function retainCanonicalMetadataPath(
 ): void {
   if (
     !isCanonicalMetadataFile(path) ||
-    isDenied(path) ||
+    !isAdmittedMetadataPath(path, scope, cache) ||
     !fileExistsByContainedStat(scope, fs, path)
   )
     return;
@@ -3823,10 +3840,11 @@ interface FileExistenceCache {
   readonly metadataCoverageIssues: Map<MetadataCoverageIssue, number>;
   readonly metadataDirectories: Set<string>;
   readonly metadataWildcardBases: Set<string>;
+  readonly metadataScopePaths: ReadonlySet<string> | undefined;
   metadataRetention?: MetadataRetention;
 }
 
-function createFileExistenceCache(): FileExistenceCache {
+function createFileExistenceCache(scopePaths?: readonly string[]): FileExistenceCache {
   return {
     files: new Map(),
     directories: new Map(),
@@ -3834,6 +3852,7 @@ function createFileExistenceCache(): FileExistenceCache {
     metadataCoverageIssues: new Map(),
     metadataDirectories: new Set(),
     metadataWildcardBases: new Set(),
+    metadataScopePaths: scopePaths === undefined ? undefined : new Set(scopePaths),
   };
 }
 
@@ -3986,6 +4005,7 @@ async function projectMetadataRootAtoms(
     if (!metadataTraversalCanContinue(control)) break;
     const scopePath = joinScopePath(root, filename);
     if (
+      isAdmittedMetadataPath(scopePath, searchScope, existsCache) &&
       (globPaths.includes(scopePath) || acceptInjectionScopePath(scopePath, seen)) &&
       fileExistsInSearchScope(searchScope, fs, scopePath, existsCache)
     ) {
@@ -4146,7 +4166,7 @@ async function deterministicMetadataEvidence(
   deadlineAtMs: number,
 ): Promise<DeterministicContextEvidence> {
   const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs };
-  const existsCache = createFileExistenceCache();
+  const existsCache = createFileExistenceCache(input.scope.relativePaths);
   const discovery: MetadataDiscoveryInputs = {
     input,
     intent: plan.retrievalIntent,
