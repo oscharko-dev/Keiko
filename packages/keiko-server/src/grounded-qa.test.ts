@@ -2236,9 +2236,9 @@ describe("handleGroundedAsk", () => {
         status: 409,
         body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
       });
-      expect(store.listMessages(chatId)).toMatchObject([
-        { role: "user", turnState: "failed", canonicalTurnRef: expect.any(String) },
-      ]);
+      const persistedMessages = store.listMessages(chatId);
+      expect(persistedMessages).toMatchObject([{ role: "user", turnState: "failed" }]);
+      expect(persistedMessages[0]?.canonicalTurnRef).toEqual(expect.any(String));
       expect(scopedRunner).not.toHaveBeenCalled();
       expect(seenRequests).toEqual([]);
       expect(diagnostics).toHaveLength(1);

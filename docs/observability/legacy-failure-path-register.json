@@ -8132,12 +8132,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-ui/src/lib/api.ts",
-      "owner": "sendDesktopChatStream",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-ui/src/lib/clipboard.ts",
       "owner": "copyTextToClipboard",
       "kind": "unregistered-catch",
