@@ -5526,6 +5526,17 @@ function primaryCandidateFilter(rings: RingRunSummary): typeof DEFAULT_FILTER_OP
   };
 }
 
+function codeEvidenceAtoms(
+  atoms: readonly EvidenceAtom[],
+  scope: SelectedScope,
+): readonly EvidenceAtom[] {
+  // Explicit documents belong to extraction, including its unsupported diagnostics. Keep them
+  // off the code excerpt path before merging that exclusively document-owned result.
+  return scope.kind === "files" && scope.explicitConnection === true
+    ? atoms.filter((atom) => !isConnectedDocumentPath(atom.scopePath))
+    : atoms;
+}
+
 function preparePackAssembly(
   input: OrchestratorInput,
   plan: ExplorationPlan,
@@ -5533,7 +5544,7 @@ function preparePackAssembly(
   nowMs: () => number,
   hasGitMetadata: boolean,
 ): PreparedPackAssembly {
-  const atoms = rings.atoms;
+  const atoms = codeEvidenceAtoms(rings.atoms, input.scope);
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
   // M4: pass the classified retrieval intent so ranking can apply intent-conditioned signals
   // (canonical-metadata, structural-edge). Non-boosted intents (e.g. clarification) and the
