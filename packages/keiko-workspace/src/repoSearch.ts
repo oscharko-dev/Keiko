@@ -3702,11 +3702,8 @@ async function assertExcerptNotBinary(
   }
 }
 
-// Line numbering has to agree with whatever lane produced the coordinates being read. `redact()`
-// collapses a multi-line PEM block into a single token, so an excerpt taken from redacted text
-// addresses different lines than the raw file: an editor-lane match at raw line N would be shown
-// with the wrong source lines. The editor lane therefore splits RAW lines here and leaves masking to
-// the surface that emits the excerpt (the BFF applies the live-payload redactor to the response).
+// Both lanes retain physical source lines. Evidence masks secret spans while preserving their
+// newline delimiters; the human-operated editor lane leaves content masking to its read surface.
 function excerptFileLines(
   scope: SearchScope,
   request: ReadExcerptRequest,
@@ -3733,7 +3730,9 @@ function excerptTextLines(
       "binary",
     );
   }
-  return (lane === "editor" ? raw : redact(raw)).split("\n");
+  return (lane === "editor" ? raw : redact(raw, [], { preserveSourceLineBreaks: true })).split(
+    "\n",
+  );
 }
 
 async function readExcerptLines(

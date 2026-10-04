@@ -1020,7 +1020,9 @@ function recordSizeExceeded(relativePath: string, candidates: CandidateFile[]): 
 // boundary, so no secret-shaped byte can reach an evidence atom, the persisted index, or a grounded
 // answer. The editor lane keeps the raw bytes: see `SearchTextRunner.contentLane`.
 function laneText(runner: SearchTextRunner, text: string): string {
-  return runner.contentLane === "editor" ? text : redact(text);
+  return runner.contentLane === "editor"
+    ? text
+    : redact(text, [], { preserveSourceLineBreaks: true });
 }
 
 async function readRawTextForScan(

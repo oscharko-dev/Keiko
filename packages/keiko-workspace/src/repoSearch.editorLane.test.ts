@@ -175,8 +175,8 @@ describe("searchText content lane – a match AFTER a secret-shaped line", () =>
   });
 });
 
-describe("searchText content lane – multi-line PEM block shifts every later line", () => {
-  it("reports the real file line on the editor lane and the shifted one on the evidence lane", async () => {
+describe("searchText content lane – multi-line PEM source coordinates", () => {
+  it("reports the real file line on both lanes after a multiline secret", async () => {
     const { scope, fs } = scopeFor({ "src/key.ts": PEM_FILE });
     const deps = { fs, nowMs: (): number => 0 };
 
@@ -188,10 +188,10 @@ describe("searchText content lane – multi-line PEM block shifts every later li
       ...deps,
     });
 
-    // Raw: line 5. Redacted: the 4-line PEM block became one token, so the evidence lane sees line 2.
+    // Secret bodies remain masked while their newline delimiters retain physical source coordinates.
     expect(coversLine(editor.atoms, "src/key.ts", 5)).toBe(true);
-    expect(coversLine(evidence.atoms, "src/key.ts", 5)).toBe(false);
-    expect(coversLine(evidence.atoms, "src/key.ts", 2)).toBe(true);
+    expect(coversLine(evidence.atoms, "src/key.ts", 5)).toBe(true);
+    expect(coversLine(evidence.atoms, "src/key.ts", 2)).toBe(false);
   });
 });
 

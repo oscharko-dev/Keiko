@@ -191,6 +191,11 @@ with `io-error` incomplete coverage; they never certify a stable snapshot. Repla
 identity, unsafe aliases, and root containment changes still fail closed. Secret redaction uses
 one private-key boundary scan and scheme-start guards, including conservative redaction of an
 unterminated private-key body, so eligible large text does not trigger repeated suffix scans.
+Workspace search and excerpt projection preserve each masked secret span's original LF/CRLF
+delimiters without retaining its body or columns. Facts between separate secret blocks therefore
+keep their physical source lines in lexical matches, numbered model context, and source navigation.
+The general-purpose redactor's default output remains unchanged. Persisted lexical snapshots from
+before this coordinate policy are invalidated by the existing index version fence.
 Auxiliary symbol and document filename discovery follows the same complete streaming traversal
 policy. Each requested filename pattern retains a bounded independent result bucket within one
 shared traversal per batch. Actual source-line inspection and final candidate ordering preserve

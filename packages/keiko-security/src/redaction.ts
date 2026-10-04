@@ -207,10 +207,21 @@ export function objectContainsCredentialKey(value: unknown, seen = new WeakSet()
 // Strips known secret shapes and any caller-supplied literal secrets from `input`.
 // `additionalSecrets` lets the caller pass exact apiKey/baseUrl/env values it holds
 // so even non-standard key formats are scrubbed.
-export function redact(input: string, additionalSecrets: readonly string[] = []): string {
-  let output = redactPrivateKeyBlocks(input)
-    .replace(BEARER_PATTERN, `Bearer ${REDACTED}`)
-    .replace(BASIC_AUTH_PATTERN, `Basic ${REDACTED}`)
+// Source projections may preserve each masked span's LF/CRLF delimiters so cited line numbers
+// remain physical file coordinates. The default diagnostic/provider projection is unchanged.
+export function redact(
+  input: string,
+  additionalSecrets: readonly string[] = [],
+  options: { readonly preserveSourceLineBreaks?: boolean } = {},
+): string {
+  const preserveSourceLineBreaks = options.preserveSourceLineBreaks === true;
+  let output = redactPrivateKeyBlocks(input, preserveSourceLineBreaks)
+    .replace(BEARER_PATTERN, (span) =>
+      redactedSourceSpan(span, `Bearer ${REDACTED}`, preserveSourceLineBreaks),
+    )
+    .replace(BASIC_AUTH_PATTERN, (span) =>
+      redactedSourceSpan(span, `Basic ${REDACTED}`, preserveSourceLineBreaks),
+    )
     .replace(GENERIC_API_KEY_HEADER_PATTERN, `$1${REDACTED}`)
     .replace(GENERIC_API_KEY_ASSIGNMENT_PATTERN, `$1${REDACTED}`)
     .replace(SECRET_KEY_VALUE_PATTERN, `$1$2${REDACTED}`)
@@ -229,28 +240,46 @@ export function redact(input: string, additionalSecrets: readonly string[] = [])
     if (secret.length === 0) {
       continue;
     }
-    output = output.replace(new RegExp(escapeRegExp(secret), "g"), REDACTED);
+    output = output.replace(new RegExp(escapeRegExp(secret), "g"), (span) =>
+      redactedSourceSpan(span, REDACTED, preserveSourceLineBreaks),
+    );
   }
   return output;
 }
 
 // Scan each boundary once. Repeated unterminated BEGIN headers must not re-scan the remaining
 // source for an END, and an unfinished key body must not become evidence merely because it is cut.
-function redactPrivateKeyBlocks(input: string): string {
+function redactedSourceSpan(
+  span: string,
+  replacement: string,
+  preserveSourceLineBreaks: boolean,
+): string {
+  // Preserve only the source span's line delimiters. Neither its body nor its columns survive.
+  return preserveSourceLineBreaks
+    ? replacement + (span.match(/\r?\n/gu)?.join("") ?? "")
+    : replacement;
+}
+
+function redactPrivateKeyBlocks(input: string, preserveSourceLineBreaks: boolean): string {
   const chunks: string[] = [];
   let copiedThrough = 0;
-  let openBlock = false;
+  let openBlockStart: number | undefined;
   for (const boundary of input.matchAll(PRIVATE_KEY_BOUNDARY_PATTERN)) {
-    if (boundary[1] === "BEGIN" && !openBlock) {
+    if (boundary[1] === "BEGIN" && openBlockStart === undefined) {
       chunks.push(input.slice(copiedThrough, boundary.index));
-      openBlock = true;
-    } else if (boundary[1] === "END" && openBlock) {
-      chunks.push(REDACTED);
+      openBlockStart = boundary.index;
+    } else if (boundary[1] === "END" && openBlockStart !== undefined) {
+      const span = input.slice(openBlockStart, boundary.index + boundary[0].length);
+      chunks.push(redactedSourceSpan(span, REDACTED, preserveSourceLineBreaks));
       copiedThrough = boundary.index + boundary[0].length;
-      openBlock = false;
+      openBlockStart = undefined;
     }
   }
-  chunks.push(openBlock ? REDACTED : input.slice(copiedThrough));
+  chunks.push(
+    openBlockStart === undefined
+      ? input.slice(copiedThrough)
+      : redactedSourceSpan(input.slice(openBlockStart), REDACTED, preserveSourceLineBreaks),
+  );
   return chunks.join("");
 }
 
