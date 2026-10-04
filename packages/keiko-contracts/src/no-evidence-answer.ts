@@ -24,21 +24,18 @@
 //     fact about the subject.
 
 import { findCitationMarkerGroups } from "./citation-markers.js";
+import {
+  CONNECTED_SEARCH_ABSTENTION_DE,
+  CONNECTED_SEARCH_ABSTENTION_EN,
+} from "./connected-search-abstention.js";
+
+export {
+  LEGACY_CONNECTED_SEARCH_ABSTENTION,
+  isCanonicalConnectedSearchAbstention,
+} from "./connected-search-abstention.js";
 
 /** Longest answer (after whitespace collapse) that can still be read as a bare refusal. */
 export const NO_EVIDENCE_ANSWER_MAX_CHARS = 240;
-
-export const LEGACY_CONNECTED_SEARCH_ABSTENTION =
-  "I could not find evidence in the connected scope to answer this question. " +
-  "No answer is given because there is nothing to ground it in.";
-
-const CONNECTED_SEARCH_ABSTENTION_EN = "No matching evidence was found for this search.";
-const CONNECTED_SEARCH_ABSTENTION_DE = "Keine passenden Belege für diese Suche gefunden.";
-const CANONICAL_CONNECTED_SEARCH_ABSTENTIONS: ReadonlySet<string> = new Set([
-  LEGACY_CONNECTED_SEARCH_ABSTENTION,
-  CONNECTED_SEARCH_ABSTENTION_EN,
-  CONNECTED_SEARCH_ABSTENTION_DE,
-]);
 
 const GERMAN_QUERY_PATTERNS: readonly RegExp[] = [
   /[äöüß]/iu,
@@ -57,11 +54,6 @@ export function connectedSearchNoEvidenceAnswer(question?: string): string {
   return shouldUseGermanForSystemAnswer(question)
     ? CONNECTED_SEARCH_ABSTENTION_DE
     : CONNECTED_SEARCH_ABSTENTION_EN;
-}
-
-/** Strict canonical recognition; arbitrary model refusals and additional claims are excluded. */
-export function isCanonicalConnectedSearchAbstention(text: string): boolean {
-  return CANONICAL_CONNECTED_SEARCH_ABSTENTIONS.has(text);
 }
 
 // Explicit "there is not enough evidence/information" statements. They stay unconditional (bar the

@@ -16,7 +16,7 @@ import {
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import { isConnectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
-import { isCanonicalConnectedSearchAbstention } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
+import { isCanonicalConnectedSearchAbstention } from "@oscharko-dev/keiko-contracts/runtime/connected-search-abstention";
 import { formatBytes, formatMs } from "@/lib/format";
 import {
   useOptionalWidgetTranslate,
