@@ -57,8 +57,9 @@ export interface SupportReportDownload {
 /** A stable local download target until the report action is dismissed or its cache is evicted. */
 export function createSupportReportDownload(
   report: DesktopSupportReportResponse,
+  delivery: "server" | "local" = "server",
 ): SupportReportDownload {
-  if (report.downloadPath !== undefined)
+  if (delivery === "server" && report.downloadPath !== undefined)
     return {
       href: report.downloadPath,
       expiresAtMs: report.downloadExpiresAtMs,

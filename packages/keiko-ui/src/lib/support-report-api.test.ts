@@ -43,6 +43,21 @@ describe("support report browser download", () => {
     expect(bffFetchJson).toHaveBeenCalledOnce();
   });
 
+  it("preserves timeout before boot pairing settles without posting an orphan report", async () => {
+    let completePairing: (value: boolean) => void = () => undefined;
+    pairing.settled = new Promise((resolve) => {
+      completePairing = resolve;
+    });
+    const deadline = new AbortController();
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const pending = createSupportReport("pre-pairing-failure");
+    const rejected = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+    deadline.abort(new DOMException("Expired", "TimeoutError"));
+    completePairing(false);
+    await rejected;
+    expect(bffFetchJson).not.toHaveBeenCalled();
+  });
+
   it("accepts the closed canonical filename and preserves report bytes", async () => {
     response.value = { fileName, reportJson: '{"kind":"keiko.support.report"}' };
     expect(await createSupportReport("failure-1")).toEqual(response.value);
@@ -83,6 +98,40 @@ describe("support report browser download", () => {
     const target = createSupportReportDownload(report);
     expect(target.href).toBe(downloadPath);
     target.dispose();
+  });
+
+  it("prepares exact canonical bytes locally without using a supplied HTTP attachment", async () => {
+    const reportJson = '{"kind":"keiko.support.report","label":"é\\n"}\n';
+    const objectUrl = vi.fn((blob: Blob | MediaSource): string => {
+      if (!(blob instanceof Blob)) throw new TypeError("Expected canonical report Blob");
+      expect(blob.type).toBe("application/json");
+      return "blob:retained-canonical-report";
+    });
+    const revoke = vi.fn();
+    vi.spyOn(URL, "createObjectURL").mockImplementation(objectUrl);
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(revoke);
+    const report = {
+      fileName,
+      reportJson,
+      downloadPath: "/api/diagnostics/report/download/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      downloadExpiresAtMs: Date.now() + 60_000,
+    };
+    const target = createSupportReportDownload(report, "local");
+    expect(target.href).toBe("blob:retained-canonical-report");
+    expect(target.expiresAtMs).toBeUndefined();
+    const blob = objectUrl.mock.calls[0]?.[0];
+    expect(blob).toBeDefined();
+    const bytes = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (): void => resolve(String(reader.result));
+      reader.onerror = reject;
+      if (!(blob instanceof Blob)) throw new TypeError("Expected canonical report Blob");
+      reader.readAsText(blob);
+    });
+    expect(bytes).toBe(reportJson);
+    expect(bffFetchJson).not.toHaveBeenCalled();
+    target.dispose();
+    expect(revoke).toHaveBeenCalledExactlyOnceWith(target.href);
   });
 
   it.each([

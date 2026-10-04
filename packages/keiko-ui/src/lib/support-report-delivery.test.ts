@@ -3,12 +3,16 @@ import { createSupportReport } from "./support-report-api";
 import { clientErrorEvidence } from "./client-error-evidence";
 import { observeFilesDirectoryRead } from "./files-navigation-evidence";
 import { bffRequestErrorKind } from "./http";
-import { setClientDiagnosticWriter } from "./client-diagnostics";
+import * as clientDiagnostics from "./client-diagnostics";
 import {
   fanOutClientDiagnostic,
   clientDiagnosticPostFailureCount,
   resetClientDiagnosticPostStateForTests,
 } from "./install-client-diagnostics";
+
+vi.mock("./coding-app-session-client", () => ({
+  codingAppSessionPairingSettled: (): Promise<boolean> => Promise.resolve(true),
+}));
 
 const correlationId = "browser-crash-evidence-01";
 const report = {
@@ -124,7 +128,7 @@ describe("browser incident delivery before report selection", () => {
     vi.stubGlobal("fetch", fetch);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.spyOn(console, "debug").mockImplementation(() => undefined);
-    setClientDiagnosticWriter(fanOutClientDiagnostic);
+    clientDiagnostics.setClientDiagnosticWriter(fanOutClientDiagnostic);
     for (let index = 0; index < 20; index += 1) fanOutClientDiagnostic("bounded prior failure");
     await expect(
       observeFilesDirectoryRead(
@@ -226,10 +230,14 @@ describe("browser incident delivery before report selection", () => {
     vi.stubGlobal("fetch", fetch);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
     fanOutClientDiagnostic("[keiko] uncaught window error: TypeError", diagnostic);
+    const delivery = vi.spyOn(clientDiagnostics, "ensureClientDiagnosticDelivery");
     const result = createSupportReport(correlationId);
     const settled = expect(result).rejects.toMatchObject({
       name: "SupportReportEvidenceUnavailable",
     });
+    await vi.waitFor(() =>
+      expect(delivery).toHaveBeenCalledWith(correlationId, expect.any(AbortSignal)),
+    );
     deadline.abort(new DOMException("Expired", "TimeoutError"));
     await settled;
     expect(fetch).toHaveBeenCalledOnce();

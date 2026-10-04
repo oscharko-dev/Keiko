@@ -35,6 +35,8 @@ export const EN_MESSAGES = {
   "supportReport.create": "Create error report",
   "supportReport.creating": "Creating report…",
   "supportReport.download": "Download report",
+  "supportReport.downloadLocal": "Download locally",
+  "supportReport.regenerate": "Regenerate report",
   "supportReport.saved": "Download started.",
   "supportReport.failed": "Report unavailable. Try again.",
   "supportReport.sessionDenied":

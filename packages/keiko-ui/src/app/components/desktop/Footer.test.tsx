@@ -1,8 +1,6 @@
 // Tests for the workspace Footer.
 //
-// The footer currently exposes only the open-window count trigger and its
-// restore/focus palette. Other shell status indicators are intentionally hidden
-// from this surface.
+// The footer exposes window status, diagnostic readiness and the canonical support action.
 
 import type { ComponentProps, ReactNode } from "react";
 import { useState } from "react";
@@ -83,7 +81,7 @@ describe("Footer — window status trigger", () => {
       expect(screen.getByText("Keiko | 0.2.0-beta.5")).toBeInTheDocument();
     });
     expect(fetchHealthMock).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
   });
 
   it("keeps the footer signature present when the version request fails", async () => {
@@ -95,7 +93,7 @@ describe("Footer — window status trigger", () => {
     });
   });
 
-  it("only offers a dismissible action for actual global uncaught failures", async () => {
+  it("keeps reporting available and offers dismissal only for actual global uncaught failures", async () => {
     renderFooter();
     await screen.findByText("Keiko | 0.2.0-test");
     act(() =>
@@ -104,7 +102,7 @@ describe("Footer — window status trigger", () => {
         errorKind: "internal",
       }),
     );
-    expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
     act(() =>
       reportClientDiagnostic("[keiko] uncaught window error: Error", {
         kind: "window-error",
@@ -115,7 +113,26 @@ describe("Footer — window status trigger", () => {
     expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
     expect(Object.keys(currentGlobalClientFailure() ?? {})).toEqual(["ordinal", "correlationId"]);
     await userEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create error report" })).toBeInTheDocument();
+  });
+
+  it("offers canonical reporting after reload without requiring an in-memory failure", async () => {
+    vi.mocked(createSupportReport).mockResolvedValueOnce({
+      fileName: "report.json",
+      reportJson: "{}",
+    });
+    expect(currentGlobalClientFailure()).toBeNull();
+    renderFooter();
+    await screen.findByText("Keiko | 0.2.0-test");
+    expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    expect(createSupportReport).toHaveBeenCalledExactlyOnceWith(undefined, expect.any(AbortSignal));
+    expect(await screen.findByRole("link", { name: "Download report" })).toHaveAttribute(
+      "download",
+      "report.json",
+    );
+    expect(screen.getByRole("link", { name: "Download locally" })).toBeInTheDocument();
+    expect(currentGlobalClientFailure()).toBeNull();
   });
 
   it("keeps the global report downloadable until the person dismisses it", async () => {
