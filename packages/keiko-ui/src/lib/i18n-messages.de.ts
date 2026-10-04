@@ -542,6 +542,18 @@ export const DE_MESSAGES = {
   "chat.regenerate.action": "Antwort neu generieren",
   "chat.regenerate.cancelShort": "Abbrechen",
   "chat.regenerate.short": "Neu generieren",
+  "chat.repository.openInEditor": "{path}{range} im Editor öffnen",
+  "chat.repository.line": " in Zeile {start}",
+  "chat.repository.lines": " in Zeilen {start}-{end}",
+  "chat.repository.opening": "{path} wird geöffnet…",
+  "chat.repository.opened": "{path} im Editor geöffnet.",
+  "chat.repository.connectFirst": "Verbinde ein Files-Fenster, um Repository-Quellen zu öffnen.",
+  "chat.repository.sourceMismatch": "Diese Repository-Quelle passt zu keiner verbundenen Quelle.",
+  "chat.repository.chooseSource": "Wähle eine Repository-Quelle.",
+  "chat.context.sourcesPolicy":
+    "Verbundene Quellenauszüge werden für jede Frage neu geladen und nie zusammengefasst. Der Gesprächsverlauf nutzt ein eigenes Eingabebudget.",
+  "chat.context.sourcesPolicyGrounded":
+    "Verbundene Quellenauszüge werden für jede Frage neu geladen und nie zusammengefasst. Das aktuelle Eingabebudget für den Gesprächsverlauf beträgt {tokens} Tokens.",
   "chat.repository.selectFirst": "Wähle zuerst eine Repository-Datei aus.",
   "chat.repository.limit": "Diese Files-Quelle verweist bereits auf {count} Dateien.",
   "chat.repository.root": "Repository-Wurzel",
@@ -1960,6 +1972,7 @@ export const DE_MESSAGES = {
   // records the required German-copy review.
   // Neue i18n-Schlüssel für das Quality-Widgets-Retrofit: AgentRunWidget, FilePreview,
   // FilesWidget, PdfCitationPreviewWindow, ReviewWidget, FigmaSnapshotWindow.
+  "filePreview.showSource": "Quellenvorschau anzeigen",
   "filePreview.linesAdded": "{count} Zeilen hinzugefügt.",
   "filePreview.revealedRange": "Quellenzeilen {start}–{end}.",
   "filePreview.revealOutsideContent":

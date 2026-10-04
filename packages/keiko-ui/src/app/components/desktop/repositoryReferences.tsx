@@ -13,7 +13,7 @@ import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWor
 import { FileIcon } from "./widgets/shared/projectTree";
 import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
-import { useTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 export interface RepositoryReference {
   readonly label: string;
@@ -403,12 +403,12 @@ export function repositoryReferenceRoots(
   return out;
 }
 
-function referenceRangeLabel(reference: RepositoryReference): string {
+function referenceRangeLabel(reference: RepositoryReference, t: I18nTranslate): string {
   if (reference.lineStart === undefined) return "";
   if (reference.lineEnd === undefined || reference.lineEnd === reference.lineStart) {
-    return ` at line ${String(reference.lineStart)}`;
+    return t("chat.repository.line", { start: reference.lineStart });
   }
-  return ` at lines ${String(reference.lineStart)}-${String(reference.lineEnd)}`;
+  return t("chat.repository.lines", { start: reference.lineStart, end: reference.lineEnd });
 }
 
 interface ReferenceSuffixNode {
@@ -456,10 +456,19 @@ export function repositoryReferencePathLabels(
   );
 }
 
+export function repositoryReferenceDisplayPath(path: string): string {
+  return stripUnsafeFormatChars(path)
+    .replaceAll("\t", "␉")
+    .replaceAll("\r", "␍")
+    .replaceAll("\n", "␊");
+}
+
 function referenceVisibleLabel(reference: RepositoryReference, displayPath?: string): string {
   const parts = reference.path.split("/");
   parts.reverse();
-  const fileName = displayPath ?? parts.find(Boolean) ?? reference.path;
+  const fileName = repositoryReferenceDisplayPath(
+    displayPath ?? parts.find(Boolean) ?? reference.path,
+  );
   if (reference.lineStart === undefined) return fileName;
   if (reference.lineEnd === undefined || reference.lineEnd === reference.lineStart) {
     return `${fileName}:${String(reference.lineStart)}`;
@@ -599,7 +608,7 @@ export function RepositoryReferenceInline({
       if (openReference === undefined) return;
       const path = root.openPath;
       setStatus("opening");
-      setMessage(`Opening ${path}…`);
+      setMessage(t("chat.repository.opening", { path: repositoryReferenceDisplayPath(path) }));
       const result = openReference({
         root: root.root,
         path,
@@ -608,25 +617,25 @@ export function RepositoryReferenceInline({
       });
       if (result.ok) {
         setStatus("opened");
-        setMessage(`Opened ${path} in editor.`);
+        setMessage(t("chat.repository.opened", { path: repositoryReferenceDisplayPath(path) }));
         scheduleIdleReset(OPENED_CONFIRMATION_MS);
         return;
       }
       setStatus("failed");
       setMessage(result.message);
     },
-    [openReference, reference, scheduleIdleReset],
+    [openReference, reference, scheduleIdleReset, t],
   );
 
   const activate = useCallback((): void => {
     if (openReference === undefined || rootOptions.length === 0) {
       setStatus("failed");
-      setMessage("Connect a Files window to open repository references.");
+      setMessage(t("chat.repository.connectFirst"));
       return;
     }
     if (rankedRootOptions.length === 0) {
       setStatus("failed");
-      setMessage("This repository reference does not match any connected source.");
+      setMessage(t("chat.repository.sourceMismatch"));
       return;
     }
     if (bestRootOptions.length === 1) {
@@ -635,8 +644,15 @@ export function RepositoryReferenceInline({
       return;
     }
     setStatus((current) => (current === "choosing" ? "idle" : "choosing"));
-    setMessage("Select a repository source.");
-  }, [bestRootOptions, openForRoot, openReference, rankedRootOptions.length, rootOptions.length]);
+    setMessage(t("chat.repository.chooseSource"));
+  }, [
+    bestRootOptions,
+    openForRoot,
+    openReference,
+    rankedRootOptions.length,
+    rootOptions.length,
+    t,
+  ]);
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>): void => {
@@ -654,7 +670,11 @@ export function RepositoryReferenceInline({
   );
 
   if (openReference === undefined) {
-    return <span title={reference.label}>{referenceVisibleLabel(reference, displayPath)}</span>;
+    return (
+      <span title={repositoryReferenceDisplayPath(reference.label)}>
+        {referenceVisibleLabel(reference, displayPath)}
+      </span>
+    );
   }
 
   const alert = status === "failed";
@@ -663,10 +683,13 @@ export function RepositoryReferenceInline({
       <button
         type="button"
         className={className}
-        aria-label={`Open ${reference.path}${referenceRangeLabel(reference)} in editor`}
+        aria-label={t("chat.repository.openInEditor", {
+          path: repositoryReferenceDisplayPath(reference.path),
+          range: referenceRangeLabel(reference, t),
+        })}
         aria-expanded={bestRootOptions.length > 1 ? status === "choosing" : undefined}
         data-state={status}
-        title={reference.label}
+        title={repositoryReferenceDisplayPath(reference.label)}
         onClick={activate}
         onKeyDown={onKeyDown}
       >

@@ -150,6 +150,26 @@ describe("Chat context window breakdown", () => {
     expect(knowledge).toHaveTextContent("25%");
   });
 
+  it("describes the actual conversation lane without a hardcoded policy cap", () => {
+    const panel = openGroundedPanel({ ...groundedStatus(), conversationInputBudgetTokens: 768 });
+    const policy = [...panel.querySelectorAll("p")].find((paragraph) =>
+      paragraph.textContent?.includes("retrieved fresh"),
+    );
+    expect(policy).toHaveTextContent("768 tokens");
+    expect(policy).not.toHaveTextContent("8,000");
+    expect(policy).not.toHaveTextContent("a third");
+  });
+
+  it("does not invent a conversation policy cap when lane metadata is absent", () => {
+    const { conversationInputBudgetTokens: _tokens, ...status } = groundedStatus();
+    const panel = openGroundedPanel(status);
+    const policy = [...panel.querySelectorAll("p")].find((paragraph) =>
+      paragraph.textContent?.includes("retrieved fresh"),
+    );
+    expect(policy).toHaveTextContent("Conversation history uses its own input budget.");
+    expect(policy).not.toHaveTextContent(/8,000|a third|current conversation input budget is/u);
+  });
+
   it("explains a grounded conversation lane separately from available source capacity", () => {
     const panel = openGroundedPanel({
       ...groundedStatus(),

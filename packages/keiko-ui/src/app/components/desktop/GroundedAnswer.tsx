@@ -7,7 +7,7 @@
 // UI's lib/types re-export. Citations are static evidence references until a future change wires
 // them to the Files-window preview at the cited line range.
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   citationFindingTotal,
@@ -18,13 +18,15 @@ import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safet
 import { isCanonicalConnectedSearchAbstention } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { formatBytes, formatMs } from "@/lib/format";
 import {
-  useOptionalWidgetTranslate as useTranslate,
-  type OptionalWidgetTranslate as I18nTranslate,
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
 } from "@/lib/optional-widget-i18n";
+import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
 import type { OptionalWidgetMessageKey as MessageKey } from "@/lib/i18n-messages.optional.en";
 import {
   RepositoryReferenceInline,
   repositoryReferencePathLabels,
+  repositoryReferenceDisplayPath,
   type OpenRepositoryReference,
   type RepositoryReferenceRoot,
   type RepositoryReference,
@@ -47,6 +49,21 @@ import type {
 } from "@/lib/types";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 import activityBadgeStyles from "./GroundedAnswer.module.css";
+
+type I18nTranslate = OptionalWidgetTranslate & { readonly locale: Locale };
+
+// Keep the selected locale alongside this component's private presentation translator.
+function useTranslate(): I18nTranslate {
+  const translate = useOptionalWidgetTranslate();
+  const locale = useLocale();
+  return useMemo(
+    () =>
+      Object.assign((key: MessageKey, values?: MessageValues): string => translate(key, values), {
+        locale,
+      }),
+    [locale, translate],
+  );
+}
 
 // Opens the citation's target in the existing governed documentation browser widget (ADR-0113) so
 // that widget's own navigateDocumentation call renders the authoritative reason/severity outcome —
@@ -74,8 +91,8 @@ type KnowledgeGroundedAnswer = Extract<
 
 // Display "—" for Infinity / non-finite caps (the default budget uses Number.POSITIVE_INFINITY
 // for unbounded dimensions like rerankCallsMax when the orchestrator is disabled).
-function formatCap(value: number): string {
-  return Number.isFinite(value) ? String(value) : "—";
+function formatCap(value: number, locale: Locale): string {
+  return Number.isFinite(value) ? formatCount(value, locale) : "—";
 }
 
 // Same "—" sentinel, but with a human-readable presenter (formatBytes/formatMs) for finite
@@ -86,10 +103,10 @@ function formatCapWith(value: number, format: (n: number) => string): string {
 }
 
 // Thousands-separated counts for the token rows — five-/six-digit raw values like
-// "32000" are hard to parse in the 11px mono column (uiux-fix F051 C318). Fixed
-// en-US grouping keeps the output deterministic across runtimes.
-function formatCount(value: number): string {
-  return value.toLocaleString("en-US");
+// "32000" are hard to parse in the 11px mono column (uiux-fix F051 C318). The
+// selected-locale grouping keeps the display consistent with the surrounding interface.
+function formatCount(value: number, locale: Locale): string {
+  return value.toLocaleString(locale);
 }
 
 // Internal enum tokens (e.g. "no-evidence", "natural-language", "capsule-set") are
@@ -99,18 +116,11 @@ export function humanizeToken(value: string): string {
   return value.replaceAll("-", " ");
 }
 
-function localKnowledgeScopeKindLabel(
-  scopeKind: LocalKnowledgeGroundedAnswerContextSummary["scopeKind"],
+function formatEcosystemEntry(
+  eco: { readonly id: string; readonly count: number },
+  t: I18nTranslate,
 ): string {
-  return scopeKind === "capsule-set" ? "Knowledge Pod Set" : "Knowledge Pod";
-}
-
-function pluralize(value: number, singular: string, plural = `${singular}s`): string {
-  return value === 1 ? singular : plural;
-}
-
-function formatEcosystemEntry(eco: { readonly id: string; readonly count: number }): string {
-  return `${eco.id} (${formatCount(eco.count)})`;
+  return `${eco.id} (${formatCount(eco.count, t.locale)})`;
 }
 
 function formatScopeLabel(summary: GroundedAnswerContextPackSummary, t: I18nTranslate): string {
@@ -177,14 +187,14 @@ function RankingRationale({
           <MetricRow
             key={`bucket-${bucket}`}
             label={humanizeToken(bucket)}
-            value={formatCount(count)}
+            value={formatCount(count, t.locale)}
           />
         ))}
       </dl>
       {summary.ecosystems.length > 0 ? (
         <p className="grounded-ranking-ecosystems">
           {t("grounded.inspection.ecosystems", {
-            entries: summary.ecosystems.map(formatEcosystemEntry).join(", "),
+            entries: summary.ecosystems.map((eco) => formatEcosystemEntry(eco, t)).join(", "),
           })}
         </p>
       ) : null}
@@ -218,16 +228,14 @@ function contextPackHeadline(
         ? "grounded.inspection.scopeFile"
         : "grounded.inspection.scopeFiles";
   }
-  return t(key, { scope, count: contextPack.fileCount });
+  return t(key, { scope, count: formatCount(contextPack.fileCount, t.locale) });
 }
 
 type InspectionMetric = readonly [string, string];
 type SearchCoverage = GroundedAnswerContextPackSummary["coverage"];
 
-function hasOnlyOmittedMatches(coverage: NonNullable<SearchCoverage>): boolean {
+function hasInspectedEligibleFiles(coverage: NonNullable<SearchCoverage>): boolean {
   return (
-    coverage.reasons.length === 1 &&
-    coverage.reasons[0] === "match-cap" &&
     coverage.filesScanned === coverage.filesAfterPolicy &&
     coverage.filesSkipped === 0 &&
     coverage.depthPrunedByDiscovery === 0 &&
@@ -235,9 +243,22 @@ function hasOnlyOmittedMatches(coverage: NonNullable<SearchCoverage>): boolean {
   );
 }
 
+function hasOnlyOmittedMatches(coverage: NonNullable<SearchCoverage>): boolean {
+  return (
+    coverage.reasons.length === 1 &&
+    coverage.reasons[0] === "match-cap" &&
+    hasInspectedEligibleFiles(coverage)
+  );
+}
+
 function selectedReadCount(pack: GroundedAnswerContextPackSummary, t: I18nTranslate): string {
   return pack.budget.filesReadMax === null
-    ? t("grounded.inspection.fileCountUncapped", { used: formatCount(pack.usage.filesRead) })
+    ? t(
+        pack.usage.filesRead === 1
+          ? "grounded.inspection.fileCountUncapped.one"
+          : "grounded.inspection.fileCountUncapped.other",
+        { used: formatCount(pack.usage.filesRead, t.locale) },
+      )
     : inspectionCount(
         t,
         "grounded.inspection.fileCount",
@@ -247,7 +268,10 @@ function selectedReadCount(pack: GroundedAnswerContextPackSummary, t: I18nTransl
 }
 
 function inspectionCount(t: I18nTranslate, key: MessageKey, used: number, max: number): string {
-  return t(key, { used: formatCount(used), max: formatCapWith(max, formatCount) });
+  return t(key, {
+    used: formatCount(used, t.locale),
+    max: formatCapWith(max, (value) => formatCount(value, t.locale)),
+  });
 }
 
 function coverageMessageKey(coverage: NonNullable<SearchCoverage>): MessageKey {
@@ -293,7 +317,7 @@ function inspectionReadMetrics(
     [t("grounded.inspection.selectedReads"), selectedReadCount(pack, t)],
     [
       t("grounded.inspection.excerptBytes"),
-      `${formatBytes(usage.excerptBytes)} / ${formatCapWith(budget.excerptBytesMax, formatBytes)}`,
+      `${formatBytes(usage.excerptBytes, t.locale)} / ${formatCapWith(budget.excerptBytesMax, (value) => formatBytes(value, t.locale))}`,
     ],
     [
       t("grounded.inspection.rerank"),
@@ -333,12 +357,12 @@ function inspectionTimeMetrics(
   t: I18nTranslate,
 ): readonly InspectionMetric[] {
   return [
-    [t("grounded.inspection.duration"), formatMs(pack.elapsedMs)],
+    [t("grounded.inspection.duration"), formatMs(pack.elapsedMs, t.locale)],
     [
       t("grounded.inspection.timeLimit"),
       pack.budget.elapsedMsMax === null
         ? t("grounded.inspection.noTimeLimit")
-        : formatCapWith(pack.budget.elapsedMsMax, formatMs),
+        : formatCapWith(pack.budget.elapsedMsMax, (value) => formatMs(value, t.locale)),
     ],
     [t("grounded.inspection.query"), t(QUERY_KIND_LABELS[pack.queryKind])],
   ];
@@ -383,7 +407,9 @@ function ContextPackSummary({
       <p className="grounded-meta">
         {contextPack.budget.filesReadMax === null
           ? t("grounded.inspection.readHintUncapped")
-          : t("grounded.inspection.readHint", { max: formatCap(contextPack.budget.filesReadMax) })}
+          : t("grounded.inspection.readHint", {
+              max: formatCap(contextPack.budget.filesReadMax, t.locale),
+            })}
       </p>
       <p className="grounded-meta">{t("grounded.inspection.timeHint")}</p>
       <p className="grounded-meta">{t("grounded.inspection.modelBudgetHint")}</p>
@@ -396,9 +422,9 @@ function ContextPackSummary({
 
 function formatRange(citation: GroundedEvidenceCitation): string {
   if (citation.lineRange === undefined) {
-    return citation.scopePath;
+    return repositoryReferenceDisplayPath(citation.scopePath);
   }
-  return `${citation.scopePath}:${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
+  return `${repositoryReferenceDisplayPath(citation.scopePath)}:${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
 }
 
 function citationSpan(citation: GroundedEvidenceCitation, t: I18nTranslate): string {
@@ -420,7 +446,7 @@ function citationTitle(citation: GroundedEvidenceCitation, t: I18nTranslate): st
       : t("grounded.citation.documentEvidence", { format: citation.documentFormat.toUpperCase() });
   return t("grounded.citation.title", {
     kind,
-    path: citation.scopePath,
+    path: repositoryReferenceDisplayPath(citation.scopePath),
     span: citationSpan(citation, t),
   });
 }
@@ -466,7 +492,7 @@ function CitationReference({
       {documentFormat === undefined ? null : (
         <>
           <span className="grounded-citation-doc-badge">{documentFormat}</span>
-          <span className="sr-only"> document evidence extracted text </span>
+          <span className="sr-only">{t("grounded.citation.extractedText")}</span>
         </>
       )}
       <span className="grounded-citation-range">
@@ -476,7 +502,10 @@ function CitationReference({
             roots={repositoryRoots}
             openReference={openRepositoryReference}
             className="repo-ref-link grounded-citation-open"
-            displayPath={attributedCitationLabel(displayPath, sourceLabel)}
+            displayPath={attributedCitationLabel(
+              repositoryReferenceDisplayPath(displayPath),
+              sourceLabel,
+            )}
           />
         ) : (
           attributedCitationLabel(formatRange(citation), sourceLabel)
@@ -539,7 +568,7 @@ function CitationDisclosureButton({
     >
       {expanded
         ? t("grounded.citations.showFewer")
-        : t("grounded.citations.showAll", { count: total })}
+        : t("grounded.citations.showAll", { count: formatCount(total, t.locale) })}
     </button>
   );
 }
@@ -553,6 +582,7 @@ function ActivityDisclosureButton({
   readonly expanded: boolean;
   readonly onToggle: () => void;
 }): ReactNode {
+  const t = useTranslate();
   if (total <= ACTIVITY_POD_DISPLAY_CAP) return null;
   return (
     <button
@@ -561,7 +591,9 @@ function ActivityDisclosureButton({
       aria-expanded={expanded}
       onClick={onToggle}
     >
-      {expanded ? "Show fewer Knowledge Pods" : `Show all ${String(total)} Knowledge Pods`}
+      {expanded
+        ? t("grounded.activity.showFewer")
+        : t("grounded.activity.showAll", { count: formatCount(total, t.locale) })}
     </button>
   );
 }
@@ -598,12 +630,16 @@ function CitationList({
 }): ReactNode {
   const t = useTranslate();
   const [expanded, setExpanded] = useState(false);
+  const sorted = useMemo(
+    () => uniqueByCitationIdentity([...citations].sort((a, b) => b.score - a.score)),
+    [citations],
+  );
+  const labels = useMemo(
+    () => repositoryReferencePathLabels(sorted.map((citation) => citation.scopePath)),
+    [sorted],
+  );
+  const collisions = useMemo(() => attributedCitationCollisions(sorted), [sorted]);
   if (citations.length === 0) return null;
-  // Defensive re-sort: the wire delivers folder citations score-sorted already, but the cap
-  // must never hide a stronger citation behind a weaker one.
-  const sorted = uniqueByCitationIdentity([...citations].sort((a, b) => b.score - a.score));
-  const labels = repositoryReferencePathLabels(sorted.map((citation) => citation.scopePath));
-  const collisions = attributedCitationCollisions(sorted);
   const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
   // Copilot PR #258 finding: the prior "Evidence" label was a direct child of role="list"
   // which is invalid (only listitem children allowed). Lift the label OUT of the list and
@@ -645,7 +681,7 @@ function citationCountLabel(
   keys: { readonly one: MessageKey; readonly other: MessageKey },
   values: Readonly<Record<string, string | number>> = {},
 ): string {
-  return t(count === 1 ? keys.one : keys.other, { ...values, count: formatCount(count) });
+  return t(count === 1 ? keys.one : keys.other, { ...values, count: formatCount(count, t.locale) });
 }
 
 function connectedEvidenceSummary(answer: ConnectedGroundedAnswer, t: I18nTranslate): string {
@@ -661,13 +697,18 @@ function connectedEvidenceSummary(answer: ConnectedGroundedAnswer, t: I18nTransl
         }
       : { one: "grounded.summary.connected.one", other: "grounded.summary.connected.other" },
     {
-      read: formatCount(answer.contextPack.usage.filesRead),
+      read:
+        answer.contextPack.budget.filesReadMax === null
+          ? selectedReadCount(answer.contextPack, t)
+          : formatCount(answer.contextPack.usage.filesRead, t.locale),
       max:
         answer.contextPack.budget.filesReadMax === null
           ? ""
-          : formatCap(answer.contextPack.budget.filesReadMax),
+          : formatCap(answer.contextPack.budget.filesReadMax, t.locale),
       omitted:
-        omittedCount > 0 ? t("grounded.summary.notUsed", { count: formatCount(omittedCount) }) : "",
+        omittedCount > 0
+          ? t("grounded.summary.notUsed", { count: formatCount(omittedCount, t.locale) })
+          : "",
     },
   );
 }
@@ -678,8 +719,8 @@ function knowledgeEvidenceSummary(answer: KnowledgeGroundedAnswer, t: I18nTransl
     uniqueCitationCount(answer.citations),
     { one: "grounded.summary.knowledge.one", other: "grounded.summary.knowledge.other" },
     {
-      used: formatCount(answer.contextPack.referencesUsed),
-      budget: formatCount(answer.contextPack.referenceBudget),
+      used: formatCount(answer.contextPack.referencesUsed, t.locale),
+      budget: formatCount(answer.contextPack.referenceBudget, t.locale),
     },
   );
 }
@@ -696,59 +737,86 @@ function hybridEvidenceSummary(answer: HybridGroundedAnswer, t: I18nTranslate): 
   return `${files} · ${knowledge}`;
 }
 
-const ACTIVITY_STATE_LABELS: Record<KnowledgePodRetrievalActivityState, string> = {
-  searched: "Searched",
-  skipped: "Skipped",
-  degraded: "Degraded",
-  denied: "Denied",
-  unavailable: "Unavailable",
-  "not-selected": "Not selected",
+const ACTIVITY_STATE_LABELS: Record<KnowledgePodRetrievalActivityState, MessageKey> = {
+  searched: "grounded.activity.state.searched",
+  skipped: "grounded.activity.state.skipped",
+  degraded: "grounded.activity.state.degraded",
+  denied: "grounded.activity.state.denied",
+  unavailable: "grounded.activity.state.unavailable",
+  "not-selected": "grounded.activity.state.not-selected",
 };
 
-const ACTIVITY_REASON_LABELS: Record<KnowledgePodRetrievalActivityReasonCode, string> = {
-  "selected-for-search": "selected for search",
-  searched: "searched",
-  "not-selected": "not selected",
-  "source-skipped": "source skipped",
-  "scope-not-ready": "scope not ready",
-  "indexing-in-progress": "indexing in progress",
-  "stale-capsule": "stale pod",
-  "retrieval-failure": "retrieval failure",
-  "no-scope": "no scope",
-  "no-vectors": "no vectors",
-  "incompatible-embedding-identity": "embedding model mismatch",
-  "dense-scan-too-large": "vector scan too large",
-  "below-min-score": "below minimum score",
-  "answer-grounding-rejected": "grounding rejected",
-  "no-evidence-stated": "no evidence stated",
-  "no-evidence": "no evidence",
-  "empty-query": "empty query",
-  "empty-answer": "empty answer",
-  "embedding-failed": "embedding failed",
-  "embedding-unavailable": "embedding unavailable",
-  "reranker-unavailable": "reranker unavailable",
-  "reranker-invalid-response": "reranker invalid response",
-  "policy-denied": "policy denied",
-  "capability-missing": "capability missing",
-  "remote-unavailable": "remote unavailable",
-  "pack-validation-failed": "pack validation failed",
-  "max-sources-exceeded": "source limit exceeded",
+const ACTIVITY_REASON_LABELS: Record<KnowledgePodRetrievalActivityReasonCode, MessageKey> = {
+  "selected-for-search": "grounded.activity.reason.selected-for-search",
+  searched: "grounded.activity.reason.searched",
+  "not-selected": "grounded.activity.reason.not-selected",
+  "source-skipped": "grounded.activity.reason.source-skipped",
+  "scope-not-ready": "grounded.activity.reason.scope-not-ready",
+  "indexing-in-progress": "grounded.activity.reason.indexing-in-progress",
+  "stale-capsule": "grounded.activity.reason.stale-capsule",
+  "retrieval-failure": "grounded.activity.reason.retrieval-failure",
+  "no-scope": "grounded.activity.reason.no-scope",
+  "no-vectors": "grounded.activity.reason.no-vectors",
+  "incompatible-embedding-identity": "grounded.activity.reason.incompatible-embedding-identity",
+  "dense-scan-too-large": "grounded.activity.reason.dense-scan-too-large",
+  "below-min-score": "grounded.activity.reason.below-min-score",
+  "answer-grounding-rejected": "grounded.activity.reason.answer-grounding-rejected",
+  "no-evidence-stated": "grounded.activity.reason.no-evidence-stated",
+  "no-evidence": "grounded.activity.reason.no-evidence",
+  "empty-query": "grounded.activity.reason.empty-query",
+  "empty-answer": "grounded.activity.reason.empty-answer",
+  "embedding-failed": "grounded.activity.reason.embedding-failed",
+  "embedding-unavailable": "grounded.activity.reason.embedding-unavailable",
+  "reranker-unavailable": "grounded.activity.reason.reranker-unavailable",
+  "reranker-invalid-response": "grounded.activity.reason.reranker-invalid-response",
+  "policy-denied": "grounded.activity.reason.policy-denied",
+  "capability-missing": "grounded.activity.reason.capability-missing",
+  "remote-unavailable": "grounded.activity.reason.remote-unavailable",
+  "pack-validation-failed": "grounded.activity.reason.pack-validation-failed",
+  "max-sources-exceeded": "grounded.activity.reason.max-sources-exceeded",
 };
 
 type RetrievalActivityPod = KnowledgePodRetrievalActivity["pods"][number];
 
-function activityPodLine(pod: RetrievalActivityPod): string {
-  const referenceLabel = pluralize(pod.counts.referenceCount, "reference");
-  const citationLabel = pluralize(pod.counts.citationCount, "citation");
-  return `${pod.displayName} · ${formatCount(pod.counts.referenceCount)} ${referenceLabel} · ${formatCount(pod.counts.citationCount)} ${citationLabel}`;
+function activityEvidenceCounts(
+  referenceCount: number,
+  citationCount: number,
+  t: I18nTranslate,
+): string {
+  const references = citationCountLabel(t, referenceCount, {
+    one: "grounded.count.references.one",
+    other: "grounded.count.references.other",
+  });
+  const citations = citationCountLabel(t, citationCount, {
+    one: "grounded.count.citations.one",
+    other: "grounded.count.citations.other",
+  });
+  return `${references} · ${citations}`;
 }
 
-function activityReasons(pod: RetrievalActivityPod): string {
-  return pod.reasonCodes.map((reason) => ACTIVITY_REASON_LABELS[reason]).join(", ");
+function activityPodLine(pod: RetrievalActivityPod, t: I18nTranslate): string {
+  return `${pod.displayName} · ${activityEvidenceCounts(pod.counts.referenceCount, pod.counts.citationCount, t)}`;
 }
 
-function activityModes(pod: RetrievalActivityPod): string {
-  return pod.modes.map(humanizeToken).join(", ");
+function activityReasons(pod: RetrievalActivityPod, t: I18nTranslate): string {
+  return pod.reasonCodes.map((reason) => t(ACTIVITY_REASON_LABELS[reason])).join(", ");
+}
+
+const ACTIVITY_MODE_LABELS: Record<RetrievalActivityPod["modes"][number], MessageKey> = {
+  "local-only": "grounded.activity.mode.local-only",
+  hybrid: "grounded.activity.mode.hybrid",
+  lexical: "grounded.activity.mode.lexical",
+  vector: "grounded.activity.mode.vector",
+  reranked: "grounded.activity.mode.reranked",
+  sealed: "grounded.activity.mode.sealed",
+  remote: "grounded.activity.mode.remote",
+  federated: "grounded.activity.mode.federated",
+  exact: "grounded.activity.mode.exact",
+  broad: "grounded.activity.mode.broad",
+};
+
+function activityModes(pod: RetrievalActivityPod, t: I18nTranslate): string {
+  return pod.modes.map((mode) => t(ACTIVITY_MODE_LABELS[mode])).join(", ");
 }
 
 function KnowledgePodRetrievalActivityPanel({
@@ -757,44 +825,70 @@ function KnowledgePodRetrievalActivityPanel({
   readonly activity: KnowledgePodRetrievalActivity | undefined;
 }): ReactNode {
   const [expanded, setExpanded] = useState(false);
+  const t = useTranslate();
   if (activity === undefined || activity.pods.length === 0) return null;
   const { summary } = activity;
   const visiblePods = expanded ? activity.pods : activity.pods.slice(0, ACTIVITY_POD_DISPLAY_CAP);
   return (
     <section
       className={`grounded-context-pack ${activityBadgeStyles.scope}`}
-      aria-label="Knowledge Pod retrieval activity"
+      aria-label={t("grounded.activity.aria")}
     >
-      <div className="grounded-context-pack-headline">Knowledge Pod activity</div>
+      <div className="grounded-context-pack-headline">{t("grounded.activity.title")}</div>
       <dl className="grounded-context-pack-dl">
-        <MetricRow label="Searched" value={formatCount(summary.searchedCount)} />
-        <MetricRow label="Skipped" value={formatCount(summary.skippedCount)} />
-        <MetricRow label="Degraded" value={formatCount(summary.degradedCount)} />
-        <MetricRow label="Denied" value={formatCount(summary.deniedCount)} />
-        <MetricRow label="Unavailable" value={formatCount(summary.unavailableCount)} />
-        <MetricRow label="Not selected" value={formatCount(summary.notSelectedCount)} />
         <MetricRow
-          label="Candidates"
-          value={`${formatCount(summary.denseCandidateCount)} vector · ${formatCount(summary.lexicalCandidateCount)} lexical · ${formatCount(summary.fusedCandidateCount)} fused`}
+          label={t(ACTIVITY_STATE_LABELS["searched"])}
+          value={formatCount(summary.searchedCount, t.locale)}
         />
         <MetricRow
-          label="Evidence"
-          value={`${formatCount(summary.referenceCount)} ${pluralize(summary.referenceCount, "reference")} · ${formatCount(summary.citationCount)} ${pluralize(summary.citationCount, "citation")}`}
+          label={t(ACTIVITY_STATE_LABELS["skipped"])}
+          value={formatCount(summary.skippedCount, t.locale)}
+        />
+        <MetricRow
+          label={t(ACTIVITY_STATE_LABELS["degraded"])}
+          value={formatCount(summary.degradedCount, t.locale)}
+        />
+        <MetricRow
+          label={t(ACTIVITY_STATE_LABELS["denied"])}
+          value={formatCount(summary.deniedCount, t.locale)}
+        />
+        <MetricRow
+          label={t(ACTIVITY_STATE_LABELS["unavailable"])}
+          value={formatCount(summary.unavailableCount, t.locale)}
+        />
+        <MetricRow
+          label={t(ACTIVITY_STATE_LABELS["not-selected"])}
+          value={formatCount(summary.notSelectedCount, t.locale)}
+        />
+        <MetricRow
+          label={t("grounded.activity.candidates")}
+          value={t("grounded.activity.candidateCounts", {
+            dense: formatCount(summary.denseCandidateCount, t.locale),
+            lexical: formatCount(summary.lexicalCandidateCount, t.locale),
+            fused: formatCount(summary.fusedCandidateCount, t.locale),
+          })}
+        />
+        <MetricRow
+          label={t("grounded.title.evidence")}
+          value={activityEvidenceCounts(summary.referenceCount, summary.citationCount, t)}
         />
       </dl>
       <ul
         className={`grounded-uncertainty-list ${activityBadgeStyles.activityList}`}
-        aria-label="Knowledge Pod activity details"
+        aria-label={t("grounded.activity.details")}
       >
         {visiblePods.map((pod) => (
           <li key={`${pod.podKind}-${pod.podId}`} className={activityBadgeStyles.activityListItem}>
             <span className="grounded-evidence-summary-badge" data-activity-state={pod.state}>
-              {ACTIVITY_STATE_LABELS[pod.state]}
+              {t(ACTIVITY_STATE_LABELS[pod.state])}
             </span>{" "}
-            {activityPodLine(pod)}
+            {activityPodLine(pod, t)}
             {" · "}
             <span className={`grounded-meta ${activityBadgeStyles.activityMeta}`}>
-              {`Modes: ${activityModes(pod)} · Reasons: ${activityReasons(pod)}`}
+              {t("grounded.activity.modesReasons", {
+                modes: activityModes(pod, t),
+                reasons: activityReasons(pod, t),
+              })}
             </span>
           </li>
         ))}
@@ -859,9 +953,12 @@ function UnverifiedSupportBadge(): ReactNode {
   );
 }
 
-function knowledgeCitationLabel(citation: LocalKnowledgeEvidenceCitation): string {
+function knowledgeCitationLabel(
+  citation: LocalKnowledgeEvidenceCitation,
+  t: I18nTranslate,
+): string {
   if (citation.htmlManual !== undefined) {
-    return manualCitationLabel(citation);
+    return manualCitationLabel(citation, t);
   }
   return citation.source === undefined
     ? `${citation.marker} ${citation.label}`
@@ -881,9 +978,12 @@ function LocalKnowledgeCitationList({
 }): ReactNode {
   const t = useTranslate();
   const [expanded, setExpanded] = useState(false);
+  const sorted = useMemo(
+    () => uniqueByCitationIdentity([...citations].sort((a, b) => b.score - a.score)),
+    [citations],
+  );
   if (citations.length === 0) return null;
   // uiux-fix F012 C091 — same cap + disclosure as CitationList above.
-  const sorted = uniqueByCitationIdentity([...citations].sort((a, b) => b.score - a.score));
   const visible = expanded ? sorted : sorted.slice(0, CITATION_DISPLAY_CAP);
   return (
     <div className="grounded-citations-wrap">
@@ -897,7 +997,7 @@ function LocalKnowledgeCitationList({
             <KnowledgeCitationChip
               citation={citation}
               citationPreview={citationPreview}
-              label={knowledgeCitationLabel(citation)}
+              label={knowledgeCitationLabel(citation, t)}
               openDocumentationTarget={openDocumentationTarget}
               unverified={unverifiedSupport && citation.lexicalSupport === "weak"}
             />
@@ -915,19 +1015,25 @@ function LocalKnowledgeCitationList({
   );
 }
 
-function knowledgeCitationTitle(citation: LocalKnowledgeEvidenceCitation): string {
+function knowledgeCitationTitle(
+  citation: LocalKnowledgeEvidenceCitation,
+  t: I18nTranslate,
+): string {
   if (citation.htmlManual !== undefined) {
     const section = citation.htmlManual.sectionPath?.join(" · ");
     const suffix = section === undefined ? "" : ` · ${section}`;
-    return `${citation.htmlManual.pageTitle}${suffix} — HTML manual evidence`;
+    return `${citation.htmlManual.pageTitle}${suffix} — ${t("grounded.manual.evidence")}`;
   }
   return citation.source === undefined ? citation.label : `${citation.source} · ${citation.label}`;
 }
 
-function manualCitationLabel(citation: LocalKnowledgeEvidenceCitation): string {
+function manualCitationLabel(citation: LocalKnowledgeEvidenceCitation, t: I18nTranslate): string {
   const manual = citation.htmlManual;
   if (manual === undefined) return `${citation.marker} ${citation.label}`;
-  const source = citation.source === undefined ? "HTML manual" : `${citation.source} · HTML manual`;
+  const source =
+    citation.source === undefined
+      ? t("grounded.manual.name")
+      : `${citation.source} · ${t("grounded.manual.name")}`;
   const section = manual.sectionPath?.join(" · ");
   const sectionSuffix = section === undefined || section.length === 0 ? "" : ` · ${section}`;
   return `${citation.marker} ${source} · ${manual.pageTitle}${sectionSuffix}`;
@@ -936,33 +1042,34 @@ function manualCitationLabel(citation: LocalKnowledgeEvidenceCitation): string {
 // Curated, short copy for every governed reason a manual citation cannot be reopened — mirrors the
 // tone of DocumentationBrowserWidget's REASON_COPY without exposing the raw wire enum token.
 const MANUAL_UNAVAILABLE_REASON_COPY: Readonly<
-  Record<HtmlManualCitationOpenUnavailableReason, string>
+  Record<HtmlManualCitationOpenUnavailableReason, MessageKey>
 > = {
-  "source-metadata-unavailable": "Source unavailable",
-  "citation-lineage-mismatch": "Citation mismatch",
-  "target-outside-approved-scope": "Outside approved scope",
-  "target-unsupported": "Unsupported target",
-  "target-credentialed": "Requires sign-in",
-  "target-unavailable": "Target unavailable",
+  "source-metadata-unavailable": "grounded.manual.reason.source-metadata-unavailable",
+  "citation-lineage-mismatch": "grounded.manual.reason.citation-lineage-mismatch",
+  "target-outside-approved-scope": "grounded.manual.reason.target-outside-approved-scope",
+  "target-unsupported": "grounded.manual.reason.target-unsupported",
+  "target-credentialed": "grounded.manual.reason.target-credentialed",
+  "target-unavailable": "grounded.manual.reason.target-unavailable",
 };
 
-function manualCitationActionLabel(manual: HtmlManualCitationMetadata): string {
-  if (manual.open.state === "available") return "Open manual";
-  if (manual.open.state === "page-level-only") return "Open page";
-  return MANUAL_UNAVAILABLE_REASON_COPY[manual.open.reason];
+function manualCitationActionLabel(manual: HtmlManualCitationMetadata, t: I18nTranslate): string {
+  if (manual.open.state === "available") return t("grounded.manual.openManual");
+  if (manual.open.state === "page-level-only") return t("grounded.manual.openPage");
+  return t(MANUAL_UNAVAILABLE_REASON_COPY[manual.open.reason]);
 }
 
 function manualCitationChipActionLabel(
   state: "idle" | "opened" | "failed",
   manual: HtmlManualCitationMetadata,
+  t: I18nTranslate,
 ): string {
   let label: string;
   if (state === "opened") {
-    label = "Opened";
+    label = t("grounded.manual.opened");
   } else if (state === "failed") {
-    label = "Open failed";
+    label = t("grounded.manual.failed");
   } else {
-    label = manualCitationActionLabel(manual);
+    label = manualCitationActionLabel(manual, t);
   }
   return label;
 }
@@ -978,12 +1085,13 @@ function ManualCitationChip({
   readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
   readonly unverified?: boolean;
 }): ReactNode {
+  const t = useTranslate();
   const manual = citation.htmlManual;
   const [state, setState] = useState<"idle" | "opened" | "failed">("idle");
   const accessibleLabel = useSupportAwareLabel(label, unverified);
   if (manual === undefined) return null;
   const unavailable = manual.open.state === "unavailable";
-  const actionLabel = manualCitationChipActionLabel(state, manual);
+  const actionLabel = manualCitationChipActionLabel(state, manual, t);
   const target = manual.open.state === "unavailable" ? undefined : manual.open.target;
   const modifier = unavailable || state === "failed" ? " grounded-citation-action--blocked" : "";
   return (
@@ -992,7 +1100,7 @@ function ManualCitationChip({
       className={`grounded-citation grounded-citation-action ${activityBadgeStyles.manualCitationAction}${modifier}`}
       aria-disabled={unavailable ? "true" : undefined}
       aria-label={`${accessibleLabel} · ${actionLabel}`}
-      title={`${knowledgeCitationTitle(citation)} · ${actionLabel}`}
+      title={`${knowledgeCitationTitle(citation, t)} · ${actionLabel}`}
       onClick={() => {
         if (target === undefined || unavailable || openDocumentationTarget === undefined) return;
         // Opens the existing governed documentation browser widget (ADR-0113) with this target; the
@@ -1012,16 +1120,22 @@ function ManualCitationChip({
   );
 }
 
-function pdfPreviewActionText(state: string): {
+function pdfPreviewActionText(
+  state: string,
+  t: I18nTranslate,
+): {
   readonly actionLabel: string;
   readonly actionTitle: string;
 } {
   if (state === "recoverable")
-    return { actionLabel: "Recover PDF", actionTitle: "Open PDF recovery" };
+    return { actionLabel: t("grounded.pdf.recover"), actionTitle: t("grounded.pdf.recoveryTitle") };
   if (state === "blocked") {
-    return { actionLabel: "PDF unavailable", actionTitle: "PDF preview unavailable" };
+    return {
+      actionLabel: t("grounded.pdf.unavailable"),
+      actionTitle: t("grounded.pdf.unavailableTitle"),
+    };
   }
-  return { actionLabel: "Open PDF", actionTitle: "Open PDF preview" };
+  return { actionLabel: t("grounded.pdf.open"), actionTitle: t("grounded.pdf.openTitle") };
 }
 
 function KnowledgeCitationChip({
@@ -1037,6 +1151,7 @@ function KnowledgeCitationChip({
   readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
   readonly unverified: boolean;
 }): ReactNode {
+  const t = useTranslate();
   const accessibleLabel = useSupportAwareLabel(label, unverified);
   if (citation.htmlManual !== undefined) {
     return (
@@ -1051,7 +1166,7 @@ function KnowledgeCitationChip({
   const affordance = citationPreview?.forCitation(citation);
   if (affordance === undefined) {
     return (
-      <span className="grounded-citation" title={knowledgeCitationTitle(citation)}>
+      <span className="grounded-citation" title={knowledgeCitationTitle(citation, t)}>
         <span className="grounded-citation-range">{label}</span>
         {unverified ? <UnverifiedSupportBadge /> : null}
       </span>
@@ -1060,7 +1175,7 @@ function KnowledgeCitationChip({
 
   const blocked = affordance.state === "blocked";
   const opening = citationPreview?.isOpening(citation) ?? false;
-  const { actionLabel, actionTitle } = pdfPreviewActionText(affordance.state);
+  const { actionLabel, actionTitle } = pdfPreviewActionText(affordance.state, t);
 
   return (
     <button
@@ -1069,7 +1184,7 @@ function KnowledgeCitationChip({
       aria-disabled={blocked || opening ? "true" : undefined}
       aria-label={`${accessibleLabel} · ${actionLabel}`}
       data-tip={actionTitle}
-      title={`${knowledgeCitationTitle(citation)} · ${actionLabel}`}
+      title={`${knowledgeCitationTitle(citation, t)} · ${actionLabel}`}
       onClick={() => {
         if (blocked || opening || citationPreview === undefined) return;
         void citationPreview.openCitation(citation, "citation-chip");
@@ -1164,17 +1279,12 @@ function OriginalUncertaintyDetails({
 }): ReactNode {
   const first = markers[0];
   if (first === undefined || !RETRIEVAL_UNCERTAINTY_DETAIL_KEYS.has(first.kind)) return null;
-  const occurrences = new Map<string, number>();
+  const originals = [...new Set(markers.map((marker) => marker.claim))];
   return (
-    <details>
+    <details className={activityBadgeStyles.cmpOriginalDetails}>
       <summary>{t("grounded.uncertainty.original")}</summary>
-      {markers.map((marker) => (
-        <p
-          key={nextUncertaintyKey(marker, occurrences)}
-          style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
-        >
-          {marker.claim}
-        </p>
+      {originals.map((claim) => (
+        <p key={claim}>{claim}</p>
       ))}
     </details>
   );
@@ -1212,6 +1322,12 @@ function UncertaintyItem({
   return (
     <li>
       <span>{`${uncertaintyKindLabel(first.kind, t)}: ${uncertaintyLineText(first, t)}`}</span>
+      {markers.length > 1 ? (
+        <span>
+          {" "}
+          · {t("grounded.uncertainty.groupCount", { count: formatCount(markers.length, t.locale) })}
+        </span>
+      ) : null}
       <OriginalUncertaintyDetails markers={markers} t={t} />
     </li>
   );
@@ -1228,7 +1344,9 @@ function UncertaintyLine({
   const kinds = Array.from(new Set(markers.map((m) => uncertaintyKindLabel(m.kind, t)))).join(", ");
   return (
     <div className="grounded-uncertainty" role="note">
-      <div>{t("grounded.uncertainty.summary", { count: markers.length, kinds })}</div>
+      <div>
+        {t("grounded.uncertainty.summary", { count: formatCount(markers.length, t.locale), kinds })}
+      </div>
       <ul className="grounded-uncertainty-list">
         {uncertaintyDisplayGroups(markers).map((group) => (
           <UncertaintyItem key={nextUncertaintyKey(group[0], occurrences)} markers={group} t={t} />
@@ -1281,13 +1399,18 @@ function OmittedLine({
   const reasonSummary = Object.entries(omittedCounts)
     .filter(([, count]) => count > 0)
     .sort(compareOmittedReasonEntries)
-    .map(([reason, count]) => `${omissionLabel(reason, t)}: ${String(count)}`)
+    .map(([reason, count]) => `${omissionLabel(reason, t)}: ${formatCount(count, t.locale)}`)
     .join(", ");
   const suffix = reasonSummary.length > 0 ? ` (${reasonSummary})` : "";
   // Omission entries are unique file paths, not excerpt atoms. Keep the same unit as the wire.
   return (
     <div className="grounded-meta">
-      {t("grounded.inspection.notUsed", { count: omittedCount, reasons: suffix })}
+      {t(
+        omittedCount === 1
+          ? "grounded.inspection.notUsed.one"
+          : "grounded.inspection.notUsed.other",
+        { count: formatCount(omittedCount, t.locale), reasons: suffix },
+      )}
     </div>
   );
 }
@@ -1316,7 +1439,7 @@ function CoverageNotice({
   })).filter((gap) => gap.count > 0);
   const recordedCount = gaps.reduce((sum, gap) => sum + gap.count, 0);
   if (recordedCount <= 0) return null;
-  const detail = gaps.map((gap) => `${formatCount(gap.count)} ${gap.label}`).join(", ");
+  const detail = gaps.map((gap) => `${formatCount(gap.count, t.locale)} ${gap.label}`).join(", ");
   const showDocumentNotice = COVERAGE_GAP_REASONS.some(
     (reason) =>
       reason !== "size-exceeded" && reason !== "tool-unavailable" && omittedCounts[reason] > 0,
@@ -1329,7 +1452,7 @@ function CoverageNotice({
           recordedCount === 1
             ? "grounded.inspection.coverageGap.one"
             : "grounded.inspection.coverageGap.other",
-          { count: formatCount(recordedCount), detail },
+          { count: formatCount(recordedCount, t.locale), detail },
         )}
       </span>
       {showDocumentNotice ? <span>{t("grounded.inspection.documentHint")}</span> : null}
@@ -1402,17 +1525,39 @@ function LocalKnowledgeContextPackSummary({
 }: {
   readonly contextPack: LocalKnowledgeGroundedAnswerContextSummary;
 }): ReactNode {
+  const t = useTranslate();
   return (
-    <section className="grounded-context-pack" aria-label="Knowledge scope summary">
-      <div className="grounded-context-pack-headline">{`Knowledge scope: ${contextPack.scopeLabel}`}</div>
+    <section className="grounded-context-pack" aria-label={t("grounded.knowledge.scopeAria")}>
+      <div className="grounded-context-pack-headline">
+        {t("grounded.knowledge.scopeTitle", { scope: contextPack.scopeLabel })}
+      </div>
       <dl className="grounded-context-pack-dl">
-        <MetricRow label="Mode" value={localKnowledgeScopeKindLabel(contextPack.scopeKind)} />
-        <MetricRow label="Knowledge Pods" value={String(contextPack.capsuleCount)} />
-        <MetricRow label="Sources" value={String(contextPack.sourceCount)} />
-        <MetricRow label="Citations" value={String(contextPack.citationCount)} />
         <MetricRow
-          label="Context budget"
-          value={`${String(contextPack.referencesUsed)} / ${String(contextPack.referenceBudget)} references`}
+          label={t("grounded.knowledge.mode")}
+          value={t(
+            contextPack.scopeKind === "capsule-set"
+              ? "grounded.knowledge.podSet"
+              : "grounded.knowledge.pod",
+          )}
+        />
+        <MetricRow
+          label={t("grounded.knowledge.pods")}
+          value={formatCount(contextPack.capsuleCount, t.locale)}
+        />
+        <MetricRow
+          label={t("grounded.knowledge.sources")}
+          value={formatCount(contextPack.sourceCount, t.locale)}
+        />
+        <MetricRow
+          label={t("grounded.knowledge.citations")}
+          value={formatCount(contextPack.citationCount, t.locale)}
+        />
+        <MetricRow
+          label={t("grounded.knowledge.budget")}
+          value={t("grounded.knowledge.references", {
+            used: formatCount(contextPack.referencesUsed, t.locale),
+            budget: formatCount(contextPack.referenceBudget, t.locale),
+          })}
         />
       </dl>
     </section>
@@ -1425,10 +1570,20 @@ function HybridContextPackSummary({
 }: {
   readonly contextPack: HybridGroundedAnswerContextSummary;
 }): ReactNode {
+  const t = useTranslate();
   return (
-    <section className="grounded-context-pack" aria-label="Hybrid source summary">
+    <section className="grounded-context-pack" aria-label={t("grounded.knowledge.hybridAria")}>
       <div className="grounded-context-pack-headline">
-        {`Hybrid: ${String(contextPack.folderSourceCount)} folder source${contextPack.folderSourceCount === 1 ? "" : "s"} + ${String(contextPack.connectorSourceCount)} Knowledge Pod source${contextPack.connectorSourceCount === 1 ? "" : "s"}`}
+        {t("grounded.knowledge.hybridTitle", {
+          folders: citationCountLabel(t, contextPack.folderSourceCount, {
+            one: "grounded.count.folders.one",
+            other: "grounded.count.folders.other",
+          }),
+          pods: citationCountLabel(t, contextPack.connectorSourceCount, {
+            one: "grounded.count.pods.one",
+            other: "grounded.count.pods.other",
+          }),
+        })}
       </div>
       <ContextPackSummary contextPack={contextPack.folder} />
       <LocalKnowledgeContextPackSummary contextPack={contextPack.knowledge} />
@@ -1492,7 +1647,7 @@ function countedWarning(
   keys: { readonly one: MessageKey; readonly other: MessageKey },
   detail: MessageKey,
 ): string {
-  return `${t(count === 1 ? keys.one : keys.other, { count: formatCount(count) })} — ${t(detail)}`;
+  return `${t(count === 1 ? keys.one : keys.other, { count: formatCount(count, t.locale) })} — ${t(detail)}`;
 }
 
 // Citation-related summary warnings, each in its own kind: a fabricated citation
@@ -1601,10 +1756,7 @@ function hasCompleteEligibleCoverage(
     !coverage.incomplete &&
     !coverage.truncated &&
     coverage.reasons.length === 0 &&
-    coverage.filesScanned === coverage.filesAfterPolicy &&
-    coverage.filesSkipped === 0 &&
-    coverage.depthPrunedByDiscovery === 0 &&
-    coverage.maxFilesPrunedByDiscovery === 0
+    hasInspectedEligibleFiles(coverage)
   );
 }
 
@@ -1634,8 +1786,8 @@ function GroundedAnswerWarnings({ answer }: { readonly answer: GroundedAnswer })
         <p>{t("grounded.search.empty")}</p>
         <p>
           {t("grounded.search.emptyCoverage", {
-            scanned: formatCount(emptyCoverage.filesScanned),
-            eligible: formatCount(emptyCoverage.filesAfterPolicy),
+            scanned: formatCount(emptyCoverage.filesScanned, t.locale),
+            eligible: formatCount(emptyCoverage.filesAfterPolicy, t.locale),
           })}
         </p>
       </div>

@@ -52,12 +52,17 @@ export function formatBytesPrecise(bytes: number): string {
 // Milliseconds → human-readable
 // ---------------------------------------------------------------------------
 
-export function formatMs(ms: number): string {
-  if (ms < 1000) return `${ms.toString()} ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+function formatInteger(value: number, locale: string | undefined): string {
+  return locale === undefined ? String(value) : value.toLocaleString(locale);
+}
+
+export function formatMs(ms: number, locale?: string): string {
+  if (ms < 1000) return `${formatInteger(ms, locale)} ms`;
+  if (ms < 60_000)
+    return `${locale === undefined ? (ms / 1000).toFixed(1) : new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(ms / 1000)} s`;
   const minutes = Math.floor(ms / 60_000);
   const seconds = Math.floor((ms % 60_000) / 1000);
-  return `${minutes.toString()}m ${seconds.toString()}s`;
+  return `${formatInteger(minutes, locale)}m ${formatInteger(seconds, locale)}s`;
 }
 
 // Compact whole-second duration presenter (GEN-DUP-SEMANTIC-005): rounds to whole

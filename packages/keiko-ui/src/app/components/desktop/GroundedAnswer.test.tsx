@@ -300,6 +300,48 @@ function openEvidenceDisclosure(container: HTMLElement): HTMLDetailsElement {
 }
 
 describe("GroundedAnswer", () => {
+  it.each(["src/\u202egnp.ts", "src/ze\u200bro.ts", "src/control\u0007.ts", "src/tab\t.ts"])(
+    "keeps hostile path display safe while opening the exact source %s",
+    (path) => {
+      const open = vi.fn(() => ({ ok: true as const, windowId: "editor-test" }));
+      const { container } = render(
+        <GroundedAnswer
+          answer={answer({ citations: [citation({ scopePath: path })] })}
+          busy={false}
+          repositoryRoots={[{ root: "/repo", label: "repo" }]}
+          openRepositoryReference={open}
+        />,
+      );
+      const disclosure = container.querySelector(".grounded-evidence-summary");
+      if (disclosure === null) throw new Error("Missing disclosure.");
+      fireEvent.click(disclosure);
+      const button = container.querySelector(".grounded-citation-open");
+      if (!(button instanceof HTMLButtonElement)) throw new Error("Missing citation action.");
+      expect(container.innerHTML).not.toMatch(/[\u0007\t\u200b\u202e]/u);
+      fireEvent.click(button);
+      expect(open).toHaveBeenCalledWith({ root: "/repo", path, lineStart: 10, lineEnd: 25 });
+    },
+  );
+
+  it("does not resort unchanged citations on unrelated renders", () => {
+    const scoreRead = vi.fn(() => 0.9);
+    const citations = Array.from({ length: 64 }, (_, index) => ({
+      ...citation({
+        stableId: `stable-${String(index)}`,
+        scopePath: `src/file-${String(index)}.ts`,
+      }),
+      get score(): number {
+        return scoreRead();
+      },
+    }));
+    const a = answer({ citations });
+    const { rerender } = render(<GroundedAnswer answer={a} busy={false} />);
+    const reads = scoreRead.mock.calls.length;
+    expect(reads).toBeGreaterThan(0);
+    rerender(<GroundedAnswer answer={a} busy={true} />);
+    expect(scoreRead).toHaveBeenCalledTimes(reads);
+  });
+
   it("renders nothing when answer is undefined and not busy", () => {
     const { container } = render(<GroundedAnswer answer={undefined} busy={false} />);
     expect(container.firstChild).toBeNull();
@@ -1038,7 +1080,7 @@ describe("GroundedAnswer", () => {
     expect(region.textContent).toContain("Read");
     expect(region.textContent).toContain("5 / 32 files");
     expect(region.textContent).toContain("Selected excerpt size");
-    expect(region.textContent).toContain("12.1 KB / 128.0 KB");
+    expect(region.textContent).toContain("12.1 KB / 128 KB");
     // uiux-fix F051 C318: token counts are thousands-separated for readability.
     expect(region.textContent).toContain("Model budget: input");
     expect(region.textContent).toContain("1,500 / 32,000 tokens");
@@ -1676,14 +1718,145 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     resetLoadedMessageCatalogs();
   });
 
-  function renderInLocale(locale: "en" | "de", a: GroundedAnswerType): ReturnType<typeof render> {
+  function renderInLocale(
+    locale: "en" | "de",
+    a: GroundedAnswerType,
+    citationPreview?: CitationPreviewController,
+  ): ReturnType<typeof render> {
     window.localStorage.setItem(I18N_STORAGE_KEY, locale);
     return render(
       <I18nProvider>
-        <GroundedAnswer answer={a} busy={false} />
+        <GroundedAnswer answer={a} busy={false} citationPreview={citationPreview} />
       </I18nProvider>,
     );
   }
+
+  it.each(["en", "de"] as const)(
+    "uses the %s locale for inspection counts and file singulars",
+    async (locale) => {
+      const pack = contextPack({
+        budget: { ...contextPack().budget, filesReadMax: null },
+        usage: { ...contextPack().usage, filesRead: 1, excerptBytes: 12400 },
+        omittedCount: 1000,
+        omittedCounts: { ...OMITTED_COUNTS_ZERO, binary: 1000 },
+      });
+      const a = answer({ contextPack: pack, omittedCount: 1000 });
+      const { container } = renderInLocale(locale, a);
+      if (locale === "de")
+        await waitFor(() => expect(container).toHaveTextContent("Nicht als Quelle verwendet"));
+      expect(container).toHaveTextContent(locale === "de" ? "1 Datei gelesen" : "1 file read");
+      expect(container).toHaveTextContent(locale === "de" ? "1.000 Dateien" : "1,000 files");
+      expect(container).toHaveTextContent(locale === "de" ? "12,1 KB" : "12.1 KB");
+      expect(container).toHaveTextContent(locale === "de" ? "1,8 s" : "1.8 s");
+    },
+  );
+
+  it.each(["en", "de"] as const)(
+    "uses singular file nouns for one omitted file in %s",
+    async (locale) => {
+      const pack = contextPack({
+        budget: { ...contextPack().budget, filesReadMax: null },
+        usage: { ...contextPack().usage, filesRead: 1 },
+        omittedCount: 1,
+        omittedCounts: { ...OMITTED_COUNTS_ZERO, binary: 1 },
+      });
+      const { container } = renderInLocale(locale, answer({ contextPack: pack, omittedCount: 1 }));
+      const text = locale === "de" ? "Nicht als Quelle verwendet: 1 Datei (" : "Not used: 1 file (";
+      await waitFor(() => expect(container).toHaveTextContent(text));
+      expect(container).not.toHaveTextContent(
+        locale === "de" ? "1 Dateien gelesen" : "1 files read",
+      );
+    },
+  );
+
+  it("shows each grouped marker count and deduplicates identical original details", () => {
+    const markers = ["detail A", "detail A", "detail B", "detail B", "detail C"].map((claim) =>
+      uncertainty({ claim, kind: "budget-clipped" }),
+    );
+    const { container } = renderInLocale("en", answer({ uncertainty: markers }));
+    const list = container.querySelector(".grounded-uncertainty-list");
+    expect(list).toHaveTextContent("5 markers");
+    expect(list?.querySelectorAll("details p")).toHaveLength(3);
+    expect(list?.querySelector("details")).toHaveClass(cssClass("cmpOriginalDetails"));
+    expect(list?.querySelector("details p")).not.toHaveAttribute("style");
+  });
+
+  it("localizes hybrid scope, activity and PDF actions in German", async () => {
+    const knowledge = localKnowledgeAnswer();
+    if (knowledge.groundingKind !== "local-knowledge")
+      throw new Error("Expected knowledge fixture.");
+    const a: GroundedAnswerType = {
+      ...answer(),
+      groundingKind: "hybrid",
+      citations: [citation()],
+      knowledgeCitations: [knowledgeCitation()],
+      retrievalActivity: retrievalActivity(),
+      contextPack: {
+        kind: "hybrid",
+        folderSourceCount: 1,
+        connectorSourceCount: 1,
+        folder: contextPack(),
+        knowledge: knowledge.contextPack,
+      },
+    };
+    const { container } = renderInLocale(
+      "de",
+      a,
+      citationPreviewController("available", knowledgeCitation()),
+    );
+    await waitFor(() =>
+      expect(container).toHaveTextContent("Kombiniert: 1 Ordnerquelle + 1 Knowledge-Pod-Quelle"),
+    );
+    expect(container).toHaveTextContent("Wissensumfang:");
+    expect(container).toHaveTextContent("Knowledge-Pod-Aktivität");
+    expect(container).toHaveTextContent("PDF öffnen");
+    expect(container).toHaveTextContent("Gründe: Durchsucht");
+    expect(container).toHaveTextContent("Modi:");
+    expect(container).toHaveTextContent("Gründe:");
+    expect(container).not.toHaveTextContent(
+      /Knowledge scope|Context budget|Modes:|Reasons:|Searched/u,
+    );
+  });
+
+  it("localizes HTML manual and repository opening affordances in German", async () => {
+    const manual = knowledgeCitation({
+      htmlManual: {
+        sourceKind: "html-manual-local",
+        pageTitle: "handbook.html",
+        safePageId: "manual-1",
+        parsedUnitId: "unit-1",
+        targetSummary: { originSummary: "local", pathSummary: "/…" },
+        open: { state: "available", target: "keiko-html-manual-citation:opaque" },
+      },
+    });
+    const { unmount } = renderInLocale("de", localKnowledgeAnswer([manual]));
+    expect(
+      await screen.findByRole("button", { name: /HTML-Handbuch.*Handbuch öffnen/u }),
+    ).toBeInTheDocument();
+    unmount();
+    const open = vi.fn(() => ({ ok: true as const, windowId: "source-window" }));
+    render(
+      <I18nProvider>
+        <GroundedAnswer
+          answer={answer()}
+          busy={false}
+          repositoryRoots={[{ root: "/repo", label: "repo" }]}
+          openRepositoryReference={open}
+        />
+      </I18nProvider>,
+    );
+    const button = await screen.findByRole("button", {
+      name: "src/foo.ts in Zeilen 10-25 im Editor öffnen",
+    });
+    fireEvent.click(button);
+    expect(open).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "src/foo.ts",
+      lineStart: 10,
+      lineEnd: 25,
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("src/foo.ts im Editor geöffnet.");
+  });
 
   it("groups repeated retrieval warnings while retaining every technical claim", () => {
     const markers = Array.from({ length: 9 }, (_, index) =>
@@ -1817,7 +1990,7 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     await waitFor(() =>
       expect(status).toHaveTextContent("Keine passenden Belege für diese Suche gefunden."),
     );
-    expect(status).toHaveTextContent("200,002 / 200,002 zulässige Dateien durchsucht");
+    expect(status).toHaveTextContent("200.002 / 200.002 zulässige Dateien durchsucht");
     expect(status).not.toHaveTextContent("200,005");
     expect(container.querySelector(".grounded-uncertainty[role='alert']")).toBeNull();
     expect(container).not.toHaveTextContent("Bitte prüfen");
@@ -1922,7 +2095,7 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     renderInLocale("de", answer({ contextPack: pack, citations: [citation({ score: 1 })] }));
     const region = await screen.findByRole("region", { name: "Prüfung verbundener Dateien" });
     expect(within(region).getByText("Rekursiv geprüft")).toBeInTheDocument();
-    expect(region).toHaveTextContent("200,002 / 200,002 Dateien je Suchbereich");
+    expect(region).toHaveTextContent("200.002 / 200.002 Dateien je Suchbereich");
     expect(region).toHaveTextContent(
       "Überlappende Suchbereiche können dieselbe Datei mehrfach zählen",
     );

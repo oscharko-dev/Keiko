@@ -307,6 +307,22 @@ describe("GroundedAnswer a11y", () => {
     expect(results).toHaveNoViolations();
   });
 
+  it("jest-axe: grouped original warning details remain accessible", async () => {
+    const a = {
+      ...answer(),
+      uncertainty: Array.from({ length: 5 }, (_, index) => ({
+        kind: "budget-clipped" as const,
+        claim: `Original detail ${String(index % 2)}`,
+      })),
+    };
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+    fireEvent.click(screen.getByText("Technical original details"));
+    expect(
+      screen.getByText("Technical original details").closest("details")?.querySelectorAll("p"),
+    ).toHaveLength(2);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it("jest-axe: a local-knowledge answer has no violations", async () => {
     const { container } = render(<GroundedAnswer answer={localKnowledgeAnswer()} busy={false} />);
     expect(await axe(container)).toHaveNoViolations();

@@ -320,6 +320,20 @@ function AutomaticCompactionNote({
   );
 }
 
+function SourcesPolicyNote({ status }: { readonly status: ChatContextStatusWire }): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
+  const tokens = status.conversationInputBudgetTokens;
+  return (
+    <p className={styles.cmpHelp}>
+      {t(
+        tokens === undefined ? "chat.context.sourcesPolicy" : "chat.context.sourcesPolicyGrounded",
+        { tokens: tokens?.toLocaleString(locale) ?? "" },
+      )}
+    </p>
+  );
+}
+
 function ContextDetails(props: ChatContextMeterProps): ReactNode {
   const t = useTranslate();
   return (
@@ -333,7 +347,7 @@ function ContextDetails(props: ChatContextMeterProps): ReactNode {
       <AutomaticCompactionNote status={props.status} />
       <p className={styles.cmpHelp}>{t("chat.context.retained")}</p>
       {props.status?.knowledgeSources === undefined ? null : (
-        <p className={styles.cmpHelp}>{t("chat.context.sourcesPolicy")}</p>
+        <SourcesPolicyNote status={props.status} />
       )}
       {props.error ? (
         <p>

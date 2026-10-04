@@ -526,6 +526,19 @@ export const EN_MESSAGES = {
   "chat.regenerate.action": "Regenerate response",
   "chat.regenerate.cancelShort": "Cancel",
   "chat.regenerate.short": "Regenerate",
+  "chat.repository.openInEditor": "Open {path}{range} in editor",
+  "chat.repository.line": " at line {start}",
+  "chat.repository.lines": " at lines {start}-{end}",
+  "chat.repository.opening": "Opening {path}…",
+  "chat.repository.opened": "Opened {path} in editor.",
+  "chat.repository.connectFirst": "Connect a Files window to open repository references.",
+  "chat.repository.sourceMismatch":
+    "This repository reference does not match any connected source.",
+  "chat.repository.chooseSource": "Select a repository source.",
+  "chat.context.sourcesPolicy":
+    "Connected source excerpts are retrieved fresh for each question and are never summarized. Conversation history uses its own input budget.",
+  "chat.context.sourcesPolicyGrounded":
+    "Connected source excerpts are retrieved fresh for each question and are never summarized. The current conversation input budget is {tokens} tokens.",
   "chat.repository.selectFirst": "Select a file first.",
   "chat.repository.limit": "Files source already has {count} files.",
   "chat.repository.root": "Repo root",
@@ -1900,6 +1913,7 @@ export const EN_MESSAGES = {
   // records the required English-copy review.
   // New i18n keys for the quality-widgets retrofit: AgentRunWidget, FilePreview,
   // FilesWidget, PdfCitationPreviewWindow, ReviewWidget, FigmaSnapshotWindow.
+  "filePreview.showSource": "Show source preview",
   "filePreview.linesAdded": "{count} lines added.",
   "filePreview.revealedRange": "Source lines {start}–{end}.",
   "filePreview.revealOutsideContent":

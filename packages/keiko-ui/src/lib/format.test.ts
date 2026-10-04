@@ -15,6 +15,13 @@ import {
 } from "./format";
 
 describe("format presenters", () => {
+  it("formats duration decimals using the selected locale without changing legacy presenters", () => {
+    expect(formatMs(1812, "de")).toBe("1,8 s");
+    expect(formatMs(1812, "en")).toBe("1.8 s");
+    expect(formatMs(1812)).toBe("1.8 s");
+    expect(formatMs(60000000, "de")).toBe("1.000m 0s");
+  });
+
   it("formats byte and token counts for compact UI badges", () => {
     expect(formatBytes(999)).toBe("999 B");
     expect(formatBytes(1536)).toBe("1.5 KB");
