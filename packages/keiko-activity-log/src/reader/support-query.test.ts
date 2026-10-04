@@ -770,7 +770,6 @@ describe("support query causal closure (#3531)", () => {
       fixtureLine(process, T0 + 100, {
         op: "request",
         correlationId: "important-transport",
-        status: 200,
         ...overrides,
         fields: {
           method: "GET",

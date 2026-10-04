@@ -66,13 +66,17 @@ async function browserDigest(text: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function browserReport(reference: SupportReport): Promise<SupportReport> {
+async function browserReport(
+  reference: SupportReport,
+  correlationId?: string,
+): Promise<SupportReport> {
   const sections = clientOnlySupportReportSections({
     incidentId: reference.incident.incidentId,
     nowMs: reference.incident.createdAtMs,
     build: reference.incident.build,
     defectFingerprint: reference.incident.defectFingerprint,
     availabilityReason: "session-unavailable",
+    ...(correlationId === undefined ? {} : { correlationId }),
   });
   const unsigned = buildSupportReportEnvelope(
     sections.incident,
@@ -167,6 +171,41 @@ describe("shared canonical browser report producer", () => {
 });
 
 describe("client-only original failure attribution", () => {
+  it.each([
+    ["JWT", ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "c2lnbmF0dXJl"].join(".")],
+    ["issuer credential", "ghp_" + "A".repeat(36)],
+    ["opaque credential", "aB3".repeat(16)],
+    ["national identifier", "123-45-6789"],
+    ["embedded national identifier", "support.123-45-6789.event"],
+  ])(
+    "omits a forged %s correlation before canonical browser export",
+    async (_kind, correlation) => {
+      const report = await browserReport(legacyClientOnlyReport(), correlation);
+      const canonical = serializeSupportReport(report);
+      expect(report.incident.correlation.rootCorrelationId).not.toBe(correlation);
+      expect(canonical).not.toContain(correlation);
+      expect(parseSupportReport(canonical).evidence.recordCount).toBe(0);
+      expect(analyzeSupportReport(canonical).selection.status).toBe("insufficient");
+    },
+  );
+
+  it.each([
+    "d577dcfe-e5e1-4f95-b8b4-2a27153665f8",
+    "failed-request-original-123",
+    "a".repeat(128),
+    "1a".repeat(32),
+  ])(
+    "preserves a safe original correlation in the canonical browser export",
+    async (correlation) => {
+      const canonical = serializeSupportReport(
+        await browserReport(legacyClientOnlyReport(), correlation),
+      );
+      expect(parseSupportReport(canonical).incident.correlation.rootCorrelationId).toBe(
+        correlation,
+      );
+    },
+  );
+
   it("preserves a real original correlation and closed client failure through the strict parser", () => {
     const reference = legacyClientOnlyReport();
     const input = {
@@ -243,7 +282,8 @@ it("rejects private or malformed client failure fields instead of filtering them
     },
   ])
     expect(() => clientOnlySupportReportSections({ ...base, failure })).toThrow(SupportReportError);
-  expect(() =>
-    clientOnlySupportReportSections({ ...base, correlationId: "/private/customer" }),
-  ).toThrow(SupportReportError);
+  for (const correlationId of ["/private/customer", "ghp_invalid/path", "token=invalid"])
+    expect(() => clientOnlySupportReportSections({ ...base, correlationId })).toThrow(
+      SupportReportError,
+    );
 });

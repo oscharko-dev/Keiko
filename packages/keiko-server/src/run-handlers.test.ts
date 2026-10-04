@@ -167,6 +167,7 @@ function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
     signOut: () => false,
     sessionCount: () => (paired ? 1 : 0),
     verifySession: () => (paired ? TEST_APP_SESSION : undefined),
+    beginOperation: () => (paired ? (): void => undefined : undefined),
     subscribe: () => ({
       snapshot: contentFreeCodingAppSessionChannelSnapshot(),
       live: false,

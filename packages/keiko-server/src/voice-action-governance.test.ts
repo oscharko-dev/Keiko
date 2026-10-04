@@ -480,6 +480,8 @@ function pairedRouteAppSessionChannel(): CodingAppSessionChannel {
     sessionCount: () => 1,
     verifySession: (cookieToken) =>
       cookieToken === ROUTE_APP_SESSION_COOKIE_TOKEN ? ROUTE_APP_SESSION : undefined,
+    beginOperation: (cookieToken) =>
+      cookieToken === ROUTE_APP_SESSION_COOKIE_TOKEN ? (): void => undefined : undefined,
     subscribe: () => ({
       snapshot: contentFreeCodingAppSessionChannelSnapshot(),
       live: false,

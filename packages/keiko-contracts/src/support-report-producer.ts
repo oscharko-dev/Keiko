@@ -1,3 +1,4 @@
+import { looksLikePersonalIdentifier, looksLikeSecret } from "./activity-log-label-policy.js";
 import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
@@ -77,6 +78,13 @@ export interface ClientOnlySupportReportInput {
   >["availabilityReason"];
 }
 
+function clientOnlyCorrelationId(correlationId: string | undefined): string {
+  if (correlationId === undefined) return "id000001";
+  if (looksLikeSecret(correlationId) || looksLikePersonalIdentifier(correlationId))
+    return "id000001";
+  return correlationId;
+}
+
 function clientOnlyIncident(input: ClientOnlySupportReportInput): SupportIncidentPrivateProjection {
   return {
     schemaVersion: SUPPORT_INCIDENT_SCHEMA_VERSION,
@@ -92,7 +100,10 @@ function clientOnlyIncident(input: ClientOnlySupportReportInput): SupportInciden
     errorKind: "unknown",
     frameCount: 0,
     build: input.build,
-    correlation: { rootCorrelationId: input.correlationId ?? "id000001", childCorrelationIds: [] },
+    correlation: {
+      rootCorrelationId: input.correlationId ?? "id000001",
+      childCorrelationIds: [],
+    },
     window: supportIncidentWindow(input.nowMs),
     pin: {
       status: "rejected",
@@ -128,8 +139,15 @@ function clientOnlyIncident(input: ClientOnlySupportReportInput): SupportInciden
 export function clientOnlySupportReportSections(
   input: ClientOnlySupportReportInput,
 ): Pick<SupportReport, "incident" | "selection" | "evidence"> {
-  const incident = parseSupportIncidentPrivateProjection(clientOnlyIncident(input));
-  if (incident === undefined) throw new SupportReportError("unsafe-report");
+  const parsed = parseSupportIncidentPrivateProjection(clientOnlyIncident(input));
+  if (parsed === undefined) throw new SupportReportError("unsafe-report");
+  const incident = {
+    ...parsed,
+    correlation: {
+      ...parsed.correlation,
+      rootCorrelationId: clientOnlyCorrelationId(parsed.correlation.rootCorrelationId),
+    },
+  };
   return {
     incident,
     selection: {

@@ -160,7 +160,6 @@
 .cmpBarSegment[data-segment="source-capacity"],
 .cmpSwatch[data-segment="source-capacity"],
 .cmpBarSegment[data-segment="free"],
-.cmpSwatch[data-segment="source-capacity"],
 .cmpSwatch[data-segment="free"] {
   background: transparent;
 }

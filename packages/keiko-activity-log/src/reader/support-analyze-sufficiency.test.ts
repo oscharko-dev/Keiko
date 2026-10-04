@@ -178,7 +178,9 @@ describe("projectActivityLogSufficiency", () => {
         protection,
       ];
       expect(reportsProcessEvidenceLoss(protection)).toBe(false);
-      expect(classEntry(lines, "gateway-chat-call").status).toBe("complete");
+      const gateway = classEntry(lines, "gateway-chat-call");
+      if (gateway === undefined) throw new Error("Expected the gateway failure class");
+      expect(gateway.status).toBe("complete");
       expect(classEntry(lines, "activity-log-pin")).toMatchObject({
         status: "degraded",
         reasons: ["evidence-partial"],

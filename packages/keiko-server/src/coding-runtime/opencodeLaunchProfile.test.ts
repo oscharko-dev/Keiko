@@ -142,7 +142,7 @@ describe("OpenCode launch profile", () => {
       randomBytes: (): Buffer => Buffer.alloc(32, 7),
     });
     if (!profile.ok) throw new Error("expected fixed managed launch profile");
-    const prompt = profile.configValue.agents.build.system;
+    const prompt = record(record(profile.configValue.agents).build).system;
     expect(prompt).toContain("Read every existing file before you edit it");
     expect(prompt).toContain("For a new file, use a /dev/null source diff");
     expect(prompt).toContain(createHash("sha256").update("", "utf8").digest("hex"));
@@ -156,7 +156,7 @@ describe("OpenCode launch profile", () => {
       randomBytes: (): Buffer => Buffer.alloc(32, 7),
     });
     if (!profile.ok) throw new Error("expected fixed managed launch profile");
-    const prompt = profile.configValue.agents.build.system;
+    const prompt = record(record(profile.configValue.agents).build).system;
     expect(prompt).not.toContain("continuation cursors");
     expect(prompt).toContain("truncationReasons");
     expect(prompt).toContain("includeGlobs");
