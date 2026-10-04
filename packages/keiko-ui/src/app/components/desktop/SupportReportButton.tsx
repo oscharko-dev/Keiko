@@ -17,11 +17,6 @@ import {
   type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SupportReportDownload } from "@/lib/support-report-api";
-import {
-  originalSupportReportFailure,
-  prepareCachedSupportReport,
-  prepareLocalSupportReport,
-} from "@/lib/support-report-local";
 import { ApiError } from "@/lib/api";
 import {
   currentGlobalClientFailure,
@@ -197,6 +192,13 @@ function waitForReportStep<T>(work: Promise<T>, signal: AbortSignal): Promise<T>
   });
 }
 
+function loadLocalReport(
+  signal: AbortSignal,
+): Promise<typeof import("@/lib/support-report-local")> {
+  signal.throwIfAborted();
+  return waitForReportStep(import("@/lib/support-report-local"), signal);
+}
+
 function isReportDeliveryUnavailable(
   error: unknown,
   api: typeof import("@/lib/support-report-api") | undefined,
@@ -220,7 +222,7 @@ function localReportFallbackAllowed(
   api: typeof import("@/lib/support-report-api") | undefined,
 ): boolean {
   // No API module means preparation failed while loading its chunk, before any server result.
-  // The already loaded canonical local producer can still describe this availability failure.
+  // The independent canonical local producer can still describe this availability failure.
   if (api === undefined) return true;
   if (error instanceof api.SupportReportEvidenceUnavailable) return true;
   if (isReportResponseInvalid(error, api)) return false;
@@ -285,10 +287,11 @@ async function recoverLocalReport(
   const startedAt = performance.now();
   try {
     const localSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]);
+    const local = await loadLocalReport(localSignal);
     const prepared =
       previous !== undefined && !(previous instanceof AbortController)
-        ? await prepareCachedSupportReport(previous.report, localSignal)
-        : await prepareLocalSupportReport(
+        ? await local.prepareCachedSupportReport(previous.report, localSignal)
+        : await local.prepareLocalSupportReport(
             localSignal,
             localPreparationContext(error, api, context),
           );
@@ -467,8 +470,9 @@ async function runReport(
   let phase: "module" | "facts" | "request" | "artifact" = "module";
   try {
     api = await waitForReportStep(import("@/lib/support-report-api"), signal);
+    const local = await loadLocalReport(signal);
     phase = "facts";
-    const original = originalSupportReportFailure({ correlationId, failure });
+    const original = local.originalSupportReportFailure({ correlationId, failure });
     phase = "request";
     const creation = createReportForNotice(api, correlationId, signal, original, clientOnly);
     const report = await waitForReportStep(creation, signal);
