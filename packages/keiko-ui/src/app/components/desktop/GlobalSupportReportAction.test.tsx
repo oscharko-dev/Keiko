@@ -2,7 +2,8 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
-import { createSupportReport } from "@/lib/support-report-api";
+import { canonicalSupportReportFixture } from "@/test-utils/support-report-fixture";
+import { createSupportReport, createSupportReportDownload } from "@/lib/support-report-api";
 import {
   currentGlobalClientFailure,
   reportClientDiagnostic,
@@ -92,4 +93,39 @@ describe("direct global error reporting", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     },
   );
+});
+
+it("dismisses a ready global report by disposing its target and aborting pending regeneration", async () => {
+  const canonical = await canonicalSupportReportFixture();
+  const dispose = vi.fn();
+  vi.mocked(createSupportReport).mockResolvedValueOnce(canonical);
+  vi.mocked(createSupportReportDownload).mockReturnValueOnce({
+    href: "blob:dismissed-ready",
+    dispose,
+  });
+  renderFailureNotice();
+  publishFailure("dismissed-during-regeneration");
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  expect(await screen.findByRole("link", { name: "Download report" })).toBeVisible();
+  let finish: ((report: typeof canonical) => void) | undefined;
+  vi.mocked(createSupportReport).mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Regenerate report" }));
+  const signal = vi.mocked(createSupportReport).mock.calls.at(-1)?.[1];
+  expect(signal?.aborted).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(signal?.aborted).toBe(true);
+  expect(dispose).toHaveBeenCalledOnce();
+  expect(currentGlobalClientFailure()).toBeNull();
+  await act(async () => {
+    finish?.(canonical);
+  });
+  expect(createSupportReportDownload).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
+  publishFailure("dismissed-during-regeneration");
+  expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
 });

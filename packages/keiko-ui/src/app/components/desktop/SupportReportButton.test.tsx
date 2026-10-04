@@ -9,6 +9,7 @@ import {
   createSupportReportDownload,
   SupportReportEvidenceUnavailable,
 } from "@/lib/support-report-api";
+import { canonicalSupportReportFixture } from "@/test-utils/support-report-fixture";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { SupportReportButton, resetSupportReportOutcomesForTests } from "./SupportReportButton";
 
@@ -599,4 +600,79 @@ it("shows expiry after regeneration failed while retaining the earlier ready lin
   expect(screen.getByRole("status")).toHaveTextContent(
     "Download link expired. Regenerate this report.",
   );
+});
+
+it("rejects an oversized successful payload and disposes its unused download without a local fallback", async () => {
+  const canonical = await canonicalSupportReportFixture();
+  const oversized = {
+    ...canonical,
+    reportJson: canonical.reportJson + " ".repeat(MAX_SUPPORT_REPORT_BYTES + 1),
+  };
+  const dispose = vi.fn();
+  create.mockResolvedValueOnce(oversized);
+  vi.mocked(createSupportReportDownload).mockReturnValueOnce({ href: "blob:oversized", dispose });
+  render(<SupportReportButton correlationId="oversized-canonical-response" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
+  expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
+  expect(dispose).toHaveBeenCalledOnce();
+  expect(reportClientDiagnostic).toHaveBeenCalledWith(expect.any(String), {
+    correlationId: undefined,
+    parentCorrelationId: "oversized-canonical-response",
+    errorKind: "internal",
+  });
+});
+
+it("evicts old small canonical reports by entry pressure and leaves the original failure retryable", async () => {
+  const canonical = await canonicalSupportReportFixture();
+  const firstDispose = vi.fn();
+  create.mockResolvedValue(canonical);
+  vi.mocked(createSupportReportDownload).mockReturnValueOnce({
+    href: "blob:first-count",
+    dispose: firstDispose,
+  });
+  let created = 0;
+  for (; created < 256 && firstDispose.mock.calls.length === 0; created++) {
+    const view = render(
+      <SupportReportButton correlationId={`entry-pressure-${String(created)}`} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    expect(await screen.findByRole("link", { name: "Download report" })).toBeVisible();
+    view.unmount();
+  }
+  // This corpus is far below the byte budget: the observed release is entry pressure.
+  expect(new TextEncoder().encode(canonical.reportJson).byteLength * created).toBeLessThan(
+    MAX_SUPPORT_REPORT_BYTES,
+  );
+  expect(firstDispose).toHaveBeenCalledOnce();
+  render(<SupportReportButton correlationId="entry-pressure-0" />);
+  expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
+  expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
+});
+
+it("restores canonical fixture globals after successful and failed production preparation", async () => {
+  const descriptors = (): unknown =>
+    Object.fromEntries(
+      ["Blob", "crypto", "URL"].map((key) => [
+        key,
+        Object.getOwnPropertyDescriptor(globalThis, key),
+      ]),
+    );
+  const original = descriptors();
+  await canonicalSupportReportFixture();
+  expect(descriptors()).toEqual(original);
+  vi.stubGlobal(
+    "CompressionStream",
+    class {
+      constructor() {
+        throw new TypeError("Injected gzip failure");
+      }
+    },
+  );
+  try {
+    await expect(canonicalSupportReportFixture()).rejects.toThrow("Injected gzip failure");
+    expect(descriptors()).toEqual(original);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

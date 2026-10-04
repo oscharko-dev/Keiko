@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSupportReport, createSupportReportDownload } from "./support-report-api";
 import { bffFetchJson } from "./http";
+import { canonicalSupportReportFixture } from "../test-utils/support-report-fixture";
 import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 const response = vi.hoisted(() => ({ value: {} as unknown }));
@@ -253,4 +254,23 @@ describe("support report browser download", () => {
       vi.unstubAllGlobals();
     }
   });
+});
+
+it.each([
+  { name: "missing", expiry: undefined },
+  { name: "expired", expiry: 0 },
+  { name: "current instant", expiry: "now" },
+  { name: "non-integer", expiry: "fractional future" },
+  { name: "unsafe integer", expiry: Number.MAX_SAFE_INTEGER + 1 },
+])("rejects a canonical response with $name HTTP target expiry", async ({ expiry }) => {
+  const canonical = await canonicalSupportReportFixture();
+  let observedExpiry = expiry;
+  if (observedExpiry === "now") observedExpiry = Date.now();
+  if (observedExpiry === "fractional future") observedExpiry = Date.now() + 60_000.5;
+  response.value = {
+    ...canonical,
+    downloadPath: "/api/diagnostics/report/download/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    ...(observedExpiry === undefined ? {} : { downloadExpiresAtMs: observedExpiry }),
+  };
+  await expect(createSupportReport()).rejects.toThrow("Invalid support report download target");
 });
