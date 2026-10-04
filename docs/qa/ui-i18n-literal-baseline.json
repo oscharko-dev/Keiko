@@ -1,7 +1,9 @@
 {
   "$comment": "Ratcheted ledger of pre-existing untranslated user-facing literals in the Keiko UI, one entry per file (see scripts/check-ui-i18n-guard.mjs). A literal listed here is known debt the check:ui-i18n gate tolerates; ANY literal not listed fails the gate. The ledger only shrinks - regenerate it with `npm run check:ui-i18n -- --write-baseline` after removing literals, and never add an entry to silence a new one. For a literal that is genuinely not user-facing, mark the source line `// i18n-exempt: <reason>` instead, so the claim is visible in the diff.",
   "files": {
-    "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": ["Keiko | Atlassian connectors"],
+    "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": [
+      "Keiko | Atlassian connectors"
+    ],
     "packages/keiko-ui/src/app/components/desktop/AppShell.tsx": [
       "Connected",
       "Connecting",
@@ -12,57 +14,41 @@
       "Type FORGET to remove .",
       "When muted, Keiko cannot hear your microphone until you unmute."
     ],
-    "packages/keiko-ui/src/app/components/desktop/EditorMenu.tsx": ["Preferred editor for “"],
-    "packages/keiko-ui/src/app/components/desktop/Footer.tsx": ["Keiko |"],
+    "packages/keiko-ui/src/app/components/desktop/EditorMenu.tsx": [
+      "Preferred editor for “"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/Footer.tsx": [
+      "Keiko |"
+    ],
     "packages/keiko-ui/src/app/components/desktop/GroundedAnswer.tsx": [
-      "(opens in new tab)",
-      "a malformed document",
-      "a password-protected document",
-      "a scanned document with no text layer",
-      "an unsupported document format",
-      "binary or an unsupported format",
-      "Bytes",
       "Candidates",
       "Citations",
       "Context budget",
-      "Context inspection summary",
       "Degraded",
       "Denied",
       "document evidence extracted text",
-      "Ecosystems:",
       "Evidence",
       "Hybrid source summary",
       "Hybrid: folder source + Knowledge Pod source",
-      "Input",
       "Knowledge Pod activity",
       "Knowledge Pod activity details",
       "Knowledge Pod retrieval activity",
       "Knowledge Pods",
       "Knowledge scope summary",
       "Knowledge scope:",
-      "larger than 2 MB",
       "Mode",
       "Modes: · Reasons:",
       "Not selected",
-      "Not used: excerpt",
-      "Output",
-      "Partial coverage",
-      "Query",
-      "Read",
-      "Rerank",
       "Searched",
       "Show all Knowledge Pods",
       "Show fewer Knowledge Pods",
       "Skipped",
       "Sources",
-      "This answer reflects only the searchable files in the connected scope — not searched (). It does not cover the entire folder.",
-      "Time",
-      "Unavailable",
-      "View connected-context audit evidence",
-      "Why these files were selected",
-      "Why these files?"
+      "Unavailable"
     ],
-    "packages/keiko-ui/src/app/components/desktop/Header.tsx": ["Keiko"],
+    "packages/keiko-ui/src/app/components/desktop/Header.tsx": [
+      "Keiko"
+    ],
     "packages/keiko-ui/src/app/components/desktop/hooks/voice-dialogue-evaluation/index.ts": [
       "Deprecated STT+TTS fallback deployment (full-realtime without browser WebRTC media)",
       "No-voice deployment (no voice model configured)",
@@ -70,7 +56,9 @@
       "Speech-output-only deployment (spoken answer, no capture)",
       "Speech-to-text-only deployment (dictation, no spoken answer)"
     ],
-    "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": ["Git"],
+    "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": [
+      "Git"
+    ],
     "packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx": [
       "API key header",
       "API key header authorization",
@@ -147,8 +135,7 @@
       "Validating…"
     ],
     "packages/keiko-ui/src/app/components/desktop/repositoryReferences.tsx": [
-      "Open in editor",
-      "Select repository source"
+      "Open in editor"
     ],
     "packages/keiko-ui/src/app/components/desktop/SafeMarkdown.tsx": [
       "(opens in new tab)",
@@ -675,8 +662,12 @@
     "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-actions.tsx": [
       "src/app.ts README.md"
     ],
-    "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": ["Knowledge Pod Detail — Keiko"],
-    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
+    "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": [
+      "Knowledge Pod Detail — Keiko"
+    ],
+    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": [
+      "MemoriaViva"
+    ],
     "packages/keiko-ui/src/lib/ResourceLimitDecisionsTable.tsx": [
       "Breached",
       "Dimension",

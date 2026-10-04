@@ -2145,6 +2145,32 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     expect(container).not.toHaveTextContent("Kein festes Dateianzahllimit");
   });
 
+  it.each(["io-error", "timeout"] as const)(
+    "shows %s coverage gaps before evidence is expanded, even with no omissions",
+    async (reason) => {
+      const { container } = renderInLocale(
+        "en",
+        answer({
+          uncertainty: [],
+          omittedCount: 0,
+          contextPack: contextPack({
+            coverage: fullMatchLimitedCoverage({
+              incomplete: true,
+              reasons: [reason],
+            }),
+          }),
+        }),
+      );
+      const warning = await screen.findByRole("alert");
+      expect(warning).toBeVisible();
+      expect(warning).toHaveTextContent(reason === "io-error" ? /error occurred/i : /incomplete/i);
+      expect(
+        container.querySelector(".grounded-evidence-summary .grounded-evidence-summary-badge"),
+      ).toHaveTextContent("Partial coverage");
+      expect(container.querySelector(".grounded-evidence-disclosure")).not.toHaveAttribute("open");
+    },
+  );
+
   it.each(["match-cap", "io-error"] as const)(
     "explains typed %s coverage truthfully in German",
     async (reason) => {
@@ -2191,7 +2217,9 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
       );
       await screen.findAllByText(locale === "de" ? "Evidenz" : "Evidence");
       openEvidenceDisclosure(container);
-      const uncertainty = container.querySelector(".grounded-uncertainty-list");
+      const uncertainty = container.querySelector(
+        ".grounded-evidence-body .grounded-uncertainty-list",
+      );
       const summary = container.querySelector(".grounded-context-pack");
       expect(uncertainty).toHaveTextContent(
         locale === "de"

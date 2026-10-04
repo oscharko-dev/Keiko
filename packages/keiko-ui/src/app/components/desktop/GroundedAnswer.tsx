@@ -1337,10 +1337,30 @@ function CoverageNotice({
   );
 }
 
-function hasCoverageWarning(
-  omittedCounts: GroundedAnswerContextPackSummary["omittedCounts"],
-): boolean {
-  return COVERAGE_GAP_REASONS.some((reason) => omittedCounts[reason] > 0);
+function incompleteSearchCoverage(coverage: SearchCoverage): boolean {
+  return (
+    coverage !== undefined &&
+    (coverage.incomplete ||
+      coverage.reasons.includes("io-error") ||
+      coverage.reasons.includes("timeout"))
+  );
+}
+
+function hasCoverageWarning(pack: GroundedAnswerContextPackSummary): boolean {
+  return (
+    incompleteSearchCoverage(pack.coverage) ||
+    COVERAGE_GAP_REASONS.some((reason) => pack.omittedCounts[reason] > 0)
+  );
+}
+
+function searchCoverageSummaryWarning(
+  answer: GroundedAnswer,
+  t: I18nTranslate,
+): string | undefined {
+  if (answer.groundingKind === "local-knowledge") return undefined;
+  const pack = answer.groundingKind === "hybrid" ? answer.contextPack.folder : answer.contextPack;
+  if (!incompleteSearchCoverage(pack.coverage)) return undefined;
+  return searchCoverageDetail(pack.coverage, t) ?? t("grounded.detail.scopeIncomplete");
 }
 
 function AuditEvidenceLink({
@@ -1530,6 +1550,8 @@ function groundedSummaryWarnings(answer: GroundedAnswer, t: I18nTranslate): read
     warnings.push(t("grounded.warning.noEvidence"));
   }
   warnings.push(...citationWarnings(markers, t));
+  const coverageWarning = searchCoverageSummaryWarning(answer, t);
+  if (coverageWarning !== undefined) warnings.push(coverageWarning);
   // Knowledge M1.2 (#2563): the entailment verification step could not run (fail-closed caveat).
   if (markers.some((m) => m.kind === "entailment-unavailable")) {
     warnings.push(t("grounded.detail.entailmentUnavailable"));
@@ -1684,7 +1706,7 @@ export function GroundedAnswer({
         <GroundedEvidenceDisclosure
           title={t("grounded.title.grounding")}
           summary={hybridEvidenceSummary(answer, t)}
-          hasCoverageWarning={hasCoverageWarning(answer.contextPack.folder.omittedCounts)}
+          hasCoverageWarning={hasCoverageWarning(answer.contextPack.folder)}
         >
           <CoverageNotice omittedCounts={answer.contextPack.folder.omittedCounts} />
           {/* Folder evidence (source-tagged) */}
@@ -1718,7 +1740,7 @@ export function GroundedAnswer({
       <GroundedEvidenceDisclosure
         title={t("grounded.title.evidence")}
         summary={connectedEvidenceSummary(answer, t)}
-        hasCoverageWarning={hasCoverageWarning(answer.contextPack.omittedCounts)}
+        hasCoverageWarning={hasCoverageWarning(answer.contextPack)}
       >
         <CoverageNotice omittedCounts={answer.contextPack.omittedCounts} />
         <CitationList
