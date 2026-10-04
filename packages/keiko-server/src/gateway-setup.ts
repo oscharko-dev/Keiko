@@ -2211,9 +2211,11 @@ async function runBoundedWorkers<T>(
   items: readonly T[],
   concurrency: number,
   process: (item: T, index: number) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> {
   let next = 0;
   async function worker(): Promise<void> {
+    signal?.throwIfAborted();
     const index = next;
     next += 1;
     if (index >= items.length) return;
@@ -2232,20 +2234,23 @@ async function passingCandidates(
   probe: (modelId: string) => Promise<void>,
   concurrency: number,
   failures?: ProbeFailureEvidence[],
+  signal?: AbortSignal,
 ): Promise<readonly string[]> {
   const tested = new Array<string | undefined>(candidates.length).fill(undefined);
   async function worker(modelId: string, index: number): Promise<void> {
     try {
       await probe(modelId);
+      signal?.throwIfAborted();
       tested[index] = modelId;
     } catch (error) {
+      signal?.throwIfAborted();
       // Probe rejection is the documented signal that this candidate is not
       // chat-callable. We drop it silently so healthy peers still surface — capturing only
       // the classification code/status as evidence for the all-rejected aggregate.
       failures?.push({ code: setupErrorCode(error), httpStatus: setupHttpStatus(error) });
     }
   }
-  await runBoundedWorkers(candidates, concurrency, worker);
+  await runBoundedWorkers(candidates, concurrency, worker, signal);
   return tested.filter((modelId): modelId is string => modelId !== undefined);
 }
 
@@ -2385,6 +2390,7 @@ export async function admitChatSmokeCandidates(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
   now: () => number = Date.now,
+  signal?: AbortSignal,
 ): Promise<ChatSmokeAdmission> {
   const tested = new Array<string | undefined>(candidates.length).fill(undefined);
   const accumulators: ChatSmokeAccumulators = {
@@ -2394,19 +2400,26 @@ export async function admitChatSmokeCandidates(
     skippedByDeadline: [],
   };
   const roundDeadlineAt = now() + CHAT_SMOKE_ROUND_DEADLINE_MS;
-  await runBoundedWorkers(candidates, concurrency, async (modelId, index) => {
-    if (now() >= roundDeadlineAt) {
-      accumulators.unverifiedKept.push(modelId);
-      accumulators.skippedByDeadline.push(modelId);
-      return;
-    }
-    try {
-      await probe(modelId);
-      tested[index] = modelId;
-    } catch (error) {
-      recordChatSmokeFailure(modelId, error, deps, correlationId, accumulators);
-    }
-  });
+  await runBoundedWorkers(
+    candidates,
+    concurrency,
+    async (modelId, index) => {
+      if (now() >= roundDeadlineAt) {
+        accumulators.unverifiedKept.push(modelId);
+        accumulators.skippedByDeadline.push(modelId);
+        return;
+      }
+      try {
+        await probe(modelId);
+        signal?.throwIfAborted();
+        tested[index] = modelId;
+      } catch (error) {
+        signal?.throwIfAborted();
+        recordChatSmokeFailure(modelId, error, deps, correlationId, accumulators);
+      }
+    },
+    signal,
+  );
   return {
     tested: tested.filter((modelId): modelId is string => modelId !== undefined),
     ...accumulators,
@@ -2422,6 +2435,7 @@ async function verifyTestedChatCandidates(
   testedModelIds: readonly string[],
   correlationId: string | undefined,
   deps: UiHandlerDeps,
+  signal?: AbortSignal,
 ): Promise<Pick<GatewaySetupTestResult, "responseFormatModelIds" | "toolCallingObservations">> {
   const responseFormatModelIds = await passingCandidates(
     testedModelIds,
@@ -2429,12 +2443,15 @@ async function verifyTestedChatCandidates(
       const response = await gateway.chat({
         ...buildQiJudgePreflightRequest(modelId),
         logContext: { correlationId },
+        ...(signal === undefined ? {} : { cancellationSignal: signal }),
       });
       if (tryParseJudgeVerdict(response.content) === null) {
         throw new Error("response format unsupported");
       }
     },
     SETUP_SMOKE_CONCURRENCY,
+    undefined,
+    signal,
   );
   // Both probe rounds independently use the endpoint-wide concurrency budget. Keep them
   // sequential so setup never doubles the operator-approved in-flight request ceiling.
@@ -2443,6 +2460,7 @@ async function verifyTestedChatCandidates(
     testedModelIds,
     correlationId,
     deps,
+    signal,
   );
   return { responseFormatModelIds, toolCallingObservations };
 }
@@ -2455,8 +2473,13 @@ async function verifyTestedChatCandidates(
 // `DEPLOYMENT_SMOKE_TIMEOUT_MS` for a manually entered deployment) rather than a hardcoded literal,
 // so both smoke paths stay bounded at the timeout each already advertises; the discovery constant
 // is only the defensive fallback for a candidate somehow missing its own provider entry.
-function candidateSmokeCancellationSignal(config: GatewayConfig, modelId: string): AbortSignal {
-  return AbortSignal.timeout(candidateSmokeDeadlineMs(config, modelId));
+function candidateSmokeCancellationSignal(
+  config: GatewayConfig,
+  modelId: string,
+  signal?: AbortSignal,
+): AbortSignal {
+  const deadline = AbortSignal.timeout(candidateSmokeDeadlineMs(config, modelId));
+  return signal === undefined ? deadline : AbortSignal.any([deadline, signal]);
 }
 
 // Never below the discovery smoke floor: a manually entered deployment keeps its shorter configured
@@ -2474,6 +2497,7 @@ function chatSmokeProbe(
   gateway: Gateway,
   config: GatewayConfig,
   correlationId: string | undefined,
+  signal?: AbortSignal,
 ): (modelId: string) => Promise<void> {
   return async (modelId) => {
     await gateway.chat({
@@ -2483,7 +2507,7 @@ function chatSmokeProbe(
         { role: "user", content: "Reply with exactly: OK" },
       ],
       logContext: { correlationId },
-      cancellationSignal: candidateSmokeCancellationSignal(config, modelId),
+      cancellationSignal: candidateSmokeCancellationSignal(config, modelId, signal),
     });
   };
 }
@@ -2493,6 +2517,7 @@ async function defaultGatewaySetupTester(
   candidateModelIds: readonly string[],
   correlationId: string | undefined,
   deps: UiHandlerDeps,
+  signal?: AbortSignal,
 ): Promise<GatewaySetupTestResult> {
   // Wired to the process activity log: first-run setup is where an operator's endpoint is wrong
   // in a way no UI message can name (a proxy that blocks CONNECT, a provider that answers 404 for
@@ -2503,10 +2528,12 @@ async function defaultGatewaySetupTester(
   });
   const chatSmoke = await admitChatSmokeCandidates(
     candidateModelIds,
-    chatSmokeProbe(gateway, config, correlationId),
+    chatSmokeProbe(gateway, config, correlationId, signal),
     SETUP_SMOKE_CONCURRENCY,
     deps,
     correlationId,
+    Date.now,
+    signal,
   );
   // Nothing was verified: the historic "no discovered model accepted the chat-completions smoke
   // test" case, thrown exactly as `smokeTestCandidates` always did — even when some candidates were
@@ -2525,6 +2552,7 @@ async function defaultGatewaySetupTester(
     testedModelIds,
     correlationId,
     deps,
+    signal,
   );
   return {
     testedModelIds,
@@ -2569,42 +2597,51 @@ async function setupToolCallingObservations(
   testedModelIds: readonly string[],
   correlationId: string | undefined,
   deps: UiHandlerDeps,
+  signal?: AbortSignal,
 ): Promise<readonly GatewaySetupToolCallingObservation[]> {
   const checkedAt = new Date().toISOString();
   const observations = new Array<GatewaySetupToolCallingObservation>(testedModelIds.length);
-  await runBoundedWorkers(testedModelIds, SETUP_SMOKE_CONCURRENCY, async (modelId, index) => {
-    const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-    // A model without a provider stays unverified; that conclusion takes the same log line below
-    // as every probe result instead of being recorded silently.
-    const probeStatus =
-      provider === undefined
-        ? "unverified"
-        : await probeGatewayToolCalling(
-            config,
-            provider,
-            undefined,
-            (error) => {
-              reportSetupVerificationFailure(
-                deps,
-                error,
-                correlationId,
-                "gateway.setup.tool-calling-probe",
-              );
-            },
-            {
-              env: deps.env,
-              capability: findConfiguredCapability(config, modelId),
-              correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-            },
-          );
-    // A `transient` probe answer (408/429/5xx-except-501, `transientGatewayStatus`) proves
-    // nothing about the model either way and must never be stored or logged as a verdict: the
-    // closed status vocabulary here and on the `gateway.tool-calling.verification` activity-log
-    // line stays exactly "verified" | "unsupported" | "unverified" (PR #3602 review).
-    const status = probeStatus === "transient" ? "unverified" : probeStatus;
-    observations[index] = { modelId, status, checkedAt };
-    logToolCallingVerification(config, modelId, status, correlationId ?? UNKNOWN_CORRELATION_ID);
-  });
+  await runBoundedWorkers(
+    testedModelIds,
+    SETUP_SMOKE_CONCURRENCY,
+    async (modelId, index) => {
+      const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+      // A model without a provider stays unverified; that conclusion takes the same log line below
+      // as every probe result instead of being recorded silently.
+      const probeStatus =
+        provider === undefined
+          ? "unverified"
+          : await probeGatewayToolCalling(
+              config,
+              provider,
+              undefined,
+              (error) => {
+                signal?.throwIfAborted();
+                reportSetupVerificationFailure(
+                  deps,
+                  error,
+                  correlationId,
+                  "gateway.setup.tool-calling-probe",
+                );
+              },
+              {
+                env: deps.env,
+                capability: findConfiguredCapability(config, modelId),
+                correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+              },
+              signal,
+            );
+      // A `transient` probe answer (408/429/5xx-except-501, `transientGatewayStatus`) proves
+      // nothing about the model either way and must never be stored or logged as a verdict: the
+      // closed status vocabulary here and on the `gateway.tool-calling.verification` activity-log
+      // line stays exactly "verified" | "unsupported" | "unverified" (PR #3602 review).
+      signal?.throwIfAborted();
+      const status = probeStatus === "transient" ? "unverified" : probeStatus;
+      observations[index] = { modelId, status, checkedAt };
+      logToolCallingVerification(config, modelId, status, correlationId ?? UNKNOWN_CORRELATION_ID);
+    },
+    signal,
+  );
   return observations;
 }
 
@@ -2625,7 +2662,9 @@ async function embedOnceForProbe(
   modelId: string,
   env: EnvSource,
   correlationId: string,
+  signal?: AbortSignal,
 ): Promise<OpenAIEmbeddingOutcome> {
+  signal?.throwIfAborted();
   const reservation = reserveGatewaySpendForAttempt(
     env,
     findConfiguredCapability(config, modelId),
@@ -2649,6 +2688,7 @@ async function embedOnceForProbe(
       modelId,
       input: EMBEDDING_PROBE_INPUT,
       timeoutMs: provider.timeoutMs,
+      ...(signal === undefined ? {} : { signal }),
       // The probe exists because an embedding model used to be persisted on a classification alone.
       // The sink is what turns a rejected probe into a line naming the status and the error kind,
       // rather than a model that silently fails to make the candidate list.
@@ -2676,16 +2716,21 @@ export async function defaultGatewayEmbeddingProbe(
   candidateModelIds: readonly string[],
   env: EnvSource,
   correlationId: string,
+  signal?: AbortSignal,
 ): Promise<readonly string[]> {
   return passingCandidates(
     candidateModelIds,
     async (modelId) => {
       const provider = config.providers.find((entry) => entry.modelId === modelId);
       if (provider === undefined) throw new Error("embedding candidate has no provider entry");
-      let outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId);
+      let outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId, signal);
+      signal?.throwIfAborted();
       if (!outcome.ok && RETRYABLE_PROBE_KINDS.has(outcome.kind)) {
-        await new Promise((resolve) => setTimeout(resolve, EMBEDDING_PROBE_RETRY_DELAY_MS));
-        outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId);
+        await awaitSetupOperation(
+          new Promise<void>((resolve) => setTimeout(resolve, EMBEDDING_PROBE_RETRY_DELAY_MS)),
+          signal,
+        );
+        outcome = await embedOnceForProbe(config, provider, modelId, env, correlationId, signal);
       }
       // The per-model verdict is what the operator acts on, and it travels in
       // droppedEmbeddingModelIds / unverifiedEmbeddingModelIds. passingCandidates drops the
@@ -2695,12 +2740,15 @@ export async function defaultGatewayEmbeddingProbe(
       }
     },
     SETUP_SMOKE_CONCURRENCY,
+    undefined,
+    signal,
   );
 }
 
 function gatewayEmbeddingProbe(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
+  signal?: AbortSignal,
 ): GatewayEmbeddingProbe {
   const override = deps.gatewayEmbeddingProbe;
   if (override !== undefined) return override;
@@ -2710,6 +2758,7 @@ function gatewayEmbeddingProbe(
       candidateModelIds,
       deps.env,
       correlationId ?? UNKNOWN_CORRELATION_ID,
+      signal,
     );
 }
 
@@ -2733,9 +2782,11 @@ const DEFAULT_RERANKER_TIMEOUT_MS = 120_000;
 function gatewayRerankerProbe(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
+  signal?: AbortSignal,
 ): GatewayRerankerProbe {
   let budgetEndsAt: number | undefined;
   return async (config) => {
+    signal?.throwIfAborted();
     budgetEndsAt ??= Date.now() + RERANKER_SETUP_TOTAL_BUDGET_MS;
     const remainingMs = budgetEndsAt - Date.now();
     if (remainingMs <= 0) return false;
@@ -2744,10 +2795,14 @@ function gatewayRerankerProbe(
         deps,
         config,
         correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-        signal: AbortSignal.timeout(Math.min(RERANKER_SETUP_PROBE_DEADLINE_MS, remainingMs)),
+        signal: AbortSignal.any([
+          AbortSignal.timeout(Math.min(RERANKER_SETUP_PROBE_DEADLINE_MS, remainingMs)),
+          ...(signal === undefined ? [] : [signal]),
+        ]),
       });
       return rerankerProbePassed(selection);
     } catch (error) {
+      signal?.throwIfAborted();
       reportSetupVerificationFailure(deps, error, correlationId, "gateway.setup.reranker-probe");
       return false;
     }
@@ -2761,11 +2816,12 @@ function gatewayRerankerProbe(
 function gatewaySetupTester(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
+  signal?: AbortSignal,
 ): GatewaySetupTester {
   const override = deps.gatewaySetupTester;
   if (override !== undefined) return override;
   return (config, candidateModelIds) =>
-    defaultGatewaySetupTester(config, candidateModelIds, correlationId, deps);
+    defaultGatewaySetupTester(config, candidateModelIds, correlationId, deps, signal);
 }
 
 const FIGMA_ME_ENDPOINT = "https://api.figma.com/v1/me";
@@ -7266,9 +7322,9 @@ async function verifyAndSaveGatewaySetup(
   gatewayConfig: RuntimeGatewayConfig,
 ): Promise<RouteResult> {
   const seams: SetupSeams = {
-    tester: gatewaySetupTester(deps, request.correlationId),
-    embeddingProbe: gatewayEmbeddingProbe(deps, request.correlationId),
-    rerankerProbe: gatewayRerankerProbe(deps, request.correlationId),
+    tester: gatewaySetupTester(deps, request.correlationId, request.signal),
+    embeddingProbe: gatewayEmbeddingProbe(deps, request.correlationId, request.signal),
+    rerankerProbe: gatewayRerankerProbe(deps, request.correlationId, request.signal),
     discovery:
       deps.gatewayModelDiscovery ??
       ((...args): Promise<GatewayModelDiscoveryOutput> =>

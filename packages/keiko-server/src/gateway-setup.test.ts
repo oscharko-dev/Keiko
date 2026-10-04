@@ -11973,3 +11973,154 @@ it.each(["available", "unavailable", "failed"] as const)(
     }
   },
 );
+
+type SetupProbePhase = "smoke" | "format" | "tool" | "embedding";
+
+function probePhaseOf(url: Parameters<typeof fetch>[0], init?: RequestInit): SetupProbePhase {
+  if (fetchInputUrl(url).includes("/embeddings")) return "embedding";
+  const body = typeof init?.body === "string" ? init.body : "";
+  if (body.includes('"tools"')) return "tool";
+  return body.includes("Reply with exactly: OK") ? "smoke" : "format";
+}
+
+function setupProbeReply(): Response {
+  return new Response(
+    JSON.stringify({
+      choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+      data: [{ embedding: [0.1, 0.2] }],
+      usage: { prompt_tokens: 3, completion_tokens: 1 },
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+}
+
+function pendingSetupProbe(phase: SetupProbePhase): {
+  readonly fetch: typeof fetch;
+  readonly ready: Promise<void>;
+  readonly signals: AbortSignal[];
+  readonly release: () => void;
+} {
+  const signals: AbortSignal[] = [];
+  const releases: (() => void)[] = [];
+  let released = false;
+  let ready: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  return {
+    signals,
+    ready: started,
+    release: (): void => {
+      released = true;
+      for (const release of releases) release();
+    },
+    fetch: (url, init): Promise<Response> => {
+      if (released || probePhaseOf(url, init) !== phase) return Promise.resolve(setupProbeReply());
+      return new Promise<Response>((resolve, reject) => {
+        if (init?.signal === undefined || init.signal === null)
+          throw new Error("Expected native fetch signal.");
+        signals.push(init.signal);
+        releases.push(() => {
+          resolve(setupProbeReply());
+        });
+        init.signal.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("Probe cancelled", "AbortError"));
+          },
+          { once: true },
+        );
+        if (signals.length >= (phase === "smoke" ? 4 : 1)) ready?.();
+      });
+    },
+  };
+}
+
+describe("setup native probe cancellation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each(["smoke", "format", "tool", "embedding"] as const)(
+    "aborts in-flight %s probes without probing further or reporting a provider failure",
+    async (phase) => {
+      const deps = await metadataResponsivenessDeps();
+      const diagnostics: ServerDiagnosticRecord[] = [];
+      Object.assign(deps, {
+        gatewaySetupTester: undefined,
+        gatewayEmbeddingProbe: undefined,
+        diagnostics: {
+          record: (record: ServerDiagnosticRecord): void => {
+            diagnostics.push(record);
+          },
+        },
+      });
+      const deploymentNames =
+        phase === "smoke"
+          ? Array.from({ length: 8 }, (_, index) => `cancel-chat-${String(index)}`)
+          : ["cancel-chat"];
+      if (phase === "embedding") deploymentNames.push("text-embedding-cancel");
+      const context = ctx({
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+        deploymentNames,
+      });
+      const pending = pendingSetupProbe(phase);
+      vi.stubGlobal("fetch", pending.fetch);
+      const setup = handleGatewaySetup(context, deps);
+      try {
+        await pending.ready;
+        context.res.emit("close");
+        expect(pending.signals.every((signal) => signal.aborted)).toBe(true);
+        expect((await setup).status).toBe(502);
+        expect(pending.signals).toHaveLength(phase === "smoke" ? 4 : 1);
+        expect(
+          diagnostics.filter((record) => record.source.startsWith("gateway.setup.")),
+        ).toHaveLength(0);
+        expect(currentGatewayConfig(deps)).toBeUndefined();
+      } finally {
+        pending.release();
+        await setup;
+      }
+    },
+  );
+});
+
+it("cancels the embedding retry wait before starting another attempt", async () => {
+  const deps = await metadataResponsivenessDeps();
+  Object.assign(deps, { gatewaySetupTester: undefined, gatewayEmbeddingProbe: undefined });
+  vi.useFakeTimers();
+  let embeddingRequests = 0;
+  let settled = false;
+  vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+    if (fetchInputUrl(url).includes("/embeddings")) {
+      embeddingRequests += 1;
+      return Promise.resolve(new Response("{}", { status: 429 }));
+    }
+    return Promise.resolve(setupProbeReply());
+  });
+  const context = ctx({
+    baseUrl: "https://selected.example.invalid/v1",
+    apiKey: "synthetic-selected-key",
+    deploymentNames: ["cancel-chat", "text-embedding-cancel"],
+  });
+  const setup = handleGatewaySetup(context, deps).then((result) => {
+    settled = true;
+    return result;
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(embeddingRequests).toBe(1);
+    expect(settled).toBe(false);
+    context.res.emit("close");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    expect(embeddingRequests).toBe(1);
+    expect((await setup).status).toBe(502);
+  } finally {
+    await vi.advanceTimersByTimeAsync(500);
+    await setup;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});

@@ -36,6 +36,7 @@ function isStrictChatShapeRejectionStatus(status: number): boolean {
 }
 
 export interface GatewayReadinessChatCompletionRequest {
+  readonly signal?: AbortSignal;
   readonly config: GatewayConfig;
   readonly provider: ModelProviderConfig;
   readonly body: Readonly<Record<string, unknown>>;
@@ -402,6 +403,7 @@ function dispatchReadinessChatCompletion(
     body: readinessRequestBody(request, includeUsage),
     ...(fetchImpl !== undefined ? { fetchImpl } : {}),
     timeoutMs: provider.timeoutMs,
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
     ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
     ...(config.egress !== undefined ? { egress: config.egress } : {}),
     ...(request.log === undefined ? {} : { log: request.log }),

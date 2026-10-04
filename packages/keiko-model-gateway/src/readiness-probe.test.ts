@@ -778,3 +778,42 @@ describe("requestGatewayReadinessChatCompletion", () => {
     expect(seenBody).not.toHaveProperty("reasoning_effort");
   });
 });
+
+it("keeps caller cancellation on a native readiness compatibility retry", async () => {
+  const controller = new AbortController();
+  const signals: AbortSignal[] = [];
+  let started: (() => void) | undefined;
+  const retryStarted = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const fetchImpl: typeof fetch = (_url, init) => {
+    if (init?.signal === undefined || init.signal === null)
+      throw new Error("Expected fetch signal.");
+    signals.push(init.signal);
+    if (signals.length === 1) return Promise.resolve(new Response("{}", { status: 400 }));
+    return new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener(
+        "abort",
+        () => {
+          reject(new DOMException("Readiness cancelled", "AbortError"));
+        },
+        { once: true },
+      );
+      started?.();
+    });
+  };
+  const request = requestGatewayReadinessChatCompletion({
+    config: CONFIG,
+    provider: PROVIDER,
+    body: { messages: [] },
+    stream: true,
+    fetchImpl,
+    signal: controller.signal,
+  });
+  const rejected = expect(request).rejects.toThrow();
+  await retryStarted;
+  controller.abort();
+  expect(signals.every((signal) => signal.aborted)).toBe(true);
+  await rejected;
+  expect(signals).toHaveLength(2);
+});
