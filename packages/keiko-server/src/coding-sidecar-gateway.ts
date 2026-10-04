@@ -245,6 +245,8 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
   fields: {
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     maxRequestBytes: { type: "integer", dataClass: "count", required: true },
+    inputTokenLimit: { type: "integer", dataClass: "count", required: false },
+    admissiblePromptTokens: { type: "integer", dataClass: "count", required: false },
     maxPromptTokens: { type: "integer", dataClass: "count", required: true },
     estimatedPromptTokens: { type: "integer", dataClass: "count", required: true },
     // #3591 (1.1.7): the output allowance sent with this request, clamped to the window that
@@ -281,6 +283,8 @@ const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLo
         "model-verification-pending",
       ],
     },
+    inputTokenLimit: { type: "integer", dataClass: "count", required: false },
+    availablePromptTokens: { type: "integer", dataClass: "count", required: false },
     maxPromptTokens: { type: "integer", dataClass: "count", required: false },
     minimumRequiredPromptTokens: { type: "integer", dataClass: "count", required: false },
     probeMode: {
@@ -422,6 +426,7 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
       maxLength: 64,
     },
     estimatedPromptTokens: { type: "integer", dataClass: "count", required: false },
+    inputTokenLimit: { type: "integer", dataClass: "count", required: false },
     maxPromptTokens: { type: "integer", dataClass: "count", required: false },
     // #3591 review: the bound the prompt was actually admitted against — `maxPromptTokens` less
     // the safety margin and the minimum output allowance (`admissiblePromptTokens`).
@@ -683,7 +688,8 @@ const BAD_REQUEST_MESSAGE_REASONS: readonly {
   },
   {
     test: (message) =>
-      message.startsWith("Request body estimated prompt tokens exceed profile maxPromptTokens"),
+      message.startsWith("Request body estimated prompt tokens exceed profile maxPromptTokens") ||
+      message.startsWith("Request body estimated prompt tokens exceed profile inputTokenLimit"),
     reason: "prompt-tokens-exceeded",
   },
   {
@@ -1530,6 +1536,22 @@ function contextOverflowRequest(message: string): RouteResult {
   return { status: 400, body: openAiCompatibleContextOverflowBody(message) };
 }
 
+function promptOverflowMessage(
+  bounds: CodingWorkbenchSidecarGatewayRunMetadata,
+  admissible: number,
+): string {
+  if (bounds.inputTokenLimit !== undefined && admissible === bounds.inputTokenLimit) {
+    return `Request body estimated prompt tokens exceed profile inputTokenLimit (${String(bounds.inputTokenLimit)}).`;
+  }
+  return `Request body estimated prompt tokens exceed profile maxPromptTokens (${String(bounds.maxPromptTokens)}) less the reserved output allowance (${String(admissible)} admissible).`;
+}
+
+function declaredInputBound(
+  bounds: Pick<CodingWorkbenchSidecarGatewayRunMetadata, "inputTokenLimit">,
+): { readonly inputTokenLimit?: number } {
+  return bounds.inputTokenLimit === undefined ? {} : { inputTokenLimit: bounds.inputTokenLimit };
+}
+
 function budgetValidationError(
   parsed: CodingSidecarGatewayChatCompletionRequest,
   runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
@@ -1542,9 +1564,7 @@ function budgetValidationError(
   }
   const admissible = admissiblePromptTokens(runMetadata);
   if (estimatedPromptTokens > admissible) {
-    return contextOverflowRequest(
-      `Request body estimated prompt tokens exceed profile maxPromptTokens (${String(runMetadata.maxPromptTokens)}) less the reserved output allowance (${String(admissible)} admissible).`,
-    );
+    return contextOverflowRequest(promptOverflowMessage(runMetadata, admissible));
   }
   return undefined;
 }
@@ -3315,6 +3335,15 @@ function logReadinessShortfall(
         ...(result.status === "available"
           ? {
               maxPromptTokens: result.runMetadata.maxPromptTokens,
+              ...declaredInputBound(result.runMetadata),
+              ...(result.runMetadata.inputTokenLimit === undefined
+                ? {}
+                : {
+                    availablePromptTokens: Math.min(
+                      result.runMetadata.maxPromptTokens,
+                      result.runMetadata.inputTokenLimit,
+                    ),
+                  }),
               minimumRequiredPromptTokens: CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
             }
           : {}),
@@ -3476,6 +3505,7 @@ function logChatRequestRejection(
       ? {
           estimatedPromptTokens: observed.estimatedPromptTokens,
           maxPromptTokens: observed.bounds.maxPromptTokens,
+          ...declaredInputBound(observed.bounds),
           admissiblePromptTokens: admissiblePromptTokens(observed.bounds),
           inputMessageCount: observed.parsed.messages.length,
           maxInputMessages: observed.bounds.maxInputMessages,
@@ -3633,6 +3663,10 @@ function logValidatedRequestBounds(
         runId,
         maxRequestBytes: bounds.maxRequestBytes,
         maxPromptTokens: bounds.maxPromptTokens,
+        ...declaredInputBound(bounds),
+        ...(bounds.inputTokenLimit === undefined
+          ? {}
+          : { admissiblePromptTokens: admissiblePromptTokens(bounds) }),
         estimatedPromptTokens,
         maxOutputTokens: admittedOutputTokens(bounds, estimatedPromptTokens),
         inputMessageCount: request.messages.length,

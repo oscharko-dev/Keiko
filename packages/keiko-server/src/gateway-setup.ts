@@ -66,6 +66,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   GatewayModelUnsupportedReason,
+  ActivityLogErrorKind,
   GatewaySetupAuditRecord,
   GatewaySetupOutcomeKind,
   GatewaySetupTargetClass,
@@ -254,11 +255,12 @@ function logSetupMetadataOutcome(
   startedAt: number,
   correlationId: string | undefined,
   selectionCounts?: SetupMetadataSelectionCounts,
+  failure?: { readonly errorKind: ActivityLogErrorKind; readonly status?: number },
 ): void {
   processServerLogSink().write(
     activityLogEvent(
       GATEWAY_SETUP_METADATA_OPERATION,
-      { correlationId: correlationIdOrUnknown(correlationId) },
+      { correlationId: correlationIdOrUnknown(correlationId), ...failure },
       {
         outcome,
         elapsedMs: Math.max(0, Date.now() - startedAt),
@@ -5547,6 +5549,41 @@ function discoveryProgrammingFailure(cause: unknown): boolean {
   );
 }
 
+function discoveryHttpStatus(cause: unknown): number | undefined {
+  const value =
+    cause !== null && typeof cause === "object" && "httpStatus" in cause
+      ? cause.httpStatus
+      : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 100 && value <= 599
+    ? value
+    : undefined;
+}
+
+function discoveryTimedOut(cause: unknown): boolean {
+  return (
+    (cause instanceof Error && cause.name === "TimeoutError") ||
+    (cause instanceof GatewayError && cause.code === ERROR_CODES.TIMEOUT)
+  );
+}
+
+function discoveryFailureKind(cause: unknown, status: number | undefined): ActivityLogErrorKind {
+  if (status === 401 || status === 403) return "permission-denied";
+  if (status === 429) return "rate-limited";
+  if (discoveryTimedOut(cause)) return "timeout";
+  return discoveryProgrammingFailure(cause) ? "internal" : "unavailable";
+}
+
+function discoveryFailureDetail(cause: unknown): {
+  readonly errorKind: ActivityLogErrorKind;
+  readonly status?: number;
+} {
+  const status = discoveryHttpStatus(cause);
+  return {
+    errorKind: discoveryFailureKind(cause, status),
+    ...(status === undefined ? {} : { status }),
+  };
+}
+
 async function discoverSetupModels(
   input: SetupVerificationInput,
   validationConfig: GatewayConfig,
@@ -5578,7 +5615,13 @@ async function discoverSetupModels(
     let outcome: "cancelled" | "failed" | "unavailable" = "unavailable";
     if (input.signal?.aborted === true) outcome = "cancelled";
     else if (discoveryProgrammingFailure(cause)) outcome = "failed";
-    logSetupMetadataOutcome(outcome, startedAt, input.correlationId);
+    logSetupMetadataOutcome(
+      outcome,
+      startedAt,
+      input.correlationId,
+      undefined,
+      outcome === "cancelled" ? { errorKind: "cancelled" } : discoveryFailureDetail(cause),
+    );
     throw cause;
   }
 }

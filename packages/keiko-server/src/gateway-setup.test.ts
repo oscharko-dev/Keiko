@@ -12025,6 +12025,69 @@ function metadataAbortTimers(): void {
 }
 
 describe("selected metadata responsiveness", () => {
+  it.each(["timeout", "transport"] as const)(
+    "records closed metadata failure context for %s",
+    async (failure) => {
+      const deps = await metadataResponsivenessDeps();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const cause =
+        failure === "timeout"
+          ? new DOMException("private-cause", "TimeoutError")
+          : new Error("private-cause");
+      Object.assign(deps, { gatewayModelDiscovery: () => Promise.reject(cause) });
+      try {
+        expect((await handleGatewaySetup(selectedMetadataContext(), deps)).status).toBe(200);
+        const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+        expect(event).toMatchObject({
+          errorKind: failure === "timeout" ? "timeout" : "unavailable",
+          extra: { outcome: "unavailable" },
+        });
+        expect(event?.status).toBeUndefined();
+        expectActivityLogProof(
+          "gateway.setup.metadata.resolved.line",
+          formatActivityLogProofLine(event ?? {}),
+        );
+        expect(JSON.stringify(event)).not.toContain("private-cause");
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
+  it.each([
+    [401, "permission-denied"],
+    [404, "unavailable"],
+    [429, "rate-limited"],
+  ] as const)(
+    "records closed metadata failure context for HTTP %s without raw response text",
+    async (httpStatus, errorKind) => {
+      const deps = await metadataResponsivenessDeps();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      Object.assign(deps, {
+        gatewayModelDiscovery: () =>
+          Promise.reject(Object.assign(new Error("synthetic-private-response"), { httpStatus })),
+      });
+      try {
+        expect((await handleGatewaySetup(selectedMetadataContext(), deps)).status).toBe(200);
+        const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
+        expect(event).toMatchObject({
+          errorKind,
+          status: httpStatus,
+          extra: { outcome: "unavailable" },
+        });
+        expectActivityLogProof(
+          "gateway.setup.metadata.resolved.line",
+          formatActivityLogProofLine(event ?? {}),
+        );
+        expect(JSON.stringify(event)).not.toContain("synthetic-private-response");
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();

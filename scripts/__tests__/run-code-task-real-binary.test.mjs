@@ -315,41 +315,45 @@ describe("#2483 real-binary observation helpers", () => {
     }
   });
 
-  it("derives declared geometry through the production selection and launch-profile owners", () => {
-    const config = { providers: ["fixture"] };
-    const metadata = {
-      maxPromptTokens: 128_000,
-      maxOutputTokens: 4_096,
-      maxInputMessages: 512,
-      maxRequestBytes: 1_048_576,
-    };
-    const geometry = {
-      contextWindowTokens: 45_056,
-      maxInputTokens: 40_960,
-      maxOutputTokens: 4_096,
-    };
-    const seen = [];
+  it.each([undefined, 16_000])(
+    "derives declared geometry with optional input ceiling %s through the production owners",
+    (inputTokenLimit) => {
+      const config = { providers: ["fixture"] };
+      const metadata = {
+        maxPromptTokens: 128_000,
+        ...(inputTokenLimit === undefined ? {} : { inputTokenLimit }),
+        maxOutputTokens: 4_096,
+        maxInputMessages: 512,
+        maxRequestBytes: 1_048_576,
+      };
+      const geometry = {
+        contextWindowTokens: 45_056,
+        maxInputTokens: 40_960,
+        maxOutputTokens: 4_096,
+      };
+      const seen = [];
 
-    expect(
-      readDeclaredChildGeometry(
-        "/private/state",
-        (path, env) => {
-          seen.push(path);
-          expect(env).toBe(process.env);
-          return config;
-        },
-        (input) => {
-          expect(input).toBe(config);
-          return { status: "available", runMetadata: metadata };
-        },
-        (input) => {
-          expect(input).toBe(metadata);
-          return geometry;
-        },
-      ),
-    ).toEqual({ ...geometry, runMetadata: metadata });
-    expect(seen[0]).toBe("/private/state/bff-state/ui-db/keiko.config.json");
-  });
+      expect(
+        readDeclaredChildGeometry(
+          "/private/state",
+          (path, env) => {
+            seen.push(path);
+            expect(env).toBe(process.env);
+            return config;
+          },
+          (input) => {
+            expect(input).toBe(config);
+            return { status: "available", runMetadata: metadata };
+          },
+          (input) => {
+            expect(input).toBe(metadata);
+            return geometry;
+          },
+        ),
+      ).toEqual({ ...geometry, runMetadata: metadata });
+      expect(seen[0]).toBe("/private/state/bff-state/ui-db/keiko.config.json");
+    },
+  );
 
   it("derives the exact real-binary fixture geometry from the actual production owners", () => {
     expect(productionDeclaredGeometry()).toMatchObject(expectedProductionGeometry());

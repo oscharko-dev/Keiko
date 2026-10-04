@@ -3238,7 +3238,10 @@ describe("coding-sidecar gateway", () => {
         url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
         correlationId: undefined,
       } satisfies RouteContext;
-      const config = configValue(provider(), capability({ contextWindow: 4_096 }));
+      const config = configValue(
+        provider(),
+        capability({ contextWindow: 4_096, contextWindowAssumed: true }),
+      );
       const deps: UiHandlerDeps = {
         ...depsValue(config),
         gatewayConfig: {
@@ -3299,7 +3302,10 @@ describe("coding-sidecar gateway", () => {
     vi.useFakeTimers({ toFake: ["setTimeout"] });
     resetCodingWorkbenchContextWindowProbesForTests();
     try {
-      const config = configValue(provider(), capability({ contextWindow: 4_096 }));
+      const config = configValue(
+        provider(),
+        capability({ contextWindow: 4_096, contextWindowAssumed: true }),
+      );
       const deps: UiHandlerDeps = {
         ...depsValue(config),
         gatewayConfig: {
@@ -3802,6 +3808,64 @@ describe("coding-sidecar gateway", () => {
     });
     expect(seenRequests).toHaveLength(0);
   });
+
+  it.each([false, true])(
+    "records the binding input ceiling on actual sidecar request (overlimit=%s)",
+    async (overlimit) => {
+      const sink = captureServerLog("info");
+      const seen: GatewayRequest[] = [];
+      const config = configValue(
+        provider(),
+        capability({ contextWindow: 128_000, maxInputTokens: 16_000 }),
+      );
+      const deps = depsValue(
+        config,
+        (_config, modelId) =>
+          (request): Promise<NormalizedResponse> => {
+            seen.push(request);
+            return Promise.resolve(assistantResponse(modelId));
+          },
+      );
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        routeContext({
+          messages: [
+            {
+              role: "user",
+              content: overlimit ? "x ".repeat(40_000) : "bounded input",
+            },
+          ],
+        }),
+        deps,
+      );
+      assertRouteResult(result);
+      expect(result.status).toBe(overlimit ? 400 : 200);
+      expect(seen).toHaveLength(overlimit ? 0 : 1);
+      if (overlimit) {
+        expect(result.body).toMatchObject({ error: { code: "context_length_exceeded" } });
+        expect(JSON.stringify(result.body)).toContain("inputTokenLimit (16000)");
+      }
+      const op = overlimit
+        ? "coding-sidecar.gateway.rejected"
+        : "coding-sidecar.gateway.request-validated";
+      const event = sink.events.find((entry) => entry.op === op);
+      expect(event?.extra).toMatchObject({
+        inputTokenLimit: 16_000,
+        admissiblePromptTokens: 16_000,
+      });
+      if (overlimit) {
+        expectActivityLogProof(
+          "coding-sidecar.gateway.rejected.line",
+          formatActivityLogProofLine(event ?? {}),
+        );
+      } else {
+        expectActivityLogProof(
+          "coding-sidecar.gateway.request-validated.line",
+          formatActivityLogProofLine(event ?? {}),
+        );
+      }
+      expect(JSON.stringify(sink.events)).not.toContain("bounded input");
+    },
+  );
 
   it("accepts a bounded coding transcript beyond 64 KB within the profile token allowance", async () => {
     const sink = captureServerLog("info");
@@ -5584,6 +5648,36 @@ describe("coding sidecar gateway readiness — insufficient context window", () 
       expect(JSON.stringify(line)).not.toContain("apiKey");
     },
   );
+
+  it("names the binding input ceiling in actual readiness evidence and refuses coding admission", async () => {
+    const sink = captureServerLog("warn");
+    const config = configValue(
+      provider(),
+      capability({ contextWindow: 128_000, maxInputTokens: 16_000 }),
+    );
+    const result = await handleCodingSidecarGatewayProfile(profileContext(), depsValue(config));
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        status: "unavailable",
+        reason: "model-context-window-insufficient",
+      },
+    });
+    expect(() => admitCodingRunModel(config, "azure-coding-model", undefined)).toThrow();
+    const event = sink.events.find(
+      (entry) => entry.op === "coding-sidecar.gateway.readiness-insufficient",
+    );
+    expect(event?.extra).toMatchObject({
+      maxPromptTokens: 128_000,
+      inputTokenLimit: 16_000,
+      availablePromptTokens: 16_000,
+      minimumRequiredPromptTokens: 32_000,
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.readiness-insufficient.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+  });
 
   it("demotes an available profile whose setup-placeholder capability cannot survive one request", async () => {
     const sink = captureServerLog("warn");

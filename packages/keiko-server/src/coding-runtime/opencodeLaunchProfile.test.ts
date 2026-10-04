@@ -304,6 +304,18 @@ describe("OpenCode launch profile", () => {
     ).toEqual({ ok: false, reason: "secret-generation-failed" });
   });
 
+  it.each([0, -1, Number.NaN, 1.5])("refuses malformed input ceilings: %s", (inputTokenLimit) => {
+    expect(
+      resolveOpenCodeContextGeometry({
+        maxPromptTokens: 128_000,
+        inputTokenLimit,
+        maxOutputTokens: 8_000,
+        maxInputMessages: 512,
+        maxRequestBytes: 1_048_576,
+      }),
+    ).toBeUndefined();
+  });
+
   it("honors a declared input ceiling independently of the total context window", () => {
     expect(
       resolveOpenCodeContextGeometry({
