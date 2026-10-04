@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent, MouseEvent, ReactNode, RefObject } from "react";
 import { SupportReportButton } from "../../SupportReportButton";
 import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
@@ -19,6 +19,7 @@ import { FileIcon } from "../shared/projectTree";
 import { highlightLines, langOf, type Token } from "./shared/syntaxHighlight";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import selectableTextStyles from "./shared/selectableText.module.css";
+import styles from "./FilePreview.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const BackIcon = Icons.back;
@@ -32,6 +33,7 @@ interface FilePreviewProps {
   readonly path: string;
   readonly onClose: () => void;
   readonly revealLineStart?: number | undefined;
+  readonly revealLineEnd?: number | undefined;
   readonly revealRequestId?: string | undefined;
   readonly onOpenInEditor?: ((root: string, path: string) => void) | undefined;
 }
@@ -268,6 +270,8 @@ function highlightedTokenSpans(tokens: readonly Token[]): ReactNode {
 }
 
 interface TextFilePreviewProps {
+  readonly revealLineStart?: number | undefined;
+  readonly revealLineEnd?: number | undefined;
   readonly preview: Extract<FilesPreviewResponse, { readonly kind: "text" }>;
   readonly shouldHighlight: boolean;
   readonly lines: readonly PreviewLine[];
@@ -304,11 +308,95 @@ function TextPreviewBanners(
   );
 }
 
+function PreviewRevealNotice({
+  lines,
+  revealLineStart,
+  revealLineEnd,
+  t,
+}: TextFilePreviewProps): ReactNode {
+  if (
+    revealLineStart === undefined ||
+    !Number.isSafeInteger(revealLineStart) ||
+    revealLineStart < 1
+  )
+    return null;
+  const end = Math.max(revealLineStart, revealLineEnd ?? revealLineStart);
+  const outside = end > lines.length;
+  return (
+    <div className="fpv-banner" role="status">
+      {outside
+        ? t("filePreview.revealOutsideContent", { line: end, count: lines.length })
+        : t("filePreview.revealedRange", { start: revealLineStart, end })}
+    </div>
+  );
+}
+
+function usePreviewLineNavigation(props: TextFilePreviewProps): {
+  readonly sectionRef: RefObject<HTMLElement | null>;
+  readonly announcement: ReactNode;
+  readonly previous: (event: MouseEvent<HTMLButtonElement>) => void;
+  readonly more: (event: MouseEvent<HTMLButtonElement>) => void;
+} {
+  const sectionRef = useRef<HTMLElement>(null);
+  const [added, setAdded] = useState({ count: 0, sequence: 0 });
+  const show = (previous: boolean, event: MouseEvent<HTMLButtonElement>): void => {
+    const remaining = previous ? props.precedingLineCount : props.hiddenLineCount;
+    const count = Math.min(PREVIEW_LINE_BATCH, remaining);
+    if (count === remaining && document.activeElement === event.currentTarget)
+      sectionRef.current?.focus({ preventScroll: true });
+    (previous ? props.onShowPrevious : props.onShowMore)();
+    setAdded((current) => ({ count, sequence: current.sequence + 1 }));
+  };
+  return {
+    sectionRef,
+    announcement: (
+      <span className="sr-only" role="status" aria-atomic="true">
+        {added.count === 0 ? null : (
+          <span key={added.sequence}>
+            {props.t("filePreview.linesAdded", { count: added.count })}
+          </span>
+        )}
+      </span>
+    ),
+    previous: (event): void => show(true, event),
+    more: (event): void => show(false, event),
+  };
+}
+
+function PreviewSourceRow({
+  row,
+  start,
+  end,
+}: {
+  readonly row: TextFilePreviewProps["visibleLineRows"][number];
+  readonly start: number | undefined;
+  readonly end: number | undefined;
+}): ReactNode {
+  const selected =
+    start !== undefined && row.lineNumber >= start && row.lineNumber <= (end ?? start);
+  return (
+    <div
+      className={selected ? `fpv-line ${styles.cmpReferencedLine}` : "fpv-line"}
+      data-source-reference={selected ? "true" : undefined}
+      aria-current={row.lineNumber === start ? "location" : undefined}
+    >
+      <span className={`fpv-num ${selectableTextStyles["cmp-selectable-text-chrome"]}`}>
+        {row.lineNumber}
+      </span>
+      <span className="fpv-src">{highlightedTokenSpans(row.tokens)}</span>
+    </div>
+  );
+}
+
 function TextFilePreview(props: TextFilePreviewProps): ReactNode {
+  const navigation = usePreviewLineNavigation(props);
   return (
     <>
       <TextPreviewBanners {...props} />
+      <PreviewRevealNotice {...props} />
+      {navigation.announcement}
       <section
+        ref={navigation.sectionRef}
         className={`fpv-code mono ${selectableTextStyles["cmp-selectable-text"]}`}
         // Issue #2710 — the preview text must be selectable (and its copy must
         // stay native); data-text-selectable is the guard contract for both.
@@ -323,22 +411,22 @@ function TextFilePreview(props: TextFilePreviewProps): ReactNode {
         }
       >
         {props.precedingLineCount > 0 ? (
-          <button type="button" className="fpv-retry fpv-show-more" onClick={props.onShowPrevious}>
+          <button type="button" className="fpv-retry fpv-show-more" onClick={navigation.previous}>
             {props.t("filePreview.showPreviousLines", {
               count: Math.min(PREVIEW_LINE_BATCH, props.precedingLineCount),
             })}
           </button>
         ) : null}
         {props.visibleLineRows.map((row) => (
-          <div className="fpv-line" key={`line-${String(row.lineNumber)}`}>
-            <span className={`fpv-num ${selectableTextStyles["cmp-selectable-text-chrome"]}`}>
-              {row.lineNumber}
-            </span>
-            <span className="fpv-src">{highlightedTokenSpans(row.tokens)}</span>
-          </div>
+          <PreviewSourceRow
+            key={row.lineNumber}
+            row={row}
+            start={props.revealLineStart}
+            end={props.revealLineEnd}
+          />
         ))}
         {props.hiddenLineCount > 0 ? (
-          <button type="button" className="fpv-retry fpv-show-more" onClick={props.onShowMore}>
+          <button type="button" className="fpv-retry fpv-show-more" onClick={navigation.more}>
             {props.t("filePreview.showMoreLines", {
               count: Math.min(PREVIEW_LINE_BATCH, props.hiddenLineCount),
             })}
@@ -411,6 +499,8 @@ function BinaryFilePreview({
 }
 
 interface PreviewKindContentProps {
+  readonly revealLineStart?: number | undefined;
+  readonly revealLineEnd?: number | undefined;
   readonly preview: FilesPreviewResponse | null;
   readonly shouldHighlight: boolean;
   readonly lines: readonly PreviewLine[];
@@ -518,6 +608,7 @@ export function FilePreview({
   onClose,
   onOpenInEditor,
   revealLineStart,
+  revealLineEnd,
   revealRequestId,
 }: FilePreviewProps): ReactNode {
   const t = useTranslate();
@@ -746,6 +837,8 @@ export function FilePreview({
       <PreviewKindContent
         preview={activePreview}
         shouldHighlight={shouldHighlight}
+        revealLineStart={revealLineStart}
+        revealLineEnd={revealLineEnd}
         lines={lines}
         visibleLineRows={visibleLineRows}
         hiddenLineCount={hiddenLineCount}

@@ -1,4 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, fetchFilesPreview } from "@/lib/api";
 import type { FilesPreviewResponse } from "@/lib/types";
@@ -43,6 +45,23 @@ afterEach(() => {
 });
 
 describe("read-only cited source preview", () => {
+  it("keeps the revealed source region accessible with its range announcement", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce(
+      textPreview("/repo", "manual.html", "first\nsecond\nthird\nfourth"),
+    );
+    const { container } = render(
+      <FilePreview
+        root="/repo"
+        path="manual.html"
+        revealLineStart={2}
+        revealLineEnd={3}
+        onClose={() => undefined}
+      />,
+    );
+    await screen.findByRole("region", { name: "File preview: manual.html" });
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
   it("aborts a pending source read on retarget and settles its original stage once", async () => {
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);
@@ -221,6 +240,73 @@ describe("read-only cited source preview", () => {
     expect(region.querySelectorAll(".fpv-line")).toHaveLength(183);
     view.rerender(<FilePreview {...{ ...props, revealRequestId: "second-reveal" }} />);
     expect(region.querySelectorAll(".fpv-line")).toHaveLength(7);
+  });
+
+  it.each(["previous", "more"] as const)(
+    "retains keyboard focus after the last %s batch",
+    async (direction) => {
+      const content = Array.from({ length: 600 }, (_, index) => `source ${index + 1}`).join("\n");
+      vi.mocked(fetchFilesPreview).mockResolvedValue(textPreview("/repo", "manual.html", content));
+      render(
+        <FilePreview
+          root="/repo"
+          path="manual.html"
+          revealLineStart={direction === "previous" ? 600 : undefined}
+          onClose={() => undefined}
+        />,
+      );
+      const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+      if (direction === "previous")
+        fireEvent.click(screen.getByRole("button", { name: "Show 500 previous lines" }));
+      const button = screen.getByRole("button", {
+        name: direction === "previous" ? "Show 94 previous lines" : "Show 100 more lines",
+      });
+      button.focus();
+      await userEvent.keyboard("{Enter}");
+      expect(region).toHaveFocus();
+      expect(
+        screen.getByText(direction === "previous" ? "94 lines added." : "100 lines added."),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("marks and announces the cited range", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValue(
+      textPreview(
+        "/repo",
+        "manual.html",
+        Array.from({ length: 20 }, (_, index) => `row ${index + 1}`).join("\n"),
+      ),
+    );
+    const props = {
+      root: "/repo",
+      path: "manual.html",
+      revealLineStart: 7,
+      revealLineEnd: 10,
+      onClose: (): void => undefined,
+    };
+    render(<FilePreview {...props} />);
+    const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+    expect(region.querySelector('[aria-current="location"]')).toHaveTextContent("row 7");
+    expect(region.querySelectorAll('[data-source-reference="true"]')).toHaveLength(4);
+    expect(screen.getByText("Source lines 7–10.")).toBeInTheDocument();
+  });
+
+  it("explains a citation outside the source without marking a different line", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValue(textPreview("/repo", "manual.html", "one\ntwo"));
+    render(
+      <FilePreview
+        root="/repo"
+        path="manual.html"
+        revealLineStart={90}
+        onClose={() => undefined}
+      />,
+    );
+    const region = await screen.findByRole("region", { name: "File preview: manual.html" });
+    expect(
+      screen.getByText("The referenced line 90 is outside this file (2 lines)."),
+    ).toBeInTheDocument();
+    expect(region.querySelector('[aria-current="location"]')).toBeNull();
   });
 
   it.each([false, true])(

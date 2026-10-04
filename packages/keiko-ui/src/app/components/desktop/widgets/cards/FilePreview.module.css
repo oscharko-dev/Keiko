@@ -1,0 +1,11 @@
+.cmpReferencedLine {
+  background: var(--surface-accent-subtle);
+  box-shadow: inset 2px 0 var(--text-accent);
+}
+
+@media (forced-colors: active) {
+  .cmpReferencedLine {
+    outline: 1px solid Highlight;
+    outline-offset: -1px;
+  }
+}

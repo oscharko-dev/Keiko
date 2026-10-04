@@ -1900,6 +1900,10 @@ export const EN_MESSAGES = {
   // records the required English-copy review.
   // New i18n keys for the quality-widgets retrofit: AgentRunWidget, FilePreview,
   // FilesWidget, PdfCitationPreviewWindow, ReviewWidget, FigmaSnapshotWindow.
+  "filePreview.linesAdded": "{count} lines added.",
+  "filePreview.revealedRange": "Source lines {start}–{end}.",
+  "filePreview.revealOutsideContent":
+    "The referenced line {line} is outside this file ({count} lines).",
   "filePreview.deniedMessage":
     "This file is excluded from the read surface for safety (matches a deny pattern such as .env, *.pem, node_modules, .git, …).",
   "filePreview.searchableDocument":

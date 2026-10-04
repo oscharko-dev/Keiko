@@ -1960,6 +1960,10 @@ export const DE_MESSAGES = {
   // records the required German-copy review.
   // Neue i18n-Schlüssel für das Quality-Widgets-Retrofit: AgentRunWidget, FilePreview,
   // FilesWidget, PdfCitationPreviewWindow, ReviewWidget, FigmaSnapshotWindow.
+  "filePreview.linesAdded": "{count} Zeilen hinzugefügt.",
+  "filePreview.revealedRange": "Quellenzeilen {start}–{end}.",
+  "filePreview.revealOutsideContent":
+    "Die referenzierte Zeile {line} liegt außerhalb dieser Datei ({count} Zeilen).",
   "filePreview.deniedMessage":
     "Diese Datei ist aus Sicherheitsgründen von der Leseoberfläche ausgeschlossen (entspricht einem Sperrmuster wie .env, *.pem, node_modules, .git, …).",
   "filePreview.searchableDocument":
