@@ -1083,18 +1083,60 @@ function uncertaintyLineText(marker: GroundedUncertainty, t: I18nTranslate): str
 }
 
 function OriginalUncertaintyDetails({
-  marker,
+  markers,
   t,
 }: {
-  readonly marker: GroundedUncertainty;
+  readonly markers: readonly GroundedUncertainty[];
   readonly t: I18nTranslate;
 }): ReactNode {
-  if (!RETRIEVAL_UNCERTAINTY_DETAIL_KEYS.has(marker.kind)) return null;
+  const first = markers[0];
+  if (first === undefined || !RETRIEVAL_UNCERTAINTY_DETAIL_KEYS.has(first.kind)) return null;
   return (
     <details>
       <summary>{t("grounded.uncertainty.original")}</summary>
-      <p style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{marker.claim}</p>
+      {markers.map((marker, index) => (
+        <p key={index} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+          {marker.claim}
+        </p>
+      ))}
     </details>
+  );
+}
+
+function uncertaintyDisplayGroups(
+  markers: readonly GroundedUncertainty[],
+): readonly (readonly GroundedUncertainty[])[] {
+  const groups: GroundedUncertainty[][] = [];
+  const retrievalGroups = new Map<string, GroundedUncertainty[]>();
+  for (const marker of markers) {
+    const existing = retrievalGroups.get(marker.kind);
+    if (existing !== undefined) {
+      existing.push(marker);
+      continue;
+    }
+    const group = [marker];
+    groups.push(group);
+    if (RETRIEVAL_UNCERTAINTY_DETAIL_KEYS.has(marker.kind)) {
+      retrievalGroups.set(marker.kind, group);
+    }
+  }
+  return groups;
+}
+
+function UncertaintyItem({
+  markers,
+  t,
+}: {
+  readonly markers: readonly GroundedUncertainty[];
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const first = markers[0];
+  if (first === undefined) return null;
+  return (
+    <li>
+      <span>{`${uncertaintyKindLabel(first.kind, t)}: ${uncertaintyLineText(first, t)}`}</span>
+      <OriginalUncertaintyDetails markers={markers} t={t} />
+    </li>
   );
 }
 
@@ -1110,11 +1152,8 @@ function UncertaintyLine({
     <div className="grounded-uncertainty" role="note">
       <div>{t("grounded.uncertainty.summary", { count: markers.length, kinds })}</div>
       <ul className="grounded-uncertainty-list">
-        {markers.map((marker, index) => (
-          <li key={`${marker.kind}-${String(index)}`}>
-            <span>{`${uncertaintyKindLabel(marker.kind, t)}: ${uncertaintyLineText(marker, t)}`}</span>
-            <OriginalUncertaintyDetails marker={marker} t={t} />
-          </li>
+        {uncertaintyDisplayGroups(markers).map((group, index) => (
+          <UncertaintyItem key={index} markers={group} t={t} />
         ))}
       </ul>
     </div>
@@ -1175,10 +1214,8 @@ function OmittedLine({
   );
 }
 
-// Reasons a file in the connected scope could not be searched AT ALL — distinct from relevance
-// filtering (low-relevance / near-duplicate, where the file was read) and from by-design noise
-// exclusions (ignored deps/secrets). Surfacing these makes clear the answer does not cover the
-// whole folder: a file over the 2 MiB cap or a binary/unsupported format is otherwise invisible.
+// Recorded omission paths are bounded evidence, not an exhaustive corpus exclusion census.
+// Keep their reasons visible without inferring totals from discovery or scan counters.
 const COVERAGE_GAP_REASONS: readonly (keyof GroundedAnswerContextPackSummary["omittedCounts"])[] = [
   "size-exceeded",
   "binary",
@@ -1199,8 +1236,8 @@ function CoverageNotice({
     label: omissionLabel(reason, t),
     count: omittedCounts[reason] ?? 0,
   })).filter((gap) => gap.count > 0);
-  const total = gaps.reduce((sum, gap) => sum + gap.count, 0);
-  if (total <= 0) return null;
+  const recordedCount = gaps.reduce((sum, gap) => sum + gap.count, 0);
+  if (recordedCount <= 0) return null;
   const detail = gaps.map((gap) => `${formatCount(gap.count)} ${gap.label}`).join(", ");
   const showDocumentNotice = COVERAGE_GAP_REASONS.some(
     (reason) =>
@@ -1211,10 +1248,10 @@ function CoverageNotice({
       <span className="grounded-coverage-notice-title">{t("grounded.partialCoverage")}</span>
       <span>
         {t(
-          total === 1
+          recordedCount === 1
             ? "grounded.inspection.coverageGap.one"
             : "grounded.inspection.coverageGap.other",
-          { count: formatCount(total), detail },
+          { count: formatCount(recordedCount), detail },
         )}
       </span>
       {showDocumentNotice ? <span>{t("grounded.inspection.documentHint")}</span> : null}

@@ -1327,9 +1327,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.pending":
     "Der gespeicherte Verlauf ({before} Tokens) wird beim nächsten Senden automatisch auf etwa {after} Tokens kompaktiert.",
   "grounded.inspection.coverageGap.one":
-    "Diese Antwort berücksichtigt die durchsuchbaren Dateien im verbundenen Ordner. {count} Datei wurde nicht durchsucht ({detail}). Die Antwort deckt daher nicht den gesamten Ordner ab.",
+    "Diese Antwort berücksichtigt die durchsuchbaren Dateien im verbundenen Ordner. Mindestens {count} Datei wurde nicht durchsucht (erfasste Ausschlüsse: {detail}). Diese erfassten Ausschlüsse umfassen möglicherweise nicht jede ausgeschlossene Datei.",
   "grounded.inspection.coverageGap.other":
-    "Diese Antwort berücksichtigt die durchsuchbaren Dateien im verbundenen Ordner. {count} Dateien wurden nicht durchsucht ({detail}). Die Antwort deckt daher nicht den gesamten Ordner ab.",
+    "Diese Antwort berücksichtigt die durchsuchbaren Dateien im verbundenen Ordner. Mindestens {count} Dateien wurden nicht durchsucht (erfasste Ausschlüsse: {detail}). Diese erfassten Ausschlüsse umfassen möglicherweise nicht jede ausgeschlossene Datei.",
   "grounded.inspection.documentHint":
     "Die Ordnersuche liest Text, Code sowie kleine DOCX-, XLSX- und PDF-Dokumente mit Textebene. Größere, gescannte, verschlüsselte und andere Dokumentformate können über lokale Wissensquellen verwendet werden.",
   "grounded.inspection.audit": "Prüfnachweis der verbundenen Quellen anzeigen",

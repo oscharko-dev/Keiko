@@ -1275,9 +1275,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.pending":
     "The stored history ({before} tokens) is compacted automatically to about {after} tokens before the next request.",
   "grounded.inspection.coverageGap.one":
-    "This answer reflects only the searchable files in the connected scope — {count} file was not searched ({detail}). It does not cover the entire folder.",
+    "This answer reflects only the searchable files in the connected scope. At least {count} file was not searched (recorded exclusions: {detail}). These recorded exclusions may not include every excluded file.",
   "grounded.inspection.coverageGap.other":
-    "This answer reflects only the searchable files in the connected scope — {count} files were not searched ({detail}). It does not cover the entire folder.",
+    "This answer reflects only the searchable files in the connected scope. At least {count} files were not searched (recorded exclusions: {detail}). These recorded exclusions may not include every excluded file.",
   "grounded.inspection.documentHint":
     "Repository Search reads text, code, and small DOCX, XLSX, and text-layer PDF documents. Larger, scanned, encrypted, or other document formats remain available through Local Knowledge.",
   "grounded.inspection.audit": "View connected-context audit evidence",

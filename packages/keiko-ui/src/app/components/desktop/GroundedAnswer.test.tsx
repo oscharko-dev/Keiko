@@ -344,8 +344,8 @@ describe("GroundedAnswer", () => {
     });
     render(<GroundedAnswer answer={a} busy={false} />);
     expect(screen.getAllByText(/Partial coverage/).length).toBeGreaterThan(0);
-    // 3 + 2 = 5 files not searched, with each reason quantified.
-    expect(screen.getByText(/5 files were not searched/)).toBeInTheDocument();
+    // These recorded omissions provide a lower bound, not a corpus-wide exclusion census.
+    expect(screen.getByText(/At least 5 files were not searched/)).toBeInTheDocument();
     expect(screen.getByText(/3 larger than 2 MB/)).toBeInTheDocument();
     expect(screen.getByText(/2 binary/)).toBeInTheDocument();
     expect(
@@ -353,6 +353,42 @@ describe("GroundedAnswer", () => {
         /Repository Search reads text, code, and small DOCX, XLSX, and text-layer PDF/,
       ),
     ).toBeInTheDocument();
+  });
+
+  it("labels sampled exclusion counts without claiming a corpus total", () => {
+    const a = answer({
+      contextPack: contextPack({
+        omittedCount: 100,
+        omittedCounts: {
+          ...OMITTED_COUNTS_ZERO,
+          "size-exceeded": 1,
+          binary: 49,
+          "low-relevance": 50,
+        },
+        coverage: {
+          incomplete: false,
+          reasons: [],
+          filesDiscovered: 7_519,
+          filesAfterPolicy: 7_519,
+          filesScanned: 6_993,
+          filesSkipped: 603,
+          truncated: false,
+          ignoredByDiscovery: 45,
+          deniedByDiscovery: 24,
+          depthPrunedByDiscovery: 0,
+          maxFilesPrunedByDiscovery: 0,
+          matchesReturned: 50,
+          elapsedMs: 1_000,
+          limits: { maxFilesScanned: null, maxMatchesReturned: 50, elapsedMsMax: null },
+        },
+      }),
+    });
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+    const notice = container.querySelector(".grounded-coverage-notice");
+    expect(notice).toHaveTextContent("At least 50 files were not searched");
+    expect(notice).toHaveTextContent("recorded exclusions: 1 larger than 2 MB, 49 binary");
+    expect(notice).not.toHaveTextContent("526");
+    expect(screen.getByText(/Not used: 100 files/)).toBeInTheDocument();
   });
 
   it("surfaces skipped-document diagnostics in the coverage notice (Issue #1285)", () => {
@@ -369,7 +405,7 @@ describe("GroundedAnswer", () => {
     });
     render(<GroundedAnswer answer={a} busy={false} />);
     expect(screen.getAllByText(/Partial coverage/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/5 files were not searched/)).toBeInTheDocument();
+    expect(screen.getByText(/At least 5 files were not searched/)).toBeInTheDocument();
     expect(screen.getByText(/1 no text layer/)).toBeInTheDocument();
     expect(screen.getByText(/1 password-protected document/)).toBeInTheDocument();
     expect(screen.getByText(/2 unsupported format/)).toBeInTheDocument();
@@ -782,7 +818,7 @@ describe("GroundedAnswer", () => {
       screen.getAllByText(
         "no evidence: No matching evidence is available for this part of the answer.",
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(screen.getByText("excerpt unavailable for src/baz.ts")).not.toBeVisible();
     expect(screen.getByText("other")).not.toBeVisible();
     expect(screen.getByText("clipped at foo")).not.toBeVisible();
@@ -1540,6 +1576,93 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
     );
   }
 
+  it("groups repeated retrieval warnings while retaining every technical claim", () => {
+    const markers = Array.from({ length: 9 }, (_, index) =>
+      uncertainty({
+        kind: "scope-incomplete",
+        claim: index === 0 ? "" : `Scan detail ${String(index)} <script>unsafe()</script>`,
+      }),
+    );
+    const { container } = renderInLocale("en", answer({ uncertainty: markers }));
+    const list = container.querySelector(
+      '.grounded-uncertainty[role="note"] .grounded-uncertainty-list',
+    );
+    expect(list?.children).toHaveLength(1);
+    expect(list?.querySelectorAll("details p")).toHaveLength(9);
+    expect(list?.querySelector("details p")?.textContent).toBe("");
+    expect(list?.querySelectorAll("script")).toHaveLength(0);
+    expect(list).toHaveTextContent("Scan detail 8 <script>unsafe()</script>");
+    expect(container.querySelector(".grounded-uncertainty[role='note']")).toHaveTextContent(
+      "Uncertainty (9 markers — scope incomplete)",
+    );
+  });
+
+  it.each([
+    "no-evidence",
+    "stale-evidence",
+    "scope-incomplete",
+    "budget-clipped",
+    "tool-unavailable",
+    "low-confidence",
+  ])("groups repeated %s retrieval details without dropping originals", (kind) => {
+    const { container } = renderInLocale(
+      "en",
+      answer({
+        uncertainty: [
+          uncertainty({ kind, claim: "First" }),
+          uncertainty({ kind, claim: "Second" }),
+        ],
+      }),
+    );
+    const list = container.querySelector(
+      '.grounded-uncertainty[role="note"] .grounded-uncertainty-list',
+    );
+    expect(list?.children).toHaveLength(1);
+    expect(list?.querySelectorAll("details p")).toHaveLength(2);
+    expect(list).toHaveTextContent("First");
+    expect(list).toHaveTextContent("Second");
+  });
+
+  it("groups only closed retrieval kinds while preserving citation and future-kind findings", () => {
+    const markers = [
+      uncertainty({ kind: "scope-incomplete", claim: "First scope detail" }),
+      uncertainty({ kind: "unsupported-citation", claim: "Unsupported citations: [2]" }),
+      uncertainty({ kind: "scope-incomplete", claim: "Second scope detail" }),
+      uncertainty({ kind: "unsupported-citation", claim: "Unsupported citations: [7]" }),
+      uncertainty({ kind: "future-retrieval-kind", claim: "First future claim" }),
+      uncertainty({ kind: "future-retrieval-kind", claim: "Second future claim" }),
+    ];
+    const { container } = renderInLocale("en", answer({ uncertainty: markers }));
+    const list = container.querySelector(
+      '.grounded-uncertainty[role="note"] .grounded-uncertainty-list',
+    );
+    expect(list?.children).toHaveLength(5);
+    expect(list).toHaveTextContent("[2]");
+    expect(list).toHaveTextContent("[7]");
+    expect(list).toHaveTextContent("First future claim");
+    expect(list).toHaveTextContent("Second future claim");
+    expect(list?.querySelectorAll("details p")).toHaveLength(2);
+  });
+
+  it("labels German exclusion details as recorded examples rather than a total", async () => {
+    const { container } = renderInLocale(
+      "de",
+      answer({
+        contextPack: contextPack({
+          omittedCounts: { ...OMITTED_COUNTS_ZERO, "size-exceeded": 1, binary: 49 },
+        }),
+      }),
+    );
+    await waitFor(() =>
+      expect(container.querySelector(".grounded-coverage-notice")).toHaveTextContent(
+        "Mindestens 50 Dateien wurden nicht durchsucht (erfasste Ausschlüsse:",
+      ),
+    );
+    expect(container.querySelector(".grounded-coverage-notice")).toHaveTextContent(
+      "möglicherweise nicht jede ausgeschlossene Datei",
+    );
+  });
+
   function emptySearchAnswer(): GroundedAnswerType {
     return answer({
       content:
@@ -1902,14 +2025,14 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
       screen.getAllByText(
         "Umfang unvollständig: Ein Teil der verbundenen Quellen konnte nicht vollständig untersucht werden. Die Antwort kann Details auslassen.",
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect(
       screen.getByText(
         "keine Evidenz: Für diesen Teil der Antwort liegen keine passenden Belege vor.",
       ),
     ).toBeVisible();
     const summaries = screen.getAllByText("Technische Originaldetails");
-    expect(summaries).toHaveLength(3);
+    expect(summaries).toHaveLength(2);
     for (const claim of claims) expect(screen.getByText(claim)).not.toBeVisible();
     const first = summaries[0];
     if (first === undefined) throw new TypeError("Missing original-details control.");
