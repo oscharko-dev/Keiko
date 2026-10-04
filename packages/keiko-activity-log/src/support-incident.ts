@@ -55,6 +55,7 @@ import {
 
 import {
   activityLogPinCovers,
+  MAX_ACTIVITY_LOG_PINS,
   isActivityLogSegmentEntry,
   listActivityLogDirectory,
   readActivityLogPins,
@@ -784,10 +785,14 @@ function evictOldestCandidate(
   draft: CandidateDraft,
   entries: readonly SupportIncidentStoreEntry[],
   capacity: number,
+  publishedIncidentId: string,
 ): string | undefined {
   const entry = entries.find(
     ({ record }) =>
-      record !== undefined && record.slotIndex < capacity && mayEvictCandidate(draft, record),
+      record !== undefined &&
+      record.incidentId !== publishedIncidentId &&
+      record.slotIndex <= capacity &&
+      mayEvictCandidate(draft, record),
   );
   if (entry === undefined) return undefined;
   const removal = removeEntry(context.stateDir, entry, context);
@@ -803,7 +808,6 @@ function evictOldestCandidate(
 
 interface ClaimedQuotaSlot {
   readonly slotIndex: number;
-  readonly evictedIncidentId?: string;
 }
 
 function claimQuotaSlot(
@@ -813,12 +817,17 @@ function claimQuotaSlot(
   entries: readonly SupportIncidentStoreEntry[],
 ): ClaimedQuotaSlot | undefined {
   const capacity = slotCapacity(context, draft);
-  const available = claimAvailableSlot(context, draft, incidentId, capacity);
-  if (available !== undefined) return { slotIndex: available };
-  const evictedIncidentId = evictOldestCandidate(context, draft, entries, capacity);
-  if (evictedIncidentId === undefined) return undefined;
-  const slotIndex = claimAvailableSlot(context, draft, incidentId, capacity);
-  return slotIndex === undefined ? undefined : { slotIndex, evictedIncidentId };
+  const occupied = [...occupiedSlots(context.stateDir)].filter((index) => index <= capacity);
+  if (
+    occupied.length >= capacity &&
+    !entries.some(
+      ({ record }) =>
+        record !== undefined && record.slotIndex <= capacity && mayEvictCandidate(draft, record),
+    )
+  )
+    return undefined;
+  const slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1);
+  return slotIndex === undefined ? undefined : { slotIndex };
 }
 
 // Releases a window pin a draft already published before dedup or quota was decided (the
@@ -886,20 +895,22 @@ function ownsDiagnosticPin(record: SupportIncidentRecord, pin: ActivityLogPinRec
   );
 }
 
-function rollDiagnosticPin(context: IncidentPinContext): boolean {
+function rollDiagnosticPin(context: IncidentPinContext, publishedIncidentId: string): void {
   const directory = join(context.stateDir, ACTIVITY_LOG_DIRECTORY_NAME);
   const pins = readActivityLogPins(listActivityLogDirectory(directory), directory).flatMap(
     ({ record }) => (record === undefined ? [] : [record]),
   );
+  if (pins.length < MAX_ACTIVITY_LOG_PINS) return;
   const entries = listSupportIncidentEntries(context.stateDir);
   const oldest = entries.find(
     ({ record }) =>
       record !== undefined &&
+      record.incidentId !== publishedIncidentId &&
       context.candidate !== undefined &&
       mayEvictCandidate(context.candidate, record) &&
       pins.some((pin) => ownsDiagnosticPin(record, pin)),
   );
-  if (oldest === undefined) return false;
+  if (oldest === undefined) return;
   const removal = removeEntry(context.stateDir, oldest, context);
   expiredEvidence(context.stateDir, {
     entry: oldest,
@@ -908,13 +919,9 @@ function rollDiagnosticPin(context: IncidentPinContext): boolean {
     correlationId: context.correlationId,
     openIncidentCount: entries.length - Number(removal.removed),
   });
-  return removal.complete && removal.pinRelease === "released";
 }
 
-function requestIncidentPin(
-  context: IncidentPinContext,
-  allowRolling: boolean,
-): ActivityLogPinResult {
+function requestIncidentPin(context: IncidentPinContext): ActivityLogPinResult {
   const window = supportIncidentWindow(context.nowMs);
   const request = {
     scope: { kind: "window" as const, fromMs: window.fromMs, toMs: window.toMs },
@@ -922,10 +929,6 @@ function requestIncidentPin(
     reason: "incident" as const,
     correlationId: context.correlationId,
   };
-  const first = pinActivityLogWindow(context.stateDir, request, context.env);
-  if (first.status !== "rejected" || first.reason !== "pin-limit-reached" || !allowRolling)
-    return first;
-  if (!rollDiagnosticPin(context)) return first;
   return pinActivityLogWindow(context.stateDir, request, context.env);
 }
 
@@ -934,7 +937,6 @@ function pinIncidentWindow(
   nowMs: number,
   correlationId: string,
   env: ServerLogEnv,
-  allowRolling = true,
   candidate?: CandidateDraft,
 ): SupportIncidentPin {
   const window = supportIncidentWindow(nowMs);
@@ -943,7 +945,7 @@ function pinIncidentWindow(
     overlappingSealedSegmentNames(stateDir, window, correlationId);
   try {
     const pin = pinFromResult(
-      requestIncidentPin({ stateDir, nowMs, correlationId, env, candidate }, allowRolling),
+      requestIncidentPin({ stateDir, nowMs, correlationId, env, candidate }),
     );
     if (pin.status === "rejected" || before.size === 0) return pin;
     const after = overlappingSealedSegmentNames(stateDir, window, correlationId);
@@ -970,7 +972,6 @@ function publishCandidate(
           context.nowMs,
           draft.evidenceCorrelationId,
           context.env,
-          true,
           draft,
         );
   const record = buildRecord(draft, context, pin, incidentId, slotIndex);
@@ -994,7 +995,32 @@ function publishCandidate(
     openEntry(entry, context.nowMs),
   ).length;
   createdEvidence(context.stateDir, record, draft.evidenceCorrelationId, retainedCount);
+  finishCandidateRetention(context, draft, record.incidentId);
   return { status: "created", incidentId: record.incidentId, record };
+}
+
+// Retirement only follows durable publication. Exclusive slot ownership admits at most one
+// replacement above each retained share; a peer's pending claim is never stolen to make space.
+function finishCandidateRetention(
+  context: CandidateContext,
+  draft: CandidateDraft,
+  incidentId: string,
+): void {
+  try {
+    const capacity = slotCapacity(context, draft);
+    const entries = listSupportIncidentEntries(context.stateDir);
+    if ([...occupiedSlots(context.stateDir)].filter((index) => index <= capacity).length > capacity)
+      evictOldestCandidate(context, draft, entries, capacity, incidentId);
+    rollDiagnosticPin(
+      { ...context, correlationId: draft.evidenceCorrelationId, candidate: draft },
+      incidentId,
+    );
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
+      correlationId: draft.evidenceCorrelationId,
+    });
+  }
 }
 
 type DedupOutcome =
@@ -1235,8 +1261,7 @@ function createCandidate(
   const quota = admitCandidateQuota(context, draft, incidentId, entries, dedupFingerprint);
   if ("status" in quota) return quota;
 
-  const retained = entries.filter((entry) => entry.incidentId !== quota.evictedIncidentId);
-  const created = publishCandidate(draft, context, retained, incidentId, quota.slotIndex);
+  const created = publishCandidate(draft, context, entries, incidentId, quota.slotIndex);
   if (created.status !== "created")
     releaseClaims(stateDir, dedupFingerprint, quota.slotIndex, incidentId);
   return created;
@@ -1805,14 +1830,7 @@ export function observeSupportIncidentTrigger(stateDir: string, event: ServerLog
         initial.evidenceCorrelationId,
       ),
     };
-    const pin = pinIncidentWindow(
-      stateDir,
-      nowMs,
-      draft.evidenceCorrelationId,
-      process.env,
-      false,
-      draft,
-    );
+    const pin = pinIncidentWindow(stateDir, nowMs, draft.evidenceCorrelationId, process.env, draft);
     pendingCandidates.push({ stateDir, draft: { ...draft, prePinned: pin }, nowMs });
     scheduleDrain();
   } catch (error) {

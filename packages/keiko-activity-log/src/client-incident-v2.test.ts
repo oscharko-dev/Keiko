@@ -191,13 +191,21 @@ describe("canonical client incident version compatibility and occurrence claims"
     expect(
       records.some((record) => record.fingerprint.op === "coding-runtime.readiness.failed"),
     ).toBe(true);
-    expect(records.filter((record) => record.fingerprint.op === "client.diagnostic").length).toBe(
+    expect(records.filter((record) => record.fingerprint.op === "client.diagnostic")).toHaveLength(
       policy.browserCapacity,
     );
     const server = records.find(
       (record) => record.fingerprint.op === "coding-runtime.readiness.failed",
     );
-    expect(server?.slotIndex).toBeGreaterThanOrEqual(policy.browserCapacity);
+    expect(server).not.toBeUndefined();
+    clock.mockReturnValue(start + 13 * 61_000);
+    writeFailure(FRAME, "browser-after-server-retention");
+    drainSupportIncidentCandidates();
+    const after = listSupportIncidents(stateDir);
+    expect(after.some((record) => record.incidentId === server?.incidentId)).toBe(true);
+    expect(after.filter((record) => record.fingerprint.op === "client.diagnostic")).toHaveLength(
+      policy.browserCapacity,
+    );
     clock.mockRestore();
   });
   it("exports a raw browser chunk failure through the real sink and automatic trigger", (): void => {

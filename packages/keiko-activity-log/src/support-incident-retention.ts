@@ -28,7 +28,9 @@ export function supportIncidentRetentionPolicy(
   const policy =
     readActivityLogPolicyRecord(directory, directory, { requireReadable: true }) ??
     resolveActivityLogStorageConfig(env);
-  const capacity = Math.floor(policy.retentionBytes / CANDIDATE_RESERVATION_BYTES);
+  // Keep one slot inside the existing byte pool for durable replacement. It is never a user
+  // quota: an old candidate remains owned until its replacement has been fsynced successfully.
+  const capacity = Math.floor(policy.retentionBytes / CANDIDATE_RESERVATION_BYTES) - 1;
   return {
     capacity,
     automaticCapacity: Math.floor((capacity * 3) / 4),

@@ -1,6 +1,18 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeFileServerLogSinks,
@@ -28,10 +40,12 @@ import {
   MAX_ACTIVITY_LOG_PINS,
   listActivityLogDirectory,
   readActivityLogPolicyRecord,
+  writeActivityLogPolicyRecord,
 } from "./activity-log-store.js";
 import * as incidentStore from "./support-incident-store.js";
 import * as serverLog from "./server-log.js";
 import * as artifactFiles from "@oscharko-dev/keiko-security/fs-hardening";
+import * as filesystem from "node:fs";
 
 import {
   attachActivityLogEventRegistration,
@@ -59,11 +73,18 @@ vi.mock("@oscharko-dev/keiko-security/fs-hardening", async (importOriginal) => {
   return { ...actual, removeSafeArtifactFile: vi.fn(actual.removeSafeArtifactFile) };
 });
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof filesystem>();
+  return { ...actual, fsyncSync: vi.fn(actual.fsyncSync) };
+});
+
 const actualArtifactFiles = await vi.importActual<typeof artifactFiles>(
   "@oscharko-dev/keiko-security/fs-hardening",
 );
+const actualFilesystem = await vi.importActual<typeof filesystem>("node:fs");
 let stateDir: string;
 beforeEach(() => {
+  vi.mocked(filesystem.fsyncSync).mockImplementation(actualFilesystem.fsyncSync);
   vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementation(
     actualArtifactFiles.removeSafeArtifactFile,
   );
@@ -106,6 +127,271 @@ function persistFreshFailure(): void {
 }
 
 describe("rolling diagnostic candidate retention", () => {
+  it.each(["replacement", "symlink"] as const)(
+    "never removes a %s replacing its own failed publication inode",
+    (substitution) => {
+      const original = recordUserReportedIncident(stateDir);
+      if (original.status !== "created") throw new Error("Expected original candidate");
+      const claims = listSupportIncidentClaims(stateDir);
+      const pins = listActivityLogDirectory(join(stateDir, "logs")).pins;
+      const sentinel = join(stateDir, "foreign-file.txt");
+      writeFileSync(sentinel, "foreign file remains intact", { mode: 0o600 });
+      let replacedPath: string | undefined;
+      const publish = incidentStore.writeSupportIncidentRecord;
+      vi.spyOn(incidentStore, "writeSupportIncidentRecord").mockImplementationOnce((...args) => {
+        replacedPath = join(args[0], supportIncidentFileName(args[2]));
+        vi.mocked(filesystem.fsyncSync).mockImplementationOnce(() => {
+          if (replacedPath === undefined) throw new Error("Expected owned publication path");
+          rmSync(replacedPath);
+          if (substitution === "symlink") symlinkSync(sentinel, replacedPath);
+          else writeFileSync(replacedPath, "peer replacement", { mode: 0o600 });
+          throw new Error("simulated durability failure during substitution");
+        });
+        publish(...args);
+      });
+      expect(recordUserReportedIncident(stateDir)).toEqual({
+        status: "rejected",
+        reason: "store-unavailable",
+      });
+      if (replacedPath === undefined) throw new Error("Expected substituted path");
+      expect(lstatSync(replacedPath).isSymbolicLink()).toBe(substitution === "symlink");
+      expect(readFileSync(sentinel, "utf8")).toBe("foreign file remains intact");
+      if (substitution === "replacement")
+        expect(readFileSync(replacedPath, "utf8")).toBe("peer replacement");
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([original.record]);
+      expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual(pins);
+    },
+  );
+
+  it.each(["removed", "refused"] as const)(
+    "preserves the original durability error when owned cleanup is %s",
+    (cleanup) => {
+      const source = recordUserReportedIncident(stateDir);
+      if (source.status !== "created") throw new Error("Expected producer fixture");
+      const newId = "a".repeat(32);
+      const payload = incidentStore.serializeSupportIncidentRecord({
+        ...source.record,
+        incidentId: newId,
+      });
+      if (payload === undefined) throw new Error("Expected producer payload");
+      const publicationError = new Error("simulated fsync failure");
+      const cleanupError = new artifactFiles.SafeArtifactFileError("manifest", "permission-unsafe");
+      vi.mocked(filesystem.fsyncSync).mockImplementationOnce(() => {
+        throw publicationError;
+      });
+      if (cleanup === "refused")
+        vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementationOnce(() => {
+          throw cleanupError;
+        });
+      expect(() => {
+        incidentStore.writeSupportIncidentRecord(
+          incidentStore.supportIncidentDirectory(stateDir),
+          payload,
+          newId,
+        );
+      }).toThrow(
+        cleanup === "refused"
+          ? expect.objectContaining({ errors: [publicationError, cleanupError] })
+          : publicationError,
+      );
+      const path = join(
+        incidentStore.supportIncidentDirectory(stateDir),
+        supportIncidentFileName(newId),
+      );
+      expect(existsSync(path)).toBe(cleanup === "refused");
+      if (cleanup === "refused") expect(readFileSync(path)).toEqual(payload);
+      expect(incidentStore.readSupportIncidentRecord(stateDir, source.incidentId)).toEqual(
+        source.record,
+      );
+    },
+  );
+
+  it("preserves prior durable candidates and removes only its own new record after fsync fails", () => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    const capacity = supportIncidentRetentionPolicy(stateDir).capacity;
+    for (let index = 0; index < capacity; index += 1)
+      expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    const records = listSupportIncidents(stateDir, { readOnly: true });
+    const claims = listSupportIncidentClaims(stateDir);
+    const pins = listActivityLogDirectory(join(stateDir, "logs")).pins;
+    const publish = incidentStore.writeSupportIncidentRecord;
+    vi.spyOn(incidentStore, "writeSupportIncidentRecord").mockImplementationOnce((...args) => {
+      vi.mocked(filesystem.fsyncSync).mockImplementationOnce(() => {
+        throw new Error("simulated candidate durability failure");
+      });
+      publish(...args);
+    });
+    expect(recordUserReportedIncident(stateDir)).toEqual({
+      status: "rejected",
+      reason: "store-unavailable",
+    });
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(records);
+    expect(incidentStore.listSupportIncidentEntries(stateDir)).toHaveLength(records.length);
+    expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual(pins);
+    expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(capacity);
+  });
+
+  it.each(["bytes", "pins"] as const)(
+    "preserves every prior candidate and pin after failed publication under %s pressure",
+    (pressure) => {
+      if (pressure === "bytes") vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+      const count =
+        pressure === "bytes"
+          ? supportIncidentRetentionPolicy(stateDir).capacity
+          : MAX_ACTIVITY_LOG_PINS;
+      for (let index = 0; index < count; index += 1) {
+        expect(
+          recordUserReportedIncident(stateDir, {
+            correlationId: `prior-publication-${String(index)}`,
+          }).status,
+        ).toBe("created");
+      }
+      const records = listSupportIncidents(stateDir, { readOnly: true });
+      const claims = listSupportIncidentClaims(stateDir);
+      const pins = listActivityLogDirectory(join(stateDir, "logs")).pins;
+      vi.spyOn(incidentStore, "writeSupportIncidentRecord").mockImplementationOnce(() => {
+        throw new Error("simulated durable publication failure");
+      });
+      expect(recordUserReportedIncident(stateDir, { correlationId: "failed-replacement" })).toEqual(
+        { status: "rejected", reason: "store-unavailable" },
+      );
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(records);
+      expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual(pins);
+
+      const recovered = recordUserReportedIncident(stateDir, { correlationId: "recovered-write" });
+      expect(recovered.status).toBe("created");
+      if (recovered.status !== "created") throw new Error("Expected recovered candidate");
+      expect(recovered.record.pin.status).toBe("pinned");
+      const retained = listSupportIncidents(stateDir, { readOnly: true });
+      expect(retained).toHaveLength(records.length);
+      expect(retained.map((record) => record.incidentId)).toContain(recovered.incidentId);
+      expect(retained.map((record) => record.incidentId)).not.toContain(records[0]?.incidentId);
+    },
+    60_000,
+  );
+
+  it("does not steal a peer's in-flight publication reserve before either write is durable", () => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    const capacity = supportIncidentRetentionPolicy(stateDir).capacity;
+    for (let index = 0; index < capacity; index += 1)
+      expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    const original = listSupportIncidents(stateDir, { readOnly: true });
+    const claims = listSupportIncidentClaims(stateDir);
+    const pins = listActivityLogDirectory(join(stateDir, "logs")).pins;
+    let peer: ReturnType<typeof recordUserReportedIncident> | undefined;
+    vi.spyOn(incidentStore, "writeSupportIncidentRecord").mockImplementationOnce(() => {
+      peer = recordUserReportedIncident(stateDir, { correlationId: "concurrent-publication" });
+      throw new Error("simulated interrupted publication");
+    });
+    expect(recordUserReportedIncident(stateDir)).toEqual({
+      status: "rejected",
+      reason: "store-unavailable",
+    });
+    expect(peer).toEqual({ status: "rejected", reason: "quota-exhausted" });
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(original);
+    expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual(pins);
+    expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(capacity);
+  });
+
+  it("preserves prior evidence while another process competes for the publication reserve", () => {
+    const peerStateDir = process.env.KEIKO_TEST_PUBLICATION_PEER_STATE;
+    if (peerStateDir !== undefined) {
+      expect(recordUserReportedIncident(peerStateDir)).toEqual({
+        status: "rejected",
+        reason: "quota-exhausted",
+      });
+      return;
+    }
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    const capacity = supportIncidentRetentionPolicy(stateDir).capacity;
+    for (let index = 0; index < capacity; index += 1)
+      expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    const records = listSupportIncidents(stateDir, { readOnly: true });
+    const claims = listSupportIncidentClaims(stateDir);
+    const pins = listActivityLogDirectory(join(stateDir, "logs")).pins;
+    vi.spyOn(incidentStore, "writeSupportIncidentRecord").mockImplementationOnce(() => {
+      const peer = spawnSync(
+        process.execPath,
+        [
+          fileURLToPath(new URL("../../../node_modules/vitest/vitest.mjs", import.meta.url)),
+          "run",
+          "--root",
+          fileURLToPath(new URL("..", import.meta.url)),
+          "src/support-incident-retention.test.ts",
+          "-t",
+          "another process competes",
+        ],
+        {
+          env: { ...process.env, KEIKO_TEST_PUBLICATION_PEER_STATE: stateDir },
+          encoding: "utf8",
+          timeout: 30_000,
+        },
+      );
+      expect(peer.error).toBeUndefined();
+      expect(peer.status, peer.stdout + peer.stderr).toBe(0);
+      throw new Error("simulated publication failure after concurrent admission");
+    });
+    expect(recordUserReportedIncident(stateDir)).toEqual({
+      status: "rejected",
+      reason: "store-unavailable",
+    });
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(records);
+    expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual(pins);
+    expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(capacity);
+  }, 60_000);
+
+  it("refuses a fully occupied legacy byte pool without deleting prior evidence and recovers after release", () => {
+    const smaller = supportIncidentRetentionPolicy(stateDir, {
+      KEIKO_LOG_RETENTION_BYTES: "65536",
+    });
+    for (let index = 0; index <= smaller.capacity; index += 1)
+      expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    // A prior producer used every slot in the pool. Preserve its actual descriptors and pins,
+    // while placing their claims at those old closed indexes before the smaller policy is loaded.
+    for (const [index, record] of listSupportIncidents(stateDir, { readOnly: true }).entries()) {
+      incidentStore.removeSupportIncidentRecord(stateDir, record.incidentId);
+      incidentStore.releaseSupportIncidentSlot(stateDir, record.slotIndex, record.incidentId);
+      expect(claimSupportIncidentSlot(stateDir, index, record.incidentId)).toBe(true);
+      const payload = incidentStore.serializeSupportIncidentRecord({ ...record, slotIndex: index });
+      if (payload === undefined) throw new Error("Expected valid legacy record");
+      incidentStore.writeSupportIncidentRecord(
+        incidentStore.supportIncidentDirectory(stateDir),
+        payload,
+        record.incidentId,
+      );
+    }
+    closeFileServerLogSinks();
+    const directory = join(stateDir, "logs");
+    const policy = readActivityLogPolicyRecord(directory, directory);
+    if (policy === undefined) throw new Error("Expected governing policy");
+    rmSync(join(directory, ACTIVITY_LOG_STORE_POLICY_FILE_NAME));
+    writeActivityLogPolicyRecord(directory, directory, { ...policy, retentionBytes: 65536 });
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    const records = listSupportIncidents(stateDir, { readOnly: true });
+    const claims = listSupportIncidentClaims(stateDir);
+    const pins = listActivityLogDirectory(directory).pins;
+    expect(recordUserReportedIncident(stateDir)).toEqual({
+      status: "rejected",
+      reason: "quota-exhausted",
+    });
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(records);
+    expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
+    expect(listActivityLogDirectory(directory).pins).toEqual(pins);
+    const first = records[0];
+    if (first === undefined) throw new Error("Expected legacy candidate");
+    expect(dismissSupportIncident(stateDir, first.incidentId)).toBe("dismissed");
+    expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(smaller.capacity);
+  });
+
   it.each(["corrupt", "unsafe-permissions"] as const)(
     "refuses an alternate admission policy when the governing policy is %s",
     (fault) => {
@@ -264,8 +550,14 @@ describe("rolling diagnostic candidate retention", () => {
     const next = recordUserReportedIncident(stateDir, { correlationId: "pin-release-new-request" });
     expect(next.status).toBe("created");
     if (next.status !== "created") throw new Error("Expected degraded candidate");
-    expect(next.record.pin.status).toBe("rejected");
+    expect(next.record.pin.status).toBe("pinned");
     expect(request).toHaveBeenCalledOnce();
+    // The successful pin consumes the reserve; a refused old-pin release must not pretend it
+    // recovered capacity for the next request, which keeps its genuine rejected outcome.
+    const following = recordUserReportedIncident(stateDir);
+    if (following.status !== "created") throw new Error("Expected degraded candidate");
+    expect(following.record.pin.status).toBe("rejected");
+    expect(request).toHaveBeenCalledTimes(2);
     const ended = persistedActivityLogLines(
       readPersistedActivityLog(stateDir),
       "support.incident.expired",
@@ -316,7 +608,7 @@ describe("rolling diagnostic candidate retention", () => {
     expect(retainedIds).toContain(server.incidentId);
     expect(retainedIds).not.toContain(browserIds[0]);
     expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toHaveLength(
-      MAX_ACTIVITY_LOG_PINS,
+      MAX_ACTIVITY_LOG_PINS - 1,
     );
   }, 60_000);
 
@@ -592,7 +884,7 @@ describe("rolling diagnostic candidate retention", () => {
     };
     const original = recordRegisteredFailureIncident(stateDir, evidence);
     if (original?.status !== "created") throw new Error("Expected original failure");
-    for (let index = 1; index < MAX_ACTIVITY_LOG_PINS; index += 1)
+    for (let index = 1; index < MAX_ACTIVITY_LOG_PINS - 1; index += 1)
       expect(recordUserReportedIncident(stateDir).status).toBe("created");
     const before = listSupportIncidents(stateDir, { readOnly: true });
     const pins = listActivityLogDirectory(join(stateDir, "logs")).pins.map((pin) => pin.pinId);
@@ -659,7 +951,7 @@ describe("rolling diagnostic candidate retention", () => {
       ids.push(result.incidentId);
     }
     const retained = listSupportIncidents(stateDir, { readOnly: true });
-    expect(retained).toHaveLength(MAX_ACTIVITY_LOG_PINS);
+    expect(retained).toHaveLength(MAX_ACTIVITY_LOG_PINS - 1);
     expect(retained.some((record) => record.incidentId === ids[0])).toBe(false);
     expect(retained.some((record) => record.incidentId === ids.at(-1))).toBe(true);
     expect(

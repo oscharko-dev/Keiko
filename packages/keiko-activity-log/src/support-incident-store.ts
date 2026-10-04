@@ -191,7 +191,8 @@ export function writeSupportIncidentRecord(
   payload: Buffer,
   incidentId: string,
 ): void {
-  const descriptor = openSafeArtifactFile(join(directory, supportIncidentFileName(incidentId)), {
+  const path = join(directory, supportIncidentFileName(incidentId));
+  const descriptor = openSafeArtifactFile(path, {
     artifactClass: ARTIFACT_CLASS,
     mode: "exclusive-create",
     trustedRoot: directory,
@@ -199,8 +200,36 @@ export function writeSupportIncidentRecord(
   try {
     writeAllBytes(descriptor, payload);
     fsyncSync(descriptor);
+  } catch (error) {
+    removeFailedPublication(path, directory, descriptor, error);
+    throw error;
   } finally {
     closeSync(descriptor);
+  }
+}
+
+function removeFailedPublication(
+  path: string,
+  directory: string,
+  ownedDescriptor: number,
+  publicationError: unknown,
+): void {
+  try {
+    const owned = fstatSync(ownedDescriptor, { bigint: true });
+    removeSafeArtifactFile(
+      path,
+      { artifactClass: ARTIFACT_CLASS, trustedRoot: directory },
+      (target): boolean => {
+        const current = fstatSync(target, { bigint: true });
+        return current.dev === owned.dev && current.ino === owned.ino;
+      },
+    );
+  } catch (cleanupError) {
+    throw new AggregateError(
+      [publicationError, cleanupError],
+      "Support incident publication and owned cleanup failed",
+      { cause: cleanupError },
+    );
   }
 }
 

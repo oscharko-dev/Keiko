@@ -1617,7 +1617,7 @@ synchronously, in the same turn as the triggering write. When capacity permits, 
 window before a later maintenance pass or segment admission can remove evidence. This immediate
 request never retires another candidate to recover pin capacity: deduplication and candidate
 admission must succeed first. A newly admitted candidate whose immediate pin was rejected retries
-through the existing owned-pin retention mechanism; a duplicate preserves the original candidate
+the existing pin manager without first deleting another candidate; a duplicate preserves the original candidate
 and its pin. Deduplication, quota admission, and the record write run outside the logging call and
 never transfer data. A duplicate or rejected candidate releases any pin its trigger already
 published instead of leaving it until its TTL. A queued candidate retains the original trigger-time
@@ -1657,7 +1657,14 @@ The descriptor has a strict public projection and a richer, still body-free priv
 the same record; both expose the sufficiency status, and only the private one carries reasons and
 coverage. The store is owner-private and uses the existing governing Activity Log retention-byte
 policy to size its reservation pool. Each slot reserves one maximal 4 KiB candidate plus the two
-opaque owning-id claim payloads; there is no independent candidate-count setting. Unreported
+opaque owning-id claim payloads; there is no independent candidate-count setting. Exactly one slot
+inside this existing byte pool is held as an atomic publication reserve. The retained capacity is
+the pool less that technical slot, not an additional user quota. A replacement exclusively claims
+a free slot, writes and fsyncs its new immutable record, and only then retires an eligible older
+candidate and releases its owned claims and pin. A failed publication releases only its own new
+claims and pin and preserves prior candidates. Concurrent publishers cannot steal a held reserve;
+a fully occupied legacy pool retains its prior evidence and reports the existing `quota-exhausted`
+refusal until space is genuinely released. Unreported
 candidates expire after twenty-four hours, including older records written with a longer expiry.
 On byte pressure, the oldest eligible candidate rolls out and its pin and claims are released.
 Generated reports remain only in the existing transient download cache, without a disk archive.
@@ -1669,12 +1676,14 @@ or event loss. `support.diagnostics.capacity` timestamps a changed pair when a h
 it, under that request's correlation; candidate lifecycle events retain the actual creation or
 retirement timing. A failed inspection emits one diagnostic per failure streak, and a successful
 inspection resets the streak and records the recovered observation.
-The existing Activity Log pin ceiling remains unchanged. If a new diagnostic window is refused
-specifically because that pin ceiling is full, one oldest diagnostic candidate with an exact owned
-`incident` window pin is retired and the existing pin manager is retried once. Durable-batch and
-other unowned pins are preserved. The original refusal remains evidenced, and the before/after
-segment check still reports any evidence lost before the replacement pin; retry never invents
-recovered bytes.
+The existing Activity Log pin ceiling remains unchanged. After durable publication, pressure at
+that ceiling retires one older eligible diagnostic candidate with an exact owned `incident` window
+pin, preserving one free pin slot inside the existing ceiling for the next publication. Its own
+newly published candidate is never selected for this cleanup. Durable-batch and other unowned pins
+are preserved. A legacy or foreign-filled pin pool can still refuse protection: the new record
+truthfully retains its rejected pin outcome instead of claiming a recovered pin. A failed owned
+pin release also remains evidenced and does not claim recovered capacity. The before/after segment
+check still reports any evidence lost before the new pin; no cleanup invents recovered bytes.
 
 Both the defectFingerprint dedup rule and the byte-reservation pool hold atomically across every process
 sharing the state directory (#3533 review 4050606506), not from a directory-listing count two
