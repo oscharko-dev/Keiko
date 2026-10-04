@@ -720,29 +720,17 @@ function validateScopeKindPaths(scope: SelectedScope, reasons: string[]): void {
   }
 }
 
-function isPathWithinSelectedScope(scope: SelectedScope, candidatePath: unknown): boolean {
-  if (typeof candidatePath !== "string") {
-    return false;
-  }
-  if (scope.kind === "workspace-root") {
-    return true;
-  }
-  return scope.relativePaths.some(
-    (scopePath) => candidatePath === scopePath || candidatePath.startsWith(`${scopePath}/`),
+function isPathWithinSelectedScope(
+  scope: SelectedScope,
+  scopePaths: ReadonlySet<string>,
+  candidatePath: unknown,
+): boolean {
+  if (typeof candidatePath !== "string") return false;
+  if (scope.kind === "workspace-root") return true;
+  return (
+    scopePaths.has(candidatePath) ||
+    pathAncestors(candidatePath).some((path) => scopePaths.has(path))
   );
-}
-
-function pathsOverlap(a: string, b: string): boolean {
-  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
-}
-
-function setHasOverlappingPath(paths: ReadonlySet<string>, candidatePath: string): boolean {
-  for (const path of paths) {
-    if (pathsOverlap(path, candidatePath)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 export function validateSelectedScope(scope: SelectedScope): ValidationResult {
@@ -945,7 +933,8 @@ interface PackFileValidationSummary {
 function validatePackFileEntry(
   entry: unknown,
   scope: SelectedScope,
-  selectedPaths: Set<string>,
+  selectedPaths: OmittedPathIndex,
+  scopePaths: ReadonlySet<string>,
   reasons: string[],
 ): void {
   if (!isRecord(entry)) {
@@ -954,12 +943,12 @@ function validatePackFileEntry(
   }
   const scopePath = entry.scopePath;
   if (typeof scopePath === "string" && isValidScopePath(scopePath, { mustBeRelative: true })) {
-    if (selectedPaths.has(scopePath)) {
+    if (selectedPaths.paths.has(scopePath)) {
       reasons.push("pack.files contains duplicate scopePath");
-    } else if (setHasOverlappingPath(selectedPaths, scopePath)) {
+    } else if (indexedPathsOverlap(selectedPaths, scopePath)) {
       reasons.push("pack.files contains overlapping scopePath");
     }
-    selectedPaths.add(scopePath);
+    addIndexedPath(selectedPaths, scopePath);
   }
   if (!isConnectedFileRole(entry.role)) {
     reasons.push("pack.files entry has invalid role");
@@ -967,7 +956,7 @@ function validatePackFileEntry(
   if (!isValidScopePath(scopePath, { mustBeRelative: true })) {
     reasons.push("pack.files entry has invalid scopePath");
   }
-  if (!isPathWithinSelectedScope(scope, scopePath)) {
+  if (!isPathWithinSelectedScope(scope, scopePaths, scopePath)) {
     reasons.push("pack.files entry falls outside selected scope");
   }
   if (!isNonEmptyTrimmed(entry.selectionReason)) {
@@ -979,6 +968,7 @@ function validatePackExcerptAtom(
   atom: unknown,
   entryScopePath: string,
   scope: SelectedScope,
+  scopePaths: ReadonlySet<string>,
   reasons: string[],
 ): void {
   const atomScopePath = isRecord(atom) ? atom.scopePath : undefined;
@@ -986,7 +976,10 @@ function validatePackExcerptAtom(
     reasons.push("pack.files excerpt atom.scopePath does not match parent scopePath");
   }
   appendPrefixedReasons(validateEvidenceAtom(atom as EvidenceAtom), "pack.files excerpt ", reasons);
-  if (typeof atomScopePath === "string" && !isPathWithinSelectedScope(scope, atomScopePath)) {
+  if (
+    typeof atomScopePath === "string" &&
+    !isPathWithinSelectedScope(scope, scopePaths, atomScopePath)
+  ) {
     reasons.push("pack.files excerpt atom.scopePath falls outside selected scope");
   }
   if (isRecord(atom) && atom.redactionState === "raw-internal") {
@@ -1015,13 +1008,14 @@ function validatePackExcerpt(
   excerpt: unknown,
   entryScopePath: string,
   scope: SelectedScope,
+  scopePaths: ReadonlySet<string>,
   reasons: string[],
 ): number {
   if (!isRecord(excerpt)) {
     reasons.push("pack.files excerpt invalid");
     return 0;
   }
-  validatePackExcerptAtom(excerpt.atom, entryScopePath, scope, reasons);
+  validatePackExcerptAtom(excerpt.atom, entryScopePath, scope, scopePaths, reasons);
   return validatePackExcerptContent(excerpt, reasons);
 }
 
@@ -1052,14 +1046,15 @@ function validatePackFiles(
   scope: SelectedScope,
   reasons: string[],
 ): PackFileValidationSummary {
-  const selectedPaths = new Set<string>();
+  const selectedPaths = omittedPathIndex(new Set());
+  const scopePaths = new Set(scope.relativePaths);
   let actualExcerptBytes = 0;
   if (!Array.isArray(files)) {
     reasons.push("pack.files invalid");
-    return { actualExcerptBytes, selectedPaths };
+    return { actualExcerptBytes, selectedPaths: selectedPaths.paths };
   }
   for (const entry of files as readonly unknown[]) {
-    validatePackFileEntry(entry, scope, selectedPaths, reasons);
+    validatePackFileEntry(entry, scope, selectedPaths, scopePaths, reasons);
     if (!isRecord(entry)) {
       continue;
     }
@@ -1069,10 +1064,16 @@ function validatePackFiles(
     }
     const parentScopePath = typeof entry.scopePath === "string" ? entry.scopePath : "";
     for (const excerpt of entry.excerpts) {
-      actualExcerptBytes += validatePackExcerpt(excerpt, parentScopePath, scope, reasons);
+      actualExcerptBytes += validatePackExcerpt(
+        excerpt,
+        parentScopePath,
+        scope,
+        scopePaths,
+        reasons,
+      );
     }
   }
-  return { actualExcerptBytes, selectedPaths };
+  return { actualExcerptBytes, selectedPaths: selectedPaths.paths };
 }
 
 interface OmittedPathIndex {
@@ -1140,6 +1141,7 @@ function validateOmittedEntries(
 ): void {
   const selectedIndex = omittedPathIndex(selectedPaths);
   const omittedIndex = omittedPathIndex(new Set());
+  const scopePaths = new Set(scope.relativePaths);
   for (const [i, entry] of entries.entries()) {
     if (!isRecord(entry)) {
       reasons.push("pack.omitted entry invalid");
@@ -1147,7 +1149,7 @@ function validateOmittedEntries(
     }
     validateOmittedPathState(entry, i, reasons, selectedIndex, omittedIndex);
     if (!isCandidateOmissionReason(entry.reason)) reasons.push("pack.omitted has invalid reason");
-    if (!isPathWithinSelectedScope(scope, entry.scopePath)) {
+    if (!isPathWithinSelectedScope(scope, scopePaths, entry.scopePath)) {
       reasons.push("pack.omitted entry falls outside selected scope");
     }
     if (!isFiniteNonNegativeInteger(entry.omittedAtMs)) {

@@ -2266,9 +2266,9 @@ function appendRingEvidence(evidence: RingEvidenceAccumulator, result: RingResul
     result,
     evidence.primaryContentIdentities,
   );
-  evidence.atoms.push(...result.atoms);
-  evidence.omitted.push(...result.omitted);
-  evidence.uncertainty.push(...result.uncertainty);
+  for (const atom of result.atoms) evidence.atoms.push(atom);
+  for (const omission of result.omitted) evidence.omitted.push(omission);
+  for (const marker of result.uncertainty) evidence.uncertainty.push(marker);
 }
 function newRingDecisions(): RingDecisionAudit {
   return {
