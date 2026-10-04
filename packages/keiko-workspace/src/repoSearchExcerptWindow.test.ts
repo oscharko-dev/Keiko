@@ -45,6 +45,48 @@ function expectSourceOrder(windows: readonly { readonly startLine: number }[] | 
 }
 
 describe("bounded anchor excerpt windows", () => {
+  it.each([undefined, 1])(
+    "preserves fitting nearby values through the facade with maxWindows %s",
+    async (maxWindows) => {
+      const content =
+        "padding\n".repeat(100) +
+        "x".repeat(200) +
+        "TargetOne=first\n" +
+        "x".repeat(280) +
+        "TargetTwo=second\n" +
+        "tail\n".repeat(100);
+      const fs = memFs("/ws", { "manual.txt": content });
+      const request = {
+        scopePath: "manual.txt",
+        startLine: 1,
+        endLine: 203,
+        maxBytes: 400,
+        maxTotalBytes: 400,
+        anchors: ["TargetOne", "TargetTwo"],
+      };
+      const result = await readExcerpt(
+        scope(),
+        { ...request, ...(maxWindows === undefined ? {} : { maxWindows }) },
+        { fs },
+      );
+      expect(result.content).toContain("TargetOne=first");
+      expect(result.content).toContain("TargetTwo=second");
+      expect(Buffer.byteLength(result.content)).toBeLessThanOrEqual(request.maxBytes);
+      expect(result.windows ?? [result]).toHaveLength(1);
+      expect(result.truncated).toBe(true);
+      expect(result.anchoredWindowApplied).toBe(true);
+      const offset = content.indexOf(result.content);
+      expect(offset).toBeGreaterThanOrEqual(0);
+      expect(result.atom.lineRange).toEqual({
+        startLine: content.slice(0, offset).split("\n").length,
+        endLine: content.slice(0, offset + result.content.length).split("\n").length,
+      });
+      const grouped = await readExcerpt(scope(), { ...request, maxWindows: 2 }, { fs });
+      expect(result.content).toBe(grouped.content);
+      expect(result.atom.lineRange).toEqual(grouped.atom.lineRange);
+    },
+  );
+
   it("retains the whole fitting slice instead of sharing its budget over covered anchors", () => {
     const content = nearbyContent();
     const windows = anchoredExcerptByteWindows(
@@ -143,26 +185,30 @@ describe("bounded anchor excerpt windows", () => {
       RepoSearchInvalidRangeError,
     );
   });
-  it("returns an untruncated whole fitting slice through the actual excerpt facade", async () => {
-    const content = nearbyContent();
-    const fs = memFs("/ws", { "manual.txt": content });
-    const result = await readExcerpt(
-      scope(),
-      {
-        scopePath: "manual.txt",
-        startLine: 1,
-        endLine: 1,
-        ...limits,
-        anchors: ["TargetOne", "TargetTwo", "TargetThree"],
-      },
-      { fs },
-    );
-    expect(result.content).toBe(content);
-    expect(result.truncated).toBe(false);
-    expect(result.windows ?? [result]).toHaveLength(1);
-    expect(result.atom.lineRange).toEqual({ startLine: 1, endLine: 1 });
-    expect(result.omittedRangeCount).toBeUndefined();
-  });
+  it.each([1, 3])(
+    "returns a whole fitting slice through the facade with %i windows",
+    async (maxWindows) => {
+      const content = nearbyContent();
+      const fs = memFs("/ws", { "manual.txt": content });
+      const result = await readExcerpt(
+        scope(),
+        {
+          scopePath: "manual.txt",
+          startLine: 1,
+          endLine: 1,
+          ...limits,
+          maxWindows,
+          anchors: ["TargetOne", "TargetTwo", "TargetThree"],
+        },
+        { fs },
+      );
+      expect(result.content).toBe(content);
+      expect(result.truncated).toBe(false);
+      expect(result.windows ?? [result]).toHaveLength(1);
+      expect(result.atom.lineRange).toEqual({ startLine: 1, endLine: 1 });
+      expect(result.omittedRangeCount).toBeUndefined();
+    },
+  );
   it("keeps Unicode case-folding and complete UTF-8 code points under cumulative bytes", () => {
     const content =
       "é🙂\n".repeat(300) + "ſtatus=first\n" + "é🙂\n".repeat(300) + "KeyProbe=second\n";

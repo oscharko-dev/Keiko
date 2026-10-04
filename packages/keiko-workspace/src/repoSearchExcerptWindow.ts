@@ -29,15 +29,6 @@ export function validateExcerptAnchors(anchors: readonly string[]): readonly str
   return [...unique];
 }
 
-function firstAnchorIndex(content: string, anchors: readonly string[]): number | undefined {
-  for (const anchor of anchors) {
-    const pattern = anchor.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
-    const match = new RegExp(pattern, "iu").exec(content);
-    if (match !== null) return match.index;
-  }
-  return undefined;
-}
-
 function isContinuationByte(byte: number | undefined): boolean {
   return byte !== undefined && (byte & 0xc0) === 0x80;
 }
@@ -61,24 +52,13 @@ export function anchoredExcerptByteWindow(
   maxBytes: number,
   sourceStartLine: number,
 ): AnchoredByteWindow | undefined {
-  const unique = validateExcerptAnchors(anchors);
-  if (maxBytes === 0) return undefined;
-  const index = firstAnchorIndex(content, unique);
-  if (index === undefined) return undefined;
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(content);
-  const anchorOffset = encoder.encode(content.slice(0, index)).length;
-  if (anchorOffset < Math.floor(maxBytes / 2)) return undefined;
-  const [start, end] = boundedUtf8Offsets(bytes, anchorOffset, maxBytes);
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  const before = decoder.decode(bytes.subarray(0, start));
-  const excerpt = decoder.decode(bytes.subarray(start, end));
-  const startLine = sourceStartLine + before.split("\n").length - 1;
-  return {
-    content: excerpt,
-    startLine,
-    endLine: startLine + excerpt.split("\n").length - 1,
-  };
+  const window = anchoredExcerptByteWindows(
+    content,
+    anchors,
+    { maxBytes, maxWindows: 1, maxTotalBytes: maxBytes },
+    sourceStartLine,
+  )?.[0];
+  return window?.anchoredWindowApplied === true ? window : undefined;
 }
 
 interface AnchorRange {
