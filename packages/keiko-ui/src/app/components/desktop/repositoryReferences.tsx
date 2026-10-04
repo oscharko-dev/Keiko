@@ -209,7 +209,7 @@ function tidyEvidenceText(source: string): string {
   // Keep bracket contents byte-for-byte: whitespace can be part of a real filename, and
   // converting controls to spaces could invent a different valid citation path.
   return source
-    .split(/(\[[^\[\]]{1,4096}\])/gu)
+    .split(/(\[[^[\]]{1,4096}\])/gu)
     .map((part) => (part.startsWith("[") && part.endsWith("]") ? part : tidyEvidenceProse(part)))
     .join("");
 }
