@@ -948,6 +948,7 @@ interface FailedSendOutcome {
   readonly permanentFailure?: true;
   readonly identityConflict?: true;
   readonly scopeChanged?: true;
+  readonly scopeChangeStatus?: number;
   readonly chatClosed?: true;
 }
 
@@ -2307,7 +2308,12 @@ function canonicalTurnInProgressFailure(error: unknown): FailedSendOutcome {
     return { status: "failed", permanentFailure: true, identityConflict: true };
   }
   if (error instanceof ApiError && error.code === "GROUNDING_SCOPE_CHANGED") {
-    return { status: "failed", permanentFailure: true, scopeChanged: true };
+    return {
+      status: "failed",
+      permanentFailure: true,
+      scopeChanged: true,
+      scopeChangeStatus: error.status,
+    };
   }
   if (error instanceof ApiError && error.code === "CHAT_CLOSED") {
     return { status: "failed", permanentFailure: true, chatClosed: true };
@@ -2485,6 +2491,29 @@ interface SettledSendAttempt {
   readonly persistence: UserPersistenceProof;
 }
 
+interface TypedDraftRecovery {
+  readonly terminal: SendAttemptOutcome;
+  readonly persistence: UserPersistenceProof;
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly signal: AbortSignal;
+  readonly draftRevision: number | undefined;
+  readonly text: string;
+}
+
+function isUnpersistedScopeRefusal(input: TypedDraftRecovery): boolean {
+  return (
+    input.terminal.status === "failed" &&
+    input.terminal.scopeChanged === true &&
+    input.terminal.scopeChangeStatus === 409 &&
+    input.persistence === "missing"
+  );
+}
+
+function clearsComposerDraft(options: SendMessageOptions | undefined): boolean {
+  return options?.text === undefined || options.clearDraftOnAdmission === true;
+}
+
 function failedSendPresentation(
   exactTurnInProgress: boolean,
   settled: SendAttemptOutcome,
@@ -2557,7 +2586,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const [streamingAssistantMessage, setStreamingAssistantMessage] = useState<
     ChatMessage | undefined
   >();
-  const [draft, setDraft] = useState("");
+  const [draft, setDraftState] = useState("");
+  const draftRevisionRef = useRef(0);
+  const setDraft = useCallback((value: string): void => {
+    draftRevisionRef.current += 1;
+    setDraftState(value);
+  }, []);
   const [loading, setLoading] = useState(true);
   // Issue #152 — lifecycle is the source of truth; `sending` is derived.
   const [sendStatus, setSendStatus] = useState<SendStatus>("idle");
@@ -2768,7 +2802,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const resetComposerForConversationSwitch = useCallback((): void => {
     setDraft("");
     clearPendingAttachments();
-  }, [clearPendingAttachments]);
+  }, [clearPendingAttachments, setDraft]);
 
   // Issue #148 — extract bounded text from the staged DOCUMENT attachments for the send body.
   // Images are excluded here (they stay on the metadata-only attachments path). A document with
@@ -3998,6 +4032,37 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // should call cancelSend.
   const cancelGrounded = cancelSend;
 
+  const clearAdmittedDraft = useCallback(
+    (
+      options: SendMessageOptions | undefined,
+      canonicalTarget: CanonicalVoiceSendTarget | undefined,
+    ): number | undefined => {
+      if (!clearsComposerDraft(options)) return undefined;
+      setDraft("");
+      return canonicalTarget === undefined ? draftRevisionRef.current : undefined;
+    },
+    [setDraft],
+  );
+
+  const recoverUnsentTypedDraft = useCallback(
+    (input: TypedDraftRecovery): void => {
+      if (
+        input.draftRevision === undefined ||
+        !mountedRef.current ||
+        input.signal.aborted ||
+        activeChatIdRef.current !== input.chatId ||
+        activeProjectPathRef.current !== input.projectPath ||
+        latestSendSignalRef.current !== input.signal ||
+        draftRevisionRef.current !== input.draftRevision ||
+        !isUnpersistedScopeRefusal(input)
+      ) {
+        return;
+      }
+      setDraft(input.text);
+    },
+    [setDraft],
+  );
+
   const sendMessage = useCallback(
     async (options?: SendMessageOptions): Promise<SendMessageOutcome> => {
       const admission = resolveSendMessageAdmission({
@@ -4020,9 +4085,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // Synchronously commit to "queued" so a re-entrant call in the same tick
       // hits the isInFlight guard above (AC#2).
       updateSendStatus("queued");
-      if (options?.text === undefined || options.clearDraftOnAdmission === true) {
-        setDraft("");
-      }
+      const clearedDraftRevision = clearAdmittedDraft(options, canonicalTarget);
       setError(undefined);
       // AC2 (#2670) — the queue re-attempts a retryable transport failure with the SAME optimistic
       // row, whose id reconciliation already replaced with the durable row it fetched. The id guard
@@ -4067,6 +4130,15 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           signal: controller.signal,
           preserveUserOnMissing: options?.clientTurnId !== undefined,
         });
+        recoverUnsentTypedDraft({
+          terminal,
+          persistence,
+          chatId: chat.id,
+          projectPath: project.path,
+          signal: controller.signal,
+          draftRevision: clearedDraftRevision,
+          text: options?.text ?? draft,
+        });
         // Only the latest attempt owns the shared lifecycle. cancelSend leaves this attempt's signal
         // as owner until settlement; an immediate replacement installs a different signal and cannot
         // be clobbered by this continuation.
@@ -4104,8 +4176,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.selectedModel,
       state.models,
       pendingAttachments,
+      clearAdmittedDraft,
       executeSendAttempt,
       presentCompletedSend,
+      recoverUnsentTypedDraft,
       settleSendAttempt,
       updateOwnedSendStatus,
       updateSendStatus,
@@ -4676,6 +4750,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.selectedModel,
       noEligibleModels,
       draft,
+      setDraft,
       loading,
       sending,
       sendStatus,

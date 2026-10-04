@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "bcb487086f4fdc997d8bb0efba326c891070c632cfe2e4999abb0c9a43959807",
+    "catalogDigest": "cf250d93d61c81253b4b8ac8d903c34dd00c8997db69336ce1e28c37e86bbfa3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -24727,8 +24727,8 @@
         "failureClasses": ["workspace-reconnect"],
         "proofIds": ["project.workspace.reconnect.outcome"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store-handlers.ts:90",
-        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:533"]
+        "registrationSite": "packages/keiko-server/src/store-handlers.ts:93",
+        "emitterSites": ["packages/keiko-server/src/store-handlers.ts:536"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -78499,7 +78499,7 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 65,
+    "dynamicCount": 67,
     "unknownCategoryCount": 75,
     "authoritative": false
   },
@@ -80362,7 +80362,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:251",
+      "site": "packages/keiko-server/src/grounded-qa.ts:2434",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/grounded-qa.ts:252",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -80398,6 +80405,13 @@
       "op": "<dynamic>",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/sse-write.ts:281",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/store-handlers.ts:1258",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -82493,7 +82507,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:2699",
+      "site": "packages/keiko-server/src/grounded-qa.ts:2722",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -82832,21 +82846,21 @@
     {
       "op": "project.create.trust.grant",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:406",
+      "site": "packages/keiko-server/src/store-handlers.ts:409",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/store-handlers.ts:549",
+      "site": "packages/keiko-server/src/store-handlers.ts:552",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "project.workspace.reconnect",
       "category": "setup",
-      "site": "packages/keiko-server/src/store-handlers.ts:93",
+      "site": "packages/keiko-server/src/store-handlers.ts:96",
       "package": "keiko-server"
     },
     {

@@ -1807,6 +1807,111 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
   // (server returning the {chat, messages} delta so the client applies it locally with zero
   // refetch) is a cross-package follow-up in keiko-server/keiko-contracts; this pins the client
   // never regresses to more than one of each per grounded turn.
+  it.each([false, true])(
+    "recovers an unpersisted scope-refused typed draft (live text: %s)",
+    async (live) => {
+      const { result } = await setupGroundedSession();
+      vi.mocked(askGrounded).mockRejectedValue(
+        new ApiError("GROUNDING_SCOPE_CHANGED", "The grounding scope changed.", 409),
+      );
+      act(() => result.current.setDraft("Original typed question"));
+      await act(async () => {
+        await result.current.sendMessage(
+          live ? { text: "Live typed question", clearDraftOnAdmission: true } : undefined,
+        );
+      });
+      expect(result.current.draft).toBe(live ? "Live typed question" : "Original typed question");
+      expect(result.current.messages).toHaveLength(0);
+      expect(askGrounded).toHaveBeenCalledOnce();
+      expect(result.current.error).toContain("GROUNDING_SCOPE_CHANGED");
+    },
+  );
+
+  it.each(["new draft", "edit then clear", "chat switch", "cancel"] as const)(
+    "does not restore scope-refused text after %s",
+    async (change) => {
+      const { result } = await setupGroundedSession();
+      const reconciliation = deferred<Awaited<ReturnType<typeof fetchChatMessages>>>();
+      vi.mocked(fetchChatMessages).mockReturnValueOnce(reconciliation.promise);
+      vi.mocked(askGrounded).mockRejectedValue(
+        new ApiError("GROUNDING_SCOPE_CHANGED", "The grounding scope changed.", 409),
+      );
+      act(() => result.current.setDraft("Original typed question"));
+      let sending: Promise<unknown> | undefined;
+      act(() => {
+        sending = result.current.sendMessage();
+      });
+      await waitFor(() => expect(fetchChatMessages).toHaveBeenCalledTimes(2));
+      if (change === "chat switch") {
+        vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+        await act(async () => result.current.openChat(chat({ id: "other-chat" })));
+      } else {
+        act(() => {
+          if (change === "cancel") result.current.cancelSend();
+          else {
+            result.current.setDraft("Newer question");
+            if (change === "edit then clear") result.current.setDraft("");
+          }
+        });
+      }
+      await act(async () => {
+        reconciliation.resolve({ messages: [] });
+        await sending;
+      });
+      expect(result.current.draft).toBe(change === "new draft" ? "Newer question" : "");
+      expect(askGrounded).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["persisted", "unknown"] as const)(
+    "does not restore a scope-refused typed draft with %s persistence",
+    async (persistence) => {
+      const { result } = await setupGroundedSession();
+      vi.mocked(askGrounded).mockRejectedValue(
+        new ApiError("GROUNDING_SCOPE_CHANGED", "The grounding scope changed.", 409),
+      );
+      if (persistence === "unknown")
+        vi.mocked(fetchChatMessages).mockRejectedValueOnce(new TypeError("unavailable"));
+      else
+        vi.mocked(fetchChatMessages).mockResolvedValueOnce({
+          messages: [await canonicalMessage("typed-scope-turn", { chatId: "chat-grounded" })],
+        });
+      act(() => result.current.setDraft("Original typed question"));
+      await act(async () => {
+        await result.current.sendMessage({ clientTurnId: "typed-scope-turn" });
+      });
+      expect(result.current.draft).toBe("");
+      expect(askGrounded).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves an independent typed draft after an explicit spoken scope refusal", async () => {
+    const { result } = await setupGroundedSession();
+    vi.mocked(askGrounded).mockRejectedValue(
+      new ApiError("GROUNDING_SCOPE_CHANGED", "The grounding scope changed.", 409),
+    );
+    act(() => result.current.setDraft("Independent typed question"));
+    await act(async () => {
+      await result.current.sendMessage({ text: "Spoken question" });
+    });
+    expect(result.current.draft).toBe("Independent typed question");
+    expect(askGrounded).toHaveBeenCalledOnce();
+  });
+
+  it.each(["INTERNAL", "GROUNDING_SCOPE_CHANGED"])(
+    "does not restore a typed draft for a non409 %s failure",
+    async (code) => {
+      const { result } = await setupGroundedSession();
+      vi.mocked(askGrounded).mockRejectedValue(new ApiError(code, "Internal error.", 500));
+      act(() => result.current.setDraft("Original typed question"));
+      await act(async () => {
+        await result.current.sendMessage();
+      });
+      expect(result.current.draft).toBe("");
+      expect(askGrounded).toHaveBeenCalledOnce();
+    },
+  );
+
   it("uses the confirmed folder replacement token for the next typed grounded turn", async (): Promise<void> => {
     const { result } = await setupGroundedSession([], {
       connectedScopes: [
