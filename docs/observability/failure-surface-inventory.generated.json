@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e42a8140deb1d3330806f26183ac128cce3af29ba21239a910b5eedf00e5ea13"
+    "catalogDigest": "ccb0d26d8c2237142fb7deb7136cd7b4f8bf76f76591ea08a0cf1649f6ac7989"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,9 +55,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 510,
-    "proofCount": 517,
-    "resolvedProofCount": 517,
+    "operationCount": 511,
+    "proofCount": 518,
+    "resolvedProofCount": 518,
     "failureClassCount": 335,
     "scenarioCount": 31,
     "resolvedScenarioCount": 31
@@ -272,6 +272,7 @@
         "coding-app-session.channel.closed",
         "coding-app-session.channel.opened",
         "coding-app-session.local-session.confirmed",
+        "coding-app-session.operation.state",
         "coding-app-session.paired",
         "coding-app-session.rotated",
         "coding-app-session.signed-out",
@@ -1196,6 +1197,9 @@
     ],
     "coding-app-session.local-session.confirmed.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"
+    ],
+    "coding-app-session.operation.state.line": [
+      "packages/keiko-server/src/coding-app-session/appSessionReadAuthority.test.ts"
     ],
     "coding-app-session.paired.request": [
       "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.test.ts"

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e42a8140deb1d3330806f26183ac128cce3af29ba21239a910b5eedf00e5ea13" as const;
+  "ccb0d26d8c2237142fb7deb7136cd7b4f8bf76f76591ea08a0cf1649f6ac7989" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3243,6 +3243,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "fingerprint-absent",
           "conflict-retried",
           "ack-missing",
+          "acknowledged",
+          "ack-invalidated",
           "automatic-suppressed",
           "timeout-blocked",
           "timeout-recovered",
@@ -4046,6 +4048,72 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["coding-app-session-pairing"],
     proofIds: ["coding-app-session.local-session.confirmed.request"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "coding-app-session.operation.state",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "coding-app-session.appSessionReadAuthority.logOperationState",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      phase: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["acquired", "released"],
+      },
+      surface: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "grounded-chat",
+          "desktop-chat",
+          "streaming-chat",
+          "git-description",
+          "unspecified",
+        ],
+      },
+      releaseReason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["settled", "aborted"],
+      },
+      concurrentOperations: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      authorityState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["active", "unavailable", "unobserved"],
+      },
+      durationMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-app-session-pairing"],
+    proofIds: ["coding-app-session.operation.state.line"],
     releaseImpact: "patch",
   },
   {
@@ -35831,10 +35899,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "coding-app-session-pairing",
       requirementContract: "coding-app-session-pairing",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["end"],
+      lifecycleTransitions: ["end", "state"],
       lifecycleOperations: {
         start: [],
-        state: [],
+        state: ["coding-app-session.operation.state"],
         end: ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
         failure: [],
         loss: [],
@@ -35845,12 +35913,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "coding-app-session.operation.state",
+          mode: "correlation",
+        },
+        {
           op: "coding-app-session.paired",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
+      resourceSignals: [
+        "coding-app-session.local-session.confirmed",
+        "coding-app-session.operation.state",
+        "coding-app-session.paired",
+      ],
       replayReferences: [],
       operations: [
         {
@@ -35880,6 +35956,60 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-app-session.local-session.confirmed.request"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-app-session.operation.state",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "authorityState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "concurrentOperations",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "durationMs",
+              type: "integer",
+              dataClass: "duration",
+              required: true,
+            },
+            {
+              name: "phase",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "releaseReason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "surface",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "duration", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-app-session.operation.state.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -68630,6 +68760,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-app-session.channel.closed": "tools-workflows",
     "coding-app-session.channel.opened": "tools-workflows",
     "coding-app-session.local-session.confirmed": "tools-workflows",
+    "coding-app-session.operation.state": "tools-workflows",
     "coding-app-session.paired": "tools-workflows",
     "coding-app-session.rotated": "tools-workflows",
     "coding-app-session.signed-out": "tools-workflows",
