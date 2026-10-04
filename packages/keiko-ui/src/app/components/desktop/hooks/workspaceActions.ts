@@ -1655,11 +1655,13 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     setConnecting(null);
   };
   const cancelConnect: WorkspaceApi["cancelConnect"] = () => {
-    if (connectingRef.current !== null) {
+    const cancelled = connectingRef.current !== null;
+    if (cancelled) {
       outcomeVersionRef.current += 1;
       reportConnectionOutcome({ kind: "cancelled" });
     }
     clearConnect();
+    return cancelled;
   };
 
   // Applies a confirmed connect gesture once the bind veto has resolved: re-checks both endpoints

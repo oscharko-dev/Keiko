@@ -2672,6 +2672,18 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     await Promise.resolve();
   }
 
+  it("reports cancellation only while the current connection gesture is active", () => {
+    const outcomes: ConnectionOutcome[] = [];
+    const harness = makeConnectHarness([win("files", {}, "files-1")], [], {
+      connecting: { from: "files-1", x: 0, y: 0 },
+      onConnectionOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(harness.cancelConnect()).toBe(true);
+    expect(harness.cancelConnect()).toBe(false);
+    expect(outcomes).toEqual([{ kind: "cancelled" }]);
+  });
+
   it("reports pending then connected only after the scope bind acknowledges", async () => {
     const acceptance = deferredValue<boolean>();
     const outcomes: ConnectionOutcome[] = [];
@@ -2686,6 +2698,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     );
     harness.confirmConnect("chat-1", evt);
     expect(outcomes.at(-1)?.kind).toBe("pending");
+    expect(harness.cancelConnect()).toBe(false);
     expect(outcomes.map((outcome) => outcome.kind)).not.toContain("cancelled");
     acceptance.resolve(true);
     await acceptance.promise;

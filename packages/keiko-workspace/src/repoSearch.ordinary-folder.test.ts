@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { executeCodingRepositoryRequest } from "./codingRepositorySearch.js";
 import { detectWorkspaceAt } from "./detect.js";
+import { createWorkspaceIndex } from "./workspaceIndex.js";
 import { nodeWorkspaceFs, type WorkspaceDirEntry } from "./fs.js";
 import {
   DEFAULT_SEARCH_LIMITS,
@@ -51,6 +52,26 @@ afterEach(() => {
 });
 
 describe("recursive text search in ordinary folders", () => {
+  it.each([["x".repeat(4097)], ["x".repeat(2048), "y".repeat(2048)]])(
+    "rejects oversized trusted literal targets before accessing the filesystem port",
+    async (...terms) => {
+      const selected = scope();
+      let filesystemAccesses = 0;
+      const fs = new Proxy(nodeWorkspaceFs, {
+        get: (): never => {
+          filesystemAccesses += 1;
+          throw new Error("filesystem accessed before query admission");
+        },
+      });
+      await expect(
+        searchText(selected, { ...query("target"), kind: "natural-language" }, undefined, {
+          fs,
+          queryInterpretation: { kind: "literal", terms },
+        }),
+      ).rejects.toThrow("literal targets too long");
+      expect(filesystemAccesses).toBe(0);
+    },
+  );
   it("closes an open directory iterator when traversal is cancelled", async () => {
     put("chapter.html", "<p>manualNeedle</p>");
     const controller = new AbortController();
@@ -148,6 +169,27 @@ describe("recursive text search in ordinary folders", () => {
       ).rejects.toMatchObject({ reason: "binary" });
     },
   );
+
+  it("does not reuse fuzzy cached lexical matches for trusted literal targets", async () => {
+    put("manual.html", "foo\nbar\n");
+    const selected = scope();
+    const workspaceIndex = createWorkspaceIndex();
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 32 };
+    const warm = await searchText(selected, query("foo"), limits, { workspaceIndex });
+    expect(warm.atoms).toHaveLength(1);
+    const absent = "foo bar";
+    const result = await searchText(
+      selected,
+      { ...query(absent), kind: "natural-language" },
+      limits,
+      {
+        workspaceIndex,
+        queryInterpretation: { kind: "literal", terms: [absent] },
+      },
+    );
+    expect(result.atoms).toEqual([]);
+    expect(result.coverage.incomplete).toBe(false);
+  });
 
   it("returns lexical evidence for deeply nested sources outside inferred source directories", async () => {
     const path = `${Array.from({ length: 45 }, (_, index) => `depth-${String(index)}`).join("/")}/deep.ts`;

@@ -453,6 +453,27 @@ describe("buildConnectedScopes", () => {
 });
 
 describe("buildMultiSourceGatewayMessages", () => {
+  it("keeps size-exclusion metadata inside its source and redacts sensitive path text", () => {
+    const secret = "tenantcredentialvalue987";
+    const first: ConnectedContextPack = {
+      ...scopePack("src/a.ts", 1, "first"),
+      omitted: [{ scopePath: `manuals/${secret}.html`, reason: "size-exceeded", omittedAtMs: NOW }],
+    };
+    const messages = buildMultiSourceGatewayMessages(
+      "Which files exceeded the text size limit?",
+      [
+        { label: "handbook", pack: first },
+        { label: "app", pack: scopePack("src/b.ts", 1, "second") },
+      ],
+      buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }),
+    );
+    const prompt = messages[1]?.content ?? "";
+    expect(prompt).toContain("reason=size-exceeded");
+    expect(prompt).toContain("not file-content evidence");
+    expect(prompt).not.toContain(secret);
+    expect(prompt.indexOf("reason=size-exceeded")).toBeLessThan(prompt.indexOf("### Source 2"));
+  });
+
   it("prunes prompt-only excerpt content to fit the summed model input budget", () => {
     const packA = scopePack("src/a.ts", 0.3, "low");
     const packB = scopePack("src/b.ts", 0.9, "high");

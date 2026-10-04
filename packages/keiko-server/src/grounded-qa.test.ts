@@ -735,13 +735,14 @@ describe("grounded continuity evidence lifecycle", () => {
       },
     );
     expect(second.status).toBe(200);
-    expect(captured?.answerQuestion).toContain("Earlier conversation reference data");
-    expect(captured?.answerQuestion).toContain(proposed);
-    expect(captured?.answerQuestion).toContain(followUp);
-    expect(captured?.query.text).toContain("src/arithmetic.ts");
-    expect(captured?.query.text.startsWith(followUp)).toBe(true);
+    if (captured === undefined) throw new TypeError("Missing follow-up input");
+    expect(captured.answerQuestion).toContain("Earlier conversation reference data");
+    expect(captured.answerQuestion).toContain(proposed);
+    expect(captured.answerQuestion).toContain(followUp);
+    expect(captured.query.text).toContain("src/arithmetic.ts");
+    expect(captured.query.text.startsWith(followUp)).toBe(true);
     const messages = buildGroundedGatewayMessages(
-      captured?.answerQuestion ?? "",
+      captured.answerQuestion ?? "",
       packWithCitations(),
       buildRedactor({}),
     );
@@ -835,9 +836,7 @@ describe("mappedWorkspaceError", () => {
 describe("buildGroundedGatewayMessages", () => {
   it("preserves read-only capabilities and real import paths when fitting coding proposals", () => {
     const base = packWithCitations();
-    const file = base.files[0];
-    const excerpt = file?.excerpts[0];
-    if (file === undefined || excerpt === undefined) throw new Error("missing source fixture");
+    const { file, excerpt } = requirePackExcerpt(base, 0);
     const pack: ConnectedContextPack = {
       ...base,
       files: [
@@ -1007,6 +1006,83 @@ describe("buildGroundedGatewayMessages", () => {
         buildRedactor({}, undefined),
       ),
     ).toThrow(ContextOverflowError);
+  });
+
+  it("explains safe size exclusions without presenting unread files as evidence", () => {
+    const pack: ConnectedContextPack = {
+      ...packWithCitations(),
+      omitted: [
+        { scopePath: "manuals/above.txt", reason: "size-exceeded", omittedAtMs: NOW },
+        { scopePath: ".env", reason: "size-exceeded", omittedAtMs: NOW },
+        { scopePath: ".e\u200bnv", reason: "size-exceeded", omittedAtMs: NOW },
+        { scopePath: "../escape.txt", reason: "size-exceeded", omittedAtMs: NOW },
+        { scopePath: "src/irrelevant.ts", reason: "low-relevance", omittedAtMs: NOW },
+      ],
+    };
+    const messages = buildGroundedGatewayMessages(
+      "Explain file-size exclusions",
+      pack,
+      buildRedactor({}),
+    );
+    expect(messages[0]?.content).toContain("including 2 MiB (2,097,152 bytes)");
+    expect(messages[1]?.content).toContain('"manuals/above.txt"; reason=size-exceeded');
+    expect(messages[1]?.content).toContain(
+      "Allowed relative paths excluded by file-size policy: 1",
+    );
+    expect(messages[1]?.content).toContain("not file-content evidence");
+    expect(messages[1]?.content).not.toContain(".env");
+    expect(messages[1]?.content).not.toContain("escape.txt");
+    expect(messages[1]?.content).not.toContain("src/irrelevant.ts");
+    expect(messages[1]?.content).not.toMatch(/\[manuals\/above\.txt(?::|\])/u);
+  });
+
+  it("preserves a valid deep omitted path using the admitted model budget", () => {
+    const deepPath = `${"handbook/".repeat(75)}above.html`;
+    const pack: ConnectedContextPack = {
+      ...packWithCitations(),
+      omitted: [{ scopePath: deepPath, reason: "size-exceeded", omittedAtMs: NOW }],
+    };
+    const capability = customModelConfig(CHAT_MODEL).capabilities?.[0];
+    if (capability === undefined) throw new TypeError("Missing model capability");
+    const messages = buildGroundedGatewayMessages(
+      "Explain size exclusions",
+      pack,
+      buildRedactor({}),
+      {
+        modelInputTokensMax: groundedPromptInputTokensForCapability(capability),
+      },
+    );
+    expect(messages[1]?.content).toContain(JSON.stringify(deepPath));
+    expect(messages[1]?.content).toContain("reason=size-exceeded");
+  });
+
+  it("bounds omission metadata while preserving its complete count and prompt accounting", () => {
+    const base = packWithCitations();
+    const pack: ConnectedContextPack = {
+      ...base,
+      omitted: Array.from({ length: 20 }, (_, index) => ({
+        scopePath: `manuals/${String(index)}-${"a".repeat(80)}.txt`,
+        reason: "size-exceeded" as const,
+        omittedAtMs: NOW,
+      })),
+    };
+    const sent = fittedGroundedGatewayPrompt("Explain size exclusions", pack, buildRedactor({}));
+    const prompt = sent.messages[1]?.content ?? "";
+    const withoutSources = sent.withoutSources[1]?.content ?? "";
+    const omissionLines = prompt.split("\n").filter((line) => line.startsWith("- omitted path:"));
+    expect(promptByteLength(sent.messages)).toBeLessThanOrEqual(
+      modelInputPromptByteLimit(pack.budget.modelInputTokensMax),
+    );
+    expect(omissionLines.length).toBeLessThan(20);
+    expect(prompt).toContain("Allowed relative paths excluded by file-size policy: 20");
+    expect(prompt).toContain(
+      `Additional excluded paths not listed: ${String(20 - omissionLines.length)}.`,
+    );
+    expect(withoutSources).not.toContain("Allowed relative paths excluded by file-size policy");
+    expect(sentPromptContext(sent, 0, undefined).sourceTokens).toBeGreaterThan(0);
+    expect(sent.sentReferenceCount).toBe(
+      base.files.reduce((total, file) => total + file.excerpts.length, 0),
+    );
   });
 
   it("includes incomplete repository coverage warnings in the model prompt", () => {

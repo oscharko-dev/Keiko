@@ -9,11 +9,56 @@ import {
 } from "./repoSearchMatchers.js";
 
 describe("trusted literal query interpretation", () => {
+  it.each([["x".repeat(4097)], ["x".repeat(2048), "y".repeat(2048)]])(
+    "rejects oversized literal targets before constructing a matcher or fingerprint",
+    (...terms) => {
+      const interpretation = { kind: "literal" as const, terms };
+      expect(() => buildMatcher(nlq("target"), interpretation)).toThrow("literal targets too long");
+      expect(() => fingerprintFor(nlq("target"), interpretation)).toThrow(
+        "literal targets too long",
+      );
+    },
+  );
+  it("deduplicates identical literal terms before applying the aggregate input bound", () => {
+    const target = "x".repeat(4096);
+    const query = nlq(target);
+    const interpretation = { kind: "literal" as const, terms: [target, target] };
+    expect(buildMatcher(query, interpretation).match(target)).toBe(1);
+    expect(fingerprintFor(query, interpretation)).toBe(
+      fingerprintFor(query, { kind: "literal", terms: [target] }),
+    );
+  });
+  it("preserves differently cased targets in case-sensitive literal searches", () => {
+    const query = { ...nlq("Needle needle"), caseSensitive: true };
+    const matcher = buildMatcher(query, { kind: "literal", terms: ["Needle", "needle"] });
+    expect(matcher.match("Needle")).toBe(1);
+    expect(matcher.match("needle")).toBe(1);
+    expect(matcher.match("NEEDLE")).toBe(0);
+  });
   it("matches spaces and punctuation literally without regex expansion", () => {
     const query = { ...nlq("( ".repeat(100)), kind: "exact-symbol" as const };
     expect(buildMatcher(query, { kind: "literal" }).match(query.text)).toBe(1);
     expect(() => buildMatcher(query)).toThrow("whitespace");
     expect(fingerprintFor(query, { kind: "literal" })).not.toBe(fingerprintFor(query));
+  });
+  it("keeps multiple trusted literal targets atomic in a natural-language lookup", () => {
+    const query = nlq("LAB_SCALE_NOT_PRESENT_924617 LAB_DIRECTORY_DIST");
+    const interpretation = {
+      kind: "literal" as const,
+      terms: ["LAB_SCALE_NOT_PRESENT_924617", "LAB_DIRECTORY_DIST"],
+    };
+    const matcher = buildMatcher(query, interpretation);
+    expect(matcher.match("LAB_SCALE_TARGET LAB_DIRECTORY_OUT")).toBe(0);
+    expect(matcher.match("LAB_DIRECTORY_DIST 17 bar")).toBeGreaterThan(0);
+    expect(matcher.match("LAB_SCALE_NOT_PRESENT_924617 actual evidence")).toBeGreaterThan(0);
+    expect(fingerprintFor(query, interpretation)).not.toBe(fingerprintFor(query));
+    expect(
+      buildMatcher({ ...query, caseSensitive: true }, interpretation).match("lab_directory_dist"),
+    ).toBe(0);
+    expect(fingerprintFor(query, { ...interpretation, terms: ["other target"] })).not.toBe(
+      fingerprintFor(query, interpretation),
+    );
+    expect(() => buildMatcher({ ...query, kind: "regex" }, interpretation)).toThrow("exact-text");
   });
   it("cannot turn the regex lane into a bypass of its canonical safety gate", () => {
     const query = { ...nlq("(a+)+"), kind: "regex" as const };

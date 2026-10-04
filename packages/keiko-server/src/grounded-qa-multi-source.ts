@@ -103,6 +103,8 @@ import {
   registerGroundedTurn,
   redactString,
   uncertaintyLines,
+  sizeExclusionLines,
+  fitPromptOmissionMetadata,
   withPromptExcerptByteLimit,
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
@@ -381,12 +383,18 @@ export interface LabeledPack {
   readonly pack: ConnectedContextPack;
 }
 
-function sourceSection(entry: LabeledPack, index: number, redactor: Redactor): readonly string[] {
+function sourceSection(
+  entry: LabeledPack,
+  index: number,
+  redactor: Redactor,
+  omissionPathBytes?: number,
+): readonly string[] {
   const { label, pack } = entry;
   return [
     `### Source ${String(index + 1)}: ${label}`,
     `- budget/usage: ${packBudgetSummary(pack)}`,
     `- omitted evidence atoms: ${String(pack.omitted.length)}`,
+    ...sizeExclusionLines(pack, redactor, omissionPathBytes),
     "",
     "Repository evidence excerpts:",
     ...evidenceLines(pack, redactor),
@@ -411,8 +419,11 @@ function buildRawMultiSourceGatewayMessages(
   question: string,
   labeledPacks: readonly LabeledPack[],
   redactor: Redactor,
+  omissionPathBytes?: number,
 ): readonly GatewayChatMessage[] {
-  const sections = labeledPacks.flatMap((entry, index) => sourceSection(entry, index, redactor));
+  const sections = labeledPacks.flatMap((entry, index) =>
+    sourceSection(entry, index, redactor, omissionPathBytes),
+  );
   const userContent = [
     "User question:",
     redactString(redactor, question),
@@ -491,6 +502,7 @@ function withMultiSourcePromptExcerptTotalBudget(
 }
 
 interface FittedMultiSourcePrompt {
+  readonly omissionPathBytes?: number;
   readonly messages: readonly GatewayChatMessage[];
   readonly packs: readonly LabeledPack[];
 }
@@ -533,18 +545,24 @@ function budgetedMultiSourceGatewayMessages(
   const { limit, fits } = multiSourcePromptFit(labeledPacks, options);
   const fullMessages = buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor);
   if (fits(fullMessages)) return { messages: fullMessages, packs: labeledPacks };
+  const metadataFit = fitPromptOmissionMetadata(
+    (bytes) => buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor, bytes),
+    fits,
+    limit,
+  );
+  if (metadataFit !== undefined) return { ...metadataFit, packs: labeledPacks };
   if (multiSourceExcerptCount(labeledPacks) === 0) {
     return { messages: fullMessages, packs: labeledPacks };
   }
 
   const emptyPacks = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
   const overheadBytes = promptByteLength(
-    buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor),
+    buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0),
   );
   // When overhead alone (system prompt + question + framing for all sources) exceeds the limit,
   // no amount of excerpt trimming can bring the prompt within budget. Throw instead of sending
   // an over-limit prompt to the provider which would result in an opaque 400 context-window error.
-  if (!fits(buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor))) {
+  if (!fits(buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0))) {
     throw new ContextOverflowError(
       `Multi-source grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
@@ -552,15 +570,16 @@ function budgetedMultiSourceGatewayMessages(
   let totalExcerptBytes = Math.max(0, limit - overheadBytes);
   while (totalExcerptBytes >= 0) {
     const packs = withMultiSourcePromptExcerptTotalBudget(labeledPacks, totalExcerptBytes);
-    const messages = buildRawMultiSourceGatewayMessages(question, packs, redactor);
+    const messages = buildRawMultiSourceGatewayMessages(question, packs, redactor, 0);
     if (fits(messages) || totalExcerptBytes === 0) {
-      return { messages, packs };
+      return { messages, packs, omissionPathBytes: 0 };
     }
     totalExcerptBytes = Math.max(0, Math.floor(totalExcerptBytes * 0.8));
   }
   return {
-    messages: buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor),
+    messages: buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor, 0),
     packs: emptyPacks,
+    omissionPathBytes: 0,
   };
 }
 
@@ -590,7 +609,7 @@ function loggedMultiSourceFit(
     }
     throw error;
   }
-  if (fitted.packs !== labeledPacks) {
+  if (fitted.packs !== labeledPacks || fitted.omissionPathBytes !== undefined) {
     const sentReferenceCount = promptExcerptCount(fitted.packs.map((entry) => entry.pack));
     const fit = { referenceCount, sentReferenceCount, promptTokens: tokens(fitted.messages) };
     logPromptWindowFit({ state: "trimmed", ...fit, inputBudget }, correlationId);
@@ -616,6 +635,7 @@ export function fittedMultiSourcePrompt(
       question,
       withMultiSourcePromptExcerptByteLimit(labeledPacks, 0),
       redactor,
+      -1,
     ),
     sentReferenceCount: promptExcerptCount(fitted.packs.map((entry) => entry.pack)),
     availableReferenceCount: promptExcerptCount(labeledPacks.map((entry) => entry.pack)),

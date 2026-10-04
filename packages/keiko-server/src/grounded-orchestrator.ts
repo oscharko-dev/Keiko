@@ -1489,16 +1489,25 @@ type NonLexicalRing = Omit<RetrievalRing, "kind"> & {
   readonly kind: "structural" | "git-history";
 };
 
-function anchoredLexicalQuery(inputs: SearchInputs): RetrievalQuery {
-  if (inputs.query.kind !== "natural-language") return inputs.query;
-  const terms = inputs.anchors
+function anchoredLexicalTargets(inputs: SearchInputs): readonly string[] {
+  if (inputs.query.kind !== "natural-language") return [];
+  return inputs.anchors
     .filter(
       (anchor) =>
         anchor.kind === "quoted" ||
         (anchor.kind === "identifier" && anchor.weight >= 0.85 && anchor.term.includes("_")),
     )
     .map((anchor) => anchor.term);
-  return terms.length === 0 ? inputs.query : { ...inputs.query, text: terms.join(" ") };
+}
+
+function lexicalSemanticProvider(
+  inputs: SearchInputs,
+  definitionSymbol: string | undefined,
+  terms: readonly string[],
+): SemanticSearchProvider | undefined {
+  return definitionSymbol === undefined && terms.length === 0
+    ? inputs.repoSemanticSearchProvider
+    : undefined;
 }
 
 async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Promise<SearchResult> {
@@ -1522,16 +1531,17 @@ async function lexicalRingSearch(ring: RetrievalRing, inputs: SearchInputs): Pro
     );
   }
   const definitionSymbol = directDefinitionSymbol(inputs.query, inputs.anchors);
+  const terms = definitionSymbol === undefined ? anchoredLexicalTargets(inputs) : [];
   const query =
     definitionSymbol === undefined
-      ? anchoredLexicalQuery(inputs)
+      ? { ...inputs.query, text: terms.length === 0 ? inputs.query.text : terms.join(" ") }
       : { ...inputs.query, kind: "exact-symbol" as const, text: definitionSymbol };
+  const semanticSearchProvider = lexicalSemanticProvider(inputs, definitionSymbol, terms);
   return searchText(inputs.searchScope, query, ring.searchLimits, {
     ...options,
     ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
-    ...(definitionSymbol === undefined && inputs.repoSemanticSearchProvider !== undefined
-      ? { semanticSearchProvider: inputs.repoSemanticSearchProvider }
-      : {}),
+    ...(terms.length === 0 ? {} : { queryInterpretation: { kind: "literal" as const, terms } }),
+    ...(semanticSearchProvider === undefined ? {} : { semanticSearchProvider }),
   });
 }
 

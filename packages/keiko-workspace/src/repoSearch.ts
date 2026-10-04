@@ -549,6 +549,9 @@ function buildSearchTextRunner(
     ...(deps.deadlineAtMs === undefined ? {} : { deadlineAtMs: deps.deadlineAtMs }),
     signal: deps.signal,
     matcher: buildMatcher(query, deps.queryInterpretation),
+    ...(deps.queryInterpretation?.terms === undefined
+      ? {}
+      : { literalTerms: deps.queryInterpretation.terms }),
     fingerprint: fingerprintFor(query, deps.queryInterpretation),
     policy: resolveWorkspaceSearchPolicy(scope, deps.fs, deps.searchHints),
     query,

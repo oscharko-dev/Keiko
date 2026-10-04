@@ -74,7 +74,7 @@ export function workspaceApiFixture(patch: Partial<WorkspaceApi> = {}): Workspac
     cascade: vi.fn(),
     startConnect: vi.fn(),
     confirmConnect: vi.fn(),
-    cancelConnect: vi.fn(),
+    cancelConnect: vi.fn(() => false),
     removeConn: vi.fn(),
     updateConnBoundScope: vi.fn(),
     connect: vi.fn(),

@@ -1269,6 +1269,54 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("accepts a full planner-envelope question with repeated quoted and identifier targets", async () => {
+    const marker = `LAB_${"X".repeat(2006)}`;
+    const question = `Finde "${marker}" und ${marker} im Handbuch.`.padEnd(4096, " ");
+    writeFileSync(join(ROOT, "manual.html"), `<p>${marker}: 750 hours.</p>\n`);
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: question }),
+      }),
+      {
+        answerer: echoAnswerer,
+        fs: nodeWorkspaceFs,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(
+      out.pack.files.find((file) => file.scopePath === "manual.html")?.excerpts[0]?.content,
+    ).toContain("750 hours");
+    expect(out.pack.usage.searchCalls).toBe(1);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("does not substitute shared identifier fragments for an explicitly quoted absent target", async () => {
+    writeFileSync(
+      join(ROOT, "manual.html"),
+      "<p>LAB_SCALE_TARGET: Ölwechsel alle 1250 Betriebsstunden.</p>\n",
+    );
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: 'Prüfe rekursiv den exakten Suchbegriff "LAB_SCALE_NOT_PRESENT_924617" im aktuell verbundenen Ordner. Gibt es dafür einen belegten Treffer? Wenn nicht, sage das klar und erfinde keine Fundstelle.',
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        fs: nodeWorkspaceFs,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(out.pack.files).toEqual([]);
+    expect(out.pack.diagnostics?.coverage?.matchesReturned).toBe(0);
+    expect(out.pack.diagnostics?.coverage?.incomplete).toBe(false);
+    expect(out.pack.usage.searchCalls).toBe(1);
+  });
+
   it("keeps a complete ordinary-folder literal absence free of unrelated code scan warnings", async () => {
     writeFileSync(join(ROOT, "manual.html"), "<p>Service interval: 750 hours</p>\n");
     const out = await retrieveConnectedContextPack(

@@ -36,6 +36,7 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
+  isDenied,
   PathDeniedError,
   RepoSearchInvalidQueryError,
   RepoSearchInvalidRangeError,
@@ -49,6 +50,7 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
   validateConnectedContextPack,
+  isValidScopePath,
   type ConnectedContextPack,
   type ContextExcerpt,
   type EvidenceAtom,
@@ -882,11 +884,36 @@ type GroundedPromptBuilder = (
   question: string,
   pack: ConnectedContextPack,
   redactor: Redactor,
+  omissionPathBytes?: number,
 ) => readonly GatewayChatMessage[];
 
 interface FittedPromptPack {
+  readonly omissionPathBytes: number;
   readonly messages: readonly GatewayChatMessage[];
   readonly pack: ConnectedContextPack;
+}
+
+export function fitPromptOmissionMetadata(
+  build: (pathBytes: number) => readonly GatewayChatMessage[],
+  fits: (messages: readonly GatewayChatMessage[]) => boolean,
+  pathByteLimit: number,
+):
+  | { readonly messages: readonly GatewayChatMessage[]; readonly omissionPathBytes: number }
+  | undefined {
+  const minimum = build(0);
+  if (!fits(minimum)) return undefined;
+  let best = { messages: minimum, omissionPathBytes: 0 };
+  let low = 1;
+  let high = pathByteLimit;
+  while (low <= high) {
+    const bytes = Math.floor((low + high) / 2);
+    const messages = build(bytes);
+    if (fits(messages)) {
+      best = { messages, omissionPathBytes: bytes };
+      low = bytes + 1;
+    } else high = bytes - 1;
+  }
+  return best;
 }
 
 function fitGroundedPrompt(
@@ -903,10 +930,16 @@ function fitGroundedPrompt(
     countGatewayPromptTokens({ messages: candidate }, options.tokenAccounting) <=
       budgetedPack.budget.modelInputTokensMax;
   const messages = build(question, budgetedPack, redactor);
-  if (fits(messages)) return { messages, pack: budgetedPack };
+  if (fits(messages)) return { messages, pack: budgetedPack, omissionPathBytes: limit };
+  const metadataFit = fitPromptOmissionMetadata(
+    (bytes) => build(question, budgetedPack, redactor, bytes),
+    fits,
+    limit,
+  );
+  if (metadataFit !== undefined) return { ...metadataFit, pack: budgetedPack };
 
   const emptyPack = withPromptExcerptBudget(budgetedPack, 0);
-  const emptyMessages = build(question, emptyPack, redactor);
+  const emptyMessages = build(question, emptyPack, redactor, 0);
   const overheadBytes = promptByteLength(emptyMessages);
   // When overhead alone (system prompt + question + framing) exceeds the limit, no amount of
   // excerpt trimming can bring the prompt within budget. Throw instead of sending an over-limit
@@ -918,13 +951,13 @@ function fitGroundedPrompt(
   }
   let low = 0;
   let high = Math.max(0, limit - overheadBytes);
-  let best: FittedPromptPack = { messages: emptyMessages, pack: emptyPack };
+  let best: FittedPromptPack = { messages: emptyMessages, pack: emptyPack, omissionPathBytes: 0 };
   while (low <= high) {
     const totalExcerptBytes = Math.floor((low + high) / 2);
     const candidatePack = withPromptExcerptBudget(budgetedPack, totalExcerptBytes);
-    const candidate = build(question, candidatePack, redactor);
+    const candidate = build(question, candidatePack, redactor, 0);
     if (fits(candidate)) {
-      best = { messages: candidate, pack: candidatePack };
+      best = { messages: candidate, pack: candidatePack, omissionPathBytes: 0 };
       low = totalExcerptBytes + 1;
     } else {
       high = totalExcerptBytes - 1;
@@ -981,6 +1014,7 @@ export function fittedGroundedGatewayPrompt(
       question,
       withPromptExcerptBudget(fitted.pack, 0),
       redactor,
+      -1,
     ),
     sentReferenceCount: promptExcerptCount([fitted.pack]),
     availableReferenceCount: promptExcerptCount([pack]),
@@ -1034,6 +1068,51 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
   return lines;
 }
 
+function allowedSizeExclusionPaths(pack: ConnectedContextPack): readonly string[] {
+  const paths = pack.omitted
+    .filter(
+      (entry) =>
+        entry.reason === "size-exceeded" &&
+        isValidScopePath(entry.scopePath, { mustBeRelative: true }) &&
+        stripUnsafeFormatChars(entry.scopePath) === entry.scopePath,
+    )
+    .map((entry) => entry.scopePath)
+    .filter((path) => isValidScopePath(path, { mustBeRelative: true }) && !isDenied(path));
+  return [...new Set(paths)];
+}
+
+// The existing pack owns eligibility decisions. Project only safe omission metadata, never
+// unread file bodies; bound prompt bytes without changing which files retrieval inspects.
+export function sizeExclusionLines(
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+  pathByteLimit = modelInputPromptByteLimit(pack.budget.modelInputTokensMax),
+): readonly string[] {
+  if (pathByteLimit < 0) return [];
+  const paths = allowedSizeExclusionPaths(pack);
+  if (paths.length === 0) return [];
+  const lines = [
+    "Known file-size exclusions (metadata only, not file-content evidence):",
+    `Allowed relative paths excluded by file-size policy: ${String(paths.length)}.`,
+  ];
+  let pathBytes = 0;
+  let listed = 0;
+  for (const path of paths) {
+    const line = `- omitted path: ${JSON.stringify(redactedString(redactor, path))}; reason=size-exceeded`;
+    const bytes = Buffer.byteLength(line, "utf8");
+    if (pathBytes + bytes > pathByteLimit) break;
+    lines.push(line);
+    pathBytes += bytes;
+    listed += 1;
+  }
+  if (listed < paths.length)
+    lines.push(`Additional excluded paths not listed: ${String(paths.length - listed)}.`);
+  lines.push(
+    "These files were not read as evidence. Do not infer their contents or invent line references.",
+  );
+  return lines;
+}
+
 export function uncertaintyLines(
   pack: ConnectedContextPack,
   redactor: Redactor,
@@ -1054,6 +1133,7 @@ function buildRawGroundedGatewayMessages(
   question: string,
   pack: ConnectedContextPack,
   redactor: Redactor,
+  omissionPathBytes?: number,
 ): readonly GatewayChatMessage[] {
   const safeQuestion = redactedString(redactor, question);
   const userContent = [
@@ -1067,6 +1147,7 @@ function buildRawGroundedGatewayMessages(
     `- query kind: ${pack.query.kind}`,
     `- budget/usage: ${packBudgetSummary(pack)}`,
     `- omitted evidence atoms: ${String(pack.omitted.length)}`,
+    ...sizeExclusionLines(pack, redactor, omissionPathBytes),
     "",
     "Repository evidence excerpts:",
     ...evidenceLines(pack, redactor),
@@ -2395,6 +2476,13 @@ function withGroundedCompactionSummary(
   return { ...result, body: { ...answer, contextPack } };
 }
 
+async function prepareGroundedMemoryWithContinuity(
+  admitted: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+): Promise<PreparedGroundedAsk | RouteResult> {
+  return prepareGroundedMemory(await withGroundedContinuity(admitted, deps), deps);
+}
+
 async function runAdmittedGroundedAsk(
   admitted: PreparedGroundedAsk,
   deps: UiHandlerDeps,
@@ -2404,10 +2492,7 @@ async function runAdmittedGroundedAsk(
 ): Promise<RouteResult> {
   let stagedAssistantId: string | undefined;
   try {
-    const memoryPrepared = await prepareGroundedMemory(
-      await withGroundedContinuity(admitted, deps),
-      deps,
-    );
+    const memoryPrepared = await prepareGroundedMemoryWithContinuity(admitted, deps);
     ensureNotCancelled(admitted.signal);
     if (isRouteResult(memoryPrepared)) {
       return settleGroundedChatTurn(admitted, deps, memoryPrepared);

@@ -145,9 +145,23 @@ Git-oriented generated-directory exclusions merely from names such as `build` or
 Files above the 2 MiB eligibility ceiling remain visible as excluded candidates and skipped counts;
 they do not make an otherwise complete eligible-text scan incomplete. An explicitly narrower
 caller byte cap still reports incomplete coverage when it excludes otherwise eligible text.
+Validated, policy-allowed, redacted relative paths and `size-exceeded` reasons are projected into
+the existing model prompt within its input budget. This metadata proves eligibility exclusions
+only: it contains no unread body and cannot establish file-content citations or line references.
+Exact exclusion counts remain when the remaining prompt budget cannot hold every path name.
 
 An explicit identifier or quoted target starts an independent retrieval question even when the
-question contains an anaphoric word such as "there". Literal lookup prioritizes actual lexical
+question contains an anaphoric word such as "there"; named CamelCase targets remain independent
+even when a request also says "for that". Quoted literal targets and explicit snake-case identifiers
+match whole terms, without stemming them into generic fragments. Multiple targets share the same
+recursive scan. Their literal interpretation participates in the query fingerprint and uses live
+matching rather than fuzzy hashed lexical records; approximate semantic evidence cannot substitute
+for a requested exact occurrence. Internal literal query text and aggregate unique target characters
+(including separators) remain within the planner's 4,096-character input envelope; identical targets
+are deduplicated before that aggregate check. Invalid input is rejected before needle allocation,
+fingerprinting, or filesystem access. This input bound does not limit the recursive corpus.
+General natural-language and orientation requests retain their
+existing broader retrieval behavior. Literal lookup prioritizes actual lexical
 content matches ahead of incidental natural-language path overlap. Files with the same basename
 remain independent evidence candidates: their names alone cannot establish duplicate content or
 facts. Explicit duplicate hints remain supported, and existing output/context budgets bound retained

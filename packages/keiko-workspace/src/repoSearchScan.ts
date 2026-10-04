@@ -706,6 +706,7 @@ export interface SearchTextRunner {
   readonly deadlineAtMs?: number | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly matcher: LineMatcher;
+  readonly literalTerms?: readonly string[] | undefined;
   readonly fingerprint: string;
   readonly policy: SearchPolicy;
   readonly query: RetrievalQuery;
@@ -1299,6 +1300,11 @@ function cachedPreviewFileMatches(
   return textFileMatches(runner, file, state, order, content) ?? "handled";
 }
 
+function canUseCachedLexicalMatches(runner: SearchTextRunner): boolean {
+  // Hashed natural-language records cannot prove atomic phrase/alternative matching.
+  return runner.literalTerms === undefined && runner.semantic === undefined;
+}
+
 function cachedFileMatches(
   runner: SearchTextRunner,
   file: DiscoveredFile,
@@ -1314,7 +1320,7 @@ function cachedFileMatches(
     recordCandidateOmission(candidates, file.relativePath, cached.kind);
     return "handled";
   }
-  if (runner.semantic !== undefined) {
+  if (!canUseCachedLexicalMatches(runner)) {
     return undefined;
   }
   if (abortScanFile(runner, state)) {

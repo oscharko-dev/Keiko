@@ -1437,6 +1437,39 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     }
   });
 
+  it("cancels the current connection before clearing the selected Files window", () => {
+    const clearSelection = vi.fn();
+    const cancelConnect = vi.fn(() => true);
+    const windowDispatcher = vi.fn();
+    window.addEventListener("keydown", windowDispatcher);
+    try {
+      render(
+        <Workspace
+          ws={workspace({
+            wins: [appWindow({ id: "files-1", type: "files" })],
+            // The gesture can start before React publishes the connecting snapshot.
+            connecting: null,
+            selection: { focusedWindowId: "files-1", selectedWindowIds: ["files-1"] },
+            api: api({ clearSelection, cancelConnect }),
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      const surface = screen.getByRole("main", { name: "Workspace surface" });
+      const escape = createEvent.keyDown(surface, { key: "Escape", bubbles: true });
+
+      fireEvent(surface, escape);
+
+      expect(cancelConnect).toHaveBeenCalledOnce();
+      expect(clearSelection).not.toHaveBeenCalled();
+      expect(windowDispatcher).not.toHaveBeenCalled();
+      expect(escape.defaultPrevented).toBe(true);
+    } finally {
+      window.removeEventListener("keydown", windowDispatcher);
+    }
+  });
+
   it("clears workspace selection with Escape from the focused surface", () => {
     const clearSelection = vi.fn();
     const wins = [appWindow({ id: "agents-1", type: "agents" })];

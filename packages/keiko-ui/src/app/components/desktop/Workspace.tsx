@@ -486,6 +486,11 @@ function tryHandleWorkspaceEscapeShortcut(
   api: UseWorkspaceResult["api"],
 ): boolean {
   if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (api.cancelConnect()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
     if (selection.selectedWindowIds.length > 0) {
       api.clearSelection();
       event.preventDefault();

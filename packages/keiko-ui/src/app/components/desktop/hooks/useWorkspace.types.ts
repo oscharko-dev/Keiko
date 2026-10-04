@@ -118,7 +118,7 @@ export interface WorkspaceApi {
   readonly cascade: () => void;
   readonly startConnect: (fromId: string, e: ReactPointerEvent<Element>) => void;
   readonly confirmConnect: (toId: string, e: ReactPointerEvent<Element>) => void;
-  readonly cancelConnect: () => void;
+  readonly cancelConnect: () => boolean;
   readonly removeConn: (connId: string, options?: { readonly unbind?: boolean }) => void;
   readonly updateConnBoundScope: (connId: string, scope: ChatConnectedScope) => void;
   readonly updateConnGitChangeScope?:

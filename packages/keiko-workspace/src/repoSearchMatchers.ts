@@ -27,18 +27,45 @@ export interface LineMatcher {
 /** Trusted workspace callers can request literal substring matching for an exact-text query. */
 export interface LiteralQueryInterpretation {
   readonly kind: "literal";
+  readonly terms?: readonly string[] | undefined;
+}
+
+// Match the planner's existing input envelope without depending on the higher workflow layer.
+const MAX_LITERAL_TARGET_CHARACTERS = 4096;
+
+function boundedLiteralTargets(query: RetrievalQuery, terms: readonly string[]): readonly string[] {
+  if (query.text.length > MAX_LITERAL_TARGET_CHARACTERS)
+    throw new RepoSearchInvalidQueryError("literal targets too long");
+  const unique = new Set<string>();
+  let characters = 0;
+  for (const term of terms) {
+    if (term.length === 0)
+      throw new RepoSearchInvalidQueryError("literal targets must not be empty");
+    if (unique.has(term)) continue;
+    characters += term.length + (unique.size === 0 ? 0 : 1);
+    if (characters > MAX_LITERAL_TARGET_CHARACTERS)
+      throw new RepoSearchInvalidQueryError("literal targets too long");
+    unique.add(term);
+  }
+  if (unique.size === 0) throw new RepoSearchInvalidQueryError("literal targets must not be empty");
+  return [...unique];
 }
 
 export function fingerprintFor(
   query: RetrievalQuery,
   interpretation?: LiteralQueryInterpretation,
 ): string {
+  const literalTerms =
+    interpretation?.kind === "literal"
+      ? boundedLiteralTargets(query, interpretation.terms ?? [query.text])
+      : undefined;
   const canonical = JSON.stringify({
     kind: query.kind,
     text: query.text,
     caseSensitive: query.caseSensitive,
     maxResults: query.maxResults,
     ...(interpretation === undefined ? {} : { interpretation: interpretation.kind }),
+    ...(interpretation?.terms === undefined ? {} : { literalTerms }),
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
@@ -716,12 +743,16 @@ function buildExactSymbolMatcher(query: RetrievalQuery): LineMatcher {
   return buildLiteralMatcher(query);
 }
 
-function buildLiteralMatcher(query: RetrievalQuery): LineMatcher {
-  const needle = query.caseSensitive ? query.text : query.text.toLowerCase();
+function buildLiteralMatcher(
+  query: RetrievalQuery,
+  terms: readonly string[] = [query.text],
+): LineMatcher {
+  const targets = boundedLiteralTargets(query, terms);
+  const needles = targets.map((term) => (query.caseSensitive ? term : term.toLowerCase()));
   return {
     match: (line: string): number => {
       const haystack = query.caseSensitive ? line : line.toLowerCase();
-      return haystack.includes(needle) ? 1 : 0;
+      return needles.some((needle) => haystack.includes(needle)) ? 1 : 0;
     },
   };
 }
@@ -761,9 +792,11 @@ export function buildMatcher(
   interpretation?: LiteralQueryInterpretation,
 ): LineMatcher {
   if (interpretation?.kind === "literal") {
-    if (query.kind !== "exact-symbol")
+    const namedNaturalLanguage =
+      query.kind === "natural-language" && interpretation.terms !== undefined;
+    if (query.kind !== "exact-symbol" && !namedNaturalLanguage)
       throw new RepoSearchInvalidQueryError("literal interpretation requires exact-text query");
-    return buildLiteralMatcher(query);
+    return buildLiteralMatcher(query, interpretation.terms);
   }
   if (query.kind === "natural-language") {
     return buildNaturalLanguageMatcher(query);

@@ -239,12 +239,21 @@ function isAnaphoricTestRequest(content: string): boolean {
   );
 }
 
+function isNamedCamelTarget(query: string, term: string): boolean {
+  return [...query.matchAll(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/gu)].some(
+    (match) => match[0].toLowerCase() === term && /[a-z][A-Z]/u.test(match[0]),
+  );
+}
+
 function hasIndependentQueryTarget(query: string): boolean {
   return extractAnchors({ text: query, maxAnchors: 8 }).anchors.some(
     (anchor) =>
       anchor.kind === "path" ||
       anchor.kind === "quoted" ||
-      (anchor.kind === "identifier" && (anchor.weight >= 0.9 || /[_.]/u.test(anchor.term))),
+      (anchor.kind === "identifier" &&
+        (anchor.weight >= 0.9 ||
+          /[_.]/u.test(anchor.term) ||
+          (anchor.weight >= 0.85 && isNamedCamelTarget(query, anchor.term)))),
   );
 }
 
