@@ -1151,6 +1151,12 @@ const CLIENT_FILES_SCOPE_DECISION_OPERATION = defineActivityLogOperation({
     sourceCount: { type: "integer", dataClass: "count", required: false },
     candidateCount: { type: "integer", dataClass: "count", required: false },
     bindingFingerprint: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    mutationSurface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["files", "local-knowledge", "git-change"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1863,6 +1869,9 @@ function logClientFilesScopeDecision(
         ...(decision.bindingFingerprint === undefined
           ? {}
           : { bindingFingerprint: decision.bindingFingerprint }),
+        ...(decision.mutationSurface === undefined
+          ? {}
+          : { mutationSurface: decision.mutationSurface }),
         completeness: "complete",
         loss: "none",
       },

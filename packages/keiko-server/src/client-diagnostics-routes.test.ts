@@ -1347,6 +1347,7 @@ describe("POST /api/diagnostics/client", () => {
     "automatic-suppressed",
     "timeout-blocked",
     "timeout-recovered",
+    "timeout-rejected",
     "request-superseded",
   ])(
     "persists the closed Files ownership decision %s as routine causal evidence",
@@ -1386,6 +1387,39 @@ describe("POST /api/diagnostics/client", () => {
       });
       expect(record).not.toHaveProperty("errorKind");
       expect(record).not.toHaveProperty("messageDigest");
+    },
+  );
+  it.each(["local-knowledge", "git-change"])(
+    "persists the closed %s grounding queue surface under the original correlation",
+    async (mutationSurface) => {
+      const sink = captureServerLog();
+      const filesScopeDecision = { decision: "timeout-rejected", mutationSurface };
+      expect(
+        await handleClientDiagnosticIngest(
+          context(
+            JSON.stringify({
+              message: "Keiko grounding mutation queue decision.",
+              clientTs: CLIENT_TS,
+              correlationId: "ui_queue-decision-0001",
+              filesScopeDecision,
+            }),
+          ),
+        ),
+      ).toEqual({ status: 204, body: null });
+      const event = sink.events.find((record) => record.op === "client.files-scope.decision");
+      expect(
+        expectActivityLogProof(
+          "client.files-scope.decision.line",
+          formatActivityLogProofLine(event ?? {}),
+        ),
+      ).toMatchObject({
+        ...filesScopeDecision,
+        correlationId: "ui_queue-decision-0001",
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(event?.errorKind).toBeUndefined();
+      expect(clientDiagnosticEvents(sink)).toHaveLength(0);
     },
   );
   it("keeps browser-declared artifact loss separate from loss of the routine diagnostic", async () => {

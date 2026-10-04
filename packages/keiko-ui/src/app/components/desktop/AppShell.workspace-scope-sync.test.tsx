@@ -269,7 +269,7 @@ describe("AppShell canonical workspace scope synchronization", () => {
         mocks.workspace?.wins?.find((win) => win.id === "unconnected-files")?.cfg["root"],
       ).toBe("/unrelated/new"),
     );
-    expect(mocks.fetchChats).not.toHaveBeenCalled();
+    expect(mocks.fetchChats).toHaveBeenCalledExactlyOnceWith("/repo", expect.any(String), "chat-1");
     expect(reportFilesScopeDecision).toHaveBeenCalledWith(expect.any(String), {
       decision: "automatic-suppressed",
     });
@@ -305,6 +305,23 @@ describe("AppShell canonical workspace scope synchronization", () => {
       expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalled();
     },
   );
+
+  it("refreshes an unchanged local ambiguity before adopting another client's resolved source", async () => {
+    await mountAmbiguousFiles();
+    mocks.fetchChats.mockClear();
+    mocks.serverChat = chat([scope("/manuals/New")], 2);
+    await act(async () => {
+      mocks.workspace?.api.update("unconnected-files", { cfg: { root: "/unrelated/new" } });
+    });
+    await waitFor(() =>
+      expect(mocks.workspace?.conns[0]?.boundScopeFingerprint).toBe(
+        connectedScopeFingerprint(scope("/manuals/New")),
+      ),
+    );
+    expect(mocks.fetchChats).toHaveBeenCalledWith("/repo", expect.any(String), "chat-1");
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(mocks.workspace?.conns[0]?.boundScopeElided).not.toBe(true);
+  });
 
   it("forgets the ambiguity after an edge is removed and recreated", async () => {
     const initial = await mountAmbiguousFiles();

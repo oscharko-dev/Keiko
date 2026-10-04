@@ -1,12 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, fetchChats } from "./api";
+import { ApiError, fetchChats, updateChat } from "./api";
 import { reportClientDiagnostic } from "./client-diagnostics";
-import { canonicalGroundingChat, replaceGroundingScopeList } from "./chat-grounding-mutation";
+import {
+  canonicalGroundingChat,
+  replaceGroundingScopeList,
+  updateGroundingScopes,
+} from "./chat-grounding-mutation";
 import type { Chat } from "./types";
 
 vi.mock("./api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api")>()),
   fetchChats: vi.fn(),
+  updateChat: vi.fn(),
 }));
 vi.mock("./client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
 
@@ -33,6 +38,35 @@ function conflict(): ApiError {
 afterEach(() => vi.clearAllMocks());
 
 describe("grounding source mutation conflicts", () => {
+  it("preserves the update refusal while adopting only the fresh canonical sources", async () => {
+    const refusal = conflict();
+    const canonical = { ...chat, groundingScopeIdentity: "gsi-v1:" + "b".repeat(64) };
+    vi.mocked(updateChat).mockRejectedValue(refusal);
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [canonical] });
+    const changed = vi.fn();
+    await expect(updateGroundingScopes(chat, { connectedScopes: null }, changed)).rejects.toBe(
+      refusal,
+    );
+    expect(updateChat).toHaveBeenCalledExactlyOnceWith(chat.id, {
+      connectedScopes: null,
+      expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
+    });
+    expect(fetchChats).toHaveBeenCalledExactlyOnceWith(chat.projectPath, "scope-attempt", chat.id);
+    expect(changed).toHaveBeenCalledExactlyOnceWith(canonical);
+  });
+
+  it("does not adopt a foreign canonical update-conflict response", async () => {
+    const refusal = conflict();
+    vi.mocked(updateChat).mockRejectedValue(refusal);
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [{ ...chat, id: "foreign-chat" }] });
+    const changed = vi.fn();
+    await expect(updateGroundingScopes(chat, { connectedScopes: null }, changed)).rejects.toBe(
+      refusal,
+    );
+    expect(changed).not.toHaveBeenCalled();
+    expect(updateChat).toHaveBeenCalledOnce();
+  });
+
   it("refreshes only the canonical chat and never repeats the stale list replacement", async () => {
     const refusal = conflict();
     const persist = vi.fn().mockRejectedValue(refusal);
