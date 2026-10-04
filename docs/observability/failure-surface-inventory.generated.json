@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "546d8430f813ea8fc4c152b206784099ae17b1e59dee67559996986d90497b8b"
+    "catalogDigest": "eb45c21e02a3d65e9a3a6c4afab6e61a3b4f500b1cc4d2a18f4f32532fb078b5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1624,7 +1624,8 @@
       "packages/keiko-model-gateway/src/resilience.logging.test.ts"
     ],
     "gateway.circuit.wait.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.cooldown.test.ts"
+      "packages/keiko-model-gateway/src/gateway.cooldown.test.ts",
+      "packages/keiko-model-gateway/src/resilience.admission.test.ts"
     ],
     "gateway.config.resolved.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"

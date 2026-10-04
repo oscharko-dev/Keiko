@@ -12988,12 +12988,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["started", "changed", "timer", "cancelled", "failed"],
+        values: ["started", "changed", "timer", "cancelled", "failed", "budget-refused"],
       },
       delayMs: {
         type: "number",
         dataClass: "duration",
         required: true,
+      },
+      remainingMs: {
+        type: "number",
+        dataClass: "duration",
+        required: false,
       },
     },
     causal: "none",

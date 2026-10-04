@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "546d8430f813ea8fc4c152b206784099ae17b1e59dee67559996986d90497b8b" as const;
+  "eb45c21e02a3d65e9a3a6c4afab6e61a3b4f500b1cc4d2a18f4f32532fb078b5" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -16384,6 +16384,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "remainingMs",
+              type: "number",
+              dataClass: "duration",
+              required: false,
             },
           ],
           evidenceClasses: [
