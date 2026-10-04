@@ -2997,9 +2997,10 @@ export async function parseDesktopChatSend(
   const parsedRequest = sendRequestFromBody(body);
   if (isRouteResult(parsedRequest)) return parsedRequest;
   const hasImages = parsedRequest.attachments.some((attachment) => attachment.kind === "image");
-  const session = hasImages ? resolveAppSessionReadAuthority(deps, ctx.req) : undefined;
+  // Plaintext activity refreshes an existing session without granting attachment authority.
+  const session = resolveAppSessionReadAuthority(deps, ctx.req);
   const request: SendDesktopChatRequest =
-    session === undefined
+    session === undefined || !hasImages
       ? parsedRequest
       : {
           ...parsedRequest,

@@ -2809,6 +2809,8 @@ export async function handleGroundedAsk(
     const prepared = await prepareGroundedAsk(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return groundedCancelledResult();
     if ("status" in prepared) return prepared;
+    // Explicit activity refreshes only a valid existing session; ordinary Chat needs no pairing.
+    resolveAppSessionReadAuthority(deps, ctx.req);
     const result = await executeGroundedAsk(prepared, deps, runner, multiSource, hybrid);
     if (result.status === 200 && groundedAnswerBody(result.body)) {
       logChatResponseMessage(result.body.assistantMessageId, ctx.correlationId);

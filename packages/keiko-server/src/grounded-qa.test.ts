@@ -124,7 +124,10 @@ import {
   createFakeSessionPairingPort,
   fakePairingRequestBody,
 } from "./coding-app-session/_support.js";
-import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+import {
+  APP_SESSION_COOKIE_NAME,
+  serializeSessionCookies,
+} from "./coding-app-session/sessionCookie.js";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
@@ -1182,6 +1185,81 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it("keeps a paired session active through explicit ordinary-folder grounded turns", async () => {
+    const { chatId } = await setupChatWithScope();
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const channel = createCodingAppSessionChannel({
+      registry,
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+    const cookie = serializeSessionCookies(paired.cookieToken, {
+      secure: false,
+      maxAgeSeconds: 43_200,
+    })
+      .find((value) => value.includes("Path=/api/chats/messages/grounded;"))
+      ?.split(";")[0];
+    const handlerDeps = deps(undefined, {}, { codingAppSessionChannel: channel });
+    for (const minutes of [10, 20, 30]) {
+      clock = minutes * 60_000;
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({ chatId, content: "Inspect the connected folder." }),
+          fakeRes(),
+          cookie,
+        ),
+        handlerDeps,
+        runner(emptyPack()),
+      );
+      expect(result.status).toBe(200);
+    }
+    clock = 35 * 60_000;
+    expect(channel.verifySession(paired.cookieToken)).toMatchObject({ lastSeenAtMs: clock });
+  });
+
+  it.each(["absent", "forged", "revoked", "idle-expired", "absolute-expired"] as const)(
+    "keeps ordinary grounded Chat compatible without reviving %s session authority",
+    async (kind) => {
+      const { chatId } = await setupChatWithScope();
+      let clock = 0;
+      const registry = createSessionRegistry({
+        now: () => clock,
+        absoluteTtlMs: kind === "absolute-expired" ? 5 * 60_000 : 43_200_000,
+      });
+      const channel = createCodingAppSessionChannel({
+        registry,
+        pairingPort: createFakeSessionPairingPort(),
+      });
+      const paired = channel.pair(fakePairingRequestBody());
+      if (!paired.paired) throw new TypeError("Fixture pairing failed.");
+      const session = registry.inspect(paired.cookieToken);
+      if (session === undefined) throw new TypeError("Missing fixture session.");
+      if (kind === "revoked") registry.revoke(session.sessionId);
+      clock = (kind === "idle-expired" ? 31 : 10) * 60_000;
+      const token = kind === "forged" ? `${session.sessionId}.forged` : paired.cookieToken;
+      const cookie = kind === "absent" ? undefined : `${APP_SESSION_COOKIE_NAME}=${token}`;
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({ chatId, content: "Inspect the connected folder." }),
+          fakeRes(),
+          cookie,
+        ),
+        deps(undefined, {}, { codingAppSessionChannel: channel }),
+        runner(emptyPack()),
+      );
+      expect(result.status).toBe(200);
+      if (new Set(["absent", "forged"]).has(kind)) {
+        expect(registry.inspect(paired.cookieToken)?.lastSeenAtMs).toBe(0);
+      } else {
+        expect(registry.inspect(paired.cookieToken)).toBeUndefined();
+      }
+      clock = 35 * 60_000;
+      expect(channel.verifySession(paired.cookieToken)).toBeUndefined();
+    },
+  );
+
   it.each(["single-folder", "multi-folder", "hybrid", "local-knowledge"] as const)(
     "rejects a configured but unready %s ask before provider egress",
     async (kind) => {

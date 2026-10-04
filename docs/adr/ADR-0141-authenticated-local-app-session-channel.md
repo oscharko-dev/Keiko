@@ -135,6 +135,12 @@ of these cases the prior cookie immediately yields the content-free projection. 
 authority per BFF process; this composes with, and does not duplicate, the single-active-run model
 of ADR-0137.
 
+Explicit normal Chat sends verify an optionally presented existing session so active conversation
+refreshes the inactivity window. Ordinary Chat does not require a launcher session, and verification
+cannot mint, revive or extend an expired or revoked session. Passive SSE, polling and unrelated
+reads do not count as conversation activity. The absolute lifetime remains unchanged; an in-flight
+turn does not acquire an expiry exemption or background renewal lease.
+
 ### D6 — Fail closed to the content-free projection, never to an error that reveals content
 
 The absence of a valid session yields the **same content-free projection the routes serve today** —
@@ -277,6 +283,10 @@ independently validate that session before resolving issue content. Cookie issua
 share one explicit path list so sign-out clears every browser projection.
 The exact diagnostics report path uses the same paired authority to export a local, body-free
 support artifact. Other diagnostics routes receive no bearer through this path.
+The exact `/api/chats/messages/grounded` entry point also receives a projection to verify optional
+existing-session activity on admitted normal grounded sends. Plaintext `/api/desktop/chat` sends use
+their existing projection. Neither path grants new authority or requires pairing for ordinary Chat;
+image attachment authority remains separately enforced. Other `/api/chats` routes receive no bearer.
 
 No live bearer is issued at the broader `/api` ancestor or to unrelated BFF routes. Issuance and
 sign-out also expire the retired `/api` and `/api/editor/local-history` projections. `Path` remains
