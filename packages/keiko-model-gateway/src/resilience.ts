@@ -8,6 +8,7 @@ import {
   GatewayError,
   ProviderError,
   RateLimitError,
+  TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   activityLogEvent,
@@ -313,6 +314,7 @@ export const systemClock: Clock = {
 
 export interface RetryConfig {
   readonly shouldRetry?: (error: Error) => boolean;
+  readonly jitterProviderCooldown?: boolean;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
   // The end-to-end budget of the whole call: every attempt and every backoff sleep together.
@@ -345,10 +347,17 @@ function isRetryableError(error: Error): boolean {
 // A provider cooldown is a minimum wait, not the exponential backoff ceiling. Honour it
 // within the remaining request budget and platform timer bound; retrying early can consume
 // every attempt while the same overloaded provider is still unavailable.
-function retryDelayMs(error: Error, attempt: number, base: number, random: () => number): number {
+function retryDelayMs(
+  error: Error,
+  attempt: number,
+  base: number,
+  random: () => number,
+  jitterProviderCooldown = false,
+): number {
   const retryAfterMs = providerErrorDetail(error).retryAfterMs;
   if (retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
-    return Math.min(retryAfterMs, MAX_TIMER_DELAY_MS);
+    const jitter = jitterProviderCooldown ? Math.max(1, backoffDelayMs(attempt, base, random)) : 0;
+    return Math.min(retryAfterMs + jitter, MAX_TIMER_DELAY_MS);
   }
   return backoffDelayMs(attempt, base, random);
 }
@@ -371,7 +380,13 @@ function retryDecision(
   if (!isRetryableError(lastError) || config.shouldRetry?.(lastError) === false)
     return { stop: "terminal" };
   if (attempt > config.maxRetries) return { stop: "max-retries" };
-  const delayMs = retryDelayMs(lastError, attempt, config.retryBaseDelayMs, random);
+  const delayMs = retryDelayMs(
+    lastError,
+    attempt,
+    config.retryBaseDelayMs,
+    random,
+    config.jitterProviderCooldown,
+  );
   if (delayMs >= remainingMs) return { stop: "budget", delayMs, remainingMs };
   return { sleepMs: delayMs };
 }
@@ -581,7 +596,11 @@ function logRetryScheduled(
 export async function executeWithRetry<T>(
   // Each attempt gets its own bound and what is left of the call's budget, which a streamed read
   // may spend while the provider keeps producing (ADR-0003).
-  operation: (attemptTimeoutMs?: number, remainingBudgetMs?: number) => Promise<T>,
+  operation: (
+    attemptTimeoutMs?: number,
+    remainingBudgetMs?: number,
+    previousError?: Error,
+  ) => Promise<T>,
   config: RetryConfig,
   clock: Clock,
   signal?: AbortSignal,
@@ -599,7 +618,7 @@ export async function executeWithRetry<T>(
       throw budgetExhaustedError(lastError, sink, logContext, attempt, elapsed());
     }
     try {
-      return await operation(attemptTimeoutFor(config, remaining), remaining);
+      return await operation(attemptTimeoutFor(config, remaining), remaining, lastError);
     } catch (error) {
       lastError = asError(error);
       const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
@@ -673,8 +692,49 @@ export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig 
 
 export interface CircuitBreakerAdmission {
   readonly halfOpen: boolean;
-  settle(outcome: "success" | "failure" | "non-provider-fault"): void;
+  settle(outcome: "success" | "failure" | "non-provider-fault", error?: unknown): void;
 }
+
+interface CircuitAdmissionWait {
+  readonly remainingMs: number;
+  readonly previousError?: Error | undefined;
+  readonly signal?: AbortSignal | undefined;
+  readonly correlationId?: string | undefined;
+  readonly jitterMs: number;
+}
+
+type CircuitWaitReason = "provider-cooldown" | "circuit-cooldown" | "probe-saturated";
+
+const GATEWAY_CIRCUIT_WAIT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.circuit.wait",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "resilience.CircuitBreaker.logWait",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["provider-cooldown", "circuit-cooldown", "probe-saturated"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["started", "changed", "timer", "cancelled", "failed"],
+    },
+    delayMs: { type: "number", dataClass: "duration", required: true },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-circuit-breaker"],
+  proofIds: ["gateway.circuit.wait.emitted-line"],
+  releaseImpact: "patch",
+});
 
 export class CircuitBreaker {
   private state: CircuitState = "closed";
@@ -684,6 +744,8 @@ export class CircuitBreaker {
   private probesRemaining = 0;
   // Tracks how many half-open probe slots are currently in-flight.
   private probesInFlight = 0;
+  private providerCooldownUntil = 0;
+  private readonly waiters = new Set<() => void>();
   // Calls refused since the last state change. See `noteRejection` — this is both the rate limiter
   // and the number the transition lines report, so the volume survives the demotion.
   private rejectedSinceTransition = 0;
@@ -758,6 +820,114 @@ export class CircuitBreaker {
     return this.createAdmission(correlationId);
   }
 
+  async waitForAdmission(options: CircuitAdmissionWait): Promise<{
+    readonly admission: CircuitBreakerAdmission;
+    readonly remainingMs: number;
+  }> {
+    const start = this.clock.now();
+    const announced = this.providerCooldownUntil > start;
+    const recovering =
+      announced ||
+      (options.previousError !== undefined &&
+        providerErrorDetail(options.previousError).retryAfterMs !== undefined);
+    for (;;) {
+      assertNotAborted(options.signal);
+      const remainingMs = Math.max(0, options.remainingMs - (this.clock.now() - start));
+      if (remainingMs <= 0) throw this.waitBudgetError(options);
+      const blocked = this.blockedWait(recovering, options.jitterMs);
+      if (blocked === undefined)
+        return { admission: this.assertAllowed(options.correlationId), remainingMs };
+      if (blocked.delayMs >= remainingMs && blocked.reason !== "probe-saturated")
+        throw this.waitBudgetError(options);
+      await this.waitForChange(Math.min(blocked.delayMs, remainingMs), blocked.reason, options);
+    }
+  }
+
+  private waitBudgetError(options: CircuitAdmissionWait): Error {
+    return (
+      options.previousError ??
+      new TimeoutError("request budget exhausted while waiting for provider admission")
+    );
+  }
+
+  private blockedWait(
+    allowCircuitWait: boolean,
+    jitterMs: number,
+  ): { readonly reason: CircuitWaitReason; readonly delayMs: number } | undefined {
+    const cooldown = this.providerCooldownUntil - this.clock.now();
+    if (cooldown > 0)
+      return {
+        reason: "provider-cooldown",
+        delayMs: Math.min(cooldown + Math.max(1, jitterMs), MAX_TIMER_DELAY_MS),
+      };
+    if (!allowCircuitWait) return undefined;
+    if (this.state === "open" && this.openedAt !== null) {
+      const remaining = this.config.cooldownMs - (this.clock.now() - this.openedAt);
+      if (remaining > 0) return { reason: "circuit-cooldown", delayMs: remaining };
+    }
+    return this.state === "half-open" && this.probesInFlight >= this.config.halfOpenProbes
+      ? { reason: "probe-saturated", delayMs: Number.POSITIVE_INFINITY }
+      : undefined;
+  }
+
+  private async waitForChange(
+    delayMs: number,
+    reason: CircuitWaitReason,
+    options: CircuitAdmissionWait,
+  ): Promise<void> {
+    const controller = new AbortController();
+    const abort = (): void => {
+      controller.abort();
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    let notify: (() => void) | undefined;
+    const changed = new Promise<"changed">((resolve) => {
+      notify = (): void => {
+        resolve("changed");
+      };
+      this.waiters.add(notify);
+    });
+    try {
+      this.logWait(reason, "started", delayMs, options.correlationId);
+      assertNotAborted(options.signal);
+      const outcome = await Promise.race([
+        changed,
+        this.clock.sleep(delayMs, controller.signal).then(() => "timer" as const),
+      ]);
+      assertNotAborted(options.signal);
+      this.logWait(reason, outcome, delayMs, options.correlationId);
+    } catch (error) {
+      this.logWait(
+        reason,
+        options.signal?.aborted === true ? "cancelled" : "failed",
+        delayMs,
+        options.correlationId,
+      );
+      if (options.signal?.aborted === true)
+        throw new CancelledError("request cancelled while waiting for provider admission");
+      throw error;
+    } finally {
+      if (notify !== undefined) this.waiters.delete(notify);
+      options.signal?.removeEventListener("abort", abort);
+      controller.abort();
+    }
+  }
+
+  private logWait(
+    reason: CircuitWaitReason,
+    outcome: "started" | "changed" | "timer" | "cancelled" | "failed",
+    delayMs: number,
+    correlationId: string | undefined,
+  ): void {
+    this.log.write(
+      activityLogEvent(
+        GATEWAY_CIRCUIT_WAIT_OPERATION,
+        { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
+        { modelId: logModelId(this.modelId), reason, outcome, delayMs },
+      ),
+    );
+  }
+
   // Each admission settles once and only within the circuit generation that admitted it.
   // A late response or cancellation from a previous outage cannot touch another call's probe.
   private createAdmission(correlationId: string | undefined): CircuitBreakerAdmission {
@@ -765,13 +935,22 @@ export class CircuitBreaker {
     let settled = false;
     return {
       halfOpen: this.state === "half-open",
-      settle: (outcome): void => {
+      settle: (outcome, error): void => {
         if (settled) return;
         settled = true;
         if (generation !== this.generation) return;
+        const cooldown =
+          error instanceof Error ? providerErrorDetail(error).retryAfterMs : undefined;
+        if (outcome === "failure" && cooldown !== undefined && cooldown > 0) {
+          this.providerCooldownUntil = Math.max(
+            this.providerCooldownUntil,
+            this.clock.now() + Math.min(cooldown, MAX_TIMER_DELAY_MS),
+          );
+        }
         if (outcome === "success") this.recordSuccess(correlationId);
         else if (outcome === "failure") this.recordFailure(correlationId);
         else this.recordNonProviderFault();
+        for (const notify of this.waiters) notify();
       },
     };
   }

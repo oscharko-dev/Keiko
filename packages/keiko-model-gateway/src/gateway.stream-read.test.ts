@@ -490,15 +490,17 @@ describe("stream startup resilience", () => {
       if (chunk.type === "delta") received.push(chunk.token);
     }
     expect(calls).toHaveLength(2);
-    expect(calls[1]).toBe(recoveryAt);
+    expect(calls[1]).toBeGreaterThan(recoveryAt);
     expect(received).toEqual(["recovered once"]);
     expect(log.events.find((event) => event.op === "gateway.retry.scheduled")?.extra).toMatchObject(
       {
         httpStatus: status,
-        delayMs: 120_000,
         retryAfterMs: 120_000,
       },
     );
+    expect(
+      log.events.find((event) => event.op === "gateway.retry.scheduled")?.extra?.delayMs,
+    ).toBeGreaterThan(120_000);
     expect(JSON.stringify(log.events)).not.toContain("recovered once");
   });
 
@@ -722,7 +724,10 @@ it.each(["cancelled", "abandoned"])("releases a %s half-open stream probe", asyn
       correlationId: "cancelled-probe-0001",
     }),
   );
-  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("half-open");
+  // An already-cancelled request never claims a probe; abandonment releases an actual probe.
+  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe(
+    outcome === "cancelled" ? "open" : "half-open",
+  );
   await expect(consumeStream(gateway)).resolves.toBeUndefined();
   expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
 });
