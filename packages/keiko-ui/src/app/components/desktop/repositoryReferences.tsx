@@ -68,7 +68,7 @@ function referenceLineRange(capture: boolean): string {
 const REFERENCE_LINE_RANGE = referenceLineRange(true);
 const FOLLOWING_REFERENCE_LINE_RANGE = new RegExp(`^${REFERENCE_LINE_RANGE}`, "u");
 const REPOSITORY_REFERENCE_PATTERN = new RegExp(
-  String.raw`\[[^\]]{1,4096}\]|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?:${REFERENCE_LINE_RANGE})?`,
+  String.raw`\[[^\[\]]{1,4096}\]|@?(${REPOSITORY_REFERENCE_PATH_CORE})(?:${REFERENCE_LINE_RANGE})?`,
   "gu",
 );
 // Exact/bracketed references have a known boundary, so their filenames may contain spaces or
@@ -213,9 +213,15 @@ function tidyEvidenceText(source: string): string {
   // Keep bracket contents byte-for-byte: whitespace can be part of a real filename, and
   // converting controls to spaces could invent a different valid citation path.
   return source
-    .split(/(\[[^\]]{1,4096}\])/gu)
+    .split(/(\[[^\[\]]{1,4096}\])/gu)
     .map((part) => (part.startsWith("[") && part.endsWith("]") ? part : tidyEvidenceProse(part)))
     .join("");
+}
+
+function stripEvidenceSourceLabel(raw: string): string {
+  const contents = raw.slice(1, -1);
+  const value = contents.slice(contents.indexOf(":") + 1).trim();
+  return parseExactRepositoryReference(value, true) === null ? "" : raw;
 }
 
 // Grounded model answers sometimes echo evidence as:
@@ -228,15 +234,23 @@ export function sanitizeRepositoryEvidenceText(source: string): string {
       .replace(
         BRACKETED_REFERENCE_DUPLICATE_PATTERN,
         (raw: string, first: string, second: string) =>
-          collapseDuplicateReferences(first, second, raw.replace(SOURCE_LABEL_PATTERN, "")),
+          collapseDuplicateReferences(
+            first,
+            second,
+            raw.replace(SOURCE_LABEL_PATTERN, stripEvidenceSourceLabel),
+          ),
       )
       .replace(ADJACENT_REFERENCE_DUPLICATE_PATTERN, (raw: string, first: string, second: string) =>
-        collapseDuplicateReferences(first, second, raw.replace(SOURCE_LABEL_PATTERN, "")),
+        collapseDuplicateReferences(
+          first,
+          second,
+          raw.replace(SOURCE_LABEL_PATTERN, stripEvidenceSourceLabel),
+        ),
       )
       .replace(REPOSITORY_REFERENCE_IN_BRACKETS_PATTERN, (raw: string, reference: string) =>
         parseExactRepositoryReference(reference) === null ? raw : reference,
       )
-      .replace(SOURCE_LABEL_PATTERN, ""),
+      .replace(SOURCE_LABEL_PATTERN, stripEvidenceSourceLabel),
   );
 }
 
@@ -309,31 +323,50 @@ function referenceFromMatch(match: RegExpExecArray, source: string): RepositoryR
   };
 }
 
-function referencesFromTextMatch(
+function containsUnsafeBracketPath(contents: string): boolean {
+  return (
+    stripUnsafeFormatChars(contents) !== contents ||
+    /(?:^|[\s,])(?:\/|[A-Za-z]:\/|\.\.?\/)/u.test(contents) ||
+    /\/\.\.?\//u.test(contents)
+  );
+}
+
+function unambiguousBracketReference(
+  reference: RepositoryReference | null,
+  inlineCount: number,
+): reference is RepositoryReference {
+  if (reference === null || inlineCount > 1) return false;
+  return !/\s/u.test(reference.path.split("/")[0] ?? "");
+}
+
+function bracketReferenceParts(contents: string): readonly RepositoryReferenceTextPart[] {
+  if (containsUnsafeBracketPath(contents)) return [];
+  const members = contents.split(",");
+  const references = members.map((member) => parseExactRepositoryReference(member.trim(), true));
+  if (members.length > 1 && references.every((reference) => reference !== null)) {
+    return referenceParts(references);
+  }
+  // Only separators may contain line breaks; never invent a path by normalizing its controls.
+  if (/\p{Cc}/u.test(contents)) return [];
+  const inline = repositoryReferenceTextParts(contents);
+  const inlineCount = inline.filter((part) => part.kind === "reference").length;
+  const reference = parseExactRepositoryReference(contents.trim(), true);
+  if (unambiguousBracketReference(reference, inlineCount)) {
+    return referenceParts([reference]);
+  }
+  if (inlineCount === 0) return [];
+  // Preserve prose around individually validated paths instead of treating it as a filename.
+  return [{ kind: "text", text: "[" }, ...inline, { kind: "text", text: "]" }];
+}
+
+function referencePartsFromTextMatch(
   match: RegExpExecArray,
   source: string,
-): readonly RepositoryReference[] {
+): readonly RepositoryReferenceTextPart[] {
   const token = match[0] ?? "";
-  if (!token.startsWith("[")) {
-    const reference = referenceFromMatch(match, source);
-    return reference === null ? [] : [reference];
-  }
-  // Consume invalid bracketed paths atomically, never linking their relative-looking suffix.
-  const contents = token.slice(1, -1);
-  if (/\p{Cc}/u.test(contents)) return [];
-  const reference = parseExactRepositoryReference(contents.trim(), true);
-  if (reference !== null) return [reference];
-  // A valid comma-bearing filename wins above. Lists need an explicit line range on every
-  // member, and every member must validate before any link is exposed.
-  const members = contents.split(",");
-  if (members.length < 2) return [];
-  const references: RepositoryReference[] = [];
-  for (const member of members) {
-    const parsed = parseExactRepositoryReference(member.trim(), true);
-    if (parsed?.lineStart === undefined) return [];
-    references.push(parsed);
-  }
-  return references;
+  if (token.startsWith("[")) return bracketReferenceParts(token.slice(1, -1));
+  const reference = referenceFromMatch(match, source);
+  return reference === null ? [] : referenceParts([reference]);
 }
 
 function referenceParts(references: readonly RepositoryReference[]): RepositoryReferenceTextPart[] {
@@ -350,16 +383,16 @@ export function repositoryReferenceTextParts(
 ): readonly RepositoryReferenceTextPart[] {
   const parts: RepositoryReferenceTextPart[] = [];
   let lastIndex = 0;
-  REPOSITORY_REFERENCE_PATTERN.lastIndex = 0;
+  const pattern = new RegExp(REPOSITORY_REFERENCE_PATTERN);
   for (;;) {
-    const match = REPOSITORY_REFERENCE_PATTERN.exec(source);
+    const match = pattern.exec(source);
     if (match === null) break;
-    const references = referencesFromTextMatch(match, source);
+    const references = referencePartsFromTextMatch(match, source);
     if (references.length === 0) continue;
     if (match.index > lastIndex) {
       parts.push({ kind: "text", text: source.slice(lastIndex, match.index) });
     }
-    parts.push(...referenceParts(references));
+    parts.push(...references);
     lastIndex = match.index + (match[0]?.length ?? 0);
   }
   if (lastIndex === 0) return [{ kind: "text", text: source }];
