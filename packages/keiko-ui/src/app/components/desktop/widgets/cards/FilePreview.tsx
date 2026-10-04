@@ -538,11 +538,10 @@ export function FilePreview({
       })
       .catch((err: unknown) => {
         settle(undefined, cancelled ? "dropped" : "failed");
-        if (!cancelled) {
-          if (previewFailureInvalidatesResponse(err)) setPreview(null);
-          setError(classifyError(err, correlationId));
-          updateManualRefreshStatus(isManualRefresh, "failed", setRefreshStatus);
-        }
+        if (cancelled) return;
+        if (previewFailureInvalidatesResponse(err)) setPreview(null);
+        setError(classifyError(err, correlationId));
+        updateManualRefreshStatus(isManualRefresh, "failed", setRefreshStatus);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
