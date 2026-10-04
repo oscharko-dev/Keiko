@@ -7,6 +7,7 @@ import { isRedactedLogLabel, projectSupportLogFields } from "../log-redaction.js
 import { deflateSync, inflateSync } from "node:zlib";
 import {
   buildSupportReportEnvelope,
+  clientOnlySupportReportSections,
   sealSupportReportEnvelope,
   serializeSupportReport,
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
@@ -644,6 +645,26 @@ function validateIncidentProvenance(
   validateRegisteredIdentity(incident, events);
 }
 
+function validateClientOnlyProvenance(report: SupportReport): void {
+  const clientReport = report.incident.clientReport;
+  if (clientReport === undefined) return;
+  const expected = clientOnlySupportReportSections({
+    incidentId: report.incident.incidentId,
+    nowMs: report.incident.createdAtMs,
+    build: report.incident.build,
+    defectFingerprint: report.incident.defectFingerprint,
+    correlationId: report.incident.correlation.rootCorrelationId,
+    availabilityReason: clientReport.availabilityReason,
+    failure: clientReport.failure,
+  });
+  if (
+    report.evidence.recordCount !== 0 ||
+    canonicalSupportJson(report.selection) !== canonicalSupportJson(expected.selection) ||
+    canonicalSupportJson(report.incident) !== canonicalSupportJson(expected.incident)
+  )
+    throw new SupportReportError("unsafe-report");
+}
+
 // A canonical report is exactly one line. The retired open JSONL bundle starts with its
 // `$section` manifest and a raw Activity Log with a timestamped record: both are refused by name,
 // so the receiver regenerates on the originating installation instead of suspecting tampering.
@@ -685,6 +706,7 @@ function parseValidatedSupportReport(text: string): ValidatedSupportReport {
   const events = decodeEvidence(value.evidence, registry);
   validateIncidentProvenance(incident, events);
   const report = value as unknown as SupportReport;
+  validateClientOnlyProvenance(report);
   validateLifetimeProvenance(report.selection, events);
   const analysis = eventAnalysis(events, registry);
   const selection = effectiveSelection(report, events, registry, analysis);

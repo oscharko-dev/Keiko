@@ -48,6 +48,7 @@ import {
   supportReportTimeline,
 } from "./support-report.js";
 import { parseCanonicalSupportJson } from "./support-report-json.js";
+import { createClientOnlySupportReport } from "./support-desktop-report.js";
 
 import { supportReportPrivacyProjection } from "./support-report-privacy.js";
 import { findSupportRegistry } from "./support-registry.js";
@@ -102,6 +103,37 @@ function fixture(
 }
 
 describe("canonical body-free offline report", () => {
+  it("refuses client-only availability headers attached to retained server evidence", () => {
+    const limited = parseSupportReport(
+      createClientOnlySupportReport(CORRELATION, "session-unavailable").reportJson,
+    );
+    const { report, query } = fixture();
+    const forged = sealSupportReport(limited.incident, report.selection, report.evidence);
+    expect(() => parseSupportReport(serializeSupportReport(forged))).toThrow(
+      expect.objectContaining({ reason: "unsafe-report" }),
+    );
+    expect(() => buildSupportReport(limited.incident, query)).toThrow(
+      expect.objectContaining({ reason: "unsafe-report" }),
+    );
+  });
+
+  it("refuses a resealed client-only report with manufactured selection requirements", () => {
+    const limited = parseSupportReport(
+      createClientOnlySupportReport(CORRELATION, "service-unavailable").reportJson,
+    );
+    expect(() =>
+      parseSupportReport(
+        serializeSupportReport(
+          sealSupportReport(
+            limited.incident,
+            { ...limited.selection, requiredBytes: 1 },
+            limited.evidence,
+          ),
+        ),
+      ),
+    ).toThrow(expect.objectContaining({ reason: "unsafe-report" }));
+  });
+
   it("does not label retained unrelated events omitted by canonical selection as process gaps", () => {
     const selectedSequences = new Set([1821, 1854, 1870, 1890, 1892]);
     const { report, query } = fixture(1, {}, undefined, (process) => {

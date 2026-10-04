@@ -193,9 +193,12 @@ function localReportFallbackAllowed(
   error: unknown,
   api: typeof import("@/lib/support-report-api") | undefined,
 ): boolean {
-  if (api !== undefined && error instanceof api.SupportReportEvidenceUnavailable) return true;
+  // No API module means preparation failed while loading its chunk, before any server result.
+  // The already loaded canonical local producer can still describe this availability failure.
+  if (api === undefined) return true;
+  if (error instanceof api.SupportReportEvidenceUnavailable) return true;
   if (
-    api?.SupportReportResponseInvalid !== undefined &&
+    api.SupportReportResponseInvalid !== undefined &&
     error instanceof api.SupportReportResponseInvalid
   )
     return false;

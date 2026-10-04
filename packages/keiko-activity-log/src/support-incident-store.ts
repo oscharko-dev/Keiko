@@ -395,6 +395,14 @@ export interface SupportIncidentClaimEntry extends SupportIncidentClaim {
   readonly fileName: string;
 }
 
+/** Occupancy needs names only; a foreign or concurrently released claim is never opened. */
+export function listSupportIncidentSlotIndexes(stateDir: string): readonly number[] {
+  return readDirectoryNames(supportIncidentDirectory(stateDir)).flatMap((name) => {
+    const index = parseSupportIncidentSlotClaimFileName(name);
+    return index === undefined ? [] : [index];
+  });
+}
+
 /** Every fingerprint- and slot-claim file in the store, for the orphan sweep. */
 export function listSupportIncidentClaims(stateDir: string): readonly SupportIncidentClaimEntry[] {
   const directory = supportIncidentDirectory(stateDir);

@@ -4,6 +4,7 @@
 
 import {
   mkdirSync,
+  linkSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -57,11 +58,21 @@ const dedupRace = vi.hoisted(() => ({
 // Simulates a claim the orphan sweep cannot remove (permissions, a vanished directory): armed for
 // one test, every claim removal fails and the sweep reports it instead of clearing the claim.
 const claimRemoval = vi.hoisted(() => ({ blocked: false }));
+const quotaAdmissionFailure = vi.hoisted(() => ({ armed: false }));
 
 vi.mock("./support-incident-store.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./support-incident-store.js")>();
   return {
     ...original,
+    claimSupportIncidentSlot: (
+      ...args: Parameters<typeof original.claimSupportIncidentSlot>
+    ): boolean => {
+      if (quotaAdmissionFailure.armed) {
+        quotaAdmissionFailure.armed = false;
+        throw new Error("Synthetic claim admission failure");
+      }
+      return original.claimSupportIncidentSlot(...args);
+    },
     listSupportIncidentEntries: (
       stateDir: string,
     ): ReturnType<typeof original.listSupportIncidentEntries> => {
@@ -88,8 +99,10 @@ import {
   isSupportIncidentId,
   parseSupportIncidentFileName,
   parseSupportIncidentRecord,
+  parseActivityLogPinFileName,
   supportIncidentFileName,
   supportIncidentFingerprintClaimFileName,
+  supportIncidentSlotClaimFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
@@ -193,6 +206,7 @@ describe("SupportIncident candidates", () => {
     retentionRace.armed = false;
     dedupRace.onStaleSnapshot = undefined;
     claimRemoval.blocked = false;
+    quotaAdmissionFailure.armed = false;
     rmSync(stateDir, { recursive: true, force: true });
   });
 
@@ -280,6 +294,18 @@ describe("SupportIncident candidates", () => {
   }
 
   describe("the user-initiated trigger", () => {
+    it("reserves an unsafe unrelated claim by name without opening or removing it", () => {
+      const directory = ensureSupportIncidentDirectory(stateDir);
+      const foreign = join(directory, "foreign-claim");
+      writeFileSync(foreign, "a".repeat(32), { mode: 0o600 });
+      const occupied = join(directory, supportIncidentSlotClaimFileName(0));
+      linkSync(foreign, occupied);
+      const { record } = created(recordUserReportedIncident(stateDir));
+      expect(record.slotIndex).not.toBe(0);
+      expect(statSync(occupied).nlink).toBe(2);
+      expect(readFileSync(occupied, "utf8")).toBe("a".repeat(32));
+    });
+
     it("works without any failure event: records, pins, and evidences the candidate", () => {
       const { record } = created(recordUserReportedIncident(stateDir));
       expect(record).toMatchObject({
@@ -841,6 +867,30 @@ describe("SupportIncident candidates", () => {
   });
 
   describe("the file-sink hook", () => {
+    it("releases its fingerprint claim and immediate pin after slot admission fails", () => {
+      setSupportIncidentTriggerForTests(true);
+      createFileServerLogSink(stateDir).write(failureEvent());
+      expect(lines("activity-log.pin.created")).toHaveLength(1);
+      quotaAdmissionFailure.armed = true;
+      drainSupportIncidentCandidates();
+      expect(claimNames()).toEqual([]);
+      expect(
+        readdirSync(join(stateDir, ACTIVITY_LOG_DIRECTORY_NAME)).filter(
+          (name) => parseActivityLogPinFileName(name) !== undefined,
+        ),
+      ).toEqual([]);
+      expect(lines("support.incident.rejected")).toHaveLength(1);
+      expect(JSON.parse(lines("support.incident.rejected")[0] ?? "{}")).toMatchObject({
+        rejectionReason: "store-unavailable",
+        correlationId: "failure-correlation-1",
+      });
+      expect(lines("activity-log.pin.expired")).toHaveLength(1);
+      expect(lines("support.incident.created")).toEqual([]);
+      expect(
+        created(recordRegisteredFailureIncident(stateDir, failureEvent())).record.pin.status,
+      ).toBe("pinned");
+    });
+
     it("publishes the window pin inside the sink's write, but defers the record to the next turn", async () => {
       setSupportIncidentTriggerForTests(true);
       createFileServerLogSink(stateDir).write(failureEvent());

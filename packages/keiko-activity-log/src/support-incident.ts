@@ -40,7 +40,6 @@ import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
   SUPPORT_INCIDENT_SLOT_COUNT,
-  parseSupportIncidentSlotClaimFileName,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
   activityLogEvent,
   activityLogOperationSchema,
@@ -89,6 +88,7 @@ import {
   claimSupportIncidentSlot,
   ensureSupportIncidentDirectory,
   listSupportIncidentClaims,
+  listSupportIncidentSlotIndexes,
   listSupportIncidentEntries,
   readSupportIncidentFingerprintClaim,
   readSupportIncidentRecord,
@@ -733,12 +733,7 @@ function slotCapacity(context: CandidateContext, draft: CandidateDraft): number 
 }
 
 function occupiedSlots(stateDir: string): ReadonlySet<number> {
-  return new Set(
-    listSupportIncidentClaims(stateDir).flatMap((claim) => {
-      const index = parseSupportIncidentSlotClaimFileName(claim.fileName);
-      return index === undefined ? [] : [index];
-    }),
-  );
+  return new Set(listSupportIncidentSlotIndexes(stateDir));
 }
 
 function claimAvailableSlot(
@@ -1133,6 +1128,45 @@ function draftDeduplicationKey(draft: CandidateDraft, fingerprint: string): stri
     : undefined;
 }
 
+function releaseDraftFingerprint(
+  context: CandidateContext,
+  fingerprint: string | undefined,
+  incidentId: string,
+  correlationId: string,
+): void {
+  if (fingerprint === undefined) return;
+  try {
+    releaseSupportIncidentFingerprintClaim(context.stateDir, fingerprint, incidentId);
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
+      correlationId,
+    });
+  }
+}
+
+function admitCandidateQuota(
+  context: CandidateContext,
+  draft: CandidateDraft,
+  incidentId: string,
+  entries: readonly SupportIncidentStoreEntry[],
+  fingerprint: string | undefined,
+): ClaimedQuotaSlot | SupportIncidentCreation {
+  try {
+    const quota = claimQuotaSlot(context, draft, incidentId, entries);
+    if (quota !== undefined) return quota;
+    releaseDraftFingerprint(context, fingerprint, incidentId, draft.evidenceCorrelationId);
+    return reject(context, draft, "quota-exhausted", entries.length);
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_REJECTED_OPERATION.op,
+      correlationId: draft.evidenceCorrelationId,
+    });
+    releaseDraftFingerprint(context, fingerprint, incidentId, draft.evidenceCorrelationId);
+    return reject(context, draft, "store-unavailable", entries.length);
+  }
+}
+
 function createCandidate(
   stateDir: string,
   draft: CandidateDraft,
@@ -1163,13 +1197,8 @@ function createCandidate(
     if (handled.done) return handled.result;
   }
 
-  const quota = claimQuotaSlot(context, draft, incidentId, entries);
-  if (quota === undefined) {
-    if (dedupFingerprint !== undefined) {
-      releaseSupportIncidentFingerprintClaim(stateDir, dedupFingerprint, incidentId);
-    }
-    return reject(context, draft, "quota-exhausted", entries.length);
-  }
+  const quota = admitCandidateQuota(context, draft, incidentId, entries, dedupFingerprint);
+  if ("status" in quota) return quota;
 
   const retained = entries.filter((entry) => entry.incidentId !== quota.evictedIncidentId);
   const created = publishCandidate(draft, context, retained, incidentId, quota.slotIndex);
