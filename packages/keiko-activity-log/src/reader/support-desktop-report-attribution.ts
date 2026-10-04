@@ -66,7 +66,7 @@ function primaryFailure(query: SupportQueryResult, root: string): SelectedEvent 
   return primary;
 }
 
-/** Attribute only a transient quota fallback to its authoritative retained failing event. */
+/** Attribute a manual descriptor only to its authoritative selected failing event. */
 export function attributeUnretainedReportFailure(
   record: SupportIncidentDescriptorRecord,
   query: SupportQueryResult,
@@ -74,7 +74,6 @@ export function attributeUnretainedReportFailure(
   const root = record.correlation.rootCorrelationId;
   if (
     record.trigger !== "user-report" ||
-    "slotIndex" in record ||
     root === undefined ||
     query.integrity.classification !== "supported"
   )

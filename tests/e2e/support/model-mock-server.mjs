@@ -255,6 +255,15 @@ const server = createServer((req, res) => {
   }
   if (req.method === "POST" && url.pathname.endsWith("/chat/completions")) {
     void readBody(req).then((raw) => {
+      if (raw.includes("KEIKO_E2E_SUPPORT_FAILURE")) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: { message: "Synthetic support download failure", type: "invalid_request_error" },
+          }),
+        );
+        return;
+      }
       let wantsStream = false;
       try {
         wantsStream = JSON.parse(raw || "{}").stream === true;

@@ -60,6 +60,7 @@ import {
 import { sortProjects } from "@/lib/sidebar-sort";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { clientErrorSummary } from "@/lib/client-error-summary";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { bffRequestErrorKind } from "@/lib/http";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -468,6 +469,15 @@ function contextOversizedMessage(error: unknown): string {
     overflow.correlationId = error.correlationId;
   }
   return formatUserError(overflow, CONTEXT_OVERSIZED_USER_MESSAGE);
+}
+
+function retainStreamFailure(error: ApiError): void {
+  reportClientDiagnostic(clientErrorSummary(error), {
+    kind: "sse-error",
+    correlationId: error.correlationId,
+    errorKind: bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+  });
 }
 
 function errorMessage(error: unknown): string {
@@ -3609,6 +3619,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           // formatUserError can surface it as a copyable support id.
           const apiError = new ApiError(code, message, 0);
           if (correlationId !== undefined) apiError.correlationId = correlationId;
+          retainStreamFailure(apiError);
           setError(errorMessage(apiError));
           removeTempMessage(tempAssistantId);
           resolve({ status: "failed" });

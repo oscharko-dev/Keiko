@@ -25,6 +25,7 @@ import {
   regenerateDesktopChat,
   resetModelRequestCache,
   sendDesktopChat,
+  sendDesktopChatStream,
   uploadConversationAttachment,
 } from "@/lib/api";
 import {
@@ -64,6 +65,8 @@ import {
   notifyGatewayModelReadinessUpdated,
 } from "../widgets/shared/gatewaySetupBus";
 
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
 });
@@ -76,6 +79,7 @@ vi.mock("@/lib/api", () => ({
       public readonly status: number,
     ) {
       super(message);
+      this.name = "ApiError";
     }
   },
   StreamingUnavailableError: class StreamingUnavailableError extends Error {
@@ -5028,5 +5032,48 @@ describe("useChatSession memory autonomy hydration", () => {
     expect(errorSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
     errorSpy.mockRestore();
+  });
+});
+
+describe("useChatSession original streamed failure evidence", () => {
+  it("retains the original structured SSE failure before formatting the displayed notice", async () => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "stream-model" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ selectedModel: "stream-model" })] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChatStream).mockImplementation(async (_input, _signal, handlers) => {
+      handlers.onError({
+        code: "GATEWAY_PROVIDER_ERROR",
+        message: "Private upstream body",
+        correlationId: "original-stream-failure",
+      });
+    });
+    try {
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      await act(async () => {
+        await result.current.openProject(project("/repo"));
+      });
+      expect(result.current.selectedModel).toBe("stream-model");
+      await act(async () => {
+        await result.current.sendMessage({ text: "Synthetic question" });
+      });
+      expect(sendDesktopChatStream).toHaveBeenCalledTimes(1);
+      expect(diagnostic).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          correlationId: "original-stream-failure",
+          kind: "sse-error",
+          errorKind: "unknown",
+          errorEvidence: expect.objectContaining({ errorClass: "ApiError" }),
+        }),
+      );
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private upstream body");
+      expect(result.current.error).toContain("original-stream-failure");
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 });

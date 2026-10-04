@@ -271,6 +271,23 @@ describe("desktop canonical support report", () => {
     expect(report.incident.sufficiencyStatus).toBe(report.selection.status);
   });
 
+  it("keeps authoritative failure attribution when regeneration creates a retained manual descriptor", () => {
+    writeFailures();
+    const root = "desktop-failure-1";
+    const selected = readDesktopSupportReportSelection(stateDir, root);
+    const manual = prepareManualSupportReportIncident(stateDir, root);
+    expect(manual).toHaveProperty("slotIndex");
+    const response = createPreparedDesktopSupportReport(stateDir, manual, root, selected.evidence);
+    const analyzed = analyzeSupportReport(response.reportJson);
+    expect(analyzed.incident).toMatchObject({
+      trigger: "registered-failure",
+      op: "client.diagnostic",
+      errorKind: "timeout",
+      frameCount: 1,
+    });
+    expect(analyzed.analysis.evidence.supportedLineCount).toBeGreaterThan(0);
+  });
+
   function transientReport(correlationId: string): ReturnType<typeof analyzeSupportReport> {
     const selected = readDesktopSupportReportSelection(stateDir, correlationId);
     const response = createPreparedDesktopSupportReport(

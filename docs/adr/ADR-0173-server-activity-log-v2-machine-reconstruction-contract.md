@@ -790,9 +790,11 @@ rather than implying protected retention. After a desktop artifact is successful
 admitted to the existing fifteen-minute memory download cache, its durable candidate and pin are
 released. This means the artifact is prepared, not that it was saved or sent. Failed preparation or
 cache admission preserves the diagnostic candidate; no additional report archive is created.
-When that transient descriptor's supported causal selection retains a registry-eligible failure
+When a manual descriptor's supported causal selection retains a registry-eligible failure
 under the requested root or its direct child, desktop composition derives a registered-failure
 identity from that retained event using the existing fingerprint, frame and correlation rules.
+This applies to both transient fallback descriptors and retained manual descriptors created when
+regenerating an artifact after the original diagnostic candidate was released.
 Error diagnostics take priority over warning summaries; framed diagnostics take priority over
 unframed events at the same level. No durable candidate, pin or quota slot is created by this
 attribution. A selection without an eligible failing event keeps the unattributed manual identity;
