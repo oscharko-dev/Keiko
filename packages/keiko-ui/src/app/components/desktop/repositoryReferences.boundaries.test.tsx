@@ -20,17 +20,16 @@ it("gives identically labelled roots distinct accessible choices and restores fo
   );
   const trigger = screen.getByRole("button", { name: "Open src/a.ts in editor" });
   fireEvent.click(trigger);
-  const choices = screen.getByRole("group", { name: "Select a repository source." });
   const second = screen.getByRole("button", {
     name: "Select repository source: app · /beta/shared/app",
   });
   expect(
     screen.getByRole("button", { name: "Select repository source: app · /alpha/shared/app" }),
   ).toBeVisible();
-  expect(trigger.getAttribute("aria-controls")).toBe(choices.id);
+  expect(trigger.getAttribute("aria-controls")).toBe(second.parentElement?.id);
   second.focus();
   fireEvent.keyDown(second, { key: "Escape" });
-  expect(screen.queryByRole("group", { name: "Select a repository source." })).toBeNull();
+  expect(second).not.toBeInTheDocument();
   expect(trigger).toHaveFocus();
 });
 

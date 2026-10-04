@@ -771,12 +771,7 @@ export function RepositoryReferenceInline({
         <span>{referenceVisibleLabel(reference, displayPath)}</span>
       </button>
       {status === "choosing" ? (
-        <span
-          id={pickerId}
-          role="group"
-          aria-label={t("chat.repository.chooseSource")}
-          className="repo-ref-picker"
-        >
+        <span id={pickerId} className="repo-ref-picker">
           {bestRootOptions.map((root) => (
             <button
               key={root.root}
