@@ -279,7 +279,9 @@ interface TextFilePreviewProps {
   readonly t: I18nTranslate;
 }
 
-function TextPreviewBanners(props: TextFilePreviewProps): ReactNode {
+function TextPreviewBanners(
+  props: Pick<TextFilePreviewProps, "preview" | "shouldHighlight" | "t">,
+): ReactNode {
   return (
     <>
       {props.preview.canEdit === false ? (
@@ -459,6 +461,21 @@ function validatedPreview(
   return response;
 }
 
+function previewFailureInvalidatesResponse(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === "DENIED" || error.code === "STALE_SESSION" || error.code === "BAD_RESPONSE")
+  );
+}
+
+function updateManualRefreshStatus(
+  manual: boolean,
+  status: PreviewRefreshStatus,
+  setStatus: (status: PreviewRefreshStatus) => void,
+): void {
+  if (manual) setStatus(status);
+}
+
 export function FilePreview({
   root,
   path,
@@ -516,19 +533,15 @@ export function FilePreview({
         settle(selected, "applied");
         if (!cancelled) {
           setPreview(selected);
-          if (isManualRefresh) setRefreshStatus("refreshed");
+          updateManualRefreshStatus(isManualRefresh, "refreshed", setRefreshStatus);
         }
       })
       .catch((err: unknown) => {
         settle(undefined, cancelled ? "dropped" : "failed");
         if (!cancelled) {
-          if (
-            err instanceof ApiError &&
-            (err.code === "DENIED" || err.code === "STALE_SESSION" || err.code === "BAD_RESPONSE")
-          )
-            setPreview(null);
+          if (previewFailureInvalidatesResponse(err)) setPreview(null);
           setError(classifyError(err, correlationId));
-          if (isManualRefresh) setRefreshStatus("failed");
+          updateManualRefreshStatus(isManualRefresh, "failed", setRefreshStatus);
         }
       })
       .finally(() => {

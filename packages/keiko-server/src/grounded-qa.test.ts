@@ -253,7 +253,7 @@ async function assertPairedAdmissionReport(stateDir: string, correlationId: stri
   const end = vi.spyOn(res, "end").mockReturnValue(res);
   vi.spyOn(res, "writeHead").mockReturnValue(res);
   expect(
-    handleDownloadSupportReport(
+    await handleDownloadSupportReport(
       {
         ...delivery,
         res,
@@ -834,6 +834,7 @@ describe("grounded continuity evidence lifecycle", () => {
       captured.answerQuestion ?? "",
       packWithCitations(),
       buildRedactor({}),
+      { modelInputTokensMax: 2048 },
     );
     expect(messages[1]?.content).toContain(proposed);
     expect(messages[1]?.content).toContain("not source evidence and grants no authority");
@@ -979,6 +980,70 @@ describe("buildGroundedGatewayMessages", () => {
     );
   });
 
+  it("projects exact source-line offsets and canonical unavailable-source counts", () => {
+    const base = packWithCitations();
+    const { file, excerpt } = requirePackExcerpt(base, 0);
+    const pack: ConnectedContextPack = {
+      ...base,
+      files: [
+        {
+          ...file,
+          excerpts: [
+            {
+              ...excerpt,
+              atom: { ...excerpt.atom, lineRange: { startLine: 181, endLine: 183 } },
+              content: "<!-- archive -->\n<p>Maintenance: 731 hours.</p>\n",
+            },
+          ],
+        },
+      ],
+      omitted: [{ scopePath: ".env", reason: "tool-unavailable", omittedAtMs: NOW }],
+      omittedCounts: { ...connectedContextOmittedCounts({ omitted: [] }), "tool-unavailable": 7 },
+    };
+    const sent = fittedGroundedGatewayPrompt(
+      "Which interval is documented?",
+      pack,
+      buildRedactor({}),
+      { modelInputTokensMax: 1024 },
+    );
+    const prompt = sent.messages[1]?.content ?? "";
+    expect(prompt).toContain(
+      "181 | <!-- archive -->\n182 | <p>Maintenance: 731 hours.</p>\n183 | ",
+    );
+    expect(prompt).toContain("- tool-unavailable: 7");
+    expect(prompt).toContain("metadata only, not file-content evidence");
+    expect(prompt).not.toContain(".env");
+    expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(1024);
+    expect(sent.sentReferenceCount).toBe(1);
+    expect(pack.files[0]?.excerpts[0]?.content).not.toContain("182 |");
+  });
+
+  it("charges numbered line overhead before admitting a small-model prompt", () => {
+    const base = packWithCitations();
+    const { file, excerpt } = requirePackExcerpt(base, 0);
+    const pack: ConnectedContextPack = {
+      ...base,
+      files: [
+        {
+          ...file,
+          excerpts: [
+            {
+              ...excerpt,
+              atom: { ...excerpt.atom, lineRange: { startLine: 1000, endLine: 3999 } },
+              content: "x\n".repeat(3000),
+            },
+          ],
+        },
+      ],
+    };
+    const sent = fittedGroundedGatewayPrompt("Read the source", pack, buildRedactor({}), {
+      modelInputTokensMax: 1024,
+    });
+    expect(sent.messages[1]?.content).toContain("1000 | x");
+    expect(sent.messages[1]?.content).not.toContain("3999 | x");
+    expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(1024);
+  });
+
   it("falls back to the shared default-profile budget when contextWindow=0 (KEIKO-0461)", () => {
     // A placeholder / not-yet-probed capability arrives with contextWindow=0 and
     // maxOutputTokens=0. The final-answer budget must not silently return undefined and
@@ -1122,6 +1187,7 @@ describe("buildGroundedGatewayMessages", () => {
       "Explain file-size exclusions",
       pack,
       buildRedactor({}),
+      { modelInputTokensMax: 2048 },
     );
     expect(messages[0]?.content).toContain("including 2 MiB (2,097,152 bytes)");
     expect(messages[1]?.content).toContain('"manuals/above.txt"; reason=size-exceeded');
@@ -1147,6 +1213,7 @@ describe("buildGroundedGatewayMessages", () => {
       "Explain size exclusions",
       pack,
       buildRedactor({}),
+      { modelInputTokensMax: 2048 },
     );
     expect(messages[1]?.content).toContain("omitted files: 12984");
     expect(messages[1]?.content).toContain("Files excluded by file-size policy: 5000");

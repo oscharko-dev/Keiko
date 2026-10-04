@@ -1546,6 +1546,24 @@ describe("browser support report preparation evidence", () => {
     loss: "none",
     availabilityReason: "service-unavailable",
   };
+  it("rejects contradictory client-only integrity and server-unavailability claims", () => {
+    for (const patch of [
+      { completeness: "partial" },
+      { loss: "event-dropped" },
+      { availabilityReason: undefined },
+      { evidenceScope: "server" },
+    ])
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          supportReportPreparation: { ...prepared, ...patch },
+        }),
+      ).toBe(false);
+    const { availabilityReason: _reason, ...server } = { ...prepared, evidenceScope: "server" };
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), supportReportPreparation: server }),
+    ).toBe(true);
+  });
   it("accepts only the closed body-free canonical disposition", () => {
     expect(
       isClientDiagnosticIngestRequest({ ...validRequest(), supportReportPreparation: prepared }),

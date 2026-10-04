@@ -126,7 +126,7 @@ async function createReportResponse(
       controller.signal,
       ctx.correlationId,
     );
-    const delivery = cacheSupportReportDownload(deps, sessionId, report);
+    const delivery = cacheSupportReportDownload(deps, sessionId, report, ctx.correlationId);
     if (report.summary !== undefined) {
       completePreparedSupportIncident(resolveRuntimeStateDir(deps.env), report.summary.incidentId, {
         correlationId: ctx.correlationId,
@@ -169,7 +169,7 @@ function clientOnlyReportResponse(
       hasSession ? "diagnostic-delivery-unavailable" : "session-unavailable",
       request.failure,
     );
-    const delivery = cacheSupportReportDownload(deps, undefined, report);
+    const delivery = cacheSupportReportDownload(deps, undefined, report, ctx.correlationId);
     emitSupportReportCompleted(ctx.correlationId, report, request.correlationId);
     return {
       status: 200,

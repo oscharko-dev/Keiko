@@ -158,7 +158,7 @@ describe("desktop support report transport", () => {
       };
       const end = vi.spyOn(download.res, "end").mockReturnValue(download.res);
       vi.spyOn(download.res, "writeHead").mockReturnValue(download.res);
-      handleDownloadSupportReport(download, owner);
+      await handleDownloadSupportReport(download, owner);
       const bytes: unknown = end.mock.calls[0]?.[0];
       if (!Buffer.isBuffer(bytes)) throw new TypeError("Expected gzip attachment");
       const canonical = gunzipSync(bytes).toString("utf8");
@@ -311,7 +311,7 @@ describe("desktop support report transport", () => {
       correlationId: "report-route-test",
       recordCount: 0,
       sufficiency: "insufficient",
-      completeness: "partial",
+      completeness: "complete",
       loss: "none",
       evidenceScope: "client-only",
       availabilityReason: "session-unavailable",
@@ -395,6 +395,8 @@ describe("desktop support report transport", () => {
       reportJson: '{"private":"report-canary"}',
       summary: {
         status: "complete",
+        completeness: "complete",
+        loss: "none",
         reasons: [],
         recordCount: 4,
         reportDigest: "a".repeat(64),
@@ -501,6 +503,8 @@ describe("desktop support report transport", () => {
       reportJson: "{}",
       summary: {
         status: "insufficient",
+        completeness: "partial",
+        loss: "event-location-unknown",
         reasons: ["evidence-not-retained"],
         recordCount: 2,
         reportDigest: "a".repeat(64),

@@ -225,7 +225,9 @@ function reportLocalPreparation(
       evidenceScope: report.evidenceScope ?? "server",
       completeness: report.summary?.completeness ?? "unknown",
       loss: report.summary?.loss ?? "event-location-unknown",
-      availabilityReason: report.summary?.availabilityReason ?? "service-unavailable",
+      ...(report.evidenceScope === "client-only"
+        ? { availabilityReason: report.summary?.availabilityReason ?? "service-unavailable" }
+        : {}),
     },
   });
 }

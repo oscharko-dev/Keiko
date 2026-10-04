@@ -25,6 +25,28 @@ afterEach(() => {
 const fileName = "keiko-support-v1-aabbccddeeff-2026-10-03.json";
 
 describe("support report browser download", () => {
+  it("preserves the validated canonical disposition for locally reused server evidence", async () => {
+    const summary = {
+      status: "degraded",
+      reasons: ["context-truncated"],
+      recordCount: 2,
+      reportDigest: "a".repeat(64),
+      incidentId: "b".repeat(32),
+      manifestUnreadableCount: 0,
+      manifestReusedCount: 1,
+      completeness: "complete",
+      loss: "none",
+      pinDisposition: "pinned",
+    };
+    response.value = { fileName, reportJson: "{}", summary };
+    expect((await createSupportReport()).summary).toEqual(summary);
+    response.value = {
+      fileName,
+      reportJson: "{}",
+      summary: { ...summary, loss: "private loss detail" },
+    };
+    await expect(createSupportReport()).rejects.toThrow("Invalid report summary");
+  });
   it("preserves the explicit client-only scope returned without launcher authority", async () => {
     pairing.settled = Promise.resolve(false);
     response.value = { fileName, reportJson: "{}", evidenceScope: "client-only" };

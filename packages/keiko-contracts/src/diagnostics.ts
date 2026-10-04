@@ -1676,8 +1676,8 @@ export interface ClientSupportReportPreparation {
   readonly evidenceScope: "server" | "client-only";
   readonly completeness: ActivityLogCompletenessState;
   readonly loss: ActivityLogLossState;
-  readonly availabilityReason:
-    "session-unavailable" | "diagnostic-delivery-unavailable" | "service-unavailable";
+  readonly availabilityReason?:
+    "session-unavailable" | "diagnostic-delivery-unavailable" | "service-unavailable" | undefined;
 }
 const SUPPORT_REPORT_PREPARATION_KEYS = new Set([
   "reportBytes",
@@ -1712,6 +1712,15 @@ export function isClientSupportReportPreparation(
     (value.evidenceScope === "server" || value.evidenceScope === "client-only") &&
     isSetMember(value.completeness, new Set(ACTIVITY_LOG_COMPLETENESS_STATES)) &&
     isSetMember(value.loss, new Set(ACTIVITY_LOG_LOSS_STATES)) &&
+    coherentReportPreparationScope(value)
+  );
+}
+
+function coherentReportPreparationScope(value: Record<string, unknown>): boolean {
+  if (value.evidenceScope === "server") return !("availabilityReason" in value);
+  return (
+    value.completeness === "complete" &&
+    value.loss === "none" &&
     isSetMember(value.availabilityReason, REPORT_AVAILABILITY)
   );
 }

@@ -4,6 +4,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   isClientReportFailure,
+  ACTIVITY_LOG_COMPLETENESS_STATES,
+  ACTIVITY_LOG_LOSS_STATES,
+  DIAGNOSTIC_SUFFICIENCY_STATUSES,
+  DIAGNOSTIC_SUFFICIENCY_REASONS,
   MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES,
   MAX_SUPPORT_REPORT_BYTES,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -140,6 +144,7 @@ function validateSupportReportResponse(value: unknown): DesktopSupportReportResp
     reportJson: value.reportJson,
     ...validateDownloadTarget(value),
     ...validateEvidenceScope(value),
+    ...validateSummary(value),
   };
 }
 
@@ -167,4 +172,78 @@ function validateEvidenceScope(value: object): Pick<DesktopSupportReportResponse
   if (value.evidenceScope !== "client-only")
     throw new SupportReportResponseInvalid("Invalid report evidence scope");
   return { evidenceScope: "client-only" };
+}
+
+type ReportSummary = NonNullable<DesktopSupportReportResponse["summary"]>;
+const SUMMARY_STATUSES = new Set<string>(DIAGNOSTIC_SUFFICIENCY_STATUSES);
+const SUMMARY_REASONS = new Set<string>(DIAGNOSTIC_SUFFICIENCY_REASONS);
+const SUMMARY_COMPLETENESS = new Set<string>(ACTIVITY_LOG_COMPLETENESS_STATES);
+const SUMMARY_LOSS = new Set<string>(ACTIVITY_LOG_LOSS_STATES);
+const SUMMARY_PIN = new Set(["pinned", "quota-exceeded", "rejected"]);
+const SUMMARY_AVAILABILITY = new Set([
+  "session-unavailable",
+  "diagnostic-delivery-unavailable",
+  "service-unavailable",
+]);
+const SUMMARY_COUNTS = ["recordCount", "manifestUnreadableCount", "manifestReusedCount"];
+function nonNegativeCount(value: unknown): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+function optionalSummaryEnum(value: unknown, choices: ReadonlySet<string>): boolean {
+  return value === undefined || (typeof value === "string" && choices.has(value));
+}
+function validSummaryDisposition(value: Record<string, unknown>): boolean {
+  return (
+    optionalSummaryEnum(value.completeness, SUMMARY_COMPLETENESS) &&
+    optionalSummaryEnum(value.loss, SUMMARY_LOSS) &&
+    optionalSummaryEnum(value.pinDisposition, SUMMARY_PIN) &&
+    optionalSummaryEnum(value.availabilityReason, SUMMARY_AVAILABILITY)
+  );
+}
+const SUMMARY_KEYS = new Set([
+  "status",
+  "reasons",
+  ...SUMMARY_COUNTS,
+  "reportDigest",
+  "incidentId",
+  "completeness",
+  "loss",
+  "pinDisposition",
+  "availabilityReason",
+]);
+function isSummaryIdentity(fields: Record<string, unknown>): boolean {
+  return (
+    typeof fields.reportDigest === "string" &&
+    /^[a-f0-9]{64}$/u.test(fields.reportDigest) &&
+    typeof fields.incidentId === "string" &&
+    /^[a-f0-9]{32}$/u.test(fields.incidentId)
+  );
+}
+function isSummarySufficiency(fields: Record<string, unknown>): boolean {
+  return (
+    typeof fields.status === "string" &&
+    SUMMARY_STATUSES.has(fields.status) &&
+    Array.isArray(fields.reasons) &&
+    fields.reasons.length <= 32 &&
+    fields.reasons.every(
+      (reason: unknown) => typeof reason === "string" && SUMMARY_REASONS.has(reason),
+    )
+  );
+}
+function isReportSummary(value: unknown): value is ReportSummary {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const fields: Record<string, unknown> = Object.fromEntries(Object.entries(value));
+  return (
+    Object.keys(fields).every((key) => SUMMARY_KEYS.has(key)) &&
+    isSummarySufficiency(fields) &&
+    SUMMARY_COUNTS.every((key) => nonNegativeCount(fields[key])) &&
+    isSummaryIdentity(fields) &&
+    validSummaryDisposition(fields)
+  );
+}
+function validateSummary(value: object): Pick<DesktopSupportReportResponse, "summary"> {
+  if (!("summary" in value) || value.summary === undefined) return {};
+  if (!isReportSummary(value.summary))
+    throw new SupportReportResponseInvalid("Invalid report summary");
+  return { summary: value.summary };
 }

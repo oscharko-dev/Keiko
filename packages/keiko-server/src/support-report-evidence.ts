@@ -2,6 +2,11 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
   SUPPORT_REPORT_FAILURES,
+  looksLikeSecret,
+  looksLikePersonalIdentifier,
+  isActivityLogCorrelationId,
+  type ActivityLogCompletenessState,
+  type ActivityLogLossState,
   DIAGNOSTIC_SUFFICIENCY_REASONS,
   type ActivityLogErrorKind,
   type DesktopSupportReportResponse,
@@ -117,6 +122,7 @@ const DELIVERED = defineActivityLogOperation({
   analyzerProjection: "timeline",
   fields: {
     reportBytes: { type: "integer", dataClass: "count", required: true },
+    reportDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     ...DELIVERY_FIELDS,
     ...COMPLETE,
   },
@@ -127,19 +133,18 @@ export function emitSupportReportDelivered(
   correlationId: string | undefined,
   reportBytes: number,
   deliveryAuthority: "session-bound" | "client-only",
+  parentCorrelationId?: string,
+  reportDigest?: string,
 ): void {
   getServerLogger().info(
-    activityLogEvent(
-      DELIVERED,
-      { correlationId: correlationIdOrUnknown(correlationId) },
-      {
-        reportBytes,
-        deliveryAuthority,
-        evidenceScope: deliveryAuthority === "client-only" ? "client-only" : "server",
-        completeness: "complete",
-        loss: "none",
-      },
-    ),
+    activityLogEvent(DELIVERED, reportCorrelation(correlationId, parentCorrelationId), {
+      reportBytes,
+      ...(reportDigest === undefined ? {} : { reportDigest }),
+      deliveryAuthority,
+      evidenceScope: deliveryAuthority === "client-only" ? "client-only" : "server",
+      completeness: "complete",
+      loss: "none",
+    }),
   );
 }
 
@@ -197,7 +202,7 @@ export function emitSupportReportStarted(
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         selector: selected ? "correlation" : "recent",
-        ...(selectedCorrelationId === undefined ? {} : { selectedCorrelationId }),
+        ...selectedCorrelationFields(selectedCorrelationId),
         completeness: "complete",
         loss: "none",
       },
@@ -233,18 +238,15 @@ function completionSummary(summary: DesktopSupportReportResponse["summary"]): Co
 function completionState(report: DesktopSupportReportResponse): {
   sufficiency: DiagnosticSufficiencyStatus;
   reasons: readonly DiagnosticSufficiencyReason[];
-  completeness: "complete" | "partial";
-  loss: "none" | "event-location-unknown";
+  completeness: ActivityLogCompletenessState;
+  loss: ActivityLogLossState;
 } {
   const status = report.summary?.status ?? "degraded";
   return {
     sufficiency: status,
     reasons: report.summary?.reasons ?? ["evidence-partial"],
-    completeness: status === "complete" ? "complete" : "partial",
-    loss:
-      status === "complete" || report.evidenceScope === "client-only"
-        ? "none"
-        : "event-location-unknown",
+    completeness: report.summary?.completeness ?? "unknown",
+    loss: report.summary?.loss ?? "event-location-unknown",
   };
 }
 export function emitSupportReportCompleted(
@@ -260,7 +262,7 @@ export function emitSupportReportCompleted(
       { correlationId: correlationIdOrUnknown(correlationId) },
       {
         reportBytes: Buffer.byteLength(report.reportJson),
-        ...(selectedCorrelationId === undefined ? {} : { selectedCorrelationId }),
+        ...selectedCorrelationFields(selectedCorrelationId),
         evidenceScope: report.evidenceScope ?? "server",
         deliveryAuthority: report.evidenceScope === "client-only" ? "client-only" : "session-bound",
         ...completionSummary(summary),
@@ -272,11 +274,12 @@ export function emitSupportReportCompleted(
 export function emitSupportReportFailed(
   correlationId: string | undefined,
   error: SupportReportJobError,
+  parentCorrelationId?: string,
 ): void {
   const event = activityLogEvent(
     FAILED,
     {
-      correlationId: correlationIdOrUnknown(correlationId),
+      ...reportCorrelation(correlationId, parentCorrelationId),
       errorKind: supportReportJobErrorKind(error),
     },
     {
@@ -313,4 +316,26 @@ function supportReportJobErrorKind(error: SupportReportJobError): ActivityLogErr
   if (error.reason === "record-too-large") return "validation-failed";
   if (error.reason === "store-unavailable" || error.reason === "unavailable") return "unavailable";
   return error.reason === "timeout" ? "timeout" : "internal";
+}
+
+function safeReportCorrelation(value: string | undefined): string | undefined {
+  return isActivityLogCorrelationId(value) &&
+    !looksLikeSecret(value) &&
+    !looksLikePersonalIdentifier(value)
+    ? value
+    : undefined;
+}
+function selectedCorrelationFields(value: string | undefined): { selectedCorrelationId?: string } {
+  const selectedCorrelationId = safeReportCorrelation(value);
+  return selectedCorrelationId === undefined ? {} : { selectedCorrelationId };
+}
+function reportCorrelation(
+  correlationId: string | undefined,
+  parent: string | undefined,
+): { correlationId: string; parentCorrelationId?: string } {
+  const parentCorrelationId = safeReportCorrelation(parent);
+  return {
+    correlationId: correlationIdOrUnknown(correlationId),
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
+  };
 }

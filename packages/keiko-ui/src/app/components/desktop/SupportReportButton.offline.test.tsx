@@ -30,7 +30,22 @@ afterEach(() => {
 
 it("reuses full canonical bytes locally after an attachment expires and the server goes offline", async () => {
   vi.useFakeTimers();
-  const report = { fileName: "full.json", reportJson: '{"retained":"full canonical evidence"}' };
+  const report = {
+    fileName: "full.json",
+    reportJson: '{"retained":"full canonical evidence"}',
+    summary: {
+      status: "degraded" as const,
+      reasons: ["context-truncated" as const],
+      recordCount: 2,
+      reportDigest: "a".repeat(64),
+      incidentId: "b".repeat(32),
+      manifestUnreadableCount: 0,
+      manifestReusedCount: 0,
+      completeness: "complete" as const,
+      loss: "none" as const,
+    },
+  };
+  const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
   vi.mocked(createSupportReport).mockResolvedValueOnce(report);
   vi.mocked(createSupportReportDownload).mockReturnValueOnce({
     href: "/api/prepared-full",
@@ -56,6 +71,15 @@ it("reuses full canonical bytes locally after an attachment expires and the serv
     expect.any(AbortSignal),
   );
   expect(prepareLocalSupportReport).not.toHaveBeenCalled();
+  expect(diagnostic).toHaveBeenCalledWith("Keiko support report prepared locally.", {
+    correlationId: "expired-full-offline",
+    supportReportPreparation: {
+      reportBytes: new TextEncoder().encode(report.reportJson).length,
+      evidenceScope: "server",
+      completeness: "complete",
+      loss: "none",
+    },
+  });
   expect(screen.getAllByRole("status")).toHaveLength(1);
 });
 

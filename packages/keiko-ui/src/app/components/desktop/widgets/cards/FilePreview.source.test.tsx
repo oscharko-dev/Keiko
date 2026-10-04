@@ -40,9 +40,8 @@ afterEach(() => {
 
 describe("read-only cited source preview", () => {
   it("reveals a deep cited line with a bounded initial viewport and accessible preceding lines", async () => {
-    const content = Array.from(
-      { length: 60_000 },
-      (_, index) => `source line ${String(index + 1)}`,
+    const content = Array.from({ length: 60_000 }, (_, index) =>
+      index === 0 ? "UNIQUE_EARLY_SOURCE_SENTINEL" : `source line ${String(index + 1)}`,
     ).join("\n");
     vi.mocked(fetchFilesPreview).mockResolvedValueOnce(
       textPreview("/repo", "manual.html", content),
@@ -58,7 +57,8 @@ describe("read-only cited source preview", () => {
     const region = await screen.findByRole("region", { name: "File preview: manual.html" });
     await waitFor(() => expect(region).toHaveTextContent("source line 58000"));
     expect(region.querySelectorAll(".fpv-line").length).toBeLessThanOrEqual(500);
-    expect(region).not.toHaveTextContent("source line 1source");
+    expect(region).not.toHaveTextContent("UNIQUE_EARLY_SOURCE_SENTINEL");
+    expect(region).toHaveTextContent("source line 57995");
     fireEvent.click(screen.getByRole("button", { name: "Show 500 previous lines" }));
     expect(region.querySelectorAll(".fpv-line").length).toBeLessThanOrEqual(1000);
     expect(region).toHaveTextContent("source line 57500");

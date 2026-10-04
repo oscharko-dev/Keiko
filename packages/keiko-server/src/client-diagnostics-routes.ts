@@ -1144,7 +1144,7 @@ const CLIENT_SUPPORT_REPORT_PREPARED_OPERATION = defineActivityLogOperation({
     availabilityReason: {
       type: "string",
       dataClass: "closed-enum",
-      required: true,
+      required: false,
       values: ["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"],
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -1745,7 +1745,9 @@ function logClientSupportReportPrepared(
       {
         reportBytes: prepared.reportBytes,
         evidenceScope: prepared.evidenceScope,
-        availabilityReason: prepared.availabilityReason,
+        ...(prepared.availabilityReason === undefined
+          ? {}
+          : { availabilityReason: prepared.availabilityReason }),
         completeness: prepared.completeness,
         loss: prepared.loss,
       },
