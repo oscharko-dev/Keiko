@@ -3,7 +3,18 @@
 import type { ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
 import type { BackendHealth } from "./hooks/useBackendHealth";
-import { SupportReportButton } from "./SupportReportButton";
+import { SupportReportButton, useSupportReportPresence } from "./SupportReportButton";
+
+const READINESS_REPORT_KEY = "diagnostic-readiness";
+
+function readinessUnavailable(health: BackendHealth): boolean {
+  if (health.state === "unavailable") return true;
+  return (
+    health.state === "loaded" &&
+    health.health.diagnostics !== undefined &&
+    health.health.diagnostics.readiness !== "ready"
+  );
+}
 
 export function DiagnosticReadinessNotice({
   health,
@@ -11,15 +22,17 @@ export function DiagnosticReadinessNotice({
   readonly health: BackendHealth;
 }): ReactNode {
   const t = useTranslate();
-  if (health.state === "loading") return null;
-  if (health.state === "loaded") {
-    const readiness = health.health.diagnostics?.readiness;
-    if (readiness === undefined || readiness === "ready") return null;
-  }
+  const hasReport = useSupportReportPresence(READINESS_REPORT_KEY);
+  const unavailable = readinessUnavailable(health);
+  if (!unavailable && !hasReport) return null;
   return (
-    <output className="source-limit-alert">
-      <span>{t("supportReport.readinessUnavailable")}</span>
-      <SupportReportButton compact failure={{ errorKind: "unavailable", context: [] }} />
-    </output>
+    <div className="source-limit-alert">
+      {unavailable ? <output>{t("supportReport.readinessUnavailable")}</output> : null}
+      <SupportReportButton
+        compact
+        errorKey={READINESS_REPORT_KEY}
+        failure={{ errorKind: "unavailable", context: [] }}
+      />
+    </div>
   );
 }

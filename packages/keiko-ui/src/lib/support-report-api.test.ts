@@ -40,6 +40,19 @@ afterEach(() => {
 const fileName = supportReportFileName(1, "aabbccddeeff".padEnd(32, "0"), Date.UTC(2026, 9, 3));
 
 describe("support report browser download", () => {
+  it("requests only the supplied client failure when the displayed notice has no trusted correlation", async () => {
+    response.value = await canonicalSupportReportFixture();
+    const failure = { errorKind: "unavailable", context: [] } as const;
+    await createSupportReport(undefined, undefined, failure, "client-only");
+    expect(bffFetchJson).toHaveBeenCalledWith(
+      "/api/diagnostics/report",
+      expect.objectContaining({
+        body: JSON.stringify({ evidenceScope: "client-only", failure }),
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("accepts the filename grammar owned by the canonical producer", async () => {
     const producedFileName = supportReportFileName(2, "a".repeat(32), Date.UTC(2026, 9, 3));
     response.value = { fileName: producedFileName, reportJson: "{}" };
@@ -123,40 +136,44 @@ describe("support report browser download", () => {
     expect(new TextEncoder().encode(String(body)).byteLength).toBeLessThanOrEqual(1024);
   });
 
-  it("omits oversized optional frames without inventing an empty observed stack", async () => {
-    response.value = { fileName, reportJson: "{}", evidenceScope: "client-only" };
-    const failure = {
-      errorKind: "timeout" as const,
-      context: [
-        "kind:sse-error",
-        "render:window-body",
-        "module:git-history",
-        "stage:files-directory-navigation",
-      ],
-      errorEvidence: {
-        errorClass: "ApiError",
-        frames: Array.from(
-          { length: 8 },
-          () => `dist/ui/static/_next/static/chunks/${"a".repeat(32)}.js:12345678:12345678`,
-        ),
-        causeChain: ["Error"],
-      },
-    };
-    expect(
-      new TextEncoder().encode(JSON.stringify({ correlationId: "b".repeat(128), failure }))
-        .byteLength,
-    ).toBeGreaterThan(1030);
-    await createSupportReport("b".repeat(128), undefined, failure);
-    const body = vi.mocked(bffFetchJson).mock.calls.at(-1)?.[1]?.body;
-    expect(body).toBe(
-      JSON.stringify({
-        correlationId: "b".repeat(128),
-        failure: { errorKind: failure.errorKind, context: failure.context },
-      }),
-    );
-    expect(new TextEncoder().encode(String(body)).byteLength).toBeLessThanOrEqual(1024);
-    expect(String(body)).not.toContain("frames");
-  });
+  it.each([undefined, "client-only"] as const)(
+    "omits oversized optional frames without inventing an empty observed stack (%s)",
+    async (evidenceScope) => {
+      response.value = { fileName, reportJson: "{}", evidenceScope: "client-only" };
+      const failure = {
+        errorKind: "timeout" as const,
+        context: [
+          "kind:sse-error",
+          "render:window-body",
+          "module:git-history",
+          "stage:files-directory-navigation",
+        ],
+        errorEvidence: {
+          errorClass: "ApiError",
+          frames: Array.from(
+            { length: 8 },
+            () => `dist/ui/static/_next/static/chunks/${"a".repeat(32)}.js:12345678:12345678`,
+          ),
+          causeChain: ["Error"],
+        },
+      };
+      expect(
+        new TextEncoder().encode(JSON.stringify({ correlationId: "b".repeat(128), failure }))
+          .byteLength,
+      ).toBeGreaterThan(1030);
+      await createSupportReport("b".repeat(128), undefined, failure, evidenceScope);
+      const body = vi.mocked(bffFetchJson).mock.calls.at(-1)?.[1]?.body;
+      expect(body).toBe(
+        JSON.stringify({
+          ...(evidenceScope === undefined ? {} : { evidenceScope }),
+          correlationId: "b".repeat(128),
+          failure: { errorKind: failure.errorKind, context: failure.context },
+        }),
+      );
+      expect(new TextEncoder().encode(String(body)).byteLength).toBeLessThanOrEqual(1024);
+      expect(String(body)).not.toContain("frames");
+    },
+  );
 
   it("rejects an unknown evidence scope rather than claiming a complete report", async () => {
     response.value = { fileName, reportJson: "{}", evidenceScope: "private-log-bypass" };

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { ReactNode } from "react";
 import { Icons } from "./Icons";
 import { toUserErrorNotice, type UserErrorNotice } from "./format-error";
@@ -60,6 +60,8 @@ function ErrorNoticeReportAction({
       correlationId={notice.correlationId}
       errorKey={noticeKey}
       failure={failure}
+      clientOnly={notice.correlationId === undefined}
+      disposeOnUnmount={notice.correlationId === undefined}
     />
   );
 }
@@ -78,6 +80,7 @@ function noticeFailure(
 
 function ErrorNotice({
   notice,
+  noticeKey,
   failure,
   className = "ui-error-notice",
   id,
@@ -85,6 +88,7 @@ function ErrorNotice({
   dismissible = true,
 }: {
   readonly notice: UserErrorNotice;
+  readonly noticeKey: string;
   readonly failure: ClientOnlySupportReportInput["failure"];
   readonly className?: string | undefined;
   readonly id?: string | undefined;
@@ -92,10 +96,6 @@ function ErrorNotice({
   readonly dismissible?: boolean | undefined;
 }): ReactNode {
   const t = useTranslate();
-  // RB-6 / ADR-0173 D5 — correlationId is a user-visible field (the "Support ID" line), so it must
-  // be part of the dismissal identity: without it, a later failure with the same title/message/code
-  // but a NEW support id would still match a stale dismissedKey and stay hidden (#3241 review).
-  const noticeKey = `${notice.title}\n${notice.message}\n${notice.code ?? ""}\n${notice.remediation ?? ""}\n${notice.correlationId ?? ""}`;
   const [dismissedKey, setDismissedKey] = useState<string | undefined>();
   if (dismissedKey === noticeKey) return null;
   return (
@@ -128,6 +128,17 @@ function ErrorNotice({
   );
 }
 
+function useNoticeOccurrence(error: unknown): string {
+  const instance = useId();
+  const [previous, setPrevious] = useState({ error, occurrence: 0 });
+  if (!Object.is(previous.error, error)) {
+    const occurrence = previous.occurrence + 1;
+    setPrevious({ error, occurrence });
+    return `${instance}:${occurrence}`;
+  }
+  return `${instance}:${previous.occurrence}`;
+}
+
 export function ErrorNoticeFromError({
   error,
   fallback,
@@ -136,12 +147,14 @@ export function ErrorNoticeFromError({
   onDismiss,
   dismissible,
 }: ErrorNoticeProps): ReactNode {
+  const occurrence = useNoticeOccurrence(error);
   const notice = toUserErrorNotice(error, fallback);
   return (
     <ErrorNotice
       id={id}
       className={className}
       notice={notice}
+      noticeKey={`${occurrence}:${notice.correlationId ?? ""}`}
       failure={noticeFailure(error, notice)}
       onDismiss={onDismiss}
       dismissible={dismissible}

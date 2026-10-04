@@ -56,6 +56,15 @@ function subscribeOutcomes(listener: () => void): () => void {
   };
 }
 
+/** Observes the existing bounded outcome while its owning surface recovers. */
+export function useSupportReportPresence(key: string): boolean {
+  return useSyncExternalStore(
+    subscribeOutcomes,
+    () => outcomes.has(key),
+    () => false,
+  );
+}
+
 function beginReport(key: string, regenerate: boolean): AbortController | undefined {
   const prior = outcomes.get(key);
   if (prior instanceof AbortController) return undefined;
@@ -146,6 +155,8 @@ interface SupportReportButtonProps {
   readonly correlationId?: string | undefined;
   readonly errorKey?: string | undefined;
   readonly compact?: boolean;
+  readonly clientOnly?: boolean;
+  readonly disposeOnUnmount?: boolean;
   readonly failure?: ClientOnlySupportReportInput["failure"];
 }
 
@@ -302,17 +313,19 @@ async function recoverLocalReport(
   }
 }
 
-function useReportCancellation(key: string): ReportRequestRef {
+function useReportCancellation(key: string, disposeOnUnmount: boolean): ReportRequestRef {
   const request = useRef<ReportRequestRef["current"]>(null);
   useEffect(
     () => (): void => {
       const pending = request.current;
-      if (pending === null) return;
-      pending.controller.abort();
-      releaseReport(pending.key, pending.controller);
-      request.current = null;
+      if (pending !== null) {
+        pending.controller.abort();
+        releaseReport(pending.key, pending.controller);
+        request.current = null;
+      }
+      if (disposeOnUnmount) forgetReadyReport(key);
     },
-    [key],
+    [key, disposeOnUnmount],
   );
   return request;
 }
@@ -337,7 +350,13 @@ function readyReportStatus(ready: ReadyReport, feedback: ReportFeedback["state"]
   return "saved";
 }
 
-function useSupportReportAction({ correlationId, errorKey, failure }: SupportReportButtonProps): {
+function useSupportReportAction({
+  correlationId,
+  errorKey,
+  failure,
+  clientOnly = false,
+  disposeOnUnmount = false,
+}: SupportReportButtonProps): {
   readonly status: ReportStatus;
   readonly create: () => Promise<void>;
   readonly regenerate: () => Promise<void>;
@@ -355,12 +374,12 @@ function useSupportReportAction({ correlationId, errorKey, failure }: SupportRep
     key,
     state: "idle",
   });
-  const request = useReportCancellation(key);
+  const request = useReportCancellation(key, disposeOnUnmount);
   const currentFeedback = feedback.key === key ? feedback.state : "idle";
   const create = (): Promise<void> =>
-    runReport(key, correlationId, request, setFeedback, false, failure);
+    runReport(key, correlationId, request, setFeedback, false, failure, clientOnly);
   const regenerate = (): Promise<void> =>
-    runReport(key, correlationId, request, setFeedback, true, failure);
+    runReport(key, correlationId, request, setFeedback, true, failure, clientOnly);
   if (outcome !== undefined && !(outcome instanceof AbortController)) {
     return {
       status: readyReportStatus(outcome, currentFeedback),
@@ -418,6 +437,18 @@ async function reportPreparationFailure(
   diagnoseReportFailure(error, correlationId, availabilityFallback);
 }
 
+function createReportForNotice(
+  api: typeof import("@/lib/support-report-api"),
+  correlationId: string | undefined,
+  signal: AbortSignal,
+  original: ClientOnlySupportReportInput["failure"],
+  clientOnly: boolean,
+): Promise<DesktopSupportReportResponse> {
+  if (clientOnly) return api.createSupportReport(correlationId, signal, original, "client-only");
+  if (original === undefined) return api.createSupportReport(correlationId, signal);
+  return api.createSupportReport(correlationId, signal, original);
+}
+
 async function runReport(
   key: string,
   correlationId: string | undefined,
@@ -425,6 +456,7 @@ async function runReport(
   setFeedback: (feedback: ReportFeedback) => void,
   regenerate: boolean,
   failure: ClientOnlySupportReportInput["failure"],
+  clientOnly: boolean,
 ): Promise<void> {
   const controller = beginReport(key, regenerate);
   if (controller === undefined) return;
@@ -438,10 +470,7 @@ async function runReport(
     phase = "facts";
     const original = originalSupportReportFailure({ correlationId, failure });
     phase = "request";
-    const creation =
-      original === undefined
-        ? api.createSupportReport(correlationId, signal)
-        : api.createSupportReport(correlationId, signal, original);
+    const creation = createReportForNotice(api, correlationId, signal, original, clientOnly);
     const report = await waitForReportStep(creation, signal);
     if (!reportRequestIsCurrent(request, pending)) return;
     signal.throwIfAborted();

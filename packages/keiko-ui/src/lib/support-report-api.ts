@@ -77,6 +77,7 @@ export async function createSupportReport(
   correlationId?: string,
   signal?: AbortSignal,
   failure?: DesktopSupportReportRequest["failure"],
+  evidenceScope?: DesktopSupportReportRequest["evidenceScope"],
 ): Promise<DesktopSupportReportResponse> {
   const deadline = AbortSignal.timeout(35_000);
   const requestSignal = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
@@ -90,7 +91,7 @@ export async function createSupportReport(
     "/api/diagnostics/report",
     {
       method: "POST",
-      body: reportRequestBody(correlationId, failure),
+      body: reportRequestBody(correlationId, failure, evidenceScope),
       signal: requestSignal,
     },
     {
@@ -103,9 +104,11 @@ export async function createSupportReport(
 function reportRequestBody(
   correlationId: string | undefined,
   failure: DesktopSupportReportRequest["failure"],
+  evidenceScope: DesktopSupportReportRequest["evidenceScope"],
 ): string {
   if (!isClientReportFailure(failure)) throw new TypeError("Invalid support report failure");
   const request = {
+    ...(evidenceScope === undefined ? {} : { evidenceScope }),
     ...(correlationId === undefined ? {} : { correlationId }),
     ...(failure === undefined ? {} : { failure }),
   };

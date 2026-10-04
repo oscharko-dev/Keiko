@@ -2,7 +2,7 @@
 // underlying failure carried a correlation id, using the same "{feature}.supportId" i18n key
 // pattern already proven at VoiceDictation.tsx and WorkspaceTrustSurfaces.tsx.
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
@@ -12,6 +12,7 @@ import {
   loadLocaleMessages,
   resetLoadedMessageCatalogs,
 } from "@/lib/i18n";
+import { canonicalSupportReportFixture } from "@/test-utils/support-report-fixture";
 import * as reportApi from "@/lib/support-report-api";
 import { resetSupportReportOutcomesForTests } from "./SupportReportButton";
 import { ErrorNoticeFromError } from "./ErrorNotice";
@@ -55,6 +56,125 @@ describe("ErrorNoticeFromError — correlation support id", () => {
       errorKind: "invalid-request",
       context: [],
       errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+    });
+  });
+
+  it("selects only the displayed client failure when no trusted Support ID exists", async () => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:uncorrelated-report",
+      dispose: vi.fn(),
+    });
+    renderInLocale(new ApiError("GATEWAY_TIMEOUT", "Gateway timeout", 503), "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledWith(
+      undefined,
+      expect.any(AbortSignal),
+      {
+        errorKind: "unavailable",
+        context: [],
+        errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+      },
+      "client-only",
+    );
+  });
+
+  it("isolates identical uncorrelated notices and disposes their own report on dismissal", async () => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    const firstDispose = vi.fn();
+    const secondDispose = vi.fn();
+    vi.spyOn(reportApi, "createSupportReportDownload")
+      .mockReturnValueOnce({ href: "blob:first-notice", dispose: firstDispose })
+      .mockReturnValueOnce({ href: "blob:second-notice", dispose: secondDispose });
+    const first = new ApiError("GATEWAY_TIMEOUT", "Same message", 503);
+    const second = new ApiError("GATEWAY_TIMEOUT", "Same message", 503);
+    render(
+      <I18nProvider>
+        <ErrorNoticeFromError error={first} fallback="Failed" />
+        <ErrorNoticeFromError error={second} fallback="Failed" />
+      </I18nProvider>,
+    );
+    const notices = screen.getAllByRole("alert");
+    const firstNotice = notices[0];
+    const secondNotice = notices[1];
+    expect(firstNotice).toBeDefined();
+    expect(secondNotice).toBeDefined();
+    if (firstNotice === undefined || secondNotice === undefined) throw new Error("Missing notices");
+    fireEvent.click(within(firstNotice).getByRole("button", { name: "Create error report" }));
+    await within(firstNotice).findByRole("link", { name: "Download report" });
+    expect(within(secondNotice).queryByRole("link")).not.toBeInTheDocument();
+    fireEvent.click(within(secondNotice).getByRole("button", { name: "Create error report" }));
+    expect(
+      await within(secondNotice).findByRole("link", { name: "Download report" }),
+    ).toHaveAttribute("href", "blob:second-notice");
+    expect(create).toHaveBeenCalledTimes(2);
+    fireEvent.click(within(firstNotice).getByRole("button", { name: "Dismiss error" }));
+    expect(firstDispose).toHaveBeenCalledOnce();
+    expect(secondDispose).not.toHaveBeenCalled();
+    expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
+      "href",
+      "blob:second-notice",
+    );
+  });
+
+  it("shows and prepares a new occurrence of the same uncorrelated failure after dismissal", async () => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValue(report);
+    const dispose = vi.fn();
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:occurrence",
+      dispose,
+    });
+    const view = renderInLocale(new ApiError("GATEWAY_TIMEOUT", "Same message", 503), "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+    view.rerender(
+      <I18nProvider>
+        <ErrorNoticeFromError
+          error={new ApiError("GATEWAY_TIMEOUT", "Same message", 503)}
+          fallback="Could not send message."
+        />
+      </I18nProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("aborts an uncorrelated regeneration and disposes only its prior artifact on dismissal", async () => {
+    const report = await canonicalSupportReportFixture();
+    const create = vi.spyOn(reportApi, "createSupportReport").mockResolvedValueOnce(report);
+    const dispose = vi.fn();
+    vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+      href: "blob:prior-notice",
+      dispose,
+    });
+    renderInLocale(new ApiError("GATEWAY_TIMEOUT", "Timeout", 503), "en");
+    fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+    await screen.findByRole("link", { name: "Download report" });
+    let pendingSignal: AbortSignal | undefined;
+    let finish: ((value: typeof report) => void) | undefined;
+    create.mockImplementationOnce((_correlation, signal) => {
+      pendingSignal = signal;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate report" }));
+    await vi.waitFor(() => {
+      expect(create).toHaveBeenCalledTimes(2);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+    expect(pendingSignal?.aborted).toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
+    finish?.(report);
+    await vi.waitFor(() => {
+      expect(screen.queryByRole("link")).not.toBeInTheDocument();
     });
   });
 
