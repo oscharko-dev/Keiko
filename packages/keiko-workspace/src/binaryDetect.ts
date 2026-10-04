@@ -95,13 +95,54 @@ export function detectTextByteEncoding(
   return utf16PatternEncoding(bytes, limit);
 }
 
+interface HtmlAttributeCursor {
+  readonly tag: string;
+  offset: number;
+}
+
+function skipHtmlAttributeSeparators(cursor: HtmlAttributeCursor, slash = false): void {
+  const separator = slash ? /[\s/]/u : /\s/u;
+  while (cursor.offset < cursor.tag.length && separator.test(cursor.tag.charAt(cursor.offset)))
+    cursor.offset += 1;
+}
+
+function htmlAttributeName(cursor: HtmlAttributeCursor): string {
+  const start = cursor.offset;
+  while (cursor.offset < cursor.tag.length && !/[\s/>=]/u.test(cursor.tag.charAt(cursor.offset)))
+    cursor.offset += 1;
+  return cursor.tag.slice(start, cursor.offset).toLowerCase();
+}
+
+function htmlAttributeValue(cursor: HtmlAttributeCursor): string | undefined {
+  skipHtmlAttributeSeparators(cursor);
+  const quote = cursor.tag.charAt(cursor.offset);
+  if (quote === '"' || quote === "'") {
+    const start = cursor.offset + 1;
+    const end = cursor.tag.indexOf(quote, start);
+    cursor.offset = end < 0 ? cursor.tag.length : end + 1;
+    return end < 0 ? undefined : cursor.tag.slice(start, end);
+  }
+  const start = cursor.offset;
+  while (cursor.offset < cursor.tag.length && !/[\s/>]/u.test(cursor.tag.charAt(cursor.offset)))
+    cursor.offset += 1;
+  return cursor.offset === start ? undefined : cursor.tag.slice(start, cursor.offset);
+}
+
 function htmlMetaAttributes(tag: string): ReadonlyMap<string, string> {
   const attributes = new Map<string, string>();
-  const pattern = /(?<=[\s/"'])([^\s/>=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s/>]+))/gu;
-  for (const match of tag.matchAll(pattern)) {
-    const name = match[1]?.toLowerCase();
-    if (name !== undefined && !attributes.has(name))
-      attributes.set(name, match[2] ?? match[3] ?? match[4] ?? "");
+  const cursor = { tag, offset: 5 };
+  while (cursor.offset < tag.length) {
+    skipHtmlAttributeSeparators(cursor, true);
+    if (tag.charAt(cursor.offset) === ">") break;
+    const name = htmlAttributeName(cursor);
+    skipHtmlAttributeSeparators(cursor);
+    if (tag.charAt(cursor.offset) !== "=") {
+      if (name === "") cursor.offset += 1;
+      continue;
+    }
+    cursor.offset += 1;
+    const value = htmlAttributeValue(cursor);
+    if (name !== "" && value !== undefined && !attributes.has(name)) attributes.set(name, value);
   }
   return attributes;
 }

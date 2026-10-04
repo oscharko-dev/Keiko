@@ -137,11 +137,42 @@ describe("declared HTML character encoding", () => {
     '<meta/charset="windows-1252">',
     '<meta http-equiv="Content-Type"content="text/html; charset=windows-1252">',
     "<meta http-equiv='Content-Type'content='text/html; charset=windows-1252'>",
+    "<meta disabled charset=windows-1252/>",
+    '<meta charset="windows-1252"charset="unknown-codec">',
   ])("decodes compact HTML attributes in %s", (declaration) => {
     expect(
       decodeTextFileBytes(legacy(`${declaration}<p>Ölwechsel</p>`), { scopePath: "manual.html" }),
     ).toEqual({ encoding: "windows-1252", text: `${declaration}<p>Ölwechsel</p>` });
   });
+  it.each([
+    '<meta data="unfinished charset=windows-1252>',
+    "<meta data='unfinished charset=windows-1252>",
+    '<meta data="/charset=windows-1252">',
+    "<meta data='charset=windows-1252'>",
+  ])("does not promote quoted attribute contents into a declaration: %s", (declaration) => {
+    expect(
+      decodeTextFileBytes(legacy(`${declaration}<p>Ölwechsel</p>`), { scopePath: "manual.html" }),
+    ).toBeUndefined();
+  });
+  it.each([128, 512, 850])(
+    "reads a malformed %i-character attribute name in linear work",
+    (size) => {
+      const markup = `<meta ${"x".repeat(size)}/charset='windows-1252'><p>Ölwechsel</p>`;
+      let charactersRead: number;
+      const spy = vi.spyOn(String.prototype, "charAt");
+      try {
+        expect(decodeTextFileBytes(legacy(markup), { scopePath: "manual.html" })).toEqual({
+          encoding: "windows-1252",
+          text: markup,
+        });
+      } finally {
+        charactersRead = spy.mock.calls.length;
+        spy.mockRestore();
+      }
+      expect(charactersRead).toBeGreaterThanOrEqual(size);
+      expect(charactersRead).toBeLessThanOrEqual(markup.length * 4);
+    },
+  );
   it("matches the http-equiv charset parameter case-insensitively", () => {
     const bytes = legacy(
       '<META content="text/html; CHARSET=ISO-8859-1" HTTP-EQUIV="Content-Type"><p>Öl</p>',
