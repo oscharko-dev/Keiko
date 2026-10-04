@@ -38,6 +38,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import {
   AuthenticationError,
+  CancelledError,
   ConfigInvalidError,
   TransportError,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -3968,6 +3969,72 @@ describe("mapGroundedAskError", () => {
       store: rescueStore,
     };
   }
+
+  function failingKnowledgeDeps(cause: Error, records: ServerDiagnosticRecord[]): UiHandlerDeps {
+    const embeddingModelId = "text-embedding-3-small";
+    return {
+      ...minimalDeps(),
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+      },
+      configPresent: true,
+      env: { KEIKO_DEFAULT_API_KEY: "private-cause-canary" },
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: scriptedAdapter().request,
+      modelPortFactory: () => ({
+        call: (): Promise<never> => Promise.reject(cause),
+      }),
+      diagnostics: {
+        record: (record): void => {
+          records.push(record);
+        },
+      },
+      redactor: (value): unknown => String(value).replaceAll("private-cause-canary", "[REDACTED]"),
+    };
+  }
+
+  it.each([
+    { slug: "gateway", cause: new TransportError("private-cause-canary"), status: 503 },
+    { slug: "unexpected", cause: new Error("private-cause-canary"), status: 500 },
+  ])(
+    "correlates and diagnoses a $slug failure from the real Knowledge Pod handler",
+    async ({ slug, cause, status }) => {
+      const chat = await seedFailClosedChat(`diagnostic-${slug}`);
+      const records: ServerDiagnosticRecord[] = [];
+      const result = await handleLocalKnowledgeGroundedAsk(
+        chat,
+        { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+        failingKnowledgeDeps(cause, records),
+        new AbortController().signal,
+        undefined,
+        "corr-knowledge-failure",
+      );
+      expect(result.status).toBe(status);
+      expect(result.body).toMatchObject({ error: { correlationId: "corr-knowledge-failure" } });
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        correlationId: "corr-knowledge-failure",
+        operation: "POST /api/chats/messages/grounded",
+        source: "grounded.local-knowledge",
+        message: "server-operation-failed",
+      });
+      expect(JSON.stringify(records)).not.toContain("private-cause-canary");
+      expect(JSON.stringify(result.body)).not.toContain("private-cause-canary");
+    },
+  );
+
+  it("keeps deliberate Knowledge Pod cancellation out of failure diagnostics", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const result = mapGroundedAskError(
+      new CancelledError("private-cause-canary"),
+      failingKnowledgeDeps(new Error("unused"), records),
+      "corr-knowledge-cancel",
+    );
+    expect(result.status).toBe(499);
+    expect(records).toEqual([]);
+  });
 
   it("maps a retryable GatewayError to a 503 with the gateway code and message", () => {
     const result = mapGroundedAskError(new TransportError("connection reset"), minimalDeps());

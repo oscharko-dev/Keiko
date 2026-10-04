@@ -124,6 +124,7 @@ import {
   type CitationSupportCaveat,
 } from "./grounded-citation-log.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
+import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
 import {
   assertConversationReadinessAdmission,
   captureConversationReadinessAdmission,
@@ -192,10 +193,6 @@ function badRequest(message: string): RouteResult {
 
 function conflict(message: string): RouteResult {
   return { status: 409, body: errorBody("LOCAL_KNOWLEDGE_CONFLICT", message) };
-}
-
-function internalError(message: string): RouteResult {
-  return { status: 500, body: errorBody("INTERNAL", message) };
 }
 
 export function openStoreForDeps(deps: UiHandlerDeps): {
@@ -2729,21 +2726,35 @@ export function gatewayErrorStatus(error: GatewayError): number {
   return 502;
 }
 
-export function mapGroundedAskError(error: unknown, deps: UiHandlerDeps): RouteResult {
+export function mapGroundedAskError(
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId?: string,
+): RouteResult {
   if (error instanceof CancelledError) {
-    return { status: 499, body: errorBody(error.code, "Grounded request was cancelled.") };
+    return {
+      status: 499,
+      body: errorBody(error.code, "Grounded request was cancelled.", correlationId),
+    };
   }
+  emitGatewayErrorDiagnostic(
+    deps,
+    error,
+    correlationId,
+    "POST /api/chats/messages/grounded",
+    "grounded.local-knowledge",
+  );
   if (error instanceof GatewayError) {
     const status = gatewayErrorStatus(error);
     const message = redact(error.message, currentRedactionSecrets(deps));
-    return { status, body: errorBody(error.code, message) };
+    return { status, body: errorBody(error.code, message, correlationId) };
   }
   // Issue #154 (GAP-B) — this catch-all surfaces an arbitrary dynamic error message (a gateway
   // failure during the scoped answer can echo a provider endpoint or token). Scrub it through the
   // same redactor the content path uses before it reaches the wire; the fixed fallback is static.
   const message =
     error instanceof Error ? redactText(deps, error.message) : "Local knowledge ask failed.";
-  return internalError(message);
+  return { status: 500, body: errorBody("INTERNAL", message, correlationId) };
 }
 
 function localKnowledgeReadinessAdmission(
@@ -2783,9 +2794,14 @@ export async function handleLocalKnowledgeGroundedAsk(
     return { status: 200, body: answer };
   } catch (error) {
     if (signal.aborted) {
-      return { status: 499, body: errorBody("CANCELLED", "Grounded request was cancelled.") };
+      return {
+        status: 499,
+        body: errorBody("CANCELLED", "Grounded request was cancelled.", correlationId),
+      };
     }
-    return mappedConversationReadinessError(error) ?? mapGroundedAskError(error, deps);
+    return (
+      mappedConversationReadinessError(error) ?? mapGroundedAskError(error, deps, correlationId)
+    );
   } finally {
     env.close();
   }
