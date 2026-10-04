@@ -39,6 +39,7 @@ export const EN_MESSAGES = {
   "supportReport.download": "Download report",
   "supportReport.expired": "Download link expired. Regenerate this report.",
   "supportReport.regenerate": "Regenerate report",
+  "supportReport.limitedReady": "Limited report ready (server diagnostics unavailable).",
   "supportReport.saved": "Report ready. Download it and send it to support.",
   "supportReport.failed": "Report unavailable. Try again.",
   "supportReport.sessionDenied": "Report unavailable in this browser. Try creating it again.",

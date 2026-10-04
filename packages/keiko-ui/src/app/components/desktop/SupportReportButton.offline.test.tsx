@@ -4,7 +4,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as clientDiagnostics from "@/lib/client-diagnostics";
 import { ApiError } from "@/lib/api";
 import { ErrorNoticeFromError } from "./ErrorNotice";
-import { createSupportReport, createSupportReportDownload } from "@/lib/support-report-api";
+import {
+  createSupportReport,
+  createSupportReportDownload,
+  SupportReportResponseInvalid,
+} from "@/lib/support-report-api";
 import { prepareCachedSupportReport, prepareLocalSupportReport } from "@/lib/support-report-local";
 import { SupportReportButton, resetSupportReportOutcomesForTests } from "./SupportReportButton";
 
@@ -290,4 +294,39 @@ it("records failed local preparation without replacing the original global failu
   expect(clientDiagnostics.currentGlobalClientFailure()).toEqual(original);
   expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
   expect(screen.queryByText(/private local detail/u)).toBeNull();
+});
+
+it("diagnoses a local artifact TypeError instead of inventing a service outage", async () => {
+  const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
+  vi.mocked(createSupportReport).mockResolvedValueOnce(local.report);
+  vi.mocked(createSupportReportDownload).mockImplementationOnce(() => {
+    throw new TypeError("Artifact implementation failed");
+  });
+  vi.mocked(prepareLocalSupportReport).mockResolvedValueOnce(local);
+  render(<SupportReportButton correlationId="original-artifact-cause" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
+  expect(prepareLocalSupportReport).not.toHaveBeenCalled();
+  expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
+  expect(diagnostic).toHaveBeenCalledWith(expect.any(String), {
+    correlationId: undefined,
+    parentCorrelationId: "original-artifact-cause",
+    errorKind: "internal",
+  });
+});
+
+it("diagnoses a malformed successful server response as an internal contract failure", async () => {
+  const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
+  vi.mocked(createSupportReport).mockRejectedValueOnce(
+    new SupportReportResponseInvalid("Invalid report response"),
+  );
+  render(<SupportReportButton correlationId="original-invalid-response" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
+  expect(prepareLocalSupportReport).not.toHaveBeenCalled();
+  expect(diagnostic).toHaveBeenCalledWith(expect.any(String), {
+    correlationId: undefined,
+    parentCorrelationId: "original-invalid-response",
+    errorKind: "internal",
+  });
 });

@@ -6,17 +6,22 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   canonicalSupportJson,
   type SupportReport,
+  type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { prepareLocalSupportReport } from "./support-report-local";
+import { setClientDiagnosticDeliveryRetry, takeClientDiagnosticLoss } from "./client-diagnostics";
 
 beforeEach(() => {
   vi.stubGlobal("crypto", webcrypto);
   vi.stubGlobal("Blob", Blob);
   vi.stubGlobal("URL", URL);
+  takeClientDiagnosticLoss();
 });
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  setClientDiagnosticDeliveryRetry(async () => undefined);
+  takeClientDiagnosticLoss();
 });
 
 it("prepares exact canonical bytes with verified digests and standard gzip without a server", async () => {
@@ -101,4 +106,96 @@ it("projects canonical header completeness and loss without a second report enco
     report.incident.clientReport?.availabilityReason,
   );
   prepared.download.dispose();
+});
+
+it("still prepares canonical limited evidence when an original notice has a malformed correlation", async () => {
+  const prepared = await prepareLocalSupportReport(new AbortController().signal, {
+    correlationId: "abc",
+    failure: { errorKind: "permission-denied", context: ["stage:files-directory-load"] },
+  });
+  try {
+    const report = JSON.parse(prepared.report.reportJson) as SupportReport;
+    expect(report.incident.correlation.rootCorrelationId).toBe("id000001");
+    expect(report.incident.clientReport?.failure?.errorKind).toBe("permission-denied");
+    expect(report.incident.sufficiencyStatus).toBe("insufficient");
+    expect(report.evidence.recordCount).toBe(0);
+  } finally {
+    prepared.download.dispose();
+  }
+});
+
+const suppliedFailure: NonNullable<ClientOnlySupportReportInput["failure"]> = {
+  errorKind: "permission-denied",
+  context: ["stage:files-directory-load"],
+  errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+};
+const retainedFailure: NonNullable<ClientOnlySupportReportInput["failure"]> = {
+  errorKind: "unavailable",
+  context: ["kind:sse-error"],
+  errorEvidence: { errorClass: "Error", frames: [], causeChain: [] },
+};
+it.each([
+  {
+    name: "unknown retained kind and empty context use supplied facts",
+    retained: { errorKind: "unknown" as const, context: [] },
+    expected: suppliedFailure,
+  },
+  {
+    name: "precise retained facts and retained evidence win",
+    retained: retainedFailure,
+    expected: retainedFailure,
+  },
+  {
+    name: "absent retained failure keeps supplied facts",
+    retained: undefined,
+    expected: suppliedFailure,
+  },
+])("preserves actual canonical failure precedence: $name", async ({ retained, expected }) => {
+  const lookup = vi.fn(() => retained);
+  setClientDiagnosticDeliveryRetry(async () => undefined, lookup);
+  const prepared = await prepareLocalSupportReport(new AbortController().signal, {
+    correlationId: "retained-original-cause",
+    failure: suppliedFailure,
+  });
+  try {
+    const report = JSON.parse(prepared.report.reportJson) as SupportReport;
+    expect(report.incident.clientReport?.failure).toEqual(expected);
+    expect(lookup).toHaveBeenCalledExactlyOnceWith("retained-original-cause");
+  } finally {
+    prepared.download.dispose();
+  }
+});
+
+it("omits rejected client facets while recording body-free suppression and preserving a canonical download", async () => {
+  const prepared = await prepareLocalSupportReport(new AbortController().signal, {
+    correlationId: "safe-original-id",
+    failure: { errorKind: "internal", context: ["private-customer-prose"] },
+  });
+  try {
+    const report = JSON.parse(prepared.report.reportJson) as SupportReport;
+    expect(report.incident.correlation.rootCorrelationId).toBe("safe-original-id");
+    expect(report.incident.clientReport?.failure).toBeUndefined();
+    expect(report.incident.sufficiencyStatus).toBe("insufficient");
+    expect(prepared.report.reportJson).not.toContain("private-customer-prose");
+    expect(takeClientDiagnosticLoss()?.errorsSuppressed).toBe(1);
+  } finally {
+    prepared.download.dispose();
+  }
+});
+
+it("does not declare transport loss for absent optional supplied and retained failure facts", async () => {
+  setClientDiagnosticDeliveryRetry(
+    async () => undefined,
+    () => undefined,
+  );
+  const prepared = await prepareLocalSupportReport(new AbortController().signal, {
+    correlationId: "ordinary-manual-report",
+  });
+  try {
+    const report = JSON.parse(prepared.report.reportJson) as SupportReport;
+    expect(report.incident.clientReport?.failure).toBeUndefined();
+    expect(takeClientDiagnosticLoss()).toBeUndefined();
+  } finally {
+    prepared.download.dispose();
+  }
 });

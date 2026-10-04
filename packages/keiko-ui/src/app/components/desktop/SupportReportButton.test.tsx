@@ -94,8 +94,8 @@ describe("SupportReportButton", () => {
       expect(
         await screen.findByText(
           locale === "de"
-            ? "Bericht bereit. Lade ihn herunter und sende ihn an den Support."
-            : "Report ready. Download it and send it to support.",
+            ? "Eingeschränkter Bericht bereit (Serverdiagnosen fehlen)."
+            : "Limited report ready (server diagnostics unavailable).",
         ),
       ).toBeVisible();
       expect(
@@ -103,7 +103,7 @@ describe("SupportReportButton", () => {
           name: locale === "de" ? "Bericht herunterladen" : "Download report",
         }),
       ).toBeVisible();
-      expect(screen.queryByText(/server evidence|Server-Belege|Verfügbarkeitsstatus/u)).toBeNull();
+      expect(screen.getAllByRole("status")).toHaveLength(1);
       expect(screen.queryByText(/complete report|vollständiger Bericht/iu)).toBeNull();
       expect(screen.queryByText(/Launcher/u)).toBeNull();
     },
@@ -312,6 +312,7 @@ describe("SupportReportButton", () => {
       else
         expect(reportClientDiagnostic).toHaveBeenCalledWith(expect.any(String), {
           correlationId: "report-request-refused",
+          parentCorrelationId: "original-failure",
           errorKind: status === 403 ? "authority-denied" : "rate-limited",
         });
       create.mockResolvedValueOnce(report);
@@ -577,4 +578,25 @@ describe("SupportReportButton", () => {
     expect(automaticClick).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();
   });
+});
+
+it("shows expiry after regeneration failed while retaining the earlier ready link", async () => {
+  vi.useFakeTimers();
+  create.mockResolvedValueOnce(report);
+  vi.mocked(createSupportReportDownload).mockReturnValueOnce({
+    href: "/api/prepared-expiring",
+    expiresAtMs: Date.now() + 60_000,
+    dispose: vi.fn(),
+  });
+  render(<SupportReportButton correlationId="expired-after-failed-regeneration" />);
+  await act(async () => screen.getByRole("button", { name: "Create error report" }).click());
+  create.mockRejectedValueOnce(new ApiError("RATE_LIMITED", "private", 429));
+  await act(async () => screen.getByRole("button", { name: "Regenerate report" }).click());
+  expect(screen.getByRole("link", { name: "Download report" })).toBeVisible();
+  expect(screen.getByRole("status")).toHaveTextContent("Please wait a minute");
+  await act(async () => vi.advanceTimersByTimeAsync(60_000));
+  expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Download link expired. Regenerate this report.",
+  );
 });

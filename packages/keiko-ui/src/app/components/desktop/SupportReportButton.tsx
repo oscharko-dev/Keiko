@@ -12,6 +12,7 @@ import { useTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import {
   MAX_SUPPORT_REPORT_BYTES,
+  isActivityLogCorrelationId,
   type DesktopSupportReportResponse,
   type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -193,6 +194,16 @@ function isReportDeliveryUnavailable(
   return signal.aborted || localReportFallbackAllowed(error, api);
 }
 
+function isReportResponseInvalid(
+  error: unknown,
+  api: typeof import("@/lib/support-report-api") | undefined,
+): boolean {
+  return (
+    api?.SupportReportResponseInvalid !== undefined &&
+    error instanceof api.SupportReportResponseInvalid
+  );
+}
+
 function localReportFallbackAllowed(
   error: unknown,
   api: typeof import("@/lib/support-report-api") | undefined,
@@ -201,11 +212,7 @@ function localReportFallbackAllowed(
   // The already loaded canonical local producer can still describe this availability failure.
   if (api === undefined) return true;
   if (error instanceof api.SupportReportEvidenceUnavailable) return true;
-  if (
-    api.SupportReportResponseInvalid !== undefined &&
-    error instanceof api.SupportReportResponseInvalid
-  )
-    return false;
+  if (isReportResponseInvalid(error, api)) return false;
   if (error instanceof ApiError)
     return error.status >= 500 && error.code !== "CONTRACT_VALIDATION_FAILED";
   return (
@@ -308,8 +315,9 @@ function useReportExpiry(key: string, outcome: ReportOutcome | undefined): void 
 
 function readyReportStatus(ready: ReadyReport, feedback: ReportFeedback["state"]): ReportStatus {
   if (ready.pending !== undefined) return "busy";
+  if (ready.download === undefined) return "expired";
   if (feedback !== "idle" && feedback !== "saved") return feedback;
-  return ready.download === undefined ? "expired" : "saved";
+  return "saved";
 }
 
 function useSupportReportAction({ correlationId, errorKey, failure }: SupportReportButtonProps): {
@@ -348,6 +356,51 @@ function useSupportReportAction({ correlationId, errorKey, failure }: SupportRep
   return { status: outcome === undefined ? idleFeedback : "busy", create, regenerate };
 }
 
+interface ReportFailureContext {
+  readonly pending: { readonly key: string; readonly controller: AbortController };
+  readonly correlationId: string | undefined;
+  readonly request: ReportRequestRef;
+  readonly setFeedback: (feedback: ReportFeedback) => void;
+  readonly failure: ClientOnlySupportReportInput["failure"];
+}
+
+function diagnoseReportFailure(
+  error: unknown,
+  correlationId: string | undefined,
+  availabilityFallback: boolean,
+): void {
+  reportClientDiagnostic(`[keiko] support report failed: ${clientErrorSummary(error)}`, {
+    correlationId: correlationIdOf(error),
+    ...(isActivityLogCorrelationId(correlationId) ? { parentCorrelationId: correlationId } : {}),
+    errorKind: availabilityFallback ? bffRequestErrorKind(error) : "internal",
+  });
+}
+
+async function reportPreparationFailure(
+  context: ReportFailureContext,
+  error: unknown,
+  api: typeof import("@/lib/support-report-api") | undefined,
+  availabilityFallback: boolean,
+  signal: AbortSignal,
+): Promise<void> {
+  const { pending, correlationId, request, setFeedback, failure } = context;
+  const { key, controller } = pending;
+  if (
+    availabilityFallback &&
+    (await recoverLocalReport(key, controller, error, api, { correlationId, failure }))
+  ) {
+    setFeedback({ key, state: "saved" });
+    return;
+  }
+  if (!reportRequestIsCurrent(request, pending)) return;
+  releaseReport(key, controller);
+  setFeedback({ key, state: availabilityFallback ? reportFailure(error) : "error" });
+  // Transport loss is already counted; artifact failures remain diagnosable under their parent.
+  if (signal.aborted || (availabilityFallback && isReportDeliveryUnavailable(error, api, signal)))
+    return;
+  diagnoseReportFailure(error, correlationId, availabilityFallback);
+}
+
 async function runReport(
   key: string,
   correlationId: string | undefined,
@@ -362,9 +415,12 @@ async function runReport(
   request.current = pending;
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(REPORT_DEADLINE_MS)]);
   let api: typeof import("@/lib/support-report-api") | undefined;
+  let phase: "module" | "facts" | "request" | "artifact" = "module";
   try {
     api = await waitForReportStep(import("@/lib/support-report-api"), signal);
+    phase = "facts";
     const original = originalSupportReportFailure({ correlationId, failure });
+    phase = "request";
     const creation =
       original === undefined
         ? api.createSupportReport(correlationId, signal)
@@ -372,25 +428,19 @@ async function runReport(
     const report = await waitForReportStep(creation, signal);
     if (!reportRequestIsCurrent(request, pending)) return;
     signal.throwIfAborted();
+    phase = "artifact";
     const download = api.createSupportReportDownload(report);
     fulfillReport(key, report, download);
     setFeedback({ key, state: "saved" });
   } catch (error) {
     if (!reportRequestIsCurrent(request, pending)) return;
-    if (await recoverLocalReport(key, controller, error, api, { correlationId, failure })) {
-      setFeedback({ key, state: "saved" });
-      return;
-    }
-    if (!reportRequestIsCurrent(request, pending)) return;
-    releaseReport(key, controller);
-    setFeedback({ key, state: reportFailure(error) });
-    // The transport already accounts for missing evidence. Do not create another incident for
-    // the same offline delivery or replace the selected original error with a reporting failure.
-    if (isReportDeliveryUnavailable(error, api, signal)) return;
-    reportClientDiagnostic(`[keiko] support report failed: ${clientErrorSummary(error)}`, {
-      correlationId: correlationIdOf(error),
-      errorKind: bffRequestErrorKind(error),
-    });
+    await reportPreparationFailure(
+      { pending, correlationId, request, setFeedback, failure },
+      error,
+      api,
+      (phase === "module" || phase === "request") && !isReportResponseInvalid(error, api),
+      signal,
+    );
   } finally {
     if (request.current === pending) request.current = null;
   }
@@ -438,7 +488,10 @@ function reportFeedbackKey(status: ReportStatus): MessageKey | undefined {
 export function SupportReportButton(props: SupportReportButtonProps): ReactNode {
   const t = useTranslate();
   const { status, create, regenerate, ready } = useSupportReportAction(props);
-  const feedbackKey = reportFeedbackKey(status);
+  const feedbackKey =
+    status === "saved" && ready?.report.evidenceScope === "client-only"
+      ? "supportReport.limitedReady"
+      : reportFeedbackKey(status);
   return (
     <span className={styles.cmpControl}>
       {ready === undefined ? (

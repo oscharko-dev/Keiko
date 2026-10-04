@@ -4,6 +4,10 @@ import {
   clientOnlySupportReportSections,
   defectFingerprintPreimage,
   MAX_SUPPORT_REPORT_BYTES,
+  isActivityLogCorrelationId,
+  isClientReportFailure,
+  looksLikeSecret,
+  looksLikePersonalIdentifier,
   sealSupportReportEnvelope,
   serializeSupportReport,
   supportIncidentBuild,
@@ -15,7 +19,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { SupportReportDownload } from "./support-report-api";
-import { retainedClientDiagnosticFailure } from "./client-diagnostics";
+import { retainedClientDiagnosticFailure, recordClientDiagnosticLoss } from "./client-diagnostics";
 
 type LocalFailureContext = Pick<ClientOnlySupportReportInput, "correlationId" | "failure">;
 
@@ -45,12 +49,33 @@ function mergeFailure(
   };
 }
 
+function validatedOriginalFailure(
+  failure: ClientOnlySupportReportInput["failure"],
+): ClientOnlySupportReportInput["failure"] {
+  if (isClientReportFailure(failure)) return failure;
+  recordClientDiagnosticLoss("errorsSuppressed");
+  return undefined;
+}
+
+function validatedLocalCorrelationId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (
+    isActivityLogCorrelationId(value) &&
+    !looksLikeSecret(value) &&
+    !looksLikePersonalIdentifier(value)
+  )
+    return value;
+  recordClientDiagnosticLoss("errorsSuppressed");
+  return undefined;
+}
+
 export function originalSupportReportFailure(
   context: LocalFailureContext,
 ): ClientOnlySupportReportInput["failure"] {
-  if (context.correlationId === undefined) return context.failure;
-  const retained = retainedClientDiagnosticFailure(context.correlationId);
-  return retained === undefined ? context.failure : mergeFailure(retained, context.failure);
+  const original = validatedOriginalFailure(context.failure);
+  if (context.correlationId === undefined) return original;
+  const retained = validatedOriginalFailure(retainedClientDiagnosticFailure(context.correlationId));
+  return retained === undefined ? original : mergeFailure(retained, original);
 }
 
 async function localReport(
@@ -58,6 +83,8 @@ async function localReport(
   context: LocalFailureContext,
 ): Promise<DesktopSupportReportResponse> {
   signal.throwIfAborted();
+  const correlationId = validatedLocalCorrelationId(context.correlationId);
+  const failure = originalSupportReportFailure({ ...context, correlationId });
   const sections = clientOnlySupportReportSections({
     incidentId: crypto.randomUUID().replaceAll("-", ""),
     nowMs: Date.now(),
@@ -66,8 +93,8 @@ async function localReport(
       defectFingerprintPreimage(UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT),
     ),
     availabilityReason: "service-unavailable",
-    ...context,
-    failure: originalSupportReportFailure(context),
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(failure === undefined ? {} : { failure }),
   });
   const [incidentDigest, selectionDigest, evidenceDigest] = await Promise.all([
     browserDigest(canonicalSupportJson(sections.incident)),

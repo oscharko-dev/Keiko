@@ -43,6 +43,7 @@ export const DE_MESSAGES = {
   "supportReport.download": "Bericht herunterladen",
   "supportReport.expired": "Der Download-Link ist abgelaufen. Bericht erneut erstellen.",
   "supportReport.regenerate": "Bericht erneut erstellen",
+  "supportReport.limitedReady": "Eingeschränkter Bericht bereit (Serverdiagnosen fehlen).",
   "supportReport.saved": "Bericht bereit. Lade ihn herunter und sende ihn an den Support.",
   "supportReport.failed": "Bericht nicht verfügbar. Erneut versuchen.",
   "supportReport.sessionDenied": "Bericht in diesem Browser nicht verfügbar. Erneut erstellen.",
