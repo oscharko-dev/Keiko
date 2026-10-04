@@ -218,15 +218,18 @@ function reportLocalPreparation(
   correlationId: string | undefined,
   reportBytes: number,
 ): void {
+  const summary = report.summary;
+  if (summary?.completeness === undefined || summary.loss === undefined) return;
+  if (report.evidenceScope === "client-only" && summary.availabilityReason === undefined) return;
   reportClientDiagnostic("Keiko support report prepared locally.", {
     correlationId,
     supportReportPreparation: {
       reportBytes,
       evidenceScope: report.evidenceScope ?? "server",
-      completeness: report.summary?.completeness ?? "unknown",
-      loss: report.summary?.loss ?? "event-location-unknown",
-      ...(report.evidenceScope === "client-only"
-        ? { availabilityReason: report.summary?.availabilityReason ?? "service-unavailable" }
+      completeness: summary.completeness,
+      loss: summary.loss,
+      ...(report.evidenceScope === "client-only" && summary.availabilityReason !== undefined
+        ? { availabilityReason: summary.availabilityReason }
         : {}),
     },
   });

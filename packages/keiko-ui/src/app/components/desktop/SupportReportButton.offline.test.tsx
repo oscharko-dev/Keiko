@@ -251,3 +251,15 @@ it("forwards original closed failure facts when the live endpoint returns a limi
   );
   expect(prepareLocalSupportReport).not.toHaveBeenCalled();
 });
+
+it("does not invent preparation loss or availability when a legacy artifact has no summary", async () => {
+  const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
+  vi.mocked(createSupportReport).mockRejectedValueOnce(new TypeError("offline"));
+  vi.mocked(prepareLocalSupportReport).mockResolvedValueOnce(local);
+  render(<SupportReportButton correlationId="legacy-report-no-summary" />);
+  await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await screen.findByRole("link", { name: "Download report" });
+  expect(
+    diagnostic.mock.calls.some(([, meta]) => meta?.supportReportPreparation !== undefined),
+  ).toBe(false);
+});

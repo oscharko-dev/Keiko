@@ -11719,6 +11719,122 @@ function expectSelectedDeploymentMetadata(deps: UiHandlerDeps): void {
 }
 
 describe("selected deployment discovery metadata", () => {
+  it.each(["missing", "different-role"] as const)(
+    "records a body-free explicit selection when metadata is %s",
+    async (state) => {
+      const deps = await metadataResponsivenessDeps();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      Object.assign(deps, {
+        gatewayModelDiscovery: () =>
+          Promise.resolve(
+            parseModelDiscovery({
+              data: [
+                {
+                  model_name: state === "missing" ? "not-selected" : "selected-small",
+                  model_info: { mode: "embedding", context_window: 32_768 },
+                },
+              ],
+            }),
+          ),
+      });
+      try {
+        expect((await handleGatewaySetup(selectedMetadataContext(), deps)).status).toBe(200);
+        const events = sink.events.filter(
+          (event) => event.op === "gateway.setup.metadata.resolved",
+        );
+        expect(events).toHaveLength(1);
+        expect(events[0]?.extra).toMatchObject({
+          selectedModelCount: 1,
+          metadataEnrichedModelCount: 0,
+          roleMismatchModelCount: state === "different-role" ? 1 : 0,
+          notDiscoveredModelCount: state === "missing" ? 1 : 0,
+        });
+        expect(JSON.stringify(events)).not.toContain("selected-small");
+        expect(JSON.stringify(events)).not.toContain("selected.example.invalid");
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
+  it("reports discovery truncation before projecting explicitly selected deployment metadata", async () => {
+    const deps = await metadataResponsivenessDeps();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    Object.assign(deps, {
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          parseModelDiscovery({
+            data: [
+              ...Array.from({ length: MAX_DISCOVERED_MODELS }, (_unused, index) => ({
+                model_name: `other-chat-${String(index)}`,
+                model_info: { mode: "chat", context_window: 16_000 },
+              })),
+              { model_name: "selected-small", model_info: { mode: "chat", context_window: 4_096 } },
+            ],
+          }),
+        ),
+      diagnostics: {
+        record: (record: ServerDiagnosticRecord): void => {
+          diagnostics.push(record);
+        },
+      },
+    });
+    const result = await handleGatewaySetup(selectedMetadataContext(), deps);
+    expect(result.status).toBe(200);
+    expect(requiredGatewayConfig(deps).providers.map((provider) => provider.modelId)).toEqual([
+      "selected-small",
+    ]);
+    expect(diagnostics.filter((record) => record.code === "GATEWAY_DISCOVERY_TRUNCATED")).toEqual([
+      expect.objectContaining({ retainedModelCount: MAX_DISCOVERED_MODELS }),
+    ]);
+    expect(JSON.stringify(diagnostics)).not.toContain("other-chat-");
+    expect(JSON.stringify(diagnostics)).not.toContain("selected.example.invalid");
+  });
+
+  it("enriches explicitly selected embedding geometry without adding discovered deployments", async () => {
+    const deps = await metadataResponsivenessDeps();
+    Object.assign(deps, {
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          parseModelDiscovery({
+            data: [
+              { model_name: "selected-small", model_info: { mode: "chat", context_window: 4_096 } },
+              {
+                model_name: "selected-vectorizer",
+                model_info: { mode: "embedding", context_window: 32_768 },
+              },
+              {
+                model_name: "not-selected",
+                model_info: { mode: "embedding", context_window: 128_000 },
+              },
+            ],
+          }),
+        ),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://selected.example.invalid/v1",
+        apiKey: "synthetic-selected-key",
+        deploymentNames: ["selected-small", "selected-vectorizer"],
+        embeddingModelIds: ["selected-vectorizer"],
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const config = requiredGatewayConfig(deps);
+    expect(config.providers.map((provider) => provider.modelId)).toEqual([
+      "selected-small",
+      "selected-vectorizer",
+    ]);
+    expect(requiredCapability(config, "selected-vectorizer")).toMatchObject({
+      kind: "embedding",
+      contextWindow: 32_768,
+    });
+    expect(requiredCapability(config, "selected-vectorizer").contextWindowAssumed).not.toBe(true);
+  });
+
   it.each(["reported", "unavailable"] as const)(
     "refreshes an omitted input ceiling only when selected metadata is %s",
     async (state) => {

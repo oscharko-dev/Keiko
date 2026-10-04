@@ -68,12 +68,11 @@ function diagnosticsWithBudget(
   return { ...existing, rankedCandidates, contextBudget: budget };
 }
 
-// SHARED lane-derivation + allocation pass (single source of truth for the observer AND the
-// evidence producer below). Pure, no-IO, no-clock: maps the pack's repo-evidence lane, builds the
-// profile budget, and runs a non-evicting observation through the deterministic allocator. The
-// observer keeps the canonical ContextBudget; ContextAssemblyDiagnostics count all selected items.
-// There is no
-// divergent derivation path that could let the two views disagree for the same pack + profile.
+// Shared lane derivation for both diagnostic projections. The attached ContextBudget is the
+// canonical selection plan. The allocator observes already selected excerpts using a copy with
+// eviction disabled and the evidence cap intersected with the profile's effective input budget.
+// ContextAssemblyDiagnostics therefore describe every selected excerpt against that observation
+// cap; they do not claim that selection applied the observation settings or changed the prompt.
 function allocateGroundedContext(
   pack: ConnectedContextPack,
   profile: ContextProfile,

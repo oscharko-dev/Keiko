@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f8c42c5299342d270c9bf39fb280a8ca2a64ac43c817c83614d9afda9940e8dd" as const;
+  "6b9ace7aca0b5941d37d66d1127f73de33498f26a9c6447ffb14aa4b7227da2c" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3875,6 +3875,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: ["session-unavailable", "diagnostic-delivery-unavailable", "service-unavailable"],
+      },
+      reportCompleteness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      reportLoss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
       },
     },
     causal: "correlation",
@@ -14086,6 +14096,26 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "duration",
         required: true,
+      },
+      selectedModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      metadataEnrichedModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      roleMismatchModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      notDiscoveredModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
     },
     causal: "correlation",
@@ -28646,6 +28676,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      transportBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       reportDigest: {
         type: "string",
         dataClass: "digest",
@@ -28670,6 +28705,43 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["support-report"],
     proofIds: ["support.report.ui.delivered.line"],
+    releaseImpact: "minor",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "support.report.ui.download-refused",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "support-report-evidence.emitSupportReportDownloadRefused",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["no-session", "other-session", "expired-or-unknown"],
+      },
+      httpStatus: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["support-report"],
+    proofIds: ["support.report.ui.download-refused.line"],
     releaseImpact: "minor",
   },
   {
@@ -48727,13 +48799,37 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "metadataEnrichedModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "notDiscoveredModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "outcome",
               type: "string",
               dataClass: "closed-enum",
               required: true,
             },
+            {
+              name: "roleMismatchModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
+              name: "selectedModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "duration", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "duration", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -63699,6 +63795,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           "client.support-report.prepared",
           "support.report.degraded",
           "support.report.ui.delivered",
+          "support.report.ui.download-refused",
         ],
         end: ["support.report.completed", "support.report.ui.completed"],
         failure: ["support.report.failed", "support.report.ui.failed"],
@@ -63738,6 +63835,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           mode: "correlation",
         },
         {
+          op: "support.report.ui.download-refused",
+          mode: "correlation",
+        },
+        {
           op: "support.report.ui.failed",
           mode: "correlation",
         },
@@ -63755,6 +63856,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
         "support.report.started",
         "support.report.ui.completed",
         "support.report.ui.delivered",
+        "support.report.ui.download-refused",
         "support.report.ui.started",
       ],
       replayReferences: [],
@@ -63807,6 +63909,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "reportBytes",
               type: "integer",
               dataClass: "count",
+              required: true,
+            },
+            {
+              name: "reportCompleteness",
+              type: "string",
+              dataClass: "completeness-state",
+              required: true,
+            },
+            {
+              name: "reportLoss",
+              type: "string",
+              dataClass: "loss-state",
               required: true,
             },
           ],
@@ -64208,6 +64322,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "digest",
               required: false,
             },
+            {
+              name: "transportBytes",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
           ],
           evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
@@ -64215,6 +64335,36 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["support.report.ui.delivered.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "support.report.ui.download-refused",
+          owner: "keiko-server",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "httpStatus",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["support.report.ui.download-refused.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -68484,6 +68634,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "support.report.started": "runtime-packages",
     "support.report.ui.completed": "bff",
     "support.report.ui.delivered": "bff",
+    "support.report.ui.download-refused": "bff",
     "support.report.ui.failed": "bff",
     "support.report.ui.started": "bff",
     "task-workspace.identity.creation-time-probe": "tools-workflows",

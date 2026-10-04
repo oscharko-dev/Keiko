@@ -673,7 +673,7 @@ describe("support report CLI and private publication", () => {
       completeness: "complete",
       loss: "none",
     });
-    const trace = await expectActivityLogScenario("runtime-packages.dependency-failure", {
+    const trace = await expectActivityLogScenario("runtime-packages.rejection", {
       stateDir: controlStateDir,
       startedAtMs,
       expectedOps: ["support.report.started", "support.report.failed"],

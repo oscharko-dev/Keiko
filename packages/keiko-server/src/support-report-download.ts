@@ -8,7 +8,11 @@ import {
   type DesktopSupportReportResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
-import { emitSupportReportDelivered, emitSupportReportFailed } from "./support-report-evidence.js";
+import {
+  emitSupportReportDelivered,
+  emitSupportReportDownloadRefused,
+  emitSupportReportFailed,
+} from "./support-report-evidence.js";
 import { SupportReportJobError } from "./support-report-job.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { HandlerOutcome, RouteContext } from "./routes.js";
@@ -21,7 +25,9 @@ interface Delivery {
   readonly authority:
     | { readonly kind: "session-bound"; readonly sessionId: string }
     | { readonly kind: "client-only" };
-  readonly report: DesktopSupportReportResponse;
+  readonly report: Pick<DesktopSupportReportResponse, "fileName" | "summary" | "evidenceScope">;
+  readonly canonicalBytes: number;
+  reportJson?: string;
   bytes: number;
   compressed?: Promise<Buffer>;
   expiryTimer?: ReturnType<typeof setTimeout>;
@@ -69,7 +75,19 @@ export function cacheSupportReportDownload(
     sessionId === undefined
       ? { kind: "client-only" as const }
       : { kind: "session-bound" as const, sessionId };
-  const entry: Delivery = { authority, report, bytes, expiresAtMs, creationCorrelationId };
+  const entry: Delivery = {
+    authority,
+    report: {
+      fileName: report.fileName,
+      ...(report.summary === undefined ? {} : { summary: report.summary }),
+      ...(report.evidenceScope === undefined ? {} : { evidenceScope: report.evidenceScope }),
+    },
+    reportJson: report.reportJson,
+    canonicalBytes: bytes,
+    bytes,
+    expiresAtMs,
+    creationCorrelationId,
+  };
   cache.set(id, entry);
   entry.expiryTimer = setTimeout(() => {
     disposeDelivery(cache, id, entry);
@@ -97,18 +115,14 @@ export async function handleDownloadSupportReport(
     const bytes = await compressedReport(entry, cache);
     const currentDenied = authorizeDelivery(ctx, deps, entry);
     if (currentDenied !== undefined) return currentDenied;
-    if (Date.now() >= entry.expiresAtMs)
-      return {
-        status: 404,
-        body: errorBody("NOT_FOUND", "Report unavailable.", ctx.correlationId),
-      };
+    if (Date.now() >= entry.expiresAtMs) return refusedDelivery(ctx, 404, "expired-or-unknown");
     if (ctx.res.destroyed) {
-      failedDelivery(ctx, entry, "cancelled");
+      reportFailedDelivery(ctx, entry, "cancelled");
       return STREAMING;
     }
     return deliverReport(ctx, entry, bytes);
   } catch (error) {
-    failedDelivery(ctx, entry, "unavailable", error);
+    reportFailedDelivery(ctx, entry, "unavailable", error);
     return {
       status: 500,
       body: errorBody("INTERNAL", "Report delivery unavailable.", ctx.correlationId),
@@ -123,14 +137,27 @@ function authorizeDelivery(
 ): HandlerOutcome | undefined {
   if (entry?.authority.kind === "client-only") return undefined;
   const session = resolveAppSessionReadAuthority(deps, ctx.req);
-  if (session === undefined)
-    return {
-      status: 403,
-      body: errorBody("DENIED", "Local session unavailable.", ctx.correlationId),
-    };
-  if (entry?.authority.sessionId !== session.sessionId)
-    return { status: 404, body: errorBody("NOT_FOUND", "Report unavailable.", ctx.correlationId) };
+  if (session === undefined) return refusedDelivery(ctx, 403, "no-session");
+  if (entry === undefined) return refusedDelivery(ctx, 404, "expired-or-unknown");
+  if (entry.authority.sessionId !== session.sessionId)
+    return refusedDelivery(ctx, 404, "other-session");
   return undefined;
+}
+
+function refusedDelivery(
+  ctx: RouteContext,
+  status: 403 | 404,
+  reason: "no-session" | "other-session" | "expired-or-unknown",
+): HandlerOutcome {
+  emitSupportReportDownloadRefused(ctx.correlationId, reason, status);
+  return {
+    status,
+    body: errorBody(
+      status === 403 ? "DENIED" : "NOT_FOUND",
+      status === 403 ? "Local session unavailable." : "Report unavailable.",
+      ctx.correlationId,
+    ),
+  };
 }
 
 function compressedReport(
@@ -138,15 +165,20 @@ function compressedReport(
   cache: Map<string, Delivery> | undefined,
 ): Promise<Buffer> {
   entry.compressed ??= new Promise<Buffer>((resolve, reject) => {
+    if (entry.reportJson === undefined) {
+      reject(new TypeError("Missing prepared report bytes"));
+      return;
+    }
     gzip(
-      Buffer.from(entry.report.reportJson, "utf8"),
+      Buffer.from(entry.reportJson, "utf8"),
       { maxOutputLength: MAX_SUPPORT_REPORT_BYTES },
       (error, bytes) => {
         if (error !== null) {
           reject(error);
           return;
         }
-        entry.bytes += bytes.length;
+        delete entry.reportJson;
+        entry.bytes = bytes.length;
         if (cache !== undefined) prune(cache, Date.now());
         resolve(bytes);
       },
@@ -155,7 +187,7 @@ function compressedReport(
   return entry.compressed;
 }
 
-function failedDelivery(
+function reportFailedDelivery(
   ctx: RouteContext,
   entry: Delivery,
   reason: "cancelled" | "unavailable",
@@ -178,19 +210,21 @@ function observeDelivery(ctx: RouteContext, entry: Delivery, reportBytes: number
     cleanup();
     emitSupportReportDelivered(
       ctx.correlationId,
-      reportBytes,
+      entry.canonicalBytes,
       entry.authority.kind,
       entry.creationCorrelationId,
       entry.report.summary?.reportDigest,
+      entry.report.evidenceScope ?? "server",
+      reportBytes,
     );
   };
   const closed = (): void => {
     cleanup();
-    failedDelivery(ctx, entry, "cancelled");
+    reportFailedDelivery(ctx, entry, "cancelled");
   };
   const failed = (error: Error): void => {
     cleanup();
-    failedDelivery(ctx, entry, "unavailable", error);
+    reportFailedDelivery(ctx, entry, "unavailable", error);
   };
   ctx.res.once("finish", finished);
   ctx.res.once("close", closed);
@@ -211,7 +245,7 @@ function deliverReport(ctx: RouteContext, entry: Delivery, bytes: Buffer): Handl
     ctx.res.end(bytes);
   } catch (error) {
     cleanup();
-    failedDelivery(ctx, entry, "unavailable", error);
+    reportFailedDelivery(ctx, entry, "unavailable", error);
     ctx.res.destroy();
   }
   return STREAMING;

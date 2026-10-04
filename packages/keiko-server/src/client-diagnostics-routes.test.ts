@@ -1355,6 +1355,34 @@ describe("POST /api/diagnostics/client", () => {
       expect(record).not.toHaveProperty("messageDigest");
     },
   );
+  it("keeps browser-declared artifact loss separate from loss of the routine diagnostic", async () => {
+    const sink = captureServerLog();
+    await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "Keiko support report prepared locally.",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_server-preparation-123",
+          supportReportPreparation: {
+            reportBytes: 1024,
+            evidenceScope: "server",
+            completeness: "partial",
+            loss: "event-dropped",
+          },
+        }),
+      ),
+    );
+    const event = sink.events.find((item) => item.op === "client.support-report.prepared");
+    expect(event?.extra).toMatchObject({
+      completeness: "complete",
+      loss: "none",
+      reportCompleteness: "partial",
+      reportLoss: "event-dropped",
+    });
+    expect(analyzeLogText(formatActivityLogProofLine(event ?? {})).sufficiency.status).toBe(
+      "complete",
+    );
+  });
   it("persists local report preparation as routine evidence without inventing a failure", async () => {
     const sink = captureServerLog();
     const supportReportPreparation = {

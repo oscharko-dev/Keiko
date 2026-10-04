@@ -38,6 +38,7 @@ import {
   recordRegisteredFailureIncident,
   recordUserReportedIncident,
 } from "@oscharko-dev/keiko-server";
+import { createClientOnlySupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 
 import {
   handleClientDiagnosticIngest,
@@ -184,6 +185,67 @@ describe("Activity Log scenario: client-diagnostics", () => {
     // The second invalid-json call fell inside the first's throttle window: it never got its own
     // line, only a suppressed count — the loss ledger is the only place that count is not lost too.
     expect(activityLogLossCounters()["client-rejected"]).toBe(4);
+  });
+
+  it("rejects an incoherent client-only preparation without losing the valid retry", async () => {
+    const startedAtMs = Date.now();
+    const report = createClientOnlySupportReport(CORRELATION_ID, "service-unavailable");
+    const preparation = {
+      reportBytes: Buffer.byteLength(report.reportJson, "utf8"),
+      evidenceScope: report.evidenceScope,
+      completeness: report.summary?.completeness,
+      loss: report.summary?.loss,
+      availabilityReason: report.summary?.availabilityReason,
+    };
+    const diagnostic = {
+      message: "Keiko support report prepared locally.",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_report-rejection-0001",
+      supportReportPreparation: preparation,
+    };
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(
+            JSON.stringify({
+              ...diagnostic,
+              supportReportPreparation: { ...preparation, loss: "event-dropped" },
+            }),
+          ),
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "client.support-report.prepared",
+      ),
+    ).toEqual([]);
+    expect((await handleClientDiagnosticIngest(context(JSON.stringify(diagnostic)))).status).toBe(
+      204,
+    );
+
+    const trace = await expectActivityLogScenario("client-diagnostics.rejection", {
+      stateDir,
+      startedAtMs,
+      expectedOps: ["client.diagnostic.rejected", "client.support-report.prepared"],
+    });
+    expect(trace.failureClasses).toEqual(
+      expect.arrayContaining(["client-diagnostic-rejection", "support-report"]),
+    );
+    const prepared = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "client.support-report.prepared",
+    );
+    expect(prepared).toHaveLength(1);
+    expect(parsedLine(prepared[0])).toMatchObject({
+      evidenceScope: "client-only",
+      reportCompleteness: preparation.completeness,
+      reportLoss: preparation.loss,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(readPersistedActivityLog(stateDir)).not.toContain(report.reportJson);
   });
 });
 

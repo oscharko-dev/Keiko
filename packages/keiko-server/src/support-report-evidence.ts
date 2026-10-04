@@ -122,6 +122,7 @@ const DELIVERED = defineActivityLogOperation({
   analyzerProjection: "timeline",
   fields: {
     reportBytes: { type: "integer", dataClass: "count", required: true },
+    transportBytes: { type: "integer", dataClass: "count", required: false },
     reportDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     ...DELIVERY_FIELDS,
     ...COMPLETE,
@@ -135,16 +136,53 @@ export function emitSupportReportDelivered(
   deliveryAuthority: "session-bound" | "client-only",
   parentCorrelationId?: string,
   reportDigest?: string,
+  evidenceScope?: "server" | "client-only",
+  transportBytes?: number,
 ): void {
   getServerLogger().info(
     activityLogEvent(DELIVERED, reportCorrelation(correlationId, parentCorrelationId), {
       reportBytes,
+      ...(transportBytes === undefined ? {} : { transportBytes }),
       ...(reportDigest === undefined ? {} : { reportDigest }),
       deliveryAuthority,
-      evidenceScope: deliveryAuthority === "client-only" ? "client-only" : "server",
+      evidenceScope:
+        evidenceScope ?? (deliveryAuthority === "client-only" ? "client-only" : "server"),
       completeness: "complete",
       loss: "none",
     }),
+  );
+}
+
+const DOWNLOAD_REFUSED = defineActivityLogOperation({
+  ...BASE,
+  op: "support.report.ui.download-refused",
+  emitter: "support-report-evidence.emitSupportReportDownloadRefused",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["no-session", "other-session", "expired-or-unknown"],
+    },
+    httpStatus: { type: "integer", dataClass: "count", required: true },
+    ...COMPLETE,
+  },
+  proofIds: ["support.report.ui.download-refused.line"],
+});
+
+export function emitSupportReportDownloadRefused(
+  correlationId: string | undefined,
+  reason: "no-session" | "other-session" | "expired-or-unknown",
+  httpStatus: 403 | 404,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      DOWNLOAD_REFUSED,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      { reason, httpStatus, completeness: "complete", loss: "none" },
+    ),
   );
 }
 

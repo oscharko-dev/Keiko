@@ -227,6 +227,10 @@ const GATEWAY_SETUP_METADATA_OPERATION = defineActivityLogOperation({
       values: ["available", "unavailable", "cancelled", "failed"],
     },
     elapsedMs: { type: "integer", dataClass: "duration", required: true },
+    selectedModelCount: { type: "integer", dataClass: "count", required: false },
+    metadataEnrichedModelCount: { type: "integer", dataClass: "count", required: false },
+    roleMismatchModelCount: { type: "integer", dataClass: "count", required: false },
+    notDiscoveredModelCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -238,10 +242,18 @@ const GATEWAY_SETUP_METADATA_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+interface SetupMetadataSelectionCounts {
+  readonly selectedModelCount: number;
+  readonly metadataEnrichedModelCount: number;
+  readonly roleMismatchModelCount: number;
+  readonly notDiscoveredModelCount: number;
+}
+
 function logSetupMetadataOutcome(
   outcome: "available" | "unavailable" | "cancelled" | "failed",
   startedAt: number,
   correlationId: string | undefined,
+  selectionCounts?: SetupMetadataSelectionCounts,
 ): void {
   processServerLogSink().write(
     activityLogEvent(
@@ -252,6 +264,7 @@ function logSetupMetadataOutcome(
         elapsedMs: Math.max(0, Date.now() - startedAt),
         completeness: "complete",
         loss: "none",
+        ...selectionCounts,
       },
     ),
   );
@@ -5508,6 +5521,7 @@ function discoveryProgrammingFailure(cause: unknown): boolean {
 async function discoverSetupModels(
   input: SetupVerificationInput,
   validationConfig: GatewayConfig,
+  selected?: SetupCandidateModels,
 ): Promise<SetupCandidateModels> {
   const startedAt = Date.now();
   try {
@@ -5524,7 +5538,12 @@ async function discoverSetupModels(
     );
     input.signal?.throwIfAborted();
     const normalized = normalizeDiscoveryResult(result);
-    logSetupMetadataOutcome("available", startedAt, input.correlationId);
+    logSetupMetadataOutcome(
+      "available",
+      startedAt,
+      input.correlationId,
+      selected === undefined ? undefined : selectedMetadataCounts(selected, normalized),
+    );
     return normalized;
   } catch (cause) {
     let outcome: "cancelled" | "failed" | "unavailable" = "unavailable";
@@ -5553,13 +5572,43 @@ function selectedDeploymentMetadata(
   );
 }
 
+function selectedMetadataCounts(
+  selected: SetupCandidateModels,
+  discovered: SetupCandidateModels,
+): SetupMetadataSelectionCounts {
+  const allDiscovered = new Set(discovered.modelIds);
+  let metadataEnrichedModelCount = 0;
+  let roleMismatchModelCount = 0;
+  let notDiscoveredModelCount = 0;
+  const groups = [
+    [selected.chatModelIds, discovered.chatModelIds],
+    [selected.embeddingModelIds, discovered.embeddingModelIds],
+  ] as const;
+  for (const [selectedIds, discoveredIds] of groups) {
+    const compatible = new Set(discoveredIds);
+    for (const id of selectedIds) {
+      if (!allDiscovered.has(id)) notDiscoveredModelCount++;
+      else if (!compatible.has(id)) roleMismatchModelCount++;
+      else if (Object.keys(discovered.modelMetadata[id] ?? {}).length > 0)
+        metadataEnrichedModelCount++;
+    }
+  }
+  return {
+    selectedModelCount: selected.chatModelIds.length + selected.embeddingModelIds.length,
+    metadataEnrichedModelCount,
+    roleMismatchModelCount,
+    notDiscoveredModelCount,
+  };
+}
+
 async function enrichSelectedDeploymentMetadata(
   input: SetupVerificationInput,
   validationConfig: GatewayConfig,
   selected: SetupCandidateModels,
 ): Promise<SetupCandidateModels> {
   try {
-    const discovered = await discoverSetupModels(input, validationConfig);
+    const discovered = await discoverSetupModels(input, validationConfig, selected);
+    reportDiscoveryTruncation(input.diagnostics, input.correlationId, discovered);
     return { ...selected, modelMetadata: selectedDeploymentMetadata(selected, discovered) };
   } catch (cause) {
     input.signal?.throwIfAborted();

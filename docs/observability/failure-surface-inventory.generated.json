@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f8c42c5299342d270c9bf39fb280a8ca2a64ac43c817c83614d9afda9940e8dd"
+    "catalogDigest": "6b9ace7aca0b5941d37d66d1127f73de33498f26a9c6447ffb14aa4b7227da2c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -55,12 +55,12 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 508,
-    "proofCount": 515,
-    "resolvedProofCount": 515,
+    "operationCount": 509,
+    "proofCount": 516,
+    "resolvedProofCount": 516,
     "failureClassCount": 335,
-    "scenarioCount": 30,
-    "resolvedScenarioCount": 30
+    "scenarioCount": 31,
+    "resolvedScenarioCount": 31
   },
   "surfaces": [
     {
@@ -117,6 +117,7 @@
         "support.diagnostics.capacity",
         "support.report.ui.completed",
         "support.report.ui.delivered",
+        "support.report.ui.download-refused",
         "support.report.ui.failed",
         "support.report.ui.started"
       ],
@@ -153,7 +154,11 @@
         "client.support-report.prepared",
         "voice.dialogue.stage"
       ],
-      "scenarios": ["client-diagnostics.dependency-failure", "client-diagnostics.loss"]
+      "scenarios": [
+        "client-diagnostics.dependency-failure",
+        "client-diagnostics.loss",
+        "client-diagnostics.rejection"
+      ]
     },
     {
       "surface": "model-gateway",
@@ -1013,9 +1018,9 @@
     "workspace-script-trust-admission": ["tools-workflows.rejection"],
     "support-query": ["runtime-packages.dependency-failure"],
     "support-report": [
-      "bff.dependency-failure",
-      "client-diagnostics.dependency-failure",
-      "runtime-packages.dependency-failure"
+      "bff.rejection",
+      "client-diagnostics.rejection",
+      "runtime-packages.rejection"
     ]
   },
   "proofs": {
@@ -2303,6 +2308,9 @@
     "support.report.ui.delivered.line": [
       "packages/keiko-server/src/support-report-download.test.ts"
     ],
+    "support.report.ui.download-refused.line": [
+      "packages/keiko-server/src/support-report-download.test.ts"
+    ],
     "support.report.ui.failed.lifecycle": [
       "packages/keiko-server/src/support-report-routes.test.ts"
     ],
@@ -2409,6 +2417,7 @@
       "tests/activity-log-scenarios/client-diagnostics-ui.test.ts"
     ],
     "client-diagnostics.loss": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
+    "client-diagnostics.rejection": ["tests/activity-log-scenarios/client-diagnostics-ui.test.ts"],
     "editor-delivery.crash": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
     "editor-delivery.dependency-failure": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
     "editor-delivery.loss": ["tests/activity-log-scenarios/editor-delivery.test.ts"],
@@ -2429,11 +2438,13 @@
     "model-gateway.loss": ["tests/activity-log-scenarios/model-gateway.test.ts"],
     "model-gateway.rejection": ["tests/activity-log-scenarios/model-gateway.test.ts"],
     "runtime-packages.dependency-failure": [
-      "packages/keiko-cli/src/support-report-cli.test.ts",
       "tests/activity-log-scenarios/lifecycle-runtime.test.ts"
     ],
     "runtime-packages.loss": ["tests/activity-log-scenarios/lifecycle-runtime.test.ts"],
-    "runtime-packages.rejection": ["tests/activity-log-scenarios/lifecycle-runtime.test.ts"],
+    "runtime-packages.rejection": [
+      "packages/keiko-cli/src/support-report-cli.test.ts",
+      "tests/activity-log-scenarios/lifecycle-runtime.test.ts"
+    ],
     "tools-workflows.crash": ["tests/activity-log-scenarios/tools-workflows.test.ts"],
     "tools-workflows.dependency-failure": ["tests/activity-log-scenarios/tools-workflows.test.ts"],
     "tools-workflows.loss": ["tests/activity-log-scenarios/tools-workflows.test.ts"],

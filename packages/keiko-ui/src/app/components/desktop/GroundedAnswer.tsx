@@ -81,8 +81,7 @@ function formatCap(value: number): string {
 // Same "—" sentinel, but with a human-readable presenter (formatBytes/formatMs) for finite
 // caps — the metric rows must not show raw byte/millisecond values (uiux-fix F012 C162;
 // the CoverageNotice next to them already speaks in "2 MB").
-function formatCapWith(value: number | null, format: (n: number) => string): string {
-  if (value === null) return "∞";
+function formatCapWith(value: number, format: (n: number) => string): string {
   return Number.isFinite(value) ? format(value) : "—";
 }
 
