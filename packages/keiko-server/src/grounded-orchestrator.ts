@@ -1588,16 +1588,19 @@ function primaryLexicalAnchors(
 }
 
 function originalQueryAnchorTerms(query: RetrievalQuery): ReadonlySet<string> {
+  const originalText = query.text.toLowerCase();
   const words = query.text
     .toLowerCase()
     .split(/[^\p{L}\p{N}_.$-]+/u)
     .map(trimAnchorEdgeDots);
-  // Reuse the original anchor grammar, including punctuation inside code quotes. Rewritten
-  // retrieval anchors cannot create a target absent from the human's query.
+  // Preserve punctuation inside code quotes only when it occurs in the original text. Canonical
+  // technical routing aliases cannot create an exact literal absent from the human's query.
   const original = extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors;
   return new Set([
     ...words,
-    ...original.filter((anchor) => anchor.kind === "identifier").map((anchor) => anchor.term),
+    ...original
+      .filter((anchor) => anchor.kind === "identifier" && originalText.includes(anchor.term))
+      .map((anchor) => anchor.term),
   ]);
 }
 

@@ -124,11 +124,15 @@ describe("requested symbol definition excerpt priority", () => {
     expect(
       pack.uncertainty.some((marker) => marker.claim.includes("excerpt byte limit truncated")),
     ).toBe(true);
-    expect(
-      pack.files.some((file) =>
-        file.excerpts.some((excerpt) => excerpt.content.includes("return 10")),
-      ),
-    ).toBe(false);
+    const retainedDefinitions = pack.files.filter((file) => {
+      const value = values.get(file.scopePath);
+      if (value === undefined) throw new Error("fixture fact missing");
+      return file.excerpts.some((excerpt) => excerpt.content.includes(`return ${value};`));
+    });
+    expect(retainedDefinitions.length).toBeGreaterThan(0);
+    expect(retainedDefinitions.length).toBeLessThan(values.size);
+    expectRequestedDefinitions({ ...pack, files: retainedDefinitions });
+    expect(pack.omitted.some((entry) => entry.reason === "budget-exhausted")).toBe(true);
     expect(validateConnectedContextPack(pack).ok).toBe(true);
   });
 });

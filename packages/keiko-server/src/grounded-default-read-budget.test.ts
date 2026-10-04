@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import {
   DEFAULT_EXPLORATION_BUDGET,
   validateConnectedContextPack,
   type ExplorationBudget,
+  type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { buildGroundedGatewayMessages, fittedGroundedGatewayPrompt } from "./grounded-qa.js";
@@ -39,6 +40,17 @@ function request(budget?: ExplorationBudget): OrchestratorInput {
     },
     ...(budget === undefined ? {} : { budget }),
   };
+}
+
+function completePhysicalFacts(pack: ConnectedContextPack): number {
+  return pack.files.filter((file) => {
+    const source = readFileSync(join(root, file.scopePath), "utf8");
+    for (const excerpt of file.excerpts) {
+      expect(source).toContain(excerpt.content);
+      expect(excerpt.atom.lineRange?.startLine).toBe(1);
+    }
+    return file.excerpts.some((excerpt) => excerpt.content.includes(source.trimEnd()));
+  }).length;
 }
 
 async function retrieve(
@@ -88,11 +100,10 @@ describe("default connected-folder file reads", () => {
     const { pack } = await retrieve({ ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 100 });
     expect(pack.usage.excerptBytes).toBeLessThanOrEqual(100);
     expect(pack.uncertainty.some((entry) => entry.kind === "scope-incomplete")).toBe(true);
-    expect(
-      pack.files
-        .flatMap((file) => file.excerpts)
-        .every((entry) => !entry.content.includes("value=")),
-    ).toBe(true);
+    const retainedFacts = completePhysicalFacts(pack);
+    expect(retainedFacts).toBeGreaterThan(0);
+    expect(retainedFacts).toBeLessThan(40);
+    expect(pack.omitted.some((entry) => entry.reason === "budget-exhausted")).toBe(true);
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
 

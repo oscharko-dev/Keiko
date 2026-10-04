@@ -146,6 +146,8 @@ describe("natural connected-folder context", () => {
   it.each([
     ["What Next.js version is documented?", "Next.js 16 is documented."],
     ["Which package manager is documented?", "The package manager is npm."],
+    ["Welche Version von Next.js ist dokumentiert?", "Next.js 16 is documented."],
+    ["Which package manager does this project document?", "The package manager is npm."],
     ["What's the format of the user's profile page?", "The user profile page uses HTML."],
   ])(
     "retains semantic evidence for natural wording without an actual named literal: %s",
