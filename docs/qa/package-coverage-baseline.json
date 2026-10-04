@@ -6,7 +6,7 @@
   "policy": "Packages below target are ratcheted at their recorded baseline until domain tests raise them; non-strict ratchet floors allow 0.10 percentage points of platform noise. Per-file floors are governed per entry: \"ratcheted\" floors are re-derived from measurement and allow 0.50 points, \"absolute\" floors encode policy, survive regeneration and allow none.",
   "packages": {
     "keiko-activity-log": {
-      "files": 34,
+      "files": 36,
       "uncoveredFiles": 1,
       "uncoveredLines": 181,
       "totalLines": 3713,
@@ -42,7 +42,7 @@
       }
     },
     "keiko-contracts": {
-      "files": 232,
+      "files": 236,
       "uncoveredFiles": 5,
       "uncoveredLines": 1100,
       "totalLines": 15445,
@@ -246,7 +246,7 @@
       }
     },
     "keiko-server": {
-      "files": 765,
+      "files": 770,
       "uncoveredFiles": 0,
       "uncoveredLines": 5038,
       "totalLines": 67638,
@@ -282,7 +282,7 @@
       }
     },
     "keiko-ui": {
-      "files": 496,
+      "files": 500,
       "uncoveredFiles": 3,
       "uncoveredLines": 2947,
       "totalLines": 41689,
@@ -318,7 +318,7 @@
       }
     },
     "keiko-workspace": {
-      "files": 71,
+      "files": 74,
       "uncoveredFiles": 0,
       "uncoveredLines": 629,
       "totalLines": 9637,
