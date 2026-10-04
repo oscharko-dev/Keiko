@@ -140,6 +140,7 @@ import {
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
+  mappedContextPackValidationError,
   mappedWorkspaceError,
   promptSafeExcerptText,
   numberedEvidenceText,
@@ -536,6 +537,12 @@ async function retrieveFolderIntoSlot(
     });
     ensureNotCancelled(ctx.signal);
   } catch (error) {
+    if (mappedContextPackValidationError(error, ctx.deps, ctx.correlationId) !== undefined) {
+      return {
+        kind: "skipped",
+        value: { label, reason: "pack-validation-failed", message: "Pack validation failed." },
+      };
+    }
     // Mirror retrieveOneConnector (GRD-006): a per-source embedding-adapter outage is a skippable
     // degradation (answer from the remaining sources, record the skip). EVERY other error MUST
     // propagate — ClarificationNeededError -> 400, ProviderError -> 502, generic -> 500 — so the

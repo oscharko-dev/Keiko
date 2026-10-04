@@ -119,7 +119,9 @@ describe("assembleContextPack", () => {
       expect(pack.files).toHaveLength(1);
       expect(
         pack.uncertainty.some(
-          (marker) => marker.kind === "scope-incomplete" && marker.claim.includes("a.ts"),
+          (marker) =>
+            marker.kind === "scope-incomplete" &&
+            marker.claim.includes("1 cited ranges unavailable"),
         ),
       ).toBe(true);
       expect(validateConnectedContextPack(pack).ok).toBe(true);
@@ -316,7 +318,9 @@ describe("assembleContextPack", () => {
       ...baseInput(),
       budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 5 },
     };
+    const get = vi.spyOn(input.excerpts, "get");
     const result = await assembleContextPack(input, { nowMs: fixedNow });
+    expect(get.mock.calls.map(([path]) => path)).toEqual(["a.ts"]);
     const clipped = result.pack.uncertainty.find((u) => u.kind === "budget-clipped");
     expect(clipped).toBeDefined();
     expect(validateConnectedContextPack(result.pack).ok).toBe(true);
@@ -416,7 +420,12 @@ describe("assembleContextPack", () => {
     const result = await assembleContextPack(input, { nowMs: fixedNow });
     const missing = result.pack.uncertainty.find((u) => u.kind === "scope-incomplete");
     expect(missing).toBeDefined();
-    expect(missing?.claim).toContain("b.ts");
+    expect(missing?.claim).toContain("1 candidate excerpts unavailable");
+    expect(result.pack.omitted).toContainEqual({
+      scopePath: "b.ts",
+      reason: "tool-unavailable",
+      omittedAtMs: FIXED_NOW,
+    });
     expect(result.pack.files.map((f) => f.scopePath)).toEqual(["a.ts"]);
     expect(result.pack.uncertainty.some((u) => u.kind === "no-evidence")).toBe(false);
     expect(validateConnectedContextPack(result.pack).ok).toBe(true);

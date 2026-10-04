@@ -1,3 +1,4 @@
+import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
 import {
   occupySupportIncidentRetentionForTests,
   supportIncidentReservationsForTests,
@@ -1455,6 +1456,66 @@ describe("handleGroundedAsk", () => {
     } finally {
       resetServerLogger();
     }
+  });
+
+  it("does not acquire session protection for a canonical replay but protects a new admitted turn", async () => {
+    const { chatId } = await setupChatWithScope();
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const minted = registry.mint("grounded-replay-test");
+    const channel = createCodingAppSessionChannel({ registry });
+    const handlerDeps = deps(undefined, {}, { codingAppSessionChannel: channel });
+    const cookie = `${APP_SESSION_COOKIE_NAME}=${minted.cookieToken}`;
+    const request = {
+      chatId,
+      content: "Inspect this folder.",
+      clientTurnId: "grounded-session-replay-1",
+    };
+    const retrieve = vi.fn(runner(emptyPack()));
+    expect(
+      (
+        await handleGroundedAsk(
+          ctx(JSON.stringify(request), fakeRes(), cookie),
+          handlerDeps,
+          retrieve,
+        )
+      ).status,
+    ).toBe(200);
+    clock = 20 * 60_000;
+    expect(
+      (
+        await handleGroundedAsk(
+          ctx(JSON.stringify(request), fakeRes(), cookie),
+          handlerDeps,
+          retrieve,
+        )
+      ).status,
+    ).toBe(200);
+    expect(retrieve).toHaveBeenCalledOnce();
+    expect(registry.inspect(minted.cookieToken)?.lastSeenAtMs).toBe(0);
+    expect(registry.inspectOperationCount(minted.cookieToken)).toBe(0);
+    const entered = deferred<undefined>();
+    const finish = deferred<undefined>();
+    const res = fakeRes();
+    const outcome = handleGroundedAsk(
+      ctx(JSON.stringify({ ...request, clientTurnId: "grounded-session-replay-2" }), res, cookie),
+      handlerDeps,
+      async (input) => {
+        entered.resolve(undefined);
+        await finish.promise;
+        return runner(emptyPack())(input);
+      },
+    );
+    await entered.promise;
+    clock += 31 * 60_000;
+    const authorityDuringNewTurn = registry.inspect(minted.cookieToken);
+    res.emit("close");
+    expect(registry.inspectOperationCount(minted.cookieToken)).toBe(0);
+    finish.resolve(undefined);
+    expect((await outcome).status).toBe(499);
+    expect(authorityDuringNewTurn).toBeDefined();
+    clock += 31 * 60_000;
+    expect(registry.inspect(minted.cookieToken)).toBeUndefined();
   });
 
   it("keeps a paired session active through explicit ordinary-folder grounded turns", async () => {
@@ -3396,6 +3457,25 @@ describe("handleGroundedAsk", () => {
       .find((message) => message.id === answer.userMessageId);
     expect(userMsg?.role).toBe("user");
     expect(userMsg?.content).not.toContain(secret);
+  });
+
+  it("diagnoses a closed assembler omission failure under the original request", async () => {
+    const { chatId } = await setupChatWithScope();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const correlationId = "assembler-validation-correlation";
+    const result = await handleGroundedAsk(
+      { ...ctx(JSON.stringify({ chatId, content: "Explain connected source" })), correlationId },
+      deps(undefined, {}, { diagnostics: { record: (record) => diagnostics.push(record) } }),
+      (input) => failInvalidOmissionAssembly(input.scope),
+    );
+    expect(result.status).toBe(500);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]).toMatchObject({
+      correlationId,
+      code: "GROUNDED_PACK_VALIDATION_FAILED",
+      diagnosticStage: "grounded-pack-validation",
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("escaped-private-file");
   });
 
   it("fails closed when the runner returns an invalid context pack", async () => {

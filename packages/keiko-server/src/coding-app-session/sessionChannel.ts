@@ -73,6 +73,7 @@ export interface CodingAppSessionChannel {
   readonly verifySession: (cookieToken: string | undefined) => AppSession | undefined;
   /** Explicit request activity protects only idle expiry and returns idempotent cleanup. */
   readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
+  readonly inspectOperationCount?: (cookieToken: string | undefined) => number | undefined;
   readonly subscribe: (
     cookieToken: string | undefined,
     listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
@@ -406,6 +407,8 @@ export function createCodingAppSessionChannel(
     sessionCount: (): number => registry.sessionCount(),
     verifySession: (cookieToken: string | undefined): AppSession | undefined =>
       registry.verify(cookieToken),
+    inspectOperationCount: (cookieToken: string | undefined): number | undefined =>
+      registry.inspectOperationCount(cookieToken),
     beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>
       registry.beginOperation(cookieToken),
     subscribe: (cookieToken, listener, options) =>

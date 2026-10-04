@@ -97,6 +97,7 @@ import {
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
+  mappedContextPackValidationError,
   mappedWorkspaceError,
   modelWindowAwareBudget,
   modelInputPromptByteLimit,
@@ -795,8 +796,11 @@ function classifyPerSourceRetrieveError(
   error: unknown,
   label: string,
   correlationId: string | undefined,
+  deps: UiHandlerDeps,
 ): { readonly skipped: SkippedScope; readonly mapped: RouteResult } | undefined {
-  const mapped = mappedWorkspaceError(error, { correlationId });
+  const mapped =
+    mappedContextPackValidationError(error, deps, correlationId) ??
+    mappedWorkspaceError(error, { correlationId });
   if (mapped === undefined) return undefined;
   const body = mapped.body as { readonly error?: { readonly message?: unknown } };
   const safeMessage =
@@ -844,7 +848,7 @@ async function retrieveOneSource(
     });
     ensureNotCancelled(ctx.signal);
   } catch (error) {
-    const classified = classifyPerSourceRetrieveError(error, label, ctx.correlationId);
+    const classified = classifyPerSourceRetrieveError(error, label, ctx.correlationId, ctx.deps);
     if (classified === undefined) throw error; // non-workspace error → outer handler
     acc.skipped.push(classified.skipped);
     acc.firstError ??= classified.mapped;

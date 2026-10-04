@@ -30,7 +30,10 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { DEFAULT_LEXICAL_MATCH_LIMIT } from "@oscharko-dev/keiko-workflows";
+import {
+  ContextPackValidationError,
+  DEFAULT_LEXICAL_MATCH_LIMIT,
+} from "@oscharko-dev/keiko-workflows";
 import {
   persistConnectedContextEvidence,
   type ConnectedContextEvidenceInput,
@@ -271,6 +274,16 @@ function groundedInvariantFailure(
     diagnosticStage: failure.diagnosticStage,
   });
   return internalError(failure.message, correlationId);
+}
+
+export function mappedContextPackValidationError(
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  return error instanceof ContextPackValidationError
+    ? groundedInvariantFailure(deps, correlationId, "pack-validation")
+    : undefined;
 }
 
 // Issue #154 (GAP-B) — the dynamic `error.message` of a GatewayError may echo the provider base
@@ -1897,6 +1910,12 @@ async function runGroundedRunner(
     if (error instanceof ClarificationNeededError) {
       return clarificationRequest(clarificationUserMessage(error));
     }
+    const validationResult = mappedContextPackValidationError(
+      error,
+      workerCtx.deps,
+      workerCtx.correlationId,
+    );
+    if (validationResult !== undefined) return validationResult;
     const workspaceResult = mappedWorkspaceError(error, { correlationId: workerCtx.correlationId });
     if (workspaceResult !== undefined) return workspaceResult;
     const gatewayResult = mappedGatewayError(error, workerCtx.deps, workerCtx.correlationId);
@@ -2644,7 +2663,10 @@ async function executeGroundedAskInTurn(
   if (isRouteResult(admitted)) return admitted;
   const scopeFailure = admittedGroundingScopeFailure(admitted, deps);
   if (scopeFailure !== undefined) return scopeFailure;
-  const releaseSession = beginAppSessionOperation(deps, admitted.request, admitted.signal);
+  const releaseSession = beginAppSessionOperation(deps, admitted.request, admitted.signal, {
+    correlationId: admitted.correlationId,
+    surface: "grounded-chat",
+  });
   try {
     return await runAdmittedGroundedAsk(admitted, deps, runner, multiSource, hybrid);
   } finally {

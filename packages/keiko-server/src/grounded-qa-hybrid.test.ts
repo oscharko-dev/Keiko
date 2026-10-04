@@ -1,3 +1,4 @@
+import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
 // Tests for the hybrid grounded path (Epic #189 Slice 2). Drives `handleGroundedAsk` with
 // injected seams (no real embeddings, no real workspace) while keeping a REAL KnowledgeStore so
 // `selectedCapsulesForScope` resolves actual capsule rows and `scopeStateFailure` detects not-ready
@@ -2068,6 +2069,34 @@ describe("hybrid grounded ask — folder retrieval concurrency", () => {
 // Before the fix, return internalError() terminated the entire run.
 
 describe("hybrid grounded ask — folder pack-validation failure is skipped, not aborted", () => {
+  it("skips a closed assembler omission failure while retaining connector evidence", async () => {
+    const { capsuleId } = await seedReadyCapsule("Assembly Connector");
+    const source: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/bad.ts"],
+      root: tempRoot("invalid-assembly"),
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([source], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Explain connected sources" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: (input) => failInvalidOmissionAssembly(input.scope),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer(),
+      },
+    );
+    expect(result.status).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.knowledgeCitations.length).toBeGreaterThan(0);
+    expect(answer.uncertainty.some((marker) => marker.kind === "pack-validation-failed")).toBe(
+      true,
+    );
+  });
+
   it("1 bad-pack folder + 1 healthy folder + 1 connector → 200 with healthy-folder and connector citations, skip in uncertainty", async () => {
     const { capsuleId: capId, label: connLabel } = await seedReadyCapsule("Fix3 Connector");
 

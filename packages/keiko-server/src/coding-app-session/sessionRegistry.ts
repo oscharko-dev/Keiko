@@ -39,6 +39,8 @@ export interface SessionRegistry {
   readonly inspect: (cookieToken: string | undefined) => AppSession | undefined;
   /** Confirm existing authority and return its remaining absolute cookie lifetime. */
   readonly verifyForCookieRepair: (cookieToken: string | undefined) => number | undefined;
+  /** Non-touching count for body-free operation lifecycle evidence. */
+  readonly inspectOperationCount: (cookieToken: string | undefined) => number | undefined;
   /** Protect a valid session from idle expiry only while an explicit operation remains active. */
   readonly beginOperation: (cookieToken: string | undefined) => (() => void) | undefined;
   readonly rotate: (sessionId: string) => SessionMint | undefined;
@@ -251,6 +253,12 @@ export function createSessionRegistry(deps: SessionRegistryDeps = {}): SessionRe
       verifySession(state, cookieToken, true),
     inspect: (cookieToken: string | undefined): AppSession | undefined =>
       verifySession(state, cookieToken, false),
+    inspectOperationCount: (cookieToken: string | undefined): number | undefined => {
+      const session = verifySession(state, cookieToken, false);
+      return session === undefined
+        ? undefined
+        : state.sessions.get(session.sessionId)?.activeOperationCount;
+    },
     verifyForCookieRepair: (cookieToken: string | undefined): number | undefined =>
       verifyForCookieRepair(state, cookieToken),
     beginOperation: (cookieToken: string | undefined): (() => void) | undefined =>

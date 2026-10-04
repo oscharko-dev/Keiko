@@ -2344,7 +2344,10 @@ async function persistModelChatTurn(
       startedAt,
       correlationId,
       (): void => {
-        releaseSession = beginAppSessionOperation(deps, httpRequest, abortSignal);
+        releaseSession = beginAppSessionOperation(deps, httpRequest, abortSignal, {
+          correlationId,
+          surface: "desktop-chat",
+        });
       },
     );
   } catch (error) {
@@ -2814,7 +2817,10 @@ export async function persistGitChangeDescriptionTurn(
   const admission = admitDesktopChatTurn(deps, prepared);
   if (admission.kind === "replay") return { status: 200, body: admission.response };
   if (admission.kind === "rejected") return admission.result;
-  const releaseSession = beginAppSessionOperation(deps, ctx.req, abortSignal);
+  const releaseSession = beginAppSessionOperation(deps, ctx.req, abortSignal, {
+    correlationId: ctx.correlationId,
+    surface: "git-description",
+  });
   try {
     const memory = await resolveBufferedMemory(
       deps,
@@ -4187,8 +4193,13 @@ async function persistRegeneratedChatTurn(
   prepared: PreparedDesktopChatRegenerate,
   signal: AbortSignal,
   correlationId: string | undefined,
+  httpRequest: IncomingMessage,
 ): Promise<RouteResult> {
   const { modelId } = prepared;
+  const releaseSession = beginAppSessionOperation(deps, httpRequest, signal, {
+    correlationId,
+    surface: "desktop-chat",
+  });
   try {
     const memory = await resolveRegenerateMemory(deps, prepared);
     const response = await withAdoptedContextWindowRetry(
@@ -4203,6 +4214,8 @@ async function persistRegeneratedChatTurn(
     return signal.aborted
       ? requestCancelledResult()
       : desktopChatErrorResult(error, deps, correlationId);
+  } finally {
+    releaseSession();
   }
 }
 
@@ -4233,7 +4246,13 @@ export async function handleRegenerateDesktopChat(
         );
         return isRouteResult(current)
           ? current
-          : persistRegeneratedChatTurn(deps, current, cancellation.signal, ctx.correlationId);
+          : persistRegeneratedChatTurn(
+              deps,
+              current,
+              cancellation.signal,
+              ctx.correlationId,
+              ctx.req,
+            );
       },
     );
     const response = result === CHAT_TURN_WAIT_CANCELLED ? requestCancelledResult() : result;

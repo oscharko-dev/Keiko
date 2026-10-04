@@ -306,6 +306,22 @@ after a real read. Compaction narrows ranges to the lines sent. The default matc
 assembler mode remains available to consumers that require exact match slices. Window mode
 participates in the micro-index key, so the two modes cannot reuse incompatible packs.
 
+Assembly compares requested ranges against the compacted bytes actually retained. It reports
+missing ranges, truncated windows and incompatible overlapping source views with aggregate counts,
+without one prompt marker per file. A clipped trailing newline does not authorize the next unsent
+line. Structural edges retain independent identities while a shared source body is compacted and
+charged once. Different view identities merge only when their overlapping source lines agree;
+non-overlapping partial views never establish continuity by themselves.
+
+Canonical omission order and cache identity are independent of caller ordering. A successful
+selected-file read replaces an earlier omission for that exact file; invalid parent/child overlaps
+still fail validation. Read refusals retain their existing closed policy or budget reason.
+Invalid assembly metadata raises a bounded typed validation failure: ordinary Chat fails closed,
+while multi-source and hybrid retrieval can retain healthy independent sources and register the
+failed source through the existing pack-validation diagnostic. The compatibility match-only mode
+remains opt-in; connected-folder production uses surrounding windows. Empty-evidence abstention
+retains a single `no-evidence` marker, and budget clipping remains `budget-clipped`.
+
 ### D4 — The summary is structurally redaction-free, and we prove it
 
 The wire boundary is asserted by `grounded-qa.redaction.test.ts`: an attacker-controlled

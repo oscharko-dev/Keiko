@@ -3482,9 +3482,15 @@ describe("runGroundedExploration", () => {
     expect(out.pack.files.map((file) => file.scopePath)).not.toContain("src/foo.ts");
     expect(
       out.pack.uncertainty.some((marker) =>
-        marker.claim.includes("excerpt unavailable for src/foo.ts"),
+        marker.claim.includes("files unavailable during excerpt reading"),
       ),
     ).toBe(true);
+    expect(out.pack.omitted).toContainEqual(
+      expect.objectContaining({
+        scopePath: "src/foo.ts",
+        reason: "tool-unavailable",
+      }),
+    );
     expect(unboundedReads).toEqual([]);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
@@ -3874,11 +3880,10 @@ describe("runGroundedExploration", () => {
 
     const marker = out.pack.uncertainty.find(
       (entry) =>
-        entry.kind === "scope-incomplete" &&
-        entry.claim.includes("excerpt byte limit truncated") &&
-        entry.claim.includes("src/large-trace.ts"),
+        entry.kind === "scope-incomplete" && entry.claim.includes("excerpt byte limit truncated"),
     );
     expect(marker).toBeDefined();
+    expect(out.pack.files.some((file) => file.scopePath === "src/large-trace.ts")).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -4068,7 +4073,7 @@ describe("runGroundedExploration", () => {
       "Keine passenden Belege für diese Suche gefunden.",
     ],
   ])(
-    "RB-4: localizes empty-evidence abstention before the model call: %s",
+    "RB-4 GEN-AI-GROUNDING-002/-003: localizes empty-evidence abstention before the model call: %s",
     async (text, expected) => {
       let answererCalled = false;
       const trackingAnswerer: GroundedAnswerer = {

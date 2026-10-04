@@ -18,6 +18,7 @@ import {
   DEFAULT_EXPLORATION_BUDGET,
   isValidScopePath,
   type CandidateFile,
+  type CandidateOmissionReason,
   type ConnectedContextPack,
   type ContextCoverageDiagnostics,
   type ContextPackDiagnostics,
@@ -2337,6 +2338,7 @@ export interface ExcerptInputs {
 }
 
 export interface ExcerptReadSummary {
+  readonly omitted?: readonly OmittedContextEntry[] | undefined;
   readonly byteBudgetOmittedPaths?: readonly string[] | undefined;
   readonly readWindowCount?: number | undefined;
   readonly anchoredWindowCount?: number | undefined;
@@ -4557,6 +4559,7 @@ interface ReadPathExcerptTaskResult {
   readonly scopePath: string;
   readonly result?: ReadPathExcerptWindowsResult | undefined;
   readonly skippedReason?: ExcerptSkippedReason | undefined;
+  readonly omissionReason?: CandidateOmissionReason | undefined;
 }
 
 function isQualifiedWholeFileWindow(
@@ -4697,40 +4700,32 @@ async function readPathExcerptWindows(
   };
 }
 
-function excerptWindowUncertainty(
-  scopePath: string,
-  result: ReadPathExcerptWindowsResult,
-  nowMs: () => number,
-): readonly UncertaintyMarker[] {
-  const markers: UncertaintyMarker[] = [];
-  if (result.omittedWindowCount > 0) {
-    markers.push({
-      kind: "scope-incomplete",
-      claim: `excerpt window limit omitted ${String(result.omittedWindowCount)} additional matching range(s) in ${scopePath}`,
-      impactedAtomIds: [],
-      emittedAtMs: nowMs(),
-    });
-  }
-  if (result.truncatedWindowCount > 0) {
-    markers.push({
+function excerptReadLossSummary(state: ExcerptWaveState, nowMs: () => number): UncertaintyMarker[] {
+  if (
+    state.omittedWindowCount === 0 &&
+    state.truncatedWindowCount === 0 &&
+    state.omitted.length === 0
+  )
+    return [];
+  return [
+    {
       kind: "scope-incomplete",
       claim:
-        `excerpt byte limit truncated ${String(result.truncatedWindowCount)} selected ` +
-        `range(s) in ${scopePath}`,
+        `excerpt window limit omitted ${String(state.omittedWindowCount)} additional matching range(s); ` +
+        `excerpt byte limit truncated ${String(state.truncatedWindowCount)} selected range(s); ` +
+        `${String(state.omitted.length)} files unavailable during excerpt reading`,
       impactedAtomIds: [],
       emittedAtMs: nowMs(),
-    });
-  }
-  return markers;
+    },
+  ];
 }
 
-function largeFileExcerptOmitted(scopePath: string, nowMs: () => number): UncertaintyMarker {
-  return {
-    kind: "scope-incomplete",
-    claim: `large file omitted from excerpt evidence because it exceeds the bounded read cap: ${scopePath}`,
-    impactedAtomIds: [],
-    emittedAtMs: nowMs(),
-  };
+function excerptOmissionReason(reason: string): CandidateOmissionReason {
+  if (reason === "binary") return "binary";
+  if (reason === "timeout" || reason === "aborted") return "budget-exhausted";
+  if (reason === "denied" || reason === "outside-scope") return "outside-scope";
+  if (reason === "ignored") return "ignored";
+  return "tool-unavailable";
 }
 
 function distributeByteBudget(totalBytes: number, slots: number): readonly number[] {
@@ -4755,14 +4750,18 @@ async function readPathExcerptTask(
     // degrade to a skipped excerpt, never crash the whole grounded answer. Other kept files and
     // the rest of the pipeline continue; the file simply contributes no excerpt content.
     if (error instanceof FileTooLargeError) {
-      return { scopePath, skippedReason: "too-large" };
+      return { scopePath, skippedReason: "too-large", omissionReason: "size-exceeded" };
     }
     if (error instanceof RepoSearchUnsupportedFileError) {
       // Preserve the stop reason (#3347 P1): the excerpt facade reports an elapsed-budget stop as
       // `timeout`, and flattening that to `unsupported` erased the only evidence that this file was
       // dropped because the request ran out of time — so no elapsed-budget marker was raised and
       // the completion status reported an unblocked elapsed budget.
-      return { scopePath, skippedReason: error.reason === "timeout" ? "timeout" : "unsupported" };
+      return {
+        scopePath,
+        skippedReason: error.reason === "timeout" ? "timeout" : "unsupported",
+        omissionReason: excerptOmissionReason(error.reason),
+      };
     }
     throw error;
   }
@@ -4824,7 +4823,11 @@ async function readKeptExcerpts(
   const uncertainty: UncertaintyMarker[] = [];
   const { files: remainingFiles, bytes: remainingBytes } = remainingExcerptCapacity(inputs);
   const stopped = stoppedExcerptReads(inputs, remainingFiles, remainingBytes);
-  if (stopped !== undefined) return stopped;
+  if (stopped !== undefined)
+    return {
+      ...stopped,
+      omitted: budgetExcerptOmissions(keptPaths, inputs.nowMs()),
+    };
   const readablePaths = keptPaths.slice(0, remainingFiles);
   if (readablePaths.length < keptPaths.length) {
     uncertainty.push(budgetClipped("budget-exhausted on filesRead", inputs.nowMs()));
@@ -4836,16 +4839,48 @@ async function readKeptExcerpts(
     anchoredWindowCount: 0,
     elapsedBudgetBlocked: false,
     byteBudgetOmittedPaths: undefined,
+    omitted: [],
+    omittedWindowCount: 0,
+    truncatedWindowCount: 0,
   };
   await readExcerptWaves(readablePaths, inputs, state);
+  uncertainty.push(...excerptReadLossSummary(state, inputs.nowMs));
   if (state.elapsedBudgetBlocked) {
     uncertainty.push(budgetClipped("budget-exhausted on elapsedMs", inputs.nowMs()));
   }
+  return completedExcerptSummary(keptPaths, readablePaths, state, inputs.nowMs);
+}
+
+function budgetExcerptOmissions(paths: readonly string[], nowMs: number): OmittedContextEntry[] {
+  return paths.map((scopePath) => ({ scopePath, reason: "budget-exhausted", omittedAtMs: nowMs }));
+}
+
+function completedExcerptSummary(
+  keptPaths: readonly string[],
+  readablePaths: readonly string[],
+  state: ExcerptWaveState,
+  nowMs: () => number,
+): ExcerptReadSummary {
+  const accounted = new Set([
+    ...state.excerpts.keys(),
+    ...state.omitted.map((entry) => entry.scopePath),
+  ]);
+  const readable = new Set(readablePaths);
+  const stoppedPaths = keptPaths.filter(
+    (path) => !accounted.has(path) && (state.elapsedBudgetBlocked || !readable.has(path)),
+  );
   return {
-    excerpts,
-    uncertainty,
+    excerpts: state.excerpts,
+    uncertainty: state.uncertainty,
+    omitted: [
+      ...state.omitted,
+      ...(stoppedPaths.length === 0 ? [] : budgetExcerptOmissions(stoppedPaths, nowMs())),
+    ],
     elapsedBudgetBlocked: state.elapsedBudgetBlocked,
-    readWindowCount: [...excerpts.values()].reduce((count, windows) => count + windows.length, 0),
+    readWindowCount: [...state.excerpts.values()].reduce(
+      (count, windows) => count + windows.length,
+      0,
+    ),
     anchoredWindowCount: state.anchoredWindowCount,
     ...(state.byteBudgetOmittedPaths === undefined
       ? {}
@@ -4854,6 +4889,9 @@ async function readKeptExcerpts(
 }
 
 interface ExcerptWaveState {
+  readonly omitted: OmittedContextEntry[];
+  omittedWindowCount: number;
+  truncatedWindowCount: number;
   readonly excerpts: Map<string, readonly ExcerptWindow[]>;
   readonly uncertainty: UncertaintyMarker[];
   remainingBytes: number;
@@ -4869,17 +4907,18 @@ function appendExcerptWave(
 ): void {
   for (const task of results) {
     throwIfCancelled(inputs.signal);
-    const { scopePath, result, skippedReason } = task;
+    const { scopePath, result } = task;
     state.elapsedBudgetBlocked ||= excerptTaskStoppedByDeadline(task);
     if (result === undefined || result.windows.length === 0) {
-      if (skippedReason === "too-large")
-        state.uncertainty.push(largeFileExcerptOmitted(scopePath, inputs.nowMs));
+      if (task.omissionReason !== undefined)
+        state.omitted.push({ scopePath, reason: task.omissionReason, omittedAtMs: inputs.nowMs() });
       continue;
     }
     state.remainingBytes -= result.bytesConsumed;
     state.anchoredWindowCount += result.anchoredWindowCount;
     state.excerpts.set(scopePath, result.windows);
-    state.uncertainty.push(...excerptWindowUncertainty(scopePath, result, inputs.nowMs));
+    state.omittedWindowCount += result.omittedWindowCount;
+    state.truncatedWindowCount += result.truncatedWindowCount;
   }
 }
 
@@ -5379,24 +5418,24 @@ function preparePackAssembly(
   };
 }
 
-function afterExcerptByteBudget(
+function afterExcerptReadOmissions(
   ordered: CandidateOrdering,
   reads: ExcerptReadSummary,
   nowMs: number,
 ): CandidateOrdering {
-  const paths = reads.byteBudgetOmittedPaths;
-  if (paths === undefined) return ordered;
-  const omitted = new Set(paths);
+  const entries = [
+    ...(reads.omitted ?? []),
+    ...(reads.byteBudgetOmittedPaths ?? []).map((scopePath): OmittedContextEntry => ({
+      scopePath,
+      reason: "budget-exhausted",
+      omittedAtMs: nowMs,
+    })),
+  ];
+  if (entries.length === 0) return ordered;
+  const omitted = new Set(entries.map((entry) => entry.scopePath));
   return {
     kept: ordered.kept.filter((candidate) => !omitted.has(candidate.scopePath)),
-    omitted: [
-      ...ordered.omitted,
-      ...paths.map((scopePath): OmittedContextEntry => ({
-        scopePath,
-        reason: "budget-exhausted",
-        omittedAtMs: nowMs,
-      })),
-    ],
+    omitted: [...ordered.omitted, ...entries],
   };
 }
 
@@ -5411,7 +5450,11 @@ async function assemblePackFromReads({
   assembleOptions,
 }: FinalContextPackInputs): Promise<ConnectedContextPack> {
   const excerpts = mergeExcerptSources(excerptReads.excerpts, documentEvidence.excerpts);
-  const ordered = afterExcerptByteBudget(prepared.ordered, excerptReads, assembleOptions.nowMs());
+  const ordered = afterExcerptReadOmissions(
+    prepared.ordered,
+    excerptReads,
+    assembleOptions.nowMs(),
+  );
   const needsNoEvidenceMarker =
     excerpts.size === 0 &&
     !prepared.evidenceUncertainty.some((marker) => marker.kind === "no-evidence");

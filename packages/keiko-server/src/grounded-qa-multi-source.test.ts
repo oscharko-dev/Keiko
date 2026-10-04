@@ -4,6 +4,7 @@
 // scope must produce the same answer shape as the legacy single-source runner — is asserted by
 // routing one scope through both seams and comparing the wire object minus volatile ids.
 
+import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
@@ -1826,6 +1827,43 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     // Single-source answers carry NO per-source attribution (source is absent).
     expect(answer.content).toBe("single answer");
     expect(answer.citations.every((c) => c.source === undefined)).toBe(true);
+  });
+
+  it("skips a closed assembler omission failure while preserving a healthy source", async () => {
+    const scopes: ChatConnectedScope[] = [
+      {
+        kind: "directory",
+        relativePaths: ["src/a.ts"],
+        root: tempRoot("healthy"),
+        connectedAtMs: NOW,
+      },
+      {
+        kind: "directory",
+        relativePaths: ["src/b.ts"],
+        root: tempRoot("broken"),
+        connectedAtMs: NOW,
+      },
+    ];
+    const chatId = makeChat(scopes);
+    const healthy = packPerScope(new Map([["src/a.ts", scopePack("src/a.ts", 0.7, "healthy")]]));
+    const retrieve: GroundedRetriever = (input) =>
+      input.scope.relativePaths.includes("src/b.ts")
+        ? failInvalidOmissionAssembly(input.scope)
+        : healthy(input);
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Explain both sources" })),
+      recordingDeps([]),
+      undefined,
+      seam(retrieve, constAnswerer("observed [src/a.ts:1]", { count: 0 })),
+    );
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.citations.some((citation) => citation.source === "healthy")).toBe(true);
+    expect(
+      answer.uncertainty.some(
+        (marker) => marker.kind === "source-skipped" && marker.claim.includes("broken"),
+      ),
+    ).toBe(true);
   });
 
   // ─── Fail-soft: pack validation failure skips, not aborts ────────────────

@@ -156,6 +156,15 @@ is active, the existing bounded capacity remains authoritative and evicts the ol
 registered pairing result records expired-session count and a closed eviction class, without IDs.
 No timer, polling or passive SSE renews it.
 
+The same admitted-operation protection covers normal Chat regeneration and Git-description work.
+The registered `coding-app-session.operation.state` event records acquisition and idempotent release
+through the existing session activity port: a closed surface and release reason, observed concurrent
+operation count, authority state and elapsed duration. A release records settlement or cancellation,
+not model success. Its authority observation does not refresh idle time; unavailable or custom-port
+counts are omitted rather than invented. No bearer, session ID, folder path or conversation body is
+included. If an injected activity port throws, the existing safe process logger receives the same
+body-free state; telemetry cannot turn completion or cancellation into a new request failure.
+
 ### D6 — Fail closed to the content-free projection, never to an error that reveals content
 
 The absence of a valid session yields the **same content-free projection the routes serve today** —

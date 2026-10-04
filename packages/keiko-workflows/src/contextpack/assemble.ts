@@ -19,6 +19,7 @@ import {
   type ConnectedFileRole,
   type ContextExcerpt,
   type EvidenceAtom,
+  type LineRange,
   type ExplorationBudget,
   type ExplorationUsage,
   type OmittedContextEntry,
@@ -67,6 +68,15 @@ export interface AssembleOptions {
   readonly reranker?: RerankerSeam;
   readonly microIndex?: MicroIndex;
   readonly nowMs?: () => number;
+}
+
+export class ContextPackValidationError extends TypeError {
+  readonly code = "CONTEXT_PACK_OMISSIONS_INVALID";
+
+  constructor(readonly violationCount: number) {
+    super(`Context pack omitted entries invalid (${String(violationCount)} violations).`);
+    this.name = "ContextPackValidationError";
+  }
 }
 
 export interface AssembleResult {
@@ -173,6 +183,10 @@ interface BuildPlan {
   usage: ExplorationUsage;
   readonly uncertainty: UncertaintyMarker[];
   readonly extraOmitted: OmittedContextEntry[];
+  unavailableExcerpts: number;
+  unavailableRanges: number;
+  truncatedExcerpts: number;
+  incompatibleWindows: number;
 }
 
 function cloneUsage(usage: ExplorationUsage | undefined): ExplorationUsage {
@@ -191,6 +205,10 @@ function emptyBuildPlan(
     usage: cloneUsage(initialUsage),
     uncertainty: [...(initialUncertainty ?? [])],
     extraOmitted: [],
+    unavailableExcerpts: 0,
+    unavailableRanges: 0,
+    truncatedExcerpts: 0,
+    incompatibleWindows: 0,
   };
 }
 
@@ -199,9 +217,15 @@ function compactAtomsForCandidate(
   source: ExcerptSource,
   maxBytesPerExcerpt: number,
   context: { readonly includeSurroundingContext: boolean; readonly scopeId: string },
-): { readonly excerpts: ContextExcerpt[]; readonly totalBytes: number } {
+): {
+  readonly excerpts: ContextExcerpt[];
+  readonly totalBytes: number;
+  readonly truncatedExcerpts: number;
+  readonly incompatibleWindows: number;
+} {
   const excerpts: ContextExcerpt[] = [];
   let totalBytes = 0;
+  let truncatedExcerpts = 0;
   if (context.includeSurroundingContext) {
     return compactIdentifiedContextWindows(
       atomsForPath,
@@ -218,17 +242,31 @@ function compactAtomsForCandidate(
     const result = compactExcerpt({ atom, rawContent, maxBytes: maxBytesPerExcerpt });
     excerpts.push(result.excerpt);
     totalBytes += result.bytesConsumed;
+    truncatedExcerpts += Number(result.truncated);
   }
-  return { excerpts, totalBytes };
+  return { excerpts, totalBytes, truncatedExcerpts, incompatibleWindows: 0 };
 }
 
 function contextWindowsForAtom(
-  source: ExcerptSource,
+  source: readonly ExcerptWindow[],
   atom: EvidenceAtom,
 ): readonly ExcerptWindow[] {
-  const matching = normalizeExcerptWindows(source).filter((window) => coversAtom(window, atom));
-  const legacy = matching.find((window) => window.identity === undefined);
-  return matching.filter((window) => window.identity !== undefined || window === legacy);
+  const matching = source.filter((window) => coversAtom(window, atom));
+  if (matching.length > 0) {
+    const legacy = matching.find((window) => window.identity === undefined);
+    return matching.filter((window) => window.identity !== undefined || window === legacy);
+  }
+  // A single shortened read can still provide useful evidence for part of a broad range.
+  // Multiple uncovered windows must not fabricate continuity across a gap or conflicting read.
+  if (source.length !== 1) return [];
+  const window = source[0];
+  const range = atom.lineRange;
+  return window !== undefined &&
+    range !== undefined &&
+    window.startLine <= range.endLine &&
+    window.endLine >= range.startLine
+    ? [window]
+    : [];
 }
 
 function compactIdentifiedContextWindows(
@@ -236,25 +274,43 @@ function compactIdentifiedContextWindows(
   source: ExcerptSource,
   maxBytes: number,
   scopeId: string,
-): { readonly excerpts: ContextExcerpt[]; readonly totalBytes: number } {
+): {
+  readonly excerpts: ContextExcerpt[];
+  readonly totalBytes: number;
+  readonly truncatedExcerpts: number;
+  readonly incompatibleWindows: number;
+} {
   const excerpts: ContextExcerpt[] = [];
   const seen = new Set<string>();
-  const windows = mergeContextWindows(normalizeExcerptWindows(source));
+  const bodies = new Map<string, ContextExcerpt>();
+  let truncatedExcerpts = 0;
+  const merged = mergeContextWindows(normalizeExcerptWindows(source));
+  const windows = merged.windows;
   for (const atom of atoms) {
     for (const window of contextWindowsForAtom(windows, atom)) {
-      const identity = JSON.stringify([
-        window.startLine,
-        window.endLine,
-        window.identity,
-        atom.edge,
-      ]);
+      const bodyIdentity = JSON.stringify([window.startLine, window.endLine, window.identity]);
+      const identity = JSON.stringify([bodyIdentity, atom.edge]);
       if (seen.has(identity)) continue;
       seen.add(identity);
-      const excerpt = compactContextWindow(atom, window, maxBytes, scopeId);
-      if (excerpt.contentBytes > 0) excerpts.push(excerpt);
+      const shared = bodies.get(bodyIdentity);
+      const excerpt =
+        shared === undefined
+          ? compactContextWindow(atom, window, maxBytes, scopeId)
+          : metadataForSharedWindow(atom, window, shared, scopeId);
+      if (shared === undefined && excerpt.contentBytes === 0) continue;
+      if (shared === undefined) {
+        truncatedExcerpts += Number(Buffer.byteLength(window.content) > excerpt.contentBytes);
+        bodies.set(bodyIdentity, excerpt);
+      }
+      excerpts.push(excerpt);
     }
   }
-  return { excerpts, totalBytes: excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0) };
+  return {
+    excerpts,
+    totalBytes: excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0),
+    truncatedExcerpts,
+    incompatibleWindows: merged.incompatibleWindows,
+  };
 }
 
 function compactContextWindow(
@@ -264,33 +320,50 @@ function compactContextWindow(
   scopeId: string,
 ): ContextExcerpt {
   const result = compactExcerpt({ atom, rawContent: window.content, maxBytes });
-  const queryFingerprint =
-    window.identity === undefined
-      ? atom.provenance.queryFingerprint
-      : sha256Hex(JSON.stringify([atom.provenance.queryFingerprint, window.identity]));
   const lineRange = {
     startLine: window.startLine,
     endLine: Math.min(
       window.endLine,
-      window.startLine + Math.max(0, lineCount(result.excerpt.content) - 1),
+      window.startLine +
+        Math.max(0, compactedLineCount(result.excerpt.content, result.truncated) - 1),
     ),
   };
+  return { ...result.excerpt, atom: contextWindowAtom(atom, window, lineRange, scopeId) };
+}
+
+function metadataForSharedWindow(
+  atom: EvidenceAtom,
+  window: ExcerptWindow,
+  shared: ContextExcerpt,
+  scopeId: string,
+): ContextExcerpt {
+  const range = shared.atom.lineRange ?? { startLine: window.startLine, endLine: window.endLine };
+  return { content: "", contentBytes: 0, atom: contextWindowAtom(atom, window, range, scopeId) };
+}
+
+function contextWindowAtom(
+  atom: EvidenceAtom,
+  window: ExcerptWindow,
+  lineRange: LineRange,
+  scopeId: string,
+): EvidenceAtom {
+  const queryFingerprint =
+    window.identity === undefined
+      ? atom.provenance.queryFingerprint
+      : sha256Hex(JSON.stringify([atom.provenance.queryFingerprint, window.identity]));
   return {
-    ...result.excerpt,
-    atom: {
-      ...atom,
+    ...atom,
+    lineRange,
+    provenance: { ...atom.provenance, queryFingerprint },
+    stableId: evidenceAtomStableId({
+      scopeId,
+      scopePath: atom.scopePath,
       lineRange,
-      provenance: { ...atom.provenance, queryFingerprint },
-      stableId: evidenceAtomStableId({
-        scopeId,
-        scopePath: atom.scopePath,
-        lineRange,
-        provenanceKind: atom.provenance.kind,
-        provenanceTool: atom.provenance.tool,
-        queryFingerprint,
-        edge: atom.edge,
-      }),
-    },
+      provenanceKind: atom.provenance.kind,
+      provenanceTool: atom.provenance.tool,
+      queryFingerprint,
+      edge: atom.edge,
+    }),
   };
 }
 
@@ -301,40 +374,66 @@ function lineCount(content: string): number {
   return content.split("\n").length;
 }
 
+function compactedLineCount(content: string, truncated: boolean): number {
+  return lineCount(content) - Number(truncated && content.endsWith("\n"));
+}
+
 function mergeContextWindow(left: ExcerptWindow, right: ExcerptWindow): ExcerptWindow | undefined {
-  if (left.identity !== right.identity || right.startLine > left.endLine) return undefined;
+  if (right.startLine > left.endLine + 1) return undefined;
+  const overlap = Math.min(left.endLine, right.endLine) - right.startLine + 1;
+  // Different partial-view identities require actual overlap to prove compatibility.
+  if (overlap === 0 && left.identity !== right.identity) return undefined;
   const leftLines = left.content.split("\n");
   const rightLines = right.content.split("\n");
-  const overlap = Math.min(left.endLine, right.endLine) - right.startLine + 1;
   for (let index = 0; index < overlap; index += 1) {
     if (leftLines[right.startLine - left.startLine + index] !== rightLines[index]) return undefined;
   }
+  const identity =
+    left.identity === right.identity
+      ? left.identity
+      : sha256Hex(JSON.stringify([left.identity, right.identity, left.startLine, right.endLine]));
   return {
-    ...left,
+    ...(identity === undefined ? {} : { identity }),
+    startLine: left.startLine,
     endLine: Math.max(left.endLine, right.endLine),
     content: [...leftLines, ...rightLines.slice(overlap)].join("\n"),
   };
 }
 
-function mergeContextWindows(windows: readonly ExcerptWindow[]): readonly ExcerptWindow[] {
-  const identityOrder = new Map<string | undefined, number>();
-  for (const window of windows) {
-    if (!identityOrder.has(window.identity)) identityOrder.set(window.identity, identityOrder.size);
+interface MergedContextWindows {
+  readonly windows: ExcerptWindow[];
+  incompatibleWindows: number;
+  maxEndLine: number;
+}
+
+function appendOpenContextWindow(state: MergedContextWindows, window: ExcerptWindow): void {
+  const previousMaxEnd = state.maxEndLine;
+  state.maxEndLine = Math.max(previousMaxEnd, window.endLine);
+  if (previousMaxEnd + 1 < window.startLine) {
+    state.windows.push(window);
+    return;
   }
+  for (let index = state.windows.length - 1; index >= 0; index -= 1) {
+    const previous = state.windows[index];
+    if (previous === undefined || previous.endLine + 1 < window.startLine) continue;
+    const combined = mergeContextWindow(previous, window);
+    if (combined === undefined) {
+      if (previous.endLine >= window.startLine) state.incompatibleWindows += 1;
+      continue;
+    }
+    state.windows[index] = combined;
+    return;
+  }
+  state.windows.push(window);
+}
+
+function mergeContextWindows(windows: readonly ExcerptWindow[]): MergedContextWindows {
   const ordered = [...windows].sort(
-    (left, right) =>
-      (identityOrder.get(left.identity) ?? 0) - (identityOrder.get(right.identity) ?? 0) ||
-      left.startLine - right.startLine ||
-      left.endLine - right.endLine,
+    (left, right) => left.startLine - right.startLine || left.endLine - right.endLine,
   );
-  const merged: ExcerptWindow[] = [];
-  for (const window of ordered) {
-    const previous = merged.at(-1);
-    const combined = previous === undefined ? undefined : mergeContextWindow(previous, window);
-    if (combined === undefined) merged.push(window);
-    else merged[merged.length - 1] = combined;
-  }
-  return merged;
+  const state: MergedContextWindows = { windows: [], incompatibleWindows: 0, maxEndLine: 0 };
+  for (const window of ordered) appendOpenContextWindow(state, window);
+  return state;
 }
 
 function isExcerptWindowArray(source: ExcerptSource): source is readonly ExcerptWindow[] {
@@ -422,7 +521,6 @@ function recordBudgetClip(plan: BuildPlan, candidate: CandidateFile, nowMs: numb
 function recordUnavailableExcerpt(
   plan: BuildPlan,
   candidate: CandidateFile,
-  claim: string,
   nowMs: number,
 ): ProcessOutcome {
   plan.extraOmitted.push({
@@ -430,12 +528,7 @@ function recordUnavailableExcerpt(
     reason: "tool-unavailable",
     omittedAtMs: nowMs,
   });
-  plan.uncertainty.push({
-    kind: "scope-incomplete",
-    claim,
-    impactedAtomIds: [],
-    emittedAtMs: nowMs,
-  });
+  plan.unavailableExcerpts += 1;
   return "excerpt-unavailable";
 }
 
@@ -473,24 +566,19 @@ function appendAssembledCandidate(
 
 function recordUnavailableAtomRanges(
   plan: BuildPlan,
-  candidate: CandidateFile,
   atoms: readonly EvidenceAtom[],
-  source: ExcerptSource,
-  ctx: ProcessContext,
+  excerpts: readonly ContextExcerpt[],
 ): void {
-  const availableSource = ctx.includeSurroundingContext
-    ? mergeContextWindows(normalizeExcerptWindows(source))
-    : source;
-  const unavailable = atoms.filter(
-    (atom) => contentForAtom(atom, availableSource) === undefined,
+  const windows = excerpts
+    .filter((excerpt) => excerpt.contentBytes > 0)
+    .map((excerpt) => ({
+      startLine: excerpt.atom.lineRange?.startLine ?? 1,
+      endLine: excerpt.atom.lineRange?.endLine ?? lineCount(excerpt.content),
+      content: excerpt.content,
+    }));
+  plan.unavailableRanges += atoms.filter(
+    (atom) => !windows.some((window) => coversAtom(window, atom)),
   ).length;
-  if (unavailable === 0) return;
-  plan.uncertainty.push({
-    kind: "scope-incomplete",
-    claim: `${String(unavailable)} cited ranges unavailable in ${candidate.scopePath}`,
-    impactedAtomIds: [],
-    emittedAtMs: ctx.nowMs,
-  });
 }
 
 function candidateExcerptByteLimit(candidate: CandidateFile, ctx: ProcessContext): number {
@@ -514,30 +602,20 @@ function processCandidate(
   }
   const excerptSource = ctx.excerpts.get(candidate.scopePath);
   if (excerptSource === undefined) {
-    return recordUnavailableExcerpt(
-      plan,
-      candidate,
-      `excerpt unavailable for ${candidate.scopePath}`,
-      ctx.nowMs,
-    );
+    return recordUnavailableExcerpt(plan, candidate, ctx.nowMs);
   }
   const atomsForPath = ctx.atomsByPath.get(candidate.scopePath) ?? [];
   if (atomsForPath.length === 0) {
     return "continue";
   }
-  const { excerpts, totalBytes } = compactAtomsForCandidate(
+  const { excerpts, totalBytes, truncatedExcerpts, incompatibleWindows } = compactAtomsForCandidate(
     atomsForPath,
     excerptSource,
     candidateExcerptByteLimit(candidate, ctx),
     ctx,
   );
   if (excerpts.length === 0) {
-    return recordUnavailableExcerpt(
-      plan,
-      candidate,
-      `excerpt unavailable for cited ranges in ${candidate.scopePath}`,
-      ctx.nowMs,
-    );
+    return recordUnavailableExcerpt(plan, candidate, ctx.nowMs);
   }
   const checkpoint: BudgetCheckpoint = {
     atoms: atomsForPath,
@@ -548,7 +626,9 @@ function processCandidate(
     recordBudgetClip(plan, candidate, ctx.nowMs);
     return "budget-clipped";
   }
-  recordUnavailableAtomRanges(plan, candidate, atomsForPath, excerptSource, ctx);
+  plan.truncatedExcerpts += truncatedExcerpts;
+  plan.incompatibleWindows += incompatibleWindows;
+  recordUnavailableAtomRanges(plan, atomsForPath, excerpts);
   appendAssembledCandidate(plan, candidate, ctx, excerpts, totalBytes);
   return "continue";
 }
@@ -567,6 +647,22 @@ function recordRemainingBudgetOmissions(
   }
 }
 
+function appendUnavailableSummary(plan: BuildPlan, nowMs: number): void {
+  if (
+    plan.unavailableExcerpts === 0 &&
+    plan.unavailableRanges === 0 &&
+    plan.truncatedExcerpts === 0 &&
+    plan.incompatibleWindows === 0
+  )
+    return;
+  plan.uncertainty.push({
+    kind: "scope-incomplete",
+    claim: `${String(plan.unavailableExcerpts)} candidate excerpts unavailable and ${String(plan.unavailableRanges)} cited ranges unavailable and ${String(plan.truncatedExcerpts)} excerpts truncated and ${String(plan.incompatibleWindows)} conflicting source window comparisons during context assembly`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  });
+}
+
 function buildPlan(
   ordered: readonly CandidateFile[],
   ctx: ProcessContext,
@@ -574,16 +670,19 @@ function buildPlan(
   initialUncertainty: readonly UncertaintyMarker[] | undefined,
 ): BuildPlan {
   const plan = emptyBuildPlan(initialUsage, initialUncertainty);
-  let unavailableExcerpts = 0;
   for (const [index, candidate] of ordered.entries()) {
     const outcome = processCandidate(plan, candidate, ctx);
     if (outcome === "budget-clipped") {
       recordRemainingBudgetOmissions(plan, ordered.slice(index + 1), ctx.nowMs);
       break;
     }
-    if (outcome === "excerpt-unavailable") unavailableExcerpts += 1;
   }
-  if (plan.files.length === 0 && unavailableExcerpts > 0) {
+  appendUnavailableSummary(plan, ctx.nowMs);
+  if (
+    plan.files.length === 0 &&
+    plan.unavailableExcerpts > 0 &&
+    !plan.uncertainty.some((marker) => marker.kind === "no-evidence")
+  ) {
     plan.uncertainty.push({
       kind: "no-evidence",
       claim: "no candidate excerpt supplied usable evidence",
@@ -611,15 +710,31 @@ function cacheConnectedFile(file: ConnectedFileEntry): object {
   };
 }
 
+function compareOmissions(left: OmittedContextEntry, right: OmittedContextEntry): number {
+  return (
+    omissionDetailPriority(left) - omissionDetailPriority(right) ||
+    compareStrings(left.scopePath, right.scopePath) ||
+    compareStrings(left.reason, right.reason)
+  );
+}
+
 function mergeOmittedEntries(
   ranked: readonly OmittedContextEntry[],
   assembled: readonly OmittedContextEntry[],
+  selectedPaths: ReadonlySet<string> = new Set(),
 ): readonly OmittedContextEntry[] {
   const byPath = new Map<string, OmittedContextEntry>();
-  for (const entry of [...ranked, ...assembled]) {
+  for (const entry of [...ranked].sort(compareOmissions)) {
+    if (selectedPaths.has(entry.scopePath) || byPath.has(entry.scopePath)) continue;
     byPath.set(entry.scopePath, entry);
   }
-  return [...byPath.values()];
+  for (const entry of assembled) {
+    if (selectedPaths.has(entry.scopePath)) continue;
+    const existing = byPath.get(entry.scopePath);
+    if (existing !== undefined && entry.reason === "tool-unavailable") continue;
+    byPath.set(entry.scopePath, entry);
+  }
+  return [...byPath.values()].sort(compareOmissions);
 }
 
 function buildStableId(
@@ -666,13 +781,17 @@ function retainedOmissionDetails(
 }
 
 function buildPack(input: AssembleInput, plan: BuildPlan, nowMs: number): ConnectedContextPack {
-  const omitted = mergeOmittedEntries(input.omittedFromRanking, plan.extraOmitted);
+  const omitted = mergeOmittedEntries(
+    input.omittedFromRanking,
+    plan.extraOmitted,
+    new Set(plan.files.map((file) => file.scopePath)),
+  );
   const validation = validateOmittedContextEntries(
     omitted,
     input.scope,
     plan.files.map((file) => file.scopePath),
   );
-  if (!validation.ok) throw new TypeError(validation.reasons.join("; "));
+  if (!validation.ok) throw new ContextPackValidationError(validation.reasons.length);
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     stableId: buildStableId(input, plan, omitted),
@@ -819,7 +938,7 @@ function cacheExcerpts(excerpts: ReadonlyMap<string, ExcerptSource>): readonly o
 
 function cacheExcerptIdentity(input: AssembleInput): readonly object[] | readonly string[] {
   if (input.cacheIdentity !== undefined) {
-    return [...input.cacheIdentity].sort((left, right) => left.localeCompare(right));
+    return [...input.cacheIdentity].sort((left, right) => compareStrings(left, right));
   }
   return cacheExcerpts(input.excerpts);
 }
@@ -859,15 +978,15 @@ function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): rea
         ? input.initialUncertainty?.map(cacheUncertainty)
         : undefined,
     ranked: input.ranked.map(cacheCandidate),
-    omittedFromRanking: input.omittedFromRanking.map(cacheOmitted),
+    omittedFromRanking: mergeOmittedEntries(input.omittedFromRanking, []).map(cacheOmitted),
     diagnostics: cacheDiagnostics(input.diagnostics),
     excerpts: cacheExcerptIdentity(input),
     maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
     maxBytesPerExcerptByPath: [...resolved.maxBytesPerExcerptByPath].sort(([left], [right]) =>
-      left.localeCompare(right),
+      compareStrings(left, right),
     ),
     includeSurroundingContext: resolved.includeSurroundingContext,
-    editablePaths: [...resolved.editablePaths].sort((left, right) => left.localeCompare(right)),
+    editablePaths: [...resolved.editablePaths].sort((left, right) => compareStrings(left, right)),
     rerankerName: resolved.reranker.name,
   });
   return [`fp-${sha256Hex(fingerprintSource)}`];

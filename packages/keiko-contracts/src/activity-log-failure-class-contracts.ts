@@ -1017,23 +1017,26 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: [],
+      state: ["coding-app-session.operation.state"],
       end: ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
       "coding-app-session.local-session.confirmed",
+      "coding-app-session.operation.state",
       "coding-app-session.paired",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "coding-app-session.local-session.confirmed",
+      "coding-app-session.operation.state",
       "coding-app-session.paired",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "coding-app-session.local-session.confirmed",
+      "coding-app-session.operation.state",
       "coding-app-session.paired",
     ],
     requiredEvidenceClasses: [

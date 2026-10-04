@@ -503,7 +503,10 @@ export async function handleSendDesktopChatStream(
     activeChatStreams += 1;
     try {
       return await runDesktopChatStream(ctx, deps, cancellation.controller, (): void => {
-        releaseSession = beginAppSessionOperation(deps, ctx.req, cancellation.signal);
+        releaseSession = beginAppSessionOperation(deps, ctx.req, cancellation.signal, {
+          correlationId: ctx.correlationId,
+          surface: "streaming-chat",
+        });
       });
     } finally {
       activeChatStreams -= 1;

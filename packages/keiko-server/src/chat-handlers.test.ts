@@ -54,6 +54,17 @@ import { createInMemoryUiStore } from "./store/index.js";
 import { initializeGitChangeDescriptionFixture } from "./gitChangeChatTestSupport.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
 
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+
+function deferredActivity(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((finish) => {
+    resolve = finish;
+  });
+  return { promise, resolve };
+}
 // A model id reaches a rejection line only as its digest (#3557 review), from the producer itself.
 const BREAKER_CHAT_DIGEST = modelIdEvidence("breaker-chat").modelIdDigest;
 describe("Git change Chat mode selection", () => {
@@ -159,7 +170,9 @@ describe("parseExpectedGroundingScopeIdentity", (): void => {
 });
 
 function requestContext(body: Record<string, unknown>, correlationId?: string): RouteContext {
-  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
+  const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body), "utf8")]), {
+    headers: {},
+  });
   const res = {
     destroyed: false,
     closed: false,
@@ -903,6 +916,149 @@ describe("desktopChatErrorResult gateway diagnostic symmetry", () => {
       expect(event.errorClass).toBe("RateLimitError");
     } finally {
       vi.unstubAllGlobals();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+});
+
+describe("explicit session activity on regeneration", () => {
+  it("protects an admitted pending regeneration and releases on cancellation", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const entered = deferredActivity();
+    const finish = deferredActivity();
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const minted = registry.mint("regeneration-test");
+    const channel = createCodingAppSessionChannel({ registry });
+    const model: ModelPort = {
+      call: async (request) => {
+        entered.resolve();
+        await finish.promise;
+        return {
+          modelId: request.modelId,
+          content: "regenerated",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "regeneration-test",
+            promptTokens: 1,
+            completionTokens: 1,
+            latencyMs: 1,
+            costClass: "low",
+          },
+        };
+      },
+    };
+    try {
+      const user = fixture.deps.store.createMessage({
+        chatId: fixture.chatId,
+        role: "user",
+        content: "question",
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      const assistant = fixture.deps.store.createMessage({
+        ...user,
+        role: "assistant",
+        content: "old answer",
+        timestamp: 2,
+      });
+      const request = requestContext(
+        {
+          chatId: fixture.chatId,
+          projectPath: fixture.projectPath,
+          modelId: "breaker-chat",
+          assistantMessageId: assistant.id,
+        },
+        "regeneration-session-test",
+      );
+      request.req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${minted.cookieToken}` };
+      const outcome = handleRegenerateDesktopChat(request, {
+        ...fixture.deps,
+        codingAppSessionChannel: channel,
+        modelPortFactory: () => model,
+      });
+      await entered.promise;
+      clock = 31 * 60_000;
+      const activeDuringWait = registry.inspect(minted.cookieToken);
+      request.req.emit("aborted");
+      finish.resolve();
+      expect((await outcome).status).toBe(499);
+      expect(activeDuringWait).toBeDefined();
+      clock += 31 * 60_000;
+      expect(registry.inspect(minted.cookieToken)).toBeUndefined();
+    } finally {
+      finish.resolve();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+  it("protects admitted Git-description work and releases before an uncooperative gateway completes", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    const entered = deferredActivity();
+    const finish = deferredActivity();
+    let clock = 0;
+    const registry = createSessionRegistry({ now: () => clock });
+    const minted = registry.mint("description-test");
+    const channel = createCodingAppSessionChannel({ registry });
+    try {
+      const description = await initializeGitChangeDescriptionFixture(fixture.projectPath);
+      fixture.deps.store.updateChat(fixture.chatId, { gitChangeScopes: [description.scope] });
+      const generation = description.deps.prDescriptionGeneration;
+      if (generation === undefined) throw new TypeError("Expected description generation fixture");
+      const generationDeps: UiHandlerDeps = {
+        ...fixture.deps,
+        ...description.deps,
+        codingAppSessionChannel: channel,
+        codingRuntimeDeploymentCeiling: "autonomous-delivery",
+        mintDescriptionAuthority: vi.fn(),
+        gitChangeDescriptionAuthorityPort: {
+          current: (scope) => ({
+            scope,
+            effectiveMode: "governed-assist",
+            expiresAt: "2100-01-01T00:00:00.000Z",
+          }),
+        },
+        prDescriptionGeneration: {
+          ...generation,
+          gateway: {
+            ...generation.gateway,
+            chat: async (request) => {
+              entered.resolve();
+              await finish.promise;
+              return generation.gateway.chat(request);
+            },
+          },
+        },
+      };
+      const request = requestContext(
+        {
+          chatId: fixture.chatId,
+          projectPath: fixture.projectPath,
+          modelId: "breaker-chat",
+          content: "Refine the description.",
+          memory: { enabled: false, budgetTokens: 0, mode: "supervised-coding", context: {} },
+        },
+        "description-session-test",
+      );
+      request.req.headers = { cookie: `${APP_SESSION_COOKIE_NAME}=${minted.cookieToken}` };
+      const outcome = handleSendDesktopChat(request, generationDeps);
+      await entered.promise;
+      clock = 31 * 60_000;
+      const authorityDuringWork = registry.inspect(minted.cookieToken);
+      request.req.emit("aborted");
+      expect(registry.inspectOperationCount(minted.cookieToken)).toBe(0);
+      finish.resolve();
+      expect((await outcome).status).toBe(499);
+      expect(authorityDuringWork).toBeDefined();
+      clock += 31 * 60_000;
+      expect(registry.inspect(minted.cookieToken)).toBeUndefined();
+    } finally {
+      finish.resolve();
       await disposeGatewayBreakerFixture(fixture);
     }
   });
