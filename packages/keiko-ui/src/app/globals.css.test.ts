@@ -5076,7 +5076,7 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
 
   it("the browser evidence harness rejects HTTP method drift", (): void => {
     expect(browserCaptureSource).toContain(
-      'const POST_API_PATHS = new Set([\n  "/api/desktop/chats",\n  "/api/editor/agent/snapshot",\n  "/api/editor/language",\n  "/api/task-workspaces/reconciliation",\n]);',
+      'const POST_API_PATHS = new Set([\n  "/api/diagnostics/client",\n  "/api/coding-workbench/app-session/local-session",\n  "/api/git-delivery/commit/preview",\n  "/api/desktop/chats",\n  "/api/editor/agent/snapshot",\n  "/api/editor/language",\n  "/api/task-workspaces/reconciliation",\n]);',
     );
     expect(browserCaptureSource).toContain('return POST_API_PATHS.has(pathname) ? "POST" : "GET";');
     expect(browserCaptureSource).toContain("if (method !== expectedApiMethod(url.pathname)) {");
