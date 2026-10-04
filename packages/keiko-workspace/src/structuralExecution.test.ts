@@ -100,6 +100,34 @@ function synchronousOperations(fs: WorkspaceFs): readonly (() => unknown)[] {
 }
 
 describe("executionControlledWorkspaceFs", () => {
+  it("preserves the directory iterator receiver and closes it on early exit", async (): Promise<void> => {
+    let closed = false;
+    const fs: WorkspaceFs = {
+      ...memFs(ROOT, { "entry.txt": "text" }),
+      iterateDirectory: async function* (path) {
+        await Promise.resolve();
+        expect(this).toBe(fs);
+        expect(path).toBe(ROOT);
+        try {
+          yield { name: "entry.txt", isDirectory: false, isFile: true, isSymbolicLink: false };
+        } finally {
+          closed = true;
+        }
+      },
+    };
+    const controlled = executionControlledWorkspaceFs(fs, {
+      nowMs: () => 0,
+      deadlineAtMs: Infinity,
+    });
+    const entries = controlled.iterateDirectory?.(ROOT);
+    if (entries === undefined) throw new Error("missing controlled iterator");
+    for await (const entry of entries) {
+      expect(entry.name).toBe("entry.txt");
+      break;
+    }
+    expect(closed).toBe(true);
+  });
+
   it("preserves exact owned-root authority without authorizing a sibling", () => {
     const root = "/home/user/.keiko/task-workspaces/repo_a/ws_b";
     const source = workspaceFsWithOwnedRootAuthority(memFs(root, {}), root);

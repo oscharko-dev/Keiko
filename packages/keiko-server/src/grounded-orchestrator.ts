@@ -4764,6 +4764,17 @@ function appendReadExcerptWindows(
   return { bytes, truncated, anchored };
 }
 
+function remainingExcerptWindowBytes(
+  scopePath: string,
+  availableBytes: number,
+  inputs: ExcerptInputs,
+): number {
+  return Math.min(
+    inputs.knownFitFileBytes?.get(scopePath) ?? MAX_EXCERPT_WINDOW_BYTES,
+    availableBytes,
+  );
+}
+
 async function readPathExcerptWindows(
   scopePath: string,
   inputs: ExcerptInputs,
@@ -4774,6 +4785,7 @@ async function readPathExcerptWindows(
   let truncatedWindowCount = 0;
   let anchoredWindowCount = 0;
   let deadlineReached = false;
+  let readSelectedWindowCount = 0;
   const selection = excerptLineWindows(inputs.atomsByPath.get(scopePath));
   for (const window of selection.windows) {
     throwIfCancelled(inputs.signal);
@@ -4783,10 +4795,7 @@ async function readPathExcerptWindows(
     }
     const availableBytes = remainingBytes - bytesConsumed;
     if (availableBytes <= 0 || windows.length >= MAX_EXCERPT_WINDOWS_PER_FILE) break;
-    const maxBytes = Math.min(
-      inputs.knownFitFileBytes?.get(scopePath) ?? MAX_EXCERPT_WINDOW_BYTES,
-      availableBytes,
-    );
+    const maxBytes = remainingExcerptWindowBytes(scopePath, availableBytes, inputs);
     const result = await readExcerptWindow(
       scopePath,
       window,
@@ -4805,6 +4814,7 @@ async function readPathExcerptWindows(
       break;
     }
     const appended = appendReadExcerptWindows(result, windows);
+    readSelectedWindowCount += 1;
     truncatedWindowCount += appended.truncated;
     anchoredWindowCount += appended.anchored;
     bytesConsumed += appended.bytes;
@@ -4812,7 +4822,8 @@ async function readPathExcerptWindows(
   return {
     windows,
     bytesConsumed,
-    omittedWindowCount: selection.omittedWindowCount,
+    omittedWindowCount:
+      selection.omittedWindowCount + selection.windows.length - readSelectedWindowCount,
     truncatedWindowCount,
     anchoredWindowCount,
     deadlineReached,
@@ -4830,7 +4841,7 @@ function excerptReadLossSummary(state: ExcerptWaveState, nowMs: () => number): U
     {
       kind: "scope-incomplete",
       claim:
-        `excerpt window limit omitted ${String(state.omittedWindowCount)} additional matching range(s); ` +
+        `excerpt read limits omitted ${String(state.omittedWindowCount)} additional matching range(s); ` +
         `excerpt byte limit truncated ${String(state.truncatedWindowCount)} selected range(s); ` +
         `${String(state.omitted.length)} files unavailable during excerpt reading`,
       impactedAtomIds: [],

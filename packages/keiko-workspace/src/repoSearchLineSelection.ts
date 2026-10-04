@@ -1,17 +1,17 @@
 import type { ContextCoverageTruncationReason } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { LineMatcher } from "./repoSearchMatchers.js";
 import { repositorySourceLines } from "./repoSearchSourceClassification.js";
+import { RetainedAtomHeap } from "./repoSearchRetention.js";
 
-// Per-file cap on emitted lexical matches (Epic #177 retrieval fix). A connected-scope question
-// carries several content tokens, so a prose-heavy file can match many low-signal lines. Keeping
-// only each file's best windows makes the evidence diverse across the scope without starving
-// code-tracing tasks that need multiple local anchors from one file.
-const MAX_MATCHES_PER_FILE = 3;
 const LINE_TIMEOUT_CHECK_INTERVAL = 256;
 const MAX_ENCLOSING_RANGE_LINES = 80;
+const MAX_DECLARATION_LOOKBACK_LINES = 12;
 
 export interface LineSelectionRunner {
-  readonly limits: { readonly elapsedMsMax: number | null };
+  readonly limits: {
+    readonly elapsedMsMax: number | null;
+    readonly maxMatchesReturned?: number | undefined;
+  };
   readonly matcher: LineMatcher;
   readonly nowMs: () => number;
   readonly startMs: number;
@@ -29,6 +29,49 @@ export interface ScoredLine {
   readonly startLine: number;
   readonly endLine: number;
   readonly score: number;
+}
+
+class ScoredLineCollector {
+  private readonly active: ScoredLine[] = [];
+  private readonly best: RetainedAtomHeap<ScoredLine>;
+  private finalizedCount = 0;
+
+  public constructor(
+    private readonly limit: number,
+    private readonly state: LineSelectionState,
+  ) {
+    this.best = new RetainedAtomHeap(
+      limit,
+      (a, b) => b.score - a.score || a.startLine - b.startLine,
+    );
+  }
+
+  public add(candidate: ScoredLine): void {
+    // Later structural ranges cannot start before this grammar-derived lookback. Only ranges
+    // still capable of overlapping remain active; finalized output shares the request's K bound.
+    this.finalizeBefore(
+      candidate.line - MAX_ENCLOSING_RANGE_LINES - 2 * MAX_DECLARATION_LOOKBACK_LINES,
+    );
+    insertBestLine(this.active, candidate);
+  }
+
+  private finalizeBefore(firstPossibleStart: number): void {
+    for (let index = this.active.length - 1; index >= 0; index -= 1) {
+      const range = this.active[index];
+      if (range === undefined || range.endLine >= firstPossibleStart) continue;
+      this.active.splice(index, 1);
+      this.best.retain(range);
+      this.finalizedCount += 1;
+      if (this.finalizedCount > this.limit) markStopped(this.state, "match-cap");
+    }
+  }
+
+  public sorted(): readonly ScoredLine[] {
+    this.finalizeBefore(Infinity);
+    return [...this.best.sorted()].sort((a, b) =>
+      a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine,
+    );
+  }
 }
 
 function lineIndent(line: string): number {
@@ -233,7 +276,11 @@ function braceStartLine(lines: readonly string[], braceLineIndex: number): numbe
   if (looksLikeBlockHeader(line)) {
     return includeLeadingDecorators(lines, braceLineIndex);
   }
-  for (let i = braceLineIndex - 1; i >= Math.max(0, braceLineIndex - 12); i -= 1) {
+  for (
+    let i = braceLineIndex - 1;
+    i >= Math.max(0, braceLineIndex - MAX_DECLARATION_LOOKBACK_LINES);
+    i -= 1
+  ) {
     const trimmed = (lines[i] ?? "").trim();
     if (trimmed.length === 0 || looksLikeDecoratorLine(trimmed)) {
       continue;
@@ -251,7 +298,11 @@ function braceStartLine(lines: readonly string[], braceLineIndex: number): numbe
 function includeLeadingDecorators(lines: readonly string[], startIndex: number): number {
   let start = startIndex;
   const baseIndent = lineIndent(lines[startIndex] ?? "");
-  for (let i = startIndex - 1; i >= Math.max(0, startIndex - 12); i -= 1) {
+  for (
+    let i = startIndex - 1;
+    i >= Math.max(0, startIndex - MAX_DECLARATION_LOOKBACK_LINES);
+    i -= 1
+  ) {
     const line = lines[i] ?? "";
     const trimmed = line.trim();
     if (trimmed.length === 0) {
@@ -734,10 +785,6 @@ function insertBestLine(best: ScoredLine[], candidate: ScoredLine): void {
     best.splice(index, 1);
   }
   best.push(merged);
-  best.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.startLine - b.startLine));
-  if (best.length > MAX_MATCHES_PER_FILE) {
-    best.pop();
-  }
 }
 
 export function collectBestLines(
@@ -746,7 +793,7 @@ export function collectBestLines(
   state: LineSelectionState,
   scopePath?: string,
 ): readonly ScoredLine[] {
-  const best: ScoredLine[] = [];
+  const best = new ScoredLineCollector(runner.limits.maxMatchesReturned ?? Infinity, state);
   const lines = physicalLines(text);
   const sourceLines = repositorySourceLines(text, scopePath);
   const braceScanCache = createBraceScanCache(lines);
@@ -758,7 +805,7 @@ export function collectBestLines(
     if (score > 0) {
       scanBraceLinesThrough(braceScanCache, lineIndex + MAX_ENCLOSING_RANGE_LINES);
       const range = enclosingRange(lines, braceScanCache.scans, lineIndex);
-      insertBestLine(best, {
+      best.add({
         line: lineIndex + 1,
         startLine: range.start,
         endLine: range.end,
@@ -766,7 +813,5 @@ export function collectBestLines(
       });
     }
   }
-  return best.sort((a, b) =>
-    a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine,
-  );
+  return best.sorted();
 }

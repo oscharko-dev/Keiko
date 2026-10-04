@@ -1517,7 +1517,11 @@ function textFileMatches(
 ): FileMatches | undefined {
   observeEligibleTextFile(runner, file, text);
   collectRankedSemanticDocument(runner, file, text);
-  if (runner.sourceInspection !== true && !shouldScoreContent(runner.query, text, runner.policy)) {
+  if (
+    runner.sourceInspection !== true &&
+    runner.literalTerms === undefined &&
+    !shouldScoreContent(runner.query, text, runner.policy)
+  ) {
     return undefined;
   }
   const matched = scanLines(runner, text, state, file.relativePath);

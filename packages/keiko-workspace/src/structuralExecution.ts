@@ -342,7 +342,7 @@ async function* controlledDirectoryEntries(
   const iterate = fs.iterateDirectory;
   if (iterate === undefined) return;
   assertStructuralExecutionActive(control);
-  for await (const entry of iterate(path)) {
+  for await (const entry of iterate.call(fs, path)) {
     assertStructuralExecutionActive(control);
     yield entry;
   }

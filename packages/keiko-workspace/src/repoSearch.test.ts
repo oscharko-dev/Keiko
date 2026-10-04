@@ -533,15 +533,17 @@ describe("searchText (memFs)", () => {
     expect(r.atoms).toHaveLength(0);
   });
 
-  it("caps emitted matches per file so one file cannot dominate the budget", async () => {
+  it("honors an explicitly accepted result bound for a single matching file", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "needle\n".repeat(20) });
-    const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
-      fs,
-      nowMs: FIXED_NOW,
-    });
+    const r = await searchText(
+      scope,
+      nlq("needle"),
+      { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 3 },
+      { fs, nowMs: FIXED_NOW },
+    );
     const fromA = r.atoms.filter((a) => a.scopePath === "src/a.ts");
-    expect(fromA.length).toBeGreaterThan(0);
-    expect(fromA.length).toBeLessThanOrEqual(3);
+    expect(fromA).toHaveLength(3);
+    expect(r.coverage.reasons).toContain("match-cap");
   });
 
   it("examines a later-sorted file instead of saturating on the first one", async () => {
@@ -549,8 +551,8 @@ describe("searchText (memFs)", () => {
       "src/a_early.ts": "shared\nshared\nshared\nshared\nshared\nshared\n",
       "src/z_late.ts": "shared target\n",
     });
-    // Without the per-file cap the six 'shared' lines in the alphabetically-first file would
-    // consume the whole match budget and z_late.ts would never be scanned.
+    // A retained-result bound must not stop corpus traversal: primary-per-file priority keeps
+    // the later useful source alongside the earlier file's best content.
     const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 4 };
     const r = await searchText(scope, nlq("shared target"), limits, { fs, nowMs: FIXED_NOW });
     const files = new Set(r.atoms.map((a) => a.scopePath));
