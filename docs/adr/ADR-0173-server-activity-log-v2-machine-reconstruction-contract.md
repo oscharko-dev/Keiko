@@ -789,8 +789,14 @@ its replacement is prepared, also admitting a small canonical limited report bes
 Each artifact remains capped at 10 MiB. This is a payload-byte retention bound, not an exact resident-memory measurement: JavaScript object overhead and temporary compression buffers are additional. Only the retained raw or compressed representation is charged;
 gzip replaces its raw ownership after compression. Limited entries are removed before protected
 entries under byte or count pressure; unauthenticated limited creation cannot evict a protected
-artifact. Genuine exhausted protected capacity returns the existing explicit delivery-capacity
-refusal rather than growing memory. Expiry makes report creation available again. The response uses `no-store`,
+artifact. Before admitting a limited replacement, the cache checks the existing protected byte and
+entry reservations. If protected artifacts leave insufficient capacity, refusal preserves already
+prepared limited artifacts rather than evicting them in a futile attempt to fit the replacement.
+Genuine exhausted protected capacity returns the existing explicit delivery-capacity refusal rather
+than growing memory. The routine `support.report.ui.delivery-released` state records actual expiry,
+byte-pressure or entry-pressure disposal using the original creation correlation, canonical and
+charged retained byte counts, and closed authority and evidence scope. It contains no attachment
+token, filename or report body and does not claim evidence loss or an operating-system save. Expiry makes report creation available again. The response uses `no-store`,
 `nosniff`, and the closed canonical filename. Older-server local object URLs are released on
 eviction or explicit global-error dismissal. A global error stays visible until human dismissal.
 The body-free `support.report.ui.delivered` state records canonical artifact bytes and the separate

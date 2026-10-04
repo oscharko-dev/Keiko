@@ -153,6 +153,52 @@ export function emitSupportReportDelivered(
   );
 }
 
+const DELIVERY_RELEASED = defineActivityLogOperation({
+  ...BASE,
+  op: "support.report.ui.delivery-released",
+  emitter: "support-report-evidence.emitSupportReportDeliveryReleased",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["expired", "byte-pressure", "entry-pressure"],
+    },
+    reportBytes: { type: "integer", dataClass: "count", required: true },
+    retainedBytes: { type: "integer", dataClass: "count", required: true },
+    ...DELIVERY_FIELDS,
+    ...COMPLETE,
+  },
+  proofIds: ["support.report.ui.delivery-released.line"],
+});
+
+export function emitSupportReportDeliveryReleased(
+  correlationId: string | undefined,
+  reason: "expired" | "byte-pressure" | "entry-pressure",
+  reportBytes: number,
+  retainedBytes: number,
+  deliveryAuthority: "session-bound" | "client-only",
+  evidenceScope: "server" | "client-only",
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      DELIVERY_RELEASED,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        reason,
+        reportBytes,
+        retainedBytes,
+        deliveryAuthority,
+        evidenceScope,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
 const DOWNLOAD_REFUSED = defineActivityLogOperation({
   ...BASE,
   op: "support.report.ui.download-refused",

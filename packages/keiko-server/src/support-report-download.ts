@@ -10,6 +10,7 @@ import {
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import {
   emitSupportReportDelivered,
+  emitSupportReportDeliveryReleased,
   emitSupportReportDownloadRefused,
   emitSupportReportFailed,
 } from "./support-report-evidence.js";
@@ -40,7 +41,7 @@ const caches = new WeakMap<UiHandlerDeps, Map<string, Delivery>>();
 
 function prune(cache: Map<string, Delivery>, now: number): void {
   for (const [key, entry] of cache)
-    if (entry.expiresAtMs <= now) disposeDelivery(cache, key, entry);
+    if (entry.expiresAtMs <= now) disposeDelivery(cache, key, entry, "expired");
   let bytes = [...cache.values()].reduce((total, entry) => total + entry.bytes, 0);
   const ordered = [...cache].sort(
     ([, left], [, right]) =>
@@ -49,14 +50,44 @@ function prune(cache: Map<string, Delivery>, now: number): void {
   );
   for (const [key, entry] of ordered) {
     if (bytes <= MAX_SUPPORT_REPORT_DELIVERY_BYTES && cache.size <= MAX_DELIVERY_ENTRIES) break;
+    const reason = bytes > MAX_SUPPORT_REPORT_DELIVERY_BYTES ? "byte-pressure" : "entry-pressure";
     bytes -= entry.bytes;
-    disposeDelivery(cache, key, entry);
+    disposeDelivery(cache, key, entry, reason);
   }
 }
 
-function disposeDelivery(cache: Map<string, Delivery>, key: string, entry: Delivery): void {
+function disposeDelivery(
+  cache: Map<string, Delivery>,
+  key: string,
+  entry: Delivery,
+  reason: "expired" | "byte-pressure" | "entry-pressure",
+): void {
+  if (cache.get(key) !== entry) return;
   clearTimeout(entry.expiryTimer);
-  if (cache.get(key) === entry) cache.delete(key);
+  cache.delete(key);
+  emitSupportReportDeliveryReleased(
+    entry.creationCorrelationId,
+    reason,
+    entry.canonicalBytes,
+    entry.bytes,
+    entry.authority.kind,
+    entry.report.evidenceScope ?? "server",
+  );
+}
+
+function assertLimitedDeliveryCapacity(cache: Map<string, Delivery>, incomingBytes: number): void {
+  let protectedBytes = 0;
+  let protectedCount = 0;
+  for (const entry of cache.values()) {
+    if (entry.authority.kind !== "session-bound") continue;
+    protectedBytes += entry.bytes;
+    protectedCount += 1;
+  }
+  if (
+    protectedBytes + incomingBytes > MAX_SUPPORT_REPORT_DELIVERY_BYTES ||
+    protectedCount >= MAX_DELIVERY_ENTRIES
+  )
+    throw new SupportReportDeliveryCapacityError();
 }
 
 export function cacheSupportReportDownload(
@@ -70,9 +101,13 @@ export function cacheSupportReportDownload(
     throw new TypeError("Invalid support report delivery artifact");
   const cache = caches.get(deps) ?? new Map<string, Delivery>();
   caches.set(deps, cache);
+  prune(cache, Date.now());
+  if (sessionId === undefined) {
+    validateLimitedDelivery(report);
+    assertLimitedDeliveryCapacity(cache, bytes);
+  }
   const id = randomUUID();
   const expiresAtMs = Date.now() + DELIVERY_TTL_MS;
-  if (sessionId === undefined) validateLimitedDelivery(report);
   const authority =
     sessionId === undefined
       ? { kind: "client-only" as const }
@@ -92,7 +127,7 @@ export function cacheSupportReportDownload(
   };
   cache.set(id, entry);
   entry.expiryTimer = setTimeout(() => {
-    disposeDelivery(cache, id, entry);
+    disposeDelivery(cache, id, entry, "expired");
   }, DELIVERY_TTL_MS);
   entry.expiryTimer.unref();
   prune(cache, Date.now());

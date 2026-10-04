@@ -210,6 +210,58 @@ describe("authenticated canonical report attachment", () => {
       status: 404,
     });
   });
+  it.each(["expired", "byte-pressure", "entry-pressure"] as const)(
+    "records actual %s disposal under the original creation correlation without capability material",
+    async (reason) => {
+      vi.useFakeTimers();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const owner = deps("protected-session");
+      const limited = createClientOnlySupportReport("original-client-cause", "session-unavailable");
+      const target = cacheSupportReportDownload(
+        owner,
+        undefined,
+        limited,
+        "original-report-creation",
+      );
+      if (reason === "expired")
+        await vi.advanceTimersByTimeAsync(target.downloadExpiresAtMs - Date.now());
+      if (reason === "byte-pressure") {
+        for (let index = 0; index < 2; index += 1)
+          cacheSupportReportDownload(owner, "protected-session", {
+            ...report,
+            reportJson: "x".repeat(MAX_SUPPORT_REPORT_BYTES),
+          });
+      }
+      if (reason === "entry-pressure") {
+        for (let index = 0; index < 128; index += 1)
+          cacheSupportReportDownload(owner, "protected-session", report);
+      }
+      const release = sink.events.find(
+        (event) => event.op === "support.report.ui.delivery-released",
+      );
+      expect(release?.correlationId).toBe("original-report-creation");
+      const line = formatActivityLogProofLine(release ?? {});
+      expect(
+        expectActivityLogProof("support.report.ui.delivery-released.line", line),
+      ).toMatchObject({
+        reason,
+        reportBytes: Buffer.byteLength(limited.reportJson),
+        retainedBytes: Buffer.byteLength(limited.reportJson),
+        deliveryAuthority: "client-only",
+        evidenceScope: "client-only",
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(line).not.toContain(target.downloadPath);
+      expect(line).not.toContain(limited.fileName);
+      expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
+      expect(await handleDownloadSupportReport(context(target.downloadPath), owner)).toMatchObject({
+        status: 404,
+      });
+    },
+  );
+
   it("delivers standard gzip preserving exact canonical producer bytes and strict integrity", async () => {
     const canonicalReport = createClientOnlySupportReport("gzip-attachment", "session-unavailable");
     const owner = deps(undefined);
@@ -299,6 +351,40 @@ describe("authenticated canonical report attachment", () => {
       expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
       expect(decodeAttachment(end.mock.calls[0]?.[0])).toBe(target.text);
     }
+  });
+
+  it("preserves existing limited bytes when a larger limited replacement cannot fit beside protected bytes", async () => {
+    const owner = deps("protected-session");
+    const earlier = createClientOnlySupportReport("limited-existing", "session-unavailable");
+    const larger = createClientOnlySupportReport("limited-incoming", "session-unavailable", {
+      errorKind: "unavailable",
+      context: ["kind:sse-error"],
+      errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+    });
+    expect(Buffer.byteLength(larger.reportJson)).toBeGreaterThan(
+      Buffer.byteLength(earlier.reportJson),
+    );
+    cacheSupportReportDownload(owner, "protected-session", {
+      ...report,
+      reportJson: "x".repeat(MAX_SUPPORT_REPORT_BYTES),
+    });
+    cacheSupportReportDownload(owner, "protected-session", {
+      ...report,
+      reportJson: "x".repeat(MAX_SUPPORT_REPORT_BYTES - Buffer.byteLength(earlier.reportJson)),
+    });
+    const target = cacheSupportReportDownload(owner, undefined, earlier);
+    expect(() => cacheSupportReportDownload(owner, undefined, larger)).toThrow(
+      SupportReportDeliveryCapacityError,
+    );
+    const ctx = context(target.downloadPath);
+    vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+    const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+    expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+    const canonical = decodeAttachment(end.mock.calls[0]?.[0]);
+    expect(canonical).toBe(earlier.reportJson);
+    expect(parseSupportReport(canonical).incident.incidentId).toBe(
+      parseSupportReport(earlier.reportJson).incident.incidentId,
+    );
   });
 
   it("refuses limited delivery when protected artifacts occupy the whole existing capacity", async () => {
