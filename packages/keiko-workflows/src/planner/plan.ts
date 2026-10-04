@@ -315,8 +315,18 @@ export function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boole
 const DIRECT_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
 const REQUESTED_TEST_RELATION_RE =
   /\b(?:tests?|testing|tested|specs?|integration|integrations|integrationstests?|testet|getestet)\b/iu;
-const CONTEXTUAL_EXPLANATION_RE =
-  /\b(?:why|how|explain|explains|explanation|meaning|warum|weshalb|wieso|erkl[äa]re(?:n)?|bedeut(?:et|en|ung)|funktioniert)\b|\bwhat\s+does\b|\bwas\s+macht\b/iu;
+const ENGLISH_EXPLANATION_RE = /\b(?:why|how|explain|explains|explanation|meaning)\b/iu;
+const GERMAN_EXPLANATION_RE =
+  /\b(?:warum|weshalb|wieso|erkl[äa]re(?:n)?|bedeut(?:et|en|ung)|funktioniert)\b/iu;
+const EXPLANATORY_QUESTION_RE = /\b(?:what\s+does|was\s+macht)\b/iu;
+
+function hasContextualExplanation(text: string): boolean {
+  return (
+    ENGLISH_EXPLANATION_RE.test(text) ||
+    GERMAN_EXPLANATION_RE.test(text) ||
+    EXPLANATORY_QUESTION_RE.test(text)
+  );
+}
 
 /** Contextual questions retain their full query; ambiguous wording cannot justify literal-only IO. */
 export function requiresContextualEvidence(query: RetrievalQuery): boolean {
@@ -326,7 +336,7 @@ export function requiresContextualEvidence(query: RetrievalQuery): boolean {
     requiresRelationshipOrHistoryRings({ ...query, text: context }) ||
     REQUESTED_TEST_RELATION_RE.test(context) ||
     classifyRetrievalIntent(context).intent === "diagnostic-search" ||
-    CONTEXTUAL_EXPLANATION_RE.test(context)
+    hasContextualExplanation(context)
   );
 }
 
