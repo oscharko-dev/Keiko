@@ -187,11 +187,13 @@ describe(".gitleaks.toml allowlists", () => {
     expect(orCombinedAllowlists(repositoryConfig)).toEqual([]);
   });
 
-  it("limits the synthetic Workbench JWT exception to its exact historical fixture", () => {
+  it("limits the synthetic Workbench JWT exception in history and squash-equivalent scans", () => {
     const table = syntheticWorkbenchJwtException();
     expect(table.get("condition")).toBe('"AND"');
     expect(table.get("targetrules")).toBe('["jwt"]');
-    expect(table.get("commits")).toBe('["96e0f02a3ec019963102276dd98682477d9071bc"]');
+    // Squash-equivalent CI probes have a fresh commit id. Content and path, rather than the
+    // temporary history shape, identify this one public synthetic test vector.
+    expect(table.has("commits")).toBe(false);
     const path =
       "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.test.tsx";
     const pathRegex = literalArrayPattern(table, "paths");

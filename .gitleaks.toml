@@ -15,9 +15,8 @@
 title = "Keiko secret scan"
 
 [[allowlists]]
-description = "PR #3687: synthetic Workbench JWT used only to prove that credential-shaped refresh identities cannot create error-specific reports. Its payload is synthetic and its signature is the literal word signature, not a cryptographic credential. Scoped to the exact historical checkpoint, test path, JWT rule and fixture line; all other tokens remain scanned."
+description = "PR #3687: synthetic Workbench JWT used only to prove that credential-shaped refresh identities cannot create error-specific reports. Its payload is synthetic and its signature is the literal word signature, not a cryptographic credential. Scoped to the exact test path, JWT rule and fixture line for history and squash-equivalent scans; all other tokens remain scanned."
 condition = "AND"
-commits = ["96e0f02a3ec019963102276dd98682477d9071bc"]
 paths = ['''^packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow\.test\.tsx$''']
 targetRules = ["jwt"]
 regexTarget = "line"
