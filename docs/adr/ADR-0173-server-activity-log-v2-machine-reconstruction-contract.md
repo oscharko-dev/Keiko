@@ -947,8 +947,10 @@ retirement path. Its `support.incident.dismissed` line carries the closed `aband
 candidate state, never a successful-report or human-dismissal claim. Failed record inspection or
 expiry inspection emits `support.incident.retirement-failed` on the owning Activity Log port with
 the attempted incident ID, closed read/sweep stage, original reduced error class, safe frames and
-causes, and request correlation. It leaves ownership intact and does not invent unavailable record
-metadata or counts. Successful dismissal still requires its complete descriptor metadata. Existing candidates and
+causes, and request correlation. Terminal failure labels retain a reduced machine token only within
+the registered field bound; an oversized token falls back to the shared content-free exception
+class rather than truncating its identity or losing the event. Safe frames and cause evidence remain
+unchanged. It leaves ownership intact and does not invent unavailable record metadata or counts. Successful dismissal still requires its complete descriptor metadata. Existing candidates and
 transient descriptors grant no abandonment ownership. No additional report archive is created.
 
 After successful descriptor inspection, `support.incident.retirement-started` records the actual

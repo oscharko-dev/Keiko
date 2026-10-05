@@ -86,6 +86,7 @@ import {
   registeredFailureDeduplicationKey,
 } from "./defect-fingerprint.js";
 import { causeChain, keikoStackFrames } from "./stack-frames.js";
+import { contentFreeErrorClass } from "./error-classification.js";
 import { activityLogTestWriterInstalled } from "./server-logger.js";
 import {
   claimSupportIncidentFingerprint,
@@ -356,22 +357,9 @@ const SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION = defineActivityLogOperation(
   owner: "keiko-activity-log",
   emitter: "support-incident.retirementFailedEvidence",
   fields: {
+    ...TERMINAL_FAILURE_FIELDS,
     incidentId: INCIDENT_ID_FIELD,
-    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
-    frames: {
-      type: "string-array",
-      dataClass: "safe-platform-class",
-      required: false,
-      maxLength: 512,
-      maxItems: 8,
-    },
-    causeChain: {
-      type: "string-array",
-      dataClass: "error-kind",
-      required: false,
-      maxLength: 64,
-      maxItems: 5,
-    },
+    failureKind: { ...TERMINAL_FAILURE_FIELDS.failureKind, required: true },
     failureStage: {
       type: "string",
       dataClass: "closed-enum",
@@ -402,7 +390,7 @@ const SUPPORT_INCIDENT_EXPIRED_OPERATION = defineActivityLogOperation({
   emitter: "support-incident.expiredEvidence",
   fields: {
     ...TERMINAL_FAILURE_FIELDS,
-    claimsStatus: { ...CLAIMS_STATUS_FIELD, required: false },
+    claimsStatus: CLAIMS_STATUS_FIELD,
     incidentId: INCIDENT_ID_FIELD,
     expiryReason: {
       type: "string",
@@ -613,7 +601,10 @@ function retirementFailure(error: unknown): RetirementFailure {
   const failureKind = errorKindOf(error);
   return {
     errorKind: activityLogErrorKindOr(failureKind, "internal"),
-    failureKind,
+    failureKind:
+      failureKind.length <= TERMINAL_FAILURE_FIELDS.failureKind.maxLength
+        ? failureKind
+        : contentFreeErrorClass(error),
     ...(frames.length === 0 ? {} : { frames }),
     ...(causes.length === 0 ? {} : { causeChain: causes }),
   };
@@ -665,22 +656,22 @@ function retirementStartedEvidence(
   );
 }
 
+function dismissedClaimsStatus(facts: DismissalFacts): (typeof CLAIMS_STATUS_FIELD.values)[number] {
+  if (facts.removalStatus === "failed") return "not-attempted";
+  return facts.claimsReleased ? "released" : "failed";
+}
+
 function dismissedEvidence(
   stateDir: string,
   record: SupportIncidentRecord,
   facts: DismissalFacts,
 ): void {
-  const claimsStatus = facts.claimsReleased ? "released" : "failed";
+  const incomplete = facts.pinRelease === "rejected" || !facts.claimsReleased;
   writeEvidence(
     stateDir,
     activityLogEvent(
       SUPPORT_INCIDENT_DISMISSED_OPERATION,
-      retirementEnvelope(
-        facts.correlationId,
-        facts.failure,
-        record,
-        facts.pinRelease === "rejected" || !facts.claimsReleased,
-      ),
+      retirementEnvelope(facts.correlationId, facts.failure, record, incomplete),
       {
         incidentId: record.incidentId,
         defectFingerprint: record.fingerprint.defectFingerprint,
@@ -691,11 +682,9 @@ function dismissedEvidence(
         openIncidentCount: facts.openIncidentCount,
         ...(facts.reason === undefined ? {} : { reason: facts.reason }),
         removalStatus: facts.removalStatus ?? "removed",
-        claimsStatus: facts.removalStatus === "failed" ? "not-attempted" : claimsStatus,
+        claimsStatus: dismissedClaimsStatus(facts),
         ...terminalFailureFields(facts.failure),
-        ...(facts.pinRelease === "rejected" || !facts.claimsReleased
-          ? { completeness: "partial" as const }
-          : {}),
+        ...(incomplete ? { completeness: "partial" as const } : {}),
       },
     ),
   );
@@ -1926,19 +1915,18 @@ function retirementFailedEvidence(
   failureStage: "read" | "sweep",
   error: unknown,
 ): ServerLogEvent {
-  const failure = retirementFailure(error);
+  const { errorKind, ...failureFields } = retirementFailure(error);
   return activityLogEvent(
     SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION,
     {
       level: "warn",
       correlationId: options.correlationId,
-      errorKind: failure.errorKind,
+      errorKind,
     },
     {
       incidentId,
       failureStage,
-      ...terminalFailureFields(failure),
-      failureKind: failure.failureKind,
+      ...failureFields,
       ...(options.retirementReason === undefined ? {} : { reason: options.retirementReason }),
       completeness: "partial",
       loss: "none",

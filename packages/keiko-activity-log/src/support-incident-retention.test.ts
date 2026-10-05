@@ -1477,6 +1477,54 @@ describe("rolling diagnostic candidate retention", () => {
     },
   );
 
+  it.each([64, 65, 128, 129])(
+    "persists retirement failure evidence for a %i-character machine code",
+    (length) => {
+      const created = recordUserReportedIncident(stateDir, { correlationId: "bounded-code-owner" });
+      if (created.status !== "created") throw new TypeError("Expected manual candidate");
+      const code = "E".repeat(length);
+      const failure = Object.assign(
+        new TypeError("private retirement contents", {
+          cause: new RangeError("private cause"),
+        }),
+        { code },
+      );
+      failure.stack =
+        "TypeError: private contents\n    at retire (/private/work/packages/keiko-activity-log/dist/support-incident.js:20:4)";
+      vi.spyOn(incidentStore, "readSupportIncidentRecord").mockImplementationOnce(() => {
+        throw failure;
+      });
+      expect(
+        dismissSupportIncident(stateDir, created.incidentId, {
+          correlationId: "bounded-code-retirement",
+        }),
+      ).toBe("failed");
+      const lines = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.retirement-failed",
+      );
+      expect(lines).toHaveLength(1);
+      const line = expectActivityLogProof(
+        "support.incident.retirement-failed.emitted-line",
+        lines[0] ?? "",
+      );
+      expect(line).toMatchObject({
+        incidentId: created.incidentId,
+        correlationId: "bounded-code-retirement",
+        failureStage: "read",
+        errorKind: "internal",
+        failureKind: length === 64 ? code : "TypeError",
+        completeness: "partial",
+        loss: "none",
+        frames: ["packages/keiko-activity-log/dist/support-incident.js:20:4"],
+        causeChain: ["RangeError"],
+      });
+      expect(lines[0]).not.toContain("private");
+      if (length > 64) expect(lines[0]).not.toContain(code);
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([created.record]);
+    },
+  );
+
   it("preserves reported state and the actual failure when prepared removal fails", () => {
     const created = recordUserReportedIncident(stateDir, {
       correlationId: "prepared-removal-source",
