@@ -45,12 +45,18 @@ function rememberPort(port: number): void {
   }
 }
 
-export async function startUiTestServer(
-  dependencies: UiTestServerDeps,
+export function startUiTestServer(dependencies: UiTestServerDeps): Promise<StartedUiTestServer> {
+  return startUiTestServerWithFactory(dependencies, createUiServer);
+}
+
+// A built server keeps its own dependency graph, including private class identities.
+export async function startUiTestServerWithFactory<Dependencies extends object>(
+  dependencies: Dependencies,
+  createServer: (dependencies: Dependencies & { port: number }) => Server,
 ): Promise<StartedUiTestServer> {
   for (let attempt = 0; attempt <= RECENT_PORT_LIMIT; attempt += 1) {
     const serverDeps = { ...dependencies, port: 0 };
-    const server = createUiServer(serverDeps);
+    const server = createServer(serverDeps);
     await listenOnEphemeralPort(server);
     const port = boundPort(server);
     if (recentPorts.includes(port)) {
