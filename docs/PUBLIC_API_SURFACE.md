@@ -1,4 +1,4 @@
-# Public API surface — 1.1.13
+# Public API surface — 1.2.0
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -78,6 +78,22 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 1.2.0: relative to 1.1.13, the root surface adds `assumedChatCapability`,
+  `decodeTextFileBytes`, `discoverGatewayContextWindow`, `hasSymbolRelationshipQuery` and
+  `requestedSourceInspectionExtensions`, plus the declaration-only types `ContextWindowReport`,
+  `GatewayContextWindowDiscovery` and `GatewayContextWindowDiscoveryRequest`. No root export is
+  removed or renamed in the machine-readable allowlist. The root package still exports only `"."`,
+  and the existing `keiko` CLI entrypoint remains in place.
+  Support tooling uses `keiko support export` to create a private canonical report and
+  `keiko support analyze FILE --json` to validate it before machine consumption. `--out` selects a
+  directory, not a filename; raw logs, legacy bundles and inclusion flags are refused. Browser
+  downloads use the canonical compressed report. The UI Support ID is a local selection key;
+  exported reports use artifact-local references. See the
+  [support workspace guide](observability/support-workspace.md) for the accepted input contract and
+  compatibility limits. These report semantics must not be inferred from unchanged command names.
+  The owner-selected 1.2.0 release records this support CLI compatibility exception in its release
+  catalog. Existing scripts and retired bundles have no verified automatic conversion, so the
+  updater requires manual review rather than offering a one-click carry-forward.
 - 1.0.0 (2026-09-12): the first stable major. The customer-facing surface is unchanged from
   0.3.17 — no root-barrel export, CLI flag, or package entry point was added, removed, or
   renamed by the bump itself. What changes is the promise around that surface: `1.x` is now the

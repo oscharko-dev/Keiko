@@ -5,43 +5,40 @@ This repository has a dedicated, human-authorized release workflow at
 
 ## Operator contract
 
-A stable release is one press of the release button, on a `dev` that carries a reviewed
-release-impact entry for whatever version comes next (ADR-0177 D9):
+A stable release starts from a reviewed, unpublished version already integrated into `dev`
+(ADR-0177 D9). Version preparation and publication use the existing protected workflow:
 
-1. `release-impact.catalog.json` carries a reviewed entry for the version to release, written ahead
-   of time as part of the normal review of the change that needs it (KEIKO-0118) — never as a
-   separate release-time step. On each green `dev` push whose current version is approved and not yet
-   published, `release-candidate.yml` points `v<version>` at that commit through the release tag
-   GitHub App, and the tag push builds the stable portable assets beside CI.
-2. Press the button: `npm run release`, or **Actions → Release → Run workflow** on `dev`. Nothing
-   else is supplied. The run's `request` job authorizes exactly the `dev` commit it was started on.
-   - If the current version is not yet published, it points `v<version>` at that commit. It fails at
-     once, naming the reason, when that commit cannot be released: a version that is not approved, or
-     a publish of the tag that is still running.
-   - If the current version is already published, there is nothing to request yet: the job moves the
-     checkout to the lowest stable version the catalog already carries a reviewed entry for
-     (`scripts/set-version.mjs`, run mechanically — no operator command), opens a
-     `release/bump-<version>` pull request to `dev` as the release App, and arms native auto-merge,
-     instead of failing. It fails only when no reviewed entry exists yet for a newer version.
-3. Nothing after that is manual. If step 2 opened a version-bump pull request, its merge (once CI is
-   green) is recognized as the same button press across that one merge — a version-bump PR can only
-   have been opened by the release App's own identity, from this same owner-gated job, targeting
-   `dev` from the reserved branch prefix, carrying exactly the one mechanical commit
-   `set-version.mjs` produces. `release-advance.yml` runs whenever the request, the tag build, or a
-   release-required check workflow completes, and dispatches `release.yml` on the tag as soon as the
-   requested commit is built and every release-required check is green. Its `authorize` job accepts
-   that dispatch only for a commit an allowlisted owner requested, and the publish job releases the
-   exact stable build to npm and the GitHub Release and verifies both. Nothing polls and no step
-   waits on a clock: whichever prerequisite finishes last starts the publish.
-
-Merges that land on `dev` after the button was pressed do not move the tag; they belong to the next
-release. A failed tag build or required check stops the release; re-running the failed workflow
-continues it, and a fix that needs a new `dev` commit needs a new press. A failed publish is never
-retried automatically: press the button again. The `npm-publish` environment scopes credentials but
-has no reviewer rule; the owner's request is the authorization. An allowlisted owner may still
-dispatch `release.yml` directly on a tag, and cutting the tag by hand (`git tag -s v<version>` on the
-reviewed commit) remains the fallback while the App is unavailable. Do not publish packages and then
-manually remember the rest of the cleanup.
+1. Prepare the chosen product version with `npm run set-version -- <version>` on a feature or
+   release-preparation branch. The same pull request carries append-only, reviewed
+   `release-impact.catalog.json` entries, current public API and README documentation, and any
+   evidence that must be regenerated from the actual release source. Account for every integrated
+   change since the previous stable release, not only the last feature PR. Published catalog rows,
+   historical release notes and independent platform-runtime versions are not rewritten.
+2. Land that signed pull request through the protected `dev` delivery path, with the required
+   checks passing on its exact head and every review conversation resolved. A feature PR may carry
+   the release preparation; an additional version-only PR is not required. The catalog's durable
+   approval reference records the owner's decision, but a merged PR is not itself a publication
+   request. On each eligible `dev` push whose version is approved and not yet published,
+   `release-candidate.yml` assigns `v<version>` to that commit through the release tag GitHub App;
+   the tag push builds the stable portable assets beside CI.
+3. An allowlisted, non-bot owner presses the button: `npm run release`, or **Actions → Release →
+   Run workflow** on `dev`. No inputs are supplied. The `request` job authorizes exactly the commit
+   it started on and binds `v<version>` to it. It refuses an already-published version, missing
+   approval, or a competing publish. It never changes package versions or opens a version-bump PR.
+4. `release-advance.yml` runs when the request, portable build or a release-required check workflow
+   completes. Once the requested commit has a successful stable build and all release-required
+   checks pass, it dispatches `release.yml` on the tag. `authorize` verifies the owner's exact
+   request and the build identity. The remaining qualification and publish jobs release that build
+   to npm and GitHub and verify the results. Nothing polls, and no second owner action is needed
+   for a successful request.
+   Merges that land on `dev` after the button was pressed do not move the tag; they belong to the next
+   release. A failed tag build or required check stops the release; re-running the failed workflow
+   continues it, and a fix that needs a new `dev` commit needs a new press. A failed publish is never
+   retried automatically: press the button again. The `npm-publish` environment scopes credentials but
+   has no reviewer rule; the owner's request is the authorization. An allowlisted owner may still
+   dispatch `release.yml` directly on a tag, and cutting the tag by hand (`git tag -s v<version>` on the
+   reviewed commit) remains the fallback while the App is unavailable. Do not publish packages and then
+   manually remember the rest of the cleanup.
 
 `scripts/release-publish.mjs` is the source of truth for the final publish. A stable `latest`
 release is created or updated BEFORE npm publishes, so its downloads can be verified while the
@@ -255,13 +252,21 @@ owner requested the commit with the release button, and `authorize` accepts the 
 `npm run set-version -- <version>` moves the product version everywhere it lives mechanically: the
 root and every workspace `package.json`, every dependency pin one workspace package holds on
 another, the exported `KEIKO_*_VERSION` constants, the lockfile through
-`npm install --package-lock-only`, and the support registry history: every stable release tag from
+`npm install --package-lock-only --ignore-scripts`, and the support registry history: every stable release tag from
 1.1.9 up to the new version is captured, so `keiko support analyze` keeps validating reports and
 incidents from each older supported release (it needs the release tags locally). It ends by running `check:version-consistency`, which also
 refuses a lockfile entry or pin left behind: the 1.0.0 cut was written by hand and left
 `package-lock.json`'s 26 workspace entries at 0.3.17 while every manifest said 1.0.0. The
-release-impact catalog entry, `docs/PUBLIC_API_SURFACE.md` and the regenerated evidence documents
-stay reviewed work.
+release-impact catalog entries, README, `docs/PUBLIC_API_SURFACE.md` and regenerated evidence
+remain reviewed work. `set-version` does not replace historical version references or update the
+independently published optional coding-runtime packages. Their pinned versions change only when
+those runtimes change.
+
+Release notes are generated from the current version's approved catalog entries by
+`scripts/release-impact-notes.mjs` and published in GitHub Releases. Preview them with
+`npm run release:plan -- --tag latest`; do not create a second root `CHANGELOG.md`. Preserve source
+issue/PR references in the catalog, deduplicate equivalent user outcomes, and exclude unfinished
+work. Describe platform and update eligibility only as far as the release evidence supports.
 
 ## Triggering
 
@@ -309,7 +314,12 @@ job, and a tag can be cut by the owner as before.
 
 ## Release-branch workflow
 
-The release stabilization flow uses a dedicated branch for release-only hardening:
+The following records the `1.0` stabilization flow. The current stable release button described
+above is explicitly bound to `dev`; the existence of `release/1.0` does not move that button to a
+different branch or prove that the branch contains a later `dev` commit. Separate prerelease paths
+retain their own source-containment checks.
+
+The `1.0` stabilization flow uses a dedicated branch for release-only hardening:
 
 - Freeze features for `1.0` on `dev` and cut or update `release/1.0` from that point.
 - Keep feature development open on `dev`.
@@ -339,9 +349,14 @@ requested SHA succeeded. The publish job independently verifies those checks aga
 the tag still identifies its immutable workflow SHA, resolves the exact successful portable run and
 attempt, and then executes the full release plan and publish gates.
 
-The release plan validates version consistency, publish manifests, release-impact metadata, full
-build/test/SBOM/smoke evidence, and supply-chain policy. It also prints the generated GitHub Release
-notes before any publication side effect. Governed portable beta tags remain on the separate
+`npm run release:plan -- --tag latest` validates version consistency, publish manifests and
+release-impact metadata, resolves the applicable portable-asset inputs, and prints the generated
+GitHub Release notes without publishing. It exits before `runReleaseGates`; a successful preview is
+not a build, test, SBOM, installation-smoke or publication qualification.
+
+The actual publish path runs `npm run prepack` through `runReleaseGates`, in addition to the
+workflow's exact-commit required checks and qualification jobs. Its artifact, supply-chain and
+registry-install checks remain mandatory. Governed portable beta tags stay on the separate
 prerelease orchestration path and are never accepted as stable `latest` publishes.
 
 ## Publish control
