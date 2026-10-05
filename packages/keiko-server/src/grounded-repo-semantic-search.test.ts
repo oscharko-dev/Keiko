@@ -11,6 +11,7 @@ import {
   type KnowledgeStore,
 } from "@oscharko-dev/keiko-local-knowledge";
 import {
+  searchText,
   type SemanticSearchMatch,
   type SemanticSearchProvider,
   type WorkspaceDirEntry,
@@ -553,14 +554,21 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
       documents: [{ scopePath: "src/auth.ts", text: files["src/auth.ts"] ?? "" }],
     });
     expect(rawMatches.find((match) => match.scopePath === "src/auth.ts")?.line).toBe(2);
-    const range = semanticAtom?.atom.lineRange;
-    if (semanticAtom === undefined || range === undefined)
-      throw new TypeError("Expected located semantic evidence.");
-    expect(range.startLine).toBeLessThanOrEqual(2);
-    expect(range.endLine).toBeGreaterThanOrEqual(2);
-    expect(semanticAtom.content.split("\n")[2 - range.startLine]).toBe(
-      "export function renewSession() {",
+    const search = await searchText(
+      { workspace: testWorkspace(), scopeId: "repository-semantic-scope", relativePaths: [] },
+      { ...QUERY, text: "Investigate session renewal in src/auth.ts" },
+      undefined,
+      { fs, semanticSearchProvider: provider, nowMs: () => 1 },
     );
+    const searchAtom = search.atoms.find(
+      (atom) =>
+        atom.scopePath === "src/auth.ts" &&
+        atom.provenance.tool.includes("configured-repo-semantic-search"),
+    );
+    // Search owns the precise matched line; assembly owns the subsequently read source window.
+    expect(searchAtom?.lineRange).toEqual({ startLine: 2, endLine: 2 });
+    expect(semanticAtom?.atom.lineRange).toEqual({ startLine: 1, endLine: 4 });
+    expect(semanticAtom?.content).toBe(files["src/auth.ts"]);
     expect(embeddingRequest.mock.calls.some(([request]) => request.input.startsWith("Path:"))).toBe(
       false,
     );
