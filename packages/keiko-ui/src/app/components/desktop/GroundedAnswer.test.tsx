@@ -1296,7 +1296,7 @@ describe("GroundedAnswer", () => {
     expect(region.textContent).toContain("Read");
     expect(region.textContent).toContain("5 / 32 files");
     expect(region.textContent).toContain("Selected excerpt size");
-    expect(region.textContent).toContain("12.1 KB / 128 KB");
+    expect(region.textContent).toContain("12.1 KB / 128.0 KB");
     // uiux-fix F051 C318: token counts are thousands-separated for readability.
     expect(region.textContent).toContain("Model budget: input");
     expect(region.textContent).toContain("1,500 / 32,000 tokens");
@@ -2031,6 +2031,25 @@ describe("GroundedAnswer — citation warnings by marker kind", () => {
       expect(container).toHaveTextContent(locale === "de" ? "1.000 Dateien" : "1,000 files");
       expect(container).toHaveTextContent(locale === "de" ? "12,1 KB" : "12.1 KB");
       expect(container).toHaveTextContent(locale === "de" ? "1,8 s" : "1.8 s");
+    },
+  );
+
+  it.each(["en", "de"] as const)(
+    "renders duration boundary carry and matching byte precision in %s",
+    async (locale) => {
+      const pack = contextPack({
+        elapsedMs: 59_970,
+        budget: { ...contextPack().budget, elapsedMsMax: 60_000 },
+      });
+      const { container } = renderInLocale(locale, answer({ contextPack: pack }));
+      const durationLabel = locale === "de" ? "Antwortdauer" : "Response duration";
+      await waitFor(() => expect(container).toHaveTextContent(durationLabel));
+      expect(container).toHaveTextContent(`${durationLabel}1m 0s`);
+      expect(container).not.toHaveTextContent(/60[.,]0 s/);
+      expect(container).toHaveTextContent(
+        locale === "de" ? "12,1 KB / 128,0 KB" : "12.1 KB / 128.0 KB",
+      );
+      expect(pack.elapsedMs).toBe(59_970);
     },
   );
 
