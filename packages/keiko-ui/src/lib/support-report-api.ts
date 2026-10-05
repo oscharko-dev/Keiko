@@ -17,7 +17,7 @@ import {
   SUPPORT_REPORT_DELIVERY_TTL_MS,
   SUPPORT_INCIDENT_TRIGGERS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { selectedSupportReportCorrelationId } from "./support-report-errors.js";
+import { selectedSupportReportCorrelationId } from "./support-report-errors";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 import {
