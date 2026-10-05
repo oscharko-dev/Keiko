@@ -205,13 +205,14 @@ describe("grounded orchestrator denied-root activity", () => {
     fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-missing-root-log-"));
     const missingRoot = join(fixtureRoot, "missing");
     const activityLog = createBufferedServerLogSink();
+    const unavailable = Object.assign(new Error("root resolution failed"), { code: "ENOENT" });
     let detectCalls = 0;
     let realPathCalls = 0;
     const fs = {
       ...nodeWorkspaceFs,
       realPath: (): string => {
         realPathCalls += 1;
-        throw new Error("root resolution failed");
+        throw unavailable;
       },
     };
 
@@ -226,7 +227,9 @@ describe("grounded orchestrator denied-root activity", () => {
           return fixtureWorkspace(missingRoot);
         },
       }),
-    ).rejects.toBeInstanceOf(WorkspaceNotFoundError);
+    ).rejects.toSatisfy(
+      (error: unknown) => error instanceof WorkspaceNotFoundError && error.cause === unavailable,
+    );
 
     expect(realPathCalls).toBe(1);
     expect(detectCalls).toBe(0);
