@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "f332b197681aafc9d23c15469170387ccaf5f05bac0ecf282ed07c995da44e9b" as const;
+  "820843645996db8b9fd6be114975bc31f9eaead6271fff960f7f3d7f1de99ec6" as const;
 export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
@@ -32642,16 +32642,40 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "claimsStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "defectFingerprint",
               type: "string",
               dataClass: "digest",
               required: true,
             },
             {
+              name: "failureKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
               name: "fingerprintAlgorithm",
               type: "integer",
               dataClass: "safe-version",
               required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
             },
             {
               name: "incidentId",
@@ -32701,13 +32725,15 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "completeness-state",
             "count",
             "digest",
+            "error-kind",
             "loss-state",
             "opaque-id",
+            "safe-platform-class",
             "safe-version",
           ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["support.incident.dismissed.emitted-line"],
           replayReferences: [],
@@ -32722,6 +32748,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "claimsStatus",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "defectFingerprint",
               type: "string",
               dataClass: "digest",
@@ -32732,6 +32770,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "failureKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
             },
             {
               name: "incidentId",
@@ -32763,12 +32813,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "completeness-state",
             "count",
             "digest",
+            "error-kind",
             "loss-state",
             "opaque-id",
+            "safe-platform-class",
           ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["support.incident.expired.emitted-line"],
           replayReferences: [],
