@@ -73,7 +73,7 @@ export interface CitationReconciliationEvidence {
   // Attached citation entries — one per in-range marker index, grouped markers expanded.
   readonly attachedIndices: readonly number[];
   // Attached entries whose claim shared little vocabulary with the excerpt (kept, not dropped).
-  readonly weakOverlapCount: number;
+  readonly weakOverlapCount?: number;
   // The answer was enforced as a refusal ("nothing about this in the documents").
   readonly refusal: boolean;
 }
@@ -127,7 +127,9 @@ export function logCitationReconciliation(
         citationKind: "numeric",
         referenceCount: evidence.referenceCount,
         attachedCount: summary.attachedCount,
-        weakOverlapCount: evidence.weakOverlapCount,
+        ...(evidence.weakOverlapCount === undefined
+          ? {}
+          : { weakOverlapCount: evidence.weakOverlapCount }),
         groupedMarkerCount: summary.groupedMarkerCount,
         danglingMarkerCount: summary.danglingMarkerCount,
         completeness: "complete",

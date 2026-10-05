@@ -5533,8 +5533,8 @@ function completedExcerptSummary(
       state.truncatedWindowCount,
       readablePaths.length < keptPaths.length,
       (state.byteBudgetOmittedPaths?.length ?? 0) > 0 ||
-        state.omittedWindowCount > 0 ||
-        state.truncatedWindowCount > 0,
+        (state.remainingBytes <= 0 &&
+          (state.omittedWindowCount > 0 || state.truncatedWindowCount > 0)),
       state.elapsedBudgetBlocked,
     ),
     omitted: [

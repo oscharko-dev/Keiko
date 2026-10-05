@@ -110,6 +110,22 @@ async function loggedRetrieval(
 }
 
 describe("persisted retrieval loss counters", () => {
+  it("reports per-window clipping without claiming the ample byte grant is exhausted", async () => {
+    const { completed } = await loggedRetrieval(
+      {
+        "large.txt": `WindowLossProbe ${"x".repeat(20_000)}\n${"unrelated line\n".repeat(20_000)}`,
+      },
+      'Find the exact literal "WindowLossProbe".',
+      { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 128 * 1024 },
+    );
+    expect(completed.excerptTruncatedWindowCount).toBeGreaterThan(0);
+    expect(completed).toMatchObject({
+      retrievalReadBudgetBlocked: false,
+      excerptUnreadFileCount: 0,
+      excerptStopReasons: [],
+    });
+  });
+
   it("reports an actual byte-grant stop and unread file separately from a clipped window", async () => {
     const { completed, output } = await loggedRetrieval(
       {
@@ -177,6 +193,81 @@ describe("persisted retrieval loss counters", () => {
 });
 
 describe("excerpt stop attribution", () => {
+  it("does not call an exactly fitting complete read budget-blocked", async () => {
+    const result = await _readKeptExcerptsForTests(["a.txt"], {
+      searchScope: { workspace: WORKSPACE, scopeId: "exact-fit", relativePaths: [] },
+      fs: memFs(ROOT, { "a.txt": "fit" }),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 3 },
+      initialUsage: {
+        searchCalls: 0,
+        filesRead: 0,
+        excerptBytes: 0,
+        modelInputTokens: 0,
+        modelOutputTokens: 0,
+        rerankCalls: 0,
+        elapsedMs: 0,
+      },
+      atomsByPath: new Map(),
+      nowMs: () => 0,
+      deadlineAtMs: Infinity,
+    });
+    expect(result.excerpts.get("a.txt")?.[0]?.content).toBe("fit");
+    expect(result.observation).toEqual({
+      unreadFileCount: 0,
+      omittedRangeCount: 0,
+      truncatedWindowCount: 0,
+      stopReasons: [],
+      readBudgetBlocked: false,
+    });
+  });
+
+  it.each(["file-grant", "deadline"] as const)(
+    "attributes %s after reads have started",
+    async (reason) => {
+      const base = memFs(ROOT, { "a.txt": "First evidence", "b.txt": "Second evidence" });
+      let reads = 0;
+      let clock = 0;
+      const readBytes = base.readFileBytes;
+      if (readBytes === undefined) throw new TypeError("Fixture requires bounded byte reads");
+      const fs: WorkspaceFs = {
+        ...base,
+        readFileBytes: (...args) => {
+          reads += 1;
+          if (reason === "deadline") clock = 10;
+          return readBytes(...args);
+        },
+      };
+      const result = await _readKeptExcerptsForTests(["a.txt", "b.txt"], {
+        searchScope: { workspace: WORKSPACE, scopeId: "started-stop", relativePaths: [] },
+        fs,
+        budget: {
+          ...DEFAULT_EXPLORATION_BUDGET,
+          filesReadMax: reason === "file-grant" ? 1 : null,
+          excerptBytesMax: 8192,
+        },
+        initialUsage: {
+          searchCalls: 0,
+          filesRead: 0,
+          excerptBytes: 0,
+          modelInputTokens: 0,
+          modelOutputTokens: 0,
+          rerankCalls: 0,
+          elapsedMs: 0,
+        },
+        atomsByPath: new Map(),
+        nowMs: () => clock,
+        deadlineAtMs: 10,
+      });
+      expect(reads).toBeGreaterThan(0);
+      expect(result.excerpts.size).toBe(reason === "file-grant" ? 1 : 0);
+      expect(result.observation).toMatchObject({
+        stopReasons: [reason],
+        readBudgetBlocked: reason === "file-grant",
+        unreadFileCount: reason === "file-grant" ? 1 : 2,
+      });
+    },
+  );
+
   it.each([
     { files: 0, bytes: 100, deadline: Infinity, reasons: ["file-grant"], blocked: true },
     { files: 3, bytes: 0, deadline: Infinity, reasons: ["byte-grant"], blocked: true },

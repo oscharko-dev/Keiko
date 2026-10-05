@@ -11,7 +11,11 @@ import {
 // byte-identical (AC). It composes the exported folder helpers (grounded-qa-multi-source.ts) and
 // connector seams (local-knowledge-grounded-qa.ts) without re-implementing retrieval.
 
-import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
+import {
+  logCitationReconciliation,
+  reconcileAndLogInlineCitations,
+} from "./grounded-citation-log.js";
+import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import {
   resolveCostClass,
   type ChatMessage as GatewayChatMessage,
@@ -129,6 +133,7 @@ import {
   unsupportedCitationMarker,
   unsupportedNumericCitationMarker,
   type NumericEntailmentEvidence,
+  type NumericCitationReconciliation,
 } from "./grounded-faithfulness.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { rerankSelection } from "./grounded-rerank-facade.js";
@@ -1244,6 +1249,25 @@ function sentFolderPacks(
   }));
 }
 
+function hybridNumericReconciliation(
+  answer: string,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  correlationId: string | undefined,
+): NumericCitationReconciliation {
+  const supportedMarkers = new Set(selected.map((candidate) => candidate.marker));
+  const reconciliation = reconcileNumericCitations(answer, supportedMarkers);
+  logCitationReconciliation(
+    {
+      answer,
+      referenceCount: supportedMarkers.size,
+      attachedIndices: [...reconciliation.citedMarkers],
+      refusal: isNoEvidenceAnswerText(answer),
+    },
+    correlationId,
+  );
+  return reconciliation;
+}
+
 // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the hybrid answer's inline `[path:line]` citations
 // against the FOLDER evidence packs the model actually received. Connector citations use marker
 // labels rather than repo paths, so path-shaped inline references are validated against folder
@@ -1263,10 +1287,10 @@ function hybridReconciliationUncertainty(
     correlationId,
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
-  const supportedNumericMarkers = new Set(selected.map((candidate) => candidate.marker));
-  const numericReconciliation = reconcileNumericCitations(
+  const numericReconciliation = hybridNumericReconciliation(
     assistant.content,
-    supportedNumericMarkers,
+    selected,
+    correlationId,
   );
   const unsupportedNumeric = unsupportedNumericCitationMarker(
     numericReconciliation.unsupportedMarkers,

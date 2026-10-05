@@ -1078,6 +1078,69 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(manifest.connectedContext?.summary?.citationCount).toBe(0);
   });
 
+  it("records both citation kinds when a hybrid answer uses numeric markers", async () => {
+    const { capsuleId } = await seedReadyCapsule("Numeric Causal Docs");
+    const chatId = makeHybridChat(
+      [
+        {
+          kind: "directory",
+          relativePaths: ["src/numeric.ts"],
+          connectedAtMs: NOW,
+          root: tempRoot("numeric-log-repo"),
+        },
+      ],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const correlationId = "hybrid-numeric-citation-evidence";
+    const result = await handleGroundedAsk(
+      {
+        ...routeCtx(JSON.stringify({ chatId, content: "Which evidence supports this?" })),
+        correlationId,
+      },
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(
+          new Map([["src/numeric.ts", folderPack("src/numeric.ts", 0.7, "numeric-atom")]]),
+        ),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer("Supported evidence [1] and an unknown source [99]."),
+      },
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const lines = sink.events.filter((event) => event.op === "search.citations.reconciled");
+    expect(lines).toHaveLength(2);
+    const parsed = lines.map((line) =>
+      expectActivityLogProof("search.citations.reconciled.line", formatActivityLogProofLine(line)),
+    );
+    expect(parsed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          citationKind: "numeric",
+          correlationId,
+          outcome: "cited-with-dangling",
+          referenceCount: 2,
+          attachedCount: 1,
+          danglingMarkerCount: 1,
+        }),
+        expect.objectContaining({
+          citationKind: "file",
+          correlationId,
+          outcome: "uncited",
+          attachedCount: 0,
+          danglingMarkerCount: 0,
+        }),
+      ]),
+    );
+    const numeric = parsed.find((line) => line.citationKind === "numeric");
+    expect(numeric).not.toHaveProperty("weakOverlapCount");
+    expect(JSON.stringify(parsed)).not.toContain("Supported evidence");
+    expect(JSON.stringify(parsed)).not.toContain("src/numeric.ts");
+  });
+
   it("surfaces an unknown numeric evidence marker as unsupported", async () => {
     const { capsuleId } = await seedReadyCapsule("Unknown Marker Docs");
     const folderScope: ChatConnectedScope = {
