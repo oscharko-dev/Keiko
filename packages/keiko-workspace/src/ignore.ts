@@ -4,8 +4,8 @@
 //   2. compileIgnore()/isIgnored() — best-effort noise reduction over a DOCUMENTED, bounded
 //      .gitignore subset. Never relaxes the deny list. Build/noise directories are handled by
 //      search policy so explicit selections can still read committed generated source.
-// Glob translation produces only linear regex pieces (`[^/]*`, `.*`) so there is no
-// catastrophic backtracking (no ReDoS).
+// These policy rules are separate from repoSearchMatchers' filename query matcher. A glob
+// grammar alone does not establish a backtracking bound for its translated regex.
 
 import { memoizeByStringKey, PATH_MEMO_MAX_ENTRIES } from "./boundedMemo.js";
 

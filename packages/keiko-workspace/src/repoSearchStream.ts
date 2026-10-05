@@ -2,6 +2,7 @@ import type { CandidateFile, EvidenceAtom } from "@oscharko-dev/keiko-contracts/
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { visitWorkspaceFiles } from "./discovery.js";
 import { WorkspaceError } from "./errors.js";
+import type { CompiledFilenameGlob } from "./repoSearchMatchers.js";
 import { RetainedAtomHeap } from "./repoSearchRetention.js";
 import {
   extraIgnoreLinesForSearch,
@@ -36,13 +37,13 @@ interface RankedStreamAtom {
 }
 
 export interface StreamedFilePatternGroups {
-  readonly patterns: readonly RegExp[];
+  readonly patterns: readonly CompiledFilenameGlob[];
   readonly maxMatchesPerPattern: number;
 }
 
 class GroupedListingAtoms {
   private readonly groups: {
-    readonly pattern: RegExp;
+    readonly pattern: CompiledFilenameGlob;
     readonly best: RetainedAtomHeap<RankedStreamAtom>;
   }[];
 
@@ -164,7 +165,7 @@ class StreamingSearchCollector {
 
   public constructor(
     private readonly runner: SearchTextRunner,
-    private readonly pathPattern?: RegExp,
+    private readonly pathPattern?: CompiledFilenameGlob,
     filePatternGroups?: StreamedFilePatternGroups,
   ) {
     this.best = new RetainedAtomHeap(runner.limits.maxMatchesReturned, compareRanked);
@@ -437,7 +438,7 @@ async function collectPrimaryStream(
 async function collectRescueStream(
   runner: SearchTextRunner,
   control: StructuralExecutionControl,
-  pathPattern: RegExp | undefined,
+  pathPattern: CompiledFilenameGlob | undefined,
   filePatternGroups?: StreamedFilePatternGroups,
 ): Promise<StreamingSearchCollector> {
   const rescue = new StreamingSearchCollector(
@@ -525,7 +526,7 @@ function combinedExclusionCounts(
 export async function collectStreamedSearchText(
   runner: SearchTextRunner,
   control: StructuralExecutionControl,
-  pathPattern?: RegExp,
+  pathPattern?: CompiledFilenameGlob,
   filePatternGroups?: StreamedFilePatternGroups,
 ): Promise<StreamedSearchCollection> {
   const collector = new StreamingSearchCollector(runner, pathPattern, filePatternGroups);
@@ -538,7 +539,7 @@ async function rescueStreamedSearch(
   primary: StreamedSearchCollection,
   runner: SearchTextRunner,
   control: StructuralExecutionControl,
-  pathPattern?: RegExp,
+  pathPattern?: CompiledFilenameGlob,
   filePatternGroups?: StreamedFilePatternGroups,
 ): Promise<StreamedSearchCollection> {
   if (
@@ -559,7 +560,7 @@ async function rescueStreamedSearch(
 
 export interface StreamedFilenameSearch {
   readonly runner: SearchTextRunner;
-  readonly pathPattern: RegExp;
+  readonly pathPattern: CompiledFilenameGlob;
   readonly filePatternGroups: StreamedFilePatternGroups | undefined;
 }
 

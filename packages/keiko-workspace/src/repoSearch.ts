@@ -44,6 +44,7 @@ import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpa
 import {
   buildMatcher,
   compileGlob,
+  type CompiledFilenameGlob,
   fingerprintFor,
   type LiteralQueryInterpretation,
 } from "./repoSearchMatchers.js";
@@ -2616,7 +2617,7 @@ async function collectStreamedSemanticMatches(
 
 async function executeStreamedSearchText(
   runner: SearchTextRunner,
-  pathPattern?: RegExp,
+  pathPattern?: CompiledFilenameGlob,
   filePatternGroups?: StreamedFilePatternGroups,
 ): Promise<SearchResult> {
   const collected = await collectStreamedSearchText(
@@ -2980,7 +2981,7 @@ export async function searchText(
 
 interface FindFilesContext {
   readonly scope: SearchScope;
-  readonly regex: RegExp;
+  readonly regex: CompiledFilenameGlob;
   readonly fingerprint: string;
   readonly nowMs: () => number;
 }
