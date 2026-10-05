@@ -55,6 +55,7 @@ import {
   supportIncidentFileName,
   supportIncidentSlotClaimFileName,
   ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
+  type SupportIncidentRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createDesktopSupportReport,
@@ -100,6 +101,20 @@ afterEach(() => {
   vi.unstubAllEnvs();
   rmSync(stateDir, { recursive: true, force: true });
 });
+
+function occupyPublicationReserve(): readonly SupportIncidentRecord[] {
+  vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+  const capacity = supportIncidentRetentionPolicy(stateDir).capacity;
+  for (let index = 0; index < capacity; index += 1)
+    expect(recordUserReportedIncident(stateDir).status).toBe("created");
+  vi.spyOn(incidentStore, "removeSupportIncidentRecord").mockImplementationOnce(() => {
+    throw new Error("simulated post-publication retirement failure");
+  });
+  expect(recordUserReportedIncident(stateDir).status).toBe("created");
+  const retained = listSupportIncidents(stateDir, { readOnly: true });
+  expect(retained).toHaveLength(capacity + 1);
+  return retained;
+}
 
 function persistFreshFailure(): void {
   const op = "coding-runtime.readiness.failed";
@@ -478,7 +493,178 @@ describe("rolling diagnostic candidate retention", () => {
     expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(capacity);
   }, 60_000);
 
-  it("refuses a fully occupied legacy byte pool without deleting prior evidence and recovers after release", () => {
+  it("recovers an occupied publication reserve after a durable replacement could not retire its predecessor", () => {
+    vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+    const capacity = supportIncidentRetentionPolicy(stateDir).capacity;
+    for (let index = 0; index < capacity; index += 1)
+      expect(recordUserReportedIncident(stateDir).status).toBe("created");
+    const prior = listSupportIncidents(stateDir, { readOnly: true });
+    vi.spyOn(incidentStore, "removeSupportIncidentRecord").mockImplementationOnce(() => {
+      throw new Error("simulated post-publication retirement failure");
+    });
+    const published = recordUserReportedIncident(stateDir, {
+      correlationId: "occupied-reserve-publication",
+    });
+    if (published.status !== "created") throw new TypeError("Expected durable replacement");
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(capacity + 1);
+    const recovery = recordUserReportedIncident(stateDir, {
+      correlationId: "occupied-reserve-recovery",
+    });
+    expect(recovery.status).toBe("created");
+    if (recovery.status !== "created") throw new TypeError("Expected recovered admission");
+    const retained = listSupportIncidents(stateDir, { readOnly: true });
+    expect(retained).toHaveLength(capacity);
+    expect(retained.map((record) => record.incidentId)).toEqual([
+      ...prior.slice(2).map((record) => record.incidentId),
+      published.incidentId,
+      recovery.incidentId,
+    ]);
+    expect(listSupportIncidentClaims(stateDir)).toHaveLength(capacity);
+    const expired = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.expired",
+    ).map((line) => JSON.parse(line) as { completeness: string; pinRelease: string });
+    expect(expired).toEqual([
+      expect.objectContaining({ completeness: "partial" }),
+      expect.objectContaining({ completeness: "complete", pinRelease: "released" }),
+      expect.objectContaining({ completeness: "complete", pinRelease: "released" }),
+    ]);
+    expect(
+      listActivityLogDirectory(join(stateDir, "logs"))
+        .pins.map((pin) => pin.pinId)
+        .sort(),
+    ).toEqual(retained.map((record) => record.pin.pinId).sort());
+  });
+
+  it.each(["unpublished", "torn", "mismatched"] as const)(
+    "never retires durable stock while the occupied reserve includes a %s peer claim",
+    (fault) => {
+      const retained = occupyPublicationReserve();
+      const owner = retained[0];
+      if (owner === undefined) throw new TypeError("Expected durable owner");
+      const slot = join(
+        incidentStore.supportIncidentDirectory(stateDir),
+        supportIncidentSlotClaimFileName(owner.slotIndex),
+      );
+      if (fault === "unpublished")
+        incidentStore.removeSupportIncidentRecord(stateDir, owner.incidentId);
+      else writeFileSync(slot, fault === "torn" ? "" : "f".repeat(32));
+      const records = listSupportIncidents(stateDir, { readOnly: true });
+      const claims = listSupportIncidentClaims(stateDir);
+      const pins = listActivityLogDirectory(join(stateDir, "logs")).pins;
+      expect(recordUserReportedIncident(stateDir)).toEqual({
+        status: "rejected",
+        reason: "quota-exhausted",
+      });
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(records);
+      expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual(pins);
+    },
+  );
+
+  it("keeps a concurrently reclaimed slot owned by its new publisher during reserve recovery", () => {
+    const retained = occupyPublicationReserve();
+    const oldest = retained[0];
+    if (oldest === undefined) throw new TypeError("Expected durable owner");
+    const peerId = "d".repeat(32);
+    const pin = pinActivityLogWindow(stateDir, {
+      scope: { kind: "window", fromMs: oldest.window.fromMs, toMs: oldest.window.toMs },
+      expiresAtMs: oldest.expiresAtMs,
+      reason: "incident",
+      correlationId: "reclaimed-slot-peer",
+    });
+    if (pin.status !== "pinned") throw new TypeError("Expected peer pin");
+    const peer = {
+      ...oldest,
+      incidentId: peerId,
+      pin: {
+        status: "pinned" as const,
+        pinId: pin.pinId,
+        pinnedSegmentCount: pin.pinnedSegmentCount,
+        pinnedBytes: pin.pinnedBytes,
+        evidenceLostBeforePin: false,
+      },
+    };
+    const remove = incidentStore.removeSupportIncidentRecord;
+    vi.spyOn(incidentStore, "removeSupportIncidentRecord").mockImplementationOnce((dir, id) => {
+      remove(dir, id);
+      incidentStore.releaseSupportIncidentSlot(stateDir, oldest.slotIndex, oldest.incidentId);
+      expect(claimSupportIncidentSlot(stateDir, oldest.slotIndex, peerId)).toBe(true);
+      const payload = incidentStore.serializeSupportIncidentRecord(peer);
+      if (payload === undefined) throw new TypeError("Expected peer record payload");
+      incidentStore.writeSupportIncidentRecord(
+        incidentStore.supportIncidentDirectory(stateDir),
+        payload,
+        peerId,
+      );
+    });
+    expect(recordUserReportedIncident(stateDir)).toEqual({
+      status: "rejected",
+      reason: "quota-exhausted",
+    });
+    expect(incidentStore.readSupportIncidentRecord(stateDir, peerId)).toEqual(peer);
+    expect(
+      listActivityLogDirectory(join(stateDir, "logs")).pins.map((item) => item.pinId),
+    ).toContain(pin.pinId);
+    expect(listSupportIncidentClaims(stateDir)).toContainEqual(
+      expect.objectContaining({
+        incidentId: peerId,
+        fileName: supportIncidentSlotClaimFileName(oldest.slotIndex),
+      }),
+    );
+    expect(
+      listSupportIncidents(stateDir, { readOnly: true }).map((record) => record.incidentId),
+    ).toEqual(expect.arrayContaining(retained.slice(1).map((record) => record.incidentId)));
+  });
+
+  it.each(["replacement", "symlink"] as const)(
+    "preserves a peer %s installed after opening the retirement target during reserve recovery",
+    (substitution) => {
+      const retained = occupyPublicationReserve();
+      const oldest = retained[0];
+      if (oldest === undefined) throw new TypeError("Expected durable owner");
+      const target = join(
+        incidentStore.supportIncidentDirectory(stateDir),
+        supportIncidentFileName(oldest.incidentId),
+      );
+      const sentinel = join(stateDir, "active-peer-sentinel");
+      writeFileSync(sentinel, "active peer sentinel", { mode: 0o600 });
+      vi.mocked(artifactFiles.removeSafeArtifactFile).mockImplementationOnce(
+        (path, options, shouldRemove) => {
+          actualArtifactFiles.removeSafeArtifactFile(path, options, (descriptor): boolean => {
+            if (shouldRemove !== undefined && !shouldRemove(descriptor)) return false;
+            rmSync(target);
+            if (substitution === "symlink") symlinkSync(sentinel, target);
+            else writeFileSync(target, "active peer replacement", { mode: 0o600 });
+            return true;
+          });
+        },
+      );
+      const claims = listSupportIncidentClaims(stateDir);
+      const pins = listActivityLogDirectory(join(stateDir, "logs")).pins;
+      expect(recordUserReportedIncident(stateDir)).toEqual({
+        status: "rejected",
+        reason: "quota-exhausted",
+      });
+      expect(readFileSync(sentinel, "utf8")).toBe("active peer sentinel");
+      expect(lstatSync(target).isSymbolicLink()).toBe(substitution === "symlink");
+      if (substitution === "replacement")
+        expect(readFileSync(target, "utf8")).toBe("active peer replacement");
+      expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual(pins);
+      const expired = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.expired",
+      );
+      expect(JSON.parse(expired.at(-1) ?? "{}")).toMatchObject({
+        incidentId: oldest.incidentId,
+        removalStatus: "failed",
+        completeness: "partial",
+      });
+    },
+  );
+
+  it("recovers a fully occupied durable legacy byte pool without external release", () => {
     const smaller = supportIncidentRetentionPolicy(stateDir, {
       KEIKO_LOG_RETENTION_BYTES: "65536",
     });
@@ -506,20 +692,11 @@ describe("rolling diagnostic candidate retention", () => {
     writeActivityLogPolicyRecord(directory, directory, { ...policy, retentionBytes: 65536 });
     vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
     const records = listSupportIncidents(stateDir, { readOnly: true });
-    const claims = listSupportIncidentClaims(stateDir);
-    const pins = listActivityLogDirectory(directory).pins;
-    expect(recordUserReportedIncident(stateDir)).toEqual({
-      status: "rejected",
-      reason: "quota-exhausted",
-    });
-    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(records);
-    expect(listSupportIncidentClaims(stateDir)).toEqual(claims);
-    expect(listActivityLogDirectory(directory).pins).toEqual(pins);
-    const first = records[0];
-    if (first === undefined) throw new Error("Expected legacy candidate");
-    expect(dismissSupportIncident(stateDir, first.incidentId)).toBe("dismissed");
     expect(recordUserReportedIncident(stateDir).status).toBe("created");
     expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(smaller.capacity);
+    expect(
+      listSupportIncidents(stateDir, { readOnly: true }).map((record) => record.incidentId),
+    ).toEqual(expect.arrayContaining(records.slice(2).map((record) => record.incidentId)));
   });
 
   it.each(["corrupt", "unsafe-permissions"] as const)(

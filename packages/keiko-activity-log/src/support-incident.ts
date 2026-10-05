@@ -33,6 +33,7 @@ import { join } from "node:path";
 import {
   SUPPORT_INCIDENT_TTL_MS,
   supportIncidentWindow,
+  supportIncidentSlotClaimFileName,
   ACTIVITY_LOG_DIRECTORY_NAME,
   ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
@@ -813,6 +814,37 @@ interface ClaimedQuotaSlot {
   readonly slotIndex: number;
 }
 
+function recoverPublicationReserve(
+  context: CandidateContext,
+  draft: CandidateDraft,
+  entries: readonly SupportIncidentStoreEntry[],
+  capacity: number,
+  incidentId: string,
+): void {
+  const occupied = new Set(
+    [...occupiedSlots(context.stateDir)].filter((index) => index <= capacity),
+  );
+  if (occupied.size <= capacity) return;
+  const owners = new Map(
+    listSupportIncidentClaims(context.stateDir).map((claim) => [claim.fileName, claim.incidentId]),
+  );
+  const durable = entries.filter(
+    ({ record }) =>
+      record !== undefined &&
+      occupied.has(record.slotIndex) &&
+      owners.get(supportIncidentSlotClaimFileName(record.slotIndex)) === record.incidentId,
+  );
+  const durableSlots = new Set(durable.map((entry) => entry.record?.slotIndex));
+  // An unpublished or changed peer claim is active ownership, not a recoverable reserve.
+  if (durableSlots.size !== occupied.size) return;
+  const eligible = durable.filter(
+    ({ record }) => record !== undefined && mayEvictCandidate(draft, record),
+  );
+  // Protected classes can occupy overlapping indexes without exceeding this class's share.
+  if (eligible.length <= capacity) return;
+  evictOldestCandidate(context, draft, durable, capacity, incidentId);
+}
+
 function claimQuotaSlot(
   context: CandidateContext,
   draft: CandidateDraft,
@@ -829,7 +861,11 @@ function claimQuotaSlot(
     )
   )
     return undefined;
-  const slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1);
+  let slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1);
+  if (slotIndex === undefined) {
+    recoverPublicationReserve(context, draft, entries, capacity, incidentId);
+    slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1);
+  }
   return slotIndex === undefined ? undefined : { slotIndex };
 }
 

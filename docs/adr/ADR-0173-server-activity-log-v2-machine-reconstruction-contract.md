@@ -1669,8 +1669,13 @@ the pool less that technical slot, not an additional user quota. A replacement e
 a free slot, writes and fsyncs its new immutable record, and only then retires an eligible older
 candidate and releases its owned claims and pin. A failed publication releases only its own new
 claims and pin and preserves prior candidates. Concurrent publishers cannot steal a held reserve;
-a fully occupied legacy pool retains its prior evidence and reports the existing `quota-exhausted`
-refusal until space is genuinely released. Unreported
+a fully occupied pool can restore its publication reserve by retiring one eligible older candidate
+only when every occupied pool slot has a matching durable record and owning claim, and the eligible
+class stock exceeds its governing share. Protected classes occupying overlapping indexes do not
+count as that surplus. Admission then retries exclusive claiming once. Any unpublished, torn or mismatched peer claim keeps the existing
+`quota-exhausted` refusal; failed or changed-file cleanup retains truthful partial evidence. This
+exception repairs interrupted post-publication retirement and legacy full pools without stealing
+in-flight ownership or enlarging the byte pool. Unreported
 candidates expire after twenty-four hours, including older records written with a longer expiry.
 On byte pressure, the oldest eligible candidate rolls out and its pin and claims are released.
 Generated reports remain only in the existing transient download cache, without a disk archive.
