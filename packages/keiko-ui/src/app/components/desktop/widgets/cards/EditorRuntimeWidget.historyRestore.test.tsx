@@ -11,7 +11,7 @@
  * no Monaco in jsdom); unlike the other suites it renders the REAL EditorFileHistoryPanel behind the
  * `next/dynamic` boundary so the restore runs through the actual confirm flow.
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -279,16 +279,29 @@ describe("EditorRuntimeWidget local-history restore", () => {
   });
 
   it("adopts the checkpoint into a clean buffer when the restore write lands", async () => {
-    vi.mocked(saveFilesContent).mockResolvedValue(
-      fileResponse({
-        content: CHECKPOINT_CONTENT,
-        session: { schemaVersion: "1", version: { ...BASE_VERSION, modifiedAt: 2 } },
+    let resolveSave: (response: FilesContentResponse) => void = () => undefined;
+    vi.mocked(saveFilesContent).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSave = resolve;
       }),
     );
     await confirmRestore();
 
-    await waitFor(() => expect(surface.props?.buffer.content.text).toBe(CHECKPOINT_CONTENT));
-    expect(surface.props?.fileModel.dirty).toBe(false);
+    await waitFor(() => expect(saveFilesContent).toHaveBeenCalledOnce());
+    expect(surface.props?.buffer.content.text).toBe(CHECKPOINT_CONTENT);
+    expect(surface.props?.fileModel.dirty).toBe(true);
+    await act(async () => {
+      resolveSave(
+        fileResponse({
+          content: CHECKPOINT_CONTENT,
+          session: { schemaVersion: "1", version: { ...BASE_VERSION, modifiedAt: 2 } },
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(surface.props?.buffer.content.text).toBe(CHECKPOINT_CONTENT);
+      expect(surface.props?.fileModel.dirty).toBe(false);
+    });
     expect(screen.queryByText(/version was not restored/iu)).toBeNull();
   });
 
