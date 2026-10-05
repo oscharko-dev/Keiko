@@ -12014,6 +12014,29 @@ function selectedMetadataContext(): RouteContext {
   });
 }
 
+function expectFailureMetadataCounts(
+  sink: ReturnType<typeof createBufferedServerLogSink>,
+  selectedModelCount: number | undefined,
+): void {
+  const events = sink.events.filter((event) => event.op === "gateway.setup.metadata.resolved");
+  expect(events).toHaveLength(1);
+  const event = events[0];
+  if (event === undefined) throw new Error("Expected a metadata outcome.");
+  if (selectedModelCount === undefined)
+    expect(event.extra).not.toHaveProperty("selectedModelCount");
+  else expect(event.extra).toMatchObject({ selectedModelCount });
+  expect(event.extra).not.toHaveProperty("metadataEnrichedModelCount");
+  expect(event.extra).not.toHaveProperty("roleMismatchModelCount");
+  expect(event.extra).not.toHaveProperty("notDiscoveredModelCount");
+  expectActivityLogProof("gateway.setup.metadata.resolved.line", formatActivityLogProofLine(event));
+}
+
+function metadataContextForSelection(explicitSelection: boolean): RouteContext {
+  return explicitSelection
+    ? selectedMetadataContext()
+    : ctx({ baseUrl: "https://selected.example.invalid/v1", apiKey: "synthetic-selected-key" });
+}
+
 function metadataAbortTimers(): void {
   vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
     const controller = new AbortController();
@@ -12041,8 +12064,9 @@ describe("selected metadata responsiveness", () => {
         const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
         expect(event).toMatchObject({
           errorKind: failure === "timeout" ? "timeout" : "unavailable",
-          extra: { outcome: "unavailable" },
+          extra: { outcome: "unavailable", selectedModelCount: 1 },
         });
+        expectFailureMetadataCounts(sink, 1);
         expect(event?.status).toBeUndefined();
         expectActivityLogProof(
           "gateway.setup.metadata.resolved.line",
@@ -12075,8 +12099,9 @@ describe("selected metadata responsiveness", () => {
         expect(event).toMatchObject({
           errorKind,
           status: httpStatus,
-          extra: { outcome: "unavailable" },
+          extra: { outcome: "unavailable", selectedModelCount: 1 },
         });
+        expectFailureMetadataCounts(sink, 1);
         expectActivityLogProof(
           "gateway.setup.metadata.resolved.line",
           formatActivityLogProofLine(event ?? {}),
@@ -12175,52 +12200,77 @@ describe("selected metadata responsiveness", () => {
     expect((await setup).status).toBe(200);
   });
 
-  it("does not swallow a programming failure during optional metadata discovery", async () => {
-    const deps = await metadataResponsivenessDeps();
-    Object.assign(deps, {
-      gatewayModelDiscovery: () => Promise.reject(new TypeError("Synthetic defect")),
-    });
-    expect((await handleGatewaySetup(selectedMetadataContext(), deps)).status).toBe(502);
-    expect(currentGatewayConfig(deps)).toBeUndefined();
-  });
+  it.each([true, false])(
+    "does not swallow a programming failure or fabricate discovery counts (explicit=%s)",
+    async (explicitSelection) => {
+      const deps = await metadataResponsivenessDeps();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      Object.assign(deps, {
+        gatewayModelDiscovery: () => Promise.reject(new TypeError("Synthetic defect")),
+      });
+      const context = metadataContextForSelection(explicitSelection);
+      expect((await handleGatewaySetup(context, deps)).status).toBe(502);
+      expect(currentGatewayConfig(deps)).toBeUndefined();
+      expectFailureMetadataCounts(sink, explicitSelection ? 1 : undefined);
+      expect(
+        sink.events.find((event) => event.op === "gateway.setup.metadata.resolved"),
+      ).toMatchObject({
+        errorKind: "internal",
+        extra: { outcome: "failed" },
+      });
+      expect(JSON.stringify(sink.events)).not.toContain("Synthetic defect");
+      expect(JSON.stringify(sink.events)).not.toContain("synthetic-selected-key");
+      expect(JSON.stringify(sink.events)).not.toContain("selected.example.invalid");
+    },
+  );
 
-  it("does not start probes or persist after the requesting client disconnects", async () => {
-    const deps = await metadataResponsivenessDeps();
-    const diagnostics: ServerDiagnosticRecord[] = [];
-    const sink = createBufferedServerLogSink();
-    setServerLogger(createServerLogger({ sink, level: "info" }));
-    let started: (() => void) | undefined;
-    const discoveryStarted = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    const probe = vi.fn((_config: GatewayConfig, ids: readonly string[]) => Promise.resolve(ids));
-    Object.assign(deps, {
-      gatewaySetupTester: probe,
-      diagnostics: {
-        record: (record: ServerDiagnosticRecord): void => {
-          diagnostics.push(record);
+  it.each([true, false])(
+    "does not start probes, persist or fabricate counts after client disconnect (explicit=%s)",
+    async (explicitSelection) => {
+      const deps = await metadataResponsivenessDeps();
+      const diagnostics: ServerDiagnosticRecord[] = [];
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      let started: (() => void) | undefined;
+      const discoveryStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const probe = vi.fn((_config: GatewayConfig, ids: readonly string[]) => Promise.resolve(ids));
+      Object.assign(deps, {
+        gatewaySetupTester: probe,
+        diagnostics: {
+          record: (record: ServerDiagnosticRecord): void => {
+            diagnostics.push(record);
+          },
         },
-      },
-      gatewayModelDiscovery: () => {
-        started?.();
-        return new Promise<readonly string[]>(() => undefined);
-      },
-    });
-    const context = selectedMetadataContext();
-    const setup = handleGatewaySetup(context, deps);
-    await discoveryStarted;
-    context.res.emit("close");
-    expect((await setup).status).toBe(502);
-    expect(probe).not.toHaveBeenCalled();
-    expect(
-      diagnostics.filter((record) => record.source === "gateway.setup.provider-verify"),
-    ).toHaveLength(0);
-    expect(
-      sink.events.find((event) => event.op === "gateway.setup.metadata.resolved")?.extra?.outcome,
-    ).toBe("cancelled");
-    expect(currentGatewayConfig(deps)).toBeUndefined();
-    expect(context.res.listenerCount("close")).toBe(0);
-  });
+        gatewayModelDiscovery: () => {
+          started?.();
+          return new Promise<readonly string[]>(() => undefined);
+        },
+      });
+      const context = metadataContextForSelection(explicitSelection);
+      const setup = handleGatewaySetup(context, deps);
+      await discoveryStarted;
+      context.res.emit("close");
+      expect((await setup).status).toBe(502);
+      expect(probe).not.toHaveBeenCalled();
+      expect(
+        diagnostics.filter((record) => record.source === "gateway.setup.provider-verify"),
+      ).toHaveLength(0);
+      expect(
+        sink.events.find((event) => event.op === "gateway.setup.metadata.resolved")?.extra?.outcome,
+      ).toBe("cancelled");
+      expectFailureMetadataCounts(sink, explicitSelection ? 1 : undefined);
+      expect(
+        sink.events.find((event) => event.op === "gateway.setup.metadata.resolved"),
+      ).toMatchObject({ errorKind: "cancelled" });
+      expect(JSON.stringify(sink.events)).not.toContain("synthetic-selected-key");
+      expect(JSON.stringify(sink.events)).not.toContain("selected.example.invalid");
+      expect(currentGatewayConfig(deps)).toBeUndefined();
+      expect(context.res.listenerCount("close")).toBe(0);
+    },
+  );
 });
 
 it.each(["available", "unavailable", "failed"] as const)(

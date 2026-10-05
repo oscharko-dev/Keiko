@@ -254,7 +254,8 @@ function logSetupMetadataOutcome(
   outcome: "available" | "unavailable" | "cancelled" | "failed",
   startedAt: number,
   correlationId: string | undefined,
-  selectionCounts?: SetupMetadataSelectionCounts,
+  selectionCounts?: Pick<SetupMetadataSelectionCounts, "selectedModelCount"> &
+    Partial<SetupMetadataSelectionCounts>,
   failure?: { readonly errorKind: ActivityLogErrorKind; readonly status?: number },
 ): void {
   processServerLogSink().write(
@@ -5584,12 +5585,24 @@ function discoveryFailureDetail(cause: unknown): {
   };
 }
 
+function metadataFailureOutcome(
+  cause: unknown,
+  signal: AbortSignal | undefined,
+): "cancelled" | "failed" | "unavailable" {
+  if (signal?.aborted === true) return "cancelled";
+  return discoveryProgrammingFailure(cause) ? "failed" : "unavailable";
+}
+
 async function discoverSetupModels(
   input: SetupVerificationInput,
   validationConfig: GatewayConfig,
   selected?: SetupCandidateModels,
 ): Promise<SetupCandidateModels> {
   const startedAt = Date.now();
+  const selectedModelCount =
+    selected === undefined
+      ? undefined
+      : selected.chatModelIds.length + selected.embeddingModelIds.length;
   try {
     input.signal?.throwIfAborted();
     const result = await awaitSetupOperation(
@@ -5608,18 +5621,18 @@ async function discoverSetupModels(
       "available",
       startedAt,
       input.correlationId,
-      selected === undefined ? undefined : selectedMetadataCounts(selected, normalized),
+      selected === undefined || selectedModelCount === undefined
+        ? undefined
+        : selectedMetadataCounts(selected, normalized, selectedModelCount),
     );
     return normalized;
   } catch (cause) {
-    let outcome: "cancelled" | "failed" | "unavailable" = "unavailable";
-    if (input.signal?.aborted === true) outcome = "cancelled";
-    else if (discoveryProgrammingFailure(cause)) outcome = "failed";
+    const outcome = metadataFailureOutcome(cause, input.signal);
     logSetupMetadataOutcome(
       outcome,
       startedAt,
       input.correlationId,
-      undefined,
+      selectedModelCount === undefined ? undefined : { selectedModelCount },
       outcome === "cancelled" ? { errorKind: "cancelled" } : discoveryFailureDetail(cause),
     );
     throw cause;
@@ -5647,6 +5660,7 @@ function selectedDeploymentMetadata(
 function selectedMetadataCounts(
   selected: SetupCandidateModels,
   discovered: SetupCandidateModels,
+  selectedModelCount: number,
 ): SetupMetadataSelectionCounts {
   const allDiscovered = new Set(discovered.modelIds);
   let metadataEnrichedModelCount = 0;
@@ -5666,7 +5680,7 @@ function selectedMetadataCounts(
     }
   }
   return {
-    selectedModelCount: selected.chatModelIds.length + selected.embeddingModelIds.length,
+    selectedModelCount,
     metadataEnrichedModelCount,
     roleMismatchModelCount,
     notDiscoveredModelCount,
