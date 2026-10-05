@@ -37,7 +37,7 @@ import {
   type ServerLogSink,
 } from "@oscharko-dev/keiko-activity-log";
 import {
-  prepareManualSupportReportIncident,
+  prepareDesktopSupportReport,
   readManualSupportReportEvidence,
   DesktopSupportReportPreparationError,
   analyzeSupportReport,
@@ -108,10 +108,8 @@ export interface SafeSupportAnalyzeArgs {
 
 function matchesIncident(candidate: SupportIncidentRecord, selector: SupportSelectorArgs): boolean {
   return (
-    (selector.correlationId !== undefined &&
-      candidate.correlation.rootCorrelationId === selector.correlationId) ||
-    (selector.defectFingerprint !== undefined &&
-      candidate.fingerprint.defectFingerprint === selector.defectFingerprint)
+    selector.defectFingerprint !== undefined &&
+    candidate.fingerprint.defectFingerprint === selector.defectFingerprint
   );
 }
 
@@ -119,7 +117,7 @@ function existingIncident(
   stateDir: string,
   selector: SupportSelectorArgs | undefined,
 ): SupportIncidentRecord | undefined {
-  if (selector === undefined) return undefined;
+  if (selector === undefined || selector.correlationId !== undefined) return undefined;
   if (selector.incidentId !== undefined) {
     const record = readSupportIncident(stateDir, selector.incidentId);
     if (record === undefined) throw new SupportReportError("selection-unavailable");
@@ -139,7 +137,7 @@ function createdIncident(
   if (selector?.defectFingerprint !== undefined)
     throw new SupportReportError("selection-unavailable");
   try {
-    return prepareManualSupportReportIncident(stateDir, selector?.correlationId ?? correlationId);
+    return prepareDesktopSupportReport(stateDir, selector?.correlationId, correlationId);
   } catch (error) {
     if (!(error instanceof DesktopSupportReportPreparationError)) throw error;
     io.err(`keiko support export: the incident was not recorded (${error.reason})\n`);

@@ -2,7 +2,7 @@ import {
   occupySupportIncidentRetentionForTests,
   supportIncidentReservationsForTests,
 } from "../../../../tests/support/activity-log-test-support.js";
-import { mkdtempSync, rmSync, utimesSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
@@ -34,6 +34,8 @@ import {
 } from "./support-desktop-report.js";
 import { analyzeSupportReport, parseSupportReport } from "./support-report.js";
 import * as serverLog from "../server-log.js";
+import * as incidentStore from "../support-incident-store.js";
+import { listActivityLogDirectory } from "../activity-log-store.js";
 import * as supportLocalQuery from "./support-local-query.js";
 import { ActivityLogScanner } from "./support-segment-scan.js";
 import * as supportAnalysis from "./support-analyze.js";
@@ -41,6 +43,7 @@ import { executeLocalSupportQuery } from "./support-local-query.js";
 import { DEFAULT_SUPPORT_QUERY_LIMITS } from "./support-query.js";
 import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+  SUPPORT_INCIDENT_DIRECTORY_NAME,
   MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
   MAX_SUPPORT_REPORT_TIMELINE_BYTES,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -77,6 +80,74 @@ function writeFailures(): void {
 }
 
 describe("desktop canonical support report", () => {
+  it.each(["selected", "manual"] as const)(
+    "exports readable %s evidence when the independent candidate directory is unavailable",
+    (selection) => {
+      writeFailures();
+      writeFileSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME), "not a directory");
+      const response = createDesktopSupportReport(
+        stateDir,
+        selection === "selected" ? "desktop-failure-1" : undefined,
+      );
+      const report = parseSupportReport(response.reportJson);
+      const lines = analyzeSupportReport(response.reportJson).analysis.timelines.flatMap(
+        (timeline) => timeline.lines,
+      );
+      expect(lines.some((line) => line.errorKind === "timeout")).toBe(true);
+      if (selection === "selected")
+        expect(lines.some((line) => line.errorKind === "internal")).toBe(false);
+      expect(response.summary).toMatchObject({ retentionDisposition: "transient" });
+      expect(response.summary).not.toHaveProperty("pinDisposition");
+      expect(report.evidence.recordCount).toBeGreaterThan(0);
+      const rejected = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.rejected",
+      );
+      expect(rejected.map((line): unknown => JSON.parse(line))).toContainEqual(
+        expect.objectContaining({
+          rejectionReason: "store-unavailable",
+          completeness: "partial",
+          loss: "event-dropped",
+        }),
+      );
+    },
+  );
+
+  it("exports a transient descriptor after oversized candidate serialization without leaking its pin or claims", () => {
+    writeFailures();
+    vi.spyOn(incidentStore, "serializeSupportIncidentRecord").mockReturnValueOnce(undefined);
+    const response = createDesktopSupportReport(stateDir, "desktop-failure-1");
+    expect(response.summary).toMatchObject({ retentionDisposition: "transient" });
+    expect(response.summary).not.toHaveProperty("pinDisposition");
+    expect(parseSupportReport(response.reportJson).incident.op).toBe("client.diagnostic");
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+    expect(incidentStore.listSupportIncidentClaims(stateDir)).toEqual([]);
+    expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+    const rejected = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.rejected",
+    );
+    expect(rejected.map((line): unknown => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({
+        correlationId: "desktop-failure-1",
+        rejectionReason: "record-too-large",
+        completeness: "partial",
+        loss: "event-dropped",
+      }),
+    );
+  });
+
+  it("does not export an unknown selected correlation when candidate storage is unavailable", () => {
+    writeFailures();
+    writeFileSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME), "not a directory");
+    expect(() => createDesktopSupportReport(stateDir, "not-the-existing-failure")).toThrow(
+      "selection-unavailable",
+    );
+    expect(
+      persistedActivityLogLines(readPersistedActivityLog(stateDir), "support.incident.rejected"),
+    ).toEqual([]);
+  });
+
   it("grants abandonment ownership only for a newly retained manual preparation", () => {
     const onCreated = vi.fn();
     const fresh = prepareDesktopSupportReport(stateDir, "new-manual-root", undefined, onCreated);

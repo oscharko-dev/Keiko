@@ -1,7 +1,7 @@
 // Desktop composition uses the same incident, query and canonical serializer as CLI export.
 import { randomBytes, randomUUID } from "node:crypto";
 import { computeDefectFingerprint, incidentCorrelationId } from "../defect-fingerprint.js";
-import { serverLogProcessIdentity } from "../server-log.js";
+import { serverLogProcessIdentity, reportServerLogFailure } from "../server-log.js";
 import {
   clientOnlySupportReportSections,
   parseSupportIncidentRecord,
@@ -24,7 +24,6 @@ import {
   supportIncidentSegmentFiles,
   type SupportIncidentRejection,
 } from "../support-incident.js";
-import { listSupportIncidentEntries } from "../support-incident-store.js";
 import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
   type SupportQuerySelection,
@@ -72,7 +71,11 @@ export function prepareManualSupportReportIncident(
   const safeCorrelationId = incidentCorrelationId(correlationId) ?? randomUUID();
   const created = recordUserReportedIncident(stateDir, { correlationId: safeCorrelationId });
   if (created.status === "rejected") {
-    if (created.reason === "quota-exhausted") {
+    if (
+      created.reason === "quota-exhausted" ||
+      created.reason === "store-unavailable" ||
+      created.reason === "record-too-large"
+    ) {
       return prepareUnretainedUserReportDescriptor(safeCorrelationId);
     }
     throw new DesktopSupportReportPreparationError(created.reason);
@@ -122,6 +125,20 @@ export function readManualSupportReportEvidence(
   );
 }
 
+function retainedReportCandidates(
+  stateDir: string,
+  correlationId?: string,
+): readonly SupportIncidentRecord[] {
+  try {
+    return listSupportIncidents(stateDir, { readOnly: true });
+  } catch (error) {
+    // Candidate storage is optional for exporting separately guarded, readable Activity Log
+    // evidence. Retain the failed lookup's cause; the creation attempt records its own refusal.
+    reportServerLogFailure(error, { op: "support.incident.rejected", correlationId });
+    return [];
+  }
+}
+
 /** Only the owner thread creates incidents and retention pins. No log-content scan runs here. */
 export function prepareDesktopSupportReport(
   stateDir: string,
@@ -132,7 +149,7 @@ export function prepareDesktopSupportReport(
   const existing =
     correlationId === undefined
       ? undefined
-      : listSupportIncidents(stateDir).find(
+      : retainedReportCandidates(stateDir, correlationId).find(
           (record) => record.correlation.rootCorrelationId === correlationId,
         );
   return (
@@ -147,10 +164,9 @@ export function prepareDesktopSupportReport(
 
 function recentFailureCorrelation(stateDir: string): string | undefined {
   const now = Date.now();
-  const records = listSupportIncidentEntries(stateDir)
-    .flatMap((entry) => {
-      const record = entry.record;
-      return record?.trigger === "registered-failure" &&
+  const records = retainedReportCandidates(stateDir)
+    .flatMap((record) => {
+      return record.trigger === "registered-failure" &&
         !record.fingerprint.op.startsWith("support.report.") &&
         supportIncidentEffectiveExpiry(record) > now &&
         record.createdAtMs >= now - SUPPORT_INCIDENT_WINDOW_BEFORE_MS

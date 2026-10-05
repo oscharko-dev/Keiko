@@ -867,7 +867,11 @@ new authority and can still obtain the explicitly limited artifact. Cancellation
 prevents a subsequent report POST.
 An exhausted diagnostic reservation buffer must not prevent manual export of already retained evidence. Desktop and CLI
 export may prepare the canonical user-report descriptor without a persistent slot or retention pin,
-then compose and validate the same bounded report. Byte pressure rolls the oldest eligible diagnostic candidate out through its existing claim and pin
+then compose and validate the same bounded report. An unavailable independent candidate directory or
+an oversized candidate record also permits this transient preparation after the existing body-free
+refusal evidence. Explicit correlations must first resolve to readable Activity Log evidence;
+unknown correlations and unavailable named incident/fingerprint selections remain refused. Candidate
+lookup failure never broadens a selected report to another error or bypasses guarded log reads. Byte pressure rolls the oldest eligible diagnostic candidate out through its existing claim and pin
 cleanup. Admission retries the actual exclusive slot claim after a removed candidate; incomplete
 pin or fingerprint cleanup remains partial evidence without pretending that a released slot is still
 occupied. A retained or peer-replaced slot claim still prevents admission. Pin capacity likewise

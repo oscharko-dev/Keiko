@@ -450,6 +450,50 @@ describe("support report CLI and private publication", () => {
     expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
   });
 
+  it("exports an explicitly selected readable failure when candidate storage is unavailable", async () => {
+    seedGatewayFailure();
+    writeFileSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME), "not a directory");
+    const exported = await runExport(join(root, "unavailable-candidate-store"));
+    expect(exported.code).toBe(0);
+    const file = readdirSync(join(root, "unavailable-candidate-store")).find((entry) =>
+      entry.endsWith(".json"),
+    );
+    if (file === undefined) throw new TypeError("Missing exported report");
+    const report = parseSupportReport(
+      readSupportReportFile(join(root, "unavailable-candidate-store", file)),
+    );
+    expect(report.incident.trigger).toBe("registered-failure");
+    expect(report.incident.op).toBe("gateway.chat.failed");
+    expect(report.evidence.recordCount).toBeGreaterThan(0);
+  });
+
+  it.each(["--correlation-id", "--incident", "--defect-fingerprint"] as const)(
+    "refuses an unknown %s without selecting another failure when candidate storage is unavailable",
+    async (selector) => {
+      writeFileSync(join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME), "not a directory");
+      const output = join(root, "refused-unavailable-store");
+      const result = capture();
+      const code = await runSupportCli(
+        [
+          "export",
+          "--state-dir",
+          stateDir,
+          selector,
+          selector === "--correlation-id"
+            ? "unknown-correlation"
+            : "a".repeat(selector === "--incident" ? 32 : 64),
+          "--out",
+          output,
+        ],
+        result.io,
+        {},
+        { cwd: root, controlActivityStateDir: controlStateDir },
+      );
+      expect(code).toBe(1);
+      expect(existsSync(output) ? readdirSync(output) : []).toEqual([]);
+    },
+  );
+
   it("exports the selected retained evidence at a full candidate quota without a browser session", async () => {
     vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
     occupySupportIncidentRetentionForTests(stateDir);
