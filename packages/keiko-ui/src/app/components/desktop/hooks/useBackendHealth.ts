@@ -33,6 +33,7 @@ interface HealthPoll {
   failedPolls: number;
   failureReport: HealthReport | undefined;
   invalidReport: HealthReport | undefined;
+  degradedReport: HealthReport | undefined;
 }
 
 type PublishHealth = (update: (previous: BackendHealth) => BackendHealth) => void;
@@ -69,9 +70,12 @@ function observedHealthReport(
     return poll.invalidReport;
   }
   poll.invalidReport = undefined;
-  return health.diagnostics !== undefined && health.diagnostics.readiness !== "ready"
-    ? { correlationId }
-    : undefined;
+  if (health.diagnostics !== undefined && health.diagnostics.readiness !== "ready") {
+    poll.degradedReport ??= { correlationId };
+    return poll.degradedReport;
+  }
+  poll.degradedReport = undefined;
+  return undefined;
 }
 
 function recordHealthReadFailure(
@@ -80,7 +84,6 @@ function recordHealthReadFailure(
   error: unknown,
   requestCorrelationId: string,
 ): void {
-  poll.invalidReport = undefined;
   poll.failureReport ??= recordHealthFailure(
     error,
     correlationIdOf(error) ?? requestCorrelationId,
@@ -123,6 +126,7 @@ export function useBackendHealth(): BackendHealth {
       failedPolls: 0,
       failureReport: undefined,
       invalidReport: undefined,
+      degradedReport: undefined,
     };
     void readBackendHealth(poll, setBackendHealth);
     const timer = window.setInterval(() => {

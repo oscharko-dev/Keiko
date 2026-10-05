@@ -176,6 +176,16 @@ it("shows verified degraded readiness immediately without inventing an exception
     health,
     report: { correlationId: fetch.mock.calls[0]?.[0] },
   });
+  fetch.mockResolvedValueOnce(ready);
+  await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+  expect(view.result.current).toEqual({ state: "loaded", health: ready });
+  await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+  expect(view.result.current).toEqual({
+    state: "loaded",
+    health,
+    report: { correlationId: fetch.mock.calls[2]?.[0] },
+  });
+  expect(fetch.mock.calls[2]?.[0]).not.toBe(fetch.mock.calls[0]?.[0]);
   expect(reportClientDiagnostic).not.toHaveBeenCalled();
 });
 
@@ -193,4 +203,26 @@ it("does not overlap health polls or allow an older response to replace a newer 
   await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
   expect(fetch).toHaveBeenCalledTimes(2);
   expect(view.result.current).toEqual({ state: "loaded", health: ready });
+});
+
+it("keeps invalid diagnostic evidence joined across a transient read failure until valid recovery", async () => {
+  const invalid: HealthSnapshot = { ...ready, diagnosticsInvalid: true };
+  fetch.mockResolvedValue(invalid);
+  const view = renderHook(useBackendHealth);
+  await act(async () => await Promise.resolve());
+  const first = view.result.current;
+  fetch.mockRejectedValueOnce(new TypeError("private transient endpoint"));
+  await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS * 2));
+  expect(view.result.current).toBe(first);
+  const diagnostics = vi.mocked(reportClientDiagnostic).mock.calls;
+  expect(diagnostics.filter((call) => call[1]?.errorKind === "validation-failed")).toHaveLength(1);
+  expect(diagnostics[0]?.[1]?.correlationId).toBe(fetch.mock.calls[0]?.[0]);
+  expect(diagnostics[1]?.[1]?.correlationId).toBe(fetch.mock.calls[1]?.[0]);
+  expect(JSON.stringify(diagnostics)).not.toContain("private transient endpoint");
+  fetch.mockResolvedValueOnce(ready);
+  await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS * 2));
+  expect(diagnostics.filter((call) => call[1]?.errorKind === "validation-failed")).toHaveLength(2);
+  expect(view.result.current).toMatchObject({
+    report: { correlationId: fetch.mock.calls[4]?.[0] },
+  });
 });
