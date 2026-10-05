@@ -693,7 +693,11 @@ function emitSafeSeed(
   cwd: string,
   options: SupportAnalyzeOptions,
 ): SupportReportAnalysisOutcome {
-  const seed = prepareSupportReportSeed(artifact, seedCorrelation(artifact, args), options);
+  const correlation = seedCorrelation(artifact, args);
+  const seed =
+    artifact.seed?.correlationId === correlation
+      ? artifact.seed
+      : prepareSupportReportSeed(artifact, correlation, options);
   if (seed === undefined) throw new SupportReportError("seed-unavailable");
   const fixturePath = writeSelectedFixture(seed, args, io, writeFixture, cwd);
   if (args.json)
@@ -735,10 +739,12 @@ async function analyzeReceivedReport(
   const text = readSupportReportFile(resolve(cwd, args.file), (facts) => {
     context.input = facts;
   });
-  const basic = analyzeSupportReport(text);
-  context.evidence = reportScopeEvidence(basic);
-  const options = needsToolLifecycle(basic) ? await reportAnalysisOptions(context) : {};
-  const artifact = Object.keys(options).length === 0 ? basic : analyzeSupportReport(text, options);
+  let options: SupportAnalyzeOptions = {};
+  const artifact = await analyzeSupportReport(text, async (basic: AnalyzedSupportReport) => {
+    context.evidence = reportScopeEvidence(basic);
+    options = needsToolLifecycle(basic) ? await reportAnalysisOptions(context) : {};
+    return options;
+  });
   const analysis =
     args.seed || args.emitFixture !== undefined
       ? emitSafeSeed(artifact, args, context.io, writeFixture, cwd, options)

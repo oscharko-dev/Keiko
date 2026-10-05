@@ -978,6 +978,13 @@ decompression bombs fail closed. Embedded segment identifiers are closed provena
 never resolves them against local files or the network and never executes report content or probes
 its recorded PIDs.
 
+The existing analyzer also accepts lazy option resolution after that complete validation. The CLI
+uses the validated base analysis to load tool-lifecycle validators only when needed, then derives
+the option-aware analysis and seed from the same decoded evidence. This avoids parsing, integrity
+verification and inflation a second time; synchronous analyzer calls retain their synchronous
+return type. Invalid input never reaches the resolver. The incident seed is reused for its own
+correlation, while an explicitly selected different timeline receives a separately prepared seed.
+
 The reader uses the report's exact registry/schema/catalog identity. Trusted immutable snapshots
 cover every stable release from 1.1.9 up to the current version, generated from the release tags
 into a data-only module; `npm run set-version` regenerates it, and a drift test fails when a shipped

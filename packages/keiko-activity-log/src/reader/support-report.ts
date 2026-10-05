@@ -909,18 +909,18 @@ export interface AnalyzedSupportReport {
   readonly analysis: AnalyzeAllResult;
 }
 
-export function analyzeSupportReport(
+function analyzedReportArtifact(
   text: string,
-  options: SupportAnalyzeOptions = {},
+  validated: ValidatedSupportReport,
+  options: SupportAnalyzeOptions,
 ): AnalyzedSupportReport {
-  const validated = parseValidatedSupportReport(text);
   const { report, events, registry, selection } = validated;
   const analysis =
     Object.keys(options).length === 0
       ? validated.analysis
       : eventAnalysis(events, registry, options);
   const sourceArtifactDigest = supportReportDigest(text);
-  const artifact: AnalyzedSupportReport = {
+  return {
     kind: "keiko.support.report-analysis",
     schemaVersion: 1,
     authenticity: "unknown",
@@ -931,8 +931,52 @@ export function analyzeSupportReport(
     selection,
     analysis,
   };
+}
+
+function withReportSeed(
+  artifact: AnalyzedSupportReport,
+  options: SupportAnalyzeOptions,
+): AnalyzedSupportReport {
   const seed = prepareSupportReportSeed(artifact, undefined, options);
   return seed === undefined ? artifact : { ...artifact, seed };
+}
+
+type SupportReportOptionsResolver = (
+  validated: AnalyzedSupportReport,
+) => SupportAnalyzeOptions | Promise<SupportAnalyzeOptions>;
+
+async function resolveReportAnalysis(
+  text: string,
+  resolveOptions: SupportReportOptionsResolver,
+): Promise<AnalyzedSupportReport> {
+  const validated = parseValidatedSupportReport(text);
+  const basic = analyzedReportArtifact(text, validated, {});
+  const options = await resolveOptions(basic);
+  const artifact =
+    Object.keys(options).length === 0
+      ? basic
+      : { ...basic, analysis: eventAnalysis(validated.events, validated.registry, options) };
+  return withReportSeed(artifact, options);
+}
+
+export function analyzeSupportReport(
+  text: string,
+  resolveOptions: SupportReportOptionsResolver,
+): Promise<AnalyzedSupportReport>;
+export function analyzeSupportReport(
+  text: string,
+  options?: SupportAnalyzeOptions,
+): AnalyzedSupportReport;
+/** Lazy dependencies see only a validated analysis; report bytes are parsed and inflated once. */
+export function analyzeSupportReport(
+  text: string,
+  options: SupportAnalyzeOptions | SupportReportOptionsResolver = {},
+): AnalyzedSupportReport | Promise<AnalyzedSupportReport> {
+  if (typeof options === "function") return resolveReportAnalysis(text, options);
+  return withReportSeed(
+    analyzedReportArtifact(text, parseValidatedSupportReport(text), options),
+    options,
+  );
 }
 
 // A projection narrows the report, never its known loss: the effective selection's reasons stay on

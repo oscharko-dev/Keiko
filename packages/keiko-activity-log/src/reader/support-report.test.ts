@@ -48,6 +48,7 @@ import {
   sealSupportReport,
   supportReportDigest,
   supportReportTimeline,
+  type AnalyzedSupportReport,
 } from "./support-report.js";
 import { parseCanonicalSupportJson } from "./support-report-json.js";
 import { resolveSelectedSupportIncident } from "./support-incident-resolution.js";
@@ -61,13 +62,67 @@ vi.mock("@oscharko-dev/keiko-contracts/runtime/observability", async (importOrig
   const actual = await importOriginal<typeof reportContracts>();
   return { ...actual, serializeSupportReport: vi.fn(actual.serializeSupportReport) };
 });
+vi.mock("./support-report-json.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./support-report-json.js")>();
+  return { ...actual, parseCanonicalSupportJson: vi.fn(actual.parseCanonicalSupportJson) };
+});
 const actualReportContracts = await vi.importActual<typeof reportContracts>(
   "@oscharko-dev/keiko-contracts/runtime/observability",
 );
 afterEach(() => {
+  vi.mocked(parseCanonicalSupportJson).mockClear();
   vi.mocked(reportContracts.serializeSupportReport)
     .mockReset()
     .mockImplementation(actualReportContracts.serializeSupportReport);
+});
+
+describe("lazy validated support analysis", () => {
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-support-report-lazy-"));
+  });
+  afterEach(() => {
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("validates once before resolving options and preserves the synchronous result", async () => {
+    const text = serializeSupportReport(fixture().report);
+    const options = { maxTimelineRecords: 1 };
+    const expected = analyzeSupportReport(text, options);
+    vi.mocked(parseCanonicalSupportJson).mockClear();
+    const resolveOptions = vi.fn((base: AnalyzedSupportReport) => {
+      expect(base.reportDigest).toBe(expected.reportDigest);
+      expect(base).not.toHaveProperty("seed");
+      return Promise.resolve(options);
+    });
+    const result = analyzeSupportReport(text, resolveOptions);
+    expect(result).toBeInstanceOf(Promise);
+    await expect(result).resolves.toEqual(expected);
+    expect(resolveOptions).toHaveBeenCalledTimes(1);
+    expect(
+      vi
+        .mocked(parseCanonicalSupportJson)
+        .mock.calls.filter(([input]) => input === text.slice(0, -1)),
+    ).toHaveLength(1);
+  });
+
+  it("rejects malformed or tampered input before consulting lazy options", async () => {
+    const report = fixture().report;
+    const text = serializeSupportReport(report);
+    const resolveOptions = vi.fn(() => Promise.resolve({}));
+    for (const input of ["not-json\n", text.replace(report.integrity.reportDigest, "0".repeat(64))])
+      await expect(analyzeSupportReport(input, resolveOptions)).rejects.toBeInstanceOf(
+        SupportReportError,
+      );
+    expect(resolveOptions).not.toHaveBeenCalled();
+  });
+
+  it("propagates an asynchronous options failure without producing an artifact", async () => {
+    const text = serializeSupportReport(fixture().report);
+    const failure = new TypeError("test resolver failure");
+    const resolveOptions = vi.fn(() => Promise.reject(failure));
+    await expect(analyzeSupportReport(text, resolveOptions)).rejects.toBe(failure);
+    expect(resolveOptions).toHaveBeenCalledTimes(1);
+  });
 });
 
 const T0 = Date.UTC(2026, 8, 30, 12);

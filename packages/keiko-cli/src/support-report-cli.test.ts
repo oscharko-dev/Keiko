@@ -26,6 +26,7 @@ import { pathToFileURL } from "node:url";
 import { gzipSync, inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeFileServerLogSinks, listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
+import * as reportReader from "@oscharko-dev/keiko-activity-log/reader";
 import {
   ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
   analyzeLogText,
@@ -76,6 +77,15 @@ import { publishSupportReportFile, readSupportReportFile } from "./support-expor
 import { SafeArtifactFileError } from "@oscharko-dev/keiko-security/fs-hardening";
 import { emitSupportReportFailed } from "./support-report-evidence.js";
 import { defaultUiDataDir } from "./state-paths.js";
+
+vi.mock("@oscharko-dev/keiko-activity-log/reader", async (importOriginal) => {
+  const actual = await importOriginal<typeof reportReader>();
+  return {
+    ...actual,
+    analyzeSupportReport: vi.fn(actual.analyzeSupportReport),
+    prepareSupportReportSeed: vi.fn(actual.prepareSupportReportSeed),
+  };
+});
 
 const CORRELATION = "support-report-cli-0001";
 let root: string;
@@ -347,6 +357,53 @@ async function withProductStack<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 describe("support report CLI and private publication", () => {
+  it("reuses the incident seed and leaves unnecessary lifecycle validators unloaded", async () => {
+    seedGatewayFailure();
+    await exportReport();
+    const expected = analyzedReport().artifact;
+    vi.mocked(reportReader.prepareSupportReportSeed).mockClear();
+    const load = vi.spyOn(lazyModules, "loadToolLifecycle");
+    const result = await analyze(["--seed", "--json"]);
+    expect(result.code, result.errors.join("")).toBe(0);
+    expect(JSON.parse(result.output.join(""))).toEqual({ ...expected, fixtureWritten: false });
+    expect(reportReader.prepareSupportReportSeed).not.toHaveBeenCalled();
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("analyzes once when actual tool lifecycle options are needed", async () => {
+    rmSync(join(stateDir, "logs"), { recursive: true });
+    const process = fixtureProcess(4242, "aabbccdd");
+    const now = Date.now();
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, {
+        op: "coding-repository-handler.started",
+        correlationId: CORRELATION,
+      }),
+    ]);
+    await exportReport();
+    const { validateToolLifecycleEvent, redactLogFields } = await lazyModules.loadToolLifecycle();
+    const expected = analyzeSupportReport(readSupportReportFile(path), {
+      toolLifecycleValidator: validateToolLifecycleEvent,
+      toolDiagnosticRedactor: redactLogFields,
+    });
+    vi.mocked(reportReader.analyzeSupportReport).mockClear();
+    const load = vi.spyOn(lazyModules, "loadToolLifecycle");
+    const result = await analyze(["--json"]);
+    expect(result.code, result.errors.join("")).toBe(0);
+    expect(JSON.parse(result.output.join(""))).toEqual(expected);
+    expect(reportReader.analyzeSupportReport).toHaveBeenCalledTimes(1);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects invalid report bytes without loading tool lifecycle dependencies", async () => {
+    writeFileSync(path, "not-json\n", { mode: 0o600 });
+    const load = vi.spyOn(lazyModules, "loadToolLifecycle");
+    const result = await analyze(["--json"]);
+    expect(result.code).toBe(1);
+    expect(result.output).toEqual([]);
+    expect(load).not.toHaveBeenCalled();
+  });
+
   it("describes the actual empty bounded manual selection instead of an unbudgeted second window", async () => {
     rmSync(join(stateDir, "logs"), { recursive: true });
     const process = fixtureProcess(4242, "aabbccdd");
@@ -657,8 +714,12 @@ describe("support report CLI and private publication", () => {
     if (parentRef === undefined || childRef === undefined)
       throw new TypeError("missing exported parent/child references");
     for (const selected of [parentRef, childRef]) {
+      vi.mocked(reportReader.prepareSupportReportSeed).mockClear();
       const result = await analyze(["--seed", "--json", "--correlation-id", selected]);
       expect(result.code, result.errors.join("")).toBe(0);
+      expect(reportReader.prepareSupportReportSeed).toHaveBeenCalledTimes(
+        selected === parentRef ? 0 : 1,
+      );
     }
     const completions = persistedActivityLogLines(
       readPersistedActivityLog(controlStateDir),
