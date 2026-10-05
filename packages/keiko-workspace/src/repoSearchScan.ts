@@ -1558,7 +1558,7 @@ function observeEligibleTextFile(
   text: string,
 ): void {
   const observer = runner.eligibleTextObserver;
-  if (observer?.active !== true) return;
+  if (observer?.active !== true || !/\S/u.test(text)) return;
   let lineCount = 1;
   let offset = text.indexOf("\n");
   while (offset >= 0) {

@@ -176,7 +176,7 @@ import {
   tracePriority,
 } from "./grounded-evidence-selection.js";
 import { directDefinitionSymbol } from "./grounded-query-shape.js";
-import { KnownFitScopeContext } from "./grounded-scope-context.js";
+import { KnownFitScopeContext, type ScopeContextObservation } from "./grounded-scope-context.js";
 import {
   attachContextBudgetDiagnostics,
   deriveGroundedContextAssembly,
@@ -424,6 +424,16 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
     metadataDiscardedCount: { type: "integer", dataClass: "count", required: false },
     metadataOmittedDetailCount: { type: "integer", dataClass: "count", required: false },
     metadataRetentionLimit: { type: "integer", dataClass: "count", required: false },
+    scopeContextState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["applied", "empty", "overflow", "incomplete-traversal", "gate-refused"],
+    },
+    scopeContextObservedFileCount: { type: "integer", dataClass: "count", required: false },
+    scopeContextRetainedFileCount: { type: "integer", dataClass: "count", required: false },
+    scopeContextChargedBytes: { type: "integer", dataClass: "count", required: false },
+    scopeContextCapacityBytes: { type: "integer", dataClass: "count", required: false },
     structuralContextCount: { type: "integer", dataClass: "count", required: false },
     structuralCandidateInventoryBuildCount: {
       type: "integer",
@@ -761,6 +771,7 @@ interface SearchInputs {
     evidence: RingEvidenceAccumulator,
   ) => Promise<DefinitionDiscoveryExecution>;
   readonly scopeContextBytesMax: number;
+  readonly observeScopeContext?: ((observation: ScopeContextObservation) => void) | undefined;
   readonly tryReserveAdditionalSearchCall?: (() => boolean) | undefined;
   readonly hasGitMetadata: boolean;
   readonly searchScope: SearchScope;
@@ -1798,7 +1809,9 @@ async function searchLexicalTerms(
     ...(terms.length === 0 ? {} : { queryInterpretation: { kind: "literal" as const, terms } }),
     ...(semanticSearchProvider === undefined ? {} : { semanticSearchProvider }),
   });
-  if (context === undefined || !allowsReadableScopeContext(result.coverage)) return result;
+  const readable = allowsReadableScopeContext(result.coverage);
+  recordScopeContextObservation(inputs, context, readable);
+  if (context === undefined || !readable) return result;
   return {
     ...result,
     knownFitFileBytes: context.fileBytes(),
@@ -1811,8 +1824,29 @@ function allowsReadableScopeContext(coverage: SearchResult["coverage"]): boolean
   // subset while preserving incomplete coverage; interrupted traversal cannot qualify it.
   return (
     !coverage.incomplete ||
-    (coverage.reasons.length > 0 && coverage.reasons.every((reason) => reason === "io-error"))
+    (coverage.reasons.length > 0 &&
+      coverage.reasons.every((reason) => reason === "io-error" || reason === "match-cap"))
   );
+}
+
+function recordScopeContextObservation(
+  inputs: SearchInputs,
+  context: KnownFitScopeContext | undefined,
+  readable: boolean,
+): void {
+  const observation = context?.observation() ?? {
+    state: "gate-refused",
+    observedFileCount: 0,
+    retainedFileCount: 0,
+    chargedBytes: 0,
+    capacityBytes: inputs.scopeContextBytesMax,
+  };
+  inputs.observeScopeContext?.({
+    ...observation,
+    ...(!readable && context !== undefined && observation.state !== "overflow"
+      ? { state: "incomplete-traversal", retainedFileCount: 0 }
+      : {}),
+  });
 }
 
 function knownFitContextFor(inputs: SearchInputs): KnownFitScopeContext | undefined {
@@ -6433,6 +6467,7 @@ async function assembleGroundedPack(
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly scopeContextObservation?: ScopeContextObservation | undefined;
   readonly excerptObservation?: ExcerptReadObservation | undefined;
   readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly decisions?: RingDecisionAudit | undefined;
@@ -6469,6 +6504,7 @@ type ConnectedContextPhase =
   | "empty-pack-assembly";
 
 interface ConnectedContextProgress {
+  scopeContextObservation?: ScopeContextObservation | undefined;
   phase: ConnectedContextPhase;
   plannedRingCount: number;
   structuralContexts?: StructuralRequestContextPool | undefined;
@@ -6944,6 +6980,7 @@ function retrievalLossActivityExtra(
 ): Partial<ConnectedContextCompletionDetailsActivityFields> {
   const { excerptObservation: excerpt, metadataRetention: metadata } = status;
   return {
+    ...scopeContextActivityExtra(status.scopeContextObservation),
     ...(excerpt === undefined
       ? {}
       : {
@@ -6962,6 +6999,20 @@ function retrievalLossActivityExtra(
           metadataRetentionLimit: metadata.limit,
         }),
   };
+}
+
+function scopeContextActivityExtra(
+  observation: ScopeContextObservation | undefined,
+): Readonly<Record<string, unknown>> {
+  return observation === undefined
+    ? {}
+    : {
+        scopeContextState: observation.state,
+        scopeContextObservedFileCount: observation.observedFileCount,
+        scopeContextRetainedFileCount: observation.retainedFileCount,
+        scopeContextChargedBytes: observation.chargedBytes,
+        scopeContextCapacityBytes: observation.capacityBytes,
+      };
 }
 
 function completionActivityExtra(
@@ -7307,6 +7358,9 @@ function connectedContextSearchInputs(
         liveGroundedPackInputs(input, deps, plan, runtime, context, { ...evidence, governor }),
       ),
     scopeContextBytesMax: plan.budget.excerptBytesMax,
+    observeScopeContext: (observation): void => {
+      runtime.progress.scopeContextObservation = observation;
+    },
     hasGitMetadata: context.hasGitMetadata,
     searchScope: context.searchScope,
     query: input.query,
@@ -7894,7 +7948,14 @@ async function retrieveLiveConnectedContext(
     assembled.pack,
     plan,
     runtime.activity,
-    liveRetrievalCompletion(context.workspaceIndexSource !== undefined, assembled, rings.decisions),
+    {
+      ...liveRetrievalCompletion(
+        context.workspaceIndexSource !== undefined,
+        assembled,
+        rings.decisions,
+      ),
+      scopeContextObservation: runtime.progress.scopeContextObservation,
+    },
     context.structuralContexts.diagnostics(),
     context.workspaceIndexActivity.diagnostics(),
     runtime.workspaceIoActivity.diagnostics(),

@@ -10,6 +10,14 @@ interface EligibleTextFile {
   readonly lineCount: number;
 }
 
+export interface ScopeContextObservation {
+  readonly state: "applied" | "empty" | "overflow" | "incomplete-traversal" | "gate-refused";
+  readonly observedFileCount: number;
+  readonly retainedFileCount: number;
+  readonly chargedBytes: number;
+  readonly capacityBytes: number;
+}
+
 // Descriptors are transient and body-free. Crossing the accepted capacity irreversibly discards
 // the enrichment; normal lexical/semantic evidence continues unchanged.
 export class KnownFitScopeContext {
@@ -17,6 +25,7 @@ export class KnownFitScopeContext {
   private readonly bytesByPath = new Map<string, number>();
   private chargedBytes = 0;
   private overflowed = false;
+  private observedFileCount = 0;
 
   public constructor(
     private readonly capacityBytes: number,
@@ -27,6 +36,7 @@ export class KnownFitScopeContext {
 
   public observe = (file: EligibleTextFile): boolean => {
     if (this.overflowed) return false;
+    this.observedFileCount += 1;
     const atom = this.atom(file);
     this.chargedBytes += file.contentBytes + new TextEncoder().encode(JSON.stringify(atom)).length;
     if (this.chargedBytes > this.capacityBytes) {
@@ -39,6 +49,16 @@ export class KnownFitScopeContext {
     this.bytesByPath.set(file.scopePath, Math.max(1, file.contentBytes));
     return true;
   };
+
+  public observation(): ScopeContextObservation {
+    return {
+      state: this.overflowed ? "overflow" : this.retained.length === 0 ? "empty" : "applied",
+      observedFileCount: this.observedFileCount,
+      retainedFileCount: this.retained.length,
+      chargedBytes: this.chargedBytes,
+      capacityBytes: this.capacityBytes,
+    };
+  }
 
   public fileBytes(): ReadonlyMap<string, number> {
     return this.bytesByPath;

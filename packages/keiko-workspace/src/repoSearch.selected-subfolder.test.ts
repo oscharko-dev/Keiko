@@ -58,7 +58,11 @@ async function expectOutsideScope(scope: SearchScope, rebased: boolean): Promise
         endLine: 1,
         maxBytes: 256,
       }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject(
+      rebased
+        ? { name: "RepoSearchInvalidRangeError" }
+        : { name: "RepoSearchUnsupportedFileError", reason: "outside-scope" },
+    );
   }
 }
 
