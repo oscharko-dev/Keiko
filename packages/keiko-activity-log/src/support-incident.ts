@@ -1625,12 +1625,7 @@ function failedWithdrawal(
   stateDir: string,
   record: SupportIncidentRecord,
   context: DismissalContext,
-  error: unknown,
 ): SupportIncidentDismissal {
-  reportServerLogFailure(error, {
-    op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
-    correlationId: context.correlationId,
-  });
   dismissedEvidence(stateDir, record, {
     ...context,
     removalStatus: "failed",
@@ -1658,16 +1653,12 @@ function retireSupportIncident(
   try {
     removeSupportIncidentRecord(stateDir, incidentId);
   } catch (error) {
-    return failedWithdrawal(
-      stateDir,
-      record,
-      {
-        correlationId,
-        openIncidentCount: open.length,
-        reason: options.retirementReason,
-      },
-      error,
-    );
+    reportServerLogFailure(error, { op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op, correlationId });
+    return failedWithdrawal(stateDir, record, {
+      correlationId,
+      openIncidentCount: open.length,
+      reason: options.retirementReason,
+    });
   }
   const claimsReleased = releaseEntryClaims(
     stateDir,
