@@ -28,11 +28,12 @@ import {
   reportClientDiagnostic,
   type ClientDiagnosticSessionRepairReport,
 } from "./client-diagnostics";
-import { clientErrorSummary } from "./client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
+import { clientErrorEvidence } from "./client-error-evidence";
 import { bffFetchJson, bffRequestErrorKind } from "./http";
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
-const LOCAL_SESSION_TIMEOUT_MS = 15_000;
+export const LOCAL_SESSION_TIMEOUT_MS = 15_000;
 const LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
 // The pairing requests are the repair: their denial is final and never starts another repair.
 const WITHOUT_SESSION_REPAIR = { repairSession: false } as const;
@@ -41,7 +42,10 @@ const WITHOUT_SESSION_REPAIR = { repairSession: false } as const;
 export interface CodingAppSessionPairingSeams {
   readonly readFragment: () => string;
   readonly stripFragment: () => void;
-  readonly postPairing: (attestation: CodingAppSessionPairingAttestation) => Promise<unknown>;
+  readonly postPairing: (
+    attestation: CodingAppSessionPairingAttestation,
+    correlationId: string,
+  ) => Promise<unknown>;
   // `correlationId` is the id the local-session request carries. The caller mints it, so a failure
   // that never reached the server still names its request.
   readonly postLocalSession?: (correlationId: string) => Promise<unknown>;
@@ -54,11 +58,16 @@ function defaultSeams(): CodingAppSessionPairingSeams | undefined {
     stripFragment: (): void => {
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     },
-    postPairing: (attestation: CodingAppSessionPairingAttestation): Promise<unknown> =>
+    postPairing: (attestation, correlationId): Promise<unknown> =>
       bffFetchJson(
         PAIR_PATH,
-        { method: "POST", cache: "no-store", body: JSON.stringify(attestation) },
-        WITHOUT_SESSION_REPAIR,
+        {
+          method: "POST",
+          cache: "no-store",
+          body: JSON.stringify(attestation),
+          signal: AbortSignal.timeout(LOCAL_SESSION_TIMEOUT_MS),
+        },
+        { ...WITHOUT_SESSION_REPAIR, correlationId },
       ),
     postLocalSession: (correlationId: string): Promise<unknown> =>
       bffFetchJson(
@@ -87,12 +96,21 @@ export async function redeemCodingAppSessionPairingFragment(
   seams.stripFragment();
   const attestation = decodeCodingAppSessionPairingFragment(fragment);
   if (attestation === undefined) return false;
+  const correlationId = newClientCorrelationId();
   try {
-    await seams.postPairing(attestation);
+    await seams.postPairing(attestation, correlationId);
     return true;
-  } catch {
+  } catch (error) {
     // The pair endpoint acknowledges without distinguishing outcomes; a transport failure leaves
     // the window unpaired, which the questions surface reports honestly (#2478).
+    reportClientDiagnostic(
+      `[keiko] local app session pairing failed: ${clientErrorSummary(error)}`,
+      {
+        correlationId: correlationIdOf(error) ?? correlationId,
+        errorKind: bffRequestErrorKind(error),
+        errorEvidence: clientErrorEvidence(error),
+      },
+    );
     return false;
   }
 }

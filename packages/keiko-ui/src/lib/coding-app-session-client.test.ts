@@ -11,6 +11,7 @@ import {
 
 import {
   codingAppSessionPairingSettled,
+  LOCAL_SESSION_TIMEOUT_MS,
   ensureLocalCodingAppSession,
   redeemCodingAppSessionPairingFragment,
   redeemCodingAppSessionPairingNavigation,
@@ -499,6 +500,7 @@ describe("shared session repair cancellation", () => {
       expect(fetchMock).toHaveBeenCalledOnce();
     });
     deadline.abort(new DOMException("private transport detail", "TimeoutError"));
+    expect(AbortSignal.timeout).toHaveBeenCalledExactlyOnceWith(LOCAL_SESSION_TIMEOUT_MS);
     const result = await first;
     expect(await second).toEqual(result);
     expect(result).toMatchObject({ repaired: false, errorKind: "timeout" });

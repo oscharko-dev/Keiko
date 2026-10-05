@@ -191,6 +191,13 @@ writes none either, so the log never shows a sign-out that did not happen. A
 pairing fragment that arrives by same-document navigation (after a lane restart, say) is redeemed
 like a boot fragment, and every session read in the window runs again after it.
 
+The browser bounds pairing and existing-session confirmation with the same 15-second local
+session transport deadline. A stalled pairing request therefore releases the shared boot wait;
+the attestation is never replayed. Its failure records the request or echoed response correlation,
+closed error class and body-free original error evidence through the existing client diagnostic
+owner. This deadline applies to local session establishment, not model generation. A later
+content-free confirmation acknowledgement still does not establish that the session was approved.
+
 ### D7 — The CI pairing fake mints read authority and is therefore production-unreachable by construction
 
 A deterministic fake pairing port exists for CI so the channel is testable without a real launcher.
