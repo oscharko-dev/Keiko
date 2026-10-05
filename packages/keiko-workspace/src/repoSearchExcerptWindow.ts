@@ -178,6 +178,10 @@ function boundedAnchorWindow(
   return { start, end };
 }
 
+function sharedAnchorBoundary(previous: AnchorRange, next: AnchorRange): number {
+  return Math.min(next.start, Math.floor((previous.end + next.start) / 2));
+}
+
 function anchorByteWindows(
   bytes: Uint8Array,
   ranges: readonly AnchorRange[],
@@ -189,8 +193,8 @@ function anchorByteWindows(
     if (grant === 0) return [];
     const previous = assigned[index - 1]?.range;
     const next = assigned[index + 1]?.range;
-    const left = previous === undefined ? 0 : Math.floor((previous.end + range.start) / 2);
-    const right = next === undefined ? bytes.length : Math.floor((range.end + next.start) / 2);
+    const left = previous === undefined ? 0 : sharedAnchorBoundary(previous, range);
+    const right = next === undefined ? bytes.length : sharedAnchorBoundary(range, next);
     const window = boundedAnchorWindow(bytes, range, grant, left, right);
     return window.start < window.end ? [window] : [];
   });

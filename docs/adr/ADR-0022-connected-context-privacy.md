@@ -291,6 +291,10 @@ omission sampling depends on which concurrent read finishes first. Explicit fini
 are read in bounded concurrent waves; unused byte grants are recycled after a wave settles, while
 the actual accepted byte/token budgets determine which evidence fits. A large matching set therefore
 does not force every excerpt to a one-byte allocation. Unread budget tails remain budget omissions.
+Distant anchor windows share disjoint byte regions. If oversized anchor ranges overlap, their
+shared boundary never advances beyond the later anchor's source start; a tight grant may retain
+only part of either anchor, but midpoint clipping must not discard that later start. Unequal grants
+preserve complete anchors when their combined required bytes fit, and zero-byte grants emit no view.
 Selected files retain every distinct, already-admitted evidence range rather than independent
 per-file atom or window quotas. The existing safe excerpt reader batches those ranges from one
 freshly classified, decoded and redacted file snapshot, preserves original line coordinates, and
