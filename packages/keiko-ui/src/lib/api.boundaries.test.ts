@@ -378,7 +378,7 @@ describe("API BFF boundary helpers", () => {
     expect(handlers.onCancelled).toHaveBeenCalledTimes(1);
   });
 
-  it("throws StreamingUnavailableError for pre-stream JSON failures and null bodies", async () => {
+  it("allows explicit capability fallback but preserves ambiguous null-body failures", async () => {
     vi.stubGlobal(
       "fetch",
       vi
@@ -387,7 +387,12 @@ describe("API BFF boundary helpers", () => {
           jsonResponse({ error: { code: "STREAMING_UNSUPPORTED", message: "buffered only" } }, 409),
         )
         .mockResolvedValueOnce(
-          new Response(null, { headers: { "Content-Type": "text/event-stream" } }),
+          new Response(null, {
+            headers: {
+              "Content-Type": "text/event-stream",
+              "X-Keiko-Correlation-Id": "null-body-boundary",
+            },
+          }),
         ),
     );
     const handlers = {
@@ -401,9 +406,14 @@ describe("API BFF boundary helpers", () => {
     await expect(
       sendDesktopChatStream(input, new AbortController().signal, handlers),
     ).rejects.toBeInstanceOf(StreamingUnavailableError);
-    await expect(
-      sendDesktopChatStream(input, new AbortController().signal, handlers),
-    ).rejects.toMatchObject({ code: "STREAMING_UNSUPPORTED", message: "Response body was null." });
+    const missingBody = sendDesktopChatStream(input, new AbortController().signal, handlers);
+    await expect(missingBody).rejects.toBeInstanceOf(ApiError);
+    await expect(missingBody).rejects.not.toBeInstanceOf(StreamingUnavailableError);
+    await expect(missingBody).rejects.toMatchObject({
+      code: "INTERNAL",
+      message: "Response body was null.",
+      correlationId: "null-body-boundary",
+    });
   });
 });
 
