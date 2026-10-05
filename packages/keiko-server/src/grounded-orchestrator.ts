@@ -79,6 +79,7 @@ import {
   DEFAULT_SEARCH_LIMITS,
   FileTooLargeError,
   PathDeniedError,
+  PathEscapeError,
   RepoSearchUnsupportedFileError,
   WorkspaceNotFoundError,
   detectWorkspaceAt,
@@ -198,6 +199,7 @@ import {
 import {
   causeChain,
   contentFreeErrorClass,
+  safeProperty,
   keikoStackFrames,
 } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "./process-log-sink.js";
@@ -427,6 +429,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
       maxItems: 3,
       values: ["file-grant", "byte-grant", "deadline"],
     },
+    metadataUnavailableDirectoryCount: { type: "integer", dataClass: "count", required: false },
     metadataObservedCount: { type: "integer", dataClass: "count", required: false },
     metadataRetainedCount: { type: "integer", dataClass: "count", required: false },
     metadataDiscardedCount: { type: "integer", dataClass: "count", required: false },
@@ -513,6 +516,57 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogO
   analyzerProjection: "timeline",
   failureClasses: ["connected-context-retrieval"],
   proofIds: ["search.connected-context.completion-details.line"],
+  releaseImpact: "patch",
+});
+
+const SEARCH_METADATA_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.metadata-unavailable",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.metadataUnavailable",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    scopePathDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "permission-denied",
+        "filesystem-unavailable",
+        "containment-denied",
+        "directory-changed",
+        "streaming-unavailable",
+        "deadline",
+        "unexpected",
+      ],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.metadata-unavailable.line"],
   releaseImpact: "patch",
 });
 
@@ -3059,10 +3113,72 @@ interface BoundedDirectoryRead {
   readonly status: BoundedDirectoryReadStatus;
 }
 
+type MetadataFailureObserver = (error: unknown, scopePath: string) => void;
+
 interface MetadataTraversalControl {
+  readonly recordUnavailable?: MetadataFailureObserver | undefined;
   readonly signal: AbortSignal | undefined;
   readonly nowMs: () => number;
   readonly deadlineAtMs: number;
+}
+
+type MetadataUnavailableReason =
+  | "permission-denied"
+  | "filesystem-unavailable"
+  | "containment-denied"
+  | "directory-changed"
+  | "streaming-unavailable"
+  | "deadline"
+  | "unexpected";
+
+class MetadataDirectoryUnavailableError extends Error {
+  public constructor(public readonly reason: MetadataUnavailableReason) {
+    super("metadata directory inspection unavailable");
+    this.name = "MetadataDirectoryUnavailableError";
+  }
+}
+
+function metadataUnavailableReason(error: unknown): MetadataUnavailableReason {
+  if (error instanceof MetadataDirectoryUnavailableError) return error.reason;
+  if (isMetadataTraversalDeadline(error)) return "deadline";
+  if (error instanceof PathEscapeError || error instanceof PathDeniedError)
+    return "containment-denied";
+  if (safeProperty(error, "reason") === "directory-membership-changed") return "directory-changed";
+  const code = errorKindOf(error);
+  if (code === "EACCES" || code === "EPERM") return "permission-denied";
+  return isExpectedWorkspaceRootFailure(error) ? "filesystem-unavailable" : "unexpected";
+}
+
+function metadataUnavailableErrorKind(reason: MetadataUnavailableReason): ActivityLogErrorKind {
+  if (reason === "deadline") return "timeout";
+  if (reason === "containment-denied" || reason === "permission-denied") return "permission-denied";
+  return reason === "unexpected" ? "internal" : "unavailable";
+}
+
+function metadataUnavailableEvent(
+  error: unknown,
+  scopePath: string,
+  identity: ConnectedContextActivityIdentity,
+  correlationId: string,
+): ServerLogEvent {
+  const reason = metadataUnavailableReason(error);
+  const frames = keikoStackFrames(error);
+  const causes = causeChain(error);
+  return activityLogEvent(
+    SEARCH_METADATA_UNAVAILABLE_OPERATION,
+    { correlationId, errorKind: metadataUnavailableErrorKind(reason) },
+    {
+      scopeIdentitySha256: identity.scopeIdentitySha256,
+      queryIdentitySha256: identity.queryIdentitySha256,
+      scopePathDigest: createHash("sha256").update(scopePath).digest("hex"),
+      reason,
+      failureKind: connectedContextFailureKind(error),
+      ...(frames.length === 0 ? {} : { frames }),
+      ...(causes.length === 0 ? {} : { causeChain: causes }),
+      completeness: "partial",
+      loss: "none",
+    },
+  );
 }
 
 class MetadataTraversalDeadlineError extends Error {
@@ -3217,23 +3333,28 @@ function metadataDirectoryPath(
   scopePath: string,
 ): string | undefined {
   if (scopePath.length > 0 && !isValidScopePath(scopePath, { mustBeRelative: true }))
-    throw new Error("invalid metadata directory");
+    throw new MetadataDirectoryUnavailableError("containment-denied");
   const root = searchScope.workspace.root;
   const absolute = resolveWithinWorkspace(root, scopePath);
   const contained = containedRealPathInfo(fs, root, absolute);
   if (!isCanonicalAllowedContainedPath(contained, root, scopePath)) {
     if (isAllowedContainedPathParent(contained, root, scopePath) && !fs.exists(absolute))
       return undefined;
-    throw new Error("metadata directory unavailable");
+    throw new MetadataDirectoryUnavailableError("containment-denied");
   }
   const stat = fs.stat(contained.path);
-  if (stat.isSymbolicLink) throw new Error("metadata directory is a symbolic link");
+  if (stat.isSymbolicLink) throw new MetadataDirectoryUnavailableError("containment-denied");
   return stat.isDirectory ? contained.path : undefined;
 }
 
-function recordUnavailableMetadataDirectory(cache: FileExistenceCache | undefined): void {
-  // The connected-context completion records the resulting scope-incomplete uncertainty count.
+function recordUnavailableMetadataDirectory(
+  error: unknown,
+  scopePath: string,
+  control: MetadataTraversalControl,
+  cache: FileExistenceCache | undefined,
+): void {
   if (cache !== undefined) cache.unavailableDirectoryInspections += 1;
+  control.recordUnavailable?.(error, scopePath);
 }
 
 async function visitMetadataDirectory(
@@ -3249,18 +3370,18 @@ async function visitMetadataDirectory(
     const path = metadataDirectoryPath(searchScope, fs, scopePath);
     if (path === undefined) return true;
     const iterate = fs.iterateDirectory;
-    if (iterate === undefined) throw new Error("streaming directory inspection unavailable");
+    if (iterate === undefined) throw new MetadataDirectoryUnavailableError("streaming-unavailable");
     for await (const entry of iterate.call(fs, path)) {
       assertMetadataTraversalActive(control);
       await visit(entry);
     }
     assertMetadataTraversalActive(control);
     if (metadataDirectoryPath(searchScope, fs, scopePath) !== path)
-      throw new Error("metadata directory changed");
+      throw new MetadataDirectoryUnavailableError("directory-changed");
     return true;
   } catch (error) {
     rethrowMetadataCancellation(error);
-    recordUnavailableMetadataDirectory(cache);
+    recordUnavailableMetadataDirectory(error, scopePath, control, cache);
     return false;
   }
 }
@@ -4149,6 +4270,7 @@ async function discoverDefinitionsBeforeGraphs(
   const certifiedPaths = primaryContentPaths(rings);
   const evidence = await symbolFileAtoms(
     {
+      recordMetadataUnavailable: args.recordMetadataUnavailable,
       input,
       plan,
       searchScope,
@@ -4598,8 +4720,9 @@ async function deterministicMetadataEvidence(
   nowMs: () => number,
   signal: AbortSignal | undefined,
   deadlineAtMs: number,
+  recordUnavailable: MetadataFailureObserver,
 ): Promise<DeterministicContextEvidence> {
-  const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs };
+  const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs, recordUnavailable };
   const existsCache = createFileExistenceCache(input.scope.relativePaths);
   const discovery: MetadataDiscoveryInputs = {
     input,
@@ -4666,6 +4789,7 @@ type ParallelDeterministicEvidence = readonly [
 // so the shared members stay in lockstep across the collect/metadata/merge chain instead of being
 // re-threaded positionally at each hop.
 interface DeterministicContextInputs {
+  readonly recordMetadataUnavailable: MetadataFailureObserver;
   readonly lexicalAtoms?: readonly EvidenceAtom[];
   readonly symbolDiscovery?: SymbolDiscoveryResult | undefined;
   readonly skipOptionalTrace?: boolean;
@@ -4730,6 +4854,7 @@ async function deterministicMetadataAtoms(
         inputs.nowMs,
         inputs.signal,
         inputs.deadlineAtMs,
+        inputs.recordMetadataUnavailable,
       )
     : { atoms: [], uncertainty: [] };
 }
@@ -5766,6 +5891,7 @@ function createReadyGovernedPlan(input: OrchestratorInput, nowMs: () => number):
 }
 
 interface AssembleGroundedPackInputs {
+  readonly recordMetadataUnavailable: MetadataFailureObserver;
   readonly input: OrchestratorInput;
   readonly deps: OrchestratorDeps;
   readonly plan: ExplorationPlan;
@@ -6312,7 +6438,6 @@ async function augmentRingsWithDeterministicAtoms(
   args: AssembleGroundedPackInputs,
 ): Promise<RingRunSummary> {
   const {
-    input,
     deps,
     plan,
     rings,
@@ -6329,7 +6454,7 @@ async function augmentRingsWithDeterministicAtoms(
   // absolute deadline still prevents any new containment/stat work.
   const scopedRings =
     nowMs() < deadlineAtMs
-      ? withExplicitScopeAtoms(rings, input, searchScope, fs, nowMs, deadlineAtMs, deps.signal)
+      ? withExplicitScopeAtoms(rings, args.input, searchScope, fs, nowMs, deadlineAtMs, deps.signal)
       : rings;
   if (!budget.canContinue()) {
     markAugmentationSkipped(scopedRings, "budget-exhausted");
@@ -6338,9 +6463,10 @@ async function augmentRingsWithDeterministicAtoms(
   if (recordAugmentationSkip(args, scopedRings))
     return finishAugmentationBudget(scopedRings, budget);
   const deterministicRings = await withDeterministicContextAtoms(scopedRings, {
+    recordMetadataUnavailable: args.recordMetadataUnavailable,
     symbolDiscovery: scopedRings.symbolDiscovery,
     skipOptionalTrace: scopedRings.verifiedDefinitionContext === true,
-    input,
+    input: args.input,
     plan,
     searchScope,
     fs,
@@ -6544,6 +6670,7 @@ interface ConnectedContextExecution {
 }
 
 interface ConnectedContextActivity {
+  readonly metadataUnavailable: MetadataFailureObserver;
   readonly elapsedMs: () => number;
   readonly started: () => void;
   readonly completed: (execution: ConnectedContextExecution) => void;
@@ -7327,12 +7454,16 @@ function logConnectedContextCompletion(
   execution: ConnectedContextExecution,
   correlationId: string,
   durationMs: number,
+  metadataUnavailableDirectoryCount: number,
 ): void {
   logger.info(() =>
     activityLogEvent(
       SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION,
       { correlationId },
-      safeCompletionDetailsActivityExtra(identity, execution, correlationId),
+      {
+        ...safeCompletionDetailsActivityExtra(identity, execution, correlationId),
+        metadataUnavailableDirectoryCount,
+      },
     ),
   );
   logger.info(() =>
@@ -7344,17 +7475,40 @@ function logConnectedContextCompletion(
   );
 }
 
+function logConnectedContextFailure(
+  logger: ServerLogger,
+  identity: ConnectedContextActivityIdentity,
+  error: unknown,
+  progress: ConnectedContextProgress,
+  correlationId: string,
+  durationMs: number,
+): void {
+  const errorKind = safeConnectedContextErrorKind(error);
+  const cancelled = isConnectedContextCancellation(error, errorKind);
+  const event = (): ServerLogEvent =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION,
+      { correlationId, durationMs, errorKind },
+      safeFailureActivityExtra(identity, error, progress, cancelled, correlationId),
+    );
+  if (cancelled) logger.warn(event);
+  else logger.error(event);
+}
+
 function createConnectedContextActivity(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
   nowMs: () => number,
   logicalStartMs: number,
 ): ConnectedContextActivity {
-  const sink = deps.activityLog ?? processServerLogSink();
-  const logger = createServerLogger({ sink, level: "debug" });
+  const logger = createServerLogger({
+    sink: deps.activityLog ?? processServerLogSink(),
+    level: "debug",
+  });
   const correlationId = correlationIdOrUnknown(deps.correlationId);
   const identity = connectedContextActivityIdentity(input);
   const logElapsed = startLogTimer();
+  let metadataUnavailableDirectoryCount = 0;
   return {
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
     started: (): void => {
@@ -7367,19 +7521,21 @@ function createConnectedContextActivity(
       );
     },
     completed: (execution): void => {
-      logConnectedContextCompletion(logger, identity, execution, correlationId, logElapsed());
+      logConnectedContextCompletion(
+        logger,
+        identity,
+        execution,
+        correlationId,
+        logElapsed(),
+        metadataUnavailableDirectoryCount,
+      );
+    },
+    metadataUnavailable: (error, scopePath): void => {
+      metadataUnavailableDirectoryCount += 1;
+      logger.warn(() => metadataUnavailableEvent(error, scopePath, identity, correlationId));
     },
     failed: (error, progress): void => {
-      const errorKind = safeConnectedContextErrorKind(error);
-      const cancelled = isConnectedContextCancellation(error, errorKind);
-      const event = (): ServerLogEvent =>
-        activityLogEvent(
-          SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION,
-          { correlationId, durationMs: logElapsed(), errorKind },
-          safeFailureActivityExtra(identity, error, progress, cancelled, correlationId),
-        );
-      if (cancelled) logger.warn(event);
-      else logger.error(event);
+      logConnectedContextFailure(logger, identity, error, progress, correlationId, logElapsed());
     },
   };
 }
@@ -7390,6 +7546,7 @@ function fallbackConnectedContextActivity(
 ): ConnectedContextActivity {
   return {
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
+    metadataUnavailable: (): void => undefined,
     started: (): void => undefined,
     completed: (): void => undefined,
     failed: (): void => undefined,
@@ -8013,6 +8170,7 @@ function liveGroundedPackInputs(
   rings: RingRunSummary,
 ): AssembleGroundedPackInputs {
   return {
+    recordMetadataUnavailable: runtime.activity.metadataUnavailable,
     input,
     deps,
     plan,

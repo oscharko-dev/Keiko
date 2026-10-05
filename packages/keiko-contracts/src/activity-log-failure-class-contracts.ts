@@ -2546,7 +2546,10 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: ["search.connected-context.started"],
-      state: ["search.connected-context.completion-details"],
+      state: [
+        "search.connected-context.completion-details",
+        "search.connected-context.metadata-unavailable",
+      ],
       end: ["search.connected-context.completed"],
       failure: ["search.connected-context.failed"],
       loss: [],
@@ -2555,6 +2558,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "search.connected-context.completed",
       "search.connected-context.completion-details",
       "search.connected-context.failed",
+      "search.connected-context.metadata-unavailable",
       "search.connected-context.started",
     ],
     requiredLossOperations: [],
@@ -2562,6 +2566,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "search.connected-context.completed",
       "search.connected-context.completion-details",
       "search.connected-context.failed",
+      "search.connected-context.metadata-unavailable",
       "search.connected-context.started",
     ],
     requiredReplayProofIds: [],
@@ -2580,8 +2585,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "loss-state",
       "safe-platform-class",
     ],
-    requiredFrameOperations: ["search.connected-context.failed"],
-    requiredCauseOperations: ["search.connected-context.failed"],
+    requiredFrameOperations: [
+      "search.connected-context.failed",
+      "search.connected-context.metadata-unavailable",
+    ],
+    requiredCauseOperations: [
+      "search.connected-context.failed",
+      "search.connected-context.metadata-unavailable",
+    ],
   },
   {
     contractKind: "activity-log-failure-class",
