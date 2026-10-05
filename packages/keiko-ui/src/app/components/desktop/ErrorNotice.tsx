@@ -9,6 +9,7 @@ import { useTranslate } from "@/lib/i18n";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { bffRequestErrorKind } from "@/lib/http";
 import type { ClientOnlySupportReportInput } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import styles from "./ErrorNotice.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CloseIcon = Icons.close;
@@ -81,7 +82,7 @@ function noticeFailure(
 function NoticeText({ notice }: { readonly notice: UserErrorNotice }): ReactNode {
   const t = useTranslate();
   return (
-    <div className="ui-error-notice-text" role="alert" aria-live="assertive">
+    <div className={styles.cmpText} role="alert" aria-live="assertive">
       <div className="ui-error-notice-title">{notice.title}</div>
       <div className="ui-error-notice-message">{notice.message}</div>
       {notice.remediation !== undefined ? (

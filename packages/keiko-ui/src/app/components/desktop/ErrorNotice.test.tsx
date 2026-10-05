@@ -3,7 +3,7 @@
 // pattern already proven at VoiceDictation.tsx and WorkspaceTrustSurfaces.tsx.
 
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +18,7 @@ import { canonicalSupportReportFixture } from "@/test-utils/support-report-fixtu
 import * as reportApi from "@/lib/support-report-api";
 import { resetSupportReportOutcomesForTests } from "./SupportReportButton";
 import { ErrorNoticeFromError } from "./ErrorNotice";
+import styles from "./ErrorNotice.module.css";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -44,8 +45,13 @@ function errorNoticeLayoutStyle(): HTMLStyleElement {
   const start = css.indexOf(".ui-error-notice-title-row {");
   const end = css.indexOf(".ui-error-notice-close:hover", start);
   if (start < 0 || end < 0) throw new Error("Missing production notice layout rules");
+  const localCss = readFileSync(
+    resolve(dirname(path), "components/desktop/ErrorNotice.module.css"),
+    "utf8",
+  );
   const style = document.createElement("style");
-  style.textContent = css.slice(start, end);
+  // Apply the real module rule with its loader-assigned class in the jsdom stylesheet.
+  style.textContent = css.slice(start, end) + localCss.replaceAll(".cmpText", `.${styles.cmpText}`);
   document.head.append(style);
   return style;
 }

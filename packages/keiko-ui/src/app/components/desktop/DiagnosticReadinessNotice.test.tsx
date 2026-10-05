@@ -172,9 +172,11 @@ describe("DiagnosticReadinessNotice", () => {
           },
         },
       });
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "Error reports may currently be incomplete.",
-      );
+      const readinessStatus = screen
+        .getAllByRole("status")
+        .filter((status) => status.textContent === "Error reports may currently be incomplete.");
+      expect(readinessStatus).toHaveLength(1);
+      expect(readinessStatus[0]).toHaveTextContent("Error reports may currently be incomplete.");
       expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
       expect(screen.queryByText(/32|sink-unwritable/u)).not.toBeInTheDocument();
     },

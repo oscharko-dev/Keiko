@@ -35,7 +35,7 @@
   align-items: center;
   justify-content: center;
   border: 1px solid var(--button-secondary-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-control);
   background: var(--button-secondary-surface);
   color: var(--button-secondary-text);
   text-decoration: none;
