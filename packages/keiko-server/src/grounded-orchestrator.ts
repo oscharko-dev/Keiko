@@ -4826,15 +4826,18 @@ function metadataManifestCoverageUncertainty(
 }
 
 async function deterministicMetadataEvidence(
-  input: OrchestratorInput,
-  plan: ExplorationPlan,
-  searchScope: SearchScope,
-  fs: WorkspaceFs,
-  nowMs: () => number,
-  signal: AbortSignal | undefined,
-  deadlineAtMs: number,
-  recordUnavailable: MetadataFailureObserver,
+  inputs: DeterministicContextInputs,
 ): Promise<DeterministicContextEvidence> {
+  const {
+    input,
+    plan,
+    searchScope,
+    metadataFs: fs,
+    nowMs,
+    signal,
+    deadlineAtMs,
+    recordMetadataUnavailable: recordUnavailable,
+  } = inputs;
   const control: MetadataTraversalControl = { signal, nowMs, deadlineAtMs, recordUnavailable };
   const existsCache = createFileExistenceCache(input.scope.relativePaths);
   const discovery: MetadataDiscoveryInputs = {
@@ -4959,16 +4962,7 @@ async function deterministicMetadataAtoms(
   inputs: DeterministicContextInputs,
 ): Promise<DeterministicContextEvidence> {
   return inputs.budget.canContinue()
-    ? deterministicMetadataEvidence(
-        inputs.input,
-        inputs.plan,
-        inputs.searchScope,
-        inputs.metadataFs,
-        inputs.nowMs,
-        inputs.signal,
-        inputs.deadlineAtMs,
-        inputs.recordMetadataUnavailable,
-      )
+    ? deterministicMetadataEvidence(inputs)
     : { atoms: [], uncertainty: [] };
 }
 
