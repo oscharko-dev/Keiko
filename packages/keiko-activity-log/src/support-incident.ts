@@ -47,6 +47,7 @@ import {
   normalizeDefectFrameSignature,
   recordActivityLogLoss,
   supportIncidentBuild,
+  type ActivityLogErrorKind,
   type DefectFingerprintInput,
   type SupportIncidentCorrelation,
   type SupportIncidentPin,
@@ -159,6 +160,31 @@ const TRIGGER_FIELD = {
 } as const;
 const OPEN_COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
 
+const TERMINAL_FAILURE_FIELDS = {
+  failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+  frames: {
+    type: "string-array",
+    dataClass: "safe-platform-class",
+    required: false,
+    maxLength: 512,
+    maxItems: 8,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: false,
+    maxLength: 64,
+    maxItems: 5,
+  },
+} as const;
+// Additive for older persisted terminal lines; current producers always emit this status.
+const CLAIMS_STATUS_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: ["released", "failed", "not-attempted"],
+} as const;
+
 const SUPPORT_INCIDENT_CREATED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -259,6 +285,8 @@ const SUPPORT_INCIDENT_DISMISSED_OPERATION = defineActivityLogOperation({
   owner: "keiko-activity-log",
   emitter: "support-incident.dismissedEvidence",
   fields: {
+    ...TERMINAL_FAILURE_FIELDS,
+    claimsStatus: CLAIMS_STATUS_FIELD,
     incidentId: INCIDENT_ID_FIELD,
     defectFingerprint: FINGERPRINT_FIELD,
     fingerprintAlgorithm: ALGORITHM_FIELD,
@@ -350,6 +378,8 @@ const SUPPORT_INCIDENT_EXPIRED_OPERATION = defineActivityLogOperation({
   owner: "keiko-activity-log",
   emitter: "support-incident.expiredEvidence",
   fields: {
+    ...TERMINAL_FAILURE_FIELDS,
+    claimsStatus: { ...CLAIMS_STATUS_FIELD, required: false },
     incidentId: INCIDENT_ID_FIELD,
     expiryReason: {
       type: "string",
@@ -513,6 +543,7 @@ interface DismissalContext {
   readonly correlationId: string;
   readonly openIncidentCount: number;
   readonly reason?: "abandoned" | undefined;
+  readonly failure?: RetirementFailure | undefined;
 }
 
 type DismissalFacts = DismissalContext &
@@ -529,6 +560,54 @@ type DismissalFacts = DismissalContext &
       }
   );
 
+interface RetirementFailure {
+  readonly errorKind: ActivityLogErrorKind;
+  readonly failureKind: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+function retirementFailure(error: unknown): RetirementFailure {
+  const frames = keikoStackFrames(error);
+  const causes = causeChain(error);
+  const failureKind = errorKindOf(error);
+  return {
+    errorKind: activityLogErrorKindOr(failureKind, "internal"),
+    failureKind,
+    ...(frames.length === 0 ? {} : { frames }),
+    ...(causes.length === 0 ? {} : { causeChain: causes }),
+  };
+}
+function terminalFailureFields(
+  failure: RetirementFailure | undefined,
+): Partial<Omit<RetirementFailure, "errorKind">> {
+  if (failure === undefined) return {};
+  return {
+    failureKind: failure.failureKind,
+    ...(failure.frames === undefined ? {} : { frames: failure.frames }),
+    ...(failure.causeChain === undefined ? {} : { causeChain: failure.causeChain }),
+  };
+}
+function retirementEnvelope(
+  correlationId: string,
+  failure: RetirementFailure | undefined,
+  record?: SupportIncidentRecord,
+  incomplete = false,
+): {
+  readonly correlationId: string;
+  readonly parentCorrelationId?: string;
+  readonly level?: "warn";
+  readonly errorKind?: ActivityLogErrorKind;
+} {
+  const parent = record === undefined ? undefined : incidentLifecycleCorrelation(record);
+  return {
+    correlationId,
+    ...(parent === undefined || parent === correlationId ? {} : { parentCorrelationId: parent }),
+    ...(failure === undefined && !incomplete
+      ? {}
+      : { level: "warn", errorKind: failure?.errorKind ?? "unavailable" }),
+  };
+}
+
 function dismissedEvidence(
   stateDir: string,
   record: SupportIncidentRecord,
@@ -538,7 +617,12 @@ function dismissedEvidence(
     stateDir,
     activityLogEvent(
       SUPPORT_INCIDENT_DISMISSED_OPERATION,
-      { correlationId: facts.correlationId },
+      retirementEnvelope(
+        facts.correlationId,
+        facts.failure,
+        record,
+        facts.pinRelease === "rejected" || !facts.claimsReleased,
+      ),
       {
         incidentId: record.incidentId,
         defectFingerprint: record.fingerprint.defectFingerprint,
@@ -548,7 +632,14 @@ function dismissedEvidence(
         pinRelease: facts.pinRelease,
         openIncidentCount: facts.openIncidentCount,
         ...(facts.reason === undefined ? {} : { reason: facts.reason }),
-        ...(facts.removalStatus === undefined ? {} : { removalStatus: facts.removalStatus }),
+        removalStatus: facts.removalStatus ?? "removed",
+        claimsStatus:
+          facts.removalStatus === "failed"
+            ? "not-attempted"
+            : facts.claimsReleased
+              ? "released"
+              : "failed",
+        ...terminalFailureFields(facts.failure),
         ...(facts.pinRelease === "rejected" || !facts.claimsReleased
           ? { completeness: "partial" as const }
           : {}),
@@ -561,6 +652,8 @@ interface EntryRemoval {
   readonly removed: boolean;
   readonly complete: boolean;
   readonly pinRelease?: SupportIncidentPinRelease;
+  readonly claimsStatus?: "released" | "failed";
+  readonly failure?: RetirementFailure;
 }
 
 interface ExpiryFacts {
@@ -598,9 +691,18 @@ function expiredEvidence(stateDir: string, facts: ExpiryFacts): void {
     stateDir,
     activityLogEvent(
       SUPPORT_INCIDENT_EXPIRED_OPERATION,
-      { correlationId: incidentLifecycleCorrelation(record, facts.correlationId) },
+      retirementEnvelope(
+        incidentLifecycleCorrelation(record, facts.correlationId),
+        facts.removal.failure,
+        undefined,
+        !facts.removal.complete,
+      ),
       {
         incidentId: facts.entry.incidentId,
+        ...terminalFailureFields(facts.removal.failure),
+        ...(facts.removal.claimsStatus === undefined
+          ? {}
+          : { claimsStatus: facts.removal.claimsStatus }),
         expiryReason: facts.reason ?? incidentExpiryReason(record),
         removalStatus: facts.removal.removed ? "removed" : "failed",
         ...(facts.removal.pinRelease === undefined ? {} : { pinRelease: facts.removal.pinRelease }),
@@ -1491,22 +1593,22 @@ function releaseRecordClaims(stateDir: string, record: SupportIncidentRecord): v
   );
 }
 
+type ClaimRelease =
+  { readonly released: true } | { readonly released: false; readonly failure: RetirementFailure };
 function releaseEntryClaims(
   stateDir: string,
   record: SupportIncidentRecord,
   op:
     | "support.incident.expired"
     | "support.incident.dismissed" = SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
-): boolean {
+  correlationId = incidentLifecycleCorrelation(record),
+): ClaimRelease {
   try {
     releaseRecordClaims(stateDir, record);
-    return true;
+    return { released: true };
   } catch (error) {
-    reportServerLogFailure(error, {
-      op,
-      correlationId: incidentLifecycleCorrelation(record),
-    });
-    return false;
+    reportServerLogFailure(error, { op, correlationId });
+    return { released: false, failure: retirementFailure(error) };
   }
 }
 
@@ -1518,16 +1620,30 @@ function removeEntry(
   try {
     removeSupportIncidentRecord(stateDir, entry.incidentId);
   } catch (error) {
-    reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
-    return { removed: false, complete: false };
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
+      correlationId: options.correlationId ?? incidentLifecycleCorrelation(entry.record),
+    });
+    return { removed: false, complete: false, failure: retirementFailure(error) };
   }
   if (entry.record === undefined) return { removed: true, complete: true };
-  const claimsReleased = releaseEntryClaims(stateDir, entry.record);
+  const claims = releaseEntryClaims(
+    stateDir,
+    entry.record,
+    SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
+    options.correlationId ?? incidentLifecycleCorrelation(entry.record),
+  );
   const pinRelease = releaseIncidentPin(stateDir, entry.record, {
     correlationId: incidentLifecycleCorrelation(entry.record, options.correlationId),
     env: options.env ?? process.env,
   });
-  return { removed: true, complete: claimsReleased && pinRelease !== "rejected", pinRelease };
+  return {
+    removed: true,
+    complete: claims.released && pinRelease !== "rejected",
+    pinRelease,
+    claimsStatus: claims.released ? "released" : "failed",
+    ...(claims.released ? {} : { failure: claims.failure }),
+  };
 }
 
 // A claim whose referenced incidentId names no record right now is an orphan once it is older than
@@ -1540,12 +1656,12 @@ function removeEntry(
 // stale snapshot here would delete a brand-new, perfectly live claim out from under its owner,
 // silently reopening the exact cross-process race this whole scheme exists to close. Best-effort
 // per claim (#3533 review 4050606506) so one bad removal never blocks the rest.
-function sweepOrphanedClaims(stateDir: string): void {
+function sweepOrphanedClaims(stateDir: string, correlationId: string): void {
   let claims: readonly SupportIncidentClaimEntry[];
   try {
     claims = listSupportIncidentClaims(stateDir);
   } catch (error) {
-    reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
+    reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op, correlationId });
     return;
   }
   for (const claim of claims) {
@@ -1559,7 +1675,7 @@ function sweepOrphanedClaims(stateDir: string): void {
     try {
       removeSupportIncidentClaimFile(stateDir, claim.fileName, claim);
     } catch (error) {
-      reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op });
+      reportServerLogFailure(error, { op: SUPPORT_INCIDENT_EXPIRED_OPERATION.op, correlationId });
     }
   }
 }
@@ -1580,10 +1696,10 @@ function sweepExpiredEntries(
   const open = entries.filter((entry) => openEntry(entry, nowMs));
   for (const entry of entries) {
     if (!removableEntry(entry, nowMs)) continue;
-    const removal = removeEntry(stateDir, entry);
+    const removal = removeEntry(stateDir, entry, { correlationId });
     expiredEvidence(stateDir, { entry, removal, correlationId, openIncidentCount: open.length });
   }
-  sweepOrphanedClaims(stateDir);
+  sweepOrphanedClaims(stateDir, correlationId);
   return open;
 }
 
@@ -1644,7 +1760,8 @@ export function supportIncidentSegmentFiles(
     }));
 }
 
-export type SupportIncidentDismissal = "dismissed" | "not-found" | "failed";
+export type SupportIncidentDismissal =
+  "dismissed" | "dismissed-incomplete" | "not-found" | "failed";
 
 // Shared by dismissal (an existing record's own pin) and by a candidate outcome other than
 // "created" that must release a pin it published pre-emptively (releasePrePinned above). Never
@@ -1698,22 +1815,20 @@ function retirementFailedEvidence(
   failureStage: "read" | "sweep",
   error: unknown,
 ): ServerLogEvent {
-  const frames = keikoStackFrames(error);
-  const causes = causeChain(error);
+  const failure = retirementFailure(error);
   return activityLogEvent(
     SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION,
     {
       level: "warn",
       correlationId: options.correlationId,
-      errorKind: activityLogErrorKindOr(errorKindOf(error), "internal"),
+      errorKind: failure.errorKind,
     },
     {
       incidentId,
       failureStage,
-      failureKind: errorKindOf(error),
+      ...terminalFailureFields(failure),
+      failureKind: failure.failureKind,
       ...(options.retirementReason === undefined ? {} : { reason: options.retirementReason }),
-      ...(frames.length === 0 ? {} : { frames }),
-      ...(causes.length === 0 ? {} : { causeChain: causes }),
       completeness: "partial",
       loss: "none",
     },
@@ -1754,16 +1869,22 @@ function retireSupportIncident(
     removeSupportIncidentRecord(stateDir, incidentId);
   } catch (error) {
     reportServerLogFailure(error, { op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op, correlationId });
-    return failedWithdrawal(stateDir, record, {
-      correlationId,
-      openIncidentCount,
-      reason: options.retirementReason,
-    });
+    return failedWithdrawal(
+      stateDir,
+      { ...record, state },
+      {
+        correlationId,
+        openIncidentCount,
+        reason: options.retirementReason,
+        failure: retirementFailure(error),
+      },
+    );
   }
-  const claimsReleased = releaseEntryClaims(
+  const claims = releaseEntryClaims(
     stateDir,
     record,
     SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
+    correlationId,
   );
   const pinRelease = releaseIncidentPin(stateDir, record, {
     correlationId: incidentLifecycleCorrelation(record, correlationId),
@@ -1776,11 +1897,12 @@ function retireSupportIncident(
       correlationId,
       openIncidentCount: openIncidentCount - 1,
       pinRelease,
-      claimsReleased,
+      claimsReleased: claims.released,
+      ...(claims.released ? {} : { failure: claims.failure }),
       reason: options.retirementReason,
     },
   );
-  return claimsReleased ? "dismissed" : "failed";
+  return claims.released && pinRelease !== "rejected" ? "dismissed" : "dismissed-incomplete";
 }
 
 /** Explicit withdrawal of one retained candidate, including an owner's abandoned preparation. */
@@ -1798,7 +1920,12 @@ export function completePreparedSupportIncident(
   incidentId: string,
   options: SupportIncidentOptions = {},
 ): SupportIncidentDismissal {
-  return retireSupportIncident(stateDir, incidentId, options, "reported");
+  return retireSupportIncident(
+    stateDir,
+    incidentId,
+    { ...options, retirementReason: undefined },
+    "reported",
+  );
 }
 
 // ─── The registered-failure trigger ────────────────────────────────────────────────────────────

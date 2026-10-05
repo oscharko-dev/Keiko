@@ -868,7 +868,7 @@ describe("SupportIncident candidates", () => {
         reason: "removal-failed",
       });
 
-      expect(dismissSupportIncident(stateDir, record.incidentId)).toBe("dismissed");
+      expect(dismissSupportIncident(stateDir, record.incidentId)).toBe("dismissed-incomplete");
       expect(listSupportIncidents(stateDir)).toEqual([]); // the record itself is still removed
       const line = expectActivityLogProof(
         "support.incident.dismissed.emitted-line",
@@ -876,6 +876,10 @@ describe("SupportIncident candidates", () => {
       );
       expect(line).toMatchObject({
         incidentId: record.incidentId,
+        level: "warn",
+        errorKind: "unavailable",
+        removalStatus: "removed",
+        claimsStatus: "released",
         pinRelease: "rejected",
         completeness: "partial",
       });

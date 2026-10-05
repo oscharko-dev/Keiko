@@ -830,8 +830,9 @@ prevents a subsequent report POST.
 An exhausted diagnostic reservation buffer must not prevent manual export of already retained evidence. Desktop and CLI
 export may prepare the canonical user-report descriptor without a persistent slot or retention pin,
 then compose and validate the same bounded report. Byte pressure rolls the oldest eligible diagnostic candidate out through its existing claim and pin
-cleanup. In-flight reservations are never stolen; a transient descriptor reports its rejected pin
-rather than implying protected retention. After a desktop artifact is successfully prepared and
+cleanup. In-flight reservations are never stolen. The report summary distinguishes stored from
+transient descriptors with `retentionDisposition`; a transient descriptor omits `pinDisposition`
+because it owns no retained pin and must not imply that a pin attempt occurred. After a desktop artifact is successfully prepared and
 admitted to the existing fifteen-minute memory download cache, its durable candidate and pin are
 released. This means the artifact is prepared, not that it was saved or sent. Failed preparation or
 cache admission preserves pre-existing diagnostic candidates. The owner preparation callback marks
@@ -844,6 +845,17 @@ the attempted incident ID, closed read/sweep stage, original reduced error class
 causes, and request correlation. It leaves ownership intact and does not invent unavailable record
 metadata or counts. Successful dismissal still requires its complete descriptor metadata. Existing candidates and
 transient descriptors grant no abandonment ownership. No additional report archive is created.
+
+The terminal dismissal explicitly records `removalStatus`, `claimsStatus` and `pinRelease`. A
+failed record removal preserves the intended candidate/reported state and leaves claims and the
+pin `not-attempted`; failure after removal yields `dismissed-incomplete`, with the record already
+withdrawn and remaining cleanup explicitly incomplete. The CLI reports this distinction and exits
+nonzero. Dismissal and expiry failures persist warning-level canonical error kinds, reduced original
+classes, and available frames/causes on their terminal lines. The dismissal request is joined to
+the original incident lifecycle through its parent correlation. A missing or peer-released pin is
+`not-pinned`, while a rejected pin release remains incomplete. Successful prepared completion can
+never carry `abandoned`, even if a structurally wider caller object supplies that option.
+
 When a manual descriptor's supported causal selection retains a registry-eligible failure
 under the requested root or its direct child, desktop composition derives a registered-failure
 identity from that retained event using the existing fingerprint, frame and correlation rules.

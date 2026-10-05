@@ -261,6 +261,12 @@ function runDismiss(context: IncidentContext, incidentId: string): number {
     context.io.out(`Dismissed incident ${incidentId}.\n`);
     return 0;
   }
+  if (outcome === "dismissed-incomplete") {
+    context.io.err(
+      `Dismissed incident ${incidentId}; local evidence cleanup is incomplete. See the Activity Log for details.\n`,
+    );
+    return 1;
+  }
   context.io.err(`keiko support incident: dismiss ${incidentId} ${outcome}\n`);
   return 1;
 }

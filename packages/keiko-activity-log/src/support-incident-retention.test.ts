@@ -280,7 +280,7 @@ describe("rolling diagnostic candidate retention", () => {
       const retire =
         action === "dismissal" ? dismissSupportIncident : completePreparedSupportIncident;
       expect(retire(stateDir, created.incidentId, { correlationId: "unsafe-claim-retire" })).toBe(
-        "failed",
+        "dismissed-incomplete",
       );
       expect(lstatSync(slot).isDirectory()).toBe(true);
       expect(incidentStore.readSupportIncidentRecord(stateDir, created.incidentId)).toBeUndefined();
@@ -291,7 +291,13 @@ describe("rolling diagnostic candidate retention", () => {
       );
       expect(ended).toHaveLength(1);
       expect(JSON.parse(ended[0] ?? "{}")).toMatchObject({
+        level: "warn",
+        errorKind: "internal",
+        failureKind: "unsafe-target",
         correlationId: "unsafe-claim-retire",
+        parentCorrelationId: "unsafe-claim-owner",
+        removalStatus: "removed",
+        claimsStatus: "failed",
         incidentState: action === "dismissal" ? "candidate" : "reported",
         pinRelease: "released",
         completeness: "partial",
@@ -312,7 +318,9 @@ describe("rolling diagnostic candidate retention", () => {
     });
     const slot = vi.spyOn(incidentStore, "releaseSupportIncidentSlot");
     const notice = vi.spyOn(serverLog, "reportServerLogFailure");
-    expect(completePreparedSupportIncident(stateDir, created.incidentId)).toBe("failed");
+    expect(completePreparedSupportIncident(stateDir, created.incidentId)).toBe(
+      "dismissed-incomplete",
+    );
     expect(notice).toHaveBeenCalledWith(failure, {
       op: "support.incident.dismissed",
       correlationId: "failed-fingerprint-cleanup",
@@ -355,7 +363,9 @@ describe("rolling diagnostic candidate retention", () => {
       throw slotError;
     });
     const notice = vi.spyOn(serverLog, "reportServerLogFailure");
-    expect(completePreparedSupportIncident(stateDir, created.incidentId)).toBe("failed");
+    expect(completePreparedSupportIncident(stateDir, created.incidentId)).toBe(
+      "dismissed-incomplete",
+    );
     expect(notice.mock.calls[0]?.[0]).toBeInstanceOf(AggregateError);
     expect(notice.mock.calls[0]?.[0]).toMatchObject({
       errors: [fingerprintError, slotError],
@@ -1044,6 +1054,73 @@ describe("rolling diagnostic candidate retention", () => {
     },
   );
 
+  it("preserves reported state and the actual failure when prepared removal fails", () => {
+    const created = recordUserReportedIncident(stateDir, {
+      correlationId: "prepared-removal-source",
+    });
+    if (created.status !== "created") throw new TypeError("Expected candidate");
+    const failure = new TypeError("private deletion failure", {
+      cause: new RangeError("private cause"),
+    });
+    failure.stack =
+      "TypeError: private deletion failure\n    at retire (/private/customer/packages/keiko-activity-log/dist/support-incident.js:40:5)";
+    vi.spyOn(incidentStore, "removeSupportIncidentRecord").mockImplementationOnce(() => {
+      throw failure;
+    });
+    expect(
+      completePreparedSupportIncident(stateDir, created.incidentId, {
+        correlationId: "prepared-removal-attempt",
+      }),
+    ).toBe("failed");
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.dismissed",
+    );
+    expect(
+      expectActivityLogProof("support.incident.dismissed.emitted-line", lines[0] ?? ""),
+    ).toMatchObject({
+      level: "warn",
+      errorKind: "internal",
+      failureKind: "TypeError",
+      correlationId: "prepared-removal-attempt",
+      parentCorrelationId: "prepared-removal-source",
+      incidentState: "reported",
+      removalStatus: "failed",
+      claimsStatus: "not-attempted",
+      pinRelease: "not-attempted",
+      completeness: "partial",
+      causeChain: ["RangeError"],
+      frames: ["packages/keiko-activity-log/dist/support-incident.js:40:5"],
+    });
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([created.record]);
+    expect(lines[0]).not.toContain("private");
+  });
+
+  it("never labels a prepared completion abandoned even with a structurally wider options object", () => {
+    const created = recordUserReportedIncident(stateDir, {
+      correlationId: "completion-reason-source",
+    });
+    if (created.status !== "created") throw new TypeError("Expected candidate");
+    const options = {
+      correlationId: "completion-reason-attempt",
+      retirementReason: "abandoned" as const,
+    };
+    expect(completePreparedSupportIncident(stateDir, created.incidentId, options)).toBe(
+      "dismissed",
+    );
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.dismissed",
+    );
+    const line = expectActivityLogProof("support.incident.dismissed.emitted-line", lines[0] ?? "");
+    expect(line).toMatchObject({
+      incidentState: "reported",
+      removalStatus: "removed",
+      claimsStatus: "released",
+    });
+    expect(line).not.toHaveProperty("reason");
+  });
+
   it("records failed abandoned withdrawal without claiming removal or touching the owned pin", () => {
     const created = recordUserReportedIncident(stateDir, {
       correlationId: "abandoned-owned-cause",
@@ -1096,6 +1173,10 @@ describe("rolling diagnostic candidate retention", () => {
     expect(ended.map((line): unknown => JSON.parse(line))).toContainEqual(
       expect.objectContaining({
         correlationId: "claim-release-failure",
+        level: "warn",
+        errorKind: "internal",
+        failureKind: "permission-unsafe",
+        claimsStatus: "failed",
         removalStatus: "removed",
         pinRelease: "released",
         completeness: "partial",

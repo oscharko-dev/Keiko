@@ -109,6 +109,22 @@ that the operating system saved the file. Preparation reports the artifact's qua
 as `reportCompleteness` and `reportLoss`; the preparation event's own completeness/loss describe
 whether that event was recorded intact. Availability reasons apply only to client-only scope.
 
+### Local cleanup after preparing a report
+
+Preparing a report retires its temporary incident candidate; it does not prove a download was
+saved. `support.incident.dismissed` records the intended incident state, explicit `removalStatus`,
+`claimsStatus` and `pinRelease`. A failed removal leaves the candidate and its ownership intact,
+with claims and pin release `not-attempted`. Failed claim cleanup after removal is a distinct
+`dismissed-incomplete` result: the incident is withdrawn, but local cleanup is incomplete. The CLI
+says so and returns a nonzero exit status. Both failure paths retain their reduced error class,
+frames and cause chain on the terminal line at warning level; the dismissal correlation links to
+the incident lifecycle. An already absent owned pin is `not-pinned`, not a cleanup failure.
+
+`retentionDisposition` distinguishes `stored` from `transient` report descriptors. Transient
+descriptors have no retained incident pin, so their summary omits `pinDisposition` instead of
+claiming a rejected pin attempt. Full server evidence still requires the paired session described
+above. A reported completion never carries the `abandoned` retirement reason.
+
 ### Recognising a limited report
 
 After validation, `incident.clientReport` identifies a limited artifact with

@@ -3,7 +3,7 @@ import { resetServerLogFailureNotices } from "../../../tests/support/activity-lo
 // pinned window, the public/private projections the CLI prints, and the report/dismiss actions,
 // all through the production server module (no mocks of the store or the analyzer).
 
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,7 @@ import {
   activityLogOperationSchema,
   SUPPORT_INCIDENT_TTL_MS,
   supportIncidentFileName,
+  supportIncidentSlotClaimFileName,
   attachActivityLogEventRegistration,
   type SupportIncidentPrivateProjection,
   type SupportIncidentPublicProjection,
@@ -244,6 +245,29 @@ describe("keiko support incident", () => {
     expect(human.out).toContain("user-report");
     expect((await run(["dismiss", incidentId, "--state-dir", stateDir])).code).toBe(0);
     expect((await run(["dismiss", incidentId, "--state-dir", stateDir])).code).toBe(1);
+    expect((await run(["list", "--state-dir", stateDir])).out).toBe(
+      "No open incident candidates.\n",
+    );
+  });
+
+  it("reports a withdrawn incident separately from incomplete local cleanup", async () => {
+    const incidentId = await reportIncident();
+    const listed = await run(["list", "--state-dir", stateDir, "--json"]);
+    const { incidents } = JSON.parse(listed.out) as { incidents: SupportIncidentRecord[] };
+    const incident = incidents[0];
+    if (incident === undefined) throw new TypeError("Expected actual incident");
+    const slot = join(
+      stateDir,
+      "support-incidents",
+      supportIncidentSlotClaimFileName(incident.slotIndex),
+    );
+    rmSync(slot);
+    mkdirSync(slot);
+    const result = await run(["dismiss", incidentId, "--state-dir", stateDir]);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(`Dismissed incident ${incidentId}`);
+    expect(result.err).toContain("cleanup is incomplete");
+    expect(result.err).not.toContain("dismissed-incomplete");
     expect((await run(["list", "--state-dir", stateDir])).out).toBe(
       "No open incident candidates.\n",
     );
