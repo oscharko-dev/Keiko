@@ -288,12 +288,18 @@ into generic fragments. A named literal fact with no actual content match cannot
 semantic-only evidence. Diagnostic requests retain the original question and semantic provider,
 including questions with quoted errors or snake-case identifiers; they cannot take ordinary-document
 or literal-absence augmentation shortcuts. Relationship lookup and augmentation of actual primary
-evidence remain available. The planner owns one contextual-evidence predicate shared by definition
-narrowing and the server's literal/absence shortcuts. It reuses anchor quotation parsing so quoted
-target contents do not create diagnostic instructions. Explanatory questions and commands retain
-the full natural-language query and broader evidence, even when they request an implementation or
-contain quoted concepts; ambiguous prose cannot establish literal-only completion. Explicit typed
-literal queries and genuine literal-only requests retain strict absence semantics.
+evidence remain available. The planner owns one request-level target decision shared by definition
+narrowing and the server's provider, absence and augmentation choices. It reuses anchor quotation
+parsing so quoted contents are data. Only typed exact queries and fully parsed, small positive
+literal-search or direct-fact command shapes authorize narrowing; unknown or trailing prose retains
+the complete contextual question and semantic provider. Actual identifier content remains protected
+independently of this routing choice. After that full retrieval pass, one certified present target
+may avoid optional graph/history work only when those dimensions, diagnostics, definitions and
+document-reference discovery are not requested and traversal is complete. The body-free
+`verified-target-context` choice does not certify answer or contextual completeness. Semantic
+excerpt provenance remains in all folder prompt renderers as related context, not verified exact
+literal presence; it cannot by itself establish either presence or absence. Explicit typed literal
+queries and genuine literal-only requests retain strict absence semantics.
 Multiple targets share the same
 recursive scan. Their literal interpretation participates in the query fingerprint and uses live
 matching rather than fuzzy hashed lexical records; approximate semantic evidence cannot substitute

@@ -21,6 +21,7 @@ import { hasSymbolRelationshipQuery, type SearchLimits } from "@oscharko-dev/kei
 import {
   extractAnchors,
   queryContextOutsideQuotes,
+  queryShapeOutsideTargets,
   type SearchAnchor,
   type SearchAnchorKind,
 } from "./anchors.js";
@@ -65,6 +66,7 @@ export interface ExplorationPlan {
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
   readonly anchors: readonly SearchAnchor[];
+  readonly targetDecision?: QueryTargetDecision;
   readonly rings: readonly RetrievalRing[];
   readonly budget: ExplorationBudget;
   readonly clarification: ClarificationPrompt | undefined;
@@ -315,28 +317,181 @@ export function requiresRelationshipOrHistoryRings(query: RetrievalQuery): boole
 const DIRECT_DOCUMENT_REFERENCE_RE = /^(?:adr|rfc)-\d{3,6}$/iu;
 const REQUESTED_TEST_RELATION_RE =
   /\b(?:tests?|testing|tested|specs?|integration|integrations|integrationstests?|testet|getestet)\b/iu;
-const ENGLISH_EXPLANATION_RE = /\b(?:why|how|explain|explains|explanation|meaning)\b/iu;
-const GERMAN_EXPLANATION_RE =
-  /\b(?:warum|weshalb|wieso|erkl[äa]re(?:n)?|bedeut(?:et|en|ung)|funktioniert)\b/iu;
-const EXPLANATORY_QUESTION_RE = /\b(?:what\s+does|was\s+macht)\b/iu;
+export interface QueryTargetDecision {
+  readonly kind: "literal-search" | "direct-fact" | "contextual";
+  readonly targets: readonly SearchAnchor[];
+  readonly definitionSymbol: string | undefined;
+  readonly definitionRequested: boolean;
+}
 
-function hasContextualExplanation(text: string): boolean {
-  return (
-    ENGLISH_EXPLANATION_RE.test(text) ||
-    GERMAN_EXPLANATION_RE.test(text) ||
-    EXPLANATORY_QUESTION_RE.test(text)
+const SEARCH_COMMANDS = new Set(["find", "search", "locate", "suche", "finde", "lokalisiere"]);
+const SEARCH_MODIFIERS = new Set([
+  "for",
+  "nach",
+  "recursively",
+  "rekursiv",
+  "the",
+  "der",
+  "die",
+  "das",
+  "den",
+  "exact",
+  "literal",
+  "phrase",
+  "identifier",
+  "symbol",
+  "kennung",
+  "suchbegriff",
+  "exakten",
+  "exakte",
+  "exakter",
+  "exaktes",
+  "wörtlichen",
+  "wörtliche",
+]);
+const DEFINITION_GRAMMAR_WORDS = new Set([
+  "is",
+  "are",
+  "do",
+  "we",
+  "ist",
+  "sind",
+  "wir",
+  "the",
+  "and",
+  "und",
+]);
+const SHAPE_TOKEN_RE = /\0|[\p{L}\p{N}_$-]+/gu;
+const ENGLISH_VALUE_REQUEST_RE =
+  /^what\s+(?:value\s+is\s+documented\s+for|is\s+(?:the\s+)?value\s+of)\s+\0$/iu;
+const GERMAN_VALUE_REQUEST_RE = /^welche\s+werte\s+stehen\s+zu\s+\0$/iu;
+const GERMAN_INFORMATION_REQUEST_RE =
+  /^welche\s+information\s+ist\s+(?:für\s+\0|dazu)\s+in\s+diesem\s+ordner\s+belegt$/iu;
+
+function requestContentTargets(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+): readonly SearchAnchor[] {
+  const original = query.text.toLowerCase();
+  return anchors.filter(
+    (anchor) =>
+      (anchor.kind === "quoted" || (anchor.kind === "identifier" && anchor.weight >= 0.85)) &&
+      original.includes(anchor.term),
   );
 }
 
-/** Contextual questions retain their full query; ambiguous wording cannot justify literal-only IO. */
-export function requiresContextualEvidence(query: RetrievalQuery): boolean {
-  if (query.kind === "exact-symbol") return false;
-  const context = queryContextOutsideQuotes(query.text);
+function shapeWords(text: string): readonly string[] {
+  return [...text.toLowerCase().matchAll(SHAPE_TOKEN_RE)].map((match) => match[0]);
+}
+
+function isSearchClause(words: readonly string[]): boolean {
+  const start = words[0] === "please" || words[0] === "bitte" ? 1 : 0;
+  if (!SEARCH_COMMANDS.has(words[start] ?? "")) return false;
+  const target = words.indexOf("\0", start + 1);
+  const targetWords = literalTargetWords(words.slice(target));
   return (
-    requiresRelationshipOrHistoryRings({ ...query, text: context }) ||
-    REQUESTED_TEST_RELATION_RE.test(context) ||
-    classifyRetrievalIntent(context).intent === "diagnostic-search" ||
-    hasContextualExplanation(context)
+    target > start &&
+    words.slice(start + 1, target).every((word) => SEARCH_MODIFIERS.has(word)) &&
+    targetWords.every((word) => word === "\0" || ["and", "und", "or", "oder"].includes(word))
+  );
+}
+
+function literalTargetWords(words: readonly string[]): readonly string[] {
+  if (words.slice(-3).join(" ") === "and its value") return words.slice(0, -3);
+  if (["exactly", "exakt", "wörtlich"].includes(words.at(-1) ?? "")) return words.slice(0, -1);
+  return words;
+}
+
+function isDefinitionClause(words: readonly string[]): boolean {
+  return (
+    (words[0] === "where" || words[0] === "wo") &&
+    words.includes("\0") &&
+    words.some((word) => DEFINITION_LOOKUP_TERMS.has(word)) &&
+    words
+      .slice(1)
+      .every(
+        (word) =>
+          word === "\0" || DEFINITION_LOOKUP_TERMS.has(word) || DEFINITION_GRAMMAR_WORDS.has(word),
+      )
+  );
+}
+
+function isFactClause(words: readonly string[]): boolean {
+  const clause = words.join(" ");
+  return (
+    isDefinitionClause(words) ||
+    ENGLISH_VALUE_REQUEST_RE.test(clause) ||
+    GERMAN_VALUE_REQUEST_RE.test(clause) ||
+    GERMAN_INFORMATION_REQUEST_RE.test(clause)
+  );
+}
+
+function positiveRequestKind(shape: string): QueryTargetDecision["kind"] {
+  const clauses = shape
+    .split(/[.!?:;]+/u)
+    .map(shapeWords)
+    .filter((words) => words.length > 0);
+  if (
+    clauses.length === 0 ||
+    clauses.some(
+      (words) =>
+        !isSearchClause(words) &&
+        !isFactClause(words) &&
+        !(words.length === 1 && words[0] === "\0"),
+    )
+  )
+    return "contextual";
+  if (clauses.some(isSearchClause)) return "literal-search";
+  return clauses.some(isFactClause) ? "direct-fact" : "contextual";
+}
+
+/** Only fully parsed positive request shapes authorize narrowing; all unknown prose stays broad. */
+function definitionTarget(
+  query: RetrievalQuery,
+  kind: QueryTargetDecision["kind"],
+  targets: readonly SearchAnchor[],
+  definitionRequested: boolean,
+): string | undefined {
+  if (kind === "contextual" || query.kind === "exact-symbol" || !definitionRequested)
+    return undefined;
+  const identifiers = targets.filter((anchor) => anchor.kind === "identifier");
+  const symbol = identifiers[0]?.term;
+  return identifiers.length === 1 && symbol !== undefined && !isTestIdentifier(query.text, symbol)
+    ? symbol
+    : undefined;
+}
+
+export function resolveQueryTargetDecision(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+): QueryTargetDecision {
+  const strongTargets = requestContentTargets(query, anchors);
+  const possibleTargets =
+    strongTargets.length > 0
+      ? strongTargets
+      : anchors.filter((anchor) => anchor.kind === "literal" && /^\d+$/u.test(anchor.term));
+  const kind =
+    query.kind === "exact-symbol"
+      ? "literal-search"
+      : possibleTargets.length === 0
+        ? "contextual"
+        : positiveRequestKind(queryShapeOutsideTargets(query.text, possibleTargets));
+  const targets = kind === "literal-search" ? possibleTargets : strongTargets;
+  const definitionRequested = hasDefinitionLookup(queryContextOutsideQuotes(query.text));
+  return {
+    kind,
+    targets,
+    definitionSymbol: definitionTarget(query, kind, targets, definitionRequested),
+    definitionRequested,
+  };
+}
+
+export function requiresContextualEvidence(query: RetrievalQuery): boolean {
+  return (
+    resolveQueryTargetDecision(
+      query,
+      extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors,
+    ).kind === "contextual"
   );
 }
 
@@ -346,11 +501,12 @@ export function requiresContextualEvidence(query: RetrievalQuery): boolean {
 export function isDirectEvidenceLookup(
   query: RetrievalQuery,
   anchors: readonly SearchAnchor[],
+  decision = resolveQueryTargetDecision(query, anchors),
 ): boolean {
   if (
     requiresRelationshipOrHistoryRings(query) ||
     REQUESTED_TEST_RELATION_RE.test(query.text) ||
-    requiresContextualEvidence(query)
+    decision.kind === "contextual"
   )
     return false;
   const targets = anchors.filter(
@@ -368,22 +524,9 @@ export function isDirectEvidenceLookup(
 export function directDefinitionSymbol(
   query: RetrievalQuery,
   anchors: readonly SearchAnchor[],
+  decision = resolveQueryTargetDecision(query, anchors),
 ): string | undefined {
-  if (
-    requiresContextualEvidence(query) ||
-    !hasDefinitionLookup(query.text) ||
-    hasHistoryQuery(query.text) ||
-    hasSymbolRelation(query.text)
-  ) {
-    return undefined;
-  }
-  const identifiers = anchors.filter(
-    (anchor) => anchor.kind === "identifier" && anchor.weight >= 0.85,
-  );
-  const symbol = identifiers[0]?.term;
-  return identifiers.length === 1 && symbol !== undefined && !isTestIdentifier(query.text, symbol)
-    ? symbol
-    : undefined;
+  return decision.definitionSymbol;
 }
 
 function composeRings(
@@ -391,9 +534,11 @@ function composeRings(
   scope: SelectedScope,
   query: RetrievalQuery,
   budget: ExplorationBudget,
+  targetDecision: QueryTargetDecision,
 ): readonly RetrievalRing[] {
   const rings: RetrievalRing[] = [buildRing("lexical", anchors, budget)];
-  const directLookup = isDirectRouteLookup(query) || isDirectEvidenceLookup(query, anchors);
+  const directLookup =
+    isDirectRouteLookup(query) || isDirectEvidenceLookup(query, anchors, targetDecision);
   if (!directLookup && (hasKind(anchors, "identifier") || hasKind(anchors, "path"))) {
     rings.push(buildRing("structural", anchors, budget));
   }
@@ -551,10 +696,11 @@ export function createExplorationPlan(
     text: input.query.text,
     maxAnchors: resolved.maxAnchors,
   });
+  const targetDecision = resolveQueryTargetDecision(input.query, extraction.anchors);
   const decision = decideClarification(extraction.anchors, input.scope, classification.intent);
   const rings =
     decision.state === "ready"
-      ? composeRings(extraction.anchors, input.scope, input.query, resolved.budget)
+      ? composeRings(extraction.anchors, input.scope, input.query, resolved.budget, targetDecision)
       : [];
   const seed: PlanSeed = {
     scopeId: input.scope.scopeId,
@@ -572,6 +718,7 @@ export function createExplorationPlan(
     scope: input.scope,
     query: input.query,
     anchors: extraction.anchors,
+    targetDecision,
     rings,
     budget: resolved.budget,
     clarification: decision.clarification,

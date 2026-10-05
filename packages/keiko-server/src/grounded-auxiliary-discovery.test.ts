@@ -70,6 +70,15 @@ async function retrieve(text: string): Promise<ConnectedContextPack> {
   return output.pack;
 }
 
+function expectMultiSymbolRouting(
+  output: Awaited<ReturnType<typeof retrieveConnectedContextPack>>,
+  direct: boolean,
+): void {
+  expect(output.plan.targetDecision?.kind).toBe(direct ? "direct-fact" : "contextual");
+  expect(output.pack.usage.searchCalls).toBe(direct ? 2 : 11);
+  if (direct) expect(output.pack.uncertainty).toEqual([]);
+}
+
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "keiko-auxiliary-discovery-"));
   for (let index = 0; index < 10_020; index += 1) {
@@ -114,54 +123,72 @@ afterAll(() => {
 });
 
 describe("grounded auxiliary discovery traverses the complete admitted scope", () => {
-  it("answers explicitly requested implementation and document facts without relationship searches", async () => {
-    const text =
-      "Untersuche den aktuell verbundenen Ordner rekursiv. Wo sind LateAuxiliaryProbe und DeepAuxiliaryProbe implementiert, und welche Werte liefern sie? Was steht in ADR-987654 und ADR-987655 zum Wartungsintervall? Nenne belegte Dateien und Zeilen und unterscheide fehlende Evidenz von nicht vorhandenen Dateien.";
-    const output = await retrieveConnectedContextPack(request(text), {
-      correlationId: undefined,
-      answerer: { answer: () => Promise.reject(new Error("Retrieval must not call the model.")) },
-      nowMs: () => NOW,
-      detectWorkspace: workspace,
-    });
-    expect(output.pack.files.map((file) => file.scopePath)).toEqual(
-      expect.arrayContaining([
-        "zzzz/LateAuxiliaryProbe.ts",
-        `${deepDirectory}/DeepAuxiliaryProbe.ts`,
-        "zzzz/ADR-987654-late.md",
-        `${deepDirectory}/ADR-987655-deep.md`,
-      ]),
-    );
-    expect(output.plan.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
-    expect(output.pack.usage.searchCalls).toBe(3);
-    // Neighboring implementations share token fragments, but are not requested identifiers.
-    expect(output.pack.diagnostics?.coverage?.reasons).toEqual([]);
-    expect(output.pack.uncertainty).toEqual([]);
-    expect(validateConnectedContextPack(output.pack).ok).toBe(true);
-  }, 60_000);
-
-  it("keeps independently named CamelCase targets literal without unrelated shared-token matches", async () => {
-    const output = await retrieveConnectedContextPack(
-      request(
-        "Wo sind DeepAuxiliaryProbe und FairBetaProbe implementiert, und welche Werte liefern sie?",
-      ),
-      {
+  it.each([
+    {
+      text: "Where are LateAuxiliaryProbe and DeepAuxiliaryProbe implemented? Find ADR-987654 and ADR-987655.",
+      direct: true,
+    },
+    {
+      text: "Untersuche den aktuell verbundenen Ordner rekursiv. Wo sind LateAuxiliaryProbe und DeepAuxiliaryProbe implementiert, und welche Werte liefern sie? Was steht in ADR-987654 und ADR-987655 zum Wartungsintervall? Nenne belegte Dateien und Zeilen und unterscheide fehlende Evidenz von nicht vorhandenen Dateien.",
+      direct: false,
+    },
+  ])(
+    "retains implementation and document facts under complete request routing: $text",
+    async ({ text, direct }) => {
+      const output = await retrieveConnectedContextPack(request(text), {
         correlationId: undefined,
         answerer: { answer: () => Promise.reject(new Error("Retrieval must not call the model.")) },
         nowMs: () => NOW,
         detectWorkspace: workspace,
-      },
-    );
-    expect(output.pack.files.map((file) => file.scopePath).sort()).toEqual(
-      [`${deepDirectory}/DeepAuxiliaryProbe.ts`, "fair-targets/zzzz/FairBetaProbe.ts"].sort(),
-    );
-    expect(output.pack.diagnostics?.coverage?.filesDiscovered).toBeGreaterThan(10_000);
-    expect(output.pack.diagnostics?.coverage?.incomplete).toBe(false);
-    expect(output.pack.diagnostics?.coverage?.reasons).toEqual([]);
-    expect(output.pack.uncertainty).toEqual([]);
-    expect(output.pack.usage.searchCalls).toBe(2);
-    expect(output.pack.usage.filesRead).toBe(2);
-    expect(validateConnectedContextPack(output.pack).ok).toBe(true);
-  }, 60_000);
+      });
+      expect(output.pack.files.map((file) => file.scopePath)).toEqual(
+        expect.arrayContaining([
+          "zzzz/LateAuxiliaryProbe.ts",
+          `${deepDirectory}/DeepAuxiliaryProbe.ts`,
+          "zzzz/ADR-987654-late.md",
+          `${deepDirectory}/ADR-987655-deep.md`,
+        ]),
+      );
+      expect(output.plan.targetDecision?.kind).toBe(direct ? "literal-search" : "contextual");
+      if (direct) {
+        expect(output.plan.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
+        expect(output.pack.usage.searchCalls).toBe(3);
+        expect(output.pack.uncertainty).toEqual([]);
+      } else expect(output.pack.usage.searchCalls).toBe(14);
+      // Neighboring implementations share token fragments, but are not requested identifiers.
+      expect(output.pack.diagnostics?.coverage?.reasons).toEqual([]);
+      expect(validateConnectedContextPack(output.pack).ok).toBe(true);
+    },
+    60_000,
+  );
+
+  it.each([
+    { text: "Where are DeepAuxiliaryProbe and FairBetaProbe implemented?", direct: true },
+    {
+      text: "Wo sind DeepAuxiliaryProbe und FairBetaProbe implementiert, und welche Werte liefern sie?",
+      direct: false,
+    },
+  ])(
+    "keeps independent exact content targets across request shapes: $text",
+    async ({ text, direct }) => {
+      const output = await retrieveConnectedContextPack(request(text), {
+        correlationId: undefined,
+        answerer: { answer: () => Promise.reject(new Error("Retrieval must not call the model.")) },
+        nowMs: () => NOW,
+        detectWorkspace: workspace,
+      });
+      expect(output.pack.files.map((file) => file.scopePath).sort()).toEqual(
+        [`${deepDirectory}/DeepAuxiliaryProbe.ts`, "fair-targets/zzzz/FairBetaProbe.ts"].sort(),
+      );
+      expect(output.pack.diagnostics?.coverage?.filesDiscovered).toBeGreaterThan(10_000);
+      expect(output.pack.diagnostics?.coverage?.incomplete).toBe(false);
+      expect(output.pack.diagnostics?.coverage?.reasons).toEqual([]);
+      expectMultiSymbolRouting(output, direct);
+      expect(output.pack.usage.filesRead).toBe(2);
+      expect(validateConnectedContextPack(output.pack).ok).toBe(true);
+    },
+    60_000,
+  );
 
   it("retains document discovery for an explicit document-only fact question", async () => {
     const output = await retrieveConnectedContextPack(
@@ -178,9 +205,8 @@ describe("grounded auxiliary discovery traverses the complete admitted scope", (
     expect(output.pack.files.map((file) => file.scopePath)).toEqual(
       expect.arrayContaining(["zzzz/ADR-987654-late.md", `${deepDirectory}/ADR-987655-deep.md`]),
     );
-    expect(output.plan.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
-    expect(output.pack.usage.searchCalls).toBe(2);
-    expect(output.pack.uncertainty).toEqual([]);
+    expect(output.plan.targetDecision?.kind).toBe("contextual");
+    expect(output.pack.usage.searchCalls).toBe(11);
     expect(validateConnectedContextPack(output.pack).ok).toBe(true);
   }, 60_000);
 

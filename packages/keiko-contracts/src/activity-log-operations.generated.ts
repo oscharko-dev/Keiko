@@ -24785,12 +24785,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string-array",
         dataClass: "closed-enum",
         required: false,
-        maxItems: 4,
+        maxItems: 5,
         values: [
           "no-git-metadata",
           "ordinary-document",
           "literal-absence",
           "complete-exact-lookup",
+          "verified-target-context",
         ],
       },
       augmentationSkipped: {
@@ -24807,6 +24808,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "ordinary-document",
           "literal-absence",
           "complete-exact-lookup",
+          "verified-target-context",
           "budget-exhausted",
         ],
       },

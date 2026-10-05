@@ -5,6 +5,7 @@ import {
   directDefinitionSymbol,
   isDirectEvidenceLookup,
   requiresContextualEvidence,
+  resolveQueryTargetDecision,
 } from "./plan.js";
 
 function query(text: string): RetrievalQuery {
@@ -50,5 +51,28 @@ describe("contextual evidence query shape", () => {
     expect(
       requiresContextualEvidence({ ...query("why failed implementation"), kind: "exact-symbol" }),
     ).toBe(false);
+  });
+
+  it("cannot authorize a complete literal command from a truncated target set", () => {
+    const text = 'Find "First concept" and "Second concept".';
+    expect(resolveQueryTargetDecision(query(text), anchors(text).slice(0, 1)).kind).toBe(
+      "contextual",
+    );
+  });
+
+  it.each([
+    "What exactly does `retry_count` do?",
+    'Describe "Smart Mode".',
+    'Tell me about "Smart Mode".',
+    "What value should `retry_count` have to avoid interruptions?",
+    "Find `retry_count` and explain its purpose.",
+    'Search for "retry_count" and describe its operation.',
+    "Don't just find `retry_count`; give its context.",
+    'Décris "Smart Mode" dans ce dossier.',
+  ])("does not certify unparsed prose as a literal request: %s", (text) => {
+    const decision = resolveQueryTargetDecision(query(text), anchors(text));
+    expect(decision.kind).toBe("contextual");
+    expect(decision.targets.length).toBeGreaterThan(0);
+    expect(decision.definitionSymbol).toBeUndefined();
   });
 });

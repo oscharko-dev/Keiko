@@ -145,6 +145,7 @@ import {
   mappedWorkspaceError,
   promptSafeExcerptText,
   numberedEvidenceText,
+  evidenceProvenanceLine,
   omissionReasonLines,
   redactString,
 } from "./grounded-qa.js";
@@ -270,6 +271,7 @@ interface FolderPayload {
   readonly score: number;
   readonly stableId: string;
   readonly sourceScopeFingerprint: string;
+  readonly provenanceLine: string;
 }
 
 interface ConnectorPayload {
@@ -315,6 +317,7 @@ function folderRerankInputs(
           score: excerpt.atom.score,
           stableId: excerpt.atom.stableId,
           sourceScopeFingerprint,
+          provenanceLine: evidenceProvenanceLine(excerpt.atom.provenance, redactor),
         },
       })),
     );
@@ -842,8 +845,10 @@ function hybridCandidateExcerpt(candidate: SelectedCandidate<HybridPayload>): st
 function renderHybridCandidateBlock(candidate: SelectedCandidate<HybridPayload>): string {
   const kindLabel = candidate.kind === "folder" ? "Folder" : "Connector";
   const excerpt = hybridCandidateExcerpt(candidate);
+  const provenance = isFolderCandidate(candidate) ? `${candidate.payload.provenanceLine}\n` : "";
   return (
     `[${String(candidate.marker)}] ### ${kindLabel} source: ${candidate.sourceLabel}\n` +
+    provenance +
     `\`\`\`text\n${excerpt}\n\`\`\``
   );
 }

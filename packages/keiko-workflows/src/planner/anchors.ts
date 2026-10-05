@@ -273,6 +273,7 @@ function collectMatches(
   weight: number,
   out: MutableAnchor[],
   accept: (value: string) => boolean = () => true,
+  replacement?: string,
 ): string {
   const re = new RegExp(pattern.source, pattern.flags);
   const parts: string[] = [];
@@ -284,7 +285,7 @@ function collectMatches(
     parts.push(source.slice(cursor, match.index));
     if (accept(captured)) {
       pushAnchor(out, captured, kind, weight);
-      parts.push(" ".repeat(full.length));
+      parts.push(replacement ?? " ".repeat(full.length));
     } else {
       parts.push(full);
     }
@@ -367,16 +368,48 @@ function freeze(anchors: readonly MutableAnchor[]): readonly SearchAnchor[] {
   return anchors.map((a) => ({ term: a.term, weight: a.weight, kind: a.kind }));
 }
 
-function collectQuotedTargets(text: string, collected: MutableAnchor[]): string {
-  let remaining = collectMatches(text, QUOTED_DOUBLE_RE, "quoted", 1, collected);
-  remaining = collectMatches(remaining, QUOTED_SINGLE_RE, "quoted", 1, collected);
-  return collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected);
+function collectQuotedTargets(
+  text: string,
+  collected: MutableAnchor[],
+  replacement?: string,
+  accept: (value: string) => boolean = () => true,
+): string {
+  let remaining = collectMatches(
+    text,
+    QUOTED_DOUBLE_RE,
+    "quoted",
+    1,
+    collected,
+    accept,
+    replacement,
+  );
+  remaining = collectMatches(
+    remaining,
+    QUOTED_SINGLE_RE,
+    "quoted",
+    1,
+    collected,
+    accept,
+    replacement,
+  );
+  return collectMatches(remaining, BACKTICK_RE, "identifier", 0.9, collected, accept, replacement);
 }
 
 // Internal planner seam: quoted target contents are data, not instructions or diagnostic intent.
 // Extraction and contextual classification use the same contraction-safe quotation grammar.
 export function queryContextOutsideQuotes(text: string): string {
   return collectQuotedTargets(text, []);
+}
+
+// Same quote parser as extraction: the marker denotes accepted target data, never query prose.
+export function queryShapeOutsideTargets(text: string, targets: readonly SearchAnchor[]): string {
+  const terms = new Set(targets.map((target) => target.term));
+  const shape = collectQuotedTargets(text, [], " \0 ", (value) =>
+    terms.has(value.trim().toLowerCase()),
+  );
+  return shape.replace(/[\p{L}\p{N}_$-]+/gu, (token) =>
+    terms.has(token.toLowerCase()) ? " \0 " : token,
+  );
 }
 
 export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionResult {

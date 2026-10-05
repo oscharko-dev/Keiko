@@ -22,6 +22,7 @@ export type {
   ExplorationPlanState,
   RetrievalRing,
   RetrievalRingKind,
+  QueryTargetDecision,
 } from "./plan.js";
 export {
   DEFAULT_LEXICAL_MATCH_LIMIT,
@@ -29,6 +30,7 @@ export {
   directDefinitionSymbol,
   isDirectEvidenceLookup,
   requiresContextualEvidence,
+  resolveQueryTargetDecision,
   requiresRelationshipOrHistoryRings,
 } from "./plan.js";
 

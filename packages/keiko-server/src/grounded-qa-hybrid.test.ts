@@ -727,6 +727,53 @@ describe("hybrid grounded ask — folder evidence the window fit left out", () =
 // ─── Case 1: Mixed — 1 folder + 1 connector ──────────────────────────────────
 
 describe("hybrid grounded ask — 1 folder + 1 connector", () => {
+  it("projects semantic folder provenance into the actual hybrid answer prompt", async () => {
+    const { capsuleId } = await seedReadyCapsule("Context docs");
+    const scope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/context.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("semantic-context"),
+    };
+    const chatId = makeHybridChat([scope], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+    const pack = folderPack("src/context.ts", 0.9, "context-atom");
+    const semanticPack = {
+      ...pack,
+      files: pack.files.map((file) => ({
+        ...file,
+        excerpts: file.excerpts.map((excerpt) => ({
+          ...excerpt,
+          atom: {
+            ...excerpt.atom,
+            provenance: {
+              ...excerpt.atom.provenance,
+              kind: "model-rerank" as const,
+              tool: "repo.semanticSearch:context",
+            },
+          },
+        })),
+      })),
+    };
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Describe the context." })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(new Map([["src/context.ts", semanticPack]])),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: (_system, user) => {
+          expect(user).toContain(
+            "Related semantic context (not verified as an exact literal match)",
+          );
+          expect(user).toContain("repo.semanticSearch:context");
+          return Promise.resolve("Retrieved context [1].");
+        },
+      },
+    );
+    expect(result.status).toBe(200);
+  });
+
   it("keeps selected alias attribution while hybrid folder access uses the canonical root", async () => {
     const { capsuleId } = await seedReadyCapsule("Alias documents");
     const canonicalRoot = tempRoot("canonical-folder");

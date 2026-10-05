@@ -1244,34 +1244,42 @@ describe("buildGroundedGatewayMessages", () => {
     expect(messages[1]?.content).toContain("reason=size-exceeded");
   });
 
-  it("bounds omission metadata while preserving its complete count and prompt accounting", () => {
-    const base = packWithCitations();
-    const pack: ConnectedContextPack = {
-      ...base,
-      omitted: Array.from({ length: 20 }, (_, index) => ({
-        scopePath: `manuals/${String(index)}-${"a".repeat(80)}.txt`,
-        reason: "size-exceeded" as const,
-        omittedAtMs: NOW,
-      })),
-    };
-    const sent = fittedGroundedGatewayPrompt("Explain size exclusions", pack, buildRedactor({}));
-    const prompt = sent.messages[1]?.content ?? "";
-    const withoutSources = sent.withoutSources[1]?.content ?? "";
-    const omissionLines = prompt.split("\n").filter((line) => line.startsWith("- omitted path:"));
-    expect(promptByteLength(sent.messages)).toBeLessThanOrEqual(
-      modelInputPromptByteLimit(pack.budget.modelInputTokensMax),
-    );
-    expect(omissionLines.length).toBeLessThan(20);
-    expect(prompt).toContain("Files excluded by file-size policy: 20");
-    expect(prompt).toContain(
-      `Additional excluded paths not listed: ${String(20 - omissionLines.length)}.`,
-    );
-    expect(withoutSources).not.toContain("Files excluded by file-size policy");
-    expect(sentPromptContext(sent, 0, undefined).sourceTokens).toBeGreaterThan(0);
-    expect(sent.sentReferenceCount).toBe(
-      base.files.reduce((total, file) => total + file.excerpts.length, 0),
-    );
-  });
+  it.each([
+    { inputTokens: 1024, references: 1 },
+    { inputTokens: 2048, references: 2 },
+  ])(
+    "bounds omission metadata and accounts for $inputTokens-token prompt fitting",
+    ({ inputTokens, references }) => {
+      const base = packWithCitations();
+      const pack: ConnectedContextPack = {
+        ...base,
+        budget: { ...base.budget, modelInputTokensMax: inputTokens },
+        omitted: Array.from({ length: 40 }, (_, index) => ({
+          scopePath: `manuals/${String(index)}-${"a".repeat(80)}.txt`,
+          reason: "size-exceeded" as const,
+          omittedAtMs: NOW,
+        })),
+      };
+      const sent = fittedGroundedGatewayPrompt("Explain size exclusions", pack, buildRedactor({}));
+      const prompt = sent.messages[1]?.content ?? "";
+      const withoutSources = sent.withoutSources[1]?.content ?? "";
+      const omissionLines = prompt.split("\n").filter((line) => line.startsWith("- omitted path:"));
+      expect(promptByteLength(sent.messages)).toBeLessThanOrEqual(
+        modelInputPromptByteLimit(pack.budget.modelInputTokensMax),
+      );
+      expect(omissionLines.length).toBeLessThan(40);
+      expect(prompt).toContain("Files excluded by file-size policy: 40");
+      expect(prompt).toContain(
+        `Additional excluded paths not listed: ${String(40 - omissionLines.length)}.`,
+      );
+      expect(withoutSources).not.toContain("Files excluded by file-size policy");
+      expect(sentPromptContext(sent, 0, undefined).sourceTokens).toBeGreaterThan(0);
+      expect(sent.availableReferenceCount).toBe(
+        base.files.reduce((total, file) => total + file.excerpts.length, 0),
+      );
+      expect(sent.sentReferenceCount).toBe(references);
+    },
+  );
 
   it("includes incomplete repository coverage warnings in the model prompt", () => {
     const pack: ConnectedContextPack = {

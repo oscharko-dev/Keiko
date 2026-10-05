@@ -1076,6 +1076,26 @@ async function measureAcceptedExcerptReads(
   return counted.counts();
 }
 
+function expectVerifiedTargetAudit(
+  output: RetrievalOnlyOutput,
+  log: ReturnType<typeof createBufferedServerLogSink>,
+  measured: ReturnType<typeof countingNodeFs>,
+): void {
+  const completion = log.events.find(
+    (event) => event.op === "search.connected-context.completed",
+  )?.extra;
+  const details = log.events.find(
+    (event) => event.op === "search.connected-context.completion-details",
+  )?.extra;
+  expect(output.plan.targetDecision?.kind).toBe("contextual");
+  expect(completion?.ringSkipReasons).toEqual(["verified-target-context"]);
+  expect(completion?.augmentationSkipReason).toBe("verified-target-context");
+  expect(details?.structuralCandidateInventoryBuildCount).toBe(0);
+  expect(details?.structuralCodeIndexBuildCount).toBe(0);
+  expect(measured.counts().unboundedReadDir).toBe(0);
+  expect(measured.counts().readDir).toBe(measured.counts().streamedReadDir);
+}
+
 function expectBoundedRetrievalProducts(measurement: TraversalMeasurement): void {
   expect(measurement.contextCount).toBeGreaterThan(0);
   expect(measurement.contextCount).toBeLessThanOrEqual(3);
@@ -1299,6 +1319,8 @@ describe("runGroundedExploration", () => {
   );
 
   it("avoids unrelated graph and history work for a complete exact factual lookup in Git", async () => {
+    const measured = countingNodeFs();
+    const activityLog = createBufferedServerLogSink();
     mkdirSync(join(ROOT, ".git"));
     mkdirSync(join(ROOT, "src/überprüfung"), { recursive: true });
     writeFileSync(
@@ -1316,7 +1338,8 @@ describe("runGroundedExploration", () => {
       {
         correlationId: undefined,
         answerer: echoAnswerer,
-        fs: nodeWorkspaceFs,
+        fs: measured.fs,
+        activityLog,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
         gitFileHistoryEvidence: history,
@@ -1326,6 +1349,7 @@ describe("runGroundedExploration", () => {
     expect(file?.excerpts[0]?.content).toContain("Grüße aus dem Suchlabor");
     expect(file?.excerpts[0]?.atom.lineRange?.startLine).toBe(1);
     expect(out.pack.diagnostics?.coverage?.incomplete).toBe(false);
+    expectVerifiedTargetAudit(out, activityLog, measured);
     expect(out.pack.usage.searchCalls).toBe(1);
     expect(history).not.toHaveBeenCalled();
     expect(out.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(false);
@@ -1492,7 +1516,8 @@ describe("runGroundedExploration", () => {
       expect(file?.excerpts[0]?.atom.lineRange?.startLine).toBe(1);
       expect(out.pack.omitted.some((entry) => entry.scopePath === path)).toBe(false);
     }
-    expect(out.pack.usage.searchCalls).toBe(1);
+    expect(out.plan.targetDecision?.kind).toBe("contextual");
+    expect(out.pack.usage.searchCalls).toBe(11);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -1543,7 +1568,8 @@ describe("runGroundedExploration", () => {
     expect(out.pack.files).toEqual([]);
     expect(out.pack.diagnostics?.coverage?.matchesReturned).toBe(0);
     expect(out.pack.diagnostics?.coverage?.incomplete).toBe(false);
-    expect(out.pack.usage.searchCalls).toBe(1);
+    expect(out.plan.targetDecision?.kind).toBe("contextual");
+    expect(out.pack.usage.searchCalls).toBe(2);
   });
 
   it("keeps a complete ordinary-folder literal absence free of unrelated code scan warnings", async () => {
@@ -1565,7 +1591,8 @@ describe("runGroundedExploration", () => {
     expect(out.pack.diagnostics?.coverage?.incomplete).toBe(false);
     expect(out.pack.diagnostics?.coverage?.matchesReturned).toBe(0);
     expect(out.pack.files).toEqual([]);
-    expect(out.pack.usage.searchCalls).toBe(1);
+    expect(out.plan.targetDecision?.kind).toBe("contextual");
+    expect(out.pack.usage.searchCalls).toBe(2);
     expect(out.pack.uncertainty.some((marker) => marker.kind === "scope-incomplete")).toBe(false);
     expect(out.pack.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(true);
   });
@@ -2216,55 +2243,80 @@ describe("runGroundedExploration", () => {
     expect(calls).toBe(1);
   });
 
-  it("returns no evidence for a missing exact definition without partial-name citations", async () => {
-    const adapter = importGraphAdapter as { lookup: typeof importGraphAdapter.lookup };
-    const originalLookup = adapter.lookup;
-    let calls = 0;
-    let semanticCalls = 0;
-    const semanticSearchProvider: SemanticSearchProvider = {
-      name: "irrelevant exact-definition fallback",
-      search: () => {
-        semanticCalls += 1;
-        return Promise.resolve([{ scopePath: "src/foo.ts", score: 0.99, line: 1 }]);
-      },
-    };
-    adapter.lookup = (...args): ReturnType<typeof originalLookup> => {
-      calls += 1;
-      return originalLookup(...args);
-    };
-    const out = await (async (): Promise<
-      Awaited<ReturnType<typeof retrieveConnectedContextPack>>
-    > => {
-      try {
-        return await retrieveConnectedContextPack(
-          input({
-            scope: happyScope({
-              kind: "workspace-root",
-              relativePaths: [],
-              explicitConnection: true,
+  it.each([
+    { text: "Wo ist KeikoNonexistentQuantumHandler987 definiert?", contextual: false },
+    {
+      text: "Wo ist KeikoNonexistentQuantumHandler987 definiert? Erfinde nichts.",
+      contextual: true,
+    },
+  ])(
+    "distinguishes strict missing-definition absence from secondary context: $text",
+    async ({ text, contextual }) => {
+      const adapter = importGraphAdapter as { lookup: typeof importGraphAdapter.lookup };
+      const originalLookup = adapter.lookup;
+      let calls = 0;
+      let semanticCalls = 0;
+      const semanticSearchProvider: SemanticSearchProvider = {
+        name: "irrelevant exact-definition fallback",
+        search: () => {
+          semanticCalls += 1;
+          return Promise.resolve([{ scopePath: "src/foo.ts", score: 0.99, line: 1 }]);
+        },
+      };
+      adapter.lookup = (...args): ReturnType<typeof originalLookup> => {
+        calls += 1;
+        return originalLookup(...args);
+      };
+      const out = await (async (): Promise<
+        Awaited<ReturnType<typeof retrieveConnectedContextPack>>
+      > => {
+        try {
+          return await retrieveConnectedContextPack(
+            input({
+              scope: happyScope({
+                kind: "workspace-root",
+                relativePaths: [],
+                explicitConnection: true,
+              }),
+              query: happyQuery({
+                text,
+              }),
             }),
-            query: happyQuery({
-              text: "Wo ist KeikoNonexistentQuantumHandler987 definiert? Erfinde nichts.",
-            }),
-          }),
-          {
-            correlationId: undefined,
-            answerer: echoAnswerer,
-            nowMs: () => NOW,
-            detectWorkspace: () => fakeWorkspace(),
-            semanticSearchProvider,
-          },
-        );
-      } finally {
-        adapter.lookup = originalLookup;
-      }
-    })();
+            {
+              correlationId: undefined,
+              answerer: echoAnswerer,
+              nowMs: () => NOW,
+              detectWorkspace: () => fakeWorkspace(),
+              semanticSearchProvider,
+            },
+          );
+        } finally {
+          adapter.lookup = originalLookup;
+        }
+      })();
 
-    expect(calls).toBe(0);
-    expect(semanticCalls).toBe(0);
-    expect(out.pack.files).toEqual([]);
-    expect(out.pack.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(true);
-  });
+      if (contextual) {
+        expect(calls).toBeGreaterThan(0);
+        expect(semanticCalls).toBe(1);
+        expect(out.pack.files.map((file) => file.scopePath)).toEqual(["src/foo.ts"]);
+        expect(
+          out.pack.files
+            .flatMap((file) => file.excerpts)
+            .every((excerpt) => excerpt.atom.provenance.tool.startsWith("repo.semanticSearch:")),
+        ).toBe(true);
+        expect(
+          out.pack.files
+            .flatMap((file) => file.excerpts)
+            .some((excerpt) => excerpt.content.includes("KeikoNonexistentQuantumHandler987")),
+        ).toBe(false);
+      } else {
+        expect(out.pack.files).toEqual([]);
+        expect(calls).toBe(0);
+        expect(semanticCalls).toBe(0);
+        expect(out.pack.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(true);
+      }
+    },
+  );
 
   it("retrieves Express-style API route declarations through the full context-pack path", async () => {
     mkdirSync(join(ROOT, "src/http"), { recursive: true });

@@ -129,8 +129,7 @@ describe("primary content evidence is independent of presentation wording", () =
 
   it.each([
     "CompactAbsentProbe: Welche Information ist dazu in diesem Ordner belegt?",
-    "What is the latest value of CompactAbsentProbe?",
-    "What is the fastest value of CompactAbsentProbe?",
+    "What is the value of CompactAbsentProbe?",
   ])(
     "does not substitute another identifier's semantic evidence for named fact absence: %s",
     async (content): Promise<void> => {
@@ -142,6 +141,38 @@ describe("primary content evidence is independent of presentation wording", () =
       });
       expect(pack.files).toEqual([]);
       expect(pack.diagnostics?.coverage?.matchesReturned).toBe(0);
+    },
+  );
+
+  it.each([
+    "What is the latest value of CompactAbsentProbe?",
+    "What is the fastest value of CompactAbsentProbe?",
+  ])(
+    "keeps unparsed value questions contextual without asserting literal presence: %s",
+    async (content): Promise<void> => {
+      writeFileSync(join(root, "facts", "related.txt"), "OtherReadingProbe 81234\n");
+      const queries: string[] = [];
+      const { pack } = await retrieve(content, {
+        name: "related fixture",
+        search: ({ query }) => {
+          queries.push(query.text);
+          return Promise.resolve([{ scopePath: "facts/related.txt", line: 1, score: 0.99 }]);
+        },
+      });
+      expect(queries).toEqual([content]);
+      expect(pack.diagnostics?.coverage?.matchesReturned).toBe(1);
+      expect(pack.files.map((file) => file.scopePath)).toEqual(["facts/related.txt"]);
+      expect(
+        pack.files[0]?.excerpts.every((excerpt) =>
+          excerpt.atom.provenance.tool.startsWith("repo.semanticSearch:"),
+        ),
+      ).toBe(true);
+      expect(
+        pack.files[0]?.excerpts.every((excerpt) => !excerpt.content.includes("CompactAbsentProbe")),
+      ).toBe(true);
+      const prompt = JSON.stringify(buildGroundedGatewayMessages(content, pack, (value) => value));
+      expect(prompt).toContain("Related semantic context (not verified as an exact literal match)");
+      expect(prompt).toContain("OtherReadingProbe 81234");
     },
   );
 
@@ -206,7 +237,7 @@ describe("primary content evidence is independent of presentation wording", () =
     expect(pack.diagnostics?.coverage?.filesScanned).toBe(1);
   });
 
-  it("distinguishes an unquoted numeric hit from supplemental verified folder context", async (): Promise<void> => {
+  it("keeps a parsed numeric literal search separate from supplemental folder context", async (): Promise<void> => {
     writeFileSync(join(root, "facts", "target.txt"), "256 präziser Druck 81234\n");
     writeFileSync(join(root, "facts", "unrelated.txt"), "ordinary unrelated prose\n");
     const { pack } = await retrieve("Suche nach 256");
@@ -221,7 +252,7 @@ describe("primary content evidence is independent of presentation wording", () =
       incomplete: false,
       reasons: [],
     });
-    expectSupplementalFileListing(supplemental);
+    expect(supplemental).toBeUndefined();
   });
 
   it.each(['Suche nach "256"', 'Find the literal "präziser Druck"'])(
@@ -233,4 +264,14 @@ describe("primary content evidence is independent of presentation wording", () =
       expect(pack.files.map((file) => file.scopePath)).toEqual(["facts/target.txt"]);
     },
   );
+
+  it("retains verified supplemental folder context for unparsed numeric prose", async () => {
+    writeFileSync(join(root, "facts", "target.txt"), "256 precise pressure 81234\n");
+    writeFileSync(join(root, "facts", "unrelated.txt"), "ordinary unrelated prose\n");
+    const { pack } = await retrieve("Explain these 256 records.");
+    expectSupplementalFileListing(
+      pack.files.find((file) => file.scopePath === "facts/unrelated.txt"),
+    );
+    expect(pack.diagnostics?.coverage).toMatchObject({ filesScanned: 2, incomplete: false });
+  });
 });

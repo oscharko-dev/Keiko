@@ -1103,6 +1103,7 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
           : `Document evidence (${documentFormat.toUpperCase()}, extracted text)`;
       lines.push(
         `- ${label} ${redactedString(redactor, citation)} (score ${excerpt.atom.score.toFixed(2)}):`,
+        evidenceProvenanceLine(excerpt.atom.provenance, redactor),
         "```",
         promptSafeExcerptText(
           numberedEvidenceText(redactedString(redactor, excerpt.content), excerpt.atom.lineRange),
@@ -1115,6 +1116,18 @@ export function evidenceLines(pack: ConnectedContextPack, redactor: Redactor): r
     lines.push("No evidence excerpts were selected for this question.");
   }
   return lines;
+}
+
+/** Retrieval provenance describes selection, not proof that a requested literal occurs. */
+export function evidenceProvenanceLine(
+  provenance: EvidenceAtom["provenance"],
+  redactor: Redactor,
+): string {
+  const label =
+    provenance.kind === "semantic-search" || provenance.tool.startsWith("repo.semanticSearch:")
+      ? "Related semantic context (not verified as an exact literal match)"
+      : "Retrieval provenance";
+  return `${label}: ${provenance.kind}; tool: ${redactedString(redactor, provenance.tool)}.`;
 }
 
 /** Line annotations belong to the prompt; source content and citation ranges remain unchanged. */

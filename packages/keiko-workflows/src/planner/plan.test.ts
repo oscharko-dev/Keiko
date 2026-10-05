@@ -221,13 +221,14 @@ describe("createExplorationPlan", () => {
   it.each([
     "Untersuche den aktuell verbundenen Ordner rekursiv. Wo sind LateAuxiliaryProbe und DeepAuxiliaryProbe implementiert, und welche Werte liefern sie? Was steht in ADR-987654 und ADR-987655 zum Wartungsintervall? Nenne belegte Dateien und Zeilen und unterscheide fehlende Evidenz von nicht vorhandenen Dateien.",
     "Was steht in ADR-987654 und RFC-987655 zum Wartungsintervall? Nenne belegte Dateien und Zeilen.",
-  ])("keeps explicitly named source and document facts direct: %s", (text) => {
+  ])("keeps unparsed multi-clause source questions contextual: %s", (text) => {
     const p = plan({
       scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
       query: happyQuery({ text }),
     });
     expect(p.state).toBe("ready");
-    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
+    expect(p.targetDecision?.kind).toBe("contextual");
+    expect(p.rings[0]?.kind).toBe("lexical");
   });
 
   it("preserves one-symbol lexical narrowing separately from multi-target direct evidence", () => {
@@ -238,13 +239,19 @@ describe("createExplorationPlan", () => {
     ] as const;
     expect(isDirectEvidenceLookup(query, anchors)).toBe(true);
     expect(directDefinitionSymbol(query, anchors)).toBeUndefined();
-    expect(directDefinitionSymbol(query, anchors.slice(0, 1))).toBe("windowframe");
+    expect(directDefinitionSymbol(query, anchors.slice(0, 1))).toBeUndefined();
+    expect(
+      directDefinitionSymbol(
+        happyQuery({ text: "Where is WindowFrame implemented?" }),
+        anchors.slice(0, 1),
+      ),
+    ).toBe("windowframe");
   });
 
   it.each([
     "Wo ist LateDefinitionProbe in den verbundenen Dateien implementiert? Erstelle eine vollständige Tabelle für alle 96 Dateien mit Dateinummer, tatsächlichem Rückgabewert und belegter Definitionszeile. Verwende nur gelesene Werte, keine Vermutungen. Lange Kommentarblöcke vor der Funktion sind keine Implementierung. Gib jeden Rückgabewert an und zitiere jede Definitionszeile.",
     "Where is LateDefinitionProbe implemented? Create a complete table for all 96 files with their actual return values and cited definition lines. Use only read values, no guesses. Long comments before the function are not implementations.",
-  ])("treats evidence-only output directives as direct lookup: %s", (text) => {
+  ])("retains targets without interpreting output prose as literal-only syntax: %s", (text) => {
     const query = happyQuery({ text });
     const p = plan({
       scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
@@ -252,8 +259,10 @@ describe("createExplorationPlan", () => {
     });
     expect(p.state).toBe("ready");
     expect(requiresRelationshipOrHistoryRings(query)).toBe(false);
-    expect(isDirectEvidenceLookup(query, p.anchors)).toBe(true);
-    expect(p.rings.map((ring) => ring.kind)).toEqual(["lexical"]);
+    expect(isDirectEvidenceLookup(query, p.anchors)).toBe(false);
+    expect(p.targetDecision?.kind).toBe("contextual");
+    expect(p.targetDecision?.targets.map((target) => target.term)).toContain("latedefinitionprobe");
+    expect(p.rings[0]?.kind).toBe("lexical");
   });
 
   it.each([

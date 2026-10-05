@@ -55,7 +55,8 @@ import {
   rankCandidates,
   isDirectEvidenceLookup,
   requiresRelationshipOrHistoryRings,
-  requiresContextualEvidence,
+  resolveQueryTargetDecision,
+  type QueryTargetDecision,
   type ClarificationPrompt,
   type ClarificationReason,
   type ExcerptWindow,
@@ -275,8 +276,14 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
       type: "string-array",
       dataClass: "closed-enum",
       required: false,
-      maxItems: 4,
-      values: ["no-git-metadata", "ordinary-document", "literal-absence", "complete-exact-lookup"],
+      maxItems: 5,
+      values: [
+        "no-git-metadata",
+        "ordinary-document",
+        "literal-absence",
+        "complete-exact-lookup",
+        "verified-target-context",
+      ],
     },
     augmentationSkipped: { type: "boolean", dataClass: "closed-enum", required: false },
     augmentationSkipReason: {
@@ -288,6 +295,7 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
         "ordinary-document",
         "literal-absence",
         "complete-exact-lookup",
+        "verified-target-context",
         "budget-exhausted",
       ],
     },
@@ -706,6 +714,7 @@ interface SearchInputs {
   readonly hasGitMetadata: boolean;
   readonly searchScope: SearchScope;
   readonly query: RetrievalQuery;
+  readonly targetDecision: QueryTargetDecision;
   readonly anchors: readonly SearchAnchor[];
   readonly retrievalIntent: RetrievalIntent;
   readonly fs: WorkspaceFs;
@@ -1568,28 +1577,23 @@ function primaryLexicalAnchors(
   query: RetrievalQuery,
   anchors: readonly SearchAnchor[],
   retrievalIntent: RetrievalIntent,
+  decision = resolveQueryTargetDecision(query, anchors),
 ): readonly SearchAnchor[] {
+  if (query.kind !== "natural-language" || retrievalIntent === "repository-overview") return [];
   if (
-    query.kind !== "natural-language" ||
-    retrievalIntent === "repository-overview" ||
-    requiresContextualEvidence(query)
+    decision.kind === "contextual" &&
+    (retrievalIntent === "diagnostic-search" ||
+      requiresRelationshipOrHistoryRings(query) ||
+      anchors.some(
+        (anchor) =>
+          anchor.kind === "path" ||
+          (anchor.kind === "identifier" && /(?:Test|Tests|Spec)$/iu.test(anchor.term)),
+      ))
   )
     return [];
-  const factual =
-    !requiresRelationshipOrHistoryRings(query) &&
-    !anchors.some((anchor) => anchor.kind === "path") &&
-    !anchors.some(
-      (anchor) => anchor.kind === "identifier" && /(?:Test|Tests|Spec)$/iu.test(anchor.term),
-    );
-  const direct = isDirectEvidenceLookup(query, anchors);
   const sourceTerms = originalQueryAnchorTerms(query);
-  return anchors.filter(
-    (anchor) =>
-      anchor.kind === "quoted" ||
-      (anchor.kind === "identifier" &&
-        anchor.weight >= 0.85 &&
-        sourceTerms.has(anchor.term) &&
-        (factual || direct || anchor.term.includes("_"))),
+  return decision.targets.filter(
+    (anchor) => anchor.kind === "quoted" || sourceTerms.has(anchor.term),
   );
 }
 
@@ -1619,9 +1623,12 @@ function trimAnchorEdgeDots(value: string): string {
 }
 
 function anchoredLexicalTargets(inputs: SearchInputs): readonly string[] {
-  return primaryLexicalAnchors(inputs.query, inputs.anchors, inputs.retrievalIntent).map(
-    (anchor) => anchor.term,
-  );
+  return primaryLexicalAnchors(
+    inputs.query,
+    inputs.anchors,
+    inputs.retrievalIntent,
+    inputs.targetDecision,
+  ).map((anchor) => anchor.term);
 }
 
 function primaryContentPaths(rings: RingRunSummary): ReadonlySet<string> {
@@ -1636,7 +1643,7 @@ function certifiedLexicalContent(
   const literal =
     !requiresRelationshipOrHistoryRings(inputs.query) &&
     (anchoredLexicalTargets(inputs).length > 0 ||
-      directDefinitionSymbol(inputs.query, inputs.anchors) !== undefined ||
+      inputs.targetDecision.definitionSymbol !== undefined ||
       inputs.query.kind === "exact-symbol");
   return result.atoms
     .filter(
@@ -1657,7 +1664,12 @@ function primaryRankingAnchors(
   input: OrchestratorInput,
   plan: ExplorationPlan,
 ): readonly SearchAnchor[] {
-  const targets = primaryLexicalAnchors(input.query, plan.anchors, plan.retrievalIntent);
+  const targets = primaryLexicalAnchors(
+    input.query,
+    plan.anchors,
+    plan.retrievalIntent,
+    plan.targetDecision,
+  );
   return targets.length === 0 || requiresRelationshipOrHistoryRings(input.query)
     ? plan.anchors
     : plan.anchors.filter(
@@ -1666,28 +1678,17 @@ function primaryRankingAnchors(
       );
 }
 
-function lexicalSemanticProvider(
-  inputs: SearchInputs,
-  definitionSymbol: string | undefined,
-): SemanticSearchProvider | undefined {
-  if (inputs.query.kind === "exact-symbol") return undefined;
-  if (requiresContextualEvidence(inputs.query)) return inputs.repoSemanticSearchProvider;
-  if (isExplicitLiteralRequest(inputs.query, inputs.anchors)) return undefined;
-  const explicitLiteral = inputs.anchors.some(
-    (anchor) =>
-      anchor.kind === "quoted" || (anchor.kind === "identifier" && anchor.term.includes("_")),
-  );
-  const explicitCodeTarget = primaryLexicalAnchors(
-    inputs.query,
-    inputs.anchors,
-    inputs.retrievalIntent,
-  ).some((anchor) => anchor.kind === "identifier" && /[^\p{L}\p{N}_.$-]/u.test(anchor.term));
-  return definitionSymbol === undefined &&
-    !explicitLiteral &&
-    !explicitCodeTarget &&
-    !isDirectEvidenceLookup(inputs.query, inputs.anchors)
-    ? inputs.repoSemanticSearchProvider
-    : undefined;
+function lexicalSemanticProvider(inputs: SearchInputs): SemanticSearchProvider | undefined {
+  if (inputs.targetDecision.kind === "contextual") return inputs.repoSemanticSearchProvider;
+  if (
+    inputs.targetDecision.kind === "literal-search" ||
+    inputs.targetDecision.definitionSymbol !== undefined ||
+    isDirectEvidenceLookup(inputs.query, inputs.anchors, inputs.targetDecision)
+  )
+    return undefined;
+  return inputs.targetDecision.targets.some((anchor) => anchor.kind === "quoted")
+    ? undefined
+    : inputs.repoSemanticSearchProvider;
 }
 
 function lexicalSearchOptions(inputs: SearchInputs): {
@@ -1710,18 +1711,27 @@ interface ContextSearchResult extends SearchResult {
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
 }
 
+function lexicalQuery(inputs: SearchInputs, terms: readonly string[]): RetrievalQuery {
+  const symbol = inputs.targetDecision.definitionSymbol;
+  if (symbol !== undefined) return { ...inputs.query, kind: "exact-symbol", text: symbol };
+  return {
+    ...inputs.query,
+    text:
+      terms.length === 0 || inputs.targetDecision.kind === "contextual"
+        ? inputs.query.text
+        : terms.join(" "),
+  };
+}
+
 async function searchLexicalTerms(
   ring: RetrievalRing,
   inputs: SearchInputs,
 ): Promise<ContextSearchResult> {
   const options = lexicalSearchOptions(inputs);
-  const definitionSymbol = directDefinitionSymbol(inputs.query, inputs.anchors);
+  const definitionSymbol = inputs.targetDecision.definitionSymbol;
   const terms = definitionSymbol === undefined ? anchoredLexicalTargets(inputs) : [];
-  const query =
-    definitionSymbol === undefined
-      ? { ...inputs.query, text: terms.length === 0 ? inputs.query.text : terms.join(" ") }
-      : { ...inputs.query, kind: "exact-symbol" as const, text: definitionSymbol };
-  const semanticSearchProvider = lexicalSemanticProvider(inputs, definitionSymbol);
+  const query = lexicalQuery(inputs, terms);
+  const semanticSearchProvider = lexicalSemanticProvider(inputs);
   const context = knownFitContextFor(inputs);
   const result = await searchText(inputs.searchScope, query, ring.searchLimits, {
     ...options,
@@ -1749,6 +1759,7 @@ function allowsReadableScopeContext(coverage: SearchResult["coverage"]): boolean
 
 function knownFitContextFor(inputs: SearchInputs): KnownFitScopeContext | undefined {
   return inputs.query.kind === "natural-language" &&
+    inputs.targetDecision.kind !== "literal-search" &&
     inputs.retrievalIntent !== "diagnostic-search" &&
     !requiresRelationshipOrHistoryRings(inputs.query) &&
     !inputs.anchors.some((anchor) => anchor.kind !== "literal")
@@ -1787,7 +1798,7 @@ function withoutNamedSemanticSubstitution(
   inputs: SearchInputs,
 ): ContextSearchResult {
   if (
-    requiresContextualEvidence(inputs.query) ||
+    inputs.targetDecision.kind === "contextual" ||
     requiresRelationshipOrHistoryRings(inputs.query) ||
     anchoredLexicalTargets(inputs).length === 0 ||
     certifiedLexicalContent(result, inputs).length > 0 ||
@@ -2012,7 +2023,11 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
 }
 
 type RingSkipReason =
-  "no-git-metadata" | "ordinary-document" | "literal-absence" | "complete-exact-lookup";
+  | "no-git-metadata"
+  | "ordinary-document"
+  | "literal-absence"
+  | "complete-exact-lookup"
+  | "verified-target-context";
 interface RingDecisionAudit {
   readonly executedRingKinds: RetrievalRing["kind"][];
   readonly skippedRingKinds: RetrievalRing["kind"][];
@@ -2149,40 +2164,19 @@ function elapsedDeadlineStop(
 }
 
 const DOCUMENT_EVIDENCE_PATH_RE = /\.(?:html?|txt|rst|adoc|xml)$/iu;
-const EXPLICIT_LITERAL_LOOKUP_RE =
-  /\b(?:exact(?:ly)?|literal(?:ly)?|exakt(?:e[nmrs]?)?|wörtlich(?:e[nmrs]?)?)\b/iu;
-const LITERAL_LOOKUP_REQUEST_RE =
-  /^(?:(?:please|bitte)\s+)?(?:find|search|locate|suche|finde|lokalisiere)\b/iu;
-
-function isExplicitLiteralRequest(
-  query: RetrievalQuery,
-  anchors: readonly SearchAnchor[],
-): boolean {
-  return (
-    query.kind === "exact-symbol" ||
-    (!requiresContextualEvidence(query) &&
-      LITERAL_LOOKUP_REQUEST_RE.test(query.text.trim()) &&
-      EXPLICIT_LITERAL_LOOKUP_RE.test(query.text) &&
-      anchors.some(
-        (anchor) =>
-          anchor.kind === "quoted" ||
-          (anchor.kind === "identifier" && anchor.weight >= 0.85 && anchor.term.includes("_")),
-      ))
-  );
-}
 
 function isCompleteExactLiteralLookup(
   query: RetrievalQuery,
-  anchors: readonly SearchAnchor[],
   diagnostics: ContextPackDiagnostics | undefined,
+  decision: QueryTargetDecision,
 ): boolean {
   const coverage = diagnostics?.coverage;
   return (
-    isExplicitLiteralRequest(query, anchors) &&
+    decision.kind === "literal-search" &&
     coverage?.incomplete === false &&
     coverage.matchesReturned > 0 &&
     !requiresRelationshipOrHistoryRings(query) &&
-    directDefinitionSymbol(query, anchors) === undefined
+    !requiresNamedDiscovery(decision)
   );
 }
 
@@ -2226,9 +2220,10 @@ function lookupAugmentationSkipReason(
   anchors: readonly SearchAnchor[],
   hasGitMetadata: boolean,
   diagnostics: ContextPackDiagnostics | undefined,
+  decision: QueryTargetDecision,
 ): RingSkipReason | undefined {
-  if (requiresContextualEvidence(query)) return undefined;
-  if (isCompleteExactLiteralLookup(query, anchors, diagnostics)) return "complete-exact-lookup";
+  if (decision.kind === "contextual") return undefined;
+  if (isCompleteExactLiteralLookup(query, diagnostics, decision)) return "complete-exact-lookup";
   if (isOrdinaryDocumentLookup(query, hasGitMetadata, diagnostics)) return "ordinary-document";
   if (isOrdinaryLiteralAbsence(query, hasGitMetadata, anchors, diagnostics))
     return "literal-absence";
@@ -2238,12 +2233,16 @@ function lookupAugmentationSkipReason(
 function optionalRingSkipReason(
   ring: RetrievalRing,
   inputs: SearchInputs,
-  diagnostics: ContextPackDiagnostics | undefined,
+  evidence: RingEvidenceAccumulator,
 ): RingSkipReason | undefined {
   if (requiresRelationshipOrHistoryRings(inputs.query) || ring.kind === "lexical") return undefined;
   if (
-    !requiresContextualEvidence(inputs.query) &&
-    isCompleteExactLiteralLookup(inputs.query, inputs.anchors, diagnostics)
+    hasVerifiedTargetContext(inputs.query, inputs.targetDecision, inputs.retrievalIntent, evidence)
+  )
+    return "verified-target-context";
+  if (
+    inputs.targetDecision.kind !== "contextual" &&
+    isCompleteExactLiteralLookup(inputs.query, evidence.diagnostics, inputs.targetDecision)
   )
     return "complete-exact-lookup";
   if (ring.kind === "git-history") return inputs.hasGitMetadata ? undefined : "no-git-metadata";
@@ -2251,7 +2250,34 @@ function optionalRingSkipReason(
     inputs.query,
     inputs.anchors,
     inputs.hasGitMetadata,
-    diagnostics,
+    evidence.diagnostics,
+    inputs.targetDecision,
+  );
+}
+
+function hasVerifiedTargetContext(
+  query: RetrievalQuery,
+  decision: QueryTargetDecision,
+  intent: RetrievalIntent,
+  evidence: Pick<RingRunSummary, "atoms" | "primaryContentIdentities" | "diagnostics">,
+): boolean {
+  // The full contextual lexical/semantic request already ran. One certified target proves
+  // presence only; it does not certify an answer or the completeness of contextual dimensions.
+  return (
+    decision.kind === "contextual" &&
+    decision.targets.length === 1 &&
+    !requiresNamedDiscovery(decision) &&
+    intent !== "diagnostic-search" &&
+    !requiresRelationshipOrHistoryRings(query) &&
+    evidence.diagnostics?.coverage?.incomplete === false &&
+    certifiedContentPaths(evidence.atoms, evidence.primaryContentIdentities ?? []).size > 0
+  );
+}
+
+function requiresNamedDiscovery(decision: QueryTargetDecision): boolean {
+  return (
+    decision.definitionRequested ||
+    decision.targets.some((target) => DOCUMENT_REFERENCE_ANCHOR_RE.test(target.term))
   );
 }
 
@@ -2273,10 +2299,10 @@ function lexicalContentIdentities(
 function skipPlannedRing(
   ring: RetrievalRing,
   inputs: SearchInputs,
-  diagnostics: ContextPackDiagnostics | undefined,
+  evidence: RingEvidenceAccumulator,
   decisions: RingDecisionAudit,
 ): boolean {
-  const reason = optionalRingSkipReason(ring, inputs, diagnostics);
+  const reason = optionalRingSkipReason(ring, inputs, evidence);
   if (reason === undefined) return false;
   decisions.skippedRingKinds.push(ring.kind);
   if (!decisions.ringSkipReasons.includes(reason)) decisions.ringSkipReasons.push(reason);
@@ -2364,7 +2390,7 @@ async function runAllRings(
   const decisions = newRingDecisions();
   for (const ring of rings) {
     throwIfCancelled(inputs.signal);
-    if (skipPlannedRing(ring, inputs, evidence.diagnostics, decisions)) {
+    if (skipPlannedRing(ring, inputs, evidence, decisions)) {
       governor = advanceRing(governor);
       continue;
     }
@@ -5809,11 +5835,18 @@ function markAugmentationSkipped(
 }
 
 function recordAugmentationSkip(args: AssembleGroundedPackInputs, rings: RingRunSummary): boolean {
+  const decision =
+    args.plan.targetDecision ?? resolveQueryTargetDecision(args.input.query, args.plan.anchors);
+  if (hasVerifiedTargetContext(args.input.query, decision, args.plan.retrievalIntent, rings)) {
+    markAugmentationSkipped(rings, "verified-target-context");
+    return true;
+  }
   const reason = lookupAugmentationSkipReason(
     args.input.query,
     args.plan.anchors,
     args.hasGitMetadata,
     rings.diagnostics,
+    decision,
   );
   if (reason === undefined) return false;
   markAugmentationSkipped(rings, reason);
@@ -6866,6 +6899,7 @@ function connectedContextSearchInputs(
     hasGitMetadata: context.hasGitMetadata,
     searchScope: context.searchScope,
     query: input.query,
+    targetDecision: plan.targetDecision ?? resolveQueryTargetDecision(input.query, plan.anchors),
     anchors: plan.anchors,
     retrievalIntent: plan.retrievalIntent,
     fs: context.ringFs,
