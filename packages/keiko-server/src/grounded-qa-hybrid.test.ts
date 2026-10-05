@@ -780,7 +780,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
       const first = await handleGroundedAsk(routeCtx(request), owner, undefined, undefined, seam);
       expect(first.status, JSON.stringify(first.body)).toBe(200);
       const answer = asHybrid(first.body as GroundedAnswer);
-      expect(answer.memory).toBeUndefined();
+      expect(answer).not.toHaveProperty("memory");
       expect(answer.contextPack.folder.contextSummary?.compactionActive).toBe(compacted);
       expect(store.findMessageById(answer.assistantMessageId)?.groundedAnswer).toEqual(answer);
       const replay = await handleGroundedAsk(routeCtx(request), owner, undefined, undefined, seam);
