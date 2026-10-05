@@ -1946,6 +1946,9 @@ function retireSupportIncident(
   state: "candidate" | "reported",
 ): SupportIncidentDismissal {
   const requestCorrelationId = options.correlationId ?? randomUUID();
+  // Ownership refusal is already evidenced by the owning graph. Keep it outside the filesystem
+  // inspection catch so a rejected graph never tries to open a second diagnostic sink.
+  claimActivityLogWriterOwnership(stateDir, requestCorrelationId);
   const inspected = inspectRetirement(stateDir, incidentId, {
     ...options,
     correlationId: requestCorrelationId,
