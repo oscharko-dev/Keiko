@@ -5,7 +5,7 @@ import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-cont
 // states. Every test is mutation-robust: a single-line change in the source — a swapped count, a
 // missing `.source` tag, a dropped skip-uncertainty — must make at least one assertion fail.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +52,8 @@ import {
 import {
   buildSelectedScopeFrom,
   handleGroundedAsk,
+  modelWindowAwareBudget,
+  sizeExclusionLines,
   type GroundedRunner,
   type HybridSeam,
 } from "./grounded-qa.js";
@@ -79,6 +81,7 @@ import {
   hashString32,
   runHybridGroundedAsk,
   type ConnectorRetrieve,
+  type HybridGroundedAskCtx,
 } from "./grounded-qa-hybrid.js";
 import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -168,6 +171,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetServerLogger();
   store.close();
   rmSync(tmp, { recursive: true, force: true });
 });
@@ -1845,6 +1849,199 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
       expect(promptContext?.sentReferenceCount).toBe(0);
     },
   );
+});
+
+async function hybridReviewContext(): Promise<HybridGroundedAskCtx> {
+  const { capsuleId } = await seedReadyCapsule("Hybrid review docs");
+  const chatId = makeHybridChat(
+    [{ kind: "workspace-root", root: tempRoot("review"), relativePaths: [], connectedAtMs: NOW }],
+    [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+  );
+  const chat = store.findChatById(chatId);
+  if (chat === undefined) throw new Error("Missing review chat");
+  return {
+    chat,
+    content: "Explain the connected source",
+    modelId: CHAT_MODEL,
+    contextProfile: undefined,
+    deps: hybridDeps(),
+    correlationId: "hybrid-review-request",
+    signal: new AbortController().signal,
+    folderRetriever: folderRetrieverFor(new Map([["", folderPack("src/review.ts", 1, "review")]])),
+    connectorRetrieve: () => Promise.resolve({ references: [], noEvidence: true }),
+    answer: () => Promise.resolve("Source behavior [1]."),
+  };
+}
+
+function largeHybridOmissionPack(): ConnectedContextPack {
+  return {
+    ...folderPack("src/review.ts", 1, "review"),
+    omitted: Array.from({ length: 2000 }, (_, index) => ({
+      scopePath: `src/${String(index)}-${"long-directory-name/".repeat(8)}large.html`,
+      reason: "size-exceeded",
+      omittedAtMs: NOW,
+    })),
+  };
+}
+
+function assertHybridWindowFitLine(
+  sink: ReturnType<typeof createBufferedServerLogSink>,
+  promptTokens: number,
+  inputBudget: number,
+): void {
+  const events = sink.events.filter((event) => event.op === "search.prompt.window-fitted");
+  expect(events).toHaveLength(1);
+  const line = formatActivityLogProofLine(events[0] ?? {});
+  expect(expectActivityLogProof("search.prompt.window-fitted.line", line)).toMatchObject({
+    correlationId: "hybrid-review-request",
+    state: "trimmed",
+    referenceCount: 1,
+    sentReferenceCount: 1,
+    promptTokens,
+    inputBudget,
+    completeness: "complete",
+    loss: "none",
+  });
+  expect(JSON.stringify(line)).not.toContain("long-directory-name");
+}
+
+describe("hybrid model budget and runtime truth", () => {
+  it("uses the selected model budget before retrieving folder excerpts", async () => {
+    const ctx = await hybridReviewContext();
+    const profile = deriveContextProfile({
+      maxInputTokens: 32000,
+      reservedOutputTokens: 1024,
+      safetyMarginTokens: 64,
+    });
+    const deps = hybridDeps({ contextProfile: profile });
+    const budgets: ExplorationBudget[] = [];
+    const result = await runHybridGroundedAsk({
+      ...ctx,
+      deps,
+      contextProfile: profile,
+      folderRetriever: async (input) => {
+        budgets.push(input.budget ?? DEFAULT_EXPLORATION_BUDGET);
+        const out = await folderRetrieverFor(
+          new Map([["", folderPack("src/review.ts", 1, "review")]]),
+        )(input);
+        return { ...out, pack: { ...out.pack, budget: input.budget ?? out.pack.budget } };
+      },
+    });
+    expect(result.status).toBe(200);
+    expect(budgets).toEqual([modelWindowAwareBudget(deps, CHAT_MODEL)]);
+    expect(asHybrid(result.body as GroundedAnswer).contextPack.folder.budget).toEqual(budgets[0]);
+  });
+
+  it("includes safe size-exclusion metadata in the actual model prompt", async () => {
+    const ctx = await hybridReviewContext();
+    const pack: ConnectedContextPack = {
+      ...folderPack("src/review.ts", 1, "review"),
+      omitted: [{ scopePath: "src/large.html", reason: "size-exceeded", omittedAtMs: NOW }],
+    };
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+    let prompt = "";
+    const result = await runHybridGroundedAsk({
+      ...ctx,
+      folderRetriever: folderRetrieverFor(new Map([["", pack]])),
+      answer: (_system, user) => {
+        prompt = user;
+        return Promise.resolve("Source behavior [1].");
+      },
+    });
+    expect(result.status).toBe(200);
+    for (const line of sizeExclusionLines(pack, ctx.deps.redactor)) expect(prompt).toContain(line);
+    expect(prompt).not.toContain(".env");
+    expect(prompt).toContain("not file-content evidence");
+  });
+
+  it("fits large exclusion inventories while retaining answer evidence and exact prompt metrics", async () => {
+    const ctx = await hybridReviewContext();
+    const profile = deriveContextProfile({
+      maxInputTokens: 32000,
+      reservedOutputTokens: 1024,
+      safetyMarginTokens: 64,
+    });
+    const pack = largeHybridOmissionPack();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    let sentTokens = 0;
+    let prompt = "";
+    const result = await runHybridGroundedAsk({
+      ...ctx,
+      contextProfile: profile,
+      deps: hybridDeps({ contextProfile: profile }),
+      folderRetriever: folderRetrieverFor(new Map([["", pack]])),
+      answer: (system, user) => {
+        prompt = user;
+        sentTokens = countGatewayPromptTokens(
+          {
+            messages: [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+          },
+          profile.tokenAccounting,
+        );
+        return Promise.resolve("Source behavior [1].");
+      },
+    });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(prompt).toContain("evidence for src/review.ts");
+    expect(prompt).toContain("Files excluded by file-size policy: 2000.");
+    expect(prompt).toContain("Additional excluded paths not listed:");
+    expect(sentTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
+    expect((result.body as GroundedAnswer).promptContext?.estimatedPromptTokens).toBe(sentTokens);
+    assertHybridWindowFitLine(sink, sentTokens, profile.effectiveInputBudget);
+  });
+
+  it("measures wall time through retrieval, model wait and entailment", async () => {
+    const ctx = await hybridReviewContext();
+    const clock = { now: NOW };
+    const now = vi.spyOn(Date, "now").mockImplementation(() => clock.now);
+    try {
+      const result = await runHybridGroundedAsk({
+        ...ctx,
+        folderRetriever: async (input) => {
+          clock.now += 1000;
+          return folderRetrieverFor(new Map([["", folderPack("src/review.ts", 1, "review")]]))(
+            input,
+          );
+        },
+        answer: () => {
+          clock.now += 35000;
+          return Promise.resolve("Source behavior [1].");
+        },
+        entailmentStageFactory: () => ({
+          evaluate: (): ReturnType<EntailmentStage["evaluate"]> => Promise.resolve([]),
+          evaluateNumeric: (): ReturnType<EntailmentStage["evaluateNumeric"]> =>
+            Promise.resolve([]),
+          evaluateHybrid: (): ReturnType<EntailmentStage["evaluate"]> => {
+            clock.now += 2000;
+            return Promise.resolve([]);
+          },
+        }),
+      });
+      expect(result.status).toBe(200);
+      const answer = asHybrid(result.body as GroundedAnswer);
+      expect(answer.elapsedMs).toBe(38000);
+      expect(answer.contextPack.folder.elapsedMs).toBe(38000);
+      expect(answer.contextPack.folder.usage.elapsedMs).toBe(7);
+      expect(store.listMessages(ctx.chat.id).at(-1)?.groundedAnswer?.elapsedMs).toBe(38000);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("preserves unexpected failures for the route diagnostic owner without a raw 500 response", async () => {
+    const ctx = await hybridReviewContext();
+    const failure = new TypeError("private-file /customer/secrets.sql failed");
+    await expect(
+      runHybridGroundedAsk({
+        ...ctx,
+        answer: () => Promise.reject(failure),
+      }),
+    ).rejects.toBe(failure);
+  });
 });
 
 // ─── Case 3: Not-ready connector skipped, others answer ──────────────────────

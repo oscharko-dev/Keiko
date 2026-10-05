@@ -7,7 +7,10 @@
 // connector seams (local-knowledge-grounded-qa.ts) without re-implementing retrieval.
 
 import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
-import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
+import {
+  resolveCostClass,
+  type ChatMessage as GatewayChatMessage,
+} from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
 import {
@@ -39,7 +42,6 @@ import {
   connectedContextOmittedCount,
   CANDIDATE_OMISSION_REASONS,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
-  DEFAULT_EXPLORATION_BUDGET,
   type CandidateOmissionReason,
   type ConnectedContextPack,
   type RetrievalQuery,
@@ -60,8 +62,6 @@ import {
   type LocalKnowledgeGroundedAnswerContextSummary,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
-import { redact } from "@oscharko-dev/keiko-security";
-
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
@@ -71,8 +71,11 @@ import {
   currentRedactionSecrets,
 } from "./deps.js";
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
-import type { GatewayPromptTokenInput } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
-import { fitKnowledgePrompt } from "./knowledge-prompt-window.js";
+import {
+  countGatewayPromptTokens,
+  type GatewayPromptTokenInput,
+} from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { fitKnowledgePrompt, logPromptWindowFit } from "./knowledge-prompt-window.js";
 import type { Chat, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
@@ -138,15 +141,18 @@ import {
   groundedContextSummaryInput,
   groundedEvidenceRunId,
   groundedScopeWorkspaceFs,
-  internalError,
   isValidGroundedPack,
   mappedGatewayError,
   mappedContextPackValidationError,
   mappedWorkspaceError,
+  modelWindowAwareBudget,
+  modelInputPromptByteLimit,
+  fitPromptOmissionMetadata,
   promptSafeExcerptText,
   numberedEvidenceText,
   evidenceProvenanceLine,
   omissionReasonLines,
+  sizeExclusionLines,
   redactString,
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
@@ -194,9 +200,11 @@ export type ConnectorRetrieve = (
 export type HybridAnswerer = (system: string, user: string) => Promise<GroundedAnswerPayload>;
 
 export interface HybridGroundedAskCtx {
+  readonly startedAtMs?: number;
   readonly sourceScopeFingerprints?: ReadonlyMap<ChatConnectedScope, string>;
   /** Canonical closed omission counts from retrieved folders; no excluded paths or contents. */
   readonly folderOmissionMetadata?: readonly string[];
+  readonly folderOmissionPacks?: readonly RetrievedFolder[];
   readonly retrievalContent?: string | undefined;
   readonly chat: Chat;
   readonly content: string;
@@ -613,7 +621,11 @@ async function retrieveFolderPacks(
   // split, so with N folders every folder received the same rich share and the total N x work broke
   // the documented "sum of every dimension equals the base cap" invariant. The plural form is
   // query-weighted and per-folder, and re-uses the same allocation runMultiSourceAsk already uses.
-  const perFolderBudgets = splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, folderScopes, query);
+  const perFolderBudgets = splitExplorationBudgets(
+    modelWindowAwareBudget(ctx.deps, ctx.modelId),
+    folderScopes,
+    query,
+  );
   // Index-addressed slots keep the emitted order identical to the scope order regardless of which
   // worker finishes first — evidence and labels stay deterministic (mirrors retrieveConnectors).
   const slots: FolderSlot[] = new Array<FolderSlot>(folderScopes.length).fill(undefined);
@@ -1891,20 +1903,26 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
 async function noEvidenceAssistant(
   ctx: HybridGroundedAskCtx,
   selected: readonly SelectedCandidate<HybridPayload>[],
-): Promise<GroundedAnswerResult | RouteResult> {
+): Promise<
+  | { readonly assistant: GroundedAnswerResult; readonly promptCtx: HybridGroundedAskCtx }
+  | RouteResult
+> {
   ensureNotCancelled(ctx.signal);
   if (ctx.answerOnlyContextAvailable !== true) {
     // Share the localized deterministic search outcome with folder and multi-source paths.
     return {
-      content: connectedSearchNoEvidenceAnswer(ctx.content),
-      usage: { promptTokens: 0, completionTokens: 0 },
+      assistant: {
+        content: connectedSearchNoEvidenceAnswer(ctx.content),
+        usage: { promptTokens: 0, completionTokens: 0 },
+      },
+      promptCtx: ctx,
     };
   }
   const answerer = resolveHybridAnswerer(ctx);
   if ("status" in answerer) return answerer;
-  const { assistant } = await answerHybridWithinWindow(ctx, answerer, selected);
+  const { assistant, promptCtx } = await answerHybridWithinWindow(ctx, answerer, selected);
   ensureNotCancelled(ctx.signal);
-  return assistant;
+  return { assistant, promptCtx };
 }
 
 function noEvidenceSources(meta: AnswerMeta): RetrievedSources {
@@ -1926,8 +1944,9 @@ async function assembleHybridNoEvidenceRoute(
   limits: ReturnType<typeof currentGroundingLimits>,
   reranker: GroundedRerankerDiagnostics,
 ): Promise<RouteResult> {
-  const assistant = await noEvidenceAssistant(ctx, selected);
-  if ("status" in assistant) return assistant;
+  const outcome = await noEvidenceAssistant(ctx, selected);
+  if ("status" in outcome) return outcome;
+  const { assistant, promptCtx } = outcome;
   ensureNotCancelled(ctx.signal);
   const content = redactString(ctx.deps.redactor, assistant.content);
   ensureNotCancelled(ctx.signal);
@@ -1939,7 +1958,7 @@ async function assembleHybridNoEvidenceRoute(
     ctx.userMessage,
   );
   const answer = assembleHybridAnswer({
-    ctx,
+    ctx: promptCtx,
     sources: noEvidenceSources(meta),
     store,
     selected,
@@ -1962,14 +1981,31 @@ async function assembleHybridNoEvidenceRoute(
       : answer;
   ensureNotCancelled(ctx.signal);
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
-  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, finalAnswer, previewCitations);
-  return { status: 200, body: finalAnswer };
+  const completedAnswer = withHybridAnswerDuration(finalAnswer, ctx);
+  ctx.deps.store.attachGroundedAnswer(assistantMessage.id, completedAnswer, previewCitations);
+  return { status: 200, body: completedAnswer };
+}
+
+function withHybridAnswerDuration(
+  answer: HybridGroundedAnswer,
+  ctx: HybridGroundedAskCtx,
+): HybridGroundedAnswer {
+  const elapsedMs = Math.max(0, Date.now() - (ctx.startedAtMs ?? Date.now()));
+  return {
+    ...answer,
+    elapsedMs,
+    contextPack: {
+      ...answer.contextPack,
+      folder: { ...answer.contextPack.folder, elapsedMs },
+    },
+  };
 }
 
 export async function runHybridGroundedAsk(ctx: HybridGroundedAskCtx): Promise<RouteResult> {
+  const startedAtMs = Date.now();
   const env = openStoreForDeps(ctx.deps);
   try {
-    return await runHybridWithStore(ctx, env.store, env.vectorIndex);
+    return await runHybridWithStore({ ...ctx, startedAtMs }, env.store, env.vectorIndex);
   } catch (error) {
     if (ctx.signal.aborted) {
       return { status: 499, body: errorBody("CANCELLED", "Grounded request was cancelled.") };
@@ -2166,6 +2202,7 @@ async function runHybridWithStore(
   const answerCtx = {
     ...ctx,
     folderOmissionMetadata: folderOmissionMetadata(folderResult.retrieved, ctx.deps.redactor),
+    folderOmissionPacks: folderResult.retrieved,
   };
   return await answerAndAssemble(answerCtx, store, {
     folderScopeCount: capped.allFolderCount,
@@ -2178,9 +2215,13 @@ async function runHybridWithStore(
 function folderOmissionMetadata(
   folders: readonly RetrievedFolder[],
   redactor: Redactor,
+  pathByteLimit?: number,
 ): readonly string[] {
   return folders.flatMap((source) => {
-    const reasons = omissionReasonLines(source.pack);
+    const reasons = [
+      ...omissionReasonLines(source.pack),
+      ...sizeExclusionLines(source.pack, redactor, pathByteLimit),
+    ];
     return reasons.length === 0
       ? []
       : [`Folder source: ${redactString(redactor, source.label)}`, ...reasons];
@@ -2246,11 +2287,11 @@ async function answerAndAssemble(
   }
   const answerer = resolveHybridAnswerer(ctx);
   if ("status" in answerer) return answerer;
-  const { assistant, sent } = await answerHybridWithinWindow(ctx, answerer, selected);
+  const { assistant, sent, promptCtx } = await answerHybridWithinWindow(ctx, answerer, selected);
   ensureNotCancelled(ctx.signal);
   const [userMessage, assistantMessage] = persistHybridGroundedExchange(ctx, assistant.content);
   // Citations and the prompt share follow the candidates the model was actually shown.
-  return finalizeHybridAnswer(ctx, store, meta, {
+  return finalizeHybridAnswer(promptCtx, store, meta, {
     selected: sent,
     availableReferenceCount: selected.length,
     limits,
@@ -2258,6 +2299,61 @@ async function answerAndAssemble(
     reranker,
     ids: { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
   });
+}
+
+function hybridPromptMessages(
+  ctx: HybridGroundedAskCtx,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): readonly GatewayChatMessage[] {
+  return [
+    { role: "system", content: HYBRID_SYSTEM_PROMPT },
+    {
+      role: "user",
+      content: buildRerankedHybridUserMessage(
+        ctx.answerContent ?? ctx.content,
+        selected,
+        ctx.deps.redactor,
+        ctx.folderOmissionMetadata,
+      ),
+    },
+  ];
+}
+
+function hybridContextWithinWindow(
+  ctx: HybridGroundedAskCtx,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+): HybridGroundedAskCtx {
+  const profile = currentContextProfileForModel(ctx.deps, ctx.modelId);
+  if (profile === undefined || ctx.folderOmissionPacks === undefined) return ctx;
+  const tokens = (messages: readonly GatewayChatMessage[]): number =>
+    countGatewayPromptTokens({ messages }, profile.tokenAccounting);
+  if (tokens(hybridPromptMessages(ctx, selected)) <= profile.effectiveInputBudget) return ctx;
+  const withMetadata = (bytes: number): HybridGroundedAskCtx => ({
+    ...ctx,
+    folderOmissionMetadata: folderOmissionMetadata(
+      ctx.folderOmissionPacks ?? [],
+      ctx.deps.redactor,
+      bytes,
+    ),
+  });
+  const fitted = fitPromptOmissionMetadata(
+    (bytes) => hybridPromptMessages(withMetadata(bytes), selected),
+    (messages) => tokens(messages) <= profile.effectiveInputBudget,
+    modelInputPromptByteLimit(profile.effectiveInputBudget),
+  );
+  const promptCtx = withMetadata(fitted?.omissionPathBytes ?? 0);
+  if (fitted !== undefined)
+    logPromptWindowFit(
+      {
+        state: "trimmed",
+        referenceCount: selected.length,
+        sentReferenceCount: selected.length,
+        promptTokens: tokens(fitted.messages),
+        inputBudget: profile.effectiveInputBudget,
+      },
+      ctx.correlationId,
+    );
+  return promptCtx;
 }
 
 // The highest-ranked candidates whose prompt fits the model's current input budget. Candidates keep
@@ -2300,23 +2396,26 @@ async function answerHybridWithinWindow(
 ): Promise<{
   readonly assistant: GroundedAnswerResult;
   readonly sent: readonly SelectedCandidate<HybridPayload>[];
+  readonly promptCtx: HybridGroundedAskCtx;
 }> {
   let sent = selected;
+  let promptCtx = ctx;
   const assistant = await withAdoptedContextWindowRetry(
     ctx.deps,
     { modelId: ctx.modelId, surface: "grounded", correlationId: ctx.correlationId },
     async () => {
-      sent = hybridCandidatesWithinWindow(ctx, selected);
+      promptCtx = hybridContextWithinWindow(ctx, selected);
+      sent = hybridCandidatesWithinWindow(promptCtx, selected);
       const user = buildRerankedHybridUserMessage(
         ctx.answerContent ?? ctx.content,
         sent,
         ctx.deps.redactor,
-        ctx.folderOmissionMetadata,
+        promptCtx.folderOmissionMetadata,
       );
       return normalizeGroundedAnswerPayload(await answerer.answer(HYBRID_SYSTEM_PROMPT, user));
     },
   );
-  return { assistant, sent };
+  return { assistant, sent, promptCtx };
 }
 
 interface HybridFinalizeInput {
@@ -2367,8 +2466,9 @@ async function finalizeHybridAnswer(
   );
   ensureNotCancelled(ctx.signal);
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
-  ctx.deps.store.attachGroundedAnswer(ids.assistantMessageId, finalAnswer, previewCitations);
-  return { status: 200, body: finalAnswer };
+  const completedAnswer = withHybridAnswerDuration(finalAnswer, ctx);
+  ctx.deps.store.attachGroundedAnswer(ids.assistantMessageId, completedAnswer, previewCitations);
+  return { status: 200, body: completedAnswer };
 }
 
 function persistHybridGroundedExchange(
@@ -2384,10 +2484,8 @@ function persistHybridGroundedExchange(
   );
 }
 
-// Issue #154 (GAP-B) — a GatewayError is redacted inside mappedGatewayError (shared with the
-// single-source path). The non-gateway `Error` fallback carries an arbitrary dynamic message that
-// can echo a provider endpoint or token, so it is scrubbed through the SAME boundary before it
-// reaches the wire.
+// Expected domain failures retain their canonical mapping. Unexpected failures reach the shared
+// route boundary with their original cause, which emits body-free diagnostics and an opaque 500.
 function mapHybridError(
   error: unknown,
   deps: UiHandlerDeps,
@@ -2403,8 +2501,5 @@ function mapHybridError(
   }
   const workspaceResult = mappedWorkspaceError(error, { correlationId });
   if (workspaceResult !== undefined) return workspaceResult;
-  if (error instanceof Error) {
-    return internalError(redact(error.message, currentRedactionSecrets(deps)));
-  }
   throw error;
 }
