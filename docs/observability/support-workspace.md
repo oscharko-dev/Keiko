@@ -136,14 +136,19 @@ failure facts when available. Its closed `availabilityReason` is one of `session
 `correlation-unavailable`. The last two describe an explicit scope choice or a missing trustworthy
 original correlation, not an inferred service outage. A structurally complete canonical report
 may still have insufficient diagnostic evidence; integrity and diagnostic sufficiency answer
-different questions. Never treat browser descriptors as authoritative server attribution.
+different questions. Never treat browser descriptors as authoritative server attribution. The default human
+analysis prints `Limited browser artifact: server evidence unavailable (<availabilityReason>)`
+before the diagnostic sufficiency result, so missing server evidence is explicit.
 
 `.json.gz` is an outer transport. Section/report digests and `sourceArtifactDigest` cover the
 decoded canonical report text, not gzip header metadata or the compressed file bytes. Equivalent
 gzip framing may therefore validate to the same artifact digest. Keep a separate SHA-256 of the
 received file if a custody workflow requires identity of those exact transport bytes. Decompression
 remains bounded and gzip corruption, invalid decoded JSON and changed canonical evidence fail
-validation; transport metadata is never interpreted as report evidence.
+validation; transport metadata is never interpreted as report evidence. The CLI Activity Log
+records the observed raw/gzip transport and input byte count, including known facts when decoding
+fails. A successful analysis also records full or client-only evidence scope and the limited
+report availability reason. Unknown facts are omitted rather than inferred from a filename.
 
 ## On the support team's machine
 

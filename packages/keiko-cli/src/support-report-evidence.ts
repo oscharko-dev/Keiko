@@ -5,6 +5,8 @@ import {
   DIAGNOSTIC_SUFFICIENCY_REASONS,
   DIAGNOSTIC_SUFFICIENCY_STATUSES,
   SUPPORT_REPORT_FAILURES,
+  SUPPORT_REPORT_AVAILABILITY_REASONS,
+  type SupportReportAvailabilityReason,
   SUPPORT_REPORT_SCHEMA_VERSION,
   type DiagnosticSufficiencyReason,
   type DiagnosticSufficiencyStatus,
@@ -17,7 +19,7 @@ import {
   type SafeArtifactFileFailureKind,
 } from "@oscharko-dev/keiko-security/fs-hardening";
 import { describeErrorKind, SupportReportError } from "@oscharko-dev/keiko-activity-log/reader";
-import type { SupportReportPublication } from "./support-export.js";
+import type { SupportReportInputFacts, SupportReportPublication } from "./support-export.js";
 
 const SURFACE = {
   type: "string",
@@ -35,6 +37,36 @@ const BASE = {
   failureClasses: ["support-report"],
   releaseImpact: "minor",
 } as const;
+
+const INPUT_FIELDS = {
+  inputTransport: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["raw", "gzip"],
+  },
+  inputBytes: { ...COUNT, required: false },
+} as const;
+
+const EVIDENCE_SCOPE_FIELDS = {
+  evidenceScope: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["full", "client-only"],
+  },
+  clientAvailabilityReason: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [...SUPPORT_REPORT_AVAILABILITY_REASONS],
+  },
+} as const;
+
+export interface SupportReportScopeEvidence {
+  readonly evidenceScope: "full" | "client-only";
+  readonly clientAvailabilityReason?: SupportReportAvailabilityReason;
+}
 
 export const SUPPORT_REPORT_STARTED = defineActivityLogOperation({
   ...BASE,
@@ -55,6 +87,8 @@ export const SUPPORT_REPORT_COMPLETED = defineActivityLogOperation({
     surface: SURFACE,
     reportSchemaVersion: COUNT,
     reportBytes: COUNT,
+    ...INPUT_FIELDS,
+    ...EVIDENCE_SCOPE_FIELDS,
     recordCount: COUNT,
     sufficiency: {
       type: "string",
@@ -118,6 +152,8 @@ export const SUPPORT_REPORT_FAILED = defineActivityLogOperation({
   fields: {
     surface: SURFACE,
     reportSchemaVersion: COUNT,
+    ...INPUT_FIELDS,
+    ...EVIDENCE_SCOPE_FIELDS,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -213,6 +249,10 @@ export function emitSupportReportCompleted(
     reportDigest: string;
     publication?: SupportReportPublication | undefined;
     analysis?: SupportReportAnalysisOutcome | undefined;
+    inputBytes?: number;
+    inputTransport?: "raw" | "gzip";
+    evidenceScope?: "full" | "client-only";
+    clientAvailabilityReason?: SupportReportAvailabilityReason;
   },
 ): void {
   const { publication, analysis, ...counts } = summary;
@@ -298,6 +338,7 @@ export function emitSupportReportFailed(
   correlationId: string,
   surface: SupportReportSurface,
   error: unknown,
+  input?: Partial<SupportReportInputFacts & SupportReportScopeEvidence>,
 ): void {
   sink.write(
     activityLogEvent(
@@ -306,6 +347,7 @@ export function emitSupportReportFailed(
       {
         surface,
         reportSchemaVersion: SUPPORT_REPORT_SCHEMA_VERSION,
+        ...input,
         ...(error instanceof SupportReportError ? { reason: error.reason } : {}),
         frames: [...keikoStackFrames(error)],
         causeChain: [...causeChain(error)],

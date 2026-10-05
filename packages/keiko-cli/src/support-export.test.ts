@@ -3,6 +3,7 @@
 import * as fs from "node:fs";
 import {
   appendFileSync,
+  truncateSync,
   chmodSync,
   existsSync,
   mkdtempSync,
@@ -229,6 +230,47 @@ describe("bounded private report file I/O", () => {
     expect(() => readSupportReportFile(path)).toThrow("report-budget-exceeded");
     expect(appended).toBe(true);
   });
+  it.each(["grow", "shrink"] as const)(
+    "rejects a file that changes size below the limit: %s",
+    async (change) => {
+      const path = join(root, "report.json");
+      writeFileSync(path, "report-bytes", { mode: 0o600 });
+      const { readSync: realRead } = await vi.importActual<typeof import("node:fs")>("node:fs");
+      vi.mocked(fs.readSync).mockImplementationOnce(
+        (...args: Parameters<typeof fs.readSync>): number => {
+          if (change === "grow") appendFileSync(path, "x");
+          else truncateSync(path, 3);
+          return realRead(...args);
+        },
+      );
+      expect(() => readSupportReportFile(path)).toThrow("corrupt-report");
+    },
+  );
+
+  it("reuses one bounded input buffer across short descriptor reads", async () => {
+    const path = join(root, "report.json");
+    const original = "x".repeat(100_000);
+    writeFileSync(path, original, { mode: 0o600 });
+    const { readSync: realRead } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const buffers = new Set<ArrayBufferLike>();
+    vi.mocked(fs.readSync).mockImplementation((...args: Parameters<typeof fs.readSync>): number => {
+      const [fd, buffer, options] = args;
+      buffers.add(buffer.buffer);
+      return realRead(fd, buffer, {
+        ...options,
+        length: Math.min(options?.length ?? buffer.byteLength, 8192),
+      });
+    });
+    expect(readSupportReportFile(path)).toBe(original);
+    expect(buffers.size).toBe(1);
+  });
+
+  it("preserves a UTF-8 BOM for the canonical parser to reject rather than silently stripping it", () => {
+    const path = join(root, "report.json");
+    writeFileSync(path, "\uFEFFreport-bytes", { mode: 0o600 });
+    expect(readSupportReportFile(path)).toBe("\uFEFFreport-bytes");
+  });
+
   it("rejects invalid UTF-8 instead of silently replacing bytes", () => {
     const path = join(root, "report.json");
     writeFileSync(path, Buffer.from([0xc0, 0xaf]), { mode: 0o600 });

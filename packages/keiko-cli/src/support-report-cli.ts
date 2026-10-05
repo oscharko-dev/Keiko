@@ -75,11 +75,13 @@ import {
   supportReportFailureReason,
   type SupportReportAnalysisOutcome,
   type SupportReportSurface,
+  type SupportReportScopeEvidence,
 } from "./support-report-evidence.js";
 import {
   publishSupportReportFile,
   readSupportReportFile,
   type SupportReportPublication,
+  type SupportReportInputFacts,
 } from "./support-export.js";
 import type { SupportCliDeps } from "./support.js";
 import type { CliIo } from "./runner.js";
@@ -320,13 +322,18 @@ function reportFailure(error: unknown, io: CliIo, surface: SupportReportSurface)
 interface ReportRunContext {
   readonly io: CliIo;
   readonly surface: SupportReportSurface;
+  input?: SupportReportInputFacts;
+  evidence?: SupportReportScopeEvidence;
   readonly sink: ServerLogSink;
   readonly correlationId: string;
 }
 
 function reportSupportReportFailure(context: ReportRunContext, error: unknown): number {
   try {
-    emitSupportReportFailed(context.sink, context.correlationId, context.surface, error);
+    emitSupportReportFailed(context.sink, context.correlationId, context.surface, error, {
+      ...context.input,
+      ...context.evidence,
+    });
   } catch (sinkError) {
     reportServerLogFailure(sinkError, {
       op: "support.report.failed",
@@ -545,6 +552,9 @@ function humanHeader(artifact: AnalyzedSupportReport): string {
   const { status, reasons } = artifact.selection;
   return (
     `Support incident ${artifact.incident.incidentId}\n` +
+    (artifact.incident.clientReport === undefined
+      ? ""
+      : `Limited browser artifact: server evidence unavailable (${artifact.incident.clientReport.availabilityReason})\n`) +
     `Diagnostic sufficiency: ${status}${selectionReasonDetail(reasons)}\n` +
     `Authenticity: unknown\n`
   );
@@ -680,6 +690,16 @@ function emitSafeSeed(
   };
 }
 
+function reportScopeEvidence(artifact: AnalyzedSupportReport): SupportReportScopeEvidence {
+  const clientReport = artifact.incident.clientReport;
+  return clientReport === undefined
+    ? { evidenceScope: "full" }
+    : {
+        evidenceScope: "client-only",
+        clientAvailabilityReason: clientReport.availabilityReason,
+      };
+}
+
 async function analyzeReceivedReport(
   args: SafeSupportAnalyzeArgs,
   context: ReportRunContext,
@@ -692,8 +712,11 @@ async function analyzeReceivedReport(
     "analyze",
     MAX_SUPPORT_REPORT_BYTES,
   );
-  const text = readSupportReportFile(resolve(cwd, args.file));
+  const text = readSupportReportFile(resolve(cwd, args.file), (facts) => {
+    context.input = facts;
+  });
   const basic = analyzeSupportReport(text);
+  context.evidence = reportScopeEvidence(basic);
   const options = needsToolLifecycle(basic) ? await reportAnalysisOptions(context) : {};
   const artifact = Object.keys(options).length === 0 ? basic : analyzeSupportReport(text, options);
   const analysis =
@@ -702,6 +725,8 @@ async function analyzeReceivedReport(
       : emitMachineOrHuman(artifact, args, context.io);
   emitSupportReportCompleted(context.sink, context.correlationId, "analyze", {
     reportBytes: Buffer.byteLength(text),
+    ...context.input,
+    ...context.evidence,
     recordCount: artifact.analysis.evidence.supportedLineCount,
     sufficiency: artifact.selection.status,
     sufficiencyReasons: artifact.selection.reasons,
