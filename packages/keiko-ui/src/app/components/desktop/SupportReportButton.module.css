@@ -5,6 +5,7 @@
   margin: 0;
   padding: 0;
   display: inline-flex;
+  align-self: flex-start;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-4);
@@ -16,6 +17,14 @@
   min-inline-size: 0;
   flex: 1 1 18rem;
   overflow-wrap: anywhere;
+}
+
+.cmpFeedback:empty {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 
 .cmpControl .cmpAction {

@@ -99,10 +99,27 @@ async function failChat(
   });
   await expect(notice).toHaveCount(1);
   await assertNoticeDismissAlignment(notice);
+  await assertIdleReportControlLayout(notice);
   const supportId = /Support ID: ([a-zA-Z0-9_-]+)/u.exec(await alert.innerText())?.[1];
   expect(supportId).toBeDefined();
   if (supportId === undefined) throw new TypeError("Missing actual Chat support identity");
   return { notice, supportId };
+}
+
+async function assertIdleReportControlLayout(notice: Locator): Promise<void> {
+  const create = notice.getByRole("button", { name: "Create error report", exact: true });
+  const control = create.locator("..");
+  const feedback = control.getByRole("status");
+  await expect(feedback).toBeAttached();
+  await expect(feedback).toHaveText("");
+  await expect(feedback).toHaveAttribute("aria-live", "polite");
+  const buttonBounds = await create.boundingBox();
+  const controlBounds = await control.boundingBox();
+  if (buttonBounds === null || controlBounds === null)
+    throw new Error("Missing report control bounds");
+  // An empty, mounted live region must not add an invisible flex item or wrapped row.
+  expect(controlBounds.width - buttonBounds.width).toBeLessThanOrEqual(1);
+  expect(controlBounds.height - buttonBounds.height).toBeLessThanOrEqual(1);
 }
 
 async function assertNoticeDismissAlignment(notice: Locator): Promise<void> {
@@ -169,6 +186,8 @@ async function assertCliAnalysis(
 async function prepareReport(notice: Locator): Promise<void> {
   await notice.getByRole("button", { name: "Create error report", exact: true }).click();
   await expect(notice.getByRole("link", { name: "Download report", exact: true })).toBeVisible();
+  await expect(notice.getByRole("status")).toBeVisible();
+  await expect(notice.getByRole("status")).not.toHaveText("");
 }
 
 function assertOriginalFailure(artifact: AnalyzedSupportReport): void {
