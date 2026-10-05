@@ -381,6 +381,10 @@ process.exit(41);
   & cl.exe @c11Flags $productionMTFlag "/Fo:$supervisorObject" "/Fe:$supervisorOut" $supervisor /link @productionLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
 
+  # The default invocation validates policy inputs only; it never opens WFP or changes filters.
+  node (Join-Path $root "scripts/testing/test-windows-gateway-filters.mjs")
+  if ($LASTEXITCODE -ne 0) { throw "Windows gateway policy validation failed" }
+
   $fixture = Join-Path $root "native/runtime-supervisor/windows/qualification_fixture.c"
   $fixtureOut = Join-Path $scratch "qualification-fixture.exe"
   $fixtureObject = Join-Path $scratch "qualification-fixture.obj"

@@ -541,7 +541,7 @@ describe("Sonar analysis scope", () => {
     const readText = vi.fn(() => "valid");
     const result = runAnalysisScopeCheck({
       execute: () => "src/live.ts\0src/deleted.ts\0",
-      fileExists: (path) => !path.endsWith("/src/deleted.ts"),
+      fileExists: (path) => !path.replaceAll("\\", "/").endsWith("/src/deleted.ts"),
       log: () => undefined,
       nativeEntries: [],
       properties: validProperties,
