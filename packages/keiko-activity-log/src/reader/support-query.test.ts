@@ -77,8 +77,9 @@ function requestLine(
   correlationId: string,
   parentCorrelationId?: string,
   status = 200,
+  atMs = T0 + 100,
 ): string {
-  return fixtureLine(process, T0 + 100, {
+  return fixtureLine(process, atMs, {
     op: "request",
     correlationId,
     parentCorrelationId,
@@ -93,12 +94,12 @@ function requestLine(
   });
 }
 
-function manualSelection(): SupportQuerySelection {
+function manualSelection(toMs = T0 + 1000): SupportQuerySelection {
   return {
     kind: "closure",
     queryClass: "incident",
     roots: [],
-    windows: [{ fromMs: T0, toMs: T0 + 1000 }],
+    windows: [{ fromMs: T0, toMs }],
     requiredClasses: { kind: "observed-failures" },
     unresolved: false,
   };
@@ -370,6 +371,78 @@ describe("support query causal closure (#3531)", () => {
     });
     expect(result.diagnosticSufficiency.reasons).toContain("context-truncated");
     expect(result.metrics.closureEventCount).toBe(6);
+    expect(
+      result.events
+        .filter((event) => event.role === "context")
+        .map((event) => Date.parse(event.parsed.view.ts)),
+    ).toEqual([T0 + 63_100]);
+  });
+
+  it.each([1, 2])("ranks context against every selected time with stable ties: %i", (limit) => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      signal(process, T0 + 50),
+      diagnostic(process, T0 + 100, IDS.root),
+      signal(process, T0 + 490),
+      diagnostic(process, T0 + 500, IDS.root),
+      signal(process, T0 + 510),
+      diagnostic(process, T0 + 900, IDS.root),
+      signal(process, T0 + 940),
+    ]);
+    const { result } = query(stateDir, correlationSelection(IDS.root), {
+      maxContextEvents: limit,
+    });
+    expect(
+      result.events
+        .filter((event) => event.parsed.view.op === SIGNAL)
+        .map((event) => Date.parse(event.parsed.view.ts)),
+    ).toEqual([T0 + 490, T0 + 510].slice(0, limit));
+    expect(result.metrics.closureEventCount).toBe(3);
+    expect(result.truncation.omittedContextEventCount).toBe(4 - limit);
+    expect(result.events.map((event) => event.index)).toEqual(
+      result.events.map((event) => event.index).sort((a, b) => a - b),
+    );
+  });
+
+  it("retains fitting nearby context after an earlier optional line exceeds its bytes", () => {
+    const process = fixtureProcess(4101, "aaaaaaa1");
+    writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
+      fixtureLine(process, T0, { op: "process.started" }),
+      fixtureLine(process, T0 + 1, { op: "process.heartbeat" }),
+      signal(process, T0 + 9),
+      diagnostic(process, T0 + 10, IDS.root),
+    ]);
+    const required = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 }).result;
+    const full = query(stateDir, correlationSelection(IDS.root)).result;
+    const fitting = full.events.find((event) => event.parsed.view.op === SIGNAL);
+    if (fitting === undefined) throw new TypeError("Missing fixture context");
+    const maxResultBytes = required.metrics.selectedBytes + fitting.bytes;
+    const { result } = query(stateDir, correlationSelection(IDS.root), { maxResultBytes });
+    expect(result.events.map((event) => event.parsed.view.op)).toEqual([
+      "process.started",
+      SIGNAL,
+      DIAGNOSTIC,
+    ]);
+    expect(result.metrics.selectedBytes).toBe(maxResultBytes);
+    expect(result.truncation.omittedContextEventCount).toBe(1);
+  });
+
+  it("keeps required evidence and counts every omitted context event when its budget is zero", () => {
+    writeGraph(stateDir);
+    const required = query(stateDir, correlationSelection(IDS.root), { contextMs: 0 }).result;
+    for (const limits of [
+      { maxContextEvents: 0 },
+      { maxResultBytes: required.metrics.selectedBytes },
+    ]) {
+      const { result } = query(stateDir, correlationSelection(IDS.root), limits);
+      expect(result.events).toEqual(required.events);
+      expect(result.metrics.selectedBytes).toBe(required.metrics.selectedBytes);
+      expect(result.truncation).toMatchObject({
+        state: "context-truncated",
+        omittedContextEventCount: 2,
+      });
+    }
   });
 
   it("reserves the canonical record ceiling for the complete closure and its lifetime anchor", () => {
@@ -798,14 +871,14 @@ describe("support query causal closure (#3531)", () => {
   it("keeps useful manual evidence despite more than 8036 independent successful requests", () => {
     const process = fixtureProcess(4101, "aaaaaaa1");
     const noise = Array.from({ length: 8100 }, (_, index) =>
-      requestLine(process, `routine-request-${String(index)}`),
+      requestLine(process, `routine-request-${String(index)}`, undefined, 200, T0 + index),
     );
     writeFixtureSegment(stateDir, segmentIdentity(process, T0, 1), [
       ...noise,
-      diagnostic(process, T0 + 101, IDS.root),
-      requestLine(process, "causal-request", IDS.root),
-      requestLine(process, "failed-request", undefined, 500),
-      fixtureLine(process, T0 + 102, {
+      diagnostic(process, T0 + 8100, IDS.root),
+      requestLine(process, "causal-request", IDS.root, 200, T0 + 8101),
+      requestLine(process, "failed-request", undefined, 500, T0 + 8101),
+      fixtureLine(process, T0 + 8102, {
         op: "search.connected-context.completed",
         correlationId: IDS.child,
         parentCorrelationId: IDS.root,
@@ -816,7 +889,7 @@ describe("support query causal closure (#3531)", () => {
         },
       }),
     ]);
-    const { result } = query(stateDir, manualSelection());
+    const { result } = query(stateDir, manualSelection(T0 + 9000), { contextMs: 10_000 });
     expect(DEFAULT_SUPPORT_QUERY_LIMITS.maxClosureCorrelations).toBe(4096);
     expect(result.truncation.state).not.toBe("budget-exceeded");
     expect(result.events.length).toBeGreaterThan(4);
@@ -825,6 +898,12 @@ describe("support query causal closure (#3531)", () => {
       expect(eventCorrelations(result).has(id)).toBe(true);
     expect(result.truncation.omittedContextEventCount).toBeGreaterThan(7800);
     expect(result.diagnosticSufficiency.reasons).toContain("context-truncated");
+    const optionalIds = result.events
+      .filter((event) => event.role === "context" && event.index !== 0)
+      .map((event) => event.parsed.correlationId);
+    expect(optionalIds).toEqual(
+      Array.from({ length: 256 }, (_, index) => `routine-request-${String(7844 + index)}`),
+    );
   });
 
   it("keeps a manual diagnostic despite 4097 independent successful non-HTTP correlations", () => {

@@ -1967,6 +1967,13 @@ separately. A required closure that cannot fit remains explicitly insufficient r
 presented as a complete partial chain. The existing `support.query.completed` event carries the
 required record count alongside its byte count. Older reports without that count remain readable.
 
+Optional context is ranked by its distance to the nearest selected closure event time, with log
+order breaking ties. A bounded heap keeps nearby events within the remaining record and byte
+budgets; an individually oversized optional event is omitted without blocking later fitting
+context. This is a streaming selection, not a byte-packing optimization. The final evidence stays
+in log order, required roots and edges retain priority, and every omitted context event still
+contributes to `context-truncated` and its count.
+
 **No database.** Manifests and streaming meet the measured need: a checked-in long-history test
 bounds peak memory and proves that manifest-pruned segment bodies are never opened. A database
 requires recorded measurements that manifests are insufficient and an explicit re-scope of epic

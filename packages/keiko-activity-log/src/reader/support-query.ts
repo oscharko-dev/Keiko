@@ -339,6 +339,17 @@ function* acceptedLines(
 
 // ─── Budgeted collection ───────────────────────────────────────────────────────────────────────
 
+function selectedEvent(accepted: AcceptedLine, role: SupportQueryEventRole): SupportSelectedEvent {
+  return {
+    file: accepted.line.file,
+    index: accepted.line.index,
+    text: accepted.line.text,
+    bytes: accepted.line.byteLength + 1,
+    parsed: accepted.parsed,
+    role,
+  };
+}
+
 class EventCollector {
   public readonly events: SupportSelectedEvent[] = [];
   public requiredBytes = 0;
@@ -348,7 +359,6 @@ class EventCollector {
   public constructor(
     private readonly budgetBytes: number,
     private readonly budgetRecords = MAX_SUPPORT_REPORT_RECORDS,
-    private readonly optional = false,
   ) {}
 
   public add(accepted: AcceptedLine, role: SupportQueryEventRole): void {
@@ -357,19 +367,87 @@ class EventCollector {
     this.requiredBytes += bytes;
     if (this.exceeded) return;
     if (this.requiredBytes > this.budgetBytes || this.candidateCount > this.budgetRecords) {
-      // Required closure is all-or-nothing; optional context retains the fitting prefix.
+      // Required closure is all-or-nothing.
       this.exceeded = true;
-      if (!this.optional) this.events.length = 0;
+      this.events.length = 0;
       return;
     }
-    this.events.push({
-      file: accepted.line.file,
-      index: accepted.line.index,
-      text: accepted.line.text,
-      bytes,
-      parsed: accepted.parsed,
-      role,
-    });
+    this.events.push(selectedEvent(accepted, role));
+  }
+}
+
+interface RankedContextEvent {
+  readonly event: SupportSelectedEvent;
+  readonly distance: number;
+}
+
+function compareContext(left: RankedContextEvent, right: RankedContextEvent): number {
+  return (
+    left.distance - right.distance ||
+    left.event.file.order - right.event.file.order ||
+    left.event.index - right.event.index
+  );
+}
+
+// Keep a worst-first heap inside both remaining budgets. Each admitted candidate costs O(log K),
+// independent of log length; later nearby events can replace earlier distant context. Oversized
+// optional lines cannot prevent other fitting evidence from being selected.
+class ContextCollector {
+  private readonly queue: RankedContextEvent[] = [];
+  private retainedBytes = 0;
+  public candidateCount = 0;
+
+  public constructor(
+    private readonly budgetBytes: number,
+    private readonly budgetRecords: number,
+  ) {}
+
+  public get events(): readonly SupportSelectedEvent[] {
+    return this.queue.map(({ event }) => event);
+  }
+
+  public add(accepted: AcceptedLine, distance: number): void {
+    this.candidateCount += 1;
+    const bytes = accepted.line.byteLength + 1;
+    if (this.budgetRecords <= 0 || bytes > this.budgetBytes) return;
+    this.push({ event: selectedEvent(accepted, "context"), distance });
+    this.retainedBytes += bytes;
+    while (this.queue.length > this.budgetRecords || this.retainedBytes > this.budgetBytes) {
+      this.retainedBytes -= this.removeWorst()?.event.bytes ?? 0;
+    }
+  }
+
+  private push(entry: RankedContextEvent): void {
+    this.queue.push(entry);
+    let index = this.queue.length - 1;
+    while (index > 0) {
+      const parentIndex = Math.floor((index - 1) / 2);
+      const parent = this.queue[parentIndex];
+      if (parent === undefined || compareContext(parent, entry) >= 0) break;
+      this.queue[index] = parent;
+      index = parentIndex;
+    }
+    this.queue[index] = entry;
+  }
+
+  private removeWorst(): RankedContextEvent | undefined {
+    const worst = this.queue[0];
+    const last = this.queue.pop();
+    if (last === undefined || this.queue.length === 0) return worst;
+    let index = 0;
+    while (index * 2 + 1 < this.queue.length) {
+      const leftIndex = index * 2 + 1;
+      const left = this.queue[leftIndex];
+      const right = this.queue[leftIndex + 1];
+      if (left === undefined) break;
+      const useRight = right !== undefined && compareContext(right, left) > 0;
+      const child = useRight ? right : left;
+      if (compareContext(last, child) >= 0) break;
+      this.queue[index] = child;
+      index = useRight ? leftIndex + 1 : leftIndex;
+    }
+    this.queue[index] = last;
+    return worst;
   }
 }
 
@@ -627,6 +705,7 @@ interface ContextScope {
   readonly toMs: number;
   readonly lifetimes: ReadonlySet<string>;
   readonly selected: ReadonlySet<string>;
+  readonly selectedTimes: readonly number[];
 }
 
 /**
@@ -822,7 +901,24 @@ function contextScope(
   }
   if (contextMs <= 0 || lifetimes.size === 0 || !Number.isFinite(first)) return undefined;
   const selected = new Set(selectedEvents.map((event) => eventKey(event.file, event.index)));
-  return { fromMs: first - contextMs, toMs: last + contextMs, lifetimes, selected };
+  const selectedTimes = [...new Set(events.map((event) => lineMs(event.parsed)))].sort(
+    (a, b) => a - b,
+  );
+  return { fromMs: first - contextMs, toMs: last + contextMs, lifetimes, selected, selectedTimes };
+}
+
+function nearestSelectedTime(atMs: number, times: readonly number[]): number {
+  let low = 0;
+  let high = times.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if ((times[middle] ?? Number.POSITIVE_INFINITY) < atMs) low = middle + 1;
+    else high = middle;
+  }
+  return Math.min(
+    Math.abs(atMs - (times[low] ?? Number.POSITIVE_INFINITY)),
+    Math.abs(atMs - (times[low - 1] ?? Number.NEGATIVE_INFINITY)),
+  );
 }
 
 function manifestMayHoldLifetimes(
@@ -877,13 +973,14 @@ function collectContext(
     maxContextEvents,
     MAX_SUPPORT_REPORT_RECORDS - selectedEvents.length,
   );
-  const collector = new EventCollector(budgetBytes, recordBudget, true);
+  const collector = new ContextCollector(budgetBytes, recordBudget);
   for (const accepted of acceptedLines(state, files, true)) {
     if (!isContextLine(accepted, scope, windows)) continue;
-    collector.add(accepted, "context");
+    collector.add(accepted, nearestSelectedTime(lineMs(accepted.parsed), scope.selectedTimes));
   }
-  const omitted = collector.candidateCount - collector.events.length;
-  return { events: collector.events, omitted, truncated: omitted > 0 };
+  const context = collector.events;
+  const omitted = collector.candidateCount - context.length;
+  return { events: context, omitted, truncated: omitted > 0 };
 }
 
 // ─── Event queries ─────────────────────────────────────────────────────────────────────────────
