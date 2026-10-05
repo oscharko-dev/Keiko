@@ -25,7 +25,6 @@ import {
   type SupportIncidentRejection,
 } from "../support-incident.js";
 import { listSupportIncidentEntries } from "../support-incident-store.js";
-import { attributeUnretainedReportFailure } from "./support-desktop-report-attribution.js";
 import {
   DEFAULT_SUPPORT_QUERY_LIMITS,
   type SupportQuerySelection,
@@ -208,10 +207,7 @@ export function createPreparedDesktopSupportReport(
       trigger: "export",
       persist: false,
     });
-  const report = buildSupportReport(
-    incidentDescriptor(attributeUnretainedReportFailure(record, evidence.result), evidence.result),
-    evidence.result,
-  );
+  const report = buildSupportReport(incidentDescriptor(record, evidence.result), evidence.result);
   return desktopReportResponse(report, {
     manifestUnreadableCount: evidence.manifestStats.unreadableCount,
     manifestReusedCount: evidence.manifestStats.reusedCount,

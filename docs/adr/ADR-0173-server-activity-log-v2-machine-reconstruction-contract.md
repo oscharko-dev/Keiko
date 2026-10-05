@@ -871,12 +871,15 @@ the original incident lifecycle through its parent correlation. A missing or pee
 never carry `abandoned`, even if a structurally wider caller object supplies that option.
 
 When a manual descriptor's supported causal selection retains a registry-eligible failure
-under the requested root or its direct child, desktop composition derives a registered-failure
-identity from that retained event using the existing fingerprint, frame and correlation rules.
+under the requested root or its direct child, shared CLI and desktop composition derives a
+registered-failure identity from that retained event using the existing fingerprint, frame and
+correlation rules. Selecting a failing child directly preserves its real parent edge.
 This applies to both transient fallback descriptors and retained manual descriptors created when
-regenerating an artifact after the original diagnostic candidate was released.
-Error diagnostics take priority over warning summaries; framed diagnostics take priority over
-unframed events at the same level. No durable candidate, pin or quota slot is created by this
+regenerating an artifact after the original diagnostic candidate was released. Only candidates
+whose original frames survive the shipped report code-inventory policy may supply the immutable
+failure fingerprint. Error diagnostics take priority over warning summaries; framed diagnostics
+take priority over unframed events at the same level. A diagnostic-category event wins the remaining
+category tie; otherwise the first retained candidate is stable. No durable candidate, pin or quota slot is created by this
 attribution. A selection without an eligible failing event keeps the unattributed manual identity;
 deeper descendant failures remain in evidence without inventing a direct parent edge.
 Unknown selected correlations remain refused before any descriptor is created. The existing

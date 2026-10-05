@@ -30,6 +30,7 @@ import {
   ACTIVITY_LOG_MANIFEST_DIRECTORY_NAME,
   analyzeLogText,
   analyzeSupportReport,
+  createDesktopSupportReport,
   findTimeline,
   parseSupportReport,
   renderHumanAllTimelines,
@@ -348,6 +349,46 @@ describe("support report CLI and private publication", () => {
     expect(report.incident.lineCount).toBe(0);
     expect(report.incident.sufficiencyStatus).toBe("insufficient");
   });
+  it.each([false, true])(
+    "keeps CLI and desktop failure identity equal at full quota=%s",
+    async (full) => {
+      rmSync(join(stateDir, "logs"), { recursive: true });
+      const process = fixtureProcess(4242, "aabbccdd");
+      const now = Date.now();
+      writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+        fixtureLine(process, now, {
+          op: "client.diagnostic",
+          correlationId: CORRELATION,
+          level: "error",
+          errorKind: "timeout",
+          fields: { frames: ["packages/keiko-server/dist/chat-stream-handlers.js:42:7"] },
+        }),
+      ]);
+      if (full) {
+        vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+        occupySupportIncidentRetentionForTests(stateDir);
+      }
+      const desktop = parseSupportReport(
+        createDesktopSupportReport(stateDir, CORRELATION).reportJson,
+      );
+      await exportReport(join(root, "identity-report"));
+      const cli = parseSupportReport(readSupportReportFile(path));
+      expect(cli.incident).toMatchObject({
+        trigger: "registered-failure",
+        op: desktop.incident.op,
+        errorKind: desktop.incident.errorKind,
+        defectFingerprint: desktop.incident.defectFingerprint,
+        fingerprintAlgorithm: desktop.incident.fingerprintAlgorithm,
+        frameCount: desktop.incident.frameCount,
+      });
+      expect(
+        analyzeSupportReport(readSupportReportFile(path))
+          .analysis.timelines.flatMap((timeline) => timeline.lines)
+          .some((line) => line.errorKind === "timeout"),
+      ).toBe(true);
+    },
+  );
+
   it("exports an honest manual window at a full candidate quota without a selector", async () => {
     vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
     occupySupportIncidentRetentionForTests(stateDir);

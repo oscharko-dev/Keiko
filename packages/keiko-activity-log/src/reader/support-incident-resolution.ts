@@ -10,6 +10,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
 import type { SupportQueryResult } from "./support-query.js";
+import { attributeSelectedReportFailure } from "./support-desktop-report-attribution.js";
 import type { SupportIncidentSegmentFile } from "../support-incident.js";
 import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
 import {
@@ -235,6 +236,7 @@ export function resolveSelectedSupportIncident(
   record: SupportIncidentDescriptorRecord,
   selected: SupportQueryResult,
 ): ReturnType<typeof resolveSupportIncidentAnalysis> {
+  const attributed = attributeSelectedReportFailure(record, selected);
   const segments = selectedSegments(selected);
   try {
     const analysis = analyzeLogLines(
@@ -245,7 +247,7 @@ export function resolveSelectedSupportIncident(
         maxTimelineBytes: MAX_SUPPORT_REPORT_TIMELINE_BYTES,
       },
     );
-    const incident = resolveSupportIncidentAnalysis(record, segments, analysis);
+    const incident = resolveSupportIncidentAnalysis(attributed, segments, analysis);
     const reasons = [
       ...new Set([...incident.sufficiency.reasons, ...selected.diagnosticSufficiency.reasons]),
     ];
@@ -260,6 +262,6 @@ export function resolveSelectedSupportIncident(
   } catch (error) {
     if (!(error instanceof ActivityLogAnalyzeBudgetError)) throw error;
     // Reuse the canonical budget-exceeded descriptor; retain the query's selected evidence.
-    return unresolvedSupportIncident(record, segments, "window-too-large");
+    return unresolvedSupportIncident(attributed, segments, "window-too-large");
   }
 }

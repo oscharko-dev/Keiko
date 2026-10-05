@@ -2,6 +2,7 @@ import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   normalizeDefectFrameSignature,
   type SupportIncidentDescriptorRecord,
+  type SupportIncidentBuild,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   computeDefectFingerprint,
@@ -11,6 +12,7 @@ import {
 } from "../defect-fingerprint.js";
 import { supportIncidentEligibleOperation } from "../support-incident.js";
 import type { SupportQueryResult } from "./support-query.js";
+import { supportReportRetainsFrames } from "./support-report-privacy.js";
 
 type SelectedEvent = SupportQueryResult["events"][number];
 
@@ -35,7 +37,8 @@ function eligibleFailure(event: SelectedEvent, root: string): boolean {
     supportIncidentEligibleOperation(view.op) &&
     (view.level === "error" || view.level === "warn") &&
     view.errorKind !== undefined &&
-    registeredFailureCorrelation(failureFacts(event)).rootCorrelationId === root
+    (event.parsed.correlationId === root ||
+      registeredFailureCorrelation(failureFacts(event)).rootCorrelationId === root)
   );
 }
 
@@ -55,10 +58,18 @@ function preferFailure(candidate: SelectedEvent, current: SelectedEvent): boolea
   );
 }
 
-function primaryFailure(query: SupportQueryResult, root: string): SelectedEvent | undefined {
+function primaryFailure(
+  query: SupportQueryResult,
+  root: string,
+  build: SupportIncidentBuild,
+): SelectedEvent | undefined {
   let primary: SelectedEvent | undefined;
   for (const event of query.events) {
-    if (!eligibleFailure(event, root)) continue;
+    if (
+      !eligibleFailure(event, root) ||
+      !supportReportRetainsFrames(build, event.parsed.view.frames)
+    )
+      continue;
     if (primary === undefined || preferFailure(event, primary)) {
       primary = event;
     }
@@ -67,7 +78,7 @@ function primaryFailure(query: SupportQueryResult, root: string): SelectedEvent 
 }
 
 /** Attribute a manual descriptor only to its authoritative selected failing event. */
-export function attributeUnretainedReportFailure(
+export function attributeSelectedReportFailure(
   record: SupportIncidentDescriptorRecord,
   query: SupportQueryResult,
 ): SupportIncidentDescriptorRecord {
@@ -78,7 +89,7 @@ export function attributeUnretainedReportFailure(
     query.integrity.classification !== "supported"
   )
     return record;
-  const selected = primaryFailure(query, root);
+  const selected = primaryFailure(query, root, record.build);
   if (selected === undefined) return record;
   const facts = failureFacts(selected);
   const input = registeredFailureFingerprintInput(facts);

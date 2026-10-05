@@ -17,6 +17,7 @@ import {
   MAX_SUPPORT_REPORT_EVENT_BYTES,
   SUPPORT_REPORT_DIRECTORY_NAME,
   supportIncidentPrivateProjection,
+  parseSupportIncidentRecord,
   supportReportFileName,
   type SupportIncidentRecord,
   type SupportIncidentDescriptorRecord,
@@ -170,7 +171,8 @@ async function reportQuery(
   correlationId: string,
 ): Promise<SupportQueryRun> {
   if (selected !== undefined) return selected;
-  if (!("slotIndex" in record)) return readManualSupportReportEvidence(stateDir, record);
+  if (parseSupportIncidentRecord(record) === undefined)
+    return readManualSupportReportEvidence(stateDir, record);
   return selectionQuery(
     {
       incidentId: record.incidentId,

@@ -452,6 +452,127 @@ describe("desktop canonical support report", () => {
     },
   );
 
+  it("attributes only a failure whose frames survive the actual report privacy policy", () => {
+    const now = Date.now();
+    const process = fixtureProcess(4242, "aabbccdd");
+    const safeFrame = "packages/keiko-server/dist/chat-stream-handlers.js:42:7";
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, {
+        op: "client.diagnostic",
+        correlationId: "selected-root",
+        level: "error",
+        errorKind: "internal",
+        fields: { frames: [safeFrame, "packages/keiko-server/dist/not-a-shipped-module.js:1:1"] },
+      }),
+      fixtureLine(process, now + 1, {
+        op: "client.diagnostic",
+        correlationId: "selected-root",
+        level: "error",
+        errorKind: "timeout",
+        fields: { frames: [safeFrame] },
+      }),
+    ]);
+    const analyzed = transientReport("selected-root");
+    expect(analyzed.incident).toMatchObject({
+      trigger: "registered-failure",
+      errorKind: "timeout",
+      frameCount: 1,
+    });
+    expect(analyzed.analysis.timelines.flatMap((timeline) => timeline.lines)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ errorKind: "timeout", frames: [safeFrame] }),
+      ]),
+    );
+  });
+
+  it("attributes an explicitly selected failing child to its real retained parent edge", () => {
+    const now = Date.now();
+    const process = fixtureProcess(4242, "aabbccdd");
+    writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+      fixtureLine(process, now, { op: "client.diagnostic", correlationId: "selected-parent" }),
+      fixtureLine(process, now + 1, {
+        op: "client.diagnostic",
+        correlationId: "selected-child",
+        parentCorrelationId: "selected-parent",
+        level: "error",
+        errorKind: "timeout",
+      }),
+    ]);
+    const analyzed = transientReport("selected-child");
+    expect(analyzed.incident).toMatchObject({
+      trigger: "registered-failure",
+      errorKind: "timeout",
+    });
+    expect(analyzed.incident.correlation.childCorrelationIds).toHaveLength(1);
+    const failure = analyzed.analysis.timelines
+      .flatMap((timeline) => timeline.lines)
+      .find((line) => line.errorKind === "timeout");
+    expect(failure?.parentCorrelationId).toBe(analyzed.incident.correlation.rootCorrelationId);
+  });
+
+  it.each(["same-category", "diagnostic-category"])(
+    "uses the deterministic %s tie break with canonical retained failure evidence",
+    (kind) => {
+      const now = Date.now();
+      const process = fixtureProcess(4242, "aabbccdd");
+      writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+        fixtureLine(process, now, {
+          op: kind === "same-category" ? "client.diagnostic" : "gateway.chat.failed",
+          correlationId: "selected-root",
+          level: "error",
+          errorKind: "timeout",
+          ...(kind === "same-category"
+            ? {}
+            : { fields: { modelId: "test-model", streaming: false } }),
+        }),
+        fixtureLine(process, now + 1, {
+          op: "client.diagnostic",
+          correlationId: "selected-root",
+          level: "error",
+          errorKind: "internal",
+          fields: { clientKind: "boundary", renderFailure: "shell" },
+        }),
+      ]);
+      const analyzed = transientReport("selected-root");
+      expect(analyzed.incident).toMatchObject({
+        trigger: "registered-failure",
+        op: "client.diagnostic",
+        errorKind: kind === "same-category" ? "timeout" : "internal",
+        fingerprintAlgorithm: 2,
+      });
+      expect(analyzed.analysis.timelines.flatMap((timeline) => timeline.lines)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ errorKind: analyzed.incident.errorKind }),
+        ]),
+      );
+    },
+  );
+
+  it("keeps an unattributed manual identity when selected evidence integrity is corrupt", () => {
+    const now = Date.now();
+    const process = fixtureProcess(4242, "aabbccdd");
+    writeFixtureSegment(
+      stateDir,
+      segmentIdentity(process, now, 1),
+      [
+        fixtureLine(process, now, {
+          op: "client.diagnostic",
+          correlationId: "selected-root",
+          level: "error",
+          errorKind: "timeout",
+        }),
+      ],
+      { tail: "invalid-record\n" },
+    );
+    const analyzed = transientReport("selected-root");
+    expect(analyzed.incident.trigger).toBe("user-report");
+    expect(analyzed.incident.op).toBe("unattributed");
+    expect(analyzed.selection.reasons).toContain("corrupt-evidence");
+    expect(analyzed.analysis.timelines.flatMap((timeline) => timeline.lines)).toEqual(
+      expect.arrayContaining([expect.objectContaining({ errorKind: "timeout" })]),
+    );
+  });
+
   it("retains a grandchild failure without inventing a direct parent edge from the requested root", () => {
     const now = Date.now();
     const process = fixtureProcess(4242, "aabbccdd");

@@ -9,6 +9,7 @@ import {
   type ActivityLogFieldContract,
   type DiagnosticSufficiencyReason,
   type SupportIncidentPrivateProjection,
+  type SupportIncidentBuild,
   type SupportReportEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -34,22 +35,20 @@ import { CURRENT_SUPPORT_REGISTRY, type SupportReaderRegistry } from "./support-
 const MODULES = new Set(SUPPORT_CODE_MODULES);
 const archivedModules = new Map<string, ReadonlySet<string>>();
 
-function currentCodeBuild(incident: SupportIncidentPrivateProjection): boolean {
-  const build = incident.build;
+function currentCodeBuild(build: SupportIncidentBuild): boolean {
   return (
-    incident.productVersion === KEIKO_PRODUCT_VERSION &&
+    build.productVersion === KEIKO_PRODUCT_VERSION &&
     build.registryVersion === CURRENT_SUPPORT_REGISTRY.registryVersion &&
     build.schemaDigest === CURRENT_SUPPORT_REGISTRY.schemaDigest &&
     build.catalogDigest === CURRENT_SUPPORT_REGISTRY.catalogDigest
   );
 }
 
-function codeModules(incident: SupportIncidentPrivateProjection): ReadonlySet<string> {
-  if (currentCodeBuild(incident)) return MODULES;
+function codeModules(build: SupportIncidentBuild): ReadonlySet<string> {
+  if (currentCodeBuild(build)) return MODULES;
   const archived = SUPPORT_CODE_MODULE_HISTORY.find(
     (entry) =>
-      entry.release === incident.productVersion &&
-      entry.catalogDigest === incident.build.catalogDigest,
+      entry.release === build.productVersion && entry.catalogDigest === build.catalogDigest,
   );
   if (archived === undefined) return new Set();
   const cached = archivedModules.get(archived.sourceCommit);
@@ -137,6 +136,15 @@ function isCodeFrame(value: unknown, modules: ReadonlySet<string>): value is str
   if (typeof value !== "string") return false;
   const module = normalizeKeikoFrame(value);
   return module !== undefined && modules.has(module);
+}
+
+/** Failure attribution must not select a fingerprint whose original frames cannot be exported. */
+export function supportReportRetainsFrames(
+  build: SupportIncidentBuild,
+  frames: readonly string[] | undefined,
+): boolean {
+  const modules = codeModules(build);
+  return frames === undefined || frames.every((frame) => isCodeFrame(frame, modules));
 }
 
 function technicalOpaque(name: string, value: string, context: PrivacyContext): boolean {
@@ -264,7 +272,7 @@ export function supportReportPrivacyProjection(
   const context = {
     incident,
     registry,
-    modules: codeModules(incident),
+    modules: codeModules(incident.build),
     reference,
     loseDetail: (): void => {
       detailLost = true;
