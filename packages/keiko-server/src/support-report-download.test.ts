@@ -103,6 +103,30 @@ function expectRetryFailures(sink: ReturnType<typeof createBufferedServerLogSink
       failureKind: "RangeError",
     });
 }
+function expectSingleDeliveryFailure(
+  sink: ReturnType<typeof createBufferedServerLogSink>,
+  downloadPath: string,
+  canonical: string,
+): void {
+  const failures = sink.events.filter((event) => event.op === "support.report.ui.failed");
+  expect(failures).toHaveLength(1);
+  expect(
+    expectActivityLogProof(
+      "support.report.ui.failed.lifecycle",
+      formatActivityLogProofLine(failures[0] ?? {}),
+    ),
+  ).toMatchObject({
+    correlationId: "download-test",
+    parentCorrelationId: "failed-delivery-creation",
+    reason: "unavailable",
+    failureKind: "RangeError",
+    causeChain: ["TypeError"],
+  });
+  expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
+  const lines = sink.lines().join("\n");
+  for (const privateValue of [downloadPath, canonical, "private-write-detail", "private-cause"])
+    expect(lines).not.toContain(privateValue);
+}
 function expectEvictionEvidence(
   sink: ReturnType<typeof createBufferedServerLogSink>,
   reason: "byte-pressure" | "entry-pressure",
@@ -233,6 +257,41 @@ describe("authenticated canonical report attachment", () => {
     expect(failure?.extra).toMatchObject({ reason: "unavailable" });
     expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
   });
+  it.each(["writeHead", "end", "error-event"] as const)(
+    "records exactly one causal failure when attachment delivery fails at %s",
+    async (stage) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const owner = deps("owner-session");
+      const canonical = createClientOnlySupportReport("delivery-fault", "session-unavailable");
+      const cached = cacheSupportReportDownload(
+        owner,
+        "owner-session",
+        canonical,
+        "failed-delivery-creation",
+      );
+      const ctx = context(cached.downloadPath);
+      const headers = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      const destroy = vi.spyOn(ctx.res, "destroy");
+      const error = new RangeError("private-write-detail", {
+        cause: new TypeError("private-cause"),
+      });
+      if (stage !== "error-event")
+        (stage === "writeHead" ? headers : end).mockImplementationOnce(() => {
+          throw error;
+        });
+      expect(await handleDownloadSupportReport(ctx, owner)).toBe(STREAMING);
+      if (stage === "error-event") ctx.res.emit("error", error);
+      else expect(destroy).toHaveBeenCalledOnce();
+      if (stage === "writeHead") expect(end).not.toHaveBeenCalled();
+      for (const event of ["finish", "close", "error"])
+        expect(ctx.res.listenerCount(event)).toBe(0);
+      ctx.res.emit("finish");
+      ctx.res.emit("close");
+      expectSingleDeliveryFailure(sink, cached.downloadPath, canonical.reportJson);
+    },
+  );
   it("retries a failed shared gzip and charges only the successfully retained attachment", async () => {
     vi.useFakeTimers();
     const sink = createBufferedServerLogSink();

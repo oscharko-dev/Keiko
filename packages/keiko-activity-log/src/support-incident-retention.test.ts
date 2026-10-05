@@ -224,6 +224,54 @@ function persistFreshFailure(): void {
   );
 }
 
+function queuePublicationFailure(): void {
+  const op = "coding-runtime.readiness.failed";
+  const registration = activityLogOperationSchema(op);
+  if (registration === undefined) throw new TypeError("Expected registered failure operation");
+  createFileServerLogSink(stateDir).write(
+    attachActivityLogEventRegistration(
+      {
+        level: "error",
+        category: "process",
+        op,
+        correlationId: "failed-registered-publication",
+        parentCorrelationId: "publication-parent",
+        errorKind: "unavailable",
+        extra: {
+          phase: "endpoint",
+          frames: ["packages/keiko-server/dist/coding-runtime/opencodeRuntimeAdapter.js:710:9"],
+          causeChain: ["Error"],
+          completeness: "complete",
+          loss: "none",
+        },
+      },
+      registration,
+    ),
+  );
+}
+
+function expectRejectedPublicationCleanup(
+  reason: "record-too-large" | "store-unavailable",
+  trigger: "user-report" | "registered-failure",
+): void {
+  expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+  expect(listSupportIncidentClaims(stateDir)).toEqual([]);
+  expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
+  const text = readPersistedActivityLog(stateDir);
+  const failures = persistedActivityLogLines(text, "support.incident.rejected");
+  expect(failures).toHaveLength(1);
+  expect(
+    expectActivityLogProof("support.incident.rejected.emitted-line", failures[0] ?? ""),
+  ).toMatchObject({
+    reason,
+    trigger,
+    correlationId:
+      trigger === "user-report" ? "failed-manual-publication" : "failed-registered-publication",
+    openIncidentCount: 0,
+  });
+  expect(text).not.toContain("private-publication-detail");
+}
+
 function expectRetirementStarted(
   text: string,
   incidentId: string,
@@ -1203,6 +1251,69 @@ describe("rolling diagnostic candidate retention", () => {
     expect(listSupportIncidentClaims(stateDir)).toEqual([]);
     expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
   });
+
+  it.each(["user-report", "registered-failure"] as const)(
+    "releases the newly published pin after a %s record exceeds the byte limit",
+    (trigger) => {
+      const serialize = vi.spyOn(incidentStore, "serializeSupportIncidentRecord");
+      serialize.mockImplementationOnce((record) => {
+        expect(record.pin.status).toBe("pinned");
+        expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toHaveLength(1);
+        return undefined;
+      });
+      const result =
+        trigger === "user-report"
+          ? recordUserReportedIncident(stateDir, { correlationId: "failed-manual-publication" })
+          : recordRegisteredFailureIncident(stateDir, {
+              op: "coding-runtime.readiness.failed",
+              errorKind: "unavailable",
+              correlationId: "failed-registered-publication",
+              parentCorrelationId: "publication-parent",
+            });
+      expect(result).toEqual({ status: "rejected", reason: "record-too-large" });
+      expect(serialize).toHaveBeenCalledOnce();
+      expectRejectedPublicationCleanup("record-too-large", trigger);
+    },
+  );
+
+  it.each(["record-too-large", "store-unavailable"] as const)(
+    "releases the actual retry pin when queued registered publication fails with %s",
+    (reason) => {
+      setSupportIncidentTriggerForTests(true);
+      const pin = vi.spyOn(serverLog, "pinActivityLogWindow").mockReturnValueOnce({
+        status: "rejected",
+        reason: "storage-unavailable",
+      });
+      if (reason === "record-too-large")
+        vi.spyOn(incidentStore, "serializeSupportIncidentRecord").mockReturnValueOnce(undefined);
+      else
+        vi.spyOn(incidentStore, "writeSupportIncidentRecord").mockImplementationOnce(() => {
+          throw new RangeError("private-publication-detail");
+        });
+      queuePublicationFailure();
+      expect(pin).toHaveBeenCalledOnce();
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toEqual([]);
+      drainSupportIncidentCandidates();
+      expect(pin).toHaveBeenCalledTimes(2);
+      expect(pin.mock.results[1]).toMatchObject({ type: "return", value: { status: "pinned" } });
+      expectRejectedPublicationCleanup(reason, "registered-failure");
+      const text = readPersistedActivityLog(stateDir);
+      const releases = persistedActivityLogLines(text, "activity-log.pin.expired");
+      expect(releases).toHaveLength(1);
+      expect(
+        expectActivityLogProof("activity-log.pin.expired.emitted-line", releases[0] ?? ""),
+      ).toMatchObject({
+        correlationId: "failed-registered-publication",
+        reason: "released",
+      });
+      const source = persistedActivityLogLines(text, "coding-runtime.readiness.failed");
+      expect(source).toHaveLength(1);
+      expect(JSON.parse(source[0] ?? "")).toMatchObject({
+        correlationId: "failed-registered-publication",
+        parentCorrelationId: "publication-parent",
+      });
+    },
+  );
 
   it.each(["record", "slot"] as const)(
     "finishes expiry when a peer removes the %s leaf immediately before the guarded open",
