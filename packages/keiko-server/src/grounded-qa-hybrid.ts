@@ -1,3 +1,4 @@
+import { mapWithConcurrency } from "./bounded-concurrency.js";
 import {
   caughtGroundedPackValidation,
   inspectGroundedPack,
@@ -204,6 +205,7 @@ export type ConnectorRetrieve = (
   store: KnowledgeStore,
   scope: ChatLocalKnowledgeScope,
   selected: SelectedLocalKnowledgeScope,
+  signal?: AbortSignal,
 ) => Promise<RetrievalResult>;
 export type HybridAnswerer = (system: string, user: string) => Promise<GroundedAnswerPayload>;
 
@@ -604,13 +606,16 @@ async function retrieveFolderIntoSlot(
   let out: RetrievalOnlyOutput;
   try {
     const workspaceFs = groundedScopeWorkspaceFs(cs);
-    out = await retriever({
-      scope,
-      query,
-      workspaceRoot: scope.workspaceRoot,
-      budget,
-      ...(workspaceFs === undefined ? {} : { workspaceFs }),
-    });
+    out = await retriever(
+      {
+        scope,
+        query,
+        workspaceRoot: scope.workspaceRoot,
+        budget,
+        ...(workspaceFs === undefined ? {} : { workspaceFs }),
+      },
+      ctx.signal,
+    );
     ensureNotCancelled(ctx.signal);
   } catch (error) {
     // Only declared per-source degradation is recoverable; cancellation, gateway and unknown
@@ -647,28 +652,22 @@ async function retrieveFolderPacks(
   );
   // Index-addressed slots keep the emitted order identical to the scope order regardless of which
   // worker finishes first — evidence and labels stay deterministic (mirrors retrieveConnectors).
-  const slots: FolderSlot[] = new Array<FolderSlot>(folderScopes.length).fill(undefined);
-  let nextIndex = 0;
-  const worker = async (): Promise<void> => {
-    while (nextIndex < folderScopes.length) {
-      const i = nextIndex;
-      nextIndex += 1;
-      ensureNotCancelled(ctx.signal);
-      const cs = folderScopes[i];
-      const label = labels[i];
-      if (cs === undefined || label === undefined) continue;
-      const folderBudget = perFolderBudgets[i] ?? perFolderBudgets.at(-1);
-      if (folderBudget === undefined) continue;
-      slots[i] = await retrieveFolderIntoSlot(ctx, retriever, query, folderBudget, {
+  const slots = await mapWithConcurrency(
+    folderScopes,
+    MAX_FOLDER_RETRIEVAL_CONCURRENCY,
+    async (cs, index, signal): Promise<FolderSlot> => {
+      ensureNotCancelled(signal);
+      const label = labels[index];
+      const folderBudget = perFolderBudgets[index] ?? perFolderBudgets.at(-1);
+      if (label === undefined || folderBudget === undefined) return undefined;
+      return retrieveFolderIntoSlot({ ...ctx, signal }, retriever, query, folderBudget, {
         cs,
         label,
-        index: i,
+        index,
       });
-      ensureNotCancelled(ctx.signal);
-    }
-  };
-  const workerCount = Math.min(MAX_FOLDER_RETRIEVAL_CONCURRENCY, folderScopes.length);
-  await Promise.all(Array.from({ length: workerCount }, worker));
+    },
+    ctx.signal,
+  );
   ensureNotCancelled(ctx.signal);
   const retrieved: RetrievedFolder[] = [];
   const skipped: SkippedConnector[] = [];
@@ -728,13 +727,13 @@ function defaultConnectorRetrieve(
   connectorScopeCount: number,
   vectorIndex: VectorIndexOptions,
 ): ConnectorRetrieve {
-  return async (store, scope, _selected): Promise<RetrievalResult> => {
+  return async (store, scope, _selected, signal = ctx.signal): Promise<RetrievalResult> => {
     const embeddingAdapter = createEmbeddingAdapter(ctx.deps);
     if ("status" in embeddingAdapter) {
       throw new EmbeddingAdapterError(embeddingAdapter);
     }
     return runLocalKnowledgeRetrieval(
-      { store, embeddingAdapter, signal: ctx.signal, vectorIndex },
+      { store, embeddingAdapter, signal, vectorIndex },
       connectorQuery(scope, ctx.retrievalContent ?? ctx.content, connectorScopeCount),
     );
   };
@@ -761,6 +760,7 @@ type ConnectorSlot =
 async function retrieveConnectorIntoSlot(
   retrieve: ConnectorRetrieve,
   store: KnowledgeStore,
+  signal: AbortSignal,
   inputs: {
     readonly scope: ChatLocalKnowledgeScope;
     readonly selected: SelectedLocalKnowledgeScope;
@@ -779,7 +779,13 @@ async function retrieveConnectorIntoSlot(
       },
     };
   }
-  const outcome = await retrieveOneConnector(retrieve, store, inputs.scope, inputs.selected);
+  const outcome = await retrieveOneConnector(
+    retrieve,
+    store,
+    inputs.scope,
+    inputs.selected,
+    signal,
+  );
   if ("status" in outcome) {
     return {
       kind: "skipped",
@@ -814,27 +820,18 @@ async function retrieveConnectors(
   const labels = connectorLabels(resolved.map((s) => s.scopeLabel));
   // Index-addressed slots keep the emitted order identical to the scope order regardless of
   // which worker finishes first — evidence and labels stay deterministic.
-  const slots: ConnectorSlot[] = new Array<ConnectorSlot>(connectorScopes.length).fill(undefined);
-  let nextIndex = 0;
-  const worker = async (): Promise<void> => {
-    while (nextIndex < connectorScopes.length) {
-      const i = nextIndex;
-      nextIndex += 1;
-      ensureNotCancelled(ctx.signal);
-      const scope = connectorScopes[i];
-      const selected = resolved[i];
-      const label = labels[i];
-      if (scope === undefined || selected === undefined || label === undefined) continue;
-      slots[i] = await retrieveConnectorIntoSlot(retrieve, store, {
-        scope,
-        selected,
-        label,
-      });
-      ensureNotCancelled(ctx.signal);
-    }
-  };
-  const workerCount = Math.min(MAX_CONNECTOR_RETRIEVAL_CONCURRENCY, connectorScopes.length);
-  await Promise.all(Array.from({ length: workerCount }, worker));
+  const slots = await mapWithConcurrency(
+    connectorScopes,
+    MAX_CONNECTOR_RETRIEVAL_CONCURRENCY,
+    async (scope, index, signal): Promise<ConnectorSlot> => {
+      ensureNotCancelled(signal);
+      const selected = resolved[index];
+      const label = labels[index];
+      if (selected === undefined || label === undefined) return undefined;
+      return retrieveConnectorIntoSlot(retrieve, store, signal, { scope, selected, label });
+    },
+    ctx.signal,
+  );
   ensureNotCancelled(ctx.signal);
   const retrieved: RetrievedConnector[] = [];
   const skipped: SkippedConnector[] = [];
@@ -851,9 +848,10 @@ async function retrieveOneConnector(
   store: KnowledgeStore,
   scope: ChatLocalKnowledgeScope,
   selected: SelectedLocalKnowledgeScope,
+  signal: AbortSignal,
 ): Promise<RetrievalResult | RouteResult> {
   try {
-    return await retrieve(store, scope, selected);
+    return await retrieve(store, scope, selected, signal);
   } catch (error) {
     if (error instanceof EmbeddingAdapterError) return error.result;
     throw error;
@@ -2199,6 +2197,48 @@ function capSourcesToLimits(
   };
 }
 
+async function retrieveHybridSources(
+  ctx: HybridGroundedAskCtx,
+  store: KnowledgeStore,
+  vectorIndex: VectorIndexOptions,
+  capped: CappedSources,
+  resolved: readonly SelectedLocalKnowledgeScope[],
+  query: RetrievalQuery,
+): Promise<{
+  readonly folderResult: FolderRetrieval;
+  readonly connectorResult: ConnectorRetrieval | RouteResult;
+}> {
+  let folderResult: FolderRetrieval | undefined;
+  let connectorResult: ConnectorRetrieval | RouteResult | undefined;
+  await mapWithConcurrency(
+    ["folders", "connectors"] as const,
+    2,
+    async (kind, _index, signal) => {
+      const child = { ...ctx, signal };
+      if (kind === "folders") {
+        folderResult = await retrieveFolderPacks(
+          child,
+          capped.folderScopes,
+          query,
+          ctx.folderRetriever ?? defaultRetriever(signal, ctx.deps, ctx.correlationId),
+        );
+      } else {
+        connectorResult = await retrieveConnectors(
+          child,
+          store,
+          vectorIndex,
+          capped.connectorScopes,
+          resolved,
+        );
+      }
+    },
+    ctx.signal,
+  );
+  if (folderResult === undefined || connectorResult === undefined)
+    throw new TypeError("Hybrid retrieval did not settle both source kinds");
+  return { folderResult, connectorResult };
+}
+
 async function runHybridWithStore(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
@@ -2209,15 +2249,14 @@ async function runHybridWithStore(
   const resolved = resolveConnectorScopes(capped.connectorScopes, store);
   if ("status" in resolved) return resolved;
   const query = buildQuery(ctx.retrievalContent ?? ctx.content, () => Date.now());
-  const [rawFolderResult, connectorResult] = await Promise.all([
-    retrieveFolderPacks(
-      ctx,
-      capped.folderScopes,
-      query,
-      ctx.folderRetriever ?? defaultRetriever(ctx.signal, ctx.deps, ctx.correlationId),
-    ),
-    retrieveConnectors(ctx, store, vectorIndex, capped.connectorScopes, resolved),
-  ]);
+  const { folderResult: rawFolderResult, connectorResult } = await retrieveHybridSources(
+    ctx,
+    store,
+    vectorIndex,
+    capped,
+    resolved,
+    query,
+  );
   ensureNotCancelled(ctx.signal);
   // Merge upfront-skipped folders (inaccessible/denied at canonicalization), over-cap folder skips,
   // and retrieval-time folder skips so all omissions appear in the assembled uncertainty entries.

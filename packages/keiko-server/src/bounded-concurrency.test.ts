@@ -148,3 +148,76 @@ it("orders results when the last item completes first", async () => {
   expect(await result).toEqual([0, 1]);
   expect(completed).toEqual([1, 0]);
 });
+
+it("aborts active siblings, stops the queue and preserves the first failure", async () => {
+  const parent = new AbortController();
+  const failure = new TypeError("original source failure");
+  const release = deferred();
+  const signals: (AbortSignal | undefined)[] = [];
+  const started: number[] = [];
+  const result = mapWithConcurrency(
+    [0, 1, 2, 3, 4, 5],
+    3,
+    async (item, _index, signal) => {
+      started.push(item);
+      signals.push(signal);
+      if (item === 0) throw failure;
+      await release.promise;
+      signal.throwIfAborted();
+      return item;
+    },
+    parent.signal,
+  );
+  try {
+    await expect(result).rejects.toBe(failure);
+    expect(signals).toHaveLength(3);
+    expect(signals.every((signal) => signal?.aborted === true)).toBe(true);
+    expect(signals.every((signal) => signal?.reason === failure)).toBe(true);
+    expect(parent.signal.aborted).toBe(false);
+  } finally {
+    release.resolve();
+    await setImmediate();
+  }
+  expect(started).toEqual([0, 1, 2]);
+});
+
+it("links caller cancellation without starting queued work", async () => {
+  const parent = new AbortController();
+  const release = deferred();
+  const signals: (AbortSignal | undefined)[] = [];
+  const result = mapWithConcurrency(
+    [0, 1, 2],
+    2,
+    async (item, _index, signal) => {
+      signals.push(signal);
+      await release.promise;
+      signal.throwIfAborted();
+      return item;
+    },
+    parent.signal,
+  );
+  const failure = new Error("caller cancelled");
+  parent.abort(failure);
+  release.resolve();
+  await expect(result).rejects.toBe(failure);
+  expect(signals).toHaveLength(2);
+  expect(signals.every((signal) => signal?.aborted === true)).toBe(true);
+});
+
+it("retires owned child signals after success without aborting the caller", async () => {
+  const parent = new AbortController();
+  let observed: AbortSignal | undefined;
+  expect(
+    await mapWithConcurrency(
+      [1],
+      1,
+      (item, _index, signal) => {
+        observed = signal;
+        return Promise.resolve(item);
+      },
+      parent.signal,
+    ),
+  ).toEqual([1]);
+  expect(observed?.aborted).toBe(true);
+  expect(parent.signal.aborted).toBe(false);
+});

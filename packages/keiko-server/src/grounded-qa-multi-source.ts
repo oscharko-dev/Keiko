@@ -14,10 +14,12 @@ import {
 // the shared formatters/projection/persistence helpers (now exported) so the two paths build their
 // gateway messages, citations, and evidence from the exact same primitives.
 
+import { mapWithConcurrency } from "./bounded-concurrency.js";
 import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
 import { basename } from "node:path";
 import { createHash } from "node:crypto";
 import {
+  CancelledError,
   ContextOverflowError,
   resolveCostClass,
   type ChatMessage as GatewayChatMessage,
@@ -657,7 +659,10 @@ export function fittedMultiSourcePrompt(
 
 // ─── Per-source retrieval seam (test injection) ───────────────────────────────
 
-export type GroundedRetriever = (input: OrchestratorInput) => Promise<RetrievalOnlyOutput>;
+export type GroundedRetriever = (
+  input: OrchestratorInput,
+  signal?: AbortSignal,
+) => Promise<RetrievalOnlyOutput>;
 
 // Production retriever: retrieval-only orchestrator pass with a per-scope micro-index cache. No
 // modelId is needed — retrieval performs no model call.
@@ -666,16 +671,16 @@ export function defaultRetriever(
   deps?: UiHandlerDeps,
   correlationId?: string,
 ): GroundedRetriever {
-  return (input: OrchestratorInput): Promise<RetrievalOnlyOutput> => {
+  return (input: OrchestratorInput, childSignal = signal): Promise<RetrievalOnlyOutput> => {
     const nowMs = Date.now;
     const semanticLease =
       deps === undefined
         ? { provider: undefined, close: (): void => undefined }
-        : configuredRepoSemanticSearchProviderLeaseFor(deps, signal, input.workspaceRoot);
+        : configuredRepoSemanticSearchProviderLeaseFor(deps, childSignal, input.workspaceRoot);
     return retrieveConnectedContextPack(input, {
       answerer: { answer: (): Promise<string> => Promise.resolve("") },
       nowMs,
-      signal,
+      signal: childSignal,
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
       // ADR-0173 D5. A multi-folder or hybrid ask retrieves through THIS path, not through the
       // single-folder one, so without the id every git-history read failure on the plural-source
@@ -902,13 +907,16 @@ async function retrieveOneSource(
   let out: Awaited<ReturnType<GroundedRetriever>>;
   try {
     const workspaceFs = groundedScopeWorkspaceFs(cs);
-    out = await ctx.retriever({
-      scope,
-      query,
-      workspaceRoot: scope.workspaceRoot,
-      budget,
-      ...(workspaceFs === undefined ? {} : { workspaceFs }),
-    });
+    out = await ctx.retriever(
+      {
+        scope,
+        query,
+        workspaceRoot: scope.workspaceRoot,
+        budget,
+        ...(workspaceFs === undefined ? {} : { workspaceFs }),
+      },
+      ctx.signal,
+    );
     ensureNotCancelled(ctx.signal);
   } catch (error) {
     const classified = classifyPerSourceRetrieveError(error, label, ctx.correlationId, ctx.deps, i);
@@ -942,19 +950,13 @@ async function retrieveAllSources(
     skipped: [],
     firstError: undefined,
   };
-  let nextIndex = 0;
-
-  async function worker(): Promise<void> {
-    for (;;) {
-      const i = nextIndex;
-      nextIndex += 1;
-      if (i >= ctx.scopes.length) return;
-      await retrieveOneSource(ctx, query, perScopeBudgets, labels, acc, i);
-    }
-  }
-
-  const workerCount = Math.min(MAX_RETRIEVAL_CONCURRENCY, Math.max(1, ctx.scopes.length));
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  await mapWithConcurrency(
+    ctx.scopes,
+    MAX_RETRIEVAL_CONCURRENCY,
+    (_scope, index, signal) =>
+      retrieveOneSource({ ...ctx, signal }, query, perScopeBudgets, labels, acc, index),
+    ctx.signal,
+  );
   ensureNotCancelled(ctx.signal);
   const sources = acc.retrieved.filter((source): source is RetrievedSource => source !== undefined);
   const skipped = acc.skipped;
@@ -1327,7 +1329,11 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   try {
     outcome = await retrieveAllSources(ctx, query, perScopeBudgets, labels);
   } catch (error) {
-    return mapMultiSourceError(error, ctx.deps, ctx.correlationId);
+    const failure =
+      ctx.signal.aborted && error === ctx.signal.reason
+        ? new CancelledError("grounded request cancelled")
+        : error;
+    return mapMultiSourceError(failure, ctx.deps, ctx.correlationId);
   }
   if (isRouteResult(outcome)) {
     return outcome;

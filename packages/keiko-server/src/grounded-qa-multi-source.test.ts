@@ -6,6 +6,7 @@
 
 import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-context-assembly.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setImmediate } from "node:timers/promises";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
@@ -67,13 +68,19 @@ import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.j
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { adoptReportedContextWindow } from "./gateway-context-window.js";
-import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
-import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { defaultServerDiagnosticSink, type ServerDiagnosticRecord } from "./diagnostics-log.js";
+import {
+  closeFileServerLogSinks,
+  createServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
@@ -1936,6 +1943,133 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.citations).toHaveLength(16);
     expect(puts).toHaveLength(16);
+  });
+
+  it("aborts active source siblings and stops queued scopes after a fatal failure", async () => {
+    const scopes: ChatConnectedScope[] = Array.from({ length: 8 }, (_, index) => ({
+      kind: "workspace-root",
+      relativePaths: [],
+      connectedAtMs: NOW,
+      root: tempRoot(`fatal-source-${String(index)}`),
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new Error("Missing fanout chat");
+    const parent = new AbortController();
+    const release = deferred<undefined>();
+    const failure = new TypeError("fatal source fixture");
+    const signals: (AbortSignal | undefined)[] = [];
+    const run = runMultiSourceAsk({
+      chat,
+      scopes,
+      content: "Trace the handler",
+      modelId: CHAT_MODEL,
+      contextProfile: undefined,
+      deps: recordingDeps([]),
+      signal: parent.signal,
+      retriever: async (_input, signal) => {
+        signals.push(signal);
+        if (signals.length === 1) throw failure;
+        await release.promise;
+        signal?.throwIfAborted();
+        throw new Error("sibling should have been cancelled");
+      },
+      answerer: () => {
+        throw new Error("failed retrieval must not answer");
+      },
+    });
+    try {
+      await expect(run).rejects.toBe(failure);
+      expect(signals).toHaveLength(4);
+      expect(signals.every((signal) => signal?.aborted === true)).toBe(true);
+      expect(signals.every((signal) => signal?.reason === failure)).toBe(true);
+      expect(parent.signal.aborted).toBe(false);
+    } finally {
+      release.resolve(undefined);
+      await setImmediate();
+    }
+    expect(signals).toHaveLength(4);
+  });
+
+  it("persists the original mapped fanout failure once under the actual request", async () => {
+    const scopes: ChatConnectedScope[] = ["one", "two"].map((name) => ({
+      kind: "workspace-root",
+      relativePaths: [],
+      connectedAtMs: NOW,
+      root: tempRoot(name),
+    }));
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new TypeError("Missing fanout diagnostic chat");
+    const stateDir = join(tmp, "fanout-diagnostic");
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    const stderr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const failure = new ContextOverflowError("private-fanout-error-canary");
+    failure.cause = new TypeError("private-fanout-cause-canary");
+    try {
+      const result = await runMultiSourceAsk({
+        chat,
+        scopes,
+        content: "Trace",
+        modelId: CHAT_MODEL,
+        contextProfile: undefined,
+        deps: recordingDeps([], { diagnostics: defaultServerDiagnosticSink }),
+        signal: new AbortController().signal,
+        correlationId: "fanout-original-request",
+        retriever: () => Promise.reject(failure),
+        answerer: vi.fn<MultiSourceAnswerer>(),
+      });
+      expect(result.status).toBe(502);
+      closeFileServerLogSinks();
+      const lines = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "server.diagnostic.failure",
+      );
+      expect(lines).toHaveLength(1);
+      expect(
+        expectActivityLogProof("server.diagnostic.failure.activity-log-line", lines[0] ?? ""),
+      ).toMatchObject({
+        correlationId: "fanout-original-request",
+        diagnosticErrorClass: "ContextOverflowError",
+        code: "GATEWAY_CONTEXT_OVERFLOW",
+        causeChain: ["TypeError"],
+      });
+      expect(lines.join("\n")).not.toContain("private-fanout-");
+    } finally {
+      stderr.mockRestore();
+      closeFileServerLogSinks();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("maps a pre-cancelled fanout to 499 without starting a source", async () => {
+    const scopes: ChatConnectedScope[] = [
+      {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: NOW,
+        root: tempRoot("cancelled-fanout"),
+      },
+    ];
+    const chat = store.findChatById(makeChat(scopes));
+    if (chat === undefined) throw new Error("Missing cancellation chat");
+    const parent = new AbortController();
+    parent.abort();
+    const retriever = vi.fn<GroundedRetriever>();
+    const answerer = vi.fn<MultiSourceAnswerer>();
+    await expect(
+      runMultiSourceAsk({
+        chat,
+        scopes,
+        content: "Trace",
+        modelId: CHAT_MODEL,
+        contextProfile: undefined,
+        deps: recordingDeps([]),
+        signal: parent.signal,
+        retriever,
+        answerer,
+      }),
+    ).resolves.toMatchObject({ status: 499 });
+    expect(retriever).not.toHaveBeenCalled();
+    expect(answerer).not.toHaveBeenCalled();
   });
 
   it("retrieves connected sources with bounded concurrency", async () => {

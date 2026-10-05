@@ -5,6 +5,7 @@ import { failInvalidOmissionAssembly } from "../../../tests/support/invalid-cont
 // states. Every test is mutation-robust: a single-line change in the source — a swapped count, a
 // missing `.source` tag, a dropped skip-uncertainty — must make at least one assertion fail.
 
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1992,6 +1993,24 @@ async function hybridReviewContext(): Promise<HybridGroundedAskCtx> {
   };
 }
 
+async function hybridFanoutContext(): Promise<HybridGroundedAskCtx> {
+  const context = await hybridReviewContext();
+  const folders: ChatConnectedScope[] = Array.from({ length: 6 }, (_, index) => ({
+    kind: "workspace-root",
+    relativePaths: [],
+    connectedAtMs: NOW,
+    root: tempRoot(`hybrid-fanout-${String(index)}`),
+  }));
+  const connectors: ChatLocalKnowledgeScope[] = [];
+  for (let index = 0; index < 6; index += 1) {
+    const { capsuleId } = await seedReadyCapsule(`Fanout docs ${String(index)}`);
+    connectors.push({ kind: "capsule", capsuleId, connectedAtMs: NOW });
+  }
+  const chat = store.findChatById(makeHybridChat(folders, connectors));
+  if (chat === undefined) throw new TypeError("Missing hybrid fanout chat");
+  return { ...context, chat };
+}
+
 function largeHybridOmissionPack(): ConnectedContextPack {
   return {
     ...folderPack("src/review.ts", 1, "review"),
@@ -2075,8 +2094,10 @@ describe("hybrid model budget and runtime truth", () => {
 
   it("fits large exclusion inventories while retaining answer evidence and exact prompt metrics", async () => {
     const ctx = await hybridReviewContext();
+    // Path metadata now has its own 4 KiB envelope. A small configured model keeps this
+    // regression exercising actual prompt fitting, rather than demanding a fictitious trim.
     const profile = deriveContextProfile({
-      maxInputTokens: 32000,
+      maxInputTokens: 2048,
       reservedOutputTokens: 1024,
       safetyMarginTokens: 64,
     });
@@ -2150,6 +2171,47 @@ describe("hybrid model budget and runtime truth", () => {
       now.mockRestore();
     }
   });
+
+  it.each(["folder", "connector"] as const)(
+    "aborts the other retrieval branch after a fatal %s failure",
+    async (failedSource) => {
+      const ctx = await hybridFanoutContext();
+      const parent = new AbortController();
+      const release = deferred<undefined>();
+      const failure = new TypeError("fatal hybrid fixture");
+      const signals: (AbortSignal | undefined)[] = [];
+      const retrieve = async (
+        kind: "folder" | "connector",
+        signal?: AbortSignal,
+      ): Promise<never> => {
+        signals.push(signal);
+        if (kind === failedSource) throw failure;
+        await release.promise;
+        signal?.throwIfAborted();
+        throw new Error("sibling should have been cancelled");
+      };
+      const run = runHybridGroundedAsk({
+        ...ctx,
+        signal: parent.signal,
+        folderRetriever: (_input, signal) => retrieve("folder", signal),
+        connectorRetrieve: (_store, _scope, _selected, signal) => retrieve("connector", signal),
+        answer: () => {
+          throw new Error("failed retrieval must not answer");
+        },
+      });
+      try {
+        await expect(run).rejects.toBe(failure);
+        expect(signals).toHaveLength(8);
+        expect(signals.every((signal) => signal?.aborted === true)).toBe(true);
+        expect(signals.every((signal) => signal?.reason === failure)).toBe(true);
+        expect(parent.signal.aborted).toBe(false);
+      } finally {
+        release.resolve(undefined);
+        await setImmediate();
+      }
+      expect(signals).toHaveLength(8);
+    },
+  );
 
   it("preserves unexpected failures for the route diagnostic owner without a raw 500 response", async () => {
     const ctx = await hybridReviewContext();
