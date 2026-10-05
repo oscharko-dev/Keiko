@@ -1239,3 +1239,18 @@ describe("memory consolidation job handlers", () => {
     });
   });
 });
+
+describe("consolidation request response-shape isolation", () => {
+  it.each([200, 400, 413, 99999])(
+    "validates caller status %i instead of echoing it",
+    async (status) => {
+      const body = { error: { code: "CALLER_CONTROLLED" } };
+      const result = await handleCreateConsolidationJob(
+        makeCtx("/api/memory/consolidation/jobs", { status, body, scopes: [] }),
+        makeDeps({ memoryVault: makeVault() }),
+      );
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(result.body).not.toEqual(body);
+    },
+  );
+});

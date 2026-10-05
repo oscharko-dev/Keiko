@@ -61,7 +61,7 @@ import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { persistCapturedMemory } from "./memory-capture-persistence.js";
-import { readJsonRequestBody } from "./bounded-request-body.js";
+import { readJsonRequestBodyOutcome, type JsonRequestBodyOutcome } from "./bounded-request-body.js";
 import {
   enforcePersistableMemoryOutcome,
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
@@ -88,7 +88,7 @@ const MAX_BODY_BYTES = 64_000;
 // ─── Body reading ──────────────────────────────────────────────────────────────
 // Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the cap below is
 // unchanged, only the ad hoc listener wiring is gone. The read-parse-validate wrapper itself is
-// also consolidated (#2902 audit finding 3): `readJsonRequestBody` (bounded-request-body.ts) is
+// also consolidated (#2902 audit finding 3): `readJsonRequestBodyOutcome` (bounded-request-body.ts) is
 // the one owner of "bounded read, then parse+validate as a JSON object", previously hand-rolled
 // identically in this file, memory-handlers.ts and memory-consolidation-handlers.ts.
 
@@ -99,8 +99,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function readJsonBody(
   req: IncomingMessage,
   correlationId?: string,
-): Promise<Record<string, unknown> | RouteResult> {
-  return readJsonRequestBody(req, MAX_BODY_BYTES, correlationId);
+): Promise<JsonRequestBodyOutcome> {
+  return readJsonRequestBodyOutcome(req, MAX_BODY_BYTES, correlationId);
 }
 
 function isRouteResult(value: unknown): value is RouteResult {
@@ -295,8 +295,9 @@ export async function handleMemoryRetrieveContext(
 ): Promise<RouteResult> {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
   const input = parseContextInput(body);
   if (isRouteResult(input)) return input;
 
@@ -411,8 +412,9 @@ export async function handleMemoryCaptureFromConversation(
 ): Promise<RouteResult> {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
   const input = parseCaptureInput(body);
   if (isRouteResult(input)) return input;
   const runtimeContext = resolveConversationMemoryContext(

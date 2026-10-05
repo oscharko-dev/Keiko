@@ -1128,3 +1128,18 @@ describe("handleMemoryCaptureFromConversation", () => {
     });
   });
 });
+
+describe("conversation memory request response-shape isolation", () => {
+  it.each([200, 400, 413, 99999])(
+    "validates caller status %i instead of echoing it",
+    async (status) => {
+      const body = { error: { code: "CALLER_CONTROLLED" } };
+      const result = await handleMemoryRetrieveContext(
+        makeCtx({ status, body }),
+        makeDeps({ memoryVault: makeVault() }),
+      );
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(result.body).not.toEqual(body);
+    },
+  );
+});

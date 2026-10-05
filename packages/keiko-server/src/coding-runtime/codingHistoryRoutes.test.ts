@@ -178,3 +178,17 @@ describe("paired coding history routes", () => {
     ).toBe(200);
   });
 });
+
+describe("history request response-shape isolation", () => {
+  it.each([200, 400, 413, 99999])(
+    "validates caller status %i instead of echoing it",
+    async (status) => {
+      const body = { error: { code: "CALLER_CONTROLLED" } };
+      const update = vi.spyOn(history, "update");
+      const result = await updateCodingHistory(context(JSON.stringify({ status, body })), deps);
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "INVALID_REQUEST" } } });
+      expect(result.body).not.toEqual(body);
+      expect(update).not.toHaveBeenCalled();
+    },
+  );
+});

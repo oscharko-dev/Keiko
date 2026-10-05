@@ -85,7 +85,7 @@ import {
   type MemoryCaptureDecision,
 } from "./memory-capture-projection.js";
 import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
-import { readJsonRequestBody } from "./bounded-request-body.js";
+import { readJsonRequestBodyOutcome, type JsonRequestBodyOutcome } from "./bounded-request-body.js";
 import { processServerLogSink, processServerLogSinkFor } from "./process-log-sink.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { resolveMemoryTargetRecords } from "./memory-target-resolver.js";
@@ -292,15 +292,15 @@ function parseScope(raw: unknown): MemoryScope | RouteResult {
 // ─── Body reading ──────────────────────────────────────────────────────────────
 // Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the caps below are
 // unchanged, only the ad hoc listener wiring is gone. The read-parse-validate wrapper itself is
-// also consolidated (#2902 audit finding 3): `readJsonRequestBody` (bounded-request-body.ts) is
+// also consolidated (#2902 audit finding 3): `readJsonRequestBodyOutcome` (bounded-request-body.ts) is
 // the one owner of "bounded read, then parse+validate as a JSON object", previously hand-rolled
 // identically in this file, memory-conv-handlers.ts and memory-consolidation-handlers.ts.
 
 function readJsonBody(
   req: IncomingMessage,
   correlationId?: string,
-): Promise<Record<string, unknown> | RouteResult> {
-  return readJsonRequestBody(req, MAX_MEMORY_BODY_BYTES, correlationId);
+): Promise<JsonRequestBodyOutcome> {
+  return readJsonRequestBodyOutcome(req, MAX_MEMORY_BODY_BYTES, correlationId);
 }
 
 function isRouteResult(v: unknown): v is RouteResult {
@@ -925,8 +925,9 @@ function memoryIdFromParams(ctx: RouteContext): MemoryId | RouteResult {
 }
 
 async function readEditRouteInput(ctx: RouteContext): Promise<EditInput | RouteResult> {
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
   return parseEditInput(body);
 }
 
@@ -1067,6 +1068,11 @@ export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): Route
 
 // ─── Handler: POST /api/memory/:id/archive ────────────────────────────────────
 
+function archiveReason(body: Record<string, unknown>): string {
+  const rawReason = typeof body.reason === "string" ? body.reason : undefined;
+  return sanitizeMemoryStatusMutationReason(rawReason, "archived-by-user");
+}
+
 export async function handleArchiveMemory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1079,11 +1085,9 @@ export async function handleArchiveMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
-
-  const rawReason = typeof body.reason === "string" ? body.reason : undefined;
-  const reason = sanitizeMemoryStatusMutationReason(rawReason, "archived-by-user");
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const reason = archiveReason(outcome.value);
 
   try {
     const record = vault.getMemory(id as MemoryId);
@@ -1421,8 +1425,9 @@ export async function handleForgetMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
 
   const input = parseDestructiveInput(body);
   if (isRouteResult(input)) return input;
@@ -1459,8 +1464,9 @@ export async function handleForgetMemories(
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
 
   const input = parseForgetSelectionInput(body);
   if (isRouteResult(input)) return input;
@@ -1498,8 +1504,9 @@ export async function handleDeleteMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
 
   const input = parseDestructiveInput(body);
   if (isRouteResult(input)) return input;
@@ -1750,8 +1757,9 @@ export async function handleResolveMemoryConflict(
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
 
   const input = parseConflictResolutionInput(body);
   if (isRouteResult(input)) return input;
@@ -1923,8 +1931,9 @@ export async function handleCorrectMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
 
   const input = parseCorrectInput(body);
   if (isRouteResult(input)) return input;
@@ -2338,8 +2347,9 @@ export async function handleAcceptMemoryProposal(
   if (id === undefined || id.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
   const input = parseAcceptBody(body, id as MemoryId, deps);
   if (isRouteResult(input)) return input;
 
@@ -2444,8 +2454,9 @@ export async function handleRejectMemoryProposal(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req, ctx.correlationId);
-  if (isRouteResult(body)) return body;
+  const outcome = await readJsonBody(ctx.req, ctx.correlationId);
+  if (outcome.kind === "rejected") return outcome.response;
+  const body = outcome.value;
 
   const { reason } = parseRejectInput(body);
 

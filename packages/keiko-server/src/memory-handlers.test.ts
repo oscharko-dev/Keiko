@@ -2185,3 +2185,20 @@ describe("emitServerDiagnostic on memory-handler storage failures (w4b)", () => 
     expect(records[0]?.correlationId.length).toBeGreaterThan(0);
   });
 });
+
+// Request JSON is data even when it resembles an HTTP response.
+describe("memory request response-shape isolation", () => {
+  it.each([200, 400, 413, 99999])(
+    "validates caller status %i instead of echoing it",
+    async (status) => {
+      const body = { error: { code: "CALLER_CONTROLLED" } };
+      const deps = makeDeps({ memoryVault: makeVault() });
+      const result = await handleEditMemory(
+        makeCtx("/api/memory/test", { status, body }, { id: "test" }),
+        deps,
+      );
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+      expect(result.body).not.toEqual(body);
+    },
+  );
+});
