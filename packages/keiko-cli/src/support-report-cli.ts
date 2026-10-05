@@ -18,6 +18,7 @@ import {
   SUPPORT_REPORT_DIRECTORY_NAME,
   supportIncidentPrivateProjection,
   parseSupportIncidentRecord,
+  normalizeSupportReportCorrelationId,
   supportReportFileName,
   type SupportIncidentRecord,
   type SupportIncidentDescriptorRecord,
@@ -77,6 +78,7 @@ import {
   type SupportReportAnalysisOutcome,
   type SupportReportSurface,
   type SupportReportScopeEvidence,
+  type SupportReportExportEvidence,
 } from "./support-report-evidence.js";
 import {
   publishSupportReportFile,
@@ -191,7 +193,7 @@ async function makeReport(
   args: SafeSupportExportArgs,
   correlationId: string,
   io: CliIo,
-): Promise<SupportReport> {
+): Promise<{ report: SupportReport; evidence: SupportReportExportEvidence }> {
   const existing = existingIncident(stateDir, args.selector);
   const selected =
     args.selector === undefined
@@ -203,11 +205,23 @@ async function makeReport(
     throw new SupportReportError("selection-unavailable");
   const record = existing ?? createdIncident(stateDir, args.selector, correlationId, io);
   const query = await reportQuery(record, selected, stateDir, io, correlationId);
-  return buildSupportReport(
+  const report = buildSupportReport(
     supportIncidentPrivateProjection(resolveSelectedSupportIncident(record, query.result)),
     query.result,
     args.maxBytes ?? MAX_SUPPORT_REPORT_BYTES,
   );
+  const selectedId = normalizeSupportReportCorrelationId(record.correlation.rootCorrelationId);
+  const stored = parseSupportIncidentRecord(record) !== undefined;
+  return {
+    report,
+    evidence: {
+      incidentId: report.incident.incidentId,
+      incidentTrigger: report.incident.trigger,
+      ...(selectedId === undefined ? {} : { selectedCorrelationId: selectedId }),
+      retentionDisposition: stored ? "stored" : "transient",
+      ...(stored ? { pinDisposition: report.incident.pin.status } : {}),
+    },
+  };
 }
 
 // ─── Destination ───────────────────────────────────────────────────────────────────────────────
@@ -452,7 +466,12 @@ async function publishExport(
   emitSupportReportStarted(context.sink, context.correlationId, "export", plan.maxBytes);
   // The destination exists and is verified before any incident is recorded or any byte read.
   prepareReportDirectory(plan.directory, plan.logDirectories, plan.keikoOwned);
-  const report = await makeReport(plan.stateDir, args, context.correlationId, context.io);
+  const { report, evidence } = await makeReport(
+    plan.stateDir,
+    args,
+    context.correlationId,
+    context.io,
+  );
   const text = serializeSupportReport(report);
   const publication = publishSupportReportFile(join(plan.directory, reportFileName(report)), text);
   emitSupportReportCompleted(context.sink, context.correlationId, "export", {
@@ -462,6 +481,7 @@ async function publishExport(
     sufficiencyReasons: report.selection.reasons,
     reportDigest: report.integrity.reportDigest,
     publication,
+    exportEvidence: evidence,
   });
   announceReportExport(context.io, publication, report, staleStageCount(plan.directory));
   return 0;

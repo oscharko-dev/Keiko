@@ -870,7 +870,12 @@ export may prepare the canonical user-report descriptor without a persistent slo
 then compose and validate the same bounded report. Byte pressure rolls the oldest eligible diagnostic candidate out through its existing claim and pin
 cleanup. In-flight reservations are never stolen. The report summary distinguishes stored from
 transient descriptors with `retentionDisposition`; a transient descriptor omits `pinDisposition`
-because it owns no retained pin and must not imply that a pin attempt occurred. After a desktop artifact is successfully prepared and
+because it owns no retained pin and must not imply that a pin attempt occurred. Desktop and CLI
+completion events carry the canonical incident ID, report digest, actual `incidentTrigger`, and
+`retentionDisposition`; the validated selected correlation joins a transient preparation back to its
+quota-refusal evidence. `pinDisposition` is emitted only for a stored descriptor with an actual pin
+attempt. CLI analysis of an imported report does not claim local retention or pin ownership.
+After a desktop artifact is successfully prepared and
 admitted to the existing fifteen-minute memory download cache, its durable candidate and pin are
 released. This means the artifact is prepared, not that it was saved or sent. Failed preparation or
 cache admission preserves pre-existing diagnostic candidates. The owner preparation callback marks

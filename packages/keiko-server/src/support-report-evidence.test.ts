@@ -88,6 +88,7 @@ it.each(["stored", "transient"] as const)(
       expect(proof).toMatchObject({
         correlationId: "retention-report-request",
         evidenceScope: "server",
+        incidentTrigger: parseSupportReport(report.reportJson).incident.trigger,
         retentionDisposition,
       });
       if (retentionDisposition === "stored")

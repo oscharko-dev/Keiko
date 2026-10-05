@@ -99,6 +99,36 @@ function capture(): { io: CliIo; output: string[]; errors: string[] } {
     errors,
   };
 }
+function expectCapacityExportEvidence(reportJson: string): void {
+  const report = parseSupportReport(reportJson);
+  const rejected = persistedActivityLogLines(
+    readPersistedActivityLog(stateDir),
+    "support.incident.rejected",
+  ).map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(rejected).toContainEqual(
+    expect.objectContaining({
+      correlationId: CORRELATION,
+      rejectionReason: "quota-exhausted",
+      completeness: "partial",
+      loss: "event-dropped",
+    }),
+  );
+  const completed = persistedActivityLogLines(
+    readPersistedActivityLog(stateDir),
+    "support.report.completed",
+  ).at(-1);
+  const line = expectActivityLogProof("support.report.completed.report-lifecycle", completed ?? "");
+  expect(line).toMatchObject({
+    surface: "export",
+    selectedCorrelationId: CORRELATION,
+    incidentId: report.incident.incidentId,
+    incidentTrigger: report.incident.trigger,
+    reportDigest: report.integrity.reportDigest,
+    retentionDisposition: "transient",
+  });
+  expect(line).not.toHaveProperty("pinDisposition");
+}
+
 function seed(): void {
   const process = fixtureProcess(4242, "aabbccdd");
   const now = Date.now();
@@ -441,6 +471,7 @@ describe("support report CLI and private publication", () => {
     );
     expect(parseSupportReport(reportJson).incident.pin.status).toBe("rejected");
     expect(supportIncidentReservationsForTests(stateDir)).toEqual(reservations);
+    expectCapacityExportEvidence(reportJson);
   });
 
   it("assesses a historical selected correlation closure rather than the export-time window", async () => {
@@ -680,6 +711,11 @@ describe("support report CLI and private publication", () => {
       surface: "export",
       reportBytes: bytes.length,
       reportDigest: parseSupportReport(bytes.toString()).integrity.reportDigest,
+      incidentId: parseSupportReport(bytes.toString()).incident.incidentId,
+      incidentTrigger: parseSupportReport(bytes.toString()).incident.trigger,
+      selectedCorrelationId: CORRELATION,
+      retentionDisposition: "stored",
+      pinDisposition: parseSupportReport(bytes.toString()).incident.pin.status,
       sufficiency: "complete",
       sufficiencyReasons: [],
       completeness: "complete",

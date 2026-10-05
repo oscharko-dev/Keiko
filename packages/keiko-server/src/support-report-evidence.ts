@@ -2,6 +2,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
   SUPPORT_REPORT_FAILURES,
+  SUPPORT_INCIDENT_TRIGGERS,
   SUPPORT_REPORT_AVAILABILITY_REASONS,
   looksLikeSecret,
   looksLikePersonalIdentifier,
@@ -102,6 +103,12 @@ const COMPLETED = defineActivityLogOperation({
     recordCount: { type: "integer", dataClass: "count", required: false },
     reportDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
     incidentId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 32 },
+    incidentTrigger: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: SUPPORT_INCIDENT_TRIGGERS,
+    },
     manifestUnreadableCount: { type: "integer", dataClass: "count", required: false },
     manifestReusedCount: { type: "integer", dataClass: "count", required: false },
     sufficiency: {
@@ -316,6 +323,7 @@ type CompletionSummary = Partial<{
       | "recordCount"
       | "reportDigest"
       | "incidentId"
+      | "incidentTrigger"
       | "manifestUnreadableCount"
       | "manifestReusedCount"
       | "pinDisposition"
@@ -329,6 +337,7 @@ function completionSummary(summary: DesktopSupportReportResponse["summary"]): Co
     recordCount: summary.recordCount,
     reportDigest: summary.reportDigest,
     incidentId: summary.incidentId,
+    ...(summary.incidentTrigger === undefined ? {} : { incidentTrigger: summary.incidentTrigger }),
     manifestUnreadableCount: summary.manifestUnreadableCount,
     manifestReusedCount: summary.manifestReusedCount,
     ...(summary.pinDisposition === undefined ? {} : { pinDisposition: summary.pinDisposition }),

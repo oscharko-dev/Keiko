@@ -7,6 +7,7 @@ import type {
 } from "./observability.js";
 import type {
   SupportIncidentPinStatus,
+  SupportIncidentTrigger,
   SupportIncidentPrivateProjection,
 } from "./support-incident.js";
 
@@ -162,6 +163,8 @@ export interface DesktopSupportReportResponse {
         readonly recordCount: number;
         readonly reportDigest: string;
         readonly incidentId: string;
+        /** Attribution of the actual prepared descriptor, independent of its retention status. */
+        readonly incidentTrigger?: SupportIncidentTrigger | undefined;
         readonly manifestUnreadableCount: number;
         readonly manifestReusedCount: number;
         readonly completeness?: ActivityLogCompletenessState | undefined;

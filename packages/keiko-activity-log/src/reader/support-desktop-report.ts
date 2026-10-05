@@ -281,6 +281,7 @@ function desktopReportResponse(
       recordCount: report.evidence.recordCount,
       reportDigest: report.integrity.reportDigest,
       incidentId: report.incident.incidentId,
+      incidentTrigger: report.incident.trigger,
       manifestUnreadableCount,
       manifestReusedCount,
       completeness: report.incident.completeness,

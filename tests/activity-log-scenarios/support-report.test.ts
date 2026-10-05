@@ -395,6 +395,7 @@ function expectTransientExportJoins(report: CreatedReport): void {
     incidentId: report.parsed.incident.incidentId,
     reportDigest: digest,
     retentionDisposition: "transient",
+    incidentTrigger: "registered-failure",
   });
   // No pin was attempted for a transient descriptor. Do not invent a rejected pin operation.
   expect(completed).not.toHaveProperty("pinDisposition");

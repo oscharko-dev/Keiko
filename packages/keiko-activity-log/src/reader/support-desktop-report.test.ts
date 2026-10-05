@@ -131,6 +131,7 @@ describe("desktop canonical support report", () => {
       parseSupportReport(full.reportJson).incident.pin.status,
     );
     expect(full.summary?.availabilityReason).toBeUndefined();
+    expect(full.summary?.incidentTrigger).toBe("registered-failure");
   });
 
   it.each(["stored", "transient"] as const)(
@@ -151,7 +152,10 @@ describe("desktop canonical support report", () => {
       );
       const report = createPreparedDesktopSupportReport(stateDir, descriptor);
       expect(parseSupportReport(report.reportJson).incident.pin.status).toBe("rejected");
-      expect(report.summary).toMatchObject({ retentionDisposition });
+      expect(report.summary).toMatchObject({
+        retentionDisposition,
+        incidentTrigger: parseSupportReport(report.reportJson).incident.trigger,
+      });
       if (retentionDisposition === "stored")
         expect(report.summary).toHaveProperty("pinDisposition", "rejected");
       else expect(report.summary).not.toHaveProperty("pinDisposition");
