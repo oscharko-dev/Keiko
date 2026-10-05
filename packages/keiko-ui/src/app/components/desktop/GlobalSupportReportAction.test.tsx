@@ -1,5 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import { canonicalSupportReportFixture } from "@/test-utils/support-report-fixture";
@@ -31,7 +32,7 @@ afterEach(() => {
 function renderFailureNotice(): void {
   render(
     <I18nProvider>
-      <GlobalSupportReportAction onlyForFailure />
+      <GlobalSupportReportAction />
     </I18nProvider>,
   );
 }
@@ -128,4 +129,54 @@ it("dismisses a ready global report by disposing its target and aborting pending
   expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
   publishFailure("dismissed-during-regeneration");
   expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
+});
+
+it("offers global reports only for a current failure even without props", () => {
+  render(<GlobalSupportReportAction />);
+  expect(screen.queryByRole("button")).toBeNull();
+});
+
+it("keeps report controls and polite feedback outside the assertive failure text", () => {
+  renderFailureNotice();
+  publishFailure("separate-failure-controls");
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent("Keiko encountered an error.");
+  expect(alert.querySelector("button, a, output")).toBeNull();
+  expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+  expect(screen.getByRole("button", { name: "Create error report" })).not.toHaveClass("ft-seg");
+});
+
+it("restores the known prior focus after dismissing a global failure", async () => {
+  render(
+    <>
+      <button>Workspace action</button>
+      <GlobalSupportReportAction />
+    </>,
+  );
+  const prior = screen.getByRole("button", { name: "Workspace action" });
+  prior.focus();
+  publishFailure("keyboard-dismiss");
+  await userEvent.tab();
+  expect(screen.getByRole("button", { name: "Create error report" })).toHaveFocus();
+  await userEvent.tab();
+  expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+  await userEvent.keyboard("{Enter}");
+  expect(prior).toHaveFocus();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("keeps ready global actions accessible and distinctly labeled", async () => {
+  const { container } = render(<GlobalSupportReportAction />);
+  publishFailure("accessible-ready-global");
+  vi.mocked(createSupportReport).mockResolvedValueOnce(await canonicalSupportReportFixture());
+  const button = screen.getByRole("button", { name: "Create error report" });
+  const actionClass = button.className;
+  await userEvent.click(button);
+  const download = await screen.findByRole("link", { name: "Download report" });
+  expect(download).toHaveClass(actionClass);
+  expect(screen.getByRole("group", { name: "Keiko encountered an error." })).toContainElement(
+    download,
+  );
+  expect(screen.getByRole("alert")).not.toContainElement(download);
+  expect(await axe(container)).toHaveNoViolations();
 });

@@ -70,7 +70,9 @@ it("does not count unfulfilled requests against retained-report capacity", async
     const view = render(<SupportReportButton correlationId={`pending-only-${String(index)}`} />);
     pending.push(view);
     await click(view, "Create error report");
-    expect(within(view.container).getByRole("button", { name: "Creating report…" })).toBeDisabled();
+    expect(
+      within(view.container).getByRole("button", { name: "Creating report…" }),
+    ).toHaveAttribute("aria-disabled", "true");
   }
   vi.mocked(createSupportReport).mockResolvedValueOnce(canonical);
   const another = render(<SupportReportButton correlationId="another-retained" />);

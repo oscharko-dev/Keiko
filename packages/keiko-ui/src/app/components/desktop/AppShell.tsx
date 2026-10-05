@@ -2595,7 +2595,7 @@ function AppShellInner(): ReactNode {
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
                         <div className={styles.cmpSourceAlertStack}>
                           <DiagnosticReadinessNotice health={backendHealth} />
-                          <GlobalSupportReportAction onlyForFailure />
+                          <GlobalSupportReportAction />
                           {sourceConnectionNotice !== null && (
                             <div className="source-limit-alert" role="alert">
                               <span>{sourceConnectionNotice}</span>

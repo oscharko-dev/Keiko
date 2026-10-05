@@ -1691,7 +1691,7 @@ describe("AppShell grounding connections", () => {
     await userEvent.click(screen.getByRole("button", { name: "Dismiss workspace notice" }));
     expect(sourceNotice).not.toBeInTheDocument();
     expect(globalNotice).toBeVisible();
-    const globalAlert = globalNotice.closest("[role='alert']");
+    const globalAlert = globalNotice.closest(".source-limit-alert");
     if (!(globalAlert instanceof HTMLElement)) throw new TypeError("Global alert missing");
     await userEvent.click(within(globalAlert).getByRole("button", { name: "Close" }));
     expect(globalNotice).not.toBeInTheDocument();

@@ -97,12 +97,14 @@ describe("ErrorNoticeFromError — correlation support id", () => {
         <ErrorNoticeFromError error={second} fallback="Failed" />
       </I18nProvider>,
     );
-    const notices = screen.getAllByRole("alert");
+    const notices = screen
+      .getAllByRole("alert")
+      .map((alert) => alert.closest<HTMLElement>(".ui-error-notice"));
     const firstNotice = notices[0];
     const secondNotice = notices[1];
     expect(firstNotice).toBeDefined();
     expect(secondNotice).toBeDefined();
-    if (firstNotice === undefined || secondNotice === undefined) throw new Error("Missing notices");
+    if (firstNotice == null || secondNotice == null) throw new Error("Missing notices");
     fireEvent.click(within(firstNotice).getByRole("button", { name: "Create error report" }));
     await within(firstNotice).findByRole("link", { name: "Download report" });
     expect(within(secondNotice).queryByRole("link")).not.toBeInTheDocument();
@@ -231,4 +233,13 @@ describe("ErrorNoticeFromError — correlation support id", () => {
 
     expect(screen.getByText("Support ID: req-dismiss-000222")).toBeInTheDocument();
   });
+});
+
+it("announces error text separately from report and dismissal controls", async () => {
+  const { container } = renderInLocale(new ApiError("BAD_REQUEST", "Invalid request", 400), "en");
+  const alert = screen.getByRole("alert");
+  expect(alert).toHaveTextContent("Invalid request");
+  expect(alert.querySelector("button, a, output")).toBeNull();
+  expect(screen.getByRole("button", { name: "Create error report" })).toBeVisible();
+  expect(await axe(container)).toHaveNoViolations();
 });

@@ -78,6 +78,27 @@ function noticeFailure(
   };
 }
 
+function NoticeText({ notice }: { readonly notice: UserErrorNotice }): ReactNode {
+  const t = useTranslate();
+  return (
+    <div role="alert" aria-live="assertive">
+      <div className="ui-error-notice-title">{notice.title}</div>
+      <div className="ui-error-notice-message">{notice.message}</div>
+      {notice.remediation !== undefined ? (
+        <div className="ui-error-notice-remediation">{notice.remediation}</div>
+      ) : null}
+      {notice.code !== undefined ? (
+        <div className="ui-error-notice-code mono">{notice.code}</div>
+      ) : null}
+      {notice.correlationId !== undefined ? (
+        <div className="ui-error-notice-code mono">
+          {t("chat.error.supportId", { correlationId: notice.correlationId })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ErrorNotice({
   notice,
   noticeKey,
@@ -99,9 +120,9 @@ function ErrorNotice({
   const [dismissedKey, setDismissedKey] = useState<string | undefined>();
   if (dismissedKey === noticeKey) return null;
   return (
-    <div id={id} className={className} role="alert" aria-live="assertive">
+    <div id={id} className={className}>
       <div className="ui-error-notice-title-row">
-        <div className="ui-error-notice-title">{notice.title}</div>
+        <NoticeText notice={notice} />
         <ErrorNoticeDismiss
           dismissible={dismissible}
           label={t("common.dismissError")}
@@ -111,18 +132,6 @@ function ErrorNotice({
           }}
         />
       </div>
-      <div className="ui-error-notice-message">{notice.message}</div>
-      {notice.remediation !== undefined ? (
-        <div className="ui-error-notice-remediation">{notice.remediation}</div>
-      ) : null}
-      {notice.code !== undefined ? (
-        <div className="ui-error-notice-code mono">{notice.code}</div>
-      ) : null}
-      {notice.correlationId !== undefined ? (
-        <div className="ui-error-notice-code mono">
-          {t("chat.error.supportId", { correlationId: notice.correlationId })}
-        </div>
-      ) : null}
       <ErrorNoticeReportAction notice={notice} noticeKey={noticeKey} failure={failure} />
     </div>
   );

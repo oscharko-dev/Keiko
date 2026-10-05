@@ -29,3 +29,30 @@
   font-size: var(--text-label);
   font-weight: 400;
 }
+
+.cmpAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-md);
+  background: var(--button-secondary-surface);
+  color: var(--button-secondary-text);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.cmpAction:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--button-secondary-surface-hover);
+}
+
+.cmpAction:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.cmpAction:disabled,
+.cmpAction[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

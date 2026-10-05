@@ -47,7 +47,10 @@ async function cancelApiChunk(component: ReportComponent): Promise<void> {
   expect(api.imports).toBe(1);
   expect(local.imports).toBe(0);
   expect(api.create).not.toHaveBeenCalled();
-  expect(screen.getByRole("button", { name: "Creating report…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Creating report…" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
   expect(timeout).toHaveBeenCalledExactlyOnceWith(35_000);
   await act(async () => deadline.abort(new DOMException("Deadline expired", "TimeoutError")));
   expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
@@ -67,7 +70,10 @@ async function cancelLocalChunk(component: ReportComponent): Promise<void> {
   await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
   await waitFor(() => expect(local.imports).toBe(1));
   expect(api.create).not.toHaveBeenCalled();
-  expect(screen.getByRole("button", { name: "Creating report…" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Creating report…" })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
   await act(async () => deadline.abort(new DOMException("Deadline expired", "TimeoutError")));
   expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
   view.unmount();

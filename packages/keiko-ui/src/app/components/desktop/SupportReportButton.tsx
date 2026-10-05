@@ -546,9 +546,29 @@ function reportFeedbackKey(status: ReportStatus): MessageKey | undefined {
   }
 }
 
+function useReportReadyFocus(): {
+  readonly createRef: (element: HTMLButtonElement | null) => void;
+  readonly downloadRef: (element: HTMLAnchorElement | null) => void;
+} {
+  const creating = useRef<HTMLButtonElement | null>(null);
+  const transfer = useRef(false);
+  const createRef = useCallback((element: HTMLButtonElement | null): void => {
+    transfer.current = element === null && document.activeElement === creating.current;
+    creating.current = element;
+  }, []);
+  const downloadRef = useCallback((element: HTMLAnchorElement | null): void => {
+    if (element !== null && transfer.current) {
+      transfer.current = false;
+      element.focus();
+    }
+  }, []);
+  return { createRef, downloadRef };
+}
+
 export function SupportReportButton(props: SupportReportButtonProps): ReactNode {
   const t = useTranslate();
   const { status, create, regenerate, ready } = useSupportReportAction(props);
+  const focus = useReportReadyFocus();
   const feedbackKey =
     status === "saved" && ready?.report.evidenceScope === "client-only"
       ? "supportReport.limitedReady"
@@ -558,8 +578,10 @@ export function SupportReportButton(props: SupportReportButtonProps): ReactNode 
       {ready === undefined ? (
         <button
           type="button"
-          className={`${props.compact === true ? "ft-seg" : "lk-btn"} ${styles.cmpAction}`}
-          disabled={status === "busy"}
+          className={styles.cmpAction}
+          ref={focus.createRef}
+          aria-disabled={status === "busy"}
+          aria-busy={status === "busy"}
           onClick={() => void create()}
         >
           {t(status === "busy" ? "supportReport.creating" : "supportReport.create")}
@@ -571,11 +593,12 @@ export function SupportReportButton(props: SupportReportButtonProps): ReactNode 
           props={props}
           busy={status === "busy"}
           regenerate={regenerate}
+          downloadRef={focus.downloadRef}
         />
       ) : null}
-      {feedbackKey !== undefined ? (
-        <output className={styles.cmpFeedback}>{t(feedbackKey)}</output>
-      ) : null}
+      <output className={styles.cmpFeedback} aria-live="polite" aria-atomic="true">
+        {feedbackKey === undefined ? "" : t(feedbackKey)}
+      </output>
     </span>
   );
 }
@@ -585,18 +608,21 @@ function ReadyReportActions({
   props,
   busy,
   regenerate,
+  downloadRef,
 }: {
   readonly ready: ReadyReport;
   readonly props: SupportReportButtonProps;
   readonly busy: boolean;
   readonly regenerate: () => Promise<void>;
+  readonly downloadRef: (element: HTMLAnchorElement | null) => void;
 }): ReactNode {
   const t = useTranslate();
-  const className = `${props.compact === true ? "ft-seg" : "lk-btn"} ${styles.cmpAction}`;
+  const className = styles.cmpAction;
   return (
     <>
       {ready.download !== undefined ? (
         <a
+          ref={downloadRef}
           className={className}
           href={ready.download.href}
           download={ready.download.fileName ?? ready.report.fileName}
@@ -605,34 +631,48 @@ function ReadyReportActions({
           {t("supportReport.download")}
         </a>
       ) : null}
-      <button type="button" className={className} disabled={busy} onClick={() => void regenerate()}>
+      <button
+        type="button"
+        className={className}
+        aria-disabled={busy}
+        aria-busy={busy}
+        onClick={() => void regenerate()}
+      >
         {t(busy ? "supportReport.creating" : "supportReport.regenerate")}
       </button>
     </>
   );
 }
 
-export function GlobalSupportReportAction({
-  onlyForFailure = false,
+function GlobalReportControls({
+  failure,
+  labelId,
+  onDismiss,
 }: {
-  readonly onlyForFailure?: boolean;
+  readonly failure: NonNullable<ReturnType<typeof currentGlobalClientFailure>>;
+  readonly labelId: string;
+  readonly onDismiss: () => void;
 }): ReactNode {
   const t = useTranslate();
-  const failure = useSyncExternalStore(
-    subscribeGlobalClientFailure,
-    currentGlobalClientFailure,
-    () => null,
-  );
-  const ordinal = failure?.ordinal;
-  const correlationId = failure?.correlationId;
-  const dismiss = useCallback((): void => {
-    if (ordinal === undefined) return;
-    forgetReadyReport(correlationId ?? `global-error-${ordinal}`);
-    dismissGlobalClientFailure(ordinal);
-  }, [correlationId, ordinal]);
-  if (failure === null) return onlyForFailure ? null : <SupportReportButton compact />;
-  const controls = (
-    <fieldset className={styles.cmpControl} aria-label={t("supportReport.create")}>
+  const group = useRef<HTMLFieldSetElement | null>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  const dismiss = (): void => {
+    const restore = group.current?.contains(document.activeElement);
+    onDismiss();
+    if (restore && previousFocus.current?.isConnected) previousFocus.current.focus();
+  };
+  return (
+    <fieldset
+      ref={group}
+      className={styles.cmpControl}
+      aria-labelledby={labelId}
+      onFocusCapture={(event) => {
+        const target = event.relatedTarget;
+        if (target instanceof HTMLElement && !event.currentTarget.contains(target)) {
+          previousFocus.current = target;
+        }
+      }}
+    >
       <SupportReportButton
         compact
         correlationId={failure.correlationId}
@@ -640,7 +680,7 @@ export function GlobalSupportReportAction({
         failure={failure.failure}
       />
       <button
-        className={`ft-seg ${styles.cmpAction}`}
+        className={styles.cmpAction}
         type="button"
         aria-label={t("common.close")}
         onClick={dismiss}
@@ -649,12 +689,30 @@ export function GlobalSupportReportAction({
       </button>
     </fieldset>
   );
-  return onlyForFailure ? (
-    <div className="source-limit-alert" role="alert">
-      <span>{t("supportReport.globalFailure")}</span>
-      {controls}
+}
+
+export function GlobalSupportReportAction(): ReactNode {
+  const t = useTranslate();
+  const failure = useSyncExternalStore(
+    subscribeGlobalClientFailure,
+    currentGlobalClientFailure,
+    () => null,
+  );
+  const labelId = useId();
+  const ordinal = failure?.ordinal;
+  const correlationId = failure?.correlationId;
+  const dismiss = useCallback((): void => {
+    if (ordinal === undefined) return;
+    forgetReadyReport(correlationId ?? `global-error-${ordinal}`);
+    dismissGlobalClientFailure(ordinal);
+  }, [correlationId, ordinal]);
+  if (failure === null) return null;
+  return (
+    <div className="source-limit-alert">
+      <span id={labelId} role="alert">
+        {t("supportReport.globalFailure")}
+      </span>
+      <GlobalReportControls failure={failure} labelId={labelId} onDismiss={dismiss} />
     </div>
-  ) : (
-    controls
   );
 }

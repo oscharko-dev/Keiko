@@ -58,8 +58,10 @@ describe("SupportReportButton", () => {
           name: locale === "de" ? "Fehlerbericht erstellen" : "Create error report",
         }),
       );
-      expect(await screen.findByRole("status")).toHaveTextContent(
-        locale === "de" ? "Bericht bereit." : "Report ready.",
+      await waitFor(() =>
+        expect(screen.getByRole("status")).toHaveTextContent(
+          locale === "de" ? "Bericht bereit." : "Report ready.",
+        ),
       );
       const link = screen.getByRole("link", {
         name: locale === "de" ? "Bericht herunterladen" : "Download report",
@@ -126,8 +128,8 @@ describe("SupportReportButton", () => {
     });
     create.mockRejectedValueOnce(new ApiError("SUPPORT_REPORT_UNAVAILABLE", "private", 503));
     await userEvent.click(screen.getByRole("button", { name: "Regenerate report" }));
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Check that Keiko is running locally",
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Check that Keiko is running locally"),
     );
     expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
       "href",
@@ -160,7 +162,7 @@ describe("SupportReportButton", () => {
     );
     await userEvent.click(screen.getAllByRole("button", { name: "Regenerate report" })[0]!);
     for (const button of screen.getAllByRole("button", { name: "Creating report…" }))
-      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("aria-disabled", "true");
     expect(create).toHaveBeenCalledTimes(2);
     expect(screen.getAllByRole("link", { name: "Download report" })[0]).toHaveAttribute(
       "href",
@@ -210,7 +212,9 @@ describe("SupportReportButton", () => {
     create.mockReturnValueOnce(new Promise(() => undefined));
     await userEvent.click(screen.getByRole("button", { name: "Regenerate report" }));
     await act(async () => deadline.abort(new DOMException("Deadline expired", "TimeoutError")));
-    expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Report unavailable. Try again."),
+    );
     expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
       "download",
       report.fileName,
@@ -241,7 +245,9 @@ describe("SupportReportButton", () => {
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
     expect(AbortSignal.timeout).toHaveBeenCalledExactlyOnceWith(35_000);
     await act(async () => deadline.abort(new DOMException("Deadline expired", "TimeoutError")));
-    expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Report unavailable. Try again."),
+    );
     expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
     expect(automaticClick).not.toHaveBeenCalled();
     expect(reportClientDiagnostic).toHaveBeenCalledWith(
@@ -267,7 +273,9 @@ describe("SupportReportButton", () => {
     create.mockRejectedValueOnce(new SupportReportEvidenceUnavailable());
     render(<SupportReportButton correlationId="offline-original-error" />);
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("Report unavailable. Try again."),
+    );
     expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
     expect(reportClientDiagnostic).toHaveBeenCalledWith(
       "Keiko local support report preparation failed.",
@@ -295,7 +303,7 @@ describe("SupportReportButton", () => {
       create.mockRejectedValueOnce(error);
       const view = render(<SupportReportButton correlationId="original-failure" />);
       await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-      expect(await screen.findByRole("status")).toHaveTextContent(hint);
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(hint));
       expect(view.container).not.toHaveTextContent("private response body");
       expect(automaticClick).not.toHaveBeenCalled();
       if (status === 503)
@@ -377,7 +385,10 @@ describe("SupportReportButton", () => {
     expect(dispose).toHaveBeenCalledOnce();
     expect(signal?.aborted).toBe(false);
     expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Creating report…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Creating report…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     const replacement = { fileName: "fresh.json", reportJson: "fresh" };
     await act(async () => finish(replacement));
     expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
@@ -486,7 +497,10 @@ describe("SupportReportButton", () => {
     );
     render(<SupportReportButton />);
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-    expect(screen.getByRole("button", { name: "Creating report…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Creating report…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     await act(async () => rejectReport(new Error("offline")));
     expect(screen.getByRole("status")).toHaveTextContent("Report unavailable. Try again.");
     create.mockResolvedValueOnce(report);
@@ -505,13 +519,13 @@ describe("SupportReportButton", () => {
       </I18nProvider>,
     );
     await userEvent.click(await screen.findByRole("button", { name: "Fehlerbericht erstellen" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Bericht bereit.");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Bericht bereit."));
     rerender(
       <I18nProvider>
         <SupportReportButton correlationId="two" />
       </I18nProvider>,
     );
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
     await userEvent.click(screen.getByRole("button", { name: "Fehlerbericht erstellen" }));
     expect(create).toHaveBeenLastCalledWith("two", expect.any(AbortSignal));
     expect(automaticClick).not.toHaveBeenCalled();
@@ -544,8 +558,11 @@ describe("SupportReportButton", () => {
     expect(create).toHaveBeenLastCalledWith("pending-new", expect.any(AbortSignal));
     await act(async () => finishOld(oldReport));
     expect(automaticClick).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Creating report…" })).toBeDisabled();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Creating report…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
     await act(async () => finishNew(newReport));
     expect(automaticClick).not.toHaveBeenCalled();
     expect(screen.getByRole("link", { name: "Download report" })).toHaveAttribute(
@@ -573,7 +590,7 @@ describe("SupportReportButton", () => {
     );
     await userEvent.click(screen.getAllByRole("button", { name: "Create error report" })[0]!);
     for (const button of screen.getAllByRole("button", { name: "Creating report…" }))
-      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("aria-disabled", "true");
     await act(async () => resolve(report));
     expect(create).toHaveBeenCalledOnce();
     expect(automaticClick).not.toHaveBeenCalled();
@@ -613,7 +630,9 @@ it("rejects an oversized successful payload and disposes its unused download wit
   vi.mocked(createSupportReportDownload).mockReturnValueOnce({ href: "blob:oversized", dispose });
   render(<SupportReportButton correlationId="oversized-canonical-response" />);
   await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-  expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
+  await waitFor(() =>
+    expect(screen.getByRole("status")).toHaveTextContent("Report unavailable. Try again."),
+  );
   expect(screen.queryByRole("link", { name: "Download report" })).toBeNull();
   expect(dispose).toHaveBeenCalledOnce();
   expect(reportClientDiagnostic).toHaveBeenCalledWith(expect.any(String), {
@@ -676,3 +695,46 @@ it("restores canonical fixture globals after successful and failed production pr
     vi.unstubAllGlobals();
   }
 });
+
+it("keeps a polite status mounted before report preparation", () => {
+  render(<SupportReportButton correlationId="stable-status" />);
+  expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+});
+
+it.each([false, true])(
+  "transfers keyboard focus only while creation retains focus (moved: %s)",
+  async (moved) => {
+    let complete: ((value: typeof report) => void) | undefined;
+    create.mockReturnValueOnce(
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+    );
+    render(
+      <>
+        <SupportReportButton correlationId="keyboard-report" />
+        <button>Other action</button>
+      </>,
+    );
+    const statusRegion = screen.getByRole("status");
+    const button = screen.getByRole("button", { name: "Create error report" });
+    button.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: "Creating report…" })).toHaveFocus();
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    if (moved) screen.getByRole("button", { name: "Other action" }).focus();
+    await act(async () => {
+      complete?.(report);
+    });
+    const download = await screen.findByRole("link", { name: "Download report" });
+    expect(moved ? screen.getByRole("button", { name: "Other action" }) : download).toHaveFocus();
+    expect(screen.getByRole("status")).toBe(statusRegion);
+    expect(statusRegion).toHaveTextContent("Report ready.");
+    expect(download).toHaveAttribute("href", "blob:keiko-report");
+    expect(download).toHaveAttribute("download", "report.json");
+    expect(automaticClick).not.toHaveBeenCalled();
+  },
+);
