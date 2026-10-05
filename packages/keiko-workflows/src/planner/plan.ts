@@ -472,16 +472,16 @@ export function resolveQueryTargetDecision(
   anchors: readonly SearchAnchor[],
   maxTargets = query.text.length,
 ): QueryTargetDecision {
-  // Routing hints may be clipped; requested technical targets use the existing query envelope.
-  const requested = extractAnchors({ text: query.text, maxAnchors: maxTargets }).anchors;
-  const strongTargets = requestContentTargets(query, requested);
+  // Inspect the full question, but never certify a literal-only request after target clipping.
+  const requested = extractAnchors({ text: query.text, maxAnchors: maxTargets });
+  const strongTargets = requestContentTargets(query, requested.anchors);
   const possibleTargets =
     strongTargets.length > 0
       ? strongTargets
       : anchors.filter((anchor) => anchor.kind === "literal" && /^\d+$/u.test(anchor.term));
   let kind: QueryTargetDecision["kind"] = "contextual";
   if (query.kind === "exact-symbol") kind = "literal-search";
-  else if (possibleTargets.length > 0)
+  else if (!requested.truncated && possibleTargets.length > 0)
     kind = positiveRequestKind(queryShapeOutsideTargets(query.text, possibleTargets));
   const targets = kind === "literal-search" ? possibleTargets : strongTargets;
   const definitionRequested = hasDefinitionLookup(queryContextOutsideQuotes(query.text));

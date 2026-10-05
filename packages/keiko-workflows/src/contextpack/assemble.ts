@@ -322,7 +322,10 @@ function compactIdentifiedContextWindows(
   };
   const merged = mergeContextWindows(normalizeExcerptWindows(source));
   const windows = merged.windows;
-  for (const atom of atoms) {
+  // Prompt admission ranks the excerpt carrying the bytes; metadata-only siblings cannot lend
+  // it their score later. Preserve every edge, but assign each shared body to its strongest atom.
+  const rankedAtoms = [...atoms].sort((left, right) => right.score - left.score);
+  for (const atom of rankedAtoms) {
     for (const window of contextWindowsForAtom(windows, atom)) {
       appendCompactContextWindow(state, atom, window, maxBytes, scopeId);
     }

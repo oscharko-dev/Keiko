@@ -131,6 +131,37 @@ describe("review source-window integrity and omission accounting", () => {
     assertValid(pack);
   });
 
+  it.each([false, true])(
+    "assigns a shared source body to its strongest edge independently of arrival order: reverse=%s",
+    async (reverse) => {
+      const atoms = (["import", "call"] as const).map((kind, index) => ({
+        ...evidence("manual.txt", { startLine: 1, endLine: 1 }, index),
+        score: index === 0 ? 0.1 : 0.9,
+        edge: {
+          kind,
+          source: { scopePath: "manual.txt" },
+          target: { scopePath: "target.ts" },
+          confidence: "resolved" as const,
+        },
+      }));
+      if (reverse) atoms.reverse();
+      const { pack } = await assembleContextPack(inputFor(atoms, "one body"), OPTIONS);
+      const excerpts = pack.files[0]?.excerpts ?? [];
+      const bodies = excerpts.filter((excerpt) => excerpt.contentBytes > 0);
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]).toMatchObject({
+        content: "one body",
+        atom: { score: 0.9, edge: { kind: "call" } },
+      });
+      expect(excerpts.find((excerpt) => excerpt.atom.edge?.kind === "import")?.atom.score).toBe(
+        0.1,
+      );
+      expect(excerpts).toHaveLength(2);
+      expect(pack.usage.excerptBytes).toBe(Buffer.byteLength("one body"));
+      assertValid(pack);
+    },
+  );
+
   it("compacts a shared structural source body once rather than once per edge", async () => {
     const atoms = (["import", "call"] as const).map((kind, index) => ({
       ...evidence("manual.txt", { startLine: 1, endLine: 1 }, index),

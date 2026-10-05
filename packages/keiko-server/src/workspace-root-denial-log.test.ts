@@ -16,6 +16,28 @@ import {
 } from "../../../tests/support/activity-log-proof.js";
 
 describe("workspace root denial activity", () => {
+  it.each(["ENOTCONN", "EHOSTDOWN", "EHOSTUNREACH", "ENXIO", "ENODEV", "ECONNRESET", "EBUSY"])(
+    "recognizes transient root availability failure %s without treating unknown failures as safe",
+    (code) => {
+      expect(isExpectedWorkspaceRootFailure(Object.assign(new Error("private"), { code }))).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each(["EMFILE", "ENFILE"])("classifies %s as a server resource failure", (code) => {
+    const sink = createBufferedServerLogSink();
+    recordWorkspaceRootUnavailable(Object.assign(new Error("private-detail"), { code }), {
+      activityLog: sink,
+      correlationId: "root-resource-failure",
+    });
+    const proof = expectActivityLogProof(
+      "workspace.root.denied.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(proof).toMatchObject({ errorKind: "internal", failureKind: code });
+  });
+
   it("recognizes only declared root failures and known filesystem errors", () => {
     expect(
       isExpectedWorkspaceRootFailure(new WorkspaceNotFoundError("gone", "/private/root")),

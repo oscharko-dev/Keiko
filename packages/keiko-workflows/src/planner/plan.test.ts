@@ -56,6 +56,17 @@ function plan(
 }
 
 describe("createExplorationPlan", () => {
+  it("plans a connected long stacktrace with a technical target after its old intake boundary", () => {
+    const result = plan({
+      scope: happyScope({ explicitConnection: true }),
+      query: happyQuery({ text: `${"the ".repeat(1500)} Which code handles LateCrashProbe?` }),
+    });
+    expect(result.state).toBe("ready");
+    expect(result.clarification).toBeUndefined();
+    expect(result.anchors.map((anchor) => anchor.term)).toContain("latecrashprobe");
+    expect(result.rings.map((ring) => ring.kind)).toContain("lexical");
+  });
+
   it("retains every requested technical target independently of the routing hint working set", () => {
     const symbols = Array.from(
       { length: 8 },

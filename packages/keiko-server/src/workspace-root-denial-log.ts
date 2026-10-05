@@ -162,31 +162,58 @@ const WORKSPACE_ROOT_FILESYSTEM_FAILURES: ReadonlySet<string> = new Set([
   "EACCES",
   "EPERM",
   "ELOOP",
+  "ENAMETOOLONG",
+  "EINVAL",
+]);
+const WORKSPACE_ROOT_TRANSIENT_FAILURES: ReadonlySet<string> = new Set([
   "EIO",
   "ESTALE",
   "EMFILE",
   "ENFILE",
   "ETIMEDOUT",
+  "ENOTCONN",
+  "EHOSTDOWN",
+  "EHOSTUNREACH",
+  "ENXIO",
+  "ENODEV",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "ENETRESET",
+  "EBUSY",
+  "EAGAIN",
 ]);
 const WORKSPACE_ROOT_PERMISSION_FAILURES: ReadonlySet<string> = new Set(["EACCES", "EPERM"]);
+const WORKSPACE_ROOT_RESOURCE_FAILURES: ReadonlySet<string> = new Set(["EMFILE", "ENFILE"]);
+
+function isKnownWorkspaceFilesystemFailure(kind: string): boolean {
+  return (
+    WORKSPACE_ROOT_FILESYSTEM_FAILURES.has(kind) || WORKSPACE_ROOT_TRANSIENT_FAILURES.has(kind)
+  );
+}
 
 export function isExpectedWorkspaceRootFailure(error: unknown): boolean {
   return (
-    error instanceof WorkspaceNotFoundError ||
-    WORKSPACE_ROOT_FILESYSTEM_FAILURES.has(errorKindOf(error))
+    error instanceof WorkspaceNotFoundError || isKnownWorkspaceFilesystemFailure(errorKindOf(error))
   );
 }
 
 function workspaceRootFailureKind(error: unknown): string {
   const causeKind = errorKindOf(safeProperty(error, "cause"));
-  return error instanceof WorkspaceNotFoundError &&
-    WORKSPACE_ROOT_FILESYSTEM_FAILURES.has(causeKind)
+  return error instanceof WorkspaceNotFoundError && isKnownWorkspaceFilesystemFailure(causeKind)
     ? causeKind
     : errorKindOf(error);
 }
 
+export function workspaceRootFailureStatus(error: unknown): 400 | 503 {
+  return WORKSPACE_ROOT_TRANSIENT_FAILURES.has(workspaceRootFailureKind(error)) ? 503 : 400;
+}
+
 function workspaceRootErrorKind(error: unknown, failureKind: string): ActivityLogErrorKind {
   if (WORKSPACE_ROOT_PERMISSION_FAILURES.has(failureKind)) return "permission-denied";
+  if (WORKSPACE_ROOT_RESOURCE_FAILURES.has(failureKind)) return "internal";
+  if (failureKind === "ETIMEDOUT") return "timeout";
   return isExpectedWorkspaceRootFailure(error) ? "unavailable" : "internal";
 }
 

@@ -5,7 +5,8 @@ import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparator
 // a small, stable, weight-ordered set of search anchors. The stop-word list is intentionally
 // fixed and bilingual (English/German) so supported prompts remain deterministic.
 
-const MAX_INPUT_LENGTH = 4096;
+// The matcher limits literal target metadata, not surrounding question/specification text.
+const MAX_ANCHOR_CHARACTERS = 4096;
 
 const STOP_WORDS: ReadonlySet<string> = new Set([
   "the",
@@ -157,8 +158,8 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   "zur",
 ]);
 
-// Module-scope patterns are scanned only inside the bounded input envelope. Identifier and
-// path runs also have bounded backtracking per possible start position.
+// Identifier and path patterns bound backtracking at each start position, so the full admitted
+// question can be inspected without discarding targets after a fixed prefix.
 const QUOTED_DOUBLE_RE = /"([^"\n]+)"/g;
 // Apostrophes stay inside alphabetic words; only unspaced CJK scripts may border a quote.
 const QUOTED_SINGLE_RE =
@@ -172,8 +173,7 @@ const DOCUMENT_REFERENCE_RE = /\b((?:ADR|RFC)-\d{3,6})\b/gi;
 // `[\w.-]+` trade the same run of characters back and forth across an unbounded number of split
 // points, which is quadratic on adversarial input (measured empirically before this change).
 // Exported (module-internal, not re-exported from index.ts) solely so the co-located test can
-// exercise the pattern directly, past extractAnchors's MAX_INPUT_LENGTH guard, for the S8786
-// regression test.
+// exercise the pattern directly for the S8786 regression test.
 export const PATH_RE = /(?:[\w.-]{1,64}\/){1,64}[\w.-]{1,64}\.[A-Za-z]{1,8}/g;
 const API_ROUTE_RE =
   /(^|[^A-Za-z0-9_.:/-])((?:\/[A-Za-z0-9_.:{}%+*?&=-]{0,127}[A-Za-z0-9_}*-]){1,64})/g;
@@ -243,6 +243,11 @@ interface MutableAnchor {
   kind: SearchAnchorKind;
 }
 
+interface AnchorAccumulator {
+  readonly anchors: MutableAnchor[];
+  truncated: boolean;
+}
+
 const SENTENCE_PATH_SUFFIX = new Set([":", ";", ",", ".", "-"]);
 
 function trimTrailingCharacters(value: string, characters: ReadonlySet<string>): string {
@@ -260,20 +265,29 @@ function trimEdgeDots(value: string): string {
 }
 
 function pushAnchor(
-  out: MutableAnchor[],
+  out: AnchorAccumulator,
   raw: string,
   kind: SearchAnchorKind,
   weight: number,
   sourceSpelling?: string,
 ): void {
   const trimmed = raw.trim();
+  if (trimmed.length > MAX_ANCHOR_CHARACTERS) {
+    out.truncated = true;
+    return;
+  }
   const withoutSentencePunctuation =
     kind === "path" && trimmed.startsWith("/")
       ? trimTrailingCharacters(trimmed, SENTENCE_PATH_SUFFIX)
       : trimmed;
   const term = withoutSentencePunctuation.toLowerCase();
   if (term.length > 0) {
-    out.push({ term, sourceTerm: sourceSpelling ?? withoutSentencePunctuation, weight, kind });
+    out.anchors.push({
+      term,
+      sourceTerm: sourceSpelling ?? withoutSentencePunctuation,
+      weight,
+      kind,
+    });
   }
 }
 
@@ -282,7 +296,7 @@ function collectMatches(
   pattern: RegExp,
   kind: SearchAnchorKind,
   weight: number,
-  out: MutableAnchor[],
+  out: AnchorAccumulator,
   accept: (value: string) => boolean = () => true,
   replacement?: string,
 ): string {
@@ -311,7 +325,7 @@ function isDefinitionTarget(value: string): boolean {
   return !STOP_WORDS.has(value.toLowerCase());
 }
 
-function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
+function collectTechnicalTerms(source: string, out: AnchorAccumulator): string {
   let remaining = source;
   for (const entry of TECHNICAL_TERM_PATTERNS) {
     const re = new RegExp(entry.pattern.source, entry.pattern.flags);
@@ -331,11 +345,15 @@ function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
   return remaining;
 }
 
-function tokenizeRemaining(remaining: string, out: MutableAnchor[]): number {
+function tokenizeRemaining(remaining: string, out: AnchorAccumulator): number {
   let considered = 0;
   for (const raw of remaining.split(TOKEN_SPLIT_RE)) {
     const normalizedRaw = trimEdgeDots(raw);
     if (normalizedRaw.length === 0) {
+      continue;
+    }
+    if (normalizedRaw.length > MAX_ANCHOR_CHARACTERS) {
+      out.truncated = true;
       continue;
     }
     considered += 1;
@@ -347,10 +365,10 @@ function tokenizeRemaining(remaining: string, out: MutableAnchor[]): number {
       continue;
     }
     if (token.includes(".")) {
-      out.push({ term: token, sourceTerm: normalizedRaw, weight: 0.8, kind: "identifier" });
+      out.anchors.push({ term: token, sourceTerm: normalizedRaw, weight: 0.8, kind: "identifier" });
       continue;
     }
-    out.push({ term: token, sourceTerm: normalizedRaw, weight: 0.5, kind: "literal" });
+    out.anchors.push({ term: token, sourceTerm: normalizedRaw, weight: 0.5, kind: "literal" });
   }
   return considered;
 }
@@ -389,7 +407,7 @@ function freeze(
 
 function collectQuotedTargets(
   text: string,
-  collected: MutableAnchor[],
+  collected: AnchorAccumulator,
   replacement?: string,
   accept: (value: string) => boolean = () => true,
 ): string {
@@ -417,13 +435,13 @@ function collectQuotedTargets(
 // Internal planner seam: quoted target contents are data, not instructions or diagnostic intent.
 // Extraction and contextual classification use the same contraction-safe quotation grammar.
 export function queryContextOutsideQuotes(text: string): string {
-  return collectQuotedTargets(text, []);
+  return collectQuotedTargets(text, { anchors: [], truncated: false });
 }
 
 // Same quote parser as extraction: the marker denotes accepted target data, never query prose.
 export function queryShapeOutsideTargets(text: string, targets: readonly SearchAnchor[]): string {
   const terms = new Set(targets.map((target) => target.term));
-  const shape = collectQuotedTargets(text, [], " \0 ", (value) =>
+  const shape = collectQuotedTargets(text, { anchors: [], truncated: false }, " \0 ", (value) =>
     terms.has(value.trim().toLowerCase()),
   );
   return shape.replace(/[\p{L}\p{N}_$-]+/gu, (token) =>
@@ -436,10 +454,7 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   if (text.length === 0) {
     return { anchors: [], truncated: false, tokensConsidered: 0 };
   }
-  if (text.length > MAX_INPUT_LENGTH) {
-    return { anchors: [], truncated: true, tokensConsidered: 0 };
-  }
-  const collected: MutableAnchor[] = [];
+  const collected: AnchorAccumulator = { anchors: [], truncated: false };
   let remaining = collectQuotedTargets(text, collected);
   remaining = collectMatches(remaining, DOCUMENT_REFERENCE_RE, "identifier", 0.95, collected);
   remaining = collectMatches(remaining, API_ROUTE_RE, "path", 0.95, collected);
@@ -477,8 +492,27 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   remaining = collectMatches(remaining, SNAKE_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectTechnicalTerms(remaining, collected);
   const tokensConsidered = tokenizeRemaining(remaining, collected);
-  const merged = sortAnchors(dedup(collected, caseSensitive));
-  const truncated = merged.length > maxAnchors;
-  const final = truncated ? merged.slice(0, maxAnchors) : merged;
-  return { anchors: freeze(final, caseSensitive), truncated, tokensConsidered };
+  const selected = selectBoundedAnchors(collected, maxAnchors, caseSensitive);
+  return { ...selected, tokensConsidered };
+}
+
+function selectBoundedAnchors(
+  collected: AnchorAccumulator,
+  maxAnchors: number,
+  caseSensitive: boolean,
+): Omit<AnchorExtractionResult, "tokensConsidered"> {
+  const sorted = freeze(sortAnchors(dedup(collected.anchors, caseSensitive)), caseSensitive);
+  const selected: SearchAnchor[] = [];
+  let characters = 0;
+  let truncated = collected.truncated;
+  for (const anchor of sorted) {
+    const nextCharacters = characters + anchor.term.length + Number(selected.length > 0);
+    if (selected.length >= maxAnchors || nextCharacters > MAX_ANCHOR_CHARACTERS) {
+      truncated = true;
+      continue;
+    }
+    selected.push(anchor);
+    characters = nextCharacters;
+  }
+  return { anchors: selected, truncated };
 }

@@ -927,6 +927,22 @@ describe("grounded continuity evidence lifecycle", () => {
 });
 
 describe("mappedWorkspaceError", () => {
+  it.each(["EMFILE", "ENFILE", "EIO", "ESTALE", "ETIMEDOUT", "ENOTCONN", "ENXIO"])(
+    "preserves retriable root failure %s instead of blaming the request",
+    (code) => {
+      const error = new WorkspaceNotFoundError("private-root", "/private/customer/root");
+      error.cause = Object.assign(new Error("private-detail"), { code });
+      const activityLog = createBufferedServerLogSink();
+      const result = mappedWorkspaceError(error, { activityLog, correlationId: "root-transient" });
+      expect(result).toMatchObject({
+        status: 503,
+        body: { error: { correlationId: "root-transient" } },
+      });
+      expect(activityLog.events[0]?.extra?.failureKind).toBe(code);
+      expect(JSON.stringify(result)).not.toContain("private");
+    },
+  );
+
   it("maps an unavailable workspace root without exposing its path", () => {
     const unavailablePath = "/private/customer/.aws/workspace";
     const activityLog = createBufferedServerLogSink();
@@ -1461,6 +1477,86 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it.each(["ENOTCONN", "EHOSTDOWN", "ENXIO", "EMFILE", "ETIMEDOUT"])(
+    "keeps a healthy connected root when a sibling fails with %s",
+    async (code) => {
+      const { chatId, projectPath } = await setupChatWithScope();
+      seedScopedRepo(projectPath);
+      const badRoot = join(tmp, "temporarily-unavailable");
+      mkdirSync(badRoot);
+      store.updateChat(chatId, {
+        connectedScopes: [projectPath, badRoot].map((root, index) => ({
+          kind: "workspace-root",
+          root,
+          relativePaths: [],
+          connectedAtMs: NOW + index,
+        })),
+      });
+      const original = nodeWorkspaceFs.realPath;
+      const readRoot = vi.spyOn(nodeWorkspaceFs, "realPath").mockImplementation((path) => {
+        if (path === badRoot) throw Object.assign(new Error("private-root-detail"), { code });
+        return original(path);
+      });
+      const seenRequests: GatewayRequest[] = [];
+      try {
+        const result = await handleGroundedAsk(
+          ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })),
+          deps(fakeModel("Healthy source remains available.", seenRequests)),
+        );
+        expect(result.status, JSON.stringify(result.body)).toBe(200);
+        expect(seenRequests).toHaveLength(1);
+        const answer = asConnectedAnswer(result.body as GroundedAnswer);
+        expect(answer.uncertainty.some((entry) => entry.kind === "source-skipped")).toBe(true);
+        expect(JSON.stringify(result)).not.toContain(badRoot);
+        expect(JSON.stringify(result)).not.toContain("private-root-detail");
+      } finally {
+        readRoot.mockRestore();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves transient outage status when every connected root is unavailable (transient first: %s)",
+    async (transientFirst) => {
+      const { chatId, projectPath } = await setupChatWithScope();
+      const missingRoot = join(tmp, "missing-root");
+      const roots = transientFirst ? [projectPath, missingRoot] : [missingRoot, projectPath];
+      store.updateChat(chatId, {
+        connectedScopes: roots.map((root, index) => ({
+          kind: "workspace-root",
+          root,
+          relativePaths: [],
+          connectedAtMs: NOW + index,
+        })),
+      });
+      const original = nodeWorkspaceFs.realPath;
+      const readRoot = vi.spyOn(nodeWorkspaceFs, "realPath").mockImplementation((path) => {
+        if (path === projectPath)
+          throw Object.assign(new Error("private-resource-detail"), { code: "EMFILE" });
+        return original(path);
+      });
+      const seenRequests: GatewayRequest[] = [];
+      try {
+        const result = await handleGroundedAsk(
+          {
+            ...ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })),
+            correlationId: "all-roots-unavailable",
+          },
+          deps(fakeModel("Must not be called.", seenRequests)),
+        );
+        expect(result).toMatchObject({
+          status: 503,
+          body: { error: { code: "UNAVAILABLE", correlationId: "all-roots-unavailable" } },
+        });
+        expect(seenRequests).toHaveLength(0);
+        expect(JSON.stringify(result)).not.toContain(projectPath);
+        expect(JSON.stringify(result)).not.toContain("private-resource-detail");
+      } finally {
+        readRoot.mockRestore();
+      }
+    },
+  );
+
   it("rethrows unexpected root resolver failures instead of reporting a missing folder", async () => {
     const { chatId } = await setupChatWithScope();
     const failure = new TypeError("root-programmer-failure-canary");

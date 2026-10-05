@@ -143,6 +143,50 @@ function childRelative(relativeDir: string, name: string): string {
   return relativeDir === "" ? name : `${relativeDir}/${name}`;
 }
 
+function assertRecoveryRootUnchanged(
+  fs: WorkspaceFs,
+  root: string,
+  expected: string | undefined,
+): void {
+  try {
+    if (fs.realPath(root) === expected) return;
+  } catch (error) {
+    const failure = new PathDeniedError("workspace root unavailable during read", ".");
+    failure.cause = error;
+    throw failure;
+  }
+  throw new PathDeniedError("workspace root changed during read", ".");
+}
+
+// Process-wide descriptor exhaustion and identity changes remain fatal; only local availability
+// failures can preserve previously verified files and continue into unrelated sibling directories.
+const UNAVAILABLE_DIRECTORY_CODES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "EACCES",
+  "EPERM",
+  "EIO",
+  "ESTALE",
+]);
+
+function skipUnavailableStreamingDirectory(
+  walk: Walk,
+  relativeDir: string,
+  error: unknown,
+): boolean {
+  if (relativeDir === "" || walk.retainMembership !== false) return false;
+  if (
+    !(error instanceof Error) ||
+    !("code" in error) ||
+    typeof error.code !== "string" ||
+    !UNAVAILABLE_DIRECTORY_CODES.has(error.code)
+  )
+    return false;
+  assertRecoveryRootUnchanged(walk.fs, walk.root, walk.realRoot);
+  walk.ioErrors = (walk.ioErrors ?? 0) + 1;
+  return true;
+}
+
 function currentContainedDirectory(
   walk: Walk,
   absoluteDir: string,
@@ -153,6 +197,7 @@ function currentContainedDirectory(
   try {
     contained = containedRealPathInfo(walk.fs, walk.root, lexicalPath);
   } catch (error) {
+    if (skipUnavailableStreamingDirectory(walk, relativeDir, error)) return undefined;
     rejectContainedEntry(walk, relativeDir, error);
     return undefined;
   }
@@ -278,7 +323,7 @@ function currentEntryStat(
     if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
       throw error;
     }
-    if (skipDisappearedStreamingEntry(walk, error)) return undefined;
+    if (skipDisappearedStreamingEntry(walk, relativePath, error)) return undefined;
     if (walk.failOnReadError) {
       throw new WorkspaceReadError(
         `cannot stat discovered path: ${relativePath} (${describe(error)})`,
@@ -289,8 +334,9 @@ function currentEntryStat(
   }
 }
 
-function skipDisappearedStreamingEntry(walk: Walk, error: unknown): boolean {
+function skipDisappearedStreamingEntry(walk: Walk, relativePath: string, error: unknown): boolean {
   if (
+    relativePath === "" ||
     walk.retainMembership !== false ||
     !(error instanceof Error) ||
     !("code" in error) ||
@@ -323,7 +369,7 @@ function rejectContainedEntry(walk: Walk, relativePath: string, error: unknown):
   if (error instanceof PathDeniedError || error instanceof StructuralExecutionStoppedError) {
     throw error;
   }
-  if (skipDisappearedStreamingEntry(walk, error)) return undefined;
+  if (skipDisappearedStreamingEntry(walk, relativePath, error)) return undefined;
   if (walk.failOnReadError) {
     if (error instanceof PathEscapeError) throw error;
     throw new WorkspaceReadError(
@@ -700,6 +746,7 @@ async function* admittedStreamingDirectoryEntries(
       walk.ioErrors = (walk.ioErrors ?? 0) + 1;
       return;
     }
+    if (skipUnavailableStreamingDirectory(walk, relativeDir, error)) return;
     throw directoryReadFailure(relativeDir, error);
   }
 }
@@ -994,6 +1041,15 @@ function postReadStat(
   fs: WorkspaceFs,
   target: ReadableWorkspaceFile,
 ): WorkspaceStat {
+  let stat: WorkspaceStat;
+  try {
+    stat = statFile(fs, target.resolvedPath, target.normalizedRel);
+  } catch (error) {
+    // A removed child is availability loss, not evidence that it redirected outside the root.
+    // Revalidate the root before allowing the existing unreadable-file recovery to handle it.
+    assertRecoveryRootUnchanged(fs, workspace.root, target.realBase);
+    throw error;
+  }
   const contained = containedRealPathInfo(fs, workspace.root, target.resolvedPath);
   const realRelative = contained.realRelative.replaceAll("\\", "/");
   if (
@@ -1007,7 +1063,7 @@ function postReadStat(
       target.normalizedRel,
     );
   }
-  return statFile(fs, contained.path, target.normalizedRel);
+  return stat;
 }
 
 function readRawContent(

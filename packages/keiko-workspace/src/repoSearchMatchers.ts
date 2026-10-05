@@ -30,12 +30,10 @@ export interface LiteralQueryInterpretation {
   readonly terms?: readonly string[] | undefined;
 }
 
-// Match the planner's existing input envelope without depending on the higher workflow layer.
+// Bound literal target metadata independently of surrounding natural-language question text.
 const MAX_LITERAL_TARGET_CHARACTERS = 4096;
 
-function boundedLiteralTargets(query: RetrievalQuery, terms: readonly string[]): readonly string[] {
-  if (query.text.length > MAX_LITERAL_TARGET_CHARACTERS)
-    throw new RepoSearchInvalidQueryError("literal targets too long");
+function boundedLiteralTargets(terms: readonly string[]): readonly string[] {
   const unique = new Set<string>();
   let characters = 0;
   for (const term of terms) {
@@ -57,7 +55,7 @@ export function fingerprintFor(
 ): string {
   const literalTerms =
     interpretation?.kind === "literal"
-      ? boundedLiteralTargets(query, interpretation.terms ?? [query.text])
+      ? boundedLiteralTargets(interpretation.terms ?? [query.text])
       : undefined;
   const canonical = JSON.stringify({
     kind: query.kind,
@@ -747,7 +745,7 @@ function buildLiteralMatcher(
   query: RetrievalQuery,
   terms: readonly string[] = [query.text],
 ): LineMatcher {
-  const targets = boundedLiteralTargets(query, terms);
+  const targets = boundedLiteralTargets(terms);
   const needles = targets.map((term) => (query.caseSensitive ? term : term.toLowerCase()));
   return {
     match: (line: string): number => {

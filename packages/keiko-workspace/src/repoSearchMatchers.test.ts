@@ -9,6 +9,19 @@ import {
 } from "./repoSearchMatchers.js";
 
 describe("trusted literal query interpretation", () => {
+  it("accepts bounded explicit terms independently of long surrounding question text", () => {
+    const query = nlq(`${"context ".repeat(1000)} Which code handles LateCrashProbe?`);
+    const interpretation = { kind: "literal" as const, terms: ["LateCrashProbe"] };
+    expect(buildMatcher(query, interpretation).match("LateCrashProbe actual evidence")).toBe(1);
+    expect(fingerprintFor(query, interpretation)).toMatch(/^[a-f0-9]{16}$/u);
+    expect(fingerprintFor(query, interpretation)).not.toBe(
+      fingerprintFor({ ...query, text: `${query.text} changed` }, interpretation),
+    );
+    expect(() => buildMatcher({ ...query, kind: "exact-symbol" }, { kind: "literal" })).toThrow(
+      "literal targets too long",
+    );
+  });
+
   it.each([["x".repeat(4097)], ["x".repeat(2048), "y".repeat(2048)]])(
     "rejects oversized literal targets before constructing a matcher or fingerprint",
     (...terms) => {

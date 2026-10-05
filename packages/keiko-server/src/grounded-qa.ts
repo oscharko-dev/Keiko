@@ -138,6 +138,7 @@ import {
   recordWorkspaceRootDenied,
   recordWorkspaceRootUnavailable,
   resolveRecordedWorkspaceRoot,
+  workspaceRootFailureStatus,
   type WorkspaceRootDenialLogContext,
 } from "./workspace-root-denial-log.js";
 import {
@@ -340,6 +341,19 @@ function primaryWorkspaceFailure(error: unknown): unknown {
   return error;
 }
 
+function unavailableWorkspaceResult(error: unknown, correlationId?: string): RouteResult {
+  return workspaceRootFailureStatus(error) === 503
+    ? {
+        status: 503,
+        body: errorBody(
+          "UNAVAILABLE",
+          "The connected source is temporarily unavailable. Please try again.",
+          correlationId,
+        ),
+      }
+    : badRequest("Connected scope root is not accessible.");
+}
+
 export function mappedWorkspaceError(
   error: unknown,
   context: WorkspaceRootDenialLogContext = {},
@@ -348,7 +362,7 @@ export function mappedWorkspaceError(
   if (failure instanceof PathDeniedError) return pathDeniedResult(failure);
   if (failure instanceof WorkspaceNotFoundError) {
     recordWorkspaceRootUnavailable(failure, context);
-    return badRequest("Connected scope root is not accessible.");
+    return unavailableWorkspaceResult(failure, context.correlationId);
   }
   if (
     failure instanceof RepoSearchInvalidQueryError ||
@@ -575,7 +589,7 @@ function canonicalGroundedRoot(
     }
     if (!isExpectedWorkspaceRootFailure(error)) throw error;
     recordWorkspaceRootUnavailable(error, { correlationId });
-    return badRequest("Connected scope root is not accessible.");
+    return unavailableWorkspaceResult(error, correlationId);
   }
   const redacted = deps.redactor(realRoot);
   if (typeof redacted === "string" && redacted !== realRoot) {
@@ -627,7 +641,8 @@ function skippedFolderMessage(result: RouteResult): string {
 }
 
 // Fail-soft canonicalization: inaccessible/denied scopes are collected in `skipped` instead of
-// aborting the entire request. Callers apply the hard-400 only when NO healthy scope remains.
+// aborting the entire request. If no healthy scope remains, retain the recorded failure status;
+// transient server/filesystem outages take precedence over invalid or unavailable selections.
 function canonicalizeGroundedFolderScopes(
   chat: Chat,
   deps: UiHandlerDeps,
@@ -2260,6 +2275,14 @@ function canonicalizePreparedFolderScopes(
   );
 }
 
+function unavailableFolderResult(skipped: readonly SkippedFolderScope[]): RouteResult {
+  return (
+    skipped.find((entry) => entry.reason.status === 503)?.reason ??
+    skipped[0]?.reason ??
+    badRequest("Chat has no connected scope.")
+  );
+}
+
 async function dispatchPreparedGroundedAsk(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
@@ -2273,8 +2296,7 @@ async function dispatchPreparedGroundedAsk(
   // EXISTING single-connector path (#189, byte-identical). Everything else (folders+connector, or
   // 2+ connectors) is the hybrid merge.
   // Fail-soft: inaccessible/denied folders are skipped; only effective (canonical) counts drive
-  // dispatch. A chat with ONLY denied/inaccessible sources still returns the original 400 so the
-  // user sees a clear rejection (security preserved).
+  // dispatch. With no usable source, preserve the admission failure or retriable outage status.
   const {
     canonical: canonicalFolderScopes,
     skipped: skippedFolders,
@@ -2288,8 +2310,7 @@ async function dispatchPreparedGroundedAsk(
   const connectorCount = buildLocalKnowledgeScopes(chat).length;
   const effectiveFolders = canonicalFolderScopes.length;
   if (effectiveFolders === 0 && connectorCount === 0) {
-    // Hard-fail: return the first skipped reason (preserves exact 400 message) or the generic guard.
-    return skippedFolders[0]?.reason ?? badRequest("Chat has no connected scope.");
+    return unavailableFolderResult(skippedFolders);
   }
   if (connectorCount === 0) {
     return dispatchFolderAsk(
