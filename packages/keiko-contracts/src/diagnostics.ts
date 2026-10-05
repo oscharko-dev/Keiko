@@ -1947,7 +1947,6 @@ function hasValidFilesScopeDecisionContext(value: Record<string, unknown>): bool
 }
 
 /** Transport bound for diagnostic counters, independent of folder search/file-count policies. */
-export const CLIENT_CITATION_ROOT_COUNT_MAX = CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX;
 
 /** Citation attribution and the actual navigation decision, without paths or fingerprints. */
 export interface ClientDiagnosticCitationActivation {
@@ -1998,7 +1997,7 @@ function isClientDiagnosticCitationActivation(
   return (
     CITATION_ACTIVATION_REASONS.has(value.reason) &&
     CITATION_ACTIVATION_OUTCOMES.has(value.outcome) &&
-    isBoundedNonNegativeInteger(value.rootCount, CLIENT_CITATION_ROOT_COUNT_MAX) &&
+    isBoundedNonNegativeInteger(value.rootCount, CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX) &&
     isBoundedNonNegativeInteger(value.matchCount, value.rootCount) &&
     coherentCitationMatchCount(value) &&
     coherentCitationOutcome(value)
