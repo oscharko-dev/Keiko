@@ -1,5 +1,5 @@
 // Real mounted report routes, gzip attachments, session authority and analyzer reconstruction.
-// Use the built server so its worker URL resolves exactly as it does in the shipped product.
+// Source BFF dependencies share one module graph; the real report worker uses its built entry.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request, type IncomingHttpHeaders, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -11,10 +11,9 @@ import {
   buildRedactor,
   createInMemoryUiStore,
   createRunRegistry,
-  createUiServer,
   UI_HOST,
   type UiHandlerDeps,
-} from "@oscharko-dev/keiko-server";
+} from "../../packages/keiko-server/src/index.js";
 import { analyzeSupportReport, parseSupportReport } from "@oscharko-dev/keiko-activity-log/reader";
 import { listSupportIncidents } from "@oscharko-dev/keiko-activity-log";
 import { clientDefectContext } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -27,7 +26,7 @@ import { createSessionRegistry } from "../../packages/keiko-server/src/coding-ap
 import { APP_SESSION_COOKIE_NAME } from "../../packages/keiko-server/src/coding-app-session/sessionCookie.js";
 import {
   closeUiTestServer,
-  startUiTestServerWithFactory,
+  startUiTestServer,
 } from "../../packages/keiko-server/src/ui-test-server/_support.js";
 import {
   occupySupportIncidentRetentionForTests,
@@ -39,6 +38,13 @@ import {
   readPersistedActivityLog,
 } from "../support/activity-log-proof.js";
 import { expectActivityLogScenario } from "../support/activity-log-scenario.js";
+
+// Load the actual worker owner and its error class together, as in grounded-qa.test.ts.
+// Its Worker URL requires assembled JavaScript; neither the worker nor its result is mocked.
+vi.mock(
+  "../../packages/keiko-server/src/support-report-job.js",
+  () => import("../../packages/keiko-server/dist/support-report-job.js"),
+);
 
 const REPORT_PATH = "/api/diagnostics/report";
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" };
@@ -211,10 +217,11 @@ beforeEach(async () => {
     pairingPort: createFakeSessionPairingPort(),
   });
   deps = handlerDeps();
-  const started = await startUiTestServerWithFactory(
-    { staticRoot: stateDir, csp: buildCspHeader([]), handlerDeps: deps },
-    createUiServer,
-  );
+  const started = await startUiTestServer({
+    staticRoot: stateDir,
+    csp: buildCspHeader([]),
+    handlerDeps: deps,
+  });
   server = started.server;
   port = started.port;
 });
