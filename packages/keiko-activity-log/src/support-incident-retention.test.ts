@@ -139,6 +139,23 @@ function occupyPublicationReserve(): readonly SupportIncidentRecord[] {
   return retained;
 }
 
+/** Fill unrelated pin stock without repeatedly creating and scanning unrelated incidents. */
+function occupyDiagnosticPinReserve(): void {
+  const owner = recordUserReportedIncident(stateDir, { correlationId: "pin-release-owner" });
+  if (owner.status !== "created") throw new Error("Expected owned incident");
+  const directory = join(stateDir, "logs");
+  const pin = readActivityLogPins(listActivityLogDirectory(directory), directory)[0]?.record;
+  if (pin === undefined) throw new Error("Expected produced pin");
+  for (let index = 0; index < MAX_ACTIVITY_LOG_PINS - 2; index += 1) {
+    writeActivityLogPinRecord(directory, directory, {
+      ...pin,
+      pinId: index.toString(16).padStart(24, "0"),
+      reason: "durable-batch",
+    });
+  }
+  expect(listActivityLogDirectory(directory).pins).toHaveLength(MAX_ACTIVITY_LOG_PINS - 1);
+}
+
 function expectLegacyRecoveryOwnership(
   prior: readonly SupportIncidentRecord[],
   created: SupportIncidentRecord,
@@ -1428,13 +1445,7 @@ describe("rolling diagnostic candidate retention", () => {
   });
 
   it("does not claim recovered pin pressure when the owned pin release was rejected", () => {
-    for (let index = 0; index < MAX_ACTIVITY_LOG_PINS; index += 1) {
-      expect(
-        recordUserReportedIncident(stateDir, {
-          correlationId: `pin-release-owner-${String(index)}`,
-        }).status,
-      ).toBe("created");
-    }
+    occupyDiagnosticPinReserve();
     vi.spyOn(serverLog, "releaseActivityLogPin").mockReturnValueOnce({
       status: "rejected",
       reason: "removal-failed",
