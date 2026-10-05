@@ -2,7 +2,7 @@ import {
   normalizeSupportReportCorrelationId,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { recordClientDiagnosticLoss } from "./client-diagnostics.js";
+import { recordClientDiagnosticLoss } from "./client-diagnostics";
 
 /** A local canonical artifact exceeded its declared byte budget. */
 export class SupportReportBudgetExceeded extends RangeError {
