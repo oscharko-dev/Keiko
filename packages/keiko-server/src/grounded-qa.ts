@@ -126,6 +126,7 @@ import {
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import {
+  isExpectedWorkspaceRootFailure,
   recordWorkspaceRootDenial,
   recordWorkspaceRootDenied,
   recordWorkspaceRootUnavailable,
@@ -583,6 +584,7 @@ function canonicalGroundedRoot(
     if (error instanceof PathDeniedError) {
       return pathDeniedResult(error);
     }
+    if (!isExpectedWorkspaceRootFailure(error)) throw error;
     recordWorkspaceRootUnavailable(error, { correlationId });
     return badRequest("Connected scope root is not accessible.");
   }

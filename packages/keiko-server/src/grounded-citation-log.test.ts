@@ -15,6 +15,7 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   logAnswerAssessment,
   logCitationReconciliation,
+  reconcileAndLogInlineCitations,
   logCitationSupport,
   summarizeCitationReconciliation,
   type CitationReconciliationEvidence,
@@ -86,6 +87,45 @@ describe("logCitationReconciliation", () => {
     setServerLogger(createServerLogger({ sink, level: "info" }));
     return sink;
   }
+
+  it("persists unknown, ambiguous and prose-filtered file locations without paths or answer text", () => {
+    const sink = capture();
+    const result = reconcileAndLogInlineCitations(
+      "Known [source:1|src/main.ts:2]. Ambiguous `src/main.ts:3`. Unknown src/private/ghost.ts:5. package.json: 2 scripts.",
+      {
+        scopePaths: new Set(["src/main.ts"]),
+        sourceIdsByPath: new Map([["src/main.ts", new Set(["1", "2"])]]),
+        lineWindowsBySourceId: new Map(
+          ["1", "2"].map((source) => [
+            source,
+            new Map([["src/main.ts", [{ startLine: 1, endLine: 10 }]]]),
+          ]),
+        ),
+      },
+      "file-citations-proof-0001",
+    );
+    expect(result.unsupported).toHaveLength(2);
+    const event = sink.events.find((entry) => entry.op === "search.citations.reconciled");
+    const persisted = expectActivityLogProof(
+      "search.citations.reconciled.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      correlationId: "file-citations-proof-0001",
+      citationKind: "file",
+      outcome: "cited-with-dangling",
+      referenceCount: 2,
+      attachedCount: 1,
+      danglingMarkerCount: 2,
+      ambiguousMarkerCount: 1,
+      droppedImplicitCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(persisted).not.toHaveProperty("weakOverlapCount");
+    expect(persisted).not.toHaveProperty("groupedMarkerCount");
+    expect(sink.lines().join("\n")).not.toMatch(/private|ghost|src\/|scripts|Known/u);
+  });
 
   it("resolves the search.citations.reconciled Activity Log proof body-free", () => {
     const sink = capture();

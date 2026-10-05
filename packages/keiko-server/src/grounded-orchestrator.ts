@@ -9,6 +9,7 @@
 // package's already-bounded WorkspaceFs port. Path validation is enforced by every composed
 // layer at its own boundary, so this file does not re-validate scope paths.
 
+import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
@@ -122,7 +123,11 @@ import {
 } from "@oscharko-dev/keiko-workspace/code-intelligence";
 import { CancelledError, ERROR_CODES } from "@oscharko-dev/keiko-model-gateway";
 import { mapWithConcurrency } from "./bounded-concurrency.js";
-import { BoundedMetadataPaths, MetadataRetention } from "./grounded-metadata-retention.js";
+import {
+  BoundedMetadataPaths,
+  MetadataRetention,
+  type MetadataRetentionObservation,
+} from "./grounded-metadata-retention.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   isWorkspacePathSnapshotCurrent,
@@ -145,7 +150,6 @@ import {
   missingCitationMarkerFor,
   noEvidenceMarker,
   packHasUsableEvidence,
-  reconcileInlineCitations,
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
@@ -190,7 +194,10 @@ import {
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "./process-log-sink.js";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
-import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
+import {
+  resolveRecordedWorkspaceRoot,
+  isExpectedWorkspaceRootFailure,
+} from "./workspace-root-denial-log.js";
 
 const SEARCH_CONNECTED_CONTEXT_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -327,6 +334,21 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
     usageExcerptBytes: { type: "integer", dataClass: "count", required: false },
     excerptAnchoredWindowCount: { type: "integer", dataClass: "count", required: false },
     excerptReadWindowCount: { type: "integer", dataClass: "count", required: false },
+    excerptOmittedRangeCount: { type: "integer", dataClass: "count", required: false },
+    excerptTruncatedWindowCount: { type: "integer", dataClass: "count", required: false },
+    excerptUnreadFileCount: { type: "integer", dataClass: "count", required: false },
+    excerptStopReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 3,
+      values: ["file-grant", "byte-grant", "deadline"],
+    },
+    metadataObservedCount: { type: "integer", dataClass: "count", required: false },
+    metadataRetainedCount: { type: "integer", dataClass: "count", required: false },
+    metadataDiscardedCount: { type: "integer", dataClass: "count", required: false },
+    metadataOmittedDetailCount: { type: "integer", dataClass: "count", required: false },
+    metadataRetentionLimit: { type: "integer", dataClass: "count", required: false },
     usageModelInputTokens: { type: "integer", dataClass: "count", required: false },
     usageModelOutputTokens: { type: "integer", dataClass: "count", required: false },
     usageElapsedMs: { type: "integer", dataClass: "duration", required: false },
@@ -2100,6 +2122,7 @@ interface RingDecisionAudit {
 }
 
 interface RingRunSummary {
+  readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly symbolDiscovery?: SymbolDiscoveryResult | undefined;
   readonly verifiedDefinitionContext?: boolean | undefined;
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
@@ -2547,7 +2570,17 @@ export interface ExcerptInputs {
   readonly deadlineAtMs: number;
 }
 
+type ExcerptStopReason = "file-grant" | "byte-grant" | "deadline";
+interface ExcerptReadObservation {
+  readonly omittedRangeCount: number;
+  readonly truncatedWindowCount: number;
+  readonly unreadFileCount: number;
+  readonly stopReasons: readonly ExcerptStopReason[];
+  readonly readBudgetBlocked: boolean;
+}
+
 export interface ExcerptReadSummary {
+  readonly observation?: ExcerptReadObservation | undefined;
   readonly omitted?: readonly OmittedContextEntry[] | undefined;
   readonly byteBudgetOmittedPaths?: readonly string[] | undefined;
   readonly readWindowCount?: number | undefined;
@@ -4408,6 +4441,7 @@ function repositoryOverviewAtoms(inputs: MetadataDiscoveryInputs): readonly Evid
 }
 
 interface DeterministicContextEvidence {
+  readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly atoms: readonly EvidenceAtom[];
   readonly uncertainty: readonly UncertaintyMarker[];
   readonly omitted?: readonly OmittedContextEntry[];
@@ -4417,6 +4451,8 @@ function mergeDeterministicEvidence(
   sources: readonly DeterministicContextEvidence[],
 ): DeterministicContextEvidence {
   return {
+    metadataRetention: sources.find((source) => source.metadataRetention !== undefined)
+      ?.metadataRetention,
     atoms: sources.flatMap((source) => source.atoms),
     uncertainty: sources.flatMap((source) => source.uncertainty),
     omitted: sources.flatMap((source) => source.omitted ?? []),
@@ -4490,6 +4526,7 @@ async function deterministicMetadataEvidence(
   return {
     atoms,
     omitted: metadataRetentionOmissions(existsCache, emittedAtMs),
+    metadataRetention: existsCache.metadataRetention?.observation(),
     uncertainty: [
       ...metadataDirectoryCoverageUncertainty(existsCache, emittedAtMs),
       ...metadataManifestCoverageUncertainty(existsCache, emittedAtMs),
@@ -4627,11 +4664,16 @@ async function withDeterministicContextAtoms(
   inputs: DeterministicContextInputs,
 ): Promise<RingRunSummary> {
   const deterministic = await deterministicContextEvidence(inputs);
-  if (deterministic.atoms.length === 0 && deterministic.uncertainty.length === 0) {
+  if (
+    deterministic.atoms.length === 0 &&
+    deterministic.uncertainty.length === 0 &&
+    deterministic.metadataRetention === undefined
+  ) {
     return rings;
   }
   return {
     ...rings,
+    metadataRetention: deterministic.metadataRetention,
     atoms: [...rings.atoms, ...deterministic.atoms],
     omitted: [...rings.omitted, ...(deterministic.omitted ?? [])],
     uncertainty: [...rings.uncertainty, ...deterministic.uncertainty],
@@ -5320,6 +5362,14 @@ async function readKeptExcerpts(
     return {
       ...stopped,
       omitted: budgetExcerptOmissions(keptPaths, inputs.nowMs()),
+      observation: excerptReadObservation(
+        keptPaths.length,
+        0,
+        0,
+        remainingFiles <= 0,
+        remainingBytes <= 0,
+        stopped.elapsedBudgetBlocked,
+      ),
     };
   const readablePaths = keptPaths.slice(0, remainingFiles);
   if (readablePaths.length < keptPaths.length) {
@@ -5344,6 +5394,27 @@ async function readKeptExcerpts(
   return completedExcerptSummary(keptPaths, readablePaths, state, inputs.nowMs);
 }
 
+function excerptReadObservation(
+  unreadFileCount: number,
+  omittedRangeCount: number,
+  truncatedWindowCount: number,
+  fileGrantBlocked: boolean,
+  byteGrantBlocked: boolean,
+  deadlineBlocked: boolean,
+): ExcerptReadObservation {
+  const stopReasons: ExcerptStopReason[] = [];
+  if (fileGrantBlocked) stopReasons.push("file-grant");
+  if (byteGrantBlocked) stopReasons.push("byte-grant");
+  if (deadlineBlocked) stopReasons.push("deadline");
+  return {
+    unreadFileCount,
+    omittedRangeCount,
+    truncatedWindowCount,
+    stopReasons,
+    readBudgetBlocked: fileGrantBlocked || byteGrantBlocked,
+  };
+}
+
 function budgetExcerptOmissions(paths: readonly string[], nowMs: number): OmittedContextEntry[] {
   return paths.map((scopePath) => ({ scopePath, reason: "budget-exhausted", omittedAtMs: nowMs }));
 }
@@ -5365,6 +5436,16 @@ function completedExcerptSummary(
   return {
     excerpts: state.excerpts,
     uncertainty: state.uncertainty,
+    observation: excerptReadObservation(
+      keptPaths.length - state.excerpts.size,
+      state.omittedWindowCount,
+      state.truncatedWindowCount,
+      readablePaths.length < keptPaths.length,
+      (state.byteBudgetOmittedPaths?.length ?? 0) > 0 ||
+        state.omittedWindowCount > 0 ||
+        state.truncatedWindowCount > 0,
+      state.elapsedBudgetBlocked,
+    ),
     omitted: [
       ...state.omitted,
       ...(stoppedPaths.length === 0 ? [] : budgetExcerptOmissions(stoppedPaths, nowMs())),
@@ -6199,6 +6280,8 @@ interface GroundedAssemblyContext {
 }
 
 interface GroundedPackAssembly {
+  readonly excerptObservation?: ExcerptReadObservation | undefined;
+  readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly readWindowCount?: number | undefined;
   readonly anchoredWindowCount?: number | undefined;
   readonly pack: ConnectedContextPack;
@@ -6309,6 +6392,7 @@ async function assembleGroundedPack(
   if (ctx.cached !== undefined) {
     return {
       pack: withGroundedContextDiagnostics(ctx.cached, deps),
+      metadataRetention: augmentedRings.metadataRetention,
       elapsedBudgetBlocked: false,
     };
   }
@@ -6338,6 +6422,8 @@ async function assembleGroundedPack(
   });
   return {
     pack: withGroundedContextDiagnostics(pack, deps),
+    metadataRetention: augmentedRings.metadataRetention,
+    excerptObservation: excerptReads.observation,
     elapsedBudgetBlocked: excerptReads.elapsedBudgetBlocked,
     anchoredWindowCount: excerptReads.anchoredWindowCount,
     readWindowCount: excerptReads.readWindowCount,
@@ -6347,6 +6433,8 @@ async function assembleGroundedPack(
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
 interface ConnectedContextCompletionStatus {
+  readonly excerptObservation?: ExcerptReadObservation | undefined;
+  readonly metadataRetention?: MetadataRetentionObservation | undefined;
   readonly decisions?: RingDecisionAudit | undefined;
   readonly excerptReadWindowCount?: number | undefined;
   readonly anchoredExcerptWindowCount?: number | undefined;
@@ -6422,17 +6510,17 @@ const NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS = workspaceIndexActivityDiagnost
 // claiming an unblocked elapsed budget, contradicting the elapsed-budget marker on its own pack.
 function liveRetrievalCompletion(
   workspaceIndexAvailable: boolean,
-  elapsedBudgetBlocked: boolean,
-  anchoredExcerptWindowCount: number | undefined,
-  excerptReadWindowCount: number | undefined,
+  assembled: GroundedPackAssembly,
   decisions: RingDecisionAudit | undefined,
 ): ConnectedContextCompletionStatus {
   return {
-    anchoredExcerptWindowCount,
-    excerptReadWindowCount,
+    anchoredExcerptWindowCount: assembled.anchoredWindowCount,
+    excerptReadWindowCount: assembled.readWindowCount,
+    excerptObservation: assembled.excerptObservation,
+    metadataRetention: assembled.metadataRetention,
     decisions,
-    readBudgetBlocked: false,
-    elapsedBudgetBlocked,
+    readBudgetBlocked: assembled.excerptObservation?.readBudgetBlocked ?? false,
+    elapsedBudgetBlocked: assembled.elapsedBudgetBlocked,
     workspaceIndexProviderStatus: workspaceIndexAvailable ? "available" : "unavailable",
   };
 }
@@ -6851,6 +6939,31 @@ function contextObservationActivityExtra(
   };
 }
 
+function retrievalLossActivityExtra(
+  status: ConnectedContextCompletionStatus,
+): Partial<ConnectedContextCompletedActivityFields> {
+  const { excerptObservation: excerpt, metadataRetention: metadata } = status;
+  return {
+    ...(excerpt === undefined
+      ? {}
+      : {
+          excerptOmittedRangeCount: excerpt.omittedRangeCount,
+          excerptTruncatedWindowCount: excerpt.truncatedWindowCount,
+          excerptUnreadFileCount: excerpt.unreadFileCount,
+          excerptStopReasons: excerpt.stopReasons,
+        }),
+    ...(metadata === undefined
+      ? {}
+      : {
+          metadataObservedCount: metadata.observedCount,
+          metadataRetainedCount: metadata.retainedCount,
+          metadataDiscardedCount: metadata.discardedCount,
+          metadataOmittedDetailCount: metadata.omittedDetailCount,
+          metadataRetentionLimit: metadata.limit,
+        }),
+  };
+}
+
 function completionActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
@@ -6875,6 +6988,7 @@ function completionActivityExtra(
     usageExcerptBytes: pack.usage.excerptBytes,
     excerptAnchoredWindowCount: execution.status.anchoredExcerptWindowCount ?? 0,
     excerptReadWindowCount: execution.status.excerptReadWindowCount ?? 0,
+    ...retrievalLossActivityExtra(execution.status),
     usageModelInputTokens: pack.usage.modelInputTokens,
     usageModelOutputTokens: pack.usage.modelOutputTokens,
     usageElapsedMs: pack.usage.elapsedMs,
@@ -7780,13 +7894,7 @@ async function retrieveLiveConnectedContext(
     assembled.pack,
     plan,
     runtime.activity,
-    liveRetrievalCompletion(
-      context.workspaceIndexSource !== undefined,
-      assembled.elapsedBudgetBlocked,
-      assembled.anchoredWindowCount,
-      assembled.readWindowCount,
-      rings.decisions,
-    ),
+    liveRetrievalCompletion(context.workspaceIndexSource !== undefined, assembled, rings.decisions),
     context.structuralContexts.diagnostics(),
     context.workspaceIndexActivity.diagnostics(),
     runtime.workspaceIoActivity.diagnostics(),
@@ -7915,9 +8023,14 @@ function assertGroundedWorkspaceRootAllowed(
     ) {
       throw error;
     }
-    throw new WorkspaceNotFoundError("The workspace root is unavailable.", workspaceRoot, [
+    if (!isExpectedWorkspaceRootFailure(error)) throw error;
+    const unavailable = new WorkspaceNotFoundError(
+      "The workspace root is unavailable.",
       workspaceRoot,
-    ]);
+      [workspaceRoot],
+    );
+    unavailable.cause = error;
+    throw unavailable;
   }
 }
 
@@ -7971,8 +8084,13 @@ function citationCoverageMarkerFor(
   answerContent: string,
   pack: ConnectedContextPack,
   nowMs: number,
+  correlationId: string | undefined,
 ): UncertaintyMarker | undefined {
-  const reconciliation = reconcileInlineCitations(answerContent, buildPackCitationIndex([pack]));
+  const reconciliation = reconcileAndLogInlineCitations(
+    answerContent,
+    buildPackCitationIndex([pack]),
+    correlationId,
+  );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   if (unsupported !== undefined || reconciliation.citedScopePaths.size > 0) return unsupported;
   return missingCitationMarkerFor(answerContent, nowMs);
@@ -8008,7 +8126,12 @@ async function answerWithAvailableContext(
   );
   const elapsedMs = Math.max(0, nowMs() - start);
   const exhausted = exhaustedAnswerBudgetDimensions(answer, pack, elapsedMs);
-  const unsupportedMarker = citationCoverageMarkerFor(answer.content, pack, nowMs());
+  const unsupportedMarker = citationCoverageMarkerFor(
+    answer.content,
+    pack,
+    nowMs(),
+    deps.correlationId,
+  );
   const entailmentMarkers = await entailmentMarkersFor(deps, answer.content, pack, nowMs());
   const groundedPack: ConnectedContextPack = {
     ...pack,

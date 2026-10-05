@@ -302,7 +302,6 @@ function referenceMatchInsideCode(
 }
 
 function incompleteLocationSuffix(text: string, offset: number): boolean {
-  if (/^[\p{L}\p{N}_]/u.test(text.charAt(offset))) return true;
   const tail = text.slice(offset, offset + 65).replace(/^[ \t\u00a0\u202f]{0,64}/u, "");
   return /^[:\u2010-\u2014\u2212-]/u.test(tail);
 }
@@ -319,8 +318,6 @@ function appendUniqueCitation(
 }
 
 const TABLE_LOCATION_SEPARATOR_RE = new RegExp(`${BARE_CITATION_RANGE}[ \t]*[,;]`, "gu");
-
-type ImplicitCitationFilter = (citation: ParsedInlineCitation) => boolean;
 
 function tableLocationParts(token: string): readonly string[] {
   const parts: string[] = [];
@@ -351,48 +348,55 @@ function tableCellCitations(token: string): readonly ParsedInlineCitation[] {
   return parseInlineCitations(token);
 }
 
-function implicitCitationsForMatch(match: RegExpExecArray): readonly ParsedInlineCitation[] {
+interface InlineCitationScanCounts {
+  droppedImplicitCount: number;
+}
+
+function implicitCitationsForMatch(
+  match: RegExpExecArray,
+  counts: InlineCitationScanCounts | undefined,
+): readonly ParsedInlineCitation[] {
   if (match[3] !== undefined) return tableCellCitations(match[3].trim());
   const outsideCode =
     match[2] === undefined ? (match[4] ?? "") : match[0].slice(match[2].length + 2);
-  // Ordinary ': 5 files' is prose; compact and nonbreaking location punctuation is not.
-  if (/:[ \t]+/u.test(outsideCode)) return [];
   const token =
-    match[2] === undefined
-      ? (match[4] ?? "").trim()
-      : `${match[2]}${match[0].slice(match[2].length + 2)}`.trim();
-  const citation = parseCitationToken(token);
-  return citation?.lineRange !== undefined && looksLikeImplicitRepoPath(citation.scopePath)
-    ? [citation]
-    : [];
+    match[2] === undefined ? (match[4] ?? "").trim() : `${match[2]}${outsideCode}`.trim();
+  const citation = implicitCitationToken(token);
+  if (citation === undefined) return [];
+  // A spaced count after a root filename remains prose; path/code/table locations stay explicit.
+  if (/:[ \t]+/u.test(outsideCode) && !match[0].includes("/")) {
+    if (counts !== undefined) counts.droppedImplicitCount += 1;
+    return [];
+  }
+  return [citation];
 }
 
 function appendMatchedRepositoryCitation(
   match: RegExpExecArray,
   seen: Set<string>,
   out: ParsedInlineCitation[],
-  acceptImplicit: ImplicitCitationFilter | undefined,
+  counts: InlineCitationScanCounts | undefined,
 ): void {
   if (match[1] !== undefined) {
     appendBracketCitations(match[1].trim(), seen, out);
     return;
   }
-  for (const citation of implicitCitationsForMatch(match)) {
-    if (acceptImplicit?.(citation) !== false) appendUniqueCitation(citation, seen, out);
+  for (const citation of implicitCitationsForMatch(match, counts)) {
+    appendUniqueCitation(citation, seen, out);
   }
 }
 
 /**
  * Parse explicit bracketed markers and syntactic prose/table/inline-code location candidates.
- * Reconciliation attributes implicit candidates only when the sent excerpts support them.
+ * Reconciliation reports candidates unsupported when the sent excerpts do not support them.
  */
 export function parseInlineCitations(answerText: string): readonly ParsedInlineCitation[] {
-  return scanInlineCitations(answerText, undefined);
+  return scanInlineCitations(answerText);
 }
 
 function scanInlineCitations(
   answerText: string,
-  acceptImplicit: ImplicitCitationFilter | undefined,
+  counts?: InlineCitationScanCounts,
 ): readonly ParsedInlineCitation[] {
   const out: ParsedInlineCitation[] = [];
   const seen = new Set<string>();
@@ -407,7 +411,7 @@ function scanInlineCitations(
       incompleteLocationSuffix(answerText, match.index + match[0].length)
     )
       continue;
-    appendMatchedRepositoryCitation(match, seen, out, acceptImplicit);
+    appendMatchedRepositoryCitation(match, seen, out, counts);
   }
   return out;
 }
@@ -551,6 +555,14 @@ export interface CitationReconciliation {
   readonly citedScopePaths: ReadonlySet<string>;
 }
 
+export interface InlineCitationReconciliationSummary {
+  readonly referenceCount: number;
+  readonly attachedCount: number;
+  readonly danglingMarkerCount: number;
+  readonly ambiguousMarkerCount: number;
+  readonly droppedImplicitCount: number;
+}
+
 /**
  * Reconcile an answer's inline citations against the evidence pack(s) sent to the model.
  * Path-level mismatches are the strong signal (the model named a file it never received). A cited
@@ -560,15 +572,13 @@ export interface CitationReconciliation {
 export function reconcileInlineCitations(
   answerText: string,
   index: PackCitationIndex,
+  report?: (summary: InlineCitationReconciliationSummary) => void,
 ): CitationReconciliation {
   const unsupported: ParsedInlineCitation[] = [];
   const citedScopePaths = new Set<string>();
-  // Implicit prose locations are candidates until actual excerpt membership disambiguates
-  // them. Known paths retain unsupported line precision; explicit brackets also report dangling paths.
-  const citations = scanInlineCitations(
-    answerText,
-    (citation) => resolveCitationSourceId(citation, index.sourceIdsByPath) !== undefined,
-  );
+  // Evidence membership decides support, never whether a syntactic source location disappears.
+  const counts = { droppedImplicitCount: 0 };
+  const citations = scanInlineCitations(answerText, counts);
   for (const citation of citations) {
     if (resolveSupportedCitationSourceId(citation, index) === undefined) {
       unsupported.push(citation);
@@ -576,6 +586,20 @@ export function reconcileInlineCitations(
     }
     citedScopePaths.add(citation.scopePath);
   }
+  report?.({
+    referenceCount: [...index.sourceIdsByPath.values()].reduce(
+      (total, sources) => total + sources.size,
+      0,
+    ),
+    attachedCount: citations.length - unsupported.length,
+    danglingMarkerCount: unsupported.length,
+    ambiguousMarkerCount: unsupported.filter(
+      (citation) =>
+        citation.sourceId === undefined &&
+        (index.sourceIdsByPath.get(citation.scopePath)?.size ?? 0) > 1,
+    ).length,
+    droppedImplicitCount: counts.droppedImplicitCount,
+  });
   return { unsupported, citedScopePaths };
 }
 

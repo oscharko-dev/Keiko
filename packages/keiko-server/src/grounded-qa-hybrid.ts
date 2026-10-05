@@ -6,6 +6,7 @@
 // byte-identical (AC). It composes the exported folder helpers (grounded-qa-multi-source.ts) and
 // connector seams (local-knowledge-grounded-qa.ts) without re-implementing retrieval.
 
+import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
 import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
@@ -116,7 +117,6 @@ import {
   incompleteAnswerMarker,
   missingCitationMarkerFor,
   noEvidenceMarker,
-  reconcileInlineCitations,
   reconcileNumericCitations,
   unsupportedCitationMarker,
   unsupportedNumericCitationMarker,
@@ -1228,11 +1228,13 @@ function hybridReconciliationUncertainty(
   selected: readonly SelectedCandidate<HybridPayload>[],
   redactor: Redactor,
   sourceEvidenceAvailable: boolean,
+  correlationId: string | undefined,
 ): readonly GroundedUncertainty[] {
   const nowMs = Date.now();
-  const reconciliation = reconcileInlineCitations(
+  const reconciliation = reconcileAndLogInlineCitations(
     assistant.content,
     buildPackCitationIndex(sentFolderPacks(folders, selected)),
+    correlationId,
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   const supportedNumericMarkers = new Set(selected.map((candidate) => candidate.marker));
@@ -1605,13 +1607,21 @@ function hybridAnswerUncertainty(
   assistant: GroundedAnswerResult,
   redactor: Redactor,
   nowMs: number,
+  correlationId: string | undefined,
 ): readonly GroundedUncertainty[] {
   return [
     ...folderUncertainty(sources.folders, redactor),
     ...skippedUncertainty(sources.skippedFolders, redactor),
     ...skippedUncertainty(sources.skipped, redactor),
     ...noEvidenceUncertainty(selected, redactor, nowMs),
-    ...hybridReconciliationUncertainty(assistant, sources.folders, selected, redactor, true),
+    ...hybridReconciliationUncertainty(
+      assistant,
+      sources.folders,
+      selected,
+      redactor,
+      true,
+      correlationId,
+    ),
   ];
 }
 
@@ -1644,12 +1654,14 @@ function hybridUncertaintyForAnswer(
   sources: RetrievedSources,
   selected: readonly SelectedCandidate<HybridPayload>[],
   assistant: GroundedAnswerResult,
-  redactor: Redactor,
+  ctx: HybridGroundedAskCtx,
   sourceEvidenceAvailable: boolean,
   nowMs: number,
 ): readonly GroundedUncertainty[] {
+  const { redactor } = ctx.deps;
+  const { correlationId } = ctx;
   if (sourceEvidenceAvailable) {
-    return hybridAnswerUncertainty(sources, selected, assistant, redactor, nowMs);
+    return hybridAnswerUncertainty(sources, selected, assistant, redactor, nowMs, correlationId);
   }
   return [
     ...folderUncertainty(sources.folders, redactor),
@@ -1662,6 +1674,7 @@ function hybridUncertaintyForAnswer(
       selected,
       redactor,
       sourceEvidenceAvailable,
+      correlationId,
     ),
   ];
 }
@@ -1710,7 +1723,7 @@ function projectHybridAnswer(
       sources,
       selected,
       assistant,
-      ctx.deps.redactor,
+      ctx,
       sourceEvidenceAvailable,
       Date.now(),
     ),

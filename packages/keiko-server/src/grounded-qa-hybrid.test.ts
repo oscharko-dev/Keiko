@@ -92,6 +92,11 @@ import { mockRequest, mockResponse } from "./_support.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { WorkspaceNotFoundError } from "@oscharko-dev/keiko-workspace";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -727,6 +732,52 @@ describe("hybrid grounded ask — folder evidence the window fit left out", () =
 // ─── Case 1: Mixed — 1 folder + 1 connector ──────────────────────────────────
 
 describe("hybrid grounded ask — 1 folder + 1 connector", () => {
+  it("joins a hybrid root refusal to its request with the actual filesystem cause", async () => {
+    const { capsuleId } = await seedReadyCapsule("Root Failure Docs");
+    const scope: ChatConnectedScope = {
+      root: tempRoot("hybrid-root"),
+      kind: "directory",
+      relativePaths: ["src/alpha.ts"],
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([scope], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const correlationId = "hybrid-root-failure";
+    const failure = new WorkspaceNotFoundError("root disappeared", "/private/customer/root");
+    failure.cause = Object.assign(new Error("filesystem-private-canary"), { code: "ELOOP" });
+    try {
+      const result = await handleGroundedAsk(
+        { ...routeCtx(JSON.stringify({ chatId, content: "Explain alpha" })), correlationId },
+        hybridDeps(),
+        undefined,
+        undefined,
+        {
+          folderRetriever: () => Promise.reject(failure),
+          connectorRetrieve: singleConnectorRetrieve(capsuleId),
+          answer: sentinelAnswerer("Answer from the surviving source [1].", { count: 0 }),
+        },
+      );
+      expect(result).toMatchObject({
+        status: 400,
+        body: { error: { message: "Connected scope root is not accessible." } },
+      });
+      const failures = sink.events.filter((event) => event.op === "workspace.root.denied");
+      expect(failures).toHaveLength(1);
+      const line = formatActivityLogProofLine(failures[0] ?? {});
+      expect(expectActivityLogProof("workspace.root.denied.line", line)).toMatchObject({
+        correlationId,
+        failureKind: "ELOOP",
+        errorKind: "unavailable",
+        causeChain: ["Error"],
+      });
+      expect(JSON.stringify([result.body, line])).not.toContain("filesystem-private-canary");
+      expect(JSON.stringify([result.body, line])).not.toContain("/private/customer/root");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
   it("projects semantic folder provenance into the actual hybrid answer prompt", async () => {
     const { capsuleId } = await seedReadyCapsule("Context docs");
     const scope: ChatConnectedScope = {
@@ -1736,61 +1787,64 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     }
   });
 
-  it("answers from explicit personal context without projecting empty hybrid sources", async () => {
-    const { capsuleId: capA } = await seedReadyCapsule("Memory Empty A Docs");
-    const { capsuleId: capB } = await seedReadyCapsule("Memory Empty B Docs");
-    const chatId = makeHybridChat(
-      [],
-      [
-        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
-        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
-      ],
-    );
-    const chat = store.findChatById(chatId);
-    if (chat === undefined) throw new Error("expected hybrid chat");
-    let answererCalls = 0;
-    let entailmentPortResolutions = 0;
-    const result = await runHybridGroundedAsk({
-      chat,
-      content: "What package manager do I prefer?",
-      answerContent:
-        "User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm.",
-      answerOnlyContextAvailable: true,
-      modelId: ENTAILMENT_MODEL,
-      contextProfile: undefined,
-      deps: hybridDeps({
-        config: entailmentGatewayConfig(),
-        configPresent: true,
-        modelPortFactory: (): ModelPort => {
-          entailmentPortResolutions += 1;
-          return { call: () => Promise.reject(new Error("no supported claim should be judged")) };
+  it.each(["[src/preferences.ts:42]", "`src/preferences.ts:42`", "src/preferences.ts:42"])(
+    "reports an unsupported hybrid source location: %s",
+    async (fabricated) => {
+      const { capsuleId: capA } = await seedReadyCapsule("Memory Empty A Docs");
+      const { capsuleId: capB } = await seedReadyCapsule("Memory Empty B Docs");
+      const chatId = makeHybridChat(
+        [],
+        [
+          { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+          { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+        ],
+      );
+      const chat = store.findChatById(chatId);
+      if (chat === undefined) throw new Error("expected hybrid chat");
+      let answererCalls = 0;
+      let entailmentPortResolutions = 0;
+      const result = await runHybridGroundedAsk({
+        chat,
+        content: "What package manager do I prefer?",
+        answerContent:
+          "User question:\nWhat package manager do I prefer?\n\nIncluded memory context:\nUse pnpm.",
+        answerOnlyContextAvailable: true,
+        modelId: ENTAILMENT_MODEL,
+        contextProfile: undefined,
+        deps: hybridDeps({
+          config: entailmentGatewayConfig(),
+          configPresent: true,
+          modelPortFactory: (): ModelPort => {
+            entailmentPortResolutions += 1;
+            return { call: () => Promise.reject(new Error("no supported claim should be judged")) };
+          },
+        }),
+        signal: new AbortController().signal,
+        connectorRetrieve: () =>
+          Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" }),
+        answer: () => {
+          answererCalls += 1;
+          return Promise.resolve(`You prefer pnpm ${fabricated}.`);
         },
-      }),
-      signal: new AbortController().signal,
-      connectorRetrieve: () =>
-        Promise.resolve({ references: [], noEvidence: true, reason: "no-vectors" }),
-      answer: () => {
-        answererCalls += 1;
-        return Promise.resolve("You prefer pnpm [src/preferences.ts:42].");
-      },
-    });
+      });
 
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answererCalls).toBe(1);
-    expect(entailmentPortResolutions).toBe(1);
-    expect(answer.content).toContain("src/preferences.ts:42");
-    expect(answer.citations).toEqual([]);
-    expect(answer.knowledgeCitations).toEqual([]);
-    expect(answer.evidenceRunId).toBeUndefined();
-    expect(answer.evidenceRunIds).toEqual([]);
-    expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(true);
-    // PR #3678 review: the answer-only request reached the model, so the context meter must see
-    // the prompt it sent, like the Knowledge Pod and folder paths report theirs.
-    const { promptContext } = result.body as GroundedAnswer;
-    expect(promptContext?.estimatedPromptTokens).toBeGreaterThan(0);
-    expect(promptContext?.sentReferenceCount).toBe(0);
-  });
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      const answer = asHybrid(result.body as GroundedAnswer);
+      expect(answererCalls).toBe(1);
+      expect(entailmentPortResolutions).toBe(1);
+      expect(answer.content).toContain("src/preferences.ts:42");
+      expect(answer.citations).toEqual([]);
+      expect(answer.knowledgeCitations).toEqual([]);
+      expect(answer.evidenceRunId).toBeUndefined();
+      expect(answer.evidenceRunIds).toEqual([]);
+      expect(answer.uncertainty.some((u) => u.kind === "unsupported-citation")).toBe(true);
+      // PR #3678 review: the answer-only request reached the model, so the context meter must see
+      // the prompt it sent, like the Knowledge Pod and folder paths report theirs.
+      const { promptContext } = result.body as GroundedAnswer;
+      expect(promptContext?.estimatedPromptTokens).toBeGreaterThan(0);
+      expect(promptContext?.sentReferenceCount).toBe(0);
+    },
+  );
 });
 
 // ─── Case 3: Not-ready connector skipped, others answer ──────────────────────

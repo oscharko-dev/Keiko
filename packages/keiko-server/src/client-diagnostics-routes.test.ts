@@ -2834,6 +2834,64 @@ describe("reviewed navigation and render evidence", () => {
 });
 
 describe("citation activation ingestion", () => {
+  it.each([
+    { rootCount: Number.MAX_SAFE_INTEGER, correlationId: "citation-action-123", outcome: "opened" },
+    { rootCount: 2, correlationId: undefined, outcome: "opened" },
+    { rootCount: 0, correlationId: "citation-action-123", outcome: "opened" },
+  ])("refuses impossible or unjoinable activation $rootCount/$correlationId", async (input) => {
+    const sink = captureServerLog();
+    const result = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private-citation-customer-canary",
+          clientTs: CLIENT_TS,
+          correlationId: input.correlationId,
+          citationActivation: {
+            reason: "absent",
+            outcome: input.outcome,
+            rootCount: input.rootCount,
+            matchCount: 0,
+          },
+        }),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect(sink.events.some((event) => event.op === "client.citation.activated")).toBe(false);
+    expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(true);
+    expect(sink.lines().join("\n")).not.toContain("private-citation-customer-canary");
+  });
+
+  it("retains a malformed identity after the human explicitly chooses its source", async () => {
+    const sink = captureServerLog();
+    const activation = { reason: "malformed", outcome: "opened", rootCount: 1, matchCount: 0 };
+    expect(
+      (
+        await handleClientDiagnosticIngest(
+          context(
+            JSON.stringify({
+              message: "citation action",
+              clientTs: CLIENT_TS,
+              correlationId: "human-choice-123",
+              citationActivation: activation,
+            }),
+          ),
+        )
+      ).status,
+    ).toBe(204);
+    const event = sink.events.find((candidate) => candidate.op === "client.citation.activated");
+    expect(
+      expectActivityLogProof(
+        "client.citation.activated.line",
+        formatActivityLogProofLine(event ?? {}),
+      ),
+    ).toMatchObject({
+      ...activation,
+      correlationId: "human-choice-123",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
   it.each(["opened", "open-refused", "picker-opened", "picker-dismissed", "refused"])(
     "persists %s as routine citation evidence rather than a new failure incident",
     async (outcome) => {

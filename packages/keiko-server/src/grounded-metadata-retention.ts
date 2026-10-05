@@ -69,6 +69,14 @@ export class BoundedMetadataPaths {
   }
 }
 
+export interface MetadataRetentionObservation {
+  readonly observedCount: number;
+  readonly retainedCount: number;
+  readonly discardedCount: number;
+  readonly omittedDetailCount: number;
+  readonly limit: number;
+}
+
 export class MetadataRetention {
   private readonly kept: BoundedMetadataPaths;
   private readonly omitted: BoundedMetadataPaths;
@@ -77,7 +85,7 @@ export class MetadataRetention {
   discardedCount = 0;
 
   constructor(
-    limit: number,
+    private readonly limit: number,
     omittedLimit: number,
     roots: readonly string[],
     preferredNames: readonly string[],
@@ -111,6 +119,17 @@ export class MetadataRetention {
 
   observeRootFallback(path: string): void {
     if (!this.observedPreferredRoots.has(path)) this.observe(path);
+  }
+
+  observation(): MetadataRetentionObservation {
+    const retainedCount = this.kept.sorted().length;
+    return {
+      observedCount: retainedCount + this.discardedCount,
+      retainedCount,
+      discardedCount: this.discardedCount,
+      omittedDetailCount: this.omitted.sorted().length,
+      limit: this.limit,
+    };
   }
 
   retainedPaths(): readonly string[] {

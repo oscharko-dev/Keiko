@@ -255,7 +255,13 @@ the accepted file-read budget or retained query-result allowance, preserving pri
 before nested services. A bounded worst-first heap makes retention logarithmic per observation;
 overlapping declared patterns do not count the same directory twice. Dropped manifest candidates
 produce an exact retention count and bounded representative budget-omission paths; they do not
-make complete corpus traversal incomplete. Workspace
+make complete corpus traversal incomplete. The completion Activity Log records metadata candidates
+observed, retained, discarded, and retained omission details separately, so a representative detail
+cap cannot masquerade as the number of discarded candidates. These metadata-stage totals are not
+added to canonical pack omissions, which can deduplicate files and replace omissions with later reads.
+The same completion records actual unreturned excerpt ranges, clipped windows, unread selected files,
+and file-grant, byte-grant, or deadline stops from the excerpt reader. Cancellation produces a failed
+terminal event, never a successful completion with an invented stop reason. Workspace
 manifests share the inclusive 2 MiB eligibility ceiling. Explicit deadlines, cancellation, unavailable
 streaming ports, and failed enumeration remain visible; iterators close on interruption.
 The shared size-admitted decoder accepts UTF-8, BOM or recognizable-pattern UTF-16LE/BE, and declared

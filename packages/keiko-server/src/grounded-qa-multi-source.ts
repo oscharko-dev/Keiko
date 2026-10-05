@@ -7,6 +7,7 @@
 // the shared formatters/projection/persistence helpers (now exported) so the two paths build their
 // gateway messages, citations, and evidence from the exact same primitives.
 
+import { reconcileAndLogInlineCitations } from "./grounded-citation-log.js";
 import { basename } from "node:path";
 import { createHash } from "node:crypto";
 import {
@@ -73,7 +74,6 @@ import {
   incompleteAnswerMarker,
   missingCitationMarkerFor,
   packsHaveUsableEvidence,
-  reconcileInlineCitations,
   unsupportedCitationMarker,
 } from "./grounded-faithfulness.js";
 import {
@@ -1094,7 +1094,7 @@ function assembleMultiSourceAnswer(
   // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the model's inline citations against the merged
   // evidence packs the model actually received; flag references to un-retrieved files.
   const reconciliationUncertainty = modelInvoked
-    ? buildMultiSourceReconciliationUncertainty(assistant, sources, redactor)
+    ? buildMultiSourceReconciliationUncertainty(assistant, sources, redactor, ctx.correlationId)
     : [];
   return {
     groundingKind: "connected-context",
@@ -1138,11 +1138,13 @@ function buildMultiSourceReconciliationUncertainty(
   assistant: GroundedAnswerResult,
   sources: readonly RetrievedSource[],
   redactor: Redactor,
+  correlationId: string | undefined,
 ): readonly GroundedUncertainty[] {
   const nowMs = Date.now();
-  const reconciliation = reconcileInlineCitations(
+  const reconciliation = reconcileAndLogInlineCitations(
     assistant.content,
     buildPackCitationIndex(sources.map((s) => s.pack)),
+    correlationId,
   );
   const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
   const missing =

@@ -1934,6 +1934,9 @@ function hasValidFilesScopeDecisionContext(value: Record<string, unknown>): bool
   );
 }
 
+/** Transport bound for diagnostic counters, independent of folder search/file-count policies. */
+export const CLIENT_CITATION_ROOT_COUNT_MAX = CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX;
+
 /** Citation attribution and the actual navigation decision, without paths or fingerprints. */
 export interface ClientDiagnosticCitationActivation {
   readonly reason: "matched" | "unmatched" | "absent" | "malformed" | "ambiguous";
@@ -1964,6 +1967,12 @@ function coherentCitationMatchCount(value: Record<string, unknown>): boolean {
   return value.matchCount === 0;
 }
 
+function coherentCitationOutcome(value: Record<string, unknown>): boolean {
+  return (
+    value.outcome === "refused" || (typeof value.rootCount === "number" && value.rootCount > 0)
+  );
+}
+
 function isClientDiagnosticCitationActivation(
   value: unknown,
 ): value is ClientDiagnosticCitationActivation {
@@ -1977,15 +1986,17 @@ function isClientDiagnosticCitationActivation(
   return (
     CITATION_ACTIVATION_REASONS.has(value.reason) &&
     CITATION_ACTIVATION_OUTCOMES.has(value.outcome) &&
-    isBoundedNonNegativeInteger(value.rootCount, Number.MAX_SAFE_INTEGER) &&
+    isBoundedNonNegativeInteger(value.rootCount, CLIENT_CITATION_ROOT_COUNT_MAX) &&
     isBoundedNonNegativeInteger(value.matchCount, value.rootCount) &&
-    coherentCitationMatchCount(value)
+    coherentCitationMatchCount(value) &&
+    coherentCitationOutcome(value)
   );
 }
 
 function hasValidCitationActivationContext(value: Record<string, unknown>): boolean {
   if (value.citationActivation === undefined) return true;
   return (
+    isActivityLogCorrelationId(value.correlationId) &&
     isClientDiagnosticCitationActivation(value.citationActivation) &&
     [...FILES_SCOPE_DECISION_EXCLUSIVE_KEYS, "filesScopeDecision"].every(
       (key) => key === "citationActivation" || value[key] === undefined,

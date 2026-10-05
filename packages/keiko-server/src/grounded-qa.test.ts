@@ -98,6 +98,7 @@ import {
   WorkspaceNotFoundError,
   detectWorkspaceAt,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
@@ -1374,6 +1375,34 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it("rethrows unexpected root resolver failures instead of reporting a missing folder", async () => {
+    const { chatId } = await setupChatWithScope();
+    const failure = new TypeError("root-programmer-failure-canary");
+    const root = vi.spyOn(nodeWorkspaceFs, "realPath").mockImplementation(() => {
+      throw failure;
+    });
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    try {
+      await expect(
+        handleGroundedAsk(
+          {
+            ...ctx(JSON.stringify({ chatId, content: "Explain alpha" })),
+            correlationId: "root-programmer-failure",
+          },
+          deps(),
+          runner(emptyPack()),
+        ),
+      ).rejects.toBe(failure);
+      expect(activityLog.events.filter((event) => event.op === "workspace.root.denied")).toEqual(
+        [],
+      );
+    } finally {
+      root.mockRestore();
+      resetServerLogger();
+    }
+  });
+
   it("exports the actual closed admission cause when a connected ordinary root disappears", async () => {
     const { chatId } = await setupChatWithoutScope();
     const selectedRoot = join(tmp, "connected-disposable-root");
@@ -1418,7 +1447,7 @@ describe("handleGroundedAsk", () => {
         .flatMap((timeline) => timeline.lines)
         .filter((line) => line.op === "workspace.root.denied");
       expect(causes).toMatchObject([
-        { extra: { reason: "ordinary-root-unavailable", failureKind: "WORKSPACE_NOT_FOUND" } },
+        { extra: { reason: "ordinary-root-unavailable", failureKind: "ENOENT" } },
       ]);
       expect(report.reportJson).not.toContain(selectedRoot);
       expect(report.reportJson).not.toContain("private-admission-question-canary");

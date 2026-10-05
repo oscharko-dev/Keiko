@@ -21,6 +21,7 @@ import {
   CLIENT_SESSION_REPAIR_STREAMS,
   CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS,
   CLIENT_KNOWLEDGE_CATALOG_COUNT_MAX,
+  CLIENT_CITATION_ROOT_COUNT_MAX,
   CLIENT_SELECT_DISMISSAL_REASONS,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
@@ -1779,6 +1780,7 @@ describe("citation activation diagnostic contract", () => {
       expect(
         isClientDiagnosticIngestRequest({
           ...validRequest(),
+          correlationId: "citation-action-123",
           citationActivation: { ...activation, reason, matchCount },
         }),
       ).toBe(true);
@@ -1793,17 +1795,69 @@ describe("citation activation diagnostic contract", () => {
       expect(
         isClientDiagnosticIngestRequest({
           ...validRequest(),
-          citationActivation: { ...activation, outcome },
+          correlationId: "citation-action-123",
+          citationActivation: { ...activation, reason: "absent", matchCount: 0, outcome },
         }),
       ).toBe(true);
     }
     expect(
       isClientDiagnosticIngestRequest({
         ...validRequest(),
+        correlationId: "citation-action-123",
         citationActivation: { ...activation, rootCount: Number.MAX_SAFE_INTEGER },
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
+  it.each([
+    { rootCount: CLIENT_CITATION_ROOT_COUNT_MAX, accepted: true },
+    { rootCount: CLIENT_CITATION_ROOT_COUNT_MAX + 1, accepted: false },
+  ])("enforces the declared diagnostic bound $rootCount", ({ rootCount, accepted }) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        correlationId: "citation-action-123",
+        citationActivation: { ...activation, rootCount },
+      }),
+    ).toBe(accepted);
+  });
+  it.each([undefined, "", "/customer/private?secret=token"])(
+    "requires an original action correlation: %s",
+    (correlationId) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId,
+          citationActivation: activation,
+        }),
+      ).toBe(false);
+    },
+  );
+  it.each([
+    { reason: "absent", outcome: "opened", rootCount: 0, matchCount: 0 },
+    { reason: "malformed", outcome: "picker-opened", rootCount: 0, matchCount: 0 },
+    { reason: "absent", outcome: "picker-dismissed", rootCount: 0, matchCount: 0 },
+    { reason: "unmatched", outcome: "open-refused", rootCount: 0, matchCount: 0 },
+  ])("rejects impossible navigation states %j", (citationActivation) => {
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        correlationId: "citation-action-123",
+        citationActivation,
+      }),
+    ).toBe(false);
+  });
+  it.each(["unmatched", "malformed"])(
+    "retains opened after explicit source selection for %s identity",
+    (reason) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "citation-action-123",
+          citationActivation: { reason, outcome: "opened", rootCount: 1, matchCount: 0 },
+        }),
+      ).toBe(true);
+    },
+  );
   it.each([
     { reason: "private/path" },
     { outcome: "unknown" },
@@ -1819,6 +1873,7 @@ describe("citation activation diagnostic contract", () => {
     expect(
       isClientDiagnosticIngestRequest({
         ...validRequest(),
+        correlationId: "citation-action-123",
         citationActivation: { ...activation, ...overrides },
       }),
     ).toBe(false);
@@ -1829,6 +1884,7 @@ describe("citation activation diagnostic contract", () => {
       expect(
         isClientDiagnosticIngestRequest({
           ...validRequest(),
+          correlationId: "citation-action-123",
           citationActivation: activation,
           [key]: key === "kind" ? "other" : {},
         }),

@@ -182,6 +182,41 @@ describe("parseInlineCitations", () => {
     },
   );
 
+  it.each([
+    "src/ghost.ts:5",
+    "`src/ghost.ts:5`",
+    "| src/ghost.ts : 5 |",
+    "src/ghost.ts: 5",
+    "ghost.ts:5",
+  ])("reports a fabricated implicit source instead of silently dropping it: %s", (answer) => {
+    const result = reconcileInlineCitations(answer, buildPackCitationIndex([]));
+    expect(result.unsupported).toMatchObject([
+      { scopePath: answer.includes("src/") ? "src/ghost.ts" : "ghost.ts" },
+    ]);
+    expect(result.citedScopePaths.size).toBe(0);
+  });
+
+  it.each(["src/shared.ts:5", "`src/shared.ts:5`", "| src/shared.ts:5 |"])(
+    "reports source ambiguity for an unqualified implicit location: %s",
+    (answer) => {
+      const pack = packWith([
+        { scopePath: "src/shared.ts", excerpts: [excerpt("src/shared.ts", 1, 10)] },
+      ]);
+      const result = reconcileInlineCitations(answer, buildPackCitationIndex([pack, pack]));
+      expect(result.unsupported).toMatchObject([{ scopePath: "src/shared.ts" }]);
+      expect(result.citedScopePaths.size).toBe(0);
+    },
+  );
+
+  it.each(["处定义", "で定義", "implements", "𐐀suffix", "5 workers"])(
+    "uses the closing code delimiter before adjacent prose: %s",
+    (suffix) => {
+      expect(parseInlineCitations(`\`src/main.ts:5\`${suffix}`)).toMatchObject([
+        { scopePath: "src/main.ts", lineRange: { startLine: 5, endLine: 5 } },
+      ]);
+    },
+  );
+
   it("reports unsupported precision on a known implicit path without judging it", async () => {
     const answer = "Known source src/main.ts:5. Unread source src/main.ts:999.";
     const index = buildPackCitationIndex([
@@ -203,11 +238,11 @@ describe("parseInlineCitations", () => {
     expect(judged).toEqual(["Known source src/main.ts:5."]);
   });
 
-  it("disambiguates an implicit filename with actual excerpt membership", () => {
+  it("keeps a source-extension location unsupported until actual excerpts establish membership", () => {
     const answer = "Next.js:3000";
     expect(parseInlineCitations(answer)).toMatchObject([{ scopePath: "Next.js" }]);
     expect(reconcileInlineCitations(answer, buildPackCitationIndex([]))).toMatchObject({
-      unsupported: [],
+      unsupported: [{ scopePath: "Next.js" }],
     });
     const index = buildPackCitationIndex([
       packWith([{ scopePath: "Next.js", excerpts: [excerpt("Next.js", 3000, 3000)] }]),
@@ -303,7 +338,7 @@ describe("parseInlineCitations", () => {
       });
       expect(
         reconcileInlineCitations(
-          "[missing.html\u202f:\u202f182], [chapters/conveyor.html\u202f:\u202f183]",
+          "missing.html\u202f:\u202f182, chapters/conveyor.html\u202f:\u202f183",
           index,
         ).unsupported,
       ).toHaveLength(2);

@@ -86,6 +86,27 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     expectedUnsupportedCitations: ["src/secret/keys.ts:40-55"],
   },
   {
+    name: "hallucinated-bare-path",
+    variant: "hallucinated-citation",
+    packScopePaths: PACK_PATHS,
+    answerText: "See src/secret/keys.ts:40-55.",
+    expectedUnsupportedCitations: ["src/secret/keys.ts:40-55"],
+  },
+  {
+    name: "hallucinated-code-path",
+    variant: "hallucinated-citation",
+    packScopePaths: PACK_PATHS,
+    answerText: "See `src/secret/keys.ts:40-55`.",
+    expectedUnsupportedCitations: ["src/secret/keys.ts:40-55"],
+  },
+  {
+    name: "hallucinated-table-path",
+    variant: "hallucinated-citation",
+    packScopePaths: PACK_PATHS,
+    answerText: "| Source | src/secret/keys.ts:40-55 |",
+    expectedUnsupportedCitations: ["src/secret/keys.ts:40-55"],
+  },
+  {
     name: "hallucinated-only",
     variant: "hallucinated-citation",
     packScopePaths: PACK_PATHS,

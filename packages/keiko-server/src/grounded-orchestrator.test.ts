@@ -4288,26 +4288,29 @@ describe("runGroundedExploration", () => {
     );
   });
 
-  it("RB-4 (GEN-AI-GROUNDING-001/-008): flags an inline citation not present in the pack", async () => {
-    const fabricatingAnswerer: GroundedAnswerer = {
-      answer: (_question, pack) => {
-        const realPath = pack.files[0]?.scopePath ?? "src/foo.ts";
-        return Promise.resolve(
-          `Grounded in [${realPath}:1-2], but also cites [src/secret/keys.ts:40-55] which was never retrieved.`,
-        );
-      },
-    };
-    const out = await runGroundedExploration(input(), {
-      correlationId: undefined,
-      answerer: fabricatingAnswerer,
-      nowMs: () => NOW,
-      detectWorkspace: () => fakeWorkspace(),
-    });
-    const marker = out.pack.uncertainty.find((m) => m.kind === "unsupported-citation");
-    expect(marker).toBeDefined();
-    expect(marker?.claim).toContain("secret/keys.ts");
-    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
-  });
+  it.each(["[src/secret/keys.ts:40-55]", "`src/secret/keys.ts:40-55`", "src/secret/keys.ts:40-55"])(
+    "flags a location not present in the sent single-source pack: %s",
+    async (fabricated) => {
+      const fabricatingAnswerer: GroundedAnswerer = {
+        answer: (_question, pack) => {
+          const realPath = pack.files[0]?.scopePath ?? "src/foo.ts";
+          return Promise.resolve(
+            `Grounded in [${realPath}:1-2], but also cites ${fabricated} which was never retrieved.`,
+          );
+        },
+      };
+      const out = await runGroundedExploration(input(), {
+        correlationId: undefined,
+        answerer: fabricatingAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      });
+      const marker = out.pack.uncertainty.find((m) => m.kind === "unsupported-citation");
+      expect(marker).toBeDefined();
+      expect(marker?.claim).toContain("secret/keys.ts");
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    },
+  );
 
   it("RB-4 (GEN-AI-GROUNDING-001): does NOT flag when every inline citation is in the pack", async () => {
     const faithfulAnswerer: GroundedAnswerer = {

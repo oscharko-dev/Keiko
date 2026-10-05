@@ -1327,42 +1327,50 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(serialized).not.toContain("customer-root");
   });
 
-  it("skips a root that disappears after admission while a healthy source answers", async () => {
-    const healthy: ChatConnectedScope = {
+  it("joins a skipped multi-source root to its request with the actual filesystem cause", async () => {
+    const scopes: ChatConnectedScope[] = ["healthy", "gone"].map((name) => ({
       kind: "directory",
-      relativePaths: ["src/a.ts"],
+      relativePaths: [`src/${name}.ts`],
       connectedAtMs: NOW,
-      root: tempRoot("healthy-after-admission"),
-    };
-    const disappeared: ChatConnectedScope = {
-      kind: "directory",
-      relativePaths: ["src/gone.ts"],
-      connectedAtMs: NOW,
-      root: tempRoot("gone-after-admission"),
-    };
-    const chatId = makeChat([healthy, disappeared]);
-    const sensitivePath = join(tmp, ".aws", "gone-after-admission");
-    const healthyPack = scopePack("src/a.ts", 0.8, "a");
+      root: tempRoot(name),
+    }));
+    const chatId = makeChat(scopes);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const correlationId = "multi-source-root-failure";
+    const failure = new WorkspaceNotFoundError("root disappeared", "/private/customer/root");
+    failure.cause = Object.assign(new Error("filesystem-private-canary"), { code: "EACCES" });
     const retriever: GroundedRetriever = (input) =>
       input.scope.relativePaths[0] === "src/gone.ts"
-        ? Promise.reject(
-            new WorkspaceNotFoundError("root disappeared", sensitivePath, [sensitivePath]),
-          )
-        : Promise.resolve({ pack: healthyPack, elapsedMs: 11, plan: { state: "ready" } as never });
-
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "explain all" })),
-      recordingDeps([]),
-      undefined,
-      seam(retriever, constAnswerer("healthy answer [src/a.ts]", { count: 0 })),
-    );
-
-    expect(result.status).toBe(200);
-    const answer = asConnectedAnswer(result.body as GroundedAnswer);
-    const serialized = JSON.stringify(answer);
-    expect(serialized).toContain("Connected scope root is not accessible.");
-    expect(serialized).not.toContain(sensitivePath);
-    expect(serialized).not.toContain(".aws");
+        ? Promise.reject(failure)
+        : Promise.resolve({
+            pack: scopePack("src/healthy.ts", 0.8, "healthy"),
+            elapsedMs: 11,
+            plan: { state: "ready" } as never,
+          });
+    try {
+      const result = await handleGroundedAsk(
+        { ...ctx(JSON.stringify({ chatId, content: "explain all" })), correlationId },
+        recordingDeps([]),
+        undefined,
+        seam(retriever, constAnswerer("healthy answer [src/healthy.ts]", { count: 0 })),
+      );
+      expect(result.status).toBe(200);
+      expect(JSON.stringify(result.body)).toContain("Connected scope root is not accessible.");
+      const failures = sink.events.filter((event) => event.op === "workspace.root.denied");
+      expect(failures).toHaveLength(1);
+      const line = formatActivityLogProofLine(failures[0] ?? {});
+      expect(expectActivityLogProof("workspace.root.denied.line", line)).toMatchObject({
+        correlationId,
+        failureKind: "EACCES",
+        errorKind: "permission-denied",
+        causeChain: ["Error"],
+      });
+      expect(JSON.stringify([result.body, line])).not.toContain("filesystem-private-canary");
+      expect(JSON.stringify([result.body, line])).not.toContain("/private/customer/root");
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("measures total answer wall time across concurrent retrieval and delayed model response", async () => {
@@ -1441,39 +1449,44 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answer.uncertainty).toHaveLength(2);
   });
 
-  it("fails closed when an unqualified path exists in more than one source", async () => {
-    const scopeA: ChatConnectedScope = {
-      kind: "directory",
-      relativePaths: ["source-a"],
-      connectedAtMs: NOW,
-      root: tempRoot("api"),
-    };
-    const scopeB: ChatConnectedScope = {
-      kind: "directory",
-      relativePaths: ["source-b"],
-      connectedAtMs: NOW,
-      root: tempRoot("web"),
-    };
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId: makeChat([scopeA, scopeB]), content: "explain shared" })),
-      recordingDeps([]),
-      undefined,
-      seam(
-        packPerScope(
-          new Map([
-            ["source-a", scopePack("src/shared.ts", 0.8, "shared-a")],
-            ["source-b", scopePack("src/shared.ts", 0.7, "shared-b")],
-          ]),
+  it.each(["[src/shared.ts:1-5]", "`src/shared.ts:1-5`", "src/shared.ts:1-5"])(
+    "fails closed for a multi-source ambiguous location: %s",
+    async (ambiguous) => {
+      const scopeA: ChatConnectedScope = {
+        kind: "directory",
+        relativePaths: ["source-a"],
+        connectedAtMs: NOW,
+        root: tempRoot("api"),
+      };
+      const scopeB: ChatConnectedScope = {
+        kind: "directory",
+        relativePaths: ["source-b"],
+        connectedAtMs: NOW,
+        root: tempRoot("web"),
+      };
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId: makeChat([scopeA, scopeB]), content: "explain shared" })),
+        recordingDeps([]),
+        undefined,
+        seam(
+          packPerScope(
+            new Map([
+              ["source-a", scopePack("src/shared.ts", 0.8, "shared-a")],
+              ["source-b", scopePack("src/shared.ts", 0.7, "shared-b")],
+            ]),
+          ),
+          constAnswerer(`Ambiguous claim ${ambiguous}.`, { count: 0 }),
         ),
-        constAnswerer("Ambiguous claim [src/shared.ts:1-5].", { count: 0 }),
-      ),
-    );
+      );
 
-    expect(result.status).toBe(200);
-    const answer = asConnectedAnswer(result.body as GroundedAnswer);
-    expect(answer.citations).toEqual([]);
-    expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(true);
-  });
+      expect(result.status).toBe(200);
+      const answer = asConnectedAnswer(result.body as GroundedAnswer);
+      expect(answer.citations).toEqual([]);
+      expect(answer.uncertainty.some((marker) => marker.kind === "unsupported-citation")).toBe(
+        true,
+      );
+    },
+  );
 
   it("attributes an identical path only to its explicitly cited source ordinal", async () => {
     const scopeA: ChatConnectedScope = {
