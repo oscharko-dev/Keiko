@@ -495,6 +495,9 @@ const GATEWAY_CHAT_COMPLETED_OPERATION = defineActivityLogOperation({
       required: true,
     },
   },
+  diagnosticWhen: [
+    { field: "finishReason", values: ["length", "content_filter", "error", "cancelled"] },
+  ],
   causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",

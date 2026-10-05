@@ -750,6 +750,7 @@ const GATEWAY_CIRCUIT_WAIT_OPERATION = defineActivityLogOperation({
     delayMs: { type: "number", dataClass: "duration", required: true },
     remainingMs: { type: "number", dataClass: "duration", required: false },
   },
+  diagnosticWhen: [{ field: "outcome", values: ["cancelled", "failed", "budget-refused"] }],
   causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",
