@@ -119,8 +119,11 @@ const REPOSITORY_OVERVIEW_PATTERNS: readonly IntentPattern[] = [
   { term: "orientation", pattern: /\bwhat\s+(?:(?:can|do)\s+you\s+)?(?:see|notice|recognize)\b/iu },
   {
     term: "overview",
-    pattern:
-      /^(?:please\s+)?tell\s+me\s+everything[.!?\s]*$|^(?:bitte\s+)?(?:zeig|zeige|erklaere|erkläre)\s+mir\s+alles[.!?\s]*$/iu,
+    pattern: /^(?:please\s+)?tell\s+me\s+everything[.!?\s]*$/iu,
+  },
+  {
+    term: "overview",
+    pattern: /^(?:bitte\s+)?(?:zeig|zeige|erklaere|erkläre)\s+mir\s+alles[.!?\s]*$/iu,
   },
   { term: "architecture", pattern: /\barchitecture\b|\barchitektur\b/iu },
   { term: "overview", pattern: /\boverview\b|\bueberblick\b|\büberblick\b/iu },
@@ -138,8 +141,11 @@ const DIAGNOSTIC_PATTERNS: readonly IntentPattern[] = [
   { term: "bug", pattern: /\bbug\b|\bdefect\b|\bregression\b/iu },
   {
     term: "http-status",
-    pattern:
-      /\b(?:http(?:\/\d(?:\.\d)?)?|(?:response\s+)?status(?:\s+code)?)\s*[:=-]?\s*[45]\d{2}\b/iu,
+    pattern: /\bhttp(?:\/\d(?:\.\d)?)?\s*(?:[:=-]\s*)?[45]\d{2}\b/iu,
+  },
+  {
+    term: "http-status",
+    pattern: /\b(?:response\s+)?status(?:\s+code)?\s*(?:[:=-]\s*)?[45]\d{2}\b/iu,
   },
 ];
 

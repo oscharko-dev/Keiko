@@ -658,6 +658,18 @@ function sourceChoiceLabel(
   return sameLabel ? `${root.label} · ${repositoryReferenceDisplayPath(root.root)}` : root.label;
 }
 
+function sourceChoiceDetail(
+  root: RepositoryReferenceRoot,
+  roots: readonly RepositoryReferenceRoot[],
+): ReactNode {
+  const disambiguated = sourceChoiceLabel(root, roots) !== root.label;
+  const detail = disambiguated
+    ? repositoryReferenceDisplayPath(root.root)
+    : repositoryRootSuffix(root.root);
+  if (!disambiguated && detail === root.label) return null;
+  return <span className="repo-ref-root-path">{detail}</span>;
+}
+
 const OPENED_CONFIRMATION_MS = 1800;
 
 // Schedules a callback once. The pending timer is cleared before a new one is scheduled and when
@@ -906,15 +918,7 @@ export function RepositoryReferenceInline({
               onKeyDown={dismissOnEscape}
             >
               <span>{root.label}</span>
-              {sourceChoiceLabel(root, bestRootOptions) === root.label ? (
-                repositoryRootSuffix(root.root) === root.label ? null : (
-                  <span className="repo-ref-root-path">{repositoryRootSuffix(root.root)}</span>
-                )
-              ) : (
-                <span className="repo-ref-root-path">
-                  {repositoryReferenceDisplayPath(root.root)}
-                </span>
-              )}
+              {sourceChoiceDetail(root, bestRootOptions)}
             </button>
           ))}
         </span>

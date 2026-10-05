@@ -1801,10 +1801,11 @@ function supportReportStateSets(): {
   completeness: ReadonlySet<string>;
   loss: ReadonlySet<string>;
 } {
-  return (supportPreparationStates ??= {
+  supportPreparationStates ??= {
     completeness: new Set(ACTIVITY_LOG_COMPLETENESS_STATES),
     loss: new Set(ACTIVITY_LOG_LOSS_STATES),
-  });
+  };
+  return supportPreparationStates;
 }
 
 function isSupportReportPreparationBytes(value: unknown): value is number {
