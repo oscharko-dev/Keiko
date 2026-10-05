@@ -231,6 +231,17 @@ retain their coding-noise exclusions. Both scopes retain the same sensitive-path
 symlink, binary and image denials. The ordinary Chat can search a connected folder; launching a
 Coding Workbench write task still requires its existing verified Git workspace authority.
 
+The policy mode is selected by Git metadata at the connected root (`.git`), not by a parent
+directory or a nested repository. File eligibility uses the inclusive 2 MiB byte bound and
+excludes image formats, including SVG, before decoding. Text is decoded as UTF-8 or detected
+UTF-16; HTML also supports declared legacy encodings through the shared decoder. A byte-order
+mark takes precedence over an HTML declaration. An unsupported explicit HTML encoding is an
+`io-error`, not a silently excluded binary file. Decoded NULs, malformed text and an excessive
+control-character ratio identify binary content; ordinary tabs and line endings remain text.
+Binary, image and oversized exclusions are policy decisions, distinct from incomplete search
+coverage. The executable bounds table uses `null` only for the unbounded search file-count,
+inventory-count and duration fields; query, file-byte and result-size bounds remain finite.
+
 The governed model prompt describes the actual search result: bounded hits and
 `truncationReasons`, without a continuation cursor. The agent refines a truncated search with a
 more selective query or `includeGlobs`, reads the matched line window before editing, and cannot

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { GOVERNED_TOOL_CONTRACT_PINS as PINS } from "./governed-tool-contract-pins.mjs";
 import {
   REQUIRED_AXES,
+  UNBOUNDED_SEARCH_FIELDS,
   REQUIRED_BOUNDS,
   REQUIRED_CONSUMERS,
   REQUIRED_INTERFACE_FIELDS,
@@ -107,6 +108,11 @@ function checkPinnedValues(contract, errors) {
     if (!sameSet(contract[section], PINS[section])) errors.push(`${section}: vocabulary differs`);
   }
 }
+function isValidBound(field, value) {
+  if (value === null) return UNBOUNDED_SEARCH_FIELDS.has(field);
+  return Number.isSafeInteger(value) && value > 0;
+}
+
 function checkShape(contract, errors) {
   for (const [field, keys] of Object.entries({
     owners: REQUIRED_OWNERS,
@@ -118,9 +124,8 @@ function checkShape(contract, errors) {
   })) {
     requireKeys(contract[field], keys, field, errors);
   }
-  for (const value of Object.values(contract.bounds ?? {})) {
-    if (!Number.isSafeInteger(value) || value <= 0)
-      errors.push("bounds: must be positive safe integers");
+  for (const [field, value] of Object.entries(contract.bounds ?? {})) {
+    if (!isValidBound(field, value)) errors.push("bounds: must be positive safe integers");
   }
   for (const value of Object.values(contract.owners ?? {})) {
     if (typeof value !== "string" || value.length === 0) errors.push("owners: missing owner");
