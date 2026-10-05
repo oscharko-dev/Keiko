@@ -51,8 +51,9 @@ export class KnownFitScopeContext {
   };
 
   public observation(): ScopeContextObservation {
+    const retainedState = this.retained.length === 0 ? "empty" : "applied";
     return {
-      state: this.overflowed ? "overflow" : this.retained.length === 0 ? "empty" : "applied",
+      state: this.overflowed ? "overflow" : retainedState,
       observedFileCount: this.observedFileCount,
       retainedFileCount: this.retained.length,
       chargedBytes: this.chargedBytes,

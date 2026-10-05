@@ -655,6 +655,7 @@ function dismissedEvidence(
   record: SupportIncidentRecord,
   facts: DismissalFacts,
 ): void {
+  const claimsStatus = facts.claimsReleased ? "released" : "failed";
   writeEvidence(
     stateDir,
     activityLogEvent(
@@ -675,12 +676,7 @@ function dismissedEvidence(
         openIncidentCount: facts.openIncidentCount,
         ...(facts.reason === undefined ? {} : { reason: facts.reason }),
         removalStatus: facts.removalStatus ?? "removed",
-        claimsStatus:
-          facts.removalStatus === "failed"
-            ? "not-attempted"
-            : facts.claimsReleased
-              ? "released"
-              : "failed",
+        claimsStatus: facts.removalStatus === "failed" ? "not-attempted" : claimsStatus,
         ...terminalFailureFields(facts.failure),
         ...(facts.pinRelease === "rejected" || !facts.claimsReleased
           ? { completeness: "partial" as const }

@@ -723,7 +723,8 @@ async function visitStreamingDirectory(
     await collectStreamingDirectory(state, directory.absolute, directory.relativeDir, children);
     // Finish and close the current descriptor before descending. Only directory paths are queued;
     // file contents and file inventories are never retained by discovery.
-    for (const child of children.reverse()) pending.push(child);
+    children.reverse();
+    for (const child of children) pending.push(child);
   }
 }
 

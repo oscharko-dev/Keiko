@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useReducer } from "react";
 import { translate, useLocale, type Locale, type MessageValues } from "./i18n";
 import type { MessageKey } from "./i18n-messages.en";
 import {
@@ -77,11 +77,12 @@ function isOptionalWidgetKey(key: WidgetMessageKey): key is OptionalWidgetMessag
 
 export function useOptionalWidgetTranslate(): OptionalWidgetTranslate {
   const locale = useLocale();
-  const [, setCatalog] = useState(() => catalogFor(locale));
+  const [, refreshCatalog] = useReducer((version: number): number => version + 1, 0);
   useEffect(() => {
     let cancelled = false;
+    const previousCatalog = catalogFor(locale);
     void loadOptionalWidgetMessages(locale).then((loaded) => {
-      if (!cancelled) setCatalog(loaded);
+      if (!cancelled && loaded !== previousCatalog) refreshCatalog();
     });
     return (): void => {
       cancelled = true;

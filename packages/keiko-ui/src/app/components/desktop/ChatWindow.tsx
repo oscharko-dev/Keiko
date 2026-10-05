@@ -1592,12 +1592,8 @@ function repositoryReferencesForChat(args: {
 }): readonly RepositoryReferenceRoot[] {
   const connected = connectedRepositoryRoots(args.chat);
   const connectedPaths = new Set(connected.map(({ root }) => root));
-  const linked =
-    args.linkedRoots.length > 0
-      ? args.linkedRoots
-      : args.linkedRoot === null
-        ? []
-        : [args.linkedRoot];
+  const fallbackLinked = args.linkedRoot === null ? [] : [args.linkedRoot];
+  const linked = args.linkedRoots.length > 0 ? args.linkedRoots : fallbackLinked;
   const fallback = repositoryReferenceRoots(
     omitAncestorRepositoryRoots([...connectedPaths, ...linked]),
   );
@@ -3183,7 +3179,6 @@ function ComposerCoreImpl({
     error,
     messages,
     activeChat,
-    activeProject,
     replaceChat,
   } = session;
   const taRef = inputRef;
@@ -5673,7 +5668,6 @@ export function ChatWindow({
     regenerateMessage,
     cancelSend,
     cancelGrounded,
-    activeProject,
     activeChat,
     canonicalVoiceTurnRequiresRetry,
     retryPendingCanonicalVoiceTurn,
