@@ -125,6 +125,160 @@ function packWith(
 }
 
 describe("parseInlineCitations", () => {
+  it.each([
+    "listens on 127.0.0.1:1983",
+    "api.example.com:8080",
+    "gear ratio 3.5 : 1",
+    "Version 2.0: 5 new features",
+    "package.json: 2 scripts",
+    "`utils.ts`: 3 helpers",
+    "`127.0.0.1:1983`",
+    "`api.example.com:8080`",
+  ])("does not turn ordinary prose into a source claim: %s", (answer) => {
+    expect(parseInlineCitations(answer)).toEqual([]);
+    expect(reconcileInlineCitations(answer, buildPackCitationIndex([])).unsupported).toEqual([]);
+    expect(segmentCitedClaims(answer)).toEqual([]);
+  });
+
+  it.each([
+    "| src/a.ts:12, src/b.ts:30 |",
+    "| src/a.ts:12; src/b.ts:30 |",
+    "| a.html : 12, b.html : 30 |",
+  ])("keeps each table location separate: %s", (answer) => {
+    const paths = answer.includes("html") ? ["a.html", "b.html"] : ["src/a.ts", "src/b.ts"];
+    const index = buildPackCitationIndex([
+      packWith(
+        paths.map((scopePath, i) => ({
+          scopePath,
+          excerpts: [excerpt(scopePath, i === 0 ? 12 : 30, i === 0 ? 12 : 30)],
+        })),
+      ),
+    ]);
+    expect(parseInlineCitations(answer)).toMatchObject([
+      { scopePath: paths[0], lineRange: { startLine: 12, endLine: 12 } },
+      { scopePath: paths[1], lineRange: { startLine: 30, endLine: 30 } },
+    ]);
+    expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual(paths);
+    expect(reconcileInlineCitations(answer, index).unsupported).toEqual([]);
+    expect(segmentCitedClaims(answer)[0]?.citations).toHaveLength(2);
+  });
+
+  it.each(["Defined in", "See"])("keeps table prose outside the path: %s", (prefix) => {
+    expect(parseInlineCitations(`| ${prefix} src/a.ts:12 |`)).toMatchObject([
+      { scopePath: "src/a.ts", lineRange: { startLine: 12, endLine: 12 } },
+    ]);
+  });
+
+  it.each(["implements the scheduler", "实现了调度器", "5 workers use this"])(
+    "retains a genuine compact location followed by prose: %s",
+    (prose) => {
+      const answer = `src/main.ts:5 ${prose}`;
+      const index = buildPackCitationIndex([
+        packWith([{ scopePath: "src/main.ts", excerpts: [excerpt("src/main.ts", 5, 5)] }]),
+      ]);
+      expect(parseInlineCitations(answer)).toMatchObject([{ scopePath: "src/main.ts" }]);
+      expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual(["src/main.ts"]);
+      expect(parseInlineCitations("src/main.ts:5implements")).toEqual([]);
+    },
+  );
+
+  it("reports unsupported precision on a known implicit path without judging it", async () => {
+    const answer = "Known source src/main.ts:5. Unread source src/main.ts:999.";
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: "src/main.ts", excerpts: [excerpt("src/main.ts", 5, 5)] }]),
+    ]);
+    const membership = reconcileInlineCitations(answer, index);
+    expect(membership.unsupported).toMatchObject([
+      { scopePath: "src/main.ts", lineRange: { startLine: 999, endLine: 999 } },
+    ]);
+    const judged: string[] = [];
+    const judge: EntailmentJudge = {
+      judge: (input) => {
+        judged.push(input.claimText);
+        return Promise.resolve("supported");
+      },
+    };
+    const result = await reconcileClaimEntailment(answer, membership, () => "actual line 5", judge);
+    expect(result.judgedClaims).toBe(1);
+    expect(judged).toEqual(["Known source src/main.ts:5."]);
+  });
+
+  it("disambiguates an implicit filename with actual excerpt membership", () => {
+    const answer = "Next.js:3000";
+    expect(parseInlineCitations(answer)).toMatchObject([{ scopePath: "Next.js" }]);
+    expect(reconcileInlineCitations(answer, buildPackCitationIndex([]))).toMatchObject({
+      unsupported: [],
+    });
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: "Next.js", excerpts: [excerpt("Next.js", 3000, 3000)] }]),
+    ]);
+    expect([...reconcileInlineCitations(answer, index).citedScopePaths]).toEqual(["Next.js"]);
+    expect(
+      reconcileInlineCitations("[Next.js:3000]", buildPackCitationIndex([])).unsupported,
+    ).toHaveLength(1);
+  });
+
+  it("never sends an unresolved implicit location to the entailment judge", async () => {
+    const answer = "Next.js:3000";
+    let calls = 0;
+    const judge: EntailmentJudge = {
+      judge: () => {
+        calls += 1;
+        return Promise.resolve("supported");
+      },
+    };
+    const emptyIndex = buildPackCitationIndex([]);
+    const result = await reconcileClaimEntailment(
+      answer,
+      reconcileInlineCitations(answer, emptyIndex),
+      () => "irrelevant text",
+      judge,
+    );
+    expect(result.judgedClaims).toBe(0);
+    expect(result.unavailableClaims).toBe(0);
+    expect(calls).toBe(0);
+    const index = buildPackCitationIndex([
+      packWith([{ scopePath: "Next.js", excerpts: [excerpt("Next.js", 3000, 3000)] }]),
+    ]);
+    const supported = await reconcileClaimEntailment(
+      answer,
+      reconcileInlineCitations(answer, index),
+      () => "actual excerpt",
+      judge,
+    );
+    expect(supported.judgedClaims).toBe(1);
+    expect(supported.unentailed).toEqual([]);
+    expect(calls).toBe(1);
+  });
+
+  it("preserves explicit uncommon filenames and unsupported exact locations", () => {
+    const answer = "[release.123:2] [api.example.com:8080] [src/custom.opaque:3]";
+    expect(parseInlineCitations(answer).map((item) => item.scopePath)).toEqual([
+      "release.123",
+      "api.example.com",
+      "src/custom.opaque",
+    ]);
+    expect(reconcileInlineCitations(answer, buildPackCitationIndex([])).unsupported).toHaveLength(
+      3,
+    );
+  });
+
+  it.each(["src/\u202efile.ts:1", "src/part\tfile.ts:1", "../src/file.ts:1", "/src/file.ts:1"])(
+    "never recovers a suffix from an invalid table path: %s",
+    (token) => {
+      expect(parseInlineCitations(`| ${token} |`)).toEqual([]);
+    },
+  );
+
+  it("preserves an unambiguous spaced or comma filename in a single table location", () => {
+    expect(
+      parseInlineCitations("| 文書/運転 手順.html : 182 | | src/with,comma.ts:5 |"),
+    ).toMatchObject([
+      { scopePath: "文書/運転 手順.html", lineRange: { startLine: 182, endLine: 182 } },
+      { scopePath: "src/with,comma.ts", lineRange: { startLine: 5, endLine: 5 } },
+    ]);
+  });
+
   it.each([false, true])(
     "associates spaced table source lines with each factual claim (code=%s)",
     (code) => {
@@ -149,7 +303,7 @@ describe("parseInlineCitations", () => {
       });
       expect(
         reconcileInlineCitations(
-          "missing.html\u202f:\u202f182 and chapters/conveyor.html\u202f:\u202f183",
+          "[missing.html\u202f:\u202f182], [chapters/conveyor.html\u202f:\u202f183]",
           index,
         ).unsupported,
       ).toHaveLength(2);

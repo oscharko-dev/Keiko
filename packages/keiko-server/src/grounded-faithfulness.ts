@@ -34,6 +34,7 @@ import {
   markdownCodeRanges,
   type MarkdownCodeRange,
 } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
@@ -95,6 +96,72 @@ const REPOSITORY_CITATION_RE = new RegExp(
   "gu",
 );
 const SOURCE_QUALIFIER_RE = /^source:(\d+)\|/u;
+// Root-level implicit filenames need a known text/source extension. Explicit bracketed
+// references retain the broader portable-path contract, including uncommon extensions.
+const IMPLICIT_REPOSITORY_EXTENSIONS = new Set([
+  "astro",
+  "bash",
+  "c",
+  "cc",
+  "cjs",
+  "config",
+  "cpp",
+  "cs",
+  "css",
+  "csv",
+  "cts",
+  "go",
+  "gradle",
+  "h",
+  "hpp",
+  "htm",
+  "html",
+  "ini",
+  "java",
+  "js",
+  "json",
+  "jsonc",
+  "jsx",
+  "kt",
+  "kts",
+  "less",
+  "lock",
+  "lua",
+  "md",
+  "mdx",
+  "mjs",
+  "mts",
+  "php",
+  "py",
+  "rb",
+  "rs",
+  "sass",
+  "scala",
+  "scss",
+  "sh",
+  "sql",
+  "svelte",
+  "swift",
+  "toml",
+  "ts",
+  "tsx",
+  "txt",
+  "vue",
+  "xml",
+  "yaml",
+  "yml",
+  "zsh",
+]);
+
+function looksLikeImplicitRepoPath(path: string): boolean {
+  if (!looksLikeRepoPath(path)) return false;
+  if (/\s/u.test(path.split("/")[0] ?? "")) return false;
+  if (!/\p{L}/u.test(path)) return false;
+  if (path.includes("/")) return true;
+  const extension = path.split(".").at(-1)?.toLowerCase() ?? "";
+  return IMPLICIT_REPOSITORY_EXTENSIONS.has(extension);
+}
+
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const codePoint = value.codePointAt(index);
@@ -235,34 +302,98 @@ function referenceMatchInsideCode(
 }
 
 function incompleteLocationSuffix(text: string, offset: number): boolean {
+  if (/^[\p{L}\p{N}_]/u.test(text.charAt(offset))) return true;
   const tail = text.slice(offset, offset + 65).replace(/^[ \t\u00a0\u202f]{0,64}/u, "");
   return /^[:\u2010-\u2014\u2212-]/u.test(tail);
+}
+
+function appendUniqueCitation(
+  citation: ParsedInlineCitation,
+  seen: Set<string>,
+  out: ParsedInlineCitation[],
+): void {
+  const key = citationDedupKey(citation);
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push(citation);
+}
+
+const TABLE_LOCATION_SEPARATOR_RE = new RegExp(`${BARE_CITATION_RANGE}[ \t]*[,;]`, "gu");
+
+type ImplicitCitationFilter = (citation: ParsedInlineCitation) => boolean;
+
+function tableLocationParts(token: string): readonly string[] {
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const match of token.matchAll(TABLE_LOCATION_SEPARATOR_RE)) {
+    const separatorOffset = match.index + match[0].length - 1;
+    parts.push(token.slice(cursor, separatorOffset).trim());
+    cursor = separatorOffset + 1;
+  }
+  parts.push(token.slice(cursor).trim());
+  return parts;
+}
+
+function implicitCitationToken(token: string): ParsedInlineCitation | undefined {
+  const citation = parseCitationToken(token);
+  return citation?.lineRange !== undefined && looksLikeImplicitRepoPath(citation.scopePath)
+    ? citation
+    : undefined;
+}
+
+function tableCellCitations(token: string): readonly ParsedInlineCitation[] {
+  if (stripUnsafeFormatChars(token) !== token) return [];
+  const parts = tableLocationParts(token);
+  const citations = parts.map(implicitCitationToken);
+  // Split only punctuation after a complete line location, never commas inside filenames.
+  if (citations.every((citation) => citation !== undefined)) return citations;
+  if (hasControlCharacter(token)) return [];
+  return parseInlineCitations(token);
+}
+
+function implicitCitationsForMatch(match: RegExpExecArray): readonly ParsedInlineCitation[] {
+  if (match[3] !== undefined) return tableCellCitations(match[3].trim());
+  const outsideCode =
+    match[2] === undefined ? (match[4] ?? "") : match[0].slice(match[2].length + 2);
+  // Ordinary ': 5 files' is prose; compact and nonbreaking location punctuation is not.
+  if (/:[ \t]+/u.test(outsideCode)) return [];
+  const token =
+    match[2] === undefined
+      ? (match[4] ?? "").trim()
+      : `${match[2]}${match[0].slice(match[2].length + 2)}`.trim();
+  const citation = parseCitationToken(token);
+  return citation?.lineRange !== undefined && looksLikeImplicitRepoPath(citation.scopePath)
+    ? [citation]
+    : [];
 }
 
 function appendMatchedRepositoryCitation(
   match: RegExpExecArray,
   seen: Set<string>,
   out: ParsedInlineCitation[],
+  acceptImplicit: ImplicitCitationFilter | undefined,
 ): void {
   if (match[1] !== undefined) {
     appendBracketCitations(match[1].trim(), seen, out);
     return;
   }
-  const token =
-    match[2] === undefined
-      ? (match[3] ?? match[4] ?? "").trim()
-      : `${match[2]}${match[0].slice(match[2].length + 2)}`.trim();
-  const citation = parseCitationToken(token);
-  if (citation?.lineRange === undefined) return;
-  const key = citationDedupKey(citation);
-  if (!seen.has(key)) {
-    seen.add(key);
-    out.push(citation);
+  for (const citation of implicitCitationsForMatch(match)) {
+    if (acceptImplicit?.(citation) !== false) appendUniqueCitation(citation, seen, out);
   }
 }
 
-/** Parse bracketed markers and explicit prose/table/inline-code repository line references. */
+/**
+ * Parse explicit bracketed markers and syntactic prose/table/inline-code location candidates.
+ * Reconciliation attributes implicit candidates only when the sent excerpts support them.
+ */
 export function parseInlineCitations(answerText: string): readonly ParsedInlineCitation[] {
+  return scanInlineCitations(answerText, undefined);
+}
+
+function scanInlineCitations(
+  answerText: string,
+  acceptImplicit: ImplicitCitationFilter | undefined,
+): readonly ParsedInlineCitation[] {
   const out: ParsedInlineCitation[] = [];
   const seen = new Set<string>();
   const code = markdownCodeRanges(answerText);
@@ -276,7 +407,7 @@ export function parseInlineCitations(answerText: string): readonly ParsedInlineC
       incompleteLocationSuffix(answerText, match.index + match[0].length)
     )
       continue;
-    appendMatchedRepositoryCitation(match, seen, out);
+    appendMatchedRepositoryCitation(match, seen, out, acceptImplicit);
   }
   return out;
 }
@@ -432,7 +563,13 @@ export function reconcileInlineCitations(
 ): CitationReconciliation {
   const unsupported: ParsedInlineCitation[] = [];
   const citedScopePaths = new Set<string>();
-  for (const citation of parseInlineCitations(answerText)) {
+  // Implicit prose locations are candidates until actual excerpt membership disambiguates
+  // them. Known paths retain unsupported line precision; explicit brackets also report dangling paths.
+  const citations = scanInlineCitations(
+    answerText,
+    (citation) => resolveCitationSourceId(citation, index.sourceIdsByPath) !== undefined,
+  );
+  for (const citation of citations) {
     if (resolveSupportedCitationSourceId(citation, index) === undefined) {
       unsupported.push(citation);
       continue;
@@ -1103,7 +1240,11 @@ function inlineEntailmentClaims(
   const membershipFailed = new Set(membership.unsupported.map(citationDedupKey));
   return segmentCitedClaims(answerText).flatMap((claim): readonly EntailmentClaim[] => {
     const evidence = claim.citations
-      .filter((citation) => !membershipFailed.has(citationDedupKey(citation)))
+      .filter(
+        (citation) =>
+          membership.citedScopePaths.has(citation.scopePath) &&
+          !membershipFailed.has(citationDedupKey(citation)),
+      )
       .map((citation) => ({
         citedPath: citation.scopePath,
         excerptText: resolveExcerptText(citation),
