@@ -23,24 +23,25 @@ afterEach(() => {
 });
 
 describe("useBackendHealth", () => {
-  it("does not show an unavailable banner for one failed poll followed by recovery", async () => {
-    fetch.mockRejectedValueOnce(new TypeError("private-loopback-url"));
+  it("keeps a previously loaded snapshot through one failed poll followed by recovery", async () => {
     const view = renderHook(useBackendHealth);
     await act(async () => await Promise.resolve());
-    expect(view.result.current.state).toBe("loading");
+    const loaded = view.result.current;
+    fetch.mockRejectedValueOnce(new TypeError("private-loopback-url"));
+    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+    expect(view.result.current).toBe(loaded);
     await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
     expect(view.result.current).toEqual({ state: "loaded", health: ready });
     expect(reportClientDiagnostic).toHaveBeenCalledOnce();
   });
 
-  it("joins a confirmed read outage and its report to the actual request and caught failure", async () => {
+  it("immediately joins a failed initial read and its report to the actual request and caught failure", async () => {
     const failure = new DOMException("private-provider-url", "TimeoutError");
     fetch.mockRejectedValue(failure);
     const view = renderHook(useBackendHealth);
     await act(async () => await Promise.resolve());
     const correlationId = fetch.mock.calls[0]?.[0];
     expect(correlationId).toEqual(expect.any(String));
-    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
     expect(view.result.current).toMatchObject({
       state: "unavailable",
       report: {
@@ -56,7 +57,23 @@ describe("useBackendHealth", () => {
       "[keiko] health read failed: TimeoutError",
       expect.objectContaining({ correlationId, errorKind: "timeout" }),
     );
+    expect(fetch).toHaveBeenCalledOnce();
     expect(JSON.stringify(view.result.current)).not.toContain("private-provider-url");
+  });
+
+  it("requires two consecutive failed reads after a loaded snapshot", async () => {
+    const view = renderHook(useBackendHealth);
+    await act(async () => await Promise.resolve());
+    const loaded = view.result.current;
+    fetch.mockRejectedValue(new TypeError("offline"));
+    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+    expect(view.result.current).toBe(loaded);
+    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+    expect(view.result.current).toMatchObject({
+      state: "unavailable",
+      report: { correlationId: fetch.mock.calls[1]?.[0] },
+    });
+    expect(reportClientDiagnostic).toHaveBeenCalledOnce();
   });
 
   it("keeps the same snapshot identity for unchanged successful and failed polls", async () => {

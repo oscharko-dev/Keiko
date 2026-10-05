@@ -92,11 +92,13 @@ function recordHealthReadFailure(
 ): void {
   poll.failureReport ??= recordHealthFailure(error, correlationIdOf(error) ?? requestCorrelationId);
   poll.failedPolls += 1;
-  if (poll.failedPolls < 2) return;
+  const confirmedOutage = poll.failedPolls >= 2;
   const report = poll.failureReport;
-  publish((previous) =>
-    previous.state === "unavailable" ? previous : { state: "unavailable", report },
-  );
+  publish((previous) => {
+    if (previous.state === "unavailable") return previous;
+    if (previous.state === "loaded" && !confirmedOutage) return previous;
+    return { state: "unavailable", report };
+  });
 }
 
 async function readBackendHealth(poll: HealthPoll, publish: PublishHealth): Promise<void> {

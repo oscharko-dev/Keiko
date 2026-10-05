@@ -539,9 +539,10 @@ it, and so does `keiko support export` for the exported directory. The desktop w
 with an error-report action. Closed technical reasons remain in the health response, Activity
 Log and exported report; the notice uses plain language. The shell owns the health poll, so
 readiness does not depend on the lazy footer module. Verified degraded or unavailable snapshots
-are displayed immediately; transport unavailability requires two consecutive failed polls so one
-transient read does not become a persistent outage notice. Failed health reads select their actual
-request correlation and captured failure facts. Invalid diagnostic metadata records
+are displayed immediately. A failed initial health read is also displayed immediately, with its
+error-report action. After a successful health read, transport unavailability requires two consecutive
+failed polls so one transient read does not become a persistent outage notice. Failed health reads
+select their actual request correlation and captured failure facts. Invalid diagnostic metadata records
 `validation-failed` with the response correlation (the sent request id is the fallback) and the
 closed `healthDiagnosticsInvalidReason`: `null-shape`, `readiness-value`, or `snapshot-shape`.
 These are validation observations, not thrown exceptions or assertions of version skew; no synthetic
