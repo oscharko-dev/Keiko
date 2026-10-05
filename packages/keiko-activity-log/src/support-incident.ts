@@ -1031,7 +1031,9 @@ function evictOldestCandidate(
     openIncidentCount: openIncidentCount - Number(removal.removed),
     reason: "retention",
   });
-  return removal.complete ? entry.incidentId : undefined;
+  // Cleanup completeness describes evidence, not slot availability. The next exclusive claim
+  // rechecks the actual slot; a failed pin/fingerprint cleanup must not reject a freed slot.
+  return removal.removed ? entry.incidentId : undefined;
 }
 
 function ownsRecoveryClaim(stateDir: string, record: SupportIncidentRecord | undefined): boolean {

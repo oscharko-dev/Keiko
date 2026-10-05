@@ -1481,6 +1481,33 @@ describe("rolling diagnostic candidate retention", () => {
     ).toEqual([]);
   });
 
+  it("reuses actual freed pin capacity despite an unrelated retained slot cleanup failure", () => {
+    occupyDiagnosticPinReserve();
+    vi.spyOn(incidentStore, "releaseSupportIncidentSlot").mockImplementationOnce(() => {
+      throw new TypeError("simulated slot cleanup failure after publication");
+    });
+    const next = recordUserReportedIncident(stateDir, { correlationId: "pin-claim-failure-next" });
+    if (next.status !== "created") throw new TypeError("Expected new pinned candidate");
+    expect(next.record.pin.status).toBe("pinned");
+    const following = recordUserReportedIncident(stateDir, {
+      correlationId: "pin-claim-failure-following",
+    });
+    if (following.status !== "created") throw new TypeError("Expected subsequent pinned candidate");
+    expect(following.record.pin.status).toBe("pinned");
+    const ended = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.expired",
+    );
+    expect(ended.map((line): unknown => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({
+        removalStatus: "removed",
+        claimsStatus: "failed",
+        pinRelease: "released",
+        completeness: "partial",
+      }),
+    );
+  });
+
   it("does not claim recovered pin pressure when the owned pin release was rejected", () => {
     occupyDiagnosticPinReserve();
     vi.spyOn(serverLog, "releaseActivityLogPin").mockReturnValueOnce({

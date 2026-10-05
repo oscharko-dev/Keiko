@@ -17,6 +17,7 @@ import {
   setSupportIncidentTriggerForTests,
 } from "./support-incident.js";
 import * as store from "./support-incident-store.js";
+import * as serverLog from "./server-log.js";
 import { supportIncidentRetentionPolicy } from "./support-incident-retention.js";
 import { listActivityLogDirectory } from "./activity-log-store.js";
 import {
@@ -219,5 +220,105 @@ describe("durable class publication reserve recovery", () => {
     ).toEqual({ status: "rejected", reason: "quota-exhausted" });
     expect(reads).toBe(2);
     expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(before);
+  });
+});
+
+describe("publication reserve resource recovery", () => {
+  it.each(["pin", "fingerprint"] as const)(
+    "uses the released slot even when retiring its previous owner's %s is incomplete",
+    (fault) => {
+      const fixture = occupiedClass("server");
+      const oldest = fixture.candidates[0];
+      if (oldest === undefined) throw new TypeError("Missing oldest candidate");
+      if (fault === "pin")
+        vi.spyOn(serverLog, "releaseActivityLogPin").mockReturnValueOnce({
+          status: "rejected",
+          reason: "removal-failed",
+        });
+      else
+        vi.spyOn(store, "releaseSupportIncidentFingerprintClaim").mockImplementationOnce(() => {
+          throw new TypeError("simulated fingerprint-claim cleanup failure");
+        });
+      const newest = register("server", fixture.capacity + 1);
+      expect(newest.slotIndex).toBe(oldest.slotIndex);
+      const retained = listSupportIncidents(stateDir, { readOnly: true });
+      expect(retained.map((record) => record.incidentId).sort()).toEqual(
+        [...fixture.protectedRecords, ...fixture.candidates.slice(2), newest]
+          .map((record) => record.incidentId)
+          .sort(),
+      );
+      const expired = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "support.incident.expired",
+      );
+      const partial = expired.map((line): unknown => JSON.parse(line));
+      expect(partial).toContainEqual(
+        expect.objectContaining({
+          incidentId: oldest.incidentId,
+          removalStatus: "removed",
+          claimsStatus: fault === "fingerprint" ? "failed" : "released",
+          pinRelease: fault === "pin" ? "rejected" : "released",
+          completeness: "partial",
+        }),
+      );
+      expect(store.readSupportIncidentSlotClaim(stateDir, newest.slotIndex)?.incidentId).toBe(
+        newest.incidentId,
+      );
+    },
+  );
+
+  it("recovers an occupied reserve whose oldest owner's pin was already released", () => {
+    const fixture = occupiedClass("server");
+    const oldest = fixture.candidates[0];
+    if (oldest?.pin.pinId === undefined) throw new TypeError("Missing oldest pin");
+    expect(
+      serverLog.releaseActivityLogPin(stateDir, {
+        pinId: oldest.pin.pinId,
+        correlationId: "prior-owner-pin-release",
+      }).status,
+    ).toBe("released");
+    const newest = register("server", fixture.capacity + 1);
+    expect(newest.slotIndex).toBe(oldest.slotIndex);
+    const expired = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.expired",
+    );
+    expect(expired.map((line): unknown => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({
+        incidentId: oldest.incidentId,
+        removalStatus: "removed",
+        claimsStatus: "released",
+        pinRelease: "not-pinned",
+        completeness: "complete",
+      }),
+    );
+  });
+
+  it("does not steal an unreleased slot or evict another owner after a slot cleanup failure", () => {
+    const fixture = occupiedClass("server");
+    const oldest = fixture.candidates[0];
+    if (oldest === undefined) throw new TypeError("Missing oldest candidate");
+    vi.spyOn(store, "releaseSupportIncidentSlot").mockImplementationOnce(() => {
+      throw new TypeError("simulated slot claim cleanup failure");
+    });
+    expect(
+      recordRegisteredFailureIncident(stateDir, {
+        op: "coding-runtime.readiness.failed",
+        errorKind: ACTIVITY_LOG_ERROR_KINDS[fixture.capacity + 1],
+        correlationId: "unreleased-slot-recovery",
+      }),
+    ).toEqual({ status: "rejected", reason: "quota-exhausted" });
+    expect(store.readSupportIncidentSlotClaim(stateDir, oldest.slotIndex)?.incidentId).toBe(
+      oldest.incidentId,
+    );
+    expect(
+      listSupportIncidents(stateDir, { readOnly: true })
+        .map((record) => record.incidentId)
+        .sort(),
+    ).toEqual(
+      [...fixture.protectedRecords, ...fixture.candidates.slice(1)]
+        .map((record) => record.incidentId)
+        .sort(),
+    );
   });
 });

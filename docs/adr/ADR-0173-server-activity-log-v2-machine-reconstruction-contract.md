@@ -868,7 +868,10 @@ prevents a subsequent report POST.
 An exhausted diagnostic reservation buffer must not prevent manual export of already retained evidence. Desktop and CLI
 export may prepare the canonical user-report descriptor without a persistent slot or retention pin,
 then compose and validate the same bounded report. Byte pressure rolls the oldest eligible diagnostic candidate out through its existing claim and pin
-cleanup. In-flight reservations are never stolen. The report summary distinguishes stored from
+cleanup. Admission retries the actual exclusive slot claim after a removed candidate; incomplete
+pin or fingerprint cleanup remains partial evidence without pretending that a released slot is still
+occupied. A retained or peer-replaced slot claim still prevents admission. Pin capacity likewise
+follows actual pin ownership rather than unrelated claim cleanup. In-flight reservations are never stolen. The report summary distinguishes stored from
 transient descriptors with `retentionDisposition`; a transient descriptor omits `pinDisposition`
 because it owns no retained pin and must not imply that a pin attempt occurred. Desktop and CLI
 completion events carry the canonical incident ID, report digest, actual `incidentTrigger`, and
