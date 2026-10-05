@@ -8,6 +8,7 @@ import {
   recordUserReportedIncident,
   recordRegisteredFailureIncident,
   dismissSupportIncident,
+  reportServerLogFailure,
 } from "@oscharko-dev/keiko-activity-log";
 import {
   parseActivityLogPinFileName,
@@ -19,7 +20,11 @@ import * as artifactFiles from "@oscharko-dev/keiko-security/fs-hardening";
 
 vi.mock("@oscharko-dev/keiko-activity-log", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-activity-log")>();
-  return { ...actual, dismissSupportIncident: vi.fn(actual.dismissSupportIncident) };
+  return {
+    ...actual,
+    dismissSupportIncident: vi.fn(actual.dismissSupportIncident),
+    reportServerLogFailure: vi.fn(actual.reportServerLogFailure),
+  };
 });
 
 vi.mock("@oscharko-dev/keiko-security/fs-hardening", async (importOriginal) => {
@@ -120,6 +125,7 @@ function expectAbandonedPreparation(stateDir: string): void {
 afterEach(() => {
   vi.useRealTimers();
   vi.mocked(dismissSupportIncident).mockClear();
+  vi.mocked(reportServerLogFailure).mockClear();
   workers.instances.length = 0;
   workers.terminate.mockReset();
   workers.prepare.mockReset();
@@ -177,6 +183,52 @@ describe("bounded desktop support-report worker", () => {
           (name) => parseActivityLogPinFileName(name) !== undefined,
         ),
       ).toHaveLength(1);
+    },
+  );
+
+  it.each(["cancelled", "timeout"] as const)(
+    "preserves the original %s when the abandonment owner throws",
+    async (reason) => {
+      const stateDir = mkdtempSync(join(tmpdir(), "keiko-abandonment-throw-"));
+      reportDirectories.push(stateDir);
+      const actual = await vi.importActual<
+        typeof import("@oscharko-dev/keiko-activity-log/reader")
+      >("@oscharko-dev/keiko-activity-log/reader");
+      workers.prepare.mockImplementation(actual.prepareDesktopSupportReport);
+      if (reason === "timeout") vi.useFakeTimers();
+      const controller = new AbortController();
+      const job = runSupportReportJob(
+        stateDir,
+        undefined,
+        controller.signal,
+        "guarded-abandonment",
+      );
+      const rejected = job.catch((error: unknown) => error);
+      activeWorker().emit("message", { kind: "prepare" });
+      const retained = listSupportIncidents(stateDir, { readOnly: true });
+      expect(retained).toHaveLength(1);
+      const failure = new TypeError("private cleanup failure");
+      vi.mocked(dismissSupportIncident).mockImplementationOnce(() => {
+        throw failure;
+      });
+      if (reason === "cancelled") controller.abort();
+      else await vi.advanceTimersByTimeAsync(30_000);
+      expect(await rejected).toMatchObject({ reason });
+      expect(workers.terminate).toHaveBeenCalledOnce();
+      expect(reportServerLogFailure).toHaveBeenCalledWith(
+        failure,
+        expect.objectContaining({
+          correlationId: "guarded-abandonment",
+          loss: "event-dropped",
+        }),
+      );
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual(retained);
+      const following = runSupportReportJob(stateDir);
+      activeWorker().emit("message", {
+        ok: true,
+        report: { fileName: "report.json", reportJson: "{}" },
+      });
+      await expect(following).resolves.toMatchObject({ fileName: "report.json" });
     },
   );
 
@@ -346,6 +398,7 @@ describe("bounded desktop support-report worker", () => {
     expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(1);
     abandon?.();
     vi.mocked(dismissSupportIncident).mockClear();
+    vi.mocked(reportServerLogFailure).mockClear();
     abandon?.();
     expect(dismissSupportIncident).not.toHaveBeenCalled();
     expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([]);
@@ -384,6 +437,7 @@ describe("bounded desktop support-report worker", () => {
       await rejected;
       expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(refused ? 1 : 0);
       vi.mocked(dismissSupportIncident).mockClear();
+      vi.mocked(reportServerLogFailure).mockClear();
       abandon?.();
       if (refused) expect(dismissSupportIncident).toHaveBeenCalledOnce();
       else expect(dismissSupportIncident).not.toHaveBeenCalled();

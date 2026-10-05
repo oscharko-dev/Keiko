@@ -126,6 +126,28 @@ afterEach(() => {
   rmSync(stateDir, { recursive: true, force: true });
 });
 
+type RetirementFault = "inspection-open" | "start-write" | "pin-release";
+function injectRetirementFault(stage: RetirementFault, failure: Error): void {
+  if (stage === "inspection-open") {
+    vi.spyOn(incidentStore, "readSupportIncidentRecord").mockImplementationOnce(() => {
+      throw failure;
+    });
+    vi.spyOn(serverLog, "createFileServerLogSink").mockImplementationOnce(() => {
+      throw new actualArtifactFiles.SafeArtifactFileError("activity-log", "open-failed");
+    });
+  } else if (stage === "start-write") {
+    vi.spyOn(serverLog, "createFileServerLogSink").mockReturnValueOnce({
+      write: (): void => {
+        throw failure;
+      },
+    });
+  } else {
+    vi.spyOn(serverLog, "releaseActivityLogPin").mockImplementationOnce(() => {
+      throw failure;
+    });
+  }
+}
+
 function occupyPublicationReserve(): readonly SupportIncidentRecord[] {
   vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
   const capacity = supportIncidentRetentionPolicy(stateDir).capacity;
@@ -1474,6 +1496,44 @@ describe("rolling diagnostic candidate retention", () => {
       });
       expect(line).not.toHaveProperty("openIncidentCount");
       expect(lines[0]).not.toContain("private customer");
+    },
+  );
+
+  it.each(["inspection-open", "start-write", "pin-release"] as const)(
+    "contains a retirement %s failure on the independent diagnostic fallback",
+    (stage) => {
+      const created = recordUserReportedIncident(stateDir, { correlationId: "fallback-owner" });
+      if (created.status !== "created") throw new TypeError("Expected manual candidate");
+      const failure = new TypeError("private retirement failure");
+      failure.stack =
+        "TypeError: private contents\n    at retire (/private/work/packages/keiko-activity-log/dist/support-incident.js:20:4)";
+      injectRetirementFault(stage, failure);
+      const stderr = vi.spyOn(process.stderr, "write");
+      expect(
+        completePreparedSupportIncident(stateDir, created.incidentId, {
+          correlationId: "fallback-retirement",
+        }),
+      ).toBe("failed");
+      const notices = stderr.mock.calls.flatMap(([value]) =>
+        typeof value === "string" && value.startsWith("{")
+          ? [JSON.parse(value) as Record<string, unknown>]
+          : [],
+      );
+      expect(notices).toContainEqual(
+        expect.objectContaining({
+          op: "server-log.write-failed",
+          correlationId: "fallback-retirement",
+          errorKind: "internal",
+          completeness: "unknown",
+          loss: "event-dropped",
+          frames: ["packages/keiko-activity-log/dist/support-incident.js:20:4"],
+        }),
+      );
+      expect(JSON.stringify(notices)).not.toContain("private");
+      expect(incidentStore.readSupportIncidentRecord(stateDir, created.incidentId)).toEqual(
+        stage === "pin-release" ? undefined : created.record,
+      );
+      expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toHaveLength(1);
     },
   );
 

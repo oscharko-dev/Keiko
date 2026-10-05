@@ -958,6 +958,13 @@ class rather than truncating its identity or losing the event. Safe frames and c
 unchanged. It leaves ownership intact and does not invent unavailable record metadata or counts. Successful dismissal still requires its complete descriptor metadata. Existing candidates and
 transient descriptors grant no abandonment ownership. No additional report archive is created.
 
+If retirement cannot open or write its evidence sink, the existing independent diagnostic fallback
+records the original safe error evidence, request correlation and explicit event loss. An unexpected
+retirement write or pin-release exception returns `failed`; it never claims that cleanup succeeded.
+Explicit cross-graph writer ownership refusal remains an evidenced exception before mutation.
+The report-job abandonment guard preserves the original cancellation or timeout when its cleanup
+owner throws, releases the worker admission, and keeps unsuccessful cleanup eligible for retry.
+
 After successful descriptor inspection, `support.incident.retirement-started` records the actual
 withdrawal attempt under the retirement request correlation, joined to the original incident through
 its parent. The terminal dismissal closes that request lifecycle and explicitly records `removalStatus`, `claimsStatus` and `pinRelease`. A

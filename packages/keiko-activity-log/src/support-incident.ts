@@ -1955,8 +1955,17 @@ function inspectRetirement(
     const record = open.find((entry) => entry.incidentId === incidentId)?.record;
     return record === undefined ? "not-found" : { record, openIncidentCount: open.length };
   } catch (error) {
-    const sink = createFileServerLogSink(stateDir, { level: "debug" });
-    sink.write(retirementFailedEvidence(incidentId, options, stage, error));
+    try {
+      const sink = createFileServerLogSink(stateDir, { level: "debug" });
+      sink.write(retirementFailedEvidence(incidentId, options, stage, error));
+    } catch {
+      recordActivityLogLoss("persistence-failed");
+      reportServerLogFailure(error, {
+        op: SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION.op,
+        correlationId: options.correlationId,
+        loss: "event-dropped",
+      });
+    }
     return "failed";
   }
 }
@@ -1999,6 +2008,25 @@ function retireSupportIncident(
   // Ownership refusal is already evidenced by the owning graph. Keep it outside the filesystem
   // inspection catch so a rejected graph never tries to open a second diagnostic sink.
   claimActivityLogWriterOwnership(stateDir, requestCorrelationId);
+  try {
+    return retireOwnedSupportIncident(stateDir, incidentId, options, state, requestCorrelationId);
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
+      correlationId: requestCorrelationId,
+      loss: "event-dropped",
+    });
+    return "failed";
+  }
+}
+
+function retireOwnedSupportIncident(
+  stateDir: string,
+  incidentId: string,
+  options: SupportIncidentRetirementOptions,
+  state: "candidate" | "reported",
+  requestCorrelationId: string,
+): SupportIncidentDismissal {
   const inspected = inspectRetirement(stateDir, incidentId, {
     ...options,
     correlationId: requestCorrelationId,

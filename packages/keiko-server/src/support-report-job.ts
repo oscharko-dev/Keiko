@@ -7,7 +7,7 @@ import {
   type SupportIncidentDescriptorRecord,
   type SupportIncidentRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { dismissSupportIncident } from "@oscharko-dev/keiko-activity-log";
+import { dismissSupportIncident, reportServerLogFailure } from "@oscharko-dev/keiko-activity-log";
 import {
   prepareDesktopSupportReport,
   SupportReportError,
@@ -178,11 +178,19 @@ function reportAbandonedPreparation(
   correlationId: string | undefined,
 ): void {
   if (owned.retired) return;
-  const result = dismissSupportIncident(stateDir, owned.record.incidentId, {
-    correlationId,
-    retirementReason: "abandoned",
-  });
-  owned.retired = result !== "failed";
+  try {
+    const result = dismissSupportIncident(stateDir, owned.record.incidentId, {
+      correlationId,
+      retirementReason: "abandoned",
+    });
+    owned.retired = result !== "failed";
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: "support.incident.dismissed",
+      correlationId,
+      loss: "event-dropped",
+    });
+  }
 }
 
 async function releaseReportJob(
