@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
 import type { BackendHealth } from "./hooks/useBackendHealth";
 import { SupportReportButton, useSupportReportPresence } from "./SupportReportButton";
@@ -22,7 +22,13 @@ export function DiagnosticReadinessNotice({
   readonly health: BackendHealth;
 }): ReactNode {
   const t = useTranslate();
-  const hasReport = useSupportReportPresence(READINESS_REPORT_KEY);
+  const report = health.state === "loading" ? undefined : health.report;
+  const [previousReport, setPreviousReport] = useState(report);
+  useEffect(() => {
+    if (report !== undefined) setPreviousReport(report);
+  }, [report]);
+  const activeReport = report ?? previousReport;
+  const hasReport = useSupportReportPresence(activeReport?.correlationId ?? READINESS_REPORT_KEY);
   const unavailable = readinessUnavailable(health);
   if (!unavailable && !hasReport) return null;
   return (
@@ -31,7 +37,9 @@ export function DiagnosticReadinessNotice({
       <SupportReportButton
         compact
         errorKey={READINESS_REPORT_KEY}
-        failure={{ errorKind: "unavailable", context: [] }}
+        correlationId={activeReport?.correlationId}
+        failure={activeReport?.failure}
+        clientOnly={activeReport === undefined}
       />
     </div>
   );

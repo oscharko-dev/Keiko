@@ -538,7 +538,12 @@ and logs every transition. A persistence loss since the last evaluation degrades
 it, and so does `keiko support export` for the exported directory. The desktop workspace shows a compact notice when readiness is degraded or unavailable,
 with an error-report action. Closed technical reasons remain in the health response, Activity
 Log and exported report; the notice uses plain language. The shell owns the health poll, so
-readiness does not depend on the lazy footer module. The footer displays the installed version.
+readiness does not depend on the lazy footer module. Verified degraded or unavailable snapshots
+are displayed immediately; transport unavailability requires two consecutive failed polls so one
+transient read does not become a persistent outage notice. Each report selects the actual observed
+health request correlation and any captured failure facts. Observations without attribution request
+client-only evidence instead of selecting an unrelated latest incident. A pending or ready report
+keeps its original selector through health recovery. The footer displays the installed version.
 
 **Sufficiency is proven compositionally (#3532).** Four mechanisms close the gap between declared
 and demonstrated evidence. Each is derived from the registry, never maintained beside it.

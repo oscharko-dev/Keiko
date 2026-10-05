@@ -405,10 +405,10 @@ export type HealthSnapshot = Omit<HealthResponse, "diagnostics"> & {
   readonly diagnosticsInvalid?: true;
 };
 
-export async function fetchHealth(): Promise<HealthSnapshot> {
+export async function fetchHealth(correlationId?: string): Promise<HealthSnapshot> {
   const { diagnostics, ...health } = await fetchJson<
     Omit<HealthResponse, "diagnostics"> & { readonly diagnostics?: unknown }
-  >("/api/health");
+  >("/api/health", undefined, undefined, correlationId);
   if (isActivityLogReadinessSnapshot(diagnostics)) return { ...health, diagnostics };
   return diagnostics === undefined ? health : { ...health, diagnosticsInvalid: true };
 }

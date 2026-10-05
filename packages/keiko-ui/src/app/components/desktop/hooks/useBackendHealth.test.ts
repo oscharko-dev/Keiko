@@ -4,13 +4,17 @@ import { fetchHealth, type HealthSnapshot } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { HEALTH_POLL_INTERVAL_MS, useBackendHealth } from "./useBackendHealth";
 
-vi.mock("@/lib/api", () => ({ fetchHealth: vi.fn() }));
+vi.mock("@/lib/api", async (original) => ({
+  ...(await original<typeof import("@/lib/api")>()),
+  fetchHealth: vi.fn(),
+}));
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
 const fetch = vi.mocked(fetchHealth);
 const ready: HealthSnapshot = { status: "ok", version: "1.2.3" };
 
 beforeEach(() => {
   vi.useFakeTimers();
+  fetch.mockReset();
   fetch.mockResolvedValue(ready);
 });
 afterEach(() => {
@@ -19,6 +23,42 @@ afterEach(() => {
 });
 
 describe("useBackendHealth", () => {
+  it("does not show an unavailable banner for one failed poll followed by recovery", async () => {
+    fetch.mockRejectedValueOnce(new TypeError("private-loopback-url"));
+    const view = renderHook(useBackendHealth);
+    await act(async () => await Promise.resolve());
+    expect(view.result.current.state).toBe("loading");
+    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+    expect(view.result.current).toEqual({ state: "loaded", health: ready });
+    expect(reportClientDiagnostic).toHaveBeenCalledOnce();
+  });
+
+  it("joins a confirmed read outage and its report to the actual request and caught failure", async () => {
+    const failure = new DOMException("private-provider-url", "TimeoutError");
+    fetch.mockRejectedValue(failure);
+    const view = renderHook(useBackendHealth);
+    await act(async () => await Promise.resolve());
+    const correlationId = fetch.mock.calls[0]?.[0];
+    expect(correlationId).toEqual(expect.any(String));
+    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+    expect(view.result.current).toMatchObject({
+      state: "unavailable",
+      report: {
+        correlationId,
+        failure: {
+          errorKind: "timeout",
+          errorEvidence: { errorClass: "TimeoutError", frames: [], causeChain: [] },
+          context: [],
+        },
+      },
+    });
+    expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] health read failed: TimeoutError",
+      expect.objectContaining({ correlationId, errorKind: "timeout" }),
+    );
+    expect(JSON.stringify(view.result.current)).not.toContain("private-provider-url");
+  });
+
   it("keeps the same snapshot identity for unchanged successful and failed polls", async () => {
     const view = renderHook(useBackendHealth);
     await act(async () => await Promise.resolve());
@@ -27,7 +67,7 @@ describe("useBackendHealth", () => {
     await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
     expect(view.result.current).toBe(loaded);
     fetch.mockRejectedValue(new TypeError("offline"));
-    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+    await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS * 2));
     const unavailable = view.result.current;
     await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
     expect(view.result.current).toBe(unavailable);
@@ -49,7 +89,17 @@ describe("useBackendHealth", () => {
     const view = renderHook(useBackendHealth);
     await act(async () => await Promise.resolve());
     await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
-    expect(view.result.current).toEqual({ state: "unavailable" });
+    expect(view.result.current).toEqual({
+      state: "unavailable",
+      report: {
+        correlationId: fetch.mock.calls[0]?.[0],
+        failure: {
+          errorKind: "unavailable",
+          errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+          context: [],
+        },
+      },
+    });
     expect(reportClientDiagnostic).toHaveBeenCalledOnce();
     expect(vi.mocked(reportClientDiagnostic).mock.calls[0]?.[0]).toBe(
       "[keiko] health read failed: TypeError",
@@ -87,11 +137,46 @@ it("reports invalid diagnostics once without discarding the installed version", 
   expect(view.result.current).toEqual({
     state: "loaded",
     health: { ...ready, diagnosticsInvalid: true },
+    report: {
+      correlationId: fetch.mock.calls[0]?.[0],
+      failure: {
+        errorKind: "validation-failed",
+        errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+        context: [],
+      },
+    },
   });
   expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
     "[keiko] health diagnostics invalid: TypeError",
-    { errorKind: "validation-failed" },
+    {
+      correlationId: fetch.mock.calls[0]?.[0],
+      errorKind: "validation-failed",
+      errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+    },
   );
+});
+
+it("shows verified degraded readiness immediately without inventing an exception", async () => {
+  const health: HealthSnapshot = {
+    ...ready,
+    diagnostics: {
+      readiness: "degraded",
+      reasons: ["sink-unwritable"],
+      writer: "production-file",
+      lostEvents: 1,
+      retainedDiagnosticCount: 1,
+      diagnosticCapacity: 32,
+    },
+  };
+  fetch.mockResolvedValue(health);
+  const view = renderHook(useBackendHealth);
+  await act(async () => await Promise.resolve());
+  expect(view.result.current).toEqual({
+    state: "loaded",
+    health,
+    report: { correlationId: fetch.mock.calls[0]?.[0] },
+  });
+  expect(reportClientDiagnostic).not.toHaveBeenCalled();
 });
 
 it("does not overlap health polls or allow an older response to replace a newer snapshot", async () => {

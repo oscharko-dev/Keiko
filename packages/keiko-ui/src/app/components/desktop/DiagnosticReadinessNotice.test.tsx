@@ -24,6 +24,30 @@ afterEach(() => {
 });
 
 describe("DiagnosticReadinessNotice", () => {
+  it.each([undefined, "observed-readiness-request-123"])(
+    "does not invent failure facts or select an unrelated incident for readiness %s",
+    async (correlationId) => {
+      const create = vi
+        .spyOn(reportApi, "createSupportReport")
+        .mockResolvedValue(await canonicalSupportReportFixture());
+      vi.spyOn(reportApi, "createSupportReportDownload").mockReturnValue({
+        href: "blob:readiness-observation",
+        dispose: vi.fn(),
+      });
+      renderNotice({
+        state: "unavailable",
+        ...(correlationId === undefined ? {} : { report: { correlationId } }),
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
+      await screen.findByRole("link", { name: "Download report" });
+      expect(create).toHaveBeenCalledExactlyOnceWith(
+        correlationId,
+        expect.any(AbortSignal),
+        ...(correlationId === undefined ? [undefined, "client-only"] : []),
+      );
+    },
+  );
+
   it.each(["pending", "ready"] as const)(
     "preserves a %s report through health recovery",
     async (phase) => {
@@ -40,11 +64,24 @@ describe("DiagnosticReadinessNotice", () => {
         href: "blob:readiness-report",
         dispose,
       });
-      const view = renderNotice({ state: "unavailable" });
+      const observed = {
+        correlationId: "observed-health-request-123",
+        failure: {
+          errorKind: "timeout" as const,
+          errorEvidence: { errorClass: "TimeoutError", frames: [], causeChain: [] },
+          context: [],
+        },
+      };
+      const view = renderNotice({ state: "unavailable", report: observed });
       fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
       await vi.waitFor(() => {
         expect(create).toHaveBeenCalledOnce();
       });
+      expect(create).toHaveBeenCalledWith(
+        observed.correlationId,
+        expect.any(AbortSignal),
+        observed.failure,
+      );
       if (phase === "ready") {
         resolveReport?.(report);
         await screen.findByRole("link", { name: "Download report" });
