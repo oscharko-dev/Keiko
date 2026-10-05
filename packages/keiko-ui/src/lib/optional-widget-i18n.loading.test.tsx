@@ -15,6 +15,7 @@ afterEach(() => {
   vi.doUnmock("react");
   vi.doUnmock("./i18n-messages.optional.de");
   resetClientDiagnosticWriter();
+  vi.restoreAllMocks();
 });
 
 function Counter({ t }: { readonly t: OptionalWidgetTranslate }): ReactNode {
@@ -37,8 +38,9 @@ function Counter({ t }: { readonly t: OptionalWidgetTranslate }): ReactNode {
 }
 
 describe("optional widget locale recovery", () => {
-  it("records one closed failure per shared load and permits a later mounted retry", async () => {
+  it("records one correlated failure per shared attempt and backs off later consumer retries", async () => {
     vi.resetModules();
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
     vi.doMock("./i18n-messages.optional.de", () => {
       throw new TypeError("private import URL /customer/private?token=secret");
     });
@@ -51,18 +53,34 @@ describe("optional widget locale recovery", () => {
     expect(writer).toHaveBeenCalledTimes(1);
     expect(writer).toHaveBeenCalledWith("widget-locale-load-failed", {
       kind: "other",
+      errorKind: "unavailable",
+      correlationId: expect.any(String),
+      moduleLoadFailure: "widget-locale",
       errorEvidence: { errorClass: "Error", causeChain: ["TypeError"], frames: [] },
     });
     expect(JSON.stringify(writer.mock.calls)).not.toMatch(/customer|private|token|secret/u);
+    for (let consumer = 0; consumer < 80; consumer++) await widget.loadOptionalWidgetMessages("de");
+    expect(writer).toHaveBeenCalledTimes(1);
+    now.mockReturnValue(5_999);
+    await widget.loadOptionalWidgetMessages("de");
+    expect(writer).toHaveBeenCalledTimes(1);
+    now.mockReturnValue(6_000);
+    await widget.loadOptionalWidgetMessages("de");
+    expect(writer).toHaveBeenCalledTimes(2);
+    expect(writer.mock.calls[1]?.[1].correlationId).not.toBe(
+      writer.mock.calls[0]?.[1].correlationId,
+    );
     vi.doUnmock("./i18n-messages.optional.de");
+    now.mockReturnValue(11_000);
     expect(widget.loadOptionalWidgetMessages("de")).not.toBe(first);
     await widget.loadOptionalWidgetMessages("de");
     expect(widget.translateOptionalWidget("de", "memoria.approve")).toBe("Akzeptieren");
-    expect(writer).toHaveBeenCalledTimes(1);
+    expect(writer).toHaveBeenCalledTimes(2);
   });
 
   it("keeps mounted English controls and state usable through a failed German load", async () => {
     vi.resetModules();
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
     vi.doMock("./i18n-messages.optional.de", () => {
       throw new TypeError("private import URL");
     });
@@ -84,6 +102,7 @@ describe("optional widget locale recovery", () => {
     fireEvent.click(screen.getByRole("button", { name: "Approve" }));
     expect(screen.getByLabelText("Clicks")).toHaveTextContent("2");
     vi.doUnmock("./i18n-messages.optional.de");
+    now.mockReturnValue(6_000);
     fireEvent.click(screen.getByRole("button", { name: "English" }));
     await waitFor(() => expect(document.documentElement.lang).toBe("en"));
     fireEvent.click(screen.getByRole("button", { name: "German" }));

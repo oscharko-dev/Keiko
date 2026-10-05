@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadLocaleMessages } from "./i18n";
 import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "./client-diagnostics";
 import {
   fetchGitDeliverySyncPreview,
@@ -71,12 +72,16 @@ it.each([
   setClientDiagnosticWriter(writer);
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
-  await expect(read()).rejects.toMatchObject({ code: "MODULE_LOAD_FAILED" });
+  const failure: unknown = await read().catch((error: unknown) => error);
+  expect(failure).toMatchObject({
+    code: "MODULE_LOAD_FAILED",
+    correlationId: writer.mock.calls[0]?.[1].correlationId,
+  });
   expect(fetch).not.toHaveBeenCalled();
   expect(writer).toHaveBeenCalledWith(
     expect.any(String),
     expect.objectContaining({
-      moduleLoadFailure: "git-sync",
+      moduleLoadFailure: "git-read",
       correlationId: expect.any(String),
       errorEvidence: expect.objectContaining({ causeChain: ["TypeError"] }),
     }),
@@ -124,4 +129,35 @@ it.each([
     }),
   );
   expect(JSON.stringify(writer.mock.calls)).not.toMatch(/private/);
+});
+
+it.each([fetchGitStatus, fetchGitSummary])(
+  "preserves the initiating ordinary read correlation through prerequisite failure",
+  async (read) => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    await expect(
+      read("/private/repo", { correlationId: "ui_read-attempt-123" }),
+    ).rejects.toMatchObject({
+      code: "MODULE_LOAD_FAILED",
+      correlationId: "ui_read-attempt-123",
+    });
+    expect(writer).toHaveBeenCalledExactlyOnceWith(
+      "git:module-load-failed",
+      expect.objectContaining({
+        moduleLoadFailure: "git-read",
+        correlationId: "ui_read-attempt-123",
+        errorKind: "unavailable",
+      }),
+    );
+  },
+);
+
+it("localizes the Git prerequisite failure with the selected German catalog", async () => {
+  setClientDiagnosticWriter(vi.fn());
+  await loadLocaleMessages("de");
+  window.localStorage.setItem("keiko.locale", "de");
+  await expect(fetchGitStatus("/private/repo")).rejects.toMatchObject({
+    message: "Git konnte nicht geladen werden. Lade Keiko neu und versuche es erneut.",
+  });
 });

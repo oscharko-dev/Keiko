@@ -459,6 +459,15 @@ const HEALTH_DIAGNOSTICS_INVALID_REASON_SET: ReadonlySet<unknown> = new Set(
   HEALTH_DIAGNOSTICS_INVALID_REASONS,
 );
 
+export const CLIENT_MODULE_LOAD_FAILURES = [
+  "git-sync",
+  "git-history",
+  "git-read",
+  "widget-locale",
+] as const;
+export type ClientModuleLoadFailure = (typeof CLIENT_MODULE_LOAD_FAILURES)[number];
+const CLIENT_MODULE_LOAD_FAILURE_SET: ReadonlySet<unknown> = new Set(CLIENT_MODULE_LOAD_FAILURES);
+
 export interface ClientDiagnosticIngestRequest {
   readonly message: string;
   readonly clientTs: string;
@@ -473,7 +482,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
-  readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly moduleLoadFailure?: ClientModuleLoadFailure | undefined;
   readonly healthDiagnosticsInvalidReason?: HealthDiagnosticsInvalidReason | undefined;
   readonly renderFailure?: "shell" | "window-body" | undefined;
   readonly errorEvidence?: ClientErrorEvidence | undefined;
@@ -646,7 +655,7 @@ function isClientDiagnosticLossCounts(value: unknown): value is ClientDiagnostic
 }
 
 function isClientModuleLoadFailure(value: unknown): boolean {
-  return value === "git-sync" || value === "git-history";
+  return CLIENT_MODULE_LOAD_FAILURE_SET.has(value);
 }
 
 function hasValidCodingContext(value: Record<string, unknown>): boolean {

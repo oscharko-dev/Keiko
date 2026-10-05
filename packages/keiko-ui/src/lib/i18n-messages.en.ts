@@ -47,6 +47,7 @@ export const EN_MESSAGES = {
     "Report unavailable. Check that Keiko is running locally, then retry.",
   "supportReport.rateLimited": "Please wait a minute, then retry this report.",
   "editor.projectRestricted": "Workspace scripts are unavailable.",
+  "git.error.moduleLoadFailed": "Git could not be loaded. Reload Keiko and try again.",
   "editor.runtime.loadFailed": "File could not be opened.",
   "editor.runtime.retry": "Retry",
 

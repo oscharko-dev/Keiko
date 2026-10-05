@@ -71,6 +71,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_MODULE_LOAD_FAILURES,
   CLIENT_COMPOSER_ACTIVITIES,
   CLIENT_COMPOSER_CODE_STAGES,
   CLIENT_FILES_SCOPE_DECISIONS,
@@ -375,7 +376,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["git-sync", "git-history"],
+      values: CLIENT_MODULE_LOAD_FAILURES,
     },
     renderFailure: {
       type: "string",

@@ -10,10 +10,9 @@
  * validators there ships their weight on every page load. Their validators together pull in
  * `coding-workbench-runtime`, `git-journey-validation` (+ `git-journey-outcome`), `pr-description`,
  * and `pr-description-application` — real, load-bearing contract modules the desktop shell never
- * needs (epic #3384 final-audit F18: ~11 KiB gzip landed in the first-load chunk this way). Every
- * production caller of these three route groups is already behind a `next/dynamic({ ssr: false })`
- * boundary (CodingWorkbenchWindow, GovernedPullRequestCard, GitClientWindow), so `api.ts` loads this
- * module through `await import("./coding-workbench-lazy-fetchers")` at call time instead — the same
+ * needs (epic #3384 final-audit F18: ~11 KiB gzip landed in the first-load chunk this way). The owning
+ * widgets load their routes on demand; ordinary Git reads and Chat connections also use this
+ * boundary only when requested. `api.ts` loads this module through `await import("./coding-workbench-lazy-fetchers")` at call time instead — the same
  * technique this file's neighbour `managed-lsp-response-validators.ts` already uses for the managed
  * LSP settings routes. `api.ts` keeps its exported function names, signatures and behaviour exactly
  * as before, so no caller (in or out of the Coding Workbench tree) needs to change.

@@ -11,11 +11,14 @@ import {
 import { chatSessionErrorPresentation } from "./chat-session-error";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorEvidence } from "./client-error-evidence";
+import { newClientCorrelationId } from "./bff-correlation";
 
 export type WidgetMessageKey = OptionalWidgetMessageKey | MessageKey;
 
 export type OptionalWidgetTranslate = (key: WidgetMessageKey, values?: MessageValues) => string;
 
+const RETRY_DELAY_MS = 5_000;
+let germanRetryAt = 0;
 let germanCatalog: OptionalWidgetMessageCatalog | undefined;
 let germanLoad: Promise<OptionalWidgetMessageCatalog> | undefined;
 
@@ -28,24 +31,35 @@ function catalogFor(locale: Locale): OptionalWidgetMessageCatalog {
 export function loadOptionalWidgetMessages(locale: Locale): Promise<OptionalWidgetMessageCatalog> {
   if (locale === "en") return Promise.resolve(OPTIONAL_WIDGET_EN_MESSAGES);
   if (germanCatalog !== undefined) return Promise.resolve(germanCatalog);
-  germanLoad ??= import("./i18n-messages.optional.de")
+  if (performance.now() < germanRetryAt) return Promise.resolve(OPTIONAL_WIDGET_EN_MESSAGES);
+  germanLoad ??= loadGermanCatalog();
+  return germanLoad;
+}
+
+function loadGermanCatalog(): Promise<OptionalWidgetMessageCatalog> {
+  const correlationId = newClientCorrelationId();
+  return import("./i18n-messages.optional.de")
     .then((module) => {
       germanCatalog = module.OPTIONAL_WIDGET_DE_MESSAGES;
       return germanCatalog;
     })
     .catch((error: unknown) => {
       germanLoad = undefined;
+      germanRetryAt = performance.now() + RETRY_DELAY_MS;
       reportClientDiagnostic("widget-locale-load-failed", {
         kind: "other",
+        errorKind: "unavailable",
+        correlationId,
+        moduleLoadFailure: "widget-locale",
         errorEvidence: clientErrorEvidence(error),
       });
       return OPTIONAL_WIDGET_EN_MESSAGES;
     });
-  return germanLoad;
 }
 
 /** Restore the product's English-only first-load state for isolated locale tests. */
 export function resetLoadedOptionalWidgetMessages(): void {
+  germanRetryAt = 0;
   germanCatalog = undefined;
   germanLoad = undefined;
 }

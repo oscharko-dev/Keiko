@@ -281,6 +281,8 @@ describe("clientDiagnosticFailureFacts", () => {
     [{ kind: "window-error" }, ["kind:window-error"]],
     [{ renderFailure: "shell" }, ["render:shell"]],
     [{ moduleLoadFailure: "git-sync" }, ["module:git-sync"]],
+    [{ moduleLoadFailure: "git-read" }, ["module:git-read"]],
+    [{ moduleLoadFailure: "widget-locale" }, ["module:widget-locale"]],
     [{ failureStage: "files source preview" }, ["stage:files-source-preview"]],
   ] as const)("retains only the canonical closed context for %j", (meta, context) => {
     expect(clientDiagnosticFailureFacts(meta)).toEqual({ errorKind: "unknown", context });

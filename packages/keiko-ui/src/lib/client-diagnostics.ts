@@ -50,6 +50,7 @@ import {
   type ClientDiagnosticKnowledgeCatalog,
   type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
+  type ClientModuleLoadFailure,
   type ClientMarkdownLayout,
   type ClientErrorEvidence,
   type ClientDiagnosticKind,
@@ -151,7 +152,7 @@ export interface ClientDiagnosticMeta {
   readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
   readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
   readonly markdownLayout?: ClientMarkdownLayout | undefined;
-  readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly moduleLoadFailure?: ClientModuleLoadFailure | undefined;
   readonly healthDiagnosticsInvalidReason?: HealthDiagnosticsInvalidReason | undefined;
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;

@@ -69,6 +69,34 @@ describe("client diagnostics loss evidence", () => {
     return persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
   }
 
+  it.each(["git-read", "widget-locale"])(
+    "persists module prerequisite failure %s on its initiating correlation",
+    async (moduleLoadFailure) => {
+      const result = await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "private module URL must not be logged",
+            clientTs: CLIENT_TS,
+            correlationId: "ui_module-attempt-123",
+            kind: "other",
+            errorKind: "unavailable",
+            moduleLoadFailure,
+            errorEvidence: { errorClass: "ChunkLoadError", frames: [], causeChain: [] },
+          }),
+        ),
+      );
+      expect(result.status).toBe(204);
+      const [persisted] = lines("client.diagnostic");
+      expect(expectActivityLogProof("client.diagnostic.line", persisted ?? "")).toMatchObject({
+        correlationId: "ui_module-attempt-123",
+        moduleLoadFailure,
+        errorKind: "unavailable",
+        errorClass: "ChunkLoadError",
+      });
+      expect(readPersistedActivityLog(stateDir)).not.toContain("private module URL");
+    },
+  );
+
   it.each(["private-response-value", null, false])(
     "refuses unknown health validation facts %j before writing a diagnostic",
     async (healthDiagnosticsInvalidReason) => {

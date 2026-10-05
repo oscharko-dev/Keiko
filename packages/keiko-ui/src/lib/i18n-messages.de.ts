@@ -51,6 +51,8 @@ export const DE_MESSAGES = {
     "Bericht nicht verfügbar. Prüfen, ob Keiko lokal läuft, dann erneut versuchen.",
   "supportReport.rateLimited": "Bitte eine Minute warten, dann diesen Bericht erneut erstellen.",
   "editor.projectRestricted": "Arbeitsbereichsskripte sind nicht verfügbar.",
+  "git.error.moduleLoadFailed":
+    "Git konnte nicht geladen werden. Lade Keiko neu und versuche es erneut.",
   "editor.runtime.loadFailed": "Datei konnte nicht geöffnet werden.",
   "editor.runtime.retry": "Erneut versuchen",
 

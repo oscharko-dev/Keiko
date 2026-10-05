@@ -158,6 +158,7 @@ import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/cod
 import {
   isActivityLogReadinessSnapshot,
   classifyInvalidActivityLogReadiness,
+  type ClientModuleLoadFailure,
   type HealthDiagnosticsInvalidReason,
   type HealthResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
@@ -169,6 +170,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorEvidence } from "./client-error-evidence";
+import { readStoredLocale, translate } from "./i18n";
 import {
   buildBffHeaders,
   CORRELATION_HEADER,
@@ -2018,7 +2020,7 @@ export async function fetchGitStatus(
   root: string,
   options?: GitReadRequestOptions & { readonly includeIgnored?: boolean },
 ): Promise<GitRepositoryStatusResponse> {
-  const api = await loadGitWorkbenchApi();
+  const api = await loadGitWorkbenchApi("git-read", options?.correlationId);
   return api.fetchGitStatus(fetchJson, root, options);
 }
 
@@ -2111,7 +2113,7 @@ export async function fetchGitSummary(
   root: string,
   options?: GitReadRequestOptions,
 ): Promise<GitRepositorySummary> {
-  const api = await loadGitWorkbenchApi();
+  const api = await loadGitWorkbenchApi("git-read", options?.correlationId);
   return api.fetchGitSummary(fetchJson, root, options);
 }
 
@@ -2125,7 +2127,7 @@ export async function fetchGitHistory(input: {
 }
 
 export async function fetchGitRemotes(root: string): Promise<GitRemotesResponse> {
-  const api = await loadGitWorkbenchApi();
+  const api = await loadGitWorkbenchApi("git-read");
   return api.fetchGitRemotes(fetchJson, root);
 }
 
@@ -2134,7 +2136,7 @@ export async function fetchGitDiff(input: {
   readonly path?: string;
   readonly scope?: GitDiffScope;
 }): Promise<GitRepositoryDiffResponse> {
-  const api = await loadGitWorkbenchApi();
+  const api = await loadGitWorkbenchApi("git-read");
   return api.fetchGitDiff(fetchJson, input);
 }
 
@@ -3258,7 +3260,7 @@ export interface GitDeliverySyncInput {
 }
 
 async function loadGitWorkbenchApi(
-  moduleLoadFailure: "git-sync" | "git-history" = "git-sync",
+  moduleLoadFailure: ClientModuleLoadFailure = "git-sync",
   correlationId?: string,
 ): Promise<typeof import("./coding-workbench-lazy-fetchers")> {
   try {
@@ -3266,13 +3268,14 @@ async function loadGitWorkbenchApi(
   } catch (cause) {
     const error = new ApiError(
       "MODULE_LOAD_FAILED",
-      "Git could not start. Reload Keiko and try again.",
+      translate(readStoredLocale(), "git.error.moduleLoadFailed"),
       0,
     );
     error.correlationId = correlationId ?? newClientCorrelationId();
     error.cause = cause;
     reportClientDiagnostic("git:module-load-failed", {
       kind: "other",
+      errorKind: "unavailable",
       correlationId: error.correlationId,
       moduleLoadFailure,
       errorEvidence: clientErrorEvidence(cause),
