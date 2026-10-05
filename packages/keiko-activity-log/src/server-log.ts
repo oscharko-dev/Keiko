@@ -1442,7 +1442,8 @@ const ACTIVITY_LOG_PIN_QUOTA_EXHAUSTED_OPERATION = defineActivityLogOperation({
     unknownSpanSegmentCount: { type: "integer", dataClass: "count", required: true },
     activePinCount: { type: "integer", dataClass: "count", required: true },
   },
-  causal: "correlation",
+  // This observes the shared pin pool during maintenance, not one pin request's lifecycle.
+  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["activity-log-pin"],

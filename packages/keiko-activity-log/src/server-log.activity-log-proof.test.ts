@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogSegmentFileName,
   type ActivityLogSegmentIdentity,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -366,6 +367,35 @@ describe("Activity Log storage evidence proofs (#3532)", () => {
     expect(quota).toMatchObject({ pinQuotaBytes: 1, completeness: "partial", loss: "none" });
     expect((quota.unprotectedSegmentCount as number) > 0).toBe(true);
   });
+
+  it.each(["unrelated-maintenance", ACTIVITY_LOG_UNKNOWN_CORRELATION_ID])(
+    "retains the actual maintenance correlation when pin quota is exceeded later: %s",
+    (correlationId) => {
+      const env = { KEIKO_LOG_PIN_QUOTA_BYTES: "1" };
+      const now = Date.now();
+      const pin = pinActivityLogWindow(
+        stateDir,
+        {
+          scope: { kind: "window", fromMs: now - 1000, toMs: now + 60_000 },
+          expiresAtMs: now + 3_600_000,
+          correlationId: "original-pin-owner",
+        },
+        env,
+      );
+      expect(pin).toMatchObject({ status: "pinned", quotaStatus: "within-quota" });
+      closeFileServerLogSinks();
+      expect(lines("activity-log.pin.quota-exhausted")).toEqual([]);
+      logGitChangeApply(createFileServerLogSink(stateDir, { env }), correlationId, "preview");
+      const quotaLines = lines("activity-log.pin.quota-exhausted");
+      expect(quotaLines).toHaveLength(1);
+      expect(
+        expectActivityLogProof(
+          "activity-log.pin.quota-exhausted.emitted-line",
+          quotaLines[0] ?? "",
+        ),
+      ).toMatchObject({ correlationId, completeness: "partial", loss: "none" });
+    },
+  );
 
   it("replaces a pathologically oversized line with the registered drop marker", () => {
     const identity: ServerLogIdentity = { ...serverLogProcessIdentity(), seq: 1 };

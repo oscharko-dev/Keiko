@@ -218,15 +218,31 @@ describe("projectActivityLogSufficiency", () => {
     ).toMatchObject({ status: "degraded", reasons: ["evidence-partial"] });
   });
 
-  it("keeps missing pin causal starts insufficient without claiming a process drop", () => {
-    const protection = line("activity-log.pin.quota-exhausted", "pin-protection-failure", {
+  it.each(["unrelated-maintenance", ACTIVITY_LOG_UNKNOWN_CORRELATION_ID])(
+    "does not invent a missing pin start for quota observation on %s",
+    (correlationId) => {
+      const protection = line("activity-log.pin.quota-exhausted", correlationId, {
+        loss: "none",
+        completeness: "partial",
+      });
+      expect(reportsProcessEvidenceLoss(protection)).toBe(false);
+      expect(
+        classEntry(
+          [line("activity-log.pin.created", "original-pin-owner"), protection],
+          "activity-log-pin",
+        ),
+      ).toMatchObject({ status: "degraded", reasons: ["evidence-partial"] });
+    },
+  );
+
+  it("keeps an actual pin expiry without its causal start insufficient", () => {
+    const expiry = line("activity-log.pin.expired", "pin-protection-failure", {
       loss: "none",
-      completeness: "partial",
     });
-    expect(reportsProcessEvidenceLoss(protection)).toBe(false);
-    expect(classEntry([protection], "activity-log-pin")).toMatchObject({
+    expect(reportsProcessEvidenceLoss(expiry)).toBe(false);
+    expect(classEntry([expiry], "activity-log-pin")).toMatchObject({
       status: "insufficient",
-      reasons: ["lifecycle-start-missing", "evidence-partial"],
+      reasons: ["lifecycle-start-missing"],
     });
   });
 

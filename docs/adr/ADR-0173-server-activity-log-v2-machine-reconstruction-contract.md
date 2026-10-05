@@ -1558,7 +1558,9 @@ oldest pin first, and only while the quota lasts. A pin the quota cannot hold is
 `quotaStatus: "exceeded"`. Its unprotected remainder produces one `activity-log.pin.quota-exhausted`
 protection-failure record with segment counts, bytes and the seq span. It declares partial protection
 and `loss: "none"`: the marker is emitted before retention may delete the unprotected segments, so
-it cannot claim an event was dropped. The pin class remains degraded by `evidence-partial`;
+it cannot claim an event was dropped. This is a non-causal observation of the shared pin pool:
+maintenance may carry an unrelated or unknown correlation without claiming a missing pin start.
+Individual pin creation and expiry retain their causal lifecycle. The pin class remains degraded by `evidence-partial`;
 unrelated retained process evidence is not classified as lost. Historical registered quota records
 that declared `event-dropped` retain their exact bytes and are interpreted as this same protection
 failure. Derived manifests are rebuilt under version 3 so their process-loss count reflects this

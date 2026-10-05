@@ -40,6 +40,7 @@ import * as supportAnalysis from "./support-analyze.js";
 import { executeLocalSupportQuery } from "./support-local-query.js";
 import { DEFAULT_SUPPORT_QUERY_LIMITS } from "./support-query.js";
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   MAX_SUPPORT_REPORT_TIMELINE_RECORDS,
   MAX_SUPPORT_REPORT_TIMELINE_BYTES,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -273,6 +274,45 @@ describe("desktop canonical support report", () => {
       ),
     ).toMatchObject({ status: "degraded", reasons: ["evidence-partial"] });
   });
+
+  it.each(["unrelated-maintenance", ACTIVITY_LOG_UNKNOWN_CORRELATION_ID])(
+    "exports a quota observation on %s without inventing missing causal pin evidence",
+    (correlationId) => {
+      const now = Date.now() - 100;
+      const process = fixtureProcess(4242, "aabbccdd");
+      writeFixtureSegment(stateDir, segmentIdentity(process, now, 1), [
+        fixtureLine(process, now, {
+          op: "activity-log.pin.quota-exhausted",
+          correlationId,
+          fields: {
+            pinQuotaBytes: 1,
+            requestedPinnedBytes: 512,
+            protectedPinnedBytes: 0,
+            protectedSegmentCount: 0,
+            unprotectedSegmentCount: 1,
+            unprotectedBytes: 512,
+            unprotectedSeqSpan: 1,
+            unknownSpanSegmentCount: 0,
+            activePinCount: 1,
+            completeness: "partial",
+            loss: "none",
+          },
+        }),
+      ]);
+      const response = createDesktopSupportReport(stateDir);
+      const report = parseSupportReport(response.reportJson);
+      const analyzed = analyzeSupportReport(response.reportJson);
+      expect(report.incident.coverage.requiredClassCount).toBe(1);
+      expect(report.selection.status).toBe("degraded");
+      expect(report.selection.reasons).not.toContain("lifecycle-start-missing");
+      expect(report.selection.reasons).not.toContain("correlation-unknown");
+      expect(
+        analyzed.analysis.sufficiency.classes.find(
+          (entry) => entry.failureClass === "activity-log-pin",
+        ),
+      ).toMatchObject({ status: "degraded", reasons: ["evidence-partial"] });
+    },
+  );
 
   it("describes an empty budget-rejected manual export instead of its unexported complete window", () => {
     writeFailures();
