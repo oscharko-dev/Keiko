@@ -33,6 +33,7 @@ import {
   readDesktopSupportReportSelection,
 } from "./support-desktop-report.js";
 import { analyzeSupportReport, parseSupportReport } from "./support-report.js";
+import * as serverLog from "../server-log.js";
 import * as supportLocalQuery from "./support-local-query.js";
 import { ActivityLogScanner } from "./support-segment-scan.js";
 import * as supportAnalysis from "./support-analyze.js";
@@ -117,7 +118,9 @@ describe("desktop canonical support report", () => {
   it("projects canonical pin and availability disposition into body-free transport summary", () => {
     const limited = createClientOnlySupportReport("summary-correlation", "session-unavailable");
     const canonical = parseSupportReport(limited.reportJson);
-    expect(limited.summary?.pinDisposition).toBe(canonical.incident.pin.status);
+    expect(canonical.incident.pin.status).toBe("rejected");
+    expect(limited.summary).not.toHaveProperty("pinDisposition");
+    expect(limited.summary).not.toHaveProperty("retentionDisposition");
     expect(limited.summary?.availabilityReason).toBe(
       canonical.incident.clientReport?.availabilityReason,
     );
@@ -128,6 +131,31 @@ describe("desktop canonical support report", () => {
     );
     expect(full.summary?.availabilityReason).toBeUndefined();
   });
+
+  it.each(["stored", "transient"] as const)(
+    "distinguishes %s preparation from the same rejected pin status",
+    (retentionDisposition) => {
+      const pinAttempt = vi.spyOn(serverLog, "pinActivityLogWindow");
+      if (retentionDisposition === "transient") {
+        vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+        occupySupportIncidentRetentionForTests(stateDir);
+      } else {
+        pinAttempt.mockReturnValueOnce({ status: "rejected", reason: "storage-unavailable" });
+      }
+      const descriptor = prepareDesktopSupportReport(stateDir, undefined, "retention-summary");
+      expect(descriptor.pin.status).toBe("rejected");
+      expect(pinAttempt).toHaveBeenCalledTimes(retentionDisposition === "stored" ? 1 : 0);
+      expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(
+        retentionDisposition === "stored" ? 1 : 0,
+      );
+      const report = createPreparedDesktopSupportReport(stateDir, descriptor);
+      expect(parseSupportReport(report.reportJson).incident.pin.status).toBe("rejected");
+      expect(report.summary).toMatchObject({ retentionDisposition });
+      if (retentionDisposition === "stored")
+        expect(report.summary).toHaveProperty("pinDisposition", "rejected");
+      else expect(report.summary).not.toHaveProperty("pinDisposition");
+    },
+  );
 
   it("normalizes invalid correlation consistently when young claims exhaust retention", () => {
     vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");

@@ -85,6 +85,12 @@ const COMPLETED = defineActivityLogOperation({
       required: false,
       values: ["pinned", "quota-exceeded", "rejected"],
     },
+    retentionDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["stored", "transient"],
+    },
     availabilityReason: {
       type: "string",
       dataClass: "closed-enum",
@@ -309,6 +315,7 @@ type CompletionSummary = Partial<{
       | "manifestUnreadableCount"
       | "manifestReusedCount"
       | "pinDisposition"
+      | "retentionDisposition"
       | "availabilityReason"
   ]: Exclude<NonNullable<DesktopSupportReportResponse["summary"]>[Key], undefined>;
 }>;
@@ -321,6 +328,9 @@ function completionSummary(summary: DesktopSupportReportResponse["summary"]): Co
     manifestUnreadableCount: summary.manifestUnreadableCount,
     manifestReusedCount: summary.manifestReusedCount,
     ...(summary.pinDisposition === undefined ? {} : { pinDisposition: summary.pinDisposition }),
+    ...(summary.retentionDisposition === undefined
+      ? {}
+      : { retentionDisposition: summary.retentionDisposition }),
     ...(summary.availabilityReason === undefined
       ? {}
       : { availabilityReason: summary.availabilityReason }),

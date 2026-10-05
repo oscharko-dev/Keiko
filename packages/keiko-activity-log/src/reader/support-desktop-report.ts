@@ -6,6 +6,7 @@ import { serverLogProcessIdentity } from "../server-log.js";
 import {
   clientOnlySupportReportSections,
   isActivityLogCorrelationId,
+  parseSupportIncidentRecord,
   supportIncidentBuild,
   supportIncidentEffectiveExpiry,
   UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT,
@@ -217,6 +218,8 @@ export function createPreparedDesktopSupportReport(
     report,
     evidence.manifestStats.unreadableCount,
     evidence.manifestStats.reusedCount,
+    undefined,
+    parseSupportIncidentRecord(record) === undefined ? "transient" : "stored",
   );
 }
 
@@ -260,6 +263,9 @@ function desktopReportResponse(
   manifestUnreadableCount: number,
   manifestReusedCount: number,
   evidenceScope?: "client-only",
+  retentionDisposition?: NonNullable<
+    DesktopSupportReportResponse["summary"]
+  >["retentionDisposition"],
 ): DesktopSupportReportResponse {
   return {
     ...(evidenceScope === undefined ? {} : { evidenceScope }),
@@ -279,7 +285,8 @@ function desktopReportResponse(
       manifestReusedCount,
       completeness: report.incident.completeness,
       loss: report.incident.loss,
-      pinDisposition: report.incident.pin.status,
+      ...(retentionDisposition === "stored" ? { pinDisposition: report.incident.pin.status } : {}),
+      ...(retentionDisposition === undefined ? {} : { retentionDisposition }),
       ...(report.incident.clientReport === undefined
         ? {}
         : { availabilityReason: report.incident.clientReport.availabilityReason }),

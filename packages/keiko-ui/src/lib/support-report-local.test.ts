@@ -102,6 +102,9 @@ it("projects canonical header completeness and loss without a second report enco
   const report = JSON.parse(prepared.report.reportJson) as SupportReport;
   expect(prepared.report.summary?.completeness).toBe(report.incident.completeness);
   expect(prepared.report.summary?.loss).toBe(report.incident.loss);
+  expect(report.incident.pin.status).toBe("rejected");
+  expect(prepared.report.summary).not.toHaveProperty("pinDisposition");
+  expect(prepared.report.summary).not.toHaveProperty("retentionDisposition");
   expect(prepared.report.summary?.availabilityReason).toBe(
     report.incident.clientReport?.availabilityReason,
   );

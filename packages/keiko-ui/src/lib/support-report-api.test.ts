@@ -68,6 +68,24 @@ describe("support report browser download", () => {
     },
   );
 
+  it.each(["stored", "transient"])(
+    "accepts closed server retention disposition %s",
+    async (retentionDisposition) => {
+      const report = await canonicalSupportReportFixture();
+      response.value = { ...report, summary: { ...report.summary, retentionDisposition } };
+      expect((await createSupportReport()).summary).toMatchObject({ retentionDisposition });
+    },
+  );
+
+  it("rejects an invented server retention disposition", async () => {
+    const report = await canonicalSupportReportFixture();
+    response.value = {
+      ...report,
+      summary: { ...report.summary, retentionDisposition: "invented" },
+    };
+    await expect(createSupportReport()).rejects.toThrow("Invalid report summary");
+  });
+
   it("confirms only existing session projections before selecting report evidence", async () => {
     let confirm: ((value: { repaired: boolean; correlationId: string }) => void) | undefined;
     pairing.repair.mockReturnValueOnce(

@@ -483,8 +483,9 @@ describe("desktop support report transport", () => {
       evidenceScope: "client-only",
       availabilityReason: "session-unavailable",
       deliveryAuthority: "client-only",
-      pinDisposition: "rejected",
     });
+    expect(proof).not.toHaveProperty("pinDisposition");
+    expect(proof).not.toHaveProperty("retentionDisposition");
   });
 
   it("does not let limited report traffic consume protected full-report request admission", async () => {

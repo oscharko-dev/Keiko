@@ -139,7 +139,6 @@ function localReportResponse(report: SupportReport): DesktopSupportReportRespons
       manifestReusedCount: 0,
       completeness: report.incident.completeness,
       loss: report.incident.loss,
-      pinDisposition: report.incident.pin.status,
       availabilityReason: report.incident.clientReport?.availabilityReason,
     },
   };

@@ -203,6 +203,7 @@ const SUMMARY_REASONS = new Set<string>(DIAGNOSTIC_SUFFICIENCY_REASONS);
 const SUMMARY_COMPLETENESS = new Set<string>(ACTIVITY_LOG_COMPLETENESS_STATES);
 const SUMMARY_LOSS = new Set<string>(ACTIVITY_LOG_LOSS_STATES);
 const SUMMARY_PIN = new Set(["pinned", "quota-exceeded", "rejected"]);
+const SUMMARY_RETENTION = new Set(["stored", "transient"]);
 const SUMMARY_AVAILABILITY = new Set([
   "session-unavailable",
   "diagnostic-delivery-unavailable",
@@ -222,6 +223,7 @@ function validSummaryDisposition(value: Record<string, unknown>): boolean {
     optionalSummaryEnum(value.completeness, SUMMARY_COMPLETENESS) &&
     optionalSummaryEnum(value.loss, SUMMARY_LOSS) &&
     optionalSummaryEnum(value.pinDisposition, SUMMARY_PIN) &&
+    optionalSummaryEnum(value.retentionDisposition, SUMMARY_RETENTION) &&
     optionalSummaryEnum(value.availabilityReason, SUMMARY_AVAILABILITY)
   );
 }
@@ -234,6 +236,7 @@ const SUMMARY_KEYS = new Set([
   "completeness",
   "loss",
   "pinDisposition",
+  "retentionDisposition",
   "availabilityReason",
 ]);
 function isSummaryIdentity(fields: Record<string, unknown>): boolean {

@@ -28973,6 +28973,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["pinned", "quota-exceeded", "rejected"],
       },
+      retentionDisposition: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["stored", "transient"],
+      },
       availabilityReason: {
         type: "string",
         dataClass: "closed-enum",

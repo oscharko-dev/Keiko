@@ -164,6 +164,8 @@ export interface DesktopSupportReportResponse {
         readonly completeness?: ActivityLogCompletenessState | undefined;
         readonly loss?: ActivityLogLossState | undefined;
         readonly pinDisposition?: SupportIncidentPinStatus | undefined;
+        /** Actual server preparation provenance; absent when no retention was attempted. */
+        readonly retentionDisposition?: "stored" | "transient" | undefined;
         readonly availabilityReason?:
           | NonNullable<SupportIncidentPrivateProjection["clientReport"]>["availabilityReason"]
           | undefined;
