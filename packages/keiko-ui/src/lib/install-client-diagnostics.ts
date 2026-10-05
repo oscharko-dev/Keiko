@@ -451,21 +451,28 @@ type DiagnosticPostBody = ReturnType<typeof clientDiagnosticPostBody>;
 interface ReportDelivery {
   readonly body: ClientDiagnosticIngestRequest;
   acknowledged: Promise<boolean>;
+  readonly failureFacts?: ReturnType<typeof clientDiagnosticFailureFacts>;
+}
+interface ReportDeliveries {
+  failure?: ReportDelivery;
+  preparation?: ReportDelivery;
 }
 const MAX_REPORT_DELIVERIES = 100;
 const REPORT_RETRY_LIMIT = 6;
-const reportDeliveries = new Map<string, ReportDelivery>();
+const reportDeliveries = new Map<string, ReportDeliveries>();
 let reportRetryWindow = freshPostWindow();
 
 // Contextual file/folder failures need the same exact-id replay as uncaught browser failures:
 // their original request may fail before the BFF can retain any evidence. Routine lifecycle
-// reports remain unretained; only already-projected failure evidence enters this bounded cache.
+// reports remain unretained except the latest closed report-preparation breadcrumb. The original
+// failure and preparation have separate slots so preparing a report never replaces its cause.
 function browserReportCorrelation(meta: ClientDiagnosticMeta | undefined): string | undefined {
   if (meta === undefined) return undefined;
   if (
     meta.kind !== "window-error" &&
     meta.kind !== "unhandled-rejection" &&
     meta.renderFailure === undefined &&
+    meta.supportReportPreparation === undefined &&
     meta.errorKind === undefined &&
     meta.errorEvidence === undefined
   )
@@ -480,10 +487,20 @@ function rememberReportDelivery(
 ): void {
   if (!("message" in body)) return;
   const key = browserReportCorrelation(meta);
-  if (key === undefined) return;
+  if (key === undefined || meta === undefined) return;
   const retainedBody = { ...body };
   delete retainedBody.loss;
-  reportDeliveries.set(key, { body: retainedBody, acknowledged });
+  const deliveries = reportDeliveries.get(key) ?? {};
+  if (meta.supportReportPreparation === undefined) {
+    deliveries.failure = {
+      body: retainedBody,
+      acknowledged,
+      failureFacts: clientDiagnosticFailureFacts(meta),
+    };
+  } else {
+    deliveries.preparation = { body: retainedBody, acknowledged };
+  }
+  reportDeliveries.set(key, deliveries);
   if (reportDeliveries.size <= MAX_REPORT_DELIVERIES) return;
   const oldest = reportDeliveries.keys().next().value;
   if (oldest !== undefined) reportDeliveries.delete(oldest);
@@ -507,18 +524,16 @@ function waitForDelivery(delivery: Promise<boolean>, signal: AbortSignal): Promi
   });
 }
 
-async function retryReportDelivery(
-  correlationId: string,
+async function retryRetainedDelivery(
+  retained: ReportDelivery,
   signal: AbortSignal,
-): Promise<boolean | undefined> {
-  const retained = reportDeliveries.get(correlationId);
-  if (retained === undefined) return undefined;
+): Promise<boolean> {
   const pending = retained.acknowledged;
   if (await waitForDelivery(pending, signal)) return true;
   if (retained.acknowledged !== pending) return waitForDelivery(retained.acknowledged, signal);
   if (!admittedByClientPostRateLimit(reportRetryWindow, REPORT_RETRY_LIMIT, Date.now()))
     return false;
-  // One human report action may redeliver its original, already-projected diagnostic. It has a
+  // One human report action may redeliver its original failure and preparation. Each has a
   // separate bounded budget; the server's ingest limiter remains authoritative. Never fall back
   // to a different incident or send an error message, repository content or raw stack here.
   const loss = takeClientDiagnosticLoss();
@@ -528,6 +543,21 @@ async function retryReportDelivery(
     signal,
   );
   return waitForDelivery(retained.acknowledged, signal);
+}
+
+async function retryReportDelivery(
+  correlationId: string,
+  signal: AbortSignal,
+): Promise<boolean | undefined> {
+  const retained = reportDeliveries.get(correlationId);
+  if (retained === undefined) return undefined;
+  const deliveries = [retained.failure, retained.preparation].filter(
+    (delivery): delivery is ReportDelivery => delivery !== undefined,
+  );
+  const acknowledgements = await Promise.all(
+    deliveries.map((delivery) => retryRetainedDelivery(delivery, signal)),
+  );
+  return acknowledgements.every(Boolean);
 }
 
 // Best-effort POST to the server activity log. Never awaited by a call site and never lets a
@@ -634,7 +664,7 @@ function fanOutClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): v
 
 setClientDiagnosticDeliveryRetry(retryReportDelivery, (correlationId) => {
   const retained = reportDeliveries.get(correlationId);
-  return retained === undefined ? undefined : clientDiagnosticFailureFacts(retained.body);
+  return retained?.failure?.failureFacts;
 });
 setClientDiagnosticWriter(fanOutClientDiagnostic);
 

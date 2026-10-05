@@ -177,6 +177,7 @@ export interface ClientDiagnosticMeta {
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;
+  readonly failureStage?: ClientStageId | undefined;
   readonly bindingReport?: ClientDiagnosticBindingReport | undefined;
   readonly sessionRepairReport?: ClientDiagnosticSessionRepairReport | undefined;
   readonly gitRetryAttemptReport?: ClientDiagnosticGitRetryAttemptReport | undefined;
@@ -212,7 +213,10 @@ export function retainedClientDiagnosticFailure(
 }
 
 export function clientDiagnosticFailureFacts(
-  meta: ClientDiagnosticMeta,
+  meta: Pick<
+    ClientDiagnosticMeta,
+    "errorEvidence" | "errorKind" | "kind" | "renderFailure" | "moduleLoadFailure" | "failureStage"
+  >,
 ): NonNullable<ClientOnlySupportReportInput["failure"]> {
   return {
     ...(meta.errorEvidence === undefined ? {} : { errorEvidence: meta.errorEvidence }),
@@ -221,7 +225,7 @@ export function clientDiagnosticFailureFacts(
       clientKind: meta.kind,
       renderFailure: meta.renderFailure,
       moduleLoadFailure: meta.moduleLoadFailure,
-      stage: meta.stageReport?.stage.replaceAll(" ", "-"),
+      stage: meta.failureStage?.replaceAll(" ", "-"),
     }),
   };
 }

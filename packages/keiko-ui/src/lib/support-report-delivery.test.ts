@@ -1,4 +1,12 @@
-import { SUPPORT_REPORT_REQUEST_TIMEOUT_MS } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { Blob, resolveObjectURL } from "node:buffer";
+import { webcrypto } from "node:crypto";
+import { URL } from "node:url";
+import { gunzipSync } from "node:zlib";
+import { prepareLocalSupportReport } from "./support-report-local";
+import {
+  SUPPORT_REPORT_REQUEST_TIMEOUT_MS,
+  type SupportReport,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS } from "./client-diagnostics";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSupportReport } from "./support-report-api";
@@ -142,6 +150,9 @@ describe("browser incident delivery before report selection", () => {
         { correlationId, settle: (): void => undefined },
       ),
     ).rejects.toThrow("Workspace directory read failed");
+    expect(clientDiagnostics.retainedClientDiagnosticFailure(correlationId)?.context).toContain(
+      "stage:files-directory-load",
+    );
     const beforeReport = fetch.mock.calls.length;
     expect(await createSupportReport(correlationId)).toEqual(report);
     expect(fetch.mock.calls.slice(beforeReport).map(([path]) => path)).toEqual([
@@ -151,6 +162,41 @@ describe("browser incident delivery before report selection", () => {
     const replay = JSON.parse(fetch.mock.calls[beforeReport]?.[1]?.body as string) as unknown;
     expect(replay).toMatchObject({ correlationId, message: "Workspace directory read failed" });
     expect(JSON.stringify(replay)).not.toContain("customer path and content");
+  });
+
+  it("includes the actual failed Files stage in a canonical offline download", async () => {
+    vi.stubGlobal("crypto", webcrypto);
+    vi.stubGlobal("Blob", Blob);
+    vi.stubGlobal("URL", URL);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("private network failure")));
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    clientDiagnostics.setClientDiagnosticWriter(fanOutClientDiagnostic);
+    await expect(
+      observeFilesDirectoryRead(
+        (): Promise<never> => Promise.reject(new TypeError("private customer file")),
+        { correlationId, settle: (): void => undefined },
+      ),
+    ).rejects.toThrow("Workspace directory read failed");
+    const prepared = await prepareLocalSupportReport(new AbortController().signal, {
+      correlationId,
+      failure: { errorKind: "unknown", context: [] },
+    });
+    try {
+      const blob = resolveObjectURL(prepared.download.href);
+      if (blob === undefined) throw new TypeError("Expected report artifact");
+      const text = gunzipSync(Buffer.from(await blob.arrayBuffer())).toString("utf8");
+      const parsed = JSON.parse(text) as SupportReport;
+      expect(parsed.incident.clientReport?.failure).toMatchObject({
+        context: ["stage:files-directory-load"],
+        errorEvidence: { errorClass: "TypeError" },
+      });
+      expect(parsed.incident.correlation.rootCorrelationId).toBe(correlationId);
+      expect(text).not.toContain("private customer file");
+      expect(text).not.toContain("private network failure");
+    } finally {
+      prepared.download.dispose();
+    }
   });
 
   it("redelivers a client-throttled boundary failure once through the bounded report budget", async () => {
@@ -298,5 +344,50 @@ describe("browser incident delivery before report selection", () => {
     await settled;
     expect(fetch).toHaveBeenCalledOnce();
     expect(AbortSignal.timeout).toHaveBeenCalledWith(SUPPORT_REPORT_REQUEST_TIMEOUT_MS);
+  });
+  it("redelivers offline preparation alongside its original failure without replacing its facts", async () => {
+    let online = false;
+    const fetch = vi.fn((path: string, _init: RequestInit): Promise<Response> => {
+      if (!online) return Promise.reject(new TypeError("private network failure"));
+      return Promise.resolve(
+        path.endsWith("/report") ? reportResponse() : new Response(null, { status: 204 }),
+      );
+    });
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    fanOutClientDiagnostic("Original browser failure", diagnostic);
+    const preparation = {
+      reportBytes: 123,
+      evidenceScope: "client-only" as const,
+      completeness: "complete" as const,
+      loss: "none" as const,
+      availabilityReason: "service-unavailable" as const,
+    };
+    fanOutClientDiagnostic("Keiko support report prepared locally.", {
+      correlationId,
+      supportReportPreparation: preparation,
+    });
+    await vi.waitFor(() => expect(clientDiagnosticPostFailureCount()).toBe(2));
+    online = true;
+    expect(await createSupportReport(correlationId)).toEqual(report);
+    const replay = fetch.mock.calls.slice(2).map(([path, init]) => ({
+      path,
+      body: JSON.parse(init.body as string) as Record<string, unknown>,
+    }));
+    expect(replay.map(({ path }) => path)).toEqual([
+      "/api/diagnostics/client",
+      "/api/diagnostics/client",
+      "/api/diagnostics/report",
+    ]);
+    expect(replay[0]?.body).toMatchObject({ correlationId, kind: "window-error" });
+    expect(replay[1]?.body).toMatchObject({ correlationId, supportReportPreparation: preparation });
+    expect(clientDiagnostics.retainedClientDiagnosticFailure(correlationId)).toMatchObject({
+      errorEvidence: { errorClass: "TypeError" },
+      context: ["kind:window-error"],
+    });
+    expect(JSON.stringify(replay)).not.toContain("private network failure");
+    expect(await createSupportReport(correlationId)).toEqual(report);
+    expect(fetch.mock.calls.filter(([path]) => path === "/api/diagnostics/client")).toHaveLength(4);
   });
 });

@@ -128,6 +128,7 @@ export async function observeFilesDirectoryRead<T>(
   } catch (error: unknown) {
     reportClientDiagnostic("Workspace directory read failed", {
       correlationId,
+      failureStage: "files directory load",
       errorKind: bffRequestErrorKind(error),
       errorEvidence: clientErrorEvidence(error),
     });
