@@ -591,7 +591,8 @@ function declaredDiagnosticFacts(
       const value = fields[condition.field];
       if ("positive" in condition)
         return typeof value === "number" && Number.isFinite(value) && value > 0;
-      return condition.values.some((expected) => value === expected);
+      const expectedValues: readonly unknown[] = condition.values;
+      return expectedValues.includes(value);
     }) ?? false
   );
 }
