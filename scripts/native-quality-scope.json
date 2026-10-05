@@ -156,6 +156,26 @@
       "gates": ["compiler-warnings-as-errors", "native-static-analysis", "secure-read-boundary"]
     },
     {
+      "path": "native/runtime-supervisor/windows/gateway_wfp.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "gateway-filter-policy-behavior"
+      ]
+    },
+    {
+      "path": "native/runtime-supervisor/windows/gateway_wfp.c",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "gateway-filter-policy-behavior"
+      ]
+    },
+    {
       "path": "native/runtime-supervisor/windows/keiko_runtime_supervisor.c",
       "language": "c",
       "platforms": ["windows"],
