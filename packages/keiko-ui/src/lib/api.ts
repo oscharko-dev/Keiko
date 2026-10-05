@@ -1460,6 +1460,7 @@ export type SseDonePayload = DesktopChatStreamDoneEvent["data"];
 export type SseErrorPayload = DesktopChatStreamErrorEvent["data"];
 
 export interface StreamHandlers {
+  readonly onStarted?: (correlationId: string) => void;
   readonly onToken: (text: string) => void;
   readonly onDone: (payload: SseDonePayload) => void;
   readonly onError: (payload: SseErrorPayload) => void;
@@ -1689,8 +1690,8 @@ export async function sendDesktopChatStream(
   input: SendDesktopChatInput,
   signal: AbortSignal,
   handlers: StreamHandlers,
+  correlationId = newClientCorrelationId(),
 ): Promise<void> {
-  const correlationId = newClientCorrelationId();
   const requestInit: RequestInit = {
     method: "POST",
     body: JSON.stringify(input),
@@ -1720,6 +1721,7 @@ export async function sendDesktopChatStream(
     throw streamingError;
   }
 
+  handlers.onStarted?.(responseCorrelationId);
   await consumeSseStream(res.body, signal, handlers, responseCorrelationId);
 }
 

@@ -269,7 +269,7 @@ export function bffRequestErrorKind(error: unknown): ActivityLogErrorKind {
     const exact = HTTP_STATUS_ERROR_KINDS[error.status];
     if (exact !== undefined) return exact;
     if (error.status >= 500) return "unavailable";
-    return error.status >= 400 ? "invalid-request" : "unknown";
+    return error.status >= 400 ? "invalid-request" : bffCodeErrorKind(error.code);
   }
   if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
   if (error instanceof DOMException && error.name === "AbortError") return "cancelled";

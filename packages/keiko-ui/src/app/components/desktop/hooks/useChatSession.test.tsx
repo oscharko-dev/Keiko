@@ -71,52 +71,39 @@ beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
 });
 
-vi.mock("@/lib/api", () => ({
-  ApiError: class ApiError extends Error {
-    constructor(
-      public readonly code: string,
-      message: string,
-      public readonly status: number,
-    ) {
-      super(message);
-      this.name = "ApiError";
-    }
-  },
-  StreamingUnavailableError: class StreamingUnavailableError extends Error {
-    constructor(
-      public readonly code: string,
-      message: string,
-    ) {
-      super(message);
-    }
-  },
-  askGrounded: vi.fn(),
-  createDesktopChat: vi.fn(),
-  createProject: vi.fn(),
-  projectResponseWarningMessage: (response: {
-    readonly warning?: { readonly message: string; readonly correlationId: string };
-  }): string | undefined =>
-    response.warning === undefined
-      ? undefined
-      : `${response.warning.message} Support ID: ${response.warning.correlationId}`,
-  fetchChatMessages: vi.fn(),
-  fetchChats: vi.fn(),
-  fetchEvidenceManifest: vi.fn(),
-  fetchRunReport: vi.fn(),
-  fetchModels: vi.fn(),
-  fetchProjects: vi.fn(),
-  patchChatMessage: vi.fn(),
-  regenerateDesktopChat: vi.fn(),
-  resetModelRequestCache: vi.fn(),
-  sendDesktopChat: vi.fn(),
-  sendDesktopChatStream: vi.fn(),
-  uploadConversationAttachment: vi.fn().mockResolvedValue({
-    attachmentRef: `chat-attachment:${"a".repeat(64)}`,
-    expiresAt: 60_000,
-  }),
-  deleteConversationAttachment: vi.fn().mockResolvedValue(undefined),
-  updateChat: vi.fn(),
-}));
+vi.mock("@/lib/api", async (original) => {
+  const api = await original<typeof import("@/lib/api")>();
+  return {
+    ApiError: api.ApiError,
+    StreamingUnavailableError: api.StreamingUnavailableError,
+    askGrounded: vi.fn(),
+    createDesktopChat: vi.fn(),
+    createProject: vi.fn(),
+    projectResponseWarningMessage: (response: {
+      readonly warning?: { readonly message: string; readonly correlationId: string };
+    }): string | undefined =>
+      response.warning === undefined
+        ? undefined
+        : `${response.warning.message} Support ID: ${response.warning.correlationId}`,
+    fetchChatMessages: vi.fn(),
+    fetchChats: vi.fn(),
+    fetchEvidenceManifest: vi.fn(),
+    fetchRunReport: vi.fn(),
+    fetchModels: vi.fn(),
+    fetchProjects: vi.fn(),
+    patchChatMessage: vi.fn(),
+    regenerateDesktopChat: vi.fn(),
+    resetModelRequestCache: vi.fn(),
+    sendDesktopChat: vi.fn(),
+    sendDesktopChatStream: vi.fn(),
+    uploadConversationAttachment: vi.fn().mockResolvedValue({
+      attachmentRef: `chat-attachment:${"a".repeat(64)}`,
+      expiresAt: 60_000,
+    }),
+    deleteConversationAttachment: vi.fn().mockResolvedValue(undefined),
+    updateChat: vi.fn(),
+  };
+});
 
 vi.mock("@/lib/memory-session-api", () => ({
   acceptMemoryProposal: vi.fn(),
@@ -5191,6 +5178,119 @@ describe("ungrounded streaming refusal recovery", () => {
     await waitFor(() => expect(rendered.result.current.loading).toBe(false));
     return rendered;
   }
+
+  it.each([
+    "CHAT_TURN_IN_PROGRESS",
+    "CHAT_CLOSED",
+    "CHAT_TURN_IDEMPOTENCY_CONFLICT",
+    "GROUNDING_SCOPE_CHANGED",
+  ])("does not retain an expected %s admission refusal as a stream failure", async (code) => {
+    const { result } = await streamingSession();
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(
+      new ApiError(code, "Private refusal", 409),
+    );
+    try {
+      await act(async () => {
+        await result.current.sendMessage({ text: "Private prompt" });
+      });
+      expect(diagnostic.mock.calls.filter(([, meta]) => meta?.errorKind !== undefined)).toEqual([]);
+      expect(sendDesktopChatStream).toHaveBeenCalledOnce();
+      expect(sendDesktopChat).not.toHaveBeenCalled();
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it.each([
+    [422, "invalid-request", "REFUSAL"],
+    [429, "rate-limited", "REFUSAL"],
+    [503, "unavailable", "REFUSAL"],
+    [200, "internal", "INTERNAL"],
+    [504, "timeout", "DESKTOP_CHAT_STREAM_STALLED"],
+  ] as const)(
+    "retains an unexpected HTTP %s refusal once with its actual class and correlation",
+    async (status, errorKind, code) => {
+      const { result } = await streamingSession();
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      const error = new ApiError(code, "Private upstream body", status);
+      error.correlationId = "stream-startup-refusal";
+      vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(error);
+      try {
+        await act(async () => {
+          await result.current.sendMessage({ text: "Private prompt" });
+        });
+        expect(diagnostic).toHaveBeenCalledExactlyOnceWith("ApiError", {
+          kind: "other",
+          correlationId: error.correlationId,
+          errorKind,
+          errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+        });
+        expect(sendDesktopChat).not.toHaveBeenCalled();
+        expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private");
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retains a native transport failure once (SSE started: %s)",
+    async (started) => {
+      const { result } = await streamingSession();
+      const diagnostic = vi.fn();
+      setClientDiagnosticWriter(diagnostic);
+      const error = new TypeError("Private transport body", {
+        cause: new RangeError("Private cause"),
+      });
+      vi.mocked(sendDesktopChatStream).mockImplementation(async (_input, _signal, handlers) => {
+        if (started) handlers.onStarted?.("stream-reader-response");
+        throw error;
+      });
+      try {
+        await act(async () => {
+          await result.current.sendMessage({
+            text: "Private prompt",
+            ...(started ? { correlationId: "retained-chat-request" } : {}),
+          });
+        });
+        const requestCorrelation = vi.mocked(sendDesktopChatStream).mock.calls[0]?.[3];
+        expect(requestCorrelation).toEqual(expect.any(String));
+        if (started) expect(requestCorrelation).toBe("retained-chat-request");
+        expect(diagnostic).toHaveBeenCalledExactlyOnceWith("TypeError", {
+          kind: started ? "sse-error" : "other",
+          correlationId: started ? "stream-reader-response" : requestCorrelation,
+          errorKind: "unavailable",
+          errorEvidence: { errorClass: "TypeError", frames: [], causeChain: ["RangeError"] },
+        });
+        expect(sendDesktopChat).not.toHaveBeenCalled();
+        expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Private");
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("does not retain deliberate transport cancellation as a failed chat request", async () => {
+    const { result } = await streamingSession();
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    vi.mocked(sendDesktopChatStream).mockRejectedValueOnce(
+      new DOMException("Private stop", "AbortError"),
+    );
+    try {
+      await act(async () => {
+        await result.current.sendMessage({ text: "Private prompt" });
+      });
+      expect(diagnostic).not.toHaveBeenCalled();
+      expect(sendDesktopChat).not.toHaveBeenCalled();
+      expect(result.current.error).toBeUndefined();
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
 
   it("refreshes sources and restores a scope-refused streaming draft without replay", async () => {
     const { result } = await streamingSession();

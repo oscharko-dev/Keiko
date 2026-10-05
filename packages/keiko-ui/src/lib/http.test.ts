@@ -592,6 +592,8 @@ describe("bffRequestErrorKind", () => {
     [new ApiError("RATE", "no", 429), "rate-limited"],
     [new ApiError("CANCELLED", "no", 499), "cancelled"],
     [new ApiError("INTERNAL", "no", 500), "internal"],
+    [new ApiError("INTERNAL", "no", 200), "internal"],
+    [new ApiError("UNAVAILABLE", "no", 0), "unavailable"],
     [new ApiError("UPSTREAM", "no", 502), "unavailable"],
     [new ApiError("NOT_FOUND", "no", 404), "invalid-request"],
     [new DOMException("aborted", "AbortError"), "cancelled"],

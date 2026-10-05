@@ -1310,6 +1310,12 @@ request":
   structurally have no id (native `EventSource`, message-only notices) say so in their doc comments
   rather than inventing one.
 
+Desktop chat transport failures retain the original failure once under the request or echoed
+response correlation. Before validated SSE headers and a response body, their client diagnostic
+kind is `other`; after stream establishment it is `sse-error`. Idle stalls classify as `timeout`.
+Expected turn/scope admission refusals and deliberate cancellation do not create an additional
+client failure incident; their owning lifecycle evidence remains.
+
 - **Routine browser evidence is not a failure, and every browser report is a closed shape**
   (#3557). A live dev log showed 416 of 449 `client.diagnostic` lines were a window's routine
   stage evidence, all at `warn` with `errorKind: unknown`, burying the real failures. The route

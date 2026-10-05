@@ -59,7 +59,7 @@ import {
 } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
-import { clientErrorSummary } from "@/lib/client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { bffRequestErrorKind } from "@/lib/http";
@@ -471,11 +471,25 @@ function contextOversizedMessage(error: unknown): string {
   return formatUserError(overflow, CONTEXT_OVERSIZED_USER_MESSAGE);
 }
 
-function retainStreamFailure(error: ApiError): void {
+const EXPECTED_CHAT_REFUSALS = new Set([
+  "CHAT_TURN_IN_PROGRESS",
+  "CHAT_CLOSED",
+  "GROUNDING_SCOPE_CHANGED",
+  "CHAT_TURN_IDEMPOTENCY_CONFLICT",
+]);
+
+interface StreamFailureContext {
+  kind: "other" | "sse-error";
+  correlationId: string;
+}
+
+function retainStreamFailure(error: unknown, context: StreamFailureContext): void {
+  if (error instanceof ApiError && EXPECTED_CHAT_REFUSALS.has(error.code)) return;
+  const stalled = error instanceof ApiError && error.code === "DESKTOP_CHAT_STREAM_STALLED";
   reportClientDiagnostic(clientErrorSummary(error), {
-    kind: "sse-error",
-    correlationId: error.correlationId,
-    errorKind: bffRequestErrorKind(error),
+    kind: context.kind,
+    correlationId: correlationIdOf(error) ?? context.correlationId,
+    errorKind: stalled ? "timeout" : bffRequestErrorKind(error),
     errorEvidence: clientErrorEvidence(error),
   });
 }
@@ -2295,20 +2309,12 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
 // closing over hook state, matching the module-scope helpers above.
 function handleStreamUngroundedTransportFailure(
   caught: unknown,
+  context: StreamFailureContext,
   setError: Dispatch<SetStateAction<string | undefined>>,
   resolve: (outcome: SendAttemptOutcome) => void,
 ): void {
-  // A stalled stream leaves no server-side failure line of its own: record it body-free so the
-  // Activity Log shows why the turn stopped (field report 1.1.13).
-  if (caught instanceof ApiError && caught.code === "DESKTOP_CHAT_STREAM_STALLED") {
-    reportClientDiagnostic("[keiko] chat stream stalled: no byte within the idle limit", {
-      kind: "sse-error",
-      errorKind: "timeout",
-      correlationId: caught.correlationId,
-    });
-  }
   const failure = canonicalTurnInProgressFailure(caught);
-  if (caught instanceof ApiError) retainStreamFailure(caught);
+  retainStreamFailure(caught, context);
   if (failure.canonicalTurnInProgress !== true) setError(errorMessage(caught));
   resolve(failure);
 }
@@ -3583,6 +3589,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       optimisticId: string,
       signal: AbortSignal,
       resolve: (outcome: SendAttemptOutcome) => void,
+      context: StreamFailureContext,
     ): import("@/lib/api").StreamHandlers => {
       let statusFlippedToStreaming = false;
       // GEN-PERF-CHAT-007 — coalesce streamed token deltas. Each onToken appends to a buffer and
@@ -3612,6 +3619,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         rafHandle = null;
       };
       return {
+        onStarted: (correlationId): void => {
+          context.kind = "sse-error";
+          context.correlationId = correlationId;
+        },
         onToken: (text: string): void => {
           if (isSupersededOrAborted(chatId, signal)) return;
           if (!statusFlippedToStreaming) {
@@ -3674,7 +3685,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           // formatUserError can surface it as a copyable support id.
           const apiError = new ApiError(code, message, 0);
           if (correlationId !== undefined) apiError.correlationId = correlationId;
-          retainStreamFailure(apiError);
+          retainStreamFailure(apiError, { ...context, kind: "sse-error" });
           setError(errorMessage(apiError));
           removeTempMessage(tempAssistantId);
           resolve({ status: "failed" });
@@ -3735,31 +3746,38 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           : { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }),
       };
       return new Promise<SendAttemptOutcome>((resolve, reject) => {
+        const context: StreamFailureContext = {
+          kind: "other",
+          correlationId: request.correlationId ?? newClientCorrelationId(),
+        };
         const handlers = buildStreamHandlers(
           chat.id,
           tempAssistantId,
           optimisticId,
           signal,
           resolve,
+          context,
         );
-        sendDesktopChatStream(requestBody, signal, handlers).catch((error_: unknown): void => {
-          removeTempMessage(tempAssistantId);
-          if (error_ instanceof StreamingUnavailableError) {
-            // Only an explicit unsupported-stream capability permits buffered replay.
-            // Preserve other server refusals for canonical classification below.
-            reject(error_);
-          } else if (error_ instanceof DOMException && error_.name === "AbortError") {
-            resolve({ status: "cancelled" });
-          } else if (isSupersededOrAborted(chat.id, signal)) {
-            resolve({ status: "cancelled" });
-          } else {
-            // Mid-stream client error (e.g. network drop, reader TypeError). Surface it so the
-            // UI does not silently swallow the failure. The server has already persisted the
-            // user message at this point; removing it here is UI-only — it reappears on reload,
-            // which matches the behaviour of sendUngroundedBuffered and sendGrounded.
-            handleStreamUngroundedTransportFailure(error_, setError, resolve);
-          }
-        });
+        sendDesktopChatStream(requestBody, signal, handlers, context.correlationId).catch(
+          (error_: unknown): void => {
+            removeTempMessage(tempAssistantId);
+            if (error_ instanceof StreamingUnavailableError) {
+              // Only an explicit unsupported-stream capability permits buffered replay.
+              // Preserve other server refusals for canonical classification below.
+              reject(error_);
+            } else if (error_ instanceof DOMException && error_.name === "AbortError") {
+              resolve({ status: "cancelled" });
+            } else if (isSupersededOrAborted(chat.id, signal)) {
+              resolve({ status: "cancelled" });
+            } else {
+              // Mid-stream client error (e.g. network drop, reader TypeError). Surface it so the
+              // UI does not silently swallow the failure. The server has already persisted the
+              // user message at this point; removing it here is UI-only — it reappears on reload,
+              // which matches the behaviour of sendUngroundedBuffered and sendGrounded.
+              handleStreamUngroundedTransportFailure(error_, context, setError, resolve);
+            }
+          },
+        );
       });
     },
     [buildStreamHandlers, removeTempMessage],

@@ -3263,6 +3263,32 @@ describe("sendDesktopChatStream — correlation id threading", () => {
     },
   );
 
+  it.each(["request-stream-owner", "response-stream-owner"])(
+    "reports established SSE ownership with %s without changing the supplied request identity",
+    async (responseId) => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response("", {
+          headers: { "Content-Type": "text/event-stream", [CORRELATION_HEADER]: responseId },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const onStarted = vi.fn();
+      await sendDesktopChatStream(
+        { chatId: "c6", projectPath: "/repo", content: "hello" },
+        new AbortController().signal,
+        makeStreamHandlers({ onStarted }),
+        "request-stream-owner",
+      );
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+        "/api/desktop/chat/stream",
+        expect.objectContaining({
+          headers: expect.objectContaining({ [CORRELATION_HEADER]: "request-stream-owner" }),
+        }),
+      );
+      expect(onStarted).toHaveBeenCalledExactlyOnceWith(responseId);
+    },
+  );
+
   it("does not treat a missing SSE body as proof streaming is unsupported", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(null, {
@@ -3274,11 +3300,12 @@ describe("sendDesktopChatStream — correlation id threading", () => {
       }),
     );
     vi.stubGlobal("fetch", fetchMock);
+    const onStarted = vi.fn();
     await expect(
       sendDesktopChatStream(
         { chatId: "c6", projectPath: "/repo", content: "hello" },
         new AbortController().signal,
-        makeStreamHandlers(),
+        makeStreamHandlers({ onStarted }),
       ),
     ).rejects.toMatchObject({
       name: "ApiError",
@@ -3287,6 +3314,7 @@ describe("sendDesktopChatStream — correlation id threading", () => {
       correlationId: "missing-stream-body",
     });
     expect(fetchMock).toHaveBeenCalledOnce();
+    expect(onStarted).not.toHaveBeenCalled();
   });
 
   it("attaches the server-echoed correlation id to a pre-stream StreamingUnavailableError", async () => {

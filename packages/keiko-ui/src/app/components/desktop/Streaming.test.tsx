@@ -1436,28 +1436,32 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
       reports.push(meta);
     });
     try {
-      vi.spyOn(api, "sendDesktopChatStream").mockImplementation((): Promise<void> => {
-        const stalled = new api.ApiError(
-          "DESKTOP_CHAT_STREAM_STALLED",
-          "The connection to Keiko stopped delivering the answer. Retry the request.",
-          504,
-        );
-        stalled.correlationId = "ui_stream-stall-0001";
-        return Promise.reject(stalled);
-      });
+      vi.spyOn(api, "sendDesktopChatStream").mockImplementation(
+        (_input, _signal, handlers): Promise<void> => {
+          handlers.onStarted?.("ui_stream-stall-0001");
+          const stalled = new api.ApiError(
+            "DESKTOP_CHAT_STREAM_STALLED",
+            "The connection to Keiko stopped delivering the answer. Retry the request.",
+            504,
+          );
+          stalled.correlationId = "ui_stream-stall-0001";
+          return Promise.reject(stalled);
+        },
+      );
       const view = await bootStreamingHook();
       act(() => view.result.current.setDraft("hello"));
       await act(async () => {
         await view.result.current.sendMessage();
       });
       expect(view.result.current.sendStatus).toBe("failed");
-      expect(reports).toContainEqual(
-        expect.objectContaining({
+      expect(reports).toEqual([
+        {
           kind: "sse-error",
           errorKind: "timeout",
           correlationId: "ui_stream-stall-0001",
-        }),
-      );
+          errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+        },
+      ]);
     } finally {
       resetClientDiagnosticWriter();
     }
