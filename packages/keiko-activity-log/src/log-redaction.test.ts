@@ -20,12 +20,14 @@ import {
   configureActivityLogRouteRedactor,
   isDeniedLogFieldName,
   normalizeLogFieldName,
-  OPAQUE_TOKEN_RUN_LENGTH,
   redactLogFields,
   redactLogString,
   resetActivityLogRouteRedactor,
 } from "./log-redaction.js";
-import { ACTIVITY_LOG_FRAME_FIELD_NAME } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  ACTIVITY_LOG_FRAME_FIELD_NAME,
+  OPAQUE_TOKEN_RUN_LENGTH,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   redactRoutePath,
   ROUTE_TEMPLATE_REDACTOR_ID,

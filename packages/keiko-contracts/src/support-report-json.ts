@@ -46,7 +46,9 @@ export function reportCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-// Locale-independent UTF-16 ordering is part of the canonical byte contract.
+// Ordinary keys use locale-independent UTF-16 order. JSON.stringify follows ECMAScript property
+// enumeration: array-index keys (0 through 2^32 - 2) precede them in ascending numeric order.
+// This existing byte contract is shared by the producer and validator, including nested objects.
 function compareSupportKeys(left: string, right: string): number {
   if (left === right) return 0;
   return left < right ? -1 : 1;

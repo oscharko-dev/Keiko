@@ -94,11 +94,6 @@ import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
 import { FRAME_SHAPE_PATTERN, PACKAGE_DIR_NAMES } from "./stack-frames.js";
 
-export {
-  looksLikeSecret,
-  OPAQUE_TOKEN_RUN_LENGTH,
-} from "@oscharko-dev/keiko-contracts/runtime/observability";
-
 export type ActivityLogRouteRedactor = (pathname: string, maxLength: number) => string | undefined;
 
 const FAIL_CLOSED_ROUTE_REDACTOR: ActivityLogRouteRedactor = () => undefined;

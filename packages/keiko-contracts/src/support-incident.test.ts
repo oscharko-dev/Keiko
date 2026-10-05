@@ -2,6 +2,8 @@
 // normalization, the closed record schema, and the public/private projection boundary.
 
 import { describe, expect, it } from "vitest";
+import { canonicalSupportJson } from "./support-report-json.js";
+import { clientOnlySupportReportSections } from "./support-report-producer.js";
 import { ACTIVITY_LOG_FAILURE_SURFACES } from "./activity-log-registry.generated.js";
 import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
@@ -438,6 +440,57 @@ describe("public and private projections", () => {
       coverage: { degradedClassCount: 1 },
     });
   });
+});
+
+describe("JSON-compatible optional private report fields", () => {
+  function limitedProjection(): ReturnType<typeof supportIncidentPrivateProjection> {
+    return clientOnlySupportReportSections({
+      incidentId: INCIDENT_ID,
+      nowMs: 2000,
+      build: supportIncidentBuild("1.0.5", "darwin-arm64"),
+      defectFingerprint: FINGERPRINT,
+      availabilityReason: "service-unavailable",
+      failure: { errorKind: "internal", context: ["stage:files-source-preview"] },
+    }).incident;
+  }
+
+  it("distinguishes an intact limited artifact from sufficient server evidence", () => {
+    const limited = limitedProjection();
+    expect(limited).toMatchObject({
+      integrity: "supported",
+      completeness: "complete",
+      loss: "none",
+      sufficiencyStatus: "insufficient",
+      lineCount: 0,
+      segments: [],
+      clientReport: { serverEvidence: "unavailable", availabilityReason: "service-unavailable" },
+      correlation: { rootCorrelationId: "id000001", childCorrelationIds: [] },
+    });
+    expect(limited.sufficiencyReasons).toEqual(["no-registered-failure", "no-registered-evidence"]);
+  });
+
+  it.each(["clientReport", "failure", "errorEvidence"] as const)(
+    "rejects an explicitly undefined %s before canonical serialization",
+    (key) => {
+      const base = limitedProjection();
+      const value =
+        key === "clientReport"
+          ? { ...base, clientReport: undefined }
+          : key === "failure"
+            ? { ...base, clientReport: { ...base.clientReport, failure: undefined } }
+            : {
+                ...base,
+                clientReport: {
+                  ...base.clientReport,
+                  failure: { ...base.clientReport?.failure, errorEvidence: undefined },
+                },
+              };
+      expect(parseSupportIncidentPrivateProjection(base)).toEqual(base);
+      expect(() => canonicalSupportJson(base)).not.toThrow();
+      expect(parseSupportIncidentPrivateProjection(value)).toBeUndefined();
+      expect(() => canonicalSupportJson(value)).toThrow();
+    },
+  );
 });
 
 describe("received private incident projection", () => {

@@ -78,10 +78,12 @@ export interface ClientOnlySupportReportInput {
   >["availabilityReason"];
 }
 
+const CLIENT_ONLY_ROOT_CORRELATION_ID = "id000001";
+
 function clientOnlyCorrelationId(correlationId: string | undefined): string {
-  if (correlationId === undefined) return "id000001";
+  if (correlationId === undefined) return CLIENT_ONLY_ROOT_CORRELATION_ID;
   if (looksLikeSecret(correlationId) || looksLikePersonalIdentifier(correlationId))
-    return "id000001";
+    return CLIENT_ONLY_ROOT_CORRELATION_ID;
   return correlationId;
 }
 
@@ -101,7 +103,7 @@ function clientOnlyIncident(input: ClientOnlySupportReportInput): SupportInciden
     frameCount: 0,
     build: input.build,
     correlation: {
-      rootCorrelationId: input.correlationId ?? "id000001",
+      rootCorrelationId: input.correlationId ?? CLIENT_ONLY_ROOT_CORRELATION_ID,
       childCorrelationIds: [],
     },
     window: supportIncidentWindow(input.nowMs),

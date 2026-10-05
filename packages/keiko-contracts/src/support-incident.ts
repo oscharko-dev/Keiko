@@ -651,20 +651,16 @@ export interface SupportIncidentPublicProjection {
 /** The richer, still body-free private-report projection: the public fields plus analysis inputs. */
 export interface SupportIncidentPrivateProjection extends SupportIncidentPublicProjection {
   /** Unverified, closed browser availability facts; never registered server failure evidence. */
-  readonly clientReport?:
-    | {
-        readonly serverEvidence: "unavailable";
-        readonly availabilityReason: SupportReportAvailabilityReason;
-        /** Browser-observed facts, never a claim of registered server evidence. */
-        readonly failure?:
-          | {
-              readonly errorEvidence?: ClientErrorEvidence | undefined;
-              readonly errorKind: ActivityLogErrorKind;
-              readonly context: readonly string[];
-            }
-          | undefined;
-      }
-    | undefined;
+  readonly clientReport?: {
+    readonly serverEvidence: "unavailable";
+    readonly availabilityReason: SupportReportAvailabilityReason;
+    /** Browser-observed facts, never a claim of registered server evidence. */
+    readonly failure?: {
+      readonly errorEvidence?: ClientErrorEvidence;
+      readonly errorKind: ActivityLogErrorKind;
+      readonly context: readonly string[];
+    };
+  };
   readonly state: SupportIncidentState;
   readonly frameCount: number;
   readonly build: SupportIncidentBuild;
@@ -865,10 +861,18 @@ function clientOnlyManualHeader(value: PlainObject): boolean {
   );
 }
 
-function validClientReportErrorEvidence(value: unknown): boolean {
+function definedOptionalProjectionField(value: PlainObject, key: string): boolean {
+  return !Object.hasOwn(value, key) || value[key] !== undefined;
+}
+
+function validClientReportErrorEvidence(value: PlainObject): boolean {
+  if (!definedOptionalProjectionField(value, "errorEvidence")) return false;
+  const evidence = value.errorEvidence;
   return (
-    value === undefined ||
-    (isPlainObject(value) && hasOnlyKeys(value, ["errorClass", "frames", "causeChain"]))
+    evidence === undefined ||
+    (isPlainObject(evidence) &&
+      hasOnlyKeys(evidence, ["errorClass", "frames", "causeChain"]) &&
+      isClientErrorEvidence(evidence))
   );
 }
 
@@ -879,24 +883,22 @@ export function isClientReportFailure(
   if (value === undefined) return true;
   if (!isPlainObject(value) || !hasOnlyKeys(value, ["errorKind", "context"], ["errorEvidence"]))
     return false;
-  if (!validClientReportErrorEvidence(value.errorEvidence)) return false;
+  if (!validClientReportErrorEvidence(value)) return false;
   if (
     !Array.isArray(value.context) ||
     !value.context.every((token: unknown): token is string => typeof token === "string") ||
     !isClientDefectContext(value.context)
   )
     return false;
-  return (
-    isActivityLogErrorKind(value.errorKind) &&
-    (value.errorEvidence === undefined || isClientErrorEvidence(value.errorEvidence))
-  );
+  return isActivityLogErrorKind(value.errorKind);
 }
 
 function validClientReport(value: unknown, projection: PlainObject): boolean {
   return (
-    value === undefined ||
+    (value === undefined && !Object.hasOwn(projection, "clientReport")) ||
     (isPlainObject(value) &&
       hasOnlyKeys(value, ["serverEvidence", "availabilityReason"], ["failure"]) &&
+      definedOptionalProjectionField(value, "failure") &&
       isClientReportFailure(value.failure) &&
       value.serverEvidence === "unavailable" &&
       clientOnlyProjection(projection) &&
