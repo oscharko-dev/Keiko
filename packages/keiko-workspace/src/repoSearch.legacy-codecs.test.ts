@@ -44,6 +44,33 @@ function manual(charset: string, encodedText: Uint8Array): Buffer {
 
 describe("explicitly declared legacy HTML codecs", () => {
   it.each([
+    '<meta charset=""><meta charset="utf-8">',
+    '<meta charset="  "><meta charset="utf-8">',
+    '<meta charset="utf-16">',
+    '<meta charset="utf-16le">',
+    '<meta charset="utf-16be">',
+  ])("retains late physical coordinates for HTML declaration %s", async (declaration) => {
+    put(
+      path,
+      Buffer.from(
+        `${declaration}\r\n${"<!-- archived instructions -->\r\n".repeat(300)}<p>CodecServiceProbe Ölwechsel 中文 750 hours</p>\r\n`,
+      ),
+    );
+    const selected = scope();
+    const result = await searchText(selected, query);
+    expect(result.coverage).toMatchObject({ incomplete: false, filesScanned: 1 });
+    expect(result.atoms).toContainEqual(
+      expect.objectContaining({ scopePath: path, lineRange: { startLine: 302, endLine: 302 } }),
+    );
+    const excerpt = await readExcerpt(selected, {
+      scopePath: path,
+      startLine: 302,
+      endLine: 302,
+      maxBytes: 512,
+    });
+    expect(excerpt.content).toBe("<p>CodecServiceProbe Ölwechsel 中文 750 hours</p>\r");
+  });
+  it.each([
     '<meta/charset="windows-1252">',
     '<meta http-equiv="Content-Type"content="text/html; charset=windows-1252">',
   ])("searches and reads compact encoding declaration %s", async (declaration) => {

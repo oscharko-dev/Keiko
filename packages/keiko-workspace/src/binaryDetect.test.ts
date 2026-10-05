@@ -29,6 +29,21 @@ describe("looksBinary", () => {
     expect(looksBinary(new TextEncoder().encode("é"))).toBe(false);
   });
 
+  it.each(["\0", "\0".repeat(5), "\u0001".repeat(20)])(
+    "classifies binary payload behind a UTF-8 BOM consistently with complete decoding (%#)",
+    (payload) => {
+      const bytes = Buffer.from(`\uFEFF${payload}`, "utf8");
+      expect(looksBinary(bytes)).toBe(true);
+      expect(decodeTextFileBytes(bytes)).toBeUndefined();
+    },
+  );
+
+  it("preserves a BOM-prefixed valid multibyte sequence crossing the probe boundary", () => {
+    const bytes = Buffer.from(`\uFEFF${"x".repeat(4092)}中`);
+    expect(looksBinary(bytes)).toBe(false);
+    expect(decodeTextFileBytes(bytes)?.text).toBe(`${"x".repeat(4092)}中`);
+  });
+
   it("returns false on plain ASCII text", () => {
     expect(looksBinary(new TextEncoder().encode("hello world\nsecond line\n"))).toBe(false);
   });
@@ -118,6 +133,35 @@ describe("looksBinary", () => {
 
 describe("declared HTML character encoding", () => {
   const legacy = (markup: string): Uint8Array => Buffer.from(markup, "latin1");
+  it.each(["", "  "])("ignores an empty first charset before valid UTF-8 (%j)", (empty) => {
+    const text = `<meta charset="${empty}"><meta charset="utf-8"><p>Ölwechsel 中文</p>`;
+    expect(
+      decodeTextFileBytes(Buffer.from(text), {
+        scopePath: "manual.html",
+        requireSupportedEncoding: true,
+      }),
+    ).toEqual({ encoding: "utf-8", text });
+  });
+  it.each(["utf-16", "utf-16le", "utf-16be"])(
+    "interprets HTML-only %s metadata as UTF-8 without overriding a real BOM",
+    (charset) => {
+      const text = `<meta charset="${charset}"><p>Ölwechsel 中文</p>`;
+      expect(decodeTextFileBytes(Buffer.from(text), { scopePath: "manual.html" })).toEqual({
+        encoding: "utf-8",
+        text,
+      });
+      expect(decodeTextFileBytes(Buffer.from(`\uFEFF${text}`, "utf16le"))).toEqual({
+        encoding: "utf-16le",
+        text,
+      });
+    },
+  );
+  it("does not turn an unsupported nonempty first charset into a fallback codec", () => {
+    const bytes = Buffer.from('<meta charset="unavailable-codec"><meta charset="utf-8">safe text');
+    expect(() =>
+      decodeTextFileBytes(bytes, { scopePath: "manual.html", requireSupportedEncoding: true }),
+    ).toThrow("declared text encoding is unavailable");
+  });
   it.each(["windows-1252", "ISO-8859-1", "iso_8859-1", "latin1"])(
     "decodes declared %s",
     (encoding) => {

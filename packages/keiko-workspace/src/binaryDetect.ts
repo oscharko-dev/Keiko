@@ -199,7 +199,9 @@ function htmlMetaCharset(tag: string): string | undefined {
 
 function supportedDeclaredHtmlEncoding(charset: string): TextByteEncoding | false {
   try {
-    return new TextDecoder(charset, { fatal: true }).encoding;
+    const encoding = new TextDecoder(charset, { fatal: true }).encoding;
+    // HTML metadata maps UTF-16 labels to UTF-8; an actual byte-order mark still takes precedence.
+    return encoding === "utf-16le" || encoding === "utf-16be" ? "utf-8" : encoding;
   } catch (error) {
     if (error instanceof RangeError) return false;
     throw error;
@@ -216,7 +218,7 @@ function declaredHtmlEncoding(
     .replace(/<!--[\s\S]*?(?:-->|$)/gu, "");
   for (const tag of htmlMetaTags(prefix)) {
     const charset = htmlMetaCharset(tag)?.trim().toLowerCase();
-    if (charset === undefined) continue;
+    if (charset === undefined || charset === "") continue;
     return supportedDeclaredHtmlEncoding(charset);
   }
   return undefined;
@@ -281,9 +283,8 @@ export function looksBinary(bytes: Uint8Array, options?: BinaryProbeOptions): bo
   if (limit === 0) {
     return false;
   }
-  if (detectTextByteEncoding(bytes, options) !== undefined) {
-    return false;
-  }
+  const encoding = detectTextByteEncoding(bytes, options);
+  if (encoding !== undefined) return hintedProbeLooksBinary(bytes, limit, encoding);
   let nulCount = 0;
   let controlCount = 0;
   for (let i = 0; i < limit; i += 1) {
@@ -296,6 +297,22 @@ export function looksBinary(bytes: Uint8Array, options?: BinaryProbeOptions): bo
     }
   }
   return exceedsBinaryControlThreshold(bytes[0] ?? 0, nulCount, controlCount, limit);
+}
+
+function hintedProbeLooksBinary(
+  bytes: Uint8Array,
+  limit: number,
+  encoding: TextByteEncoding,
+): boolean {
+  // UTF-16/32 document-reader hints contain structural NUL bytes. A UTF-8 BOM is only a hint:
+  // validate its bounded decoded payload, including a safe incomplete final codepoint.
+  if (encoding !== "utf-8") return false;
+  const decoded = decodeTextBytes(bytes.subarray(0, limit), encoding, {
+    allowIncompleteTail: true,
+  });
+  return (
+    decoded === undefined || decoded.text.includes("\0") || decodedTextLooksBinary(decoded.text)
+  );
 }
 
 function decodedTextLooksBinary(text: string): boolean {
@@ -316,8 +333,7 @@ export function decodeTextFileBytes(
   const decoded = decodeTextBytes(bytes, undefined, options);
   return decoded === undefined ||
     decoded.text.includes("\0") ||
-    decodedTextLooksBinary(decoded.text) ||
-    looksBinary(bytes, { maxProbeBytes: bytes.length })
+    decodedTextLooksBinary(decoded.text)
     ? undefined
     : decoded;
 }

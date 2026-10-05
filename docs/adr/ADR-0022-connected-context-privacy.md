@@ -252,7 +252,10 @@ The shared size-admitted decoder accepts UTF-8, BOM or recognizable-pattern UTF-
 legacy HTML charsets supported by the platform's fatal `TextDecoder`, including Shift-JIS, Big5,
 and ISO-2022-JP. HTML declarations are inspected within the first 1,024 bytes; `http-equiv` charset
 parameters are case-insensitive, and standard aliases such as `iso_8859-1` resolve through the platform
-decoder. BOM detection retains precedence. No undeclared legacy encoding is guessed. Unknown or
+decoder. Empty charset values are absent hints, allowing a later supported declaration; nonempty
+unsupported declarations still refuse decoding. HTML metadata labels resolving to UTF-16LE/BE map
+to UTF-8, while actual BOM or recognizable-pattern detection retains precedence. A UTF-8 BOM does
+not bypass the bounded decoded NUL/control probe. No undeclared legacy encoding is guessed. Unknown or
 unavailable declared codecs remain unreadable eligible text: source search records `tool-unavailable`
 with `io-error` incomplete coverage, and source reads refuse as unreadable rather than claiming binary
 absence. Whole-file NUL/control checks still apply after decoding, including files with a BOM. A
