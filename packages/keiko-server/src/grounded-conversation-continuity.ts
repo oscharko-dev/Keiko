@@ -11,7 +11,11 @@ import {
   currentRedactionSecrets,
   type UiHandlerDeps,
 } from "./deps.js";
-import { captureChatHistoryWithCheckpoint, stampHistoryRevision } from "./chat-history-snapshot.js";
+import {
+  captureChatHistoryWithCheckpoint,
+  stampHistoryRevision,
+  type GatewayHistorySnapshot,
+} from "./chat-history-snapshot.js";
 import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import type { ChatMessage } from "./store/index.js";
@@ -79,7 +83,7 @@ function previousUserQuestion(history: readonly ChatMessage[]): string | undefin
 function assembleContinuity(
   deps: UiHandlerDeps,
   user: ChatMessage,
-  snapshot: ReturnType<typeof captureChatHistoryWithCheckpoint>,
+  snapshot: GatewayHistorySnapshot,
   profile: ContextProfile,
   historyPrefix: readonly ChatMessage[],
   query: { readonly originalQuery: string; readonly correlationId: string | undefined },

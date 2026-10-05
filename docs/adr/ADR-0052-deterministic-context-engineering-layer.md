@@ -141,9 +141,10 @@ The optional LiteLLM counter may still report a higher count and refuse admissio
 and gateway admission use the same local fallback, not a claim of provider-exact counting.
 
 **Undeclared windows (amended for the 1.1.13 field report).** A chat capability whose window nobody
-declared — a LiteLLM `hosted_vllm` deployment without any declared whole-window field or legacy
-`max_input_tokens` fallback, a mode-less discovered model, an Azure deployment set up without discovery, or an env-only provider — carries the 4,096
-setup placeholder flagged `contextWindowAssumed`. The placeholder is a floor only for surfaces that
+declared — a LiteLLM `hosted_vllm` deployment without `max_model_len`, `context_length`, or
+`context_window` (the recognised whole-window fields), and without the legacy `max_input_tokens`
+fallback, a mode-less discovered model, an Azure deployment set up without discovery, or an env-only
+provider — carries the 4,096 setup placeholder flagged `contextWindowAssumed`. The placeholder is a floor only for surfaces that
 need a proven window (the Coding Workbench). `deriveContextProfileFromCapability` plans an assumed
 window with the default geometry (128,000 input window, an 8,000 output reserve, or the declared
 output limit when that is smaller, and a 4,000 safety margin), because the 1.1.12 admission otherwise
