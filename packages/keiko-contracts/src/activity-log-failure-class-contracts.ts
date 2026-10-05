@@ -3517,7 +3517,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "embedding.scalar-ladder.completed",
       "embedding.scalar-ladder.item-completed",
     ],
-    requiredEvidenceClasses: ["completeness-state", "count", "digest", "loss-state"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },
