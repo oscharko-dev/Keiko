@@ -470,12 +470,10 @@ export function resolveQueryTargetDecision(
     strongTargets.length > 0
       ? strongTargets
       : anchors.filter((anchor) => anchor.kind === "literal" && /^\d+$/u.test(anchor.term));
-  const kind =
-    query.kind === "exact-symbol"
-      ? "literal-search"
-      : possibleTargets.length === 0
-        ? "contextual"
-        : positiveRequestKind(queryShapeOutsideTargets(query.text, possibleTargets));
+  let kind: QueryTargetDecision["kind"] = "contextual";
+  if (query.kind === "exact-symbol") kind = "literal-search";
+  else if (possibleTargets.length > 0)
+    kind = positiveRequestKind(queryShapeOutsideTargets(query.text, possibleTargets));
   const targets = kind === "literal-search" ? possibleTargets : strongTargets;
   const definitionRequested = hasDefinitionLookup(queryContextOutsideQuotes(query.text));
   return {
