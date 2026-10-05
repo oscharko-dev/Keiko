@@ -5,20 +5,31 @@
 // stack (useCodingWorkbenchRuntime → mutation queue → reducer → visibleAlert) against a stubbed
 // fetch, exactly the layer the silent failure lived in.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createSupportReport } from "@/lib/support-report-api";
 import { resetSupportReportOutcomesForTests } from "../../SupportReportButton";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
 
-vi.mock("@/lib/support-report-api", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/support-report-api")>()),
-  createSupportReport: vi.fn(),
-  createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
-}));
+const reportApi = vi.hoisted(() => {
+  let release = (): void => undefined;
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { ready, release, imports: 0, create: vi.fn() };
+});
+const createSupportReport = reportApi.create;
+vi.mock("@/lib/support-report-api", async (importOriginal) => {
+  reportApi.imports += 1;
+  await reportApi.ready;
+  return {
+    ...(await importOriginal<typeof import("@/lib/support-report-api")>()),
+    createSupportReport: reportApi.create,
+    createSupportReportDownload: vi.fn(() => ({ href: "blob:keiko-report", dispose: vi.fn() })),
+  };
+});
 
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
@@ -268,10 +279,20 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
     expect(alert).toHaveTextContent(CORRELATION_ID);
     const report = { fileName: "report.json", reportJson: "{}" };
     vi.mocked(createSupportReport).mockResolvedValueOnce(report);
+    expect(reportApi.imports).toBe(0);
     await user.click(screen.getByRole("button", { name: "Create error report" }));
-    expect(createSupportReport).toHaveBeenCalledExactlyOnceWith(
-      CORRELATION_ID,
-      expect.any(AbortSignal),
+    await waitFor(() => expect(reportApi.imports).toBe(1));
+    expect(createSupportReport).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Creating report…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await act(async () => reportApi.release());
+    await waitFor(() =>
+      expect(createSupportReport).toHaveBeenCalledExactlyOnceWith(
+        CORRELATION_ID,
+        expect.any(AbortSignal),
+      ),
     );
     expect(await screen.findByRole("link", { name: "Download report" })).toHaveAttribute(
       "download",
