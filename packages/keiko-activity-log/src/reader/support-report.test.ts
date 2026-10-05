@@ -226,16 +226,18 @@ describe("canonical body-free offline report", () => {
 
   it("round trips the largest admitted closure with its anchor and fitting optional context", () => {
     const { report, query } = countBoundedFixture(MAX_SUPPORT_REPORT_RECORDS - 2, true);
-    const parsed = parseSupportReport(serializeSupportReport(report));
-    expect(parsed.evidence.recordCount).toBe(MAX_SUPPORT_REPORT_RECORDS);
-    expect(parsed.selection).toMatchObject({
+    // The public analyzer validates the received bytes itself. Check its actual admitted records
+    // instead of parsing the same 20,000-record artifact once more before sending it to analysis.
+    const analyzed = analyzeSupportReport(serializeSupportReport(report));
+    expect(report.evidence.recordCount).toBe(MAX_SUPPORT_REPORT_RECORDS);
+    expect(analyzed.analysis.evidence.supportedLineCount).toBe(MAX_SUPPORT_REPORT_RECORDS);
+    expect(analyzed.reportDigest).toBe(report.integrity.reportDigest);
+    expect(analyzed.selection).toMatchObject({
       requiredRecordCount: MAX_SUPPORT_REPORT_RECORDS - 1,
       requiredBytes: query.truncation.requiredBytes,
       reasons: expect.arrayContaining(["context-truncated"]) as unknown,
     });
-    expect(parsed.selection.reasons).not.toContain("report-budget-exceeded");
-    const analysis = analyzeSupportReport(serializeSupportReport(parsed));
-    expect(analysis.selection.requiredRecordCount).toBe(MAX_SUPPORT_REPORT_RECORDS - 1);
+    expect(analyzed.selection.reasons).not.toContain("report-budget-exceeded");
   });
 
   it("exports a count requirement separately from bytes for an oversized required closure", () => {

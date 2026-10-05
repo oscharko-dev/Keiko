@@ -163,7 +163,8 @@ describe("executionControlledWorkspaceFs", () => {
       }
     }
     const control = { nowMs: (): number => 0, deadlineAtMs: Infinity };
-    const base = memFs(ROOT, {});
+    const base = { ...memFs(ROOT, {}) };
+    delete base.iterateDirectory;
     expect(executionControlledWorkspaceFs(base, control).iterateDirectory).toBeUndefined();
     const fs = Object.assign(new DirectoryAdapter(), base);
     const wrapped = executionControlledWorkspaceFs(fs, control);
