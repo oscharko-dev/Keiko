@@ -445,9 +445,16 @@ describe("fetchHealth diagnostic readiness", () => {
     ["a ready state that names a reason", { ...degraded, readiness: "ready" }],
     ["a negative lost-event count", { ...degraded, lostEvents: -1 }],
     ["a string", "degraded"],
-  ])("drops %s and keeps the version", async (_label, diagnostics) => {
-    stubHealth(diagnostics);
+  ])(
+    "drops %s, keeps the version, and exposes unavailable diagnostics",
+    async (_label, diagnostics) => {
+      stubHealth(diagnostics);
 
-    await expect(fetchHealth()).resolves.toEqual({ status: "ok", version: "1.0.0" });
-  });
+      await expect(fetchHealth()).resolves.toEqual({
+        status: "ok",
+        version: "1.0.0",
+        diagnosticsInvalid: true,
+      });
+    },
+  );
 });

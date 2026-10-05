@@ -11,8 +11,8 @@ function readinessUnavailable(health: BackendHealth): boolean {
   if (health.state === "unavailable") return true;
   return (
     health.state === "loaded" &&
-    health.health.diagnostics !== undefined &&
-    health.health.diagnostics.readiness !== "ready"
+    (health.health.diagnosticsInvalid === true ||
+      (health.health.diagnostics !== undefined && health.health.diagnostics.readiness !== "ready"))
   );
 }
 

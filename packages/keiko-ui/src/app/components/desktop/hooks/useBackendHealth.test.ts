@@ -51,6 +51,9 @@ describe("useBackendHealth", () => {
     await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
     expect(view.result.current).toEqual({ state: "unavailable" });
     expect(reportClientDiagnostic).toHaveBeenCalledOnce();
+    expect(vi.mocked(reportClientDiagnostic).mock.calls[0]?.[0]).toBe(
+      "[keiko] health read failed: TypeError",
+    );
     expect(vi.mocked(reportClientDiagnostic).mock.calls[0]?.[0]).not.toContain("private endpoint");
     fetch.mockResolvedValueOnce(ready);
     await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
@@ -74,4 +77,35 @@ describe("useBackendHealth", () => {
     });
     expect(reportClientDiagnostic).not.toHaveBeenCalled();
   });
+});
+
+it("reports invalid diagnostics once without discarding the installed version", async () => {
+  fetch.mockResolvedValue({ ...ready, diagnosticsInvalid: true });
+  const view = renderHook(useBackendHealth);
+  await act(async () => await Promise.resolve());
+  await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+  expect(view.result.current).toEqual({
+    state: "loaded",
+    health: { ...ready, diagnosticsInvalid: true },
+  });
+  expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
+    "[keiko] health diagnostics invalid: TypeError",
+    { errorKind: "validation-failed" },
+  );
+});
+
+it("does not overlap health polls or allow an older response to replace a newer snapshot", async () => {
+  let finish: ((value: HealthSnapshot) => void) | undefined;
+  fetch.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const view = renderHook(useBackendHealth);
+  await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS * 2));
+  expect(fetch).toHaveBeenCalledOnce();
+  await act(async () => finish?.(ready));
+  await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(view.result.current).toEqual({ state: "loaded", health: ready });
 });

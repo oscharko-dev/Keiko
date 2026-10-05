@@ -187,3 +187,18 @@ describe("DiagnosticReadinessNotice", () => {
     expect(screen.getByRole("button", { name: "Create error report" })).toBeEnabled();
   });
 });
+
+it.each(["en", "de"])("announces invalid readiness accessibly in %s", async (locale) => {
+  window.localStorage.setItem("keiko.locale", locale);
+  const health = { status: "ok" as const, version: "1.2.3", diagnosticsInvalid: true as const };
+  const view = renderNotice({ state: "loaded", health });
+  expect(
+    await screen.findByText(
+      locale === "de"
+        ? "Fehlerberichte können derzeit unvollständig sein."
+        : "Error reports may currently be incomplete.",
+    ),
+  ).toBeVisible();
+  expect(view.container.querySelector("output output")).toBeNull();
+  expect(await axe(view.container)).toHaveNoViolations();
+});

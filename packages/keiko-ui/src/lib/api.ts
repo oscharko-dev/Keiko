@@ -397,18 +397,20 @@ async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array
 
 /**
  * `GET /api/health` as the UI trusts it. `diagnostics` is kept only when it passes the closed
- * readiness contract (#3532); anything else is dropped rather than rendered, so the footer never
- * shows a readiness the server did not report.
+ * readiness contract (#3532). Present invalid diagnostics retain a body-free marker, so the
+ * workspace can report degraded evidence without rendering an untrusted server value.
  */
 export type HealthSnapshot = Omit<HealthResponse, "diagnostics"> & {
   readonly diagnostics?: HealthResponse["diagnostics"];
+  readonly diagnosticsInvalid?: true;
 };
 
 export async function fetchHealth(): Promise<HealthSnapshot> {
   const { diagnostics, ...health } = await fetchJson<
     Omit<HealthResponse, "diagnostics"> & { readonly diagnostics?: unknown }
   >("/api/health");
-  return isActivityLogReadinessSnapshot(diagnostics) ? { ...health, diagnostics } : health;
+  if (isActivityLogReadinessSnapshot(diagnostics)) return { ...health, diagnostics };
+  return diagnostics === undefined ? health : { ...health, diagnosticsInvalid: true };
 }
 
 // The Coding Workbench provider profile fetchers (sidecar gateway + Codex subscription) used

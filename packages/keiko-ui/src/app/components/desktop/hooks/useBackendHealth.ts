@@ -23,11 +23,18 @@ export function useBackendHealth(): BackendHealth {
   useEffect(() => {
     let cancelled = false;
     let failureReported = false;
+    let inFlight = false;
     async function readHealth(): Promise<void> {
+      if (inFlight || cancelled) return;
+      inFlight = true;
       try {
         const health = await fetchHealth();
-        failureReported = false;
         if (!cancelled) {
+          if (health.diagnosticsInvalid && !failureReported)
+            reportClientDiagnostic("[keiko] health diagnostics invalid: TypeError", {
+              errorKind: "validation-failed",
+            });
+          failureReported = health.diagnosticsInvalid === true;
           setBackendHealth((previous) =>
             previous.state === "loaded" &&
             JSON.stringify(previous.health) === JSON.stringify(health)
@@ -37,9 +44,8 @@ export function useBackendHealth(): BackendHealth {
         }
       } catch (error) {
         if (cancelled) return;
-        // The footer shows the version as unavailable and drops a readiness it can no longer vouch
-        // for. The failure is reported once per failure streak, by class only: a stopped server
-        // must not turn into one diagnostic per poll.
+        // The workspace exposes unavailable readiness instead of retaining stale success.
+        // A class-only diagnostic is emitted once per streak, not once per failed poll.
         if (!failureReported) {
           failureReported = true;
           reportClientDiagnostic(`[keiko] health read failed: ${clientErrorSummary(error)}`, {
@@ -49,6 +55,8 @@ export function useBackendHealth(): BackendHealth {
         setBackendHealth((previous) =>
           previous.state === "unavailable" ? previous : { state: "unavailable" },
         );
+      } finally {
+        inFlight = false;
       }
     }
     void readHealth();
