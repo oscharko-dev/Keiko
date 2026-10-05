@@ -199,15 +199,18 @@ function clientOnlyReportResponse(
 
 function reportPreparationFailure(ctx: RouteContext, error: unknown): RouteResult {
   const capacity = error instanceof SupportReportDeliveryCapacityError;
-  const reason = capacity ? "busy" : "unavailable";
   const failure =
-    error instanceof SupportReportJobError ? error : new SupportReportJobError(reason, error);
+    error instanceof SupportReportJobError
+      ? error
+      : new SupportReportJobError("unavailable", error);
   emitSupportReportFailed(
     ctx.correlationId,
     failure,
     undefined,
     capacity ? "delivery-capacity" : undefined,
   );
+  // Keep failed preparation recoverable through the browser-local report fallback.
+  // Only an active worker refusal is a retryable 429.
   return {
     status: failure.reason === "busy" ? 429 : 503,
     body: errorBody(

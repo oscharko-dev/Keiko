@@ -804,8 +804,12 @@ entries under byte or count pressure; unauthenticated limited creation cannot ev
 artifact. Before admitting a limited replacement, the cache checks the existing protected byte and
 entry reservations. If protected artifacts leave insufficient capacity, refusal preserves already
 prepared limited artifacts rather than evicting them in a futile attempt to fit the replacement.
-Genuine exhausted protected capacity returns the existing explicit delivery-capacity refusal rather
-than growing memory. The routine `support.report.ui.delivery-released` state records actual expiry,
+Genuine exhausted protected capacity returns a `503 SUPPORT_REPORT_UNAVAILABLE` response and
+records the closed `delivery-capacity` reason, allowing the existing browser-local report fallback
+without growing memory. Quota, evaluation and report-size refusals intentionally use the same
+recoverable preparation response; the Activity Log preserves their specific closed reasons. Only
+an active-worker `busy` refusal remains `429`; a missing requested selection retains its distinct
+`SUPPORT_REPORT_SELECTION_UNAVAILABLE` code. The routine `support.report.ui.delivery-released` state records actual expiry,
 byte-pressure or entry-pressure disposal using the original creation correlation, canonical and
 charged retained byte counts, and closed authority and evidence scope. It contains no attachment
 token, filename or report body and does not claim evidence loss or an operating-system save. Expiry makes report creation available again. The response uses `no-store`,

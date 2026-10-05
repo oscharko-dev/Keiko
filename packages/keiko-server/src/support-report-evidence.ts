@@ -137,29 +137,6 @@ const DELIVERED = defineActivityLogOperation({
   proofIds: ["support.report.ui.delivered.line"],
 });
 
-export function emitSupportReportDelivered(
-  correlationId: string | undefined,
-  reportBytes: number,
-  deliveryAuthority: "session-bound" | "client-only",
-  parentCorrelationId?: string,
-  reportDigest?: string,
-  evidenceScope?: "server" | "client-only",
-  transportBytes?: number,
-): void {
-  getServerLogger().info(
-    activityLogEvent(DELIVERED, reportCorrelation(correlationId, parentCorrelationId), {
-      reportBytes,
-      ...(transportBytes === undefined ? {} : { transportBytes }),
-      ...(reportDigest === undefined ? {} : { reportDigest }),
-      deliveryAuthority,
-      evidenceScope:
-        evidenceScope ?? (deliveryAuthority === "client-only" ? "client-only" : "server"),
-      completeness: "complete",
-      loss: "none",
-    }),
-  );
-}
-
 const DELIVERY_RELEASED = defineActivityLogOperation({
   ...BASE,
   op: "support.report.ui.delivery-released",
@@ -181,31 +158,6 @@ const DELIVERY_RELEASED = defineActivityLogOperation({
   proofIds: ["support.report.ui.delivery-released.line"],
 });
 
-export function emitSupportReportDeliveryReleased(
-  correlationId: string | undefined,
-  reason: "expired" | "byte-pressure" | "entry-pressure",
-  reportBytes: number,
-  retainedBytes: number,
-  deliveryAuthority: "session-bound" | "client-only",
-  evidenceScope: "server" | "client-only",
-): void {
-  getServerLogger().info(
-    activityLogEvent(
-      DELIVERY_RELEASED,
-      { correlationId: correlationIdOrUnknown(correlationId) },
-      {
-        reason,
-        reportBytes,
-        retainedBytes,
-        deliveryAuthority,
-        evidenceScope,
-        completeness: "complete",
-        loss: "none",
-      },
-    ),
-  );
-}
-
 const DOWNLOAD_REFUSED = defineActivityLogOperation({
   ...BASE,
   op: "support.report.ui.download-refused",
@@ -224,20 +176,6 @@ const DOWNLOAD_REFUSED = defineActivityLogOperation({
   },
   proofIds: ["support.report.ui.download-refused.line"],
 });
-
-export function emitSupportReportDownloadRefused(
-  correlationId: string | undefined,
-  reason: "no-session" | "other-session" | "expired-or-unknown",
-  httpStatus: 403 | 404,
-): void {
-  getServerLogger().info(
-    activityLogEvent(
-      DOWNLOAD_REFUSED,
-      { correlationId: correlationIdOrUnknown(correlationId) },
-      { reason, httpStatus, completeness: "complete", loss: "none" },
-    ),
-  );
-}
 
 const FAILED = defineActivityLogOperation({
   ...BASE,
@@ -282,6 +220,77 @@ const FAILED = defineActivityLogOperation({
   },
   proofIds: ["support.report.ui.failed.lifecycle"],
 });
+
+interface DeliveredReportEvidence {
+  readonly correlationId: string | undefined;
+  readonly reportBytes: number;
+  readonly deliveryAuthority: "session-bound" | "client-only";
+  readonly parentCorrelationId?: string | undefined;
+  readonly reportDigest?: string | undefined;
+  readonly evidenceScope?: "server" | "client-only" | undefined;
+  readonly transportBytes: number;
+}
+
+export function emitSupportReportDelivered(options: DeliveredReportEvidence): void {
+  getServerLogger().info(
+    activityLogEvent(
+      DELIVERED,
+      reportCorrelation(options.correlationId, options.parentCorrelationId),
+      {
+        reportBytes: options.reportBytes,
+        transportBytes: options.transportBytes,
+        ...(options.reportDigest === undefined ? {} : { reportDigest: options.reportDigest }),
+        deliveryAuthority: options.deliveryAuthority,
+        evidenceScope:
+          options.evidenceScope ??
+          (options.deliveryAuthority === "client-only" ? "client-only" : "server"),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+export function emitSupportReportDeliveryReleased(
+  correlationId: string | undefined,
+  reason: "expired" | "byte-pressure" | "entry-pressure",
+  reportBytes: number,
+  retainedBytes: number,
+  deliveryAuthority: "session-bound" | "client-only",
+  evidenceScope: "server" | "client-only",
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      DELIVERY_RELEASED,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        reason,
+        reportBytes,
+        retainedBytes,
+        deliveryAuthority,
+        evidenceScope,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+export function emitSupportReportDownloadRefused(
+  correlationId: string | undefined,
+  reason: "no-session" | "other-session" | "expired-or-unknown",
+  httpStatus: 403 | 404,
+  parentCorrelationId?: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(DOWNLOAD_REFUSED, reportCorrelation(correlationId, parentCorrelationId), {
+      reason,
+      httpStatus,
+      completeness: "complete",
+      loss: "none",
+    }),
+  );
+}
 
 export function emitSupportReportStarted(
   correlationId: string | undefined,

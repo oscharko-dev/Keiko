@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { gunzipSync } from "node:zlib";
+import * as crypto from "node:crypto";
 import * as zlib from "node:zlib";
 import {
   createClientOnlySupportReport,
@@ -27,10 +28,12 @@ import { resetServerLogger } from "../../../tests/support/activity-log-test-supp
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
-import { STREAMING, type RouteContext } from "./routes.js";
+import { matchRoute, STREAMING, type RouteContext } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 
 vi.mock("node:zlib", { spy: true });
+vi.mock("node:crypto", { spy: true });
 
 const report = {
   fileName: supportReportFileName(1, "aabbccddeeff".padEnd(32, "0"), Date.UTC(2026, 9, 3)),
@@ -73,6 +76,18 @@ function holdCompression(): () => void {
     finish();
   };
 }
+function applyDeliveryPressure(
+  owner: UiHandlerDeps,
+  reason: "byte-pressure" | "entry-pressure",
+): void {
+  const artifact =
+    reason === "byte-pressure"
+      ? { ...report, reportJson: "x".repeat(MAX_SUPPORT_REPORT_BYTES) }
+      : report;
+  const count = reason === "byte-pressure" ? 2 : 128;
+  for (let index = 0; index < count; index += 1)
+    cacheSupportReportDownload(owner, "protected-session", artifact);
+}
 afterEach(() => {
   vi.useRealTimers();
   resetServerLogger();
@@ -83,11 +98,12 @@ describe("authenticated canonical report attachment", () => {
     { session: undefined, status: 403, reason: "no-session", known: true },
     { session: "other-session", status: 404, reason: "other-session", known: true },
     { session: "owner-session", status: 404, reason: "expired-or-unknown", known: false },
+    { session: undefined, status: 404, reason: "expired-or-unknown", known: false },
   ])("records routine refusal evidence for $reason without claiming delivery", async (control) => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const owner = deps(control.session);
-    const cached = cacheSupportReportDownload(owner, "owner-session", report);
+    const cached = cacheSupportReportDownload(owner, "owner-session", report, "creation-test");
     expect(isSupportReportDownloadPath(cached.downloadPath)).toBe(true);
     const ctx = context(
       control.known ? cached.downloadPath : "/api/diagnostics/report/download/unknown",
@@ -98,6 +114,7 @@ describe("authenticated canonical report attachment", () => {
       level: "info",
       correlationId: ctx.correlationId,
     });
+    expect(refusal?.parentCorrelationId).toBe(control.known ? "creation-test" : undefined);
     expect(refusal?.extra).toMatchObject({
       reason: control.reason,
       completeness: "complete",
@@ -116,6 +133,22 @@ describe("authenticated canonical report attachment", () => {
     });
     expect(sink.lines().join("\n")).not.toContain(cached.downloadPath);
     expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
+  });
+  it("matches the registered download handler for the path emitted by the cache", () => {
+    const cached = cacheSupportReportDownload(deps("owner-session"), "owner-session", report);
+    expect(matchRoute("GET", cached.downloadPath)).toMatchObject({
+      definition: { handler: handleDownloadSupportReport },
+      params: { downloadId: cached.downloadPath.split("/").at(-1) },
+    });
+  });
+  it("validates the download identity before retaining bytes or arming expiry", () => {
+    vi.useFakeTimers();
+    const owner = deps("owner-session");
+    vi.mocked(crypto.randomUUID).mockReturnValueOnce(
+      "invalid" as ReturnType<typeof crypto.randomUUID>,
+    );
+    expect(() => cacheSupportReportDownload(owner, "owner-session", report)).toThrow(TypeError);
+    expect(vi.getTimerCount()).toBe(0);
   });
   it("keeps a single admitted boundary-size artifact repeatable after compression", async () => {
     const owner = deps("owner-session");
@@ -185,7 +218,12 @@ describe("authenticated canonical report attachment", () => {
     const channel = owner.codingAppSessionChannel;
     if (channel === undefined) throw new TypeError("Missing session channel");
     vi.spyOn(channel, "verifySession").mockImplementation(registry.verify);
-    const cached = cacheSupportReportDownload(owner, mint.session.sessionId, report);
+    const cached = cacheSupportReportDownload(
+      owner,
+      mint.session.sessionId,
+      report,
+      "creation-test",
+    );
     const ctx = context(cached.downloadPath);
     ctx.req.headers.cookie = `${APP_SESSION_COOKIE_NAME}=${mint.cookieToken}`;
     const headers = vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
@@ -206,7 +244,12 @@ describe("authenticated canonical report attachment", () => {
         "support.report.ui.download-refused.line",
         formatActivityLogProofLine(refusal[0] ?? {}),
       ),
-    ).toMatchObject({ correlationId: ctx.correlationId, reason: "no-session", httpStatus: 403 });
+    ).toMatchObject({
+      correlationId: ctx.correlationId,
+      parentCorrelationId: "creation-test",
+      reason: "no-session",
+      httpStatus: 403,
+    });
     expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
   });
   it.each(["expiry", "destroyed-response"] as const)(
@@ -243,7 +286,7 @@ describe("authenticated canonical report attachment", () => {
       expect(proof).toMatchObject({
         correlationId: ctx.correlationId,
         ...(control === "expiry"
-          ? { reason: "expired-or-unknown", httpStatus: 404 }
+          ? { reason: "expired-or-unknown", httpStatus: 404, parentCorrelationId: "creation-test" }
           : { errorKind: "cancelled", parentCorrelationId: "creation-test" }),
       });
       expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
@@ -277,33 +320,33 @@ describe("authenticated canonical report attachment", () => {
       status: 404,
     });
   });
-  it.each(["expired", "byte-pressure", "entry-pressure"] as const)(
-    "records actual %s disposal under the original creation correlation without capability material",
-    async (reason) => {
+  it.each(
+    (["client-only", "session-bound"] as const).flatMap((authority) =>
+      (["expired", "byte-pressure", "entry-pressure"] as const).map((reason) => ({
+        authority,
+        reason,
+      })),
+    ),
+  )(
+    "records $authority $reason disposal under its creation correlation without capability material",
+    async ({ authority, reason }) => {
       vi.useFakeTimers();
       const sink = createBufferedServerLogSink();
       setServerLogger(createServerLogger({ sink, level: "debug" }));
       const owner = deps("protected-session");
-      const limited = createClientOnlySupportReport("original-client-cause", "session-unavailable");
+      const artifact =
+        authority === "session-bound"
+          ? report
+          : createClientOnlySupportReport("original-client-cause", "session-unavailable");
       const target = cacheSupportReportDownload(
         owner,
-        undefined,
-        limited,
+        authority === "session-bound" ? "protected-session" : undefined,
+        artifact,
         "original-report-creation",
       );
       if (reason === "expired")
         await vi.advanceTimersByTimeAsync(target.downloadExpiresAtMs - Date.now());
-      if (reason === "byte-pressure") {
-        for (let index = 0; index < 2; index += 1)
-          cacheSupportReportDownload(owner, "protected-session", {
-            ...report,
-            reportJson: "x".repeat(MAX_SUPPORT_REPORT_BYTES),
-          });
-      }
-      if (reason === "entry-pressure") {
-        for (let index = 0; index < 128; index += 1)
-          cacheSupportReportDownload(owner, "protected-session", report);
-      }
+      if (reason !== "expired") applyDeliveryPressure(owner, reason);
       const release = sink.events.find(
         (event) => event.op === "support.report.ui.delivery-released",
       );
@@ -313,15 +356,15 @@ describe("authenticated canonical report attachment", () => {
         expectActivityLogProof("support.report.ui.delivery-released.line", line),
       ).toMatchObject({
         reason,
-        reportBytes: Buffer.byteLength(limited.reportJson),
-        retainedBytes: Buffer.byteLength(limited.reportJson),
-        deliveryAuthority: "client-only",
-        evidenceScope: "client-only",
+        reportBytes: Buffer.byteLength(artifact.reportJson),
+        retainedBytes: Buffer.byteLength(artifact.reportJson),
+        deliveryAuthority: authority,
+        evidenceScope: authority === "session-bound" ? "server" : "client-only",
         completeness: "complete",
         loss: "none",
       });
       expect(line).not.toContain(target.downloadPath);
-      expect(line).not.toContain(limited.fileName);
+      expect(line).not.toContain(artifact.fileName);
       expect(sink.events.some((event) => event.op === "support.report.ui.delivered")).toBe(false);
       expect(await handleDownloadSupportReport(context(target.downloadPath), owner)).toMatchObject({
         status: 404,
@@ -329,6 +372,73 @@ describe("authenticated canonical report attachment", () => {
     },
   );
 
+  it.each(["creation-test", undefined])(
+    "releases compressed retained bytes once across prune and timer for creation %s",
+    async (creationCorrelationId) => {
+      vi.useFakeTimers();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const owner = deps("owner-session");
+      const artifact = { ...report, reportJson: '"' + "x".repeat(10_000) + '"' };
+      const cached = cacheSupportReportDownload(
+        owner,
+        "owner-session",
+        artifact,
+        creationCorrelationId,
+      );
+      const ctx = context(cached.downloadPath);
+      vi.spyOn(ctx.res, "writeHead").mockReturnValue(ctx.res);
+      const end = vi.spyOn(ctx.res, "end").mockReturnValue(ctx.res);
+      await handleDownloadSupportReport(ctx, owner);
+      const bytes = attachmentBytes(end.mock.calls[0]?.[0]).length;
+      expect(bytes).toBeLessThan(Buffer.byteLength(artifact.reportJson));
+      vi.setSystemTime(cached.downloadExpiresAtMs);
+      expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({
+        status: 404,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const released = sink.events.filter(
+        (event) => event.op === "support.report.ui.delivery-released",
+      );
+      expect(released).toHaveLength(1);
+      expect(
+        expectActivityLogProof(
+          "support.report.ui.delivery-released.line",
+          formatActivityLogProofLine(released[0] ?? {}),
+        ),
+      ).toMatchObject({
+        correlationId: creationCorrelationId ?? UNKNOWN_CORRELATION_ID,
+        reason: "expired",
+        reportBytes: Buffer.byteLength(artifact.reportJson),
+        retainedBytes: bytes,
+        deliveryAuthority: "session-bound",
+        evidenceScope: "server",
+      });
+    },
+  );
+  it("withdraws expired delivery and cancels its timer even when the log sink throws", async () => {
+    vi.useFakeTimers();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const owner = deps("owner-session");
+    const cached = cacheSupportReportDownload(owner, "owner-session", report, "creation-test");
+    const write = vi.spyOn(sink, "write").mockImplementationOnce(() => {
+      throw new TypeError("private-sink-failure");
+    });
+    vi.setSystemTime(cached.downloadExpiresAtMs);
+    expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({
+      status: 404,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await handleDownloadSupportReport(context(cached.downloadPath), owner)).toMatchObject({
+      status: 404,
+    });
+    expect(
+      write.mock.calls.filter(([event]) => event.op === "support.report.ui.delivery-released"),
+    ).toHaveLength(1);
+  });
   it("delivers standard gzip preserving exact canonical producer bytes and strict integrity", async () => {
     const canonicalReport = createClientOnlySupportReport("gzip-attachment", "session-unavailable");
     const owner = deps(undefined);
@@ -581,7 +691,7 @@ describe("authenticated canonical report attachment", () => {
     const cached = cacheSupportReportDownload(owner, "owner-session", report);
     expect(
       await handleDownloadSupportReport(context(cached.downloadPath), deps(undefined)),
-    ).toMatchObject({ status: 403 });
+    ).toMatchObject({ status: 404 });
     expect(
       await handleDownloadSupportReport(context(cached.downloadPath), deps("other-session")),
     ).toMatchObject({ status: 404 });

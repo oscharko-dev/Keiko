@@ -113,7 +113,9 @@ export function supportReportFileName(
   createdAtMs: number,
 ): string {
   const date = new Date(createdAtMs).toISOString().slice(0, 10);
-  return `keiko-support-v${String(schemaVersion)}-${incidentId.slice(0, 12)}-${date}.json`;
+  const fileName = `keiko-support-v${String(schemaVersion)}-${incidentId.slice(0, 12)}-${date}.json`;
+  if (!isSupportReportFileName(fileName)) throw new TypeError("Invalid support report file name");
+  return fileName;
 }
 
 export function isSupportReportFileName(name: string): boolean {

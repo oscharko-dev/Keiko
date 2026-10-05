@@ -100,6 +100,8 @@ export function cacheSupportReportDownload(
   const bytes = Buffer.byteLength(report.reportJson);
   if (bytes > MAX_SUPPORT_REPORT_BYTES || !isSupportReportFileName(report.fileName))
     throw new TypeError("Invalid support report delivery artifact");
+  const id = randomUUID();
+  const downloadPath = supportReportDownloadPath(id);
   const cache = caches.get(deps) ?? new Map<string, Delivery>();
   caches.set(deps, cache);
   prune(cache, Date.now());
@@ -107,7 +109,6 @@ export function cacheSupportReportDownload(
     validateLimitedDelivery(report);
     assertLimitedDeliveryCapacity(cache, bytes);
   }
-  const id = randomUUID();
   const expiresAtMs = Date.now() + SUPPORT_REPORT_DELIVERY_TTL_MS;
   const authority =
     sessionId === undefined
@@ -134,7 +135,7 @@ export function cacheSupportReportDownload(
   prune(cache, Date.now());
   if (!cache.has(id)) throw new SupportReportDeliveryCapacityError();
   return {
-    downloadPath: supportReportDownloadPath(id),
+    downloadPath,
     downloadExpiresAtMs: expiresAtMs,
   };
 }
@@ -145,15 +146,15 @@ export async function handleDownloadSupportReport(
 ): Promise<HandlerOutcome> {
   const cache = caches.get(deps);
   if (cache !== undefined) prune(cache, Date.now());
-  const entry = cache?.get(ctx.params.downloadId ?? "");
-  const denied = authorizeDelivery(ctx, deps, entry);
-  if (denied !== undefined) return denied;
-  if (entry === undefined) throw new TypeError("Missing authorized report delivery");
+  const authorization = authorizeDelivery(ctx, deps, cache?.get(ctx.params.downloadId ?? ""));
+  if (authorization.kind === "denied") return authorization.response;
+  const entry = authorization.entry;
   try {
     const bytes = await compressedReport(entry, cache);
-    const currentDenied = authorizeDelivery(ctx, deps, entry);
-    if (currentDenied !== undefined) return currentDenied;
-    if (Date.now() >= entry.expiresAtMs) return refusedDelivery(ctx, 404, "expired-or-unknown");
+    const currentAuthorization = authorizeDelivery(ctx, deps, entry);
+    if (currentAuthorization.kind === "denied") return currentAuthorization.response;
+    if (Date.now() >= entry.expiresAtMs)
+      return refusedDelivery(ctx, 404, "expired-or-unknown", entry.creationCorrelationId);
     if (ctx.res.destroyed) {
       reportFailedDelivery(ctx, entry, "cancelled");
       return STREAMING;
@@ -168,26 +169,39 @@ export async function handleDownloadSupportReport(
   }
 }
 
+type DeliveryAuthorization =
+  | { readonly kind: "allowed"; readonly entry: Delivery }
+  | { readonly kind: "denied"; readonly response: HandlerOutcome };
+
 function authorizeDelivery(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   entry: Delivery | undefined,
-): HandlerOutcome | undefined {
-  if (entry?.authority.kind === "client-only") return undefined;
+): DeliveryAuthorization {
+  if (entry === undefined)
+    return { kind: "denied", response: refusedDelivery(ctx, 404, "expired-or-unknown") };
+  if (entry.authority.kind === "client-only") return { kind: "allowed", entry };
   const session = resolveAppSessionReadAuthority(deps, ctx.req);
-  if (session === undefined) return refusedDelivery(ctx, 403, "no-session");
-  if (entry === undefined) return refusedDelivery(ctx, 404, "expired-or-unknown");
+  if (session === undefined)
+    return {
+      kind: "denied",
+      response: refusedDelivery(ctx, 403, "no-session", entry.creationCorrelationId),
+    };
   if (entry.authority.sessionId !== session.sessionId)
-    return refusedDelivery(ctx, 404, "other-session");
-  return undefined;
+    return {
+      kind: "denied",
+      response: refusedDelivery(ctx, 404, "other-session", entry.creationCorrelationId),
+    };
+  return { kind: "allowed", entry };
 }
 
 function refusedDelivery(
   ctx: RouteContext,
   status: 403 | 404,
   reason: "no-session" | "other-session" | "expired-or-unknown",
+  parentCorrelationId?: string,
 ): HandlerOutcome {
-  emitSupportReportDownloadRefused(ctx.correlationId, reason, status);
+  emitSupportReportDownloadRefused(ctx.correlationId, reason, status, parentCorrelationId);
   return {
     status,
     body: errorBody(
@@ -238,7 +252,7 @@ function reportFailedDelivery(
   );
 }
 
-function observeDelivery(ctx: RouteContext, entry: Delivery, reportBytes: number): () => void {
+function observeDelivery(ctx: RouteContext, entry: Delivery, transportBytes: number): () => void {
   const cleanup = (): void => {
     ctx.res.off("finish", finished);
     ctx.res.off("close", closed);
@@ -246,15 +260,15 @@ function observeDelivery(ctx: RouteContext, entry: Delivery, reportBytes: number
   };
   const finished = (): void => {
     cleanup();
-    emitSupportReportDelivered(
-      ctx.correlationId,
-      entry.canonicalBytes,
-      entry.authority.kind,
-      entry.creationCorrelationId,
-      entry.report.summary?.reportDigest,
-      entry.report.evidenceScope ?? "server",
-      reportBytes,
-    );
+    emitSupportReportDelivered({
+      correlationId: ctx.correlationId,
+      reportBytes: entry.canonicalBytes,
+      deliveryAuthority: entry.authority.kind,
+      parentCorrelationId: entry.creationCorrelationId,
+      reportDigest: entry.report.summary?.reportDigest,
+      evidenceScope: entry.report.evidenceScope,
+      transportBytes,
+    });
   };
   const closed = (): void => {
     cleanup();

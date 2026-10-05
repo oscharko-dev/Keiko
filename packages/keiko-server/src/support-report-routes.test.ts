@@ -222,7 +222,7 @@ describe("desktop support report transport", () => {
       }
       const result = await handleCreateSupportReport(context("{}"), owner);
       expect(result).toMatchObject({
-        status: 429,
+        status: 503,
         body: { error: { code: "SUPPORT_REPORT_UNAVAILABLE", correlationId: "report-route-test" } },
       });
       const failures = sink.events.filter((event) => event.op === "support.report.ui.failed");
@@ -233,7 +233,7 @@ describe("desktop support report transport", () => {
           "support.report.ui.failed.lifecycle",
           formatActivityLogProofLine(failures[0] ?? {}),
         ),
-      ).toMatchObject({ reason: "delivery-capacity", errorKind: "rate-limited" });
+      ).toMatchObject({ reason: "delivery-capacity", errorKind: "unavailable" });
       expect(sink.events.some((event) => event.op === "support.report.ui.completed")).toBe(false);
     },
   );
@@ -751,7 +751,18 @@ describe("desktop support report transport", () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     vi.mocked(runSupportReportJob).mockRejectedValue(new SupportReportJobError(reason));
-    await handleCreateSupportReport(context("{}"), deps());
+    expect(await handleCreateSupportReport(context("{}"), deps())).toMatchObject({
+      status: reason === "busy" ? 429 : 503,
+      body: {
+        error: {
+          code:
+            reason === "selection-unavailable"
+              ? "SUPPORT_REPORT_SELECTION_UNAVAILABLE"
+              : "SUPPORT_REPORT_UNAVAILABLE",
+          correlationId: "report-route-test",
+        },
+      },
+    });
     const failed = sink.events.find((event) => event.op === "support.report.ui.failed");
     expect(failed?.level).toBe("warn");
     expect(failed?.errorKind).not.toBe("internal");

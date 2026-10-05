@@ -13,6 +13,25 @@ describe("closed support report attachment identities", () => {
     ).toBe(true);
   });
 
+  it.each([0, -1, 1.5, 10_000, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses to construct a filename outside the schema grammar: %s",
+    (schema) => {
+      expect(() => supportReportFileName(schema, "a".repeat(32), Date.UTC(2026, 9, 3))).toThrow(
+        TypeError,
+      );
+    },
+  );
+  it.each(["short", "A".repeat(32), "not-a-private-incident", "g".repeat(32)])(
+    "refuses to construct a filename from an invalid incident prefix: %s",
+    (incidentId) => {
+      expect(() => supportReportFileName(1, incidentId, Date.UTC(2026, 9, 3))).toThrow(TypeError);
+    },
+  );
+  it("refuses a date outside the four-digit filename grammar", () => {
+    expect(() => supportReportFileName(1, "a".repeat(32), Date.UTC(10_000, 9, 3))).toThrow(
+      TypeError,
+    );
+  });
   it("accepts the same-origin opaque path emitted by the shared producer", () => {
     const path = supportReportDownloadPath("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     expect(isSupportReportDownloadPath(path)).toBe(true);
