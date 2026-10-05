@@ -10,6 +10,7 @@ import {
 
 import type { SearchAnchor } from "../planner/index.js";
 
+import { DEFAULT_FILTER_OPTIONS } from "./filter.js";
 import { rankCandidates, type RankingOptions } from "./rank.js";
 
 const FIXED_NOW = 1_700_000_000_000;
@@ -142,6 +143,44 @@ describe("rankCandidates", () => {
     );
     const reasons = result.omitted.map((o) => o.reason);
     expect(reasons.includes("generated")).toBe(true);
+  });
+
+  it("forwards certified exact-content exemptions without exempting unrelated or generated paths", () => {
+    const input = {
+      atoms: [
+        atom("src/strong.ts", 1),
+        atom("src/exact.ts", 0.01),
+        atom("src/unrelated.ts", 0.01),
+        atom("src/dist/generated.ts", 0.01),
+      ],
+      anchors: [],
+    };
+    const baseline = rankCandidates(input, BASE_OPTIONS);
+    expect(baseline.kept.map((candidate) => candidate.scopePath)).toEqual(["src/strong.ts"]);
+    expect(baseline.omitted).toContainEqual({
+      scopePath: "src/exact.ts",
+      reason: "low-relevance",
+      omittedAtMs: FIXED_NOW,
+    });
+    const result = rankCandidates(input, {
+      ...BASE_OPTIONS,
+      filter: {
+        ...DEFAULT_FILTER_OPTIONS,
+        minScoreExemptPaths: new Set(["src/exact.ts", "src/dist/generated.ts"]),
+      },
+    });
+    expect(result.kept.map((candidate) => candidate.scopePath)).toEqual([
+      "src/strong.ts",
+      "src/exact.ts",
+    ]);
+    expect(result.kept[1]?.score).toBeLessThan(DEFAULT_FILTER_OPTIONS.minScore);
+    expect(result.omitted).toEqual([
+      { scopePath: "src/dist/generated.ts", reason: "generated", omittedAtMs: FIXED_NOW },
+      { scopePath: "src/unrelated.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW },
+    ]);
+    expect(result.diagnostics.keptCount).toBe(2);
+    expect(result.diagnostics.omittedCounts.generated).toBe(1);
+    expect(result.diagnostics.omittedCounts["low-relevance"]).toBe(1);
   });
 
   it("omits a near-duplicate via the hints map with reason near-duplicate", () => {
