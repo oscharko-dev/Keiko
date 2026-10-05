@@ -263,7 +263,7 @@ function expectRejectedPublicationCleanup(
   expect(
     expectActivityLogProof("support.incident.rejected.emitted-line", failures[0] ?? ""),
   ).toMatchObject({
-    reason,
+    rejectionReason: reason,
     trigger,
     correlationId:
       trigger === "user-report" ? "failed-manual-publication" : "failed-registered-publication",
@@ -1304,7 +1304,7 @@ describe("rolling diagnostic candidate retention", () => {
         expectActivityLogProof("activity-log.pin.expired.emitted-line", releases[0] ?? ""),
       ).toMatchObject({
         correlationId: "failed-registered-publication",
-        reason: "released",
+        expiryReason: "released",
       });
       const source = persistedActivityLogLines(text, "coding-runtime.readiness.failed");
       expect(source).toHaveLength(1);
