@@ -12133,9 +12133,12 @@ describe("selected metadata responsiveness", () => {
           return Promise.resolve(
             outcome === "http-error"
               ? new Response(null, { status: 503 })
-              : new Response(JSON.stringify({ data: [] }), {
-                  headers: { "content-type": "application/json" },
-                }),
+              : new Response(
+                  outcome === "invalid-json" ? "not-json" : JSON.stringify({ data: [] }),
+                  {
+                    headers: { "content-type": "application/json" },
+                  },
+                ),
           );
         }),
       );
@@ -12147,7 +12150,7 @@ describe("selected metadata responsiveness", () => {
         extra: {
           outcome: "available",
           discoverySource: "model-group-info",
-          modelInfoOutcome: outcome,
+          modelInfoOutcome: outcome === "invalid-json" ? "unusable" : outcome,
           modelGroupInfoOutcome: "available",
           modelListOutcome: "not-attempted",
         },
