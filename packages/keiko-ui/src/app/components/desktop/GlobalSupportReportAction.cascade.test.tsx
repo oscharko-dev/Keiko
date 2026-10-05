@@ -1,4 +1,4 @@
-import { act, render, renderHook, screen } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -52,6 +52,7 @@ it("retains the first undismissed failure and its pending download through a cas
   );
   const original = currentGlobalClientFailure();
   await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+  await waitFor(() => expect(createSupportReport).toHaveBeenCalledOnce());
   const signal = vi.mocked(createSupportReport).mock.calls[0]?.[1];
   act(() =>
     reportClientDiagnostic("[keiko] uncaught window error: Error", {
