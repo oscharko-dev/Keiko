@@ -9,6 +9,24 @@ function run(text: string, maxAnchors = 8): AnchorExtractionResult {
 }
 
 describe("extractAnchors", () => {
+  it("preserves source spelling only when case-sensitive extraction is requested", () => {
+    const text = 'Find "CaseProbe" and "caseprobe" beside `İzinProbe` and React.';
+    const ordinary = extractAnchors({ text, maxAnchors: 20 });
+    expect(
+      ordinary.anchors.filter((anchor) => anchor.kind === "quoted").map((anchor) => anchor.term),
+    ).toEqual(["caseprobe"]);
+    const sensitive = extractAnchors({ text, maxAnchors: 20, caseSensitive: true });
+    expect(
+      sensitive.anchors.filter((anchor) => anchor.kind === "quoted").map((anchor) => anchor.term),
+    ).toEqual(["CaseProbe", "caseprobe"]);
+    expect(sensitive.anchors.map((anchor) => anchor.term)).toEqual(
+      expect.arrayContaining(["İzinProbe", "React"]),
+    );
+    expect(ordinary.anchors.map((anchor) => anchor.term)).toEqual(
+      expect.arrayContaining(["i̇zinprobe", "react"]),
+    );
+  });
+
   it("preserves ADR and RFC references as high-confidence identifier anchors", () => {
     const result = extractAnchors({
       text: "Vergleiche ADR-0129 mit RFC-9110.",

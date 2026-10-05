@@ -1931,13 +1931,41 @@ function trimAnchorEdgeDots(value: string): string {
   return value.slice(start, end);
 }
 
+function lexicalSourceSpellings(
+  query: RetrievalQuery,
+  anchors: readonly SearchAnchor[],
+): readonly string[] {
+  if (!query.caseSensitive || query.kind !== "natural-language") {
+    return anchors.map((anchor) => anchor.term);
+  }
+  const selected = new Set(anchors.map((anchor) => anchor.term));
+  return extractAnchors({
+    text: query.text,
+    maxAnchors: query.text.length,
+    caseSensitive: true,
+  })
+    .anchors.filter((anchor) => selected.has(anchor.term.toLowerCase()))
+    .map((anchor) => anchor.term);
+}
+
 function anchoredLexicalTargets(inputs: SearchInputs): readonly string[] {
-  return primaryLexicalAnchors(
+  const anchors = primaryLexicalAnchors(
     inputs.query,
     inputs.anchors,
     inputs.retrievalIntent,
     inputs.targetDecision,
-  ).map((anchor) => anchor.term);
+  );
+  return lexicalSourceSpellings(inputs.query, anchors);
+}
+
+function lexicalDefinitionSymbol(inputs: SearchInputs): string | undefined {
+  const symbol = inputs.targetDecision.definitionSymbol;
+  if (symbol === undefined || !inputs.query.caseSensitive) return symbol;
+  const spellings = lexicalSourceSpellings(
+    inputs.query,
+    inputs.targetDecision.targets.filter((anchor) => anchor.term === symbol),
+  );
+  return spellings.length === 1 ? spellings[0] : undefined;
 }
 
 function primaryContentPaths(rings: RingRunSummary): ReadonlySet<string> {
@@ -2028,8 +2056,11 @@ interface ContextSearchResult extends SearchResult {
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
 }
 
-function lexicalQuery(inputs: SearchInputs, terms: readonly string[]): RetrievalQuery {
-  const symbol = inputs.targetDecision.definitionSymbol;
+function lexicalQuery(
+  inputs: SearchInputs,
+  terms: readonly string[],
+  symbol: string | undefined,
+): RetrievalQuery {
   if (symbol !== undefined) return { ...inputs.query, kind: "exact-symbol", text: symbol };
   return {
     ...inputs.query,
@@ -2065,9 +2096,9 @@ async function searchLexicalTerms(
   inputs: SearchInputs,
 ): Promise<ContextSearchResult> {
   const options = lexicalSearchOptions(inputs);
-  const definitionSymbol = inputs.targetDecision.definitionSymbol;
+  const definitionSymbol = lexicalDefinitionSymbol(inputs);
   const terms = definitionSymbol === undefined ? anchoredLexicalTargets(inputs) : [];
-  const query = lexicalQuery(inputs, terms);
+  const query = lexicalQuery(inputs, terms, definitionSymbol);
   const sourceDecision = emptySourceDecision("not-used");
   const semanticSearchProvider = observedLexicalSemanticProvider(inputs, sourceDecision);
   const context = knownFitContextFor(inputs);

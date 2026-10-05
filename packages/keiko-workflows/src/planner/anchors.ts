@@ -226,6 +226,8 @@ export interface SearchAnchor {
 export interface AnchorExtractionInput {
   readonly text: string;
   readonly maxAnchors: number;
+  /** Keep source spelling for exact matching; planner routing defaults to normalized terms. */
+  readonly caseSensitive?: boolean;
 }
 
 export interface AnchorExtractionResult {
@@ -236,6 +238,7 @@ export interface AnchorExtractionResult {
 
 interface MutableAnchor {
   term: string;
+  sourceTerm: string;
   weight: number;
   kind: SearchAnchorKind;
 }
@@ -261,6 +264,7 @@ function pushAnchor(
   raw: string,
   kind: SearchAnchorKind,
   weight: number,
+  sourceSpelling?: string,
 ): void {
   const trimmed = raw.trim();
   const withoutSentencePunctuation =
@@ -269,7 +273,7 @@ function pushAnchor(
       : trimmed;
   const term = withoutSentencePunctuation.toLowerCase();
   if (term.length > 0) {
-    out.push({ term, weight, kind });
+    out.push({ term, sourceTerm: sourceSpelling ?? withoutSentencePunctuation, weight, kind });
   }
 }
 
@@ -316,7 +320,7 @@ function collectTechnicalTerms(source: string, out: MutableAnchor[]): string {
     let match = re.exec(remaining);
     while (match !== null) {
       const full = match[0];
-      pushAnchor(out, entry.term, "identifier", 0.85);
+      pushAnchor(out, entry.term, "identifier", 0.85, full);
       parts.push(remaining.slice(cursor, match.index), " ".repeat(full.length));
       cursor = match.index + full.length;
       match = re.exec(remaining);
@@ -343,20 +347,21 @@ function tokenizeRemaining(remaining: string, out: MutableAnchor[]): number {
       continue;
     }
     if (token.includes(".")) {
-      out.push({ term: token, weight: 0.8, kind: "identifier" });
+      out.push({ term: token, sourceTerm: normalizedRaw, weight: 0.8, kind: "identifier" });
       continue;
     }
-    out.push({ term: token, weight: 0.5, kind: "literal" });
+    out.push({ term: token, sourceTerm: normalizedRaw, weight: 0.5, kind: "literal" });
   }
   return considered;
 }
 
-function dedup(anchors: readonly MutableAnchor[]): MutableAnchor[] {
+function dedup(anchors: readonly MutableAnchor[], caseSensitive: boolean): MutableAnchor[] {
   const best = new Map<string, MutableAnchor>();
   for (const anchor of anchors) {
-    const existing = best.get(anchor.term);
+    const key = caseSensitive ? anchor.sourceTerm : anchor.term;
+    const existing = best.get(key);
     if (existing === undefined || anchor.weight > existing.weight) {
-      best.set(anchor.term, { ...anchor });
+      best.set(key, { ...anchor });
     }
   }
   return Array.from(best.values());
@@ -371,8 +376,15 @@ function sortAnchors(anchors: MutableAnchor[]): MutableAnchor[] {
   });
 }
 
-function freeze(anchors: readonly MutableAnchor[]): readonly SearchAnchor[] {
-  return anchors.map((a) => ({ term: a.term, weight: a.weight, kind: a.kind }));
+function freeze(
+  anchors: readonly MutableAnchor[],
+  caseSensitive: boolean,
+): readonly SearchAnchor[] {
+  return anchors.map((a) => ({
+    term: caseSensitive ? a.sourceTerm : a.term,
+    weight: a.weight,
+    kind: a.kind,
+  }));
 }
 
 function collectQuotedTargets(
@@ -420,7 +432,7 @@ export function queryShapeOutsideTargets(text: string, targets: readonly SearchA
 }
 
 export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionResult {
-  const { text, maxAnchors } = input;
+  const { text, maxAnchors, caseSensitive = false } = input;
   if (text.length === 0) {
     return { anchors: [], truncated: false, tokensConsidered: 0 };
   }
@@ -465,8 +477,8 @@ export function extractAnchors(input: AnchorExtractionInput): AnchorExtractionRe
   remaining = collectMatches(remaining, SNAKE_IDENTIFIER_RE, "identifier", 0.85, collected);
   remaining = collectTechnicalTerms(remaining, collected);
   const tokensConsidered = tokenizeRemaining(remaining, collected);
-  const merged = sortAnchors(dedup(collected));
+  const merged = sortAnchors(dedup(collected, caseSensitive));
   const truncated = merged.length > maxAnchors;
   const final = truncated ? merged.slice(0, maxAnchors) : merged;
-  return { anchors: freeze(final), truncated, tokensConsidered };
+  return { anchors: freeze(final, caseSensitive), truncated, tokensConsidered };
 }
