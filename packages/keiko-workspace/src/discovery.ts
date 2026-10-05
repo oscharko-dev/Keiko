@@ -8,6 +8,7 @@
 //   - directory streaming is required for complete search; legacy ports keep bounded inventories.
 
 import { relative } from "node:path";
+import { DEFAULT_BINARY_PROBE, looksBinary } from "./binaryDetect.js";
 import {
   nodeWorkspaceFs,
   WorkspaceDescriptorReadError,
@@ -1110,6 +1111,33 @@ export async function readWorkspaceFileBytesPrefixForInternalUse(
     );
   }
   return { bytes, stat, complete: bytes.byteLength === stat.size };
+}
+
+export interface InternalWorkspaceTextByteRead extends InternalWorkspaceByteRead {
+  readonly binary: boolean;
+}
+
+/** Internal text-admission seam. Reuse complete small files; reject binary heads before full I/O. */
+export async function readWorkspaceFileBytesForTextInspection(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  maxBytes: number,
+  fs: WorkspaceFs,
+): Promise<InternalWorkspaceTextByteRead> {
+  const head = await readWorkspaceFileBytesPrefixForInternalUse(
+    workspace,
+    relPath,
+    Math.min(maxBytes, DEFAULT_BINARY_PROBE.maxProbeBytes),
+    fs,
+  );
+  // Keep size exclusions authoritative even if an oversized file also has a binary header.
+  const binary = head.stat.size <= maxBytes && looksBinary(head.bytes);
+  if (head.complete || head.stat.size > maxBytes || binary) return { ...head, binary };
+  const full = await readWorkspaceFileBytesPrefixForInternalUse(workspace, relPath, maxBytes, fs);
+  if (!sameFileSnapshot(head.stat, full.stat)) {
+    throw new WorkspaceReadError(`file changed during text inspection: ${relPath}`, relPath);
+  }
+  return { ...full, binary: false };
 }
 
 /** Internal redacted prefix seam for oversized code-intelligence sources. */

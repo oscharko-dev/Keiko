@@ -19,6 +19,8 @@ import { redact } from "@oscharko-dev/keiko-security";
 import {
   discoverCandidateInventory,
   readWorkspaceFileBytesPrefixForInternalUse,
+  readWorkspaceFileBytesForTextInspection,
+  type InternalWorkspaceTextByteRead,
   readWorkspaceFileTextForInternalUse,
   type WorkspaceContentLane,
 } from "./discovery.js";
@@ -1054,18 +1056,39 @@ function markSizeExclusion(runner: SearchTextRunner, state: RunState, sizeBytes:
     markTruncated(state, "file-cap");
 }
 
-async function readBoundedRawText(
+async function readScanBytes(
   runner: SearchTextRunner,
   relativePath: string,
-  state: RunState,
-  candidates: CandidateFile[],
-): Promise<string | undefined> {
+): Promise<InternalWorkspaceTextByteRead> {
+  if (runner.limits.maxFilesScanned === null) {
+    return readWorkspaceFileBytesForTextInspection(
+      runner.scope.workspace,
+      relativePath,
+      runner.limits.maxBytesPerFileScanned,
+      runner.fs,
+    );
+  }
+  // Finite scans already ran binaryOmission before admitting this file.
   const read = await readWorkspaceFileBytesPrefixForInternalUse(
     runner.scope.workspace,
     relativePath,
     runner.limits.maxBytesPerFileScanned,
     runner.fs,
   );
+  return { ...read, binary: false };
+}
+
+async function readBoundedRawText(
+  runner: SearchTextRunner,
+  relativePath: string,
+  state: RunState,
+  candidates: CandidateFile[],
+): Promise<string | undefined> {
+  const read = await readScanBytes(runner, relativePath);
+  if (read.binary) {
+    recordCandidateOmission(candidates, relativePath, "binary");
+    return undefined;
+  }
   if (!read.complete) {
     markSizeExclusion(runner, state, read.stat.size);
     recordSizeExceeded(relativePath, candidates);

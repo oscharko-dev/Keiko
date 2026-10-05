@@ -10,7 +10,7 @@ import {
   type CodingRepositorySearchObservation,
   type CodingRepositoryTruncationReason,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
-import { readWorkspaceFileBytesPrefixForInternalUse } from "./discovery.js";
+import { readWorkspaceFileBytesForTextInspection } from "./discovery.js";
 import { FileTooLargeError, WorkspaceReadError } from "./errors.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import {
@@ -121,12 +121,13 @@ function retrievalQuery(request: CodingRepositorySearchRequest, nowMs: number): 
 
 async function readCodingText(context: CodingRepositoryContext, path: string): Promise<string> {
   if (isImageScopePath(path)) throw new WorkspaceReadError("non-text source", path);
-  const read = await readWorkspaceFileBytesPrefixForInternalUse(
+  const read = await readWorkspaceFileBytesForTextInspection(
     context.scope.workspace,
     path,
     CODING_REPOSITORY_LIMITS.fileBytes,
     context.fs,
   );
+  if (read.binary) throw new WorkspaceReadError("non-text source", path);
   if (!read.complete) {
     throw new FileTooLargeError(
       "file exceeds coding size cap",

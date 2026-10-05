@@ -249,6 +249,9 @@ UTF-16; HTML also supports declared legacy encodings through the shared decoder.
 mark takes precedence over an HTML declaration. An unsupported explicit HTML encoding is an
 `io-error`, not a silently excluded binary file. Decoded NULs, malformed text and an excessive
 control-character ratio identify binary content; ordinary tabs and line endings remain text.
+Default content scans and direct coding reads share the guarded UTF-aware binary-head inspection.
+It reuses complete files of at most 4 KiB and rejects binary heads before full-file I/O. Larger text
+receives its full decoder check after the head, with the same file snapshot required across reads.
 Binary, image and oversized exclusions are policy decisions, distinct from incomplete search
 coverage. The executable bounds table uses `null` only for the unbounded search file-count,
 inventory-count and duration fields; query, file-byte and result-size bounds remain finite.

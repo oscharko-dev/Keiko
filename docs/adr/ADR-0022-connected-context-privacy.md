@@ -304,6 +304,12 @@ Retention uses a worst-first heap, preserving deterministic ordering without lin
 movement for every matching file. Each matching file's strongest range precedes secondary ranges
 so repeated hits in one file cannot consume every retained slot before another relevant file.
 Omission samples use the same bounded heap, ordered by path independently of read-completion timing.
+Uncapped text scans and direct coding reads first inspect the existing UTF-aware 4 KiB binary head
+through the same guarded byte reader. A complete small file reuses those bytes. A larger eligible
+text file incurs one additional bounded head read, then full decoding; a binary tail is still
+rejected. Both guarded reads must identify the same file snapshot. A changed snapshot records
+unavailable-file coverage rather than accepting mixed observations. Binary exclusions remain
+policy exclusions, without a fabricated incomplete-search flag or extension-based denial of text.
 A configured embedding endpoint alone does not enable repository semantic sampling. The configured
 provider factory first resolves a usable repository pod; an absent or unreadable pod returns the
 existing unavailable-provider result before traversal, immediately reports its observed pod mode,
