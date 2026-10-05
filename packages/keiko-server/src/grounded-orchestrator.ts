@@ -7340,8 +7340,8 @@ function completionDetailsActivityExtra(
 }
 
 function originalSearchFailure(error: unknown): unknown {
-  if (!(error instanceof AggregateError)) return error;
-  const primary: unknown = error.cause;
+  if (contentFreeErrorClass(error) !== "AggregateError") return error;
+  const primary = safeProperty(error, "cause");
   return isRecord(primary) ? (activityProperty(primary, "cause") ?? primary) : primary;
 }
 
@@ -7351,9 +7351,11 @@ function aggregateSearchFailureDetails(
   ConnectedContextFailedActivityFields,
   "secondaryFailureCount" | "secondaryFailureKinds" | "primaryFailureScopeDigest"
 > {
-  if (!(error instanceof AggregateError)) return {};
-  const failures: unknown[] = error.errors;
-  const primary: unknown = error.cause;
+  if (contentFreeErrorClass(error) !== "AggregateError") return {};
+  const candidates = safeProperty(error, "errors");
+  if (!Array.isArray(candidates)) return {};
+  const failures: readonly unknown[] = candidates;
+  const primary = safeProperty(error, "cause");
   const path = isRecord(primary) ? activityProperty(primary, "requestedPath") : undefined;
   const kinds = failures
     .slice(0, 16)
