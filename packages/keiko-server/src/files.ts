@@ -64,7 +64,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import { decodeTextFileBytes, DEFAULT_SEARCH_LIMITS } from "@oscharko-dev/keiko-workspace";
+import { decodeTextFileBytes } from "@oscharko-dev/keiko-workspace";
 import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   createOrdinaryWorkspaceRootAccess,
@@ -81,7 +81,8 @@ const MAX_FILE_SEARCH_LIMIT = 50;
 const MAX_FILE_SEARCH_QUERY_CHARS = 120;
 const MAX_FILE_SEARCH_SCAN = 20_000;
 const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
-const MAX_SOURCE_PREVIEW_BYTES = DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned;
+// Files owns this complete-preview limit independently of repository-search tuning.
+export const FILES_COMPLETE_PREVIEW_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_PREVIEW_BYTES = 3_000_000;
 const STABLE_CONTENT_READ_ATTEMPTS = 3;
 const TREE_CLASSIFY_CONCURRENCY = 32;
@@ -1575,7 +1576,10 @@ async function readContainedBytes(
   const boundedRead = fs.readFileBytes;
   if (boundedRead === undefined) return readPrefix(targetPath, maxBytes);
   const bytes = await boundedRead.call(fs, targetPath, maxBytes, "allow", identity);
-  return { buffer: Buffer.from(bytes), truncated: identity.size > maxBytes };
+  return {
+    buffer: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+    truncated: identity.size > maxBytes,
+  };
 }
 
 // Same-shape convenience for the (majority) call sites that have no retry loop of their own: a
@@ -1684,37 +1688,58 @@ function imagePreview(target: ResolvedTarget, base: FilesPreviewBase): FilesPrev
   };
 }
 
+interface DecodedPreview {
+  readonly buffer: Buffer;
+  readonly truncated: boolean;
+  readonly decoded: NonNullable<ReturnType<typeof decodeTextFileBytes>>;
+}
+
+async function readTextPreview(
+  target: ResolvedTarget,
+  maxBytes: number,
+): Promise<DecodedPreview | undefined> {
+  const prefix = await readContainedPrefixOrStale(target.path, target.fs, target.identity, 4096);
+  const prefixText = decodeTextFileBytes(prefix.buffer, {
+    scopePath: target.relativePath,
+    allowIncompleteTail: prefix.truncated,
+  });
+  if (prefixText === undefined) return undefined;
+  if (!prefix.truncated) return { ...prefix, decoded: prefixText };
+  const bytes = await readContainedPrefixOrStale(target.path, target.fs, target.identity, maxBytes);
+  const decoded = decodeTextFileBytes(bytes.buffer, {
+    scopePath: target.relativePath,
+    allowIncompleteTail: bytes.truncated,
+  });
+  return decoded === undefined ? undefined : { ...bytes, decoded };
+}
+
 async function textPreview(
   target: ResolvedTarget,
   base: FilesPreviewBase,
   redactor: UiHandlerDeps["redactor"],
 ): Promise<FilesPreviewResponse> {
-  if (target.stats.size > MAX_SOURCE_PREVIEW_BYTES) {
-    return { ...base, kind: "binary", reason: "too_large", maxBytes: MAX_SOURCE_PREVIEW_BYTES };
-  }
-  const bytes = await readContainedPrefixOrStale(
-    target.path,
-    target.fs,
-    target.identity,
-    MAX_SOURCE_PREVIEW_BYTES,
-  );
-  const decoded = decodeTextFileBytes(bytes.buffer, { scopePath: target.relativePath });
-  if (decoded === undefined) return { ...base, kind: "binary", reason: "unsupported" };
+  const maxBytes =
+    target.stats.size > FILES_COMPLETE_PREVIEW_BYTES
+      ? MAX_TEXT_PREVIEW_BYTES
+      : FILES_COMPLETE_PREVIEW_BYTES;
+  const preview = await readTextPreview(target, maxBytes);
+  if (preview === undefined) return { ...base, kind: "binary", reason: "unsupported" };
+  const { decoded, buffer, truncated } = preview;
   const redacted = redactor(decoded.text);
   return {
     ...base,
     kind: "text",
     content: typeof redacted === "string" ? redacted : decoded.text,
-    truncated: bytes.truncated,
-    maxBytes: MAX_SOURCE_PREVIEW_BYTES,
+    truncated,
+    maxBytes,
     canEdit:
       decoded.encoding === "utf-8" &&
       target.stats.size <= MAX_TEXT_PREVIEW_BYTES &&
       isEditableUtf8File(
         base.extension,
-        bytes.buffer.subarray(0, 4096),
+        buffer.subarray(0, 4096),
         target.relativePath,
-        bytes.buffer.length > 4096,
+        buffer.length > 4096,
       ),
   };
 }

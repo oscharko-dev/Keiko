@@ -51,6 +51,7 @@ import {
 } from "./index.js";
 import {
   handleFilesPreviewImage,
+  FILES_COMPLETE_PREVIEW_BYTES,
   normalizeRelativePath,
   resolveRoot,
   classifyInLockRefreshFailure,
@@ -1934,14 +1935,14 @@ describe("desktop files browser", () => {
   });
 
   it("previews the complete eligible source up to 2 MiB without widening editing", async () => {
-    const content = `${"a".repeat(2_097_152 - 9)}ENDSOURCE`;
+    const content = `${"a".repeat(FILES_COMPLETE_PREVIEW_BYTES - 9)}ENDSOURCE`;
     await writeFile(join(root, "eligible.txt"), content);
     const preview = await readFilesPreview(store, root, "eligible.txt", buildRedactor({}));
     expect(preview).toMatchObject({
       kind: "text",
       canEdit: false,
       truncated: false,
-      maxBytes: 2_097_152,
+      maxBytes: FILES_COMPLETE_PREVIEW_BYTES,
     });
     if (preview.kind === "text") expect(preview.content).toBe(content);
     await expect(
@@ -1959,11 +1960,70 @@ describe("desktop files browser", () => {
     ).toMatchObject({ kind: "binary", reason: "unsupported" });
   });
 
-  it("caps source previews above the complete eligible file limit", async () => {
-    await writeFile(join(root, "large.txt"), "a".repeat(2_097_153));
-    const preview = await readFilesPreview(store, root, "large.txt", buildRedactor({}));
-    expect(preview).toMatchObject({ kind: "binary", reason: "too_large", maxBytes: 2_097_152 });
+  it.each(["é", "€", "😀"])(
+    "keeps a safe truncated preview above the search ceiling (%s)",
+    async (tail) => {
+      const prefix = "a".repeat(MAX_TEXT_PREVIEW_BYTES - 1);
+      await writeFile(
+        join(root, "large.txt"),
+        `${prefix}${tail}${"z".repeat(FILES_COMPLETE_PREVIEW_BYTES)}`,
+      );
+      const preview = await readFilesPreview(store, root, "large.txt", buildRedactor({}));
+      expect(preview).toMatchObject({
+        kind: "text",
+        truncated: true,
+        canEdit: false,
+        maxBytes: MAX_TEXT_PREVIEW_BYTES,
+        content: prefix,
+      });
+    },
+  );
+
+  it("rejects binary previews after only the classification prefix", async () => {
+    await writeFile(join(root, "large.bin"), Buffer.alloc(1_800_000));
+    const requested: number[] = [];
+    const boundedRead = nodeWorkspaceFs.readFileBytes;
+    if (boundedRead === undefined) throw new TypeError("Missing bounded reader");
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readFileBytes: async (path, maxBytes, policy, expected) => {
+        requested.push(maxBytes);
+        return boundedRead.call(nodeWorkspaceFs, path, maxBytes, policy, expected);
+      },
+    };
+    const resolvedRoot: ResolvedProjectRoot = {
+      root,
+      realRoot: root,
+      access: { kind: "ordinary", canonicalRoot: root, fs },
+    };
+    expect(
+      await readFilesPreview(store, root, "large.bin", buildRedactor({}), resolvedRoot),
+    ).toMatchObject({ kind: "binary", reason: "unsupported" });
+    expect(requested).toEqual([4096]);
   });
+
+  it.each(["utf16le", "latin1"] as const)(
+    "redacts secrets after decoding %s previews",
+    async (encoding) => {
+      const secret = ["registered-preview-secret-", "0123456789"].join("");
+      const content =
+        encoding === "utf16le"
+          ? `\ufeffÖlwechsel api_key=${secret}\n`
+          : `<meta charset="windows-1252">Ölwechsel api_key=${secret}\n`;
+      await writeFile(join(root, "secret.html"), Buffer.from(content, encoding));
+      const preview = await readFilesPreview(
+        store,
+        root,
+        "secret.html",
+        buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }),
+      );
+      expect(preview).toMatchObject({ kind: "text", canEdit: false });
+      if (preview.kind !== "text") throw new TypeError("Expected text preview");
+      expect(preview.content).toContain("Ölwechsel");
+      expect(preview.content).toContain("[REDACTED]");
+      expect(preview.content).not.toContain(secret);
+    },
+  );
 
   it("caps large image previews to metadata", async () => {
     await writeFile(join(root, "huge.png"), Buffer.alloc(3_000_001, 1));
