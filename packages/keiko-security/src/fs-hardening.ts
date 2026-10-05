@@ -1492,7 +1492,7 @@ function validatePublication(
   const resolvedCommit = resolve(options.commitPath);
   const paths = entries.map((entry) => resolve(entry.path));
   const comparisonPaths = paths.map(filesystemComparisonPath);
-  const parents = new Set(paths.map(dirname));
+  const parents = new Set(paths.map((path) => dirname(path)));
   if (
     entries.length === 0 ||
     !paths.includes(resolvedCommit) ||

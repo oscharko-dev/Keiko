@@ -17,7 +17,7 @@ describe("extractAnchors", () => {
       const first = Math.floor(fillerLength / 2);
       const filler = "the ".repeat(Math.ceil(fillerLength / 4));
       const text = `${targets[0]}${filler.slice(0, first)}${targets[1]}${filler.slice(0, fillerLength - first)}${targets[2]}`;
-      expect(text.length).toBe(length);
+      expect(text).toHaveLength(length);
       const result = run(text);
       expect(result.anchors.map((anchor) => anchor.term)).toEqual(
         expect.arrayContaining(["headprobe", "middleprobe", "tailprobe"]),
