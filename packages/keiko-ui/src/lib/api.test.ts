@@ -4260,6 +4260,72 @@ describe("Git-to-Chat connect/refresh API (#3400)", () => {
     };
   }
 
+  function committedGitChatFixture(): Record<string, unknown> {
+    return {
+      id: "chat-1",
+      projectPath: "/repo",
+      title: "Committed chat",
+      selectedModel: "model",
+      createdAt: 1,
+      updatedAt: 2,
+      status: "open",
+      gitChangeScopes: [gitChangeScopeFixture()],
+      groundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+    };
+  }
+
+  it.each([
+    { id: "foreign-chat" },
+    { groundingScopeIdentity: "made-up" },
+    { gitChangeScopes: [] },
+    { gitChangeScopes: [{ ...gitChangeScopeFixture(), snapshotDigest: "b".repeat(64) }] },
+    { updatedAt: "not-a-timestamp" },
+  ])("refuses an incoherent committed Git chat %j", async (patch) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk({
+          status: "connected",
+          scope: gitChangeScopeFixture(),
+          chat: { ...committedGitChatFixture(), ...patch },
+        }),
+      ),
+    );
+    await expect(
+      connectGitChangeToChat({ chatId: "chat-1", mode: "pull-request", headRef: "feature/x" }),
+    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+  });
+
+  it("shares the supplied attempt correlation across Git connect and refresh without putting it in the body", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonOk({
+          status: "connected",
+          scope: gitChangeScopeFixture(),
+          chat: committedGitChatFixture(),
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonOk({
+          status: "current",
+          scope: gitChangeScopeFixture(),
+          chat: committedGitChatFixture(),
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    await connectGitChangeToChat(
+      { chatId: "chat-1", mode: "pull-request", headRef: "feature/x" },
+      undefined,
+      "git-attempt-123",
+    );
+    await refreshGitChangeScope("chat-1", "rel-1", undefined, "git-attempt-123");
+    for (const [, init] of fetchMock.mock.calls as [string, RequestInit][]) {
+      expect(new Headers(init.headers).get(CORRELATION_HEADER)).toBe("git-attempt-123");
+      expect(init.body).not.toContain("git-attempt-123");
+    }
+  });
+
   it("posts the exact comparison request and returns the validated connected scope", async () => {
     const fetchMock = vi
       .fn()
@@ -5114,7 +5180,7 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/git-change/approve-description");
     expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
-    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+    expect(new Headers(init.headers).get(CORRELATION_HEADER)).toBe(
       "ui-git-change-approve-correlation",
     );
   });
@@ -5137,7 +5203,7 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/git-change/review-description");
     expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
-    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+    expect(new Headers(init.headers).get(CORRELATION_HEADER)).toBe(
       "ui-git-change-review-correlation",
     );
   });
@@ -5158,7 +5224,7 @@ describe("Chat's git-change apply-description action (#3400 final-audit F5)", ()
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/git-change/apply-description");
     expect(JSON.parse(init.body as string)).toEqual({ schemaVersion: "1", ...INPUT });
-    expect(new Headers(init.headers).get("X-Keiko-Correlation-Id")).toBe(
+    expect(new Headers(init.headers).get(CORRELATION_HEADER)).toBe(
       "ui-git-change-apply-correlation",
     );
   });

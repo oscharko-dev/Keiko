@@ -3,14 +3,15 @@ import { newClientCorrelationId } from "./bff-correlation";
 import { clientErrorEvidence } from "./client-error-evidence";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { bffRequestErrorKind } from "./http";
-import type { Chat, ChatResponse } from "./types";
+import type { Chat, ChatGitChangeScope, ChatResponse } from "./types";
 
 // Source-mutation replies describe the scope; the targeted chat response owns its identity.
 export async function canonicalGroundingChat(
   chat: Chat,
   listChats: typeof fetchChats = fetchChats,
+  correlationId: string = newClientCorrelationId(),
 ): Promise<Chat> {
-  const response = await listChats(chat.projectPath, newClientCorrelationId(), chat.id);
+  const response = await listChats(chat.projectPath, correlationId, chat.id);
   const current = response.chats.find(
     (candidate) => candidate.id === chat.id && candidate.projectPath === chat.projectPath,
   );
@@ -104,4 +105,95 @@ export function replaceGroundingScopeList<T>(
         : persist(chat.id, scopes, chat.groundingScopeIdentity),
     onChatChanged,
   );
+}
+
+export interface CommittedGitChat {
+  readonly chat: Chat | undefined;
+  readonly confirmed: boolean;
+  readonly unavailable?: boolean;
+}
+
+type CommittedGitResult = { readonly scope: ChatGitChangeScope; readonly chat?: Chat };
+
+function ownsOpenGitChat(original: Chat, candidate: Chat): boolean {
+  return (
+    candidate.id === original.id &&
+    candidate.projectPath === original.projectPath &&
+    (candidate.status === undefined || candidate.status === "open")
+  );
+}
+
+function confirmsGitScope(chat: Chat, scope: ChatGitChangeScope): boolean {
+  return (
+    chat.gitChangeScopes?.some(
+      (candidate) =>
+        candidate.relationshipId === scope.relationshipId &&
+        candidate.snapshotDigest === scope.snapshotDigest &&
+        candidate.remoteDigest === scope.remoteDigest,
+    ) === true
+  );
+}
+
+export function projectedGitChat(
+  latest: Chat,
+  original: Chat,
+  scope: ChatGitChangeScope,
+  previousRelationshipId?: string,
+): Chat | undefined {
+  if (!ownsOpenGitChat(original, latest)) return undefined;
+  if (latest.groundingScopeIdentity !== original.groundingScopeIdentity) return undefined;
+  const scopes = (latest.gitChangeScopes ?? []).filter(
+    (candidate) =>
+      candidate.relationshipId !== previousRelationshipId &&
+      candidate.relationshipId !== scope.relationshipId,
+  );
+  return { ...latest, gitChangeScopes: [...scopes, scope] };
+}
+
+// Successful POSTs are never replayed because a legacy follow-up read is unavailable.
+export async function committedGitChat(
+  original: Chat,
+  result: CommittedGitResult,
+  correlationId: string,
+  listChats: typeof fetchChats = fetchChats,
+): Promise<CommittedGitChat> {
+  try {
+    const canonical =
+      result.chat ?? (await canonicalGroundingChat(original, listChats, correlationId));
+    if (!ownsOpenGitChat(original, canonical) || !confirmsGitScope(canonical, result.scope)) {
+      throw new ApiError(
+        "CONTRACT_VALIDATION_FAILED",
+        "Committed Git scope was not confirmed.",
+        502,
+      );
+    }
+    return { chat: canonical, confirmed: true };
+  } catch (error) {
+    reportClientDiagnostic("Committed Git scope refresh failed.", {
+      kind: "other",
+      correlationId,
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    });
+    return {
+      chat: undefined,
+      confirmed: false,
+      unavailable:
+        result.chat !== undefined || (error instanceof ApiError && error.code === "NOT_FOUND"),
+    };
+  }
+}
+
+export function adoptableGitChat(
+  original: Chat,
+  latest: Chat,
+  committed: CommittedGitChat,
+  scope: ChatGitChangeScope,
+  previousRelationshipId?: string,
+): Chat | undefined {
+  if (!ownsOpenGitChat(original, latest) || committed.unavailable === true) return undefined;
+  if (committed.chat !== undefined) {
+    return latest.updatedAt > committed.chat.updatedAt ? undefined : committed.chat;
+  }
+  return projectedGitChat(latest, original, scope, previousRelationshipId);
 }

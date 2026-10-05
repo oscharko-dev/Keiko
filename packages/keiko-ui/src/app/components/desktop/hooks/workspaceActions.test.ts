@@ -3294,6 +3294,39 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     ]);
   });
 
+  it.each(["retargeted", "closed"] as const)(
+    "releases the original Git relationship if the endpoint is %s just before acceptance",
+    async (change) => {
+      const store = { conns: [] as Connection[] };
+      const pending = deferredValue<ChatGitChangeScope>();
+      const cfg = { chatId: "original-chat", projectPath: "/original" };
+      const onGitChangeUnbind = vi.fn(() => true);
+      const harness = makeConnectHarness(
+        [
+          win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "feature/x" }, "git-1"),
+          win("chat", cfg, "chat-1"),
+        ],
+        [],
+        {
+          connecting: { from: "git-1", x: 0, y: 0 },
+          setConns: collectingSetConns(store),
+          onGitChangeBind: () => pending.promise,
+          onGitChangeUnbind,
+        },
+      );
+      harness.confirmConnect("chat-1", evt);
+      cfg.chatId = change === "retargeted" ? "new-chat" : "";
+      cfg.projectPath = "/new";
+      pending.resolve(gitScope("owned-relationship"));
+      await flushAsyncBind();
+      expect(onGitChangeUnbind).toHaveBeenCalledExactlyOnceWith("chat-1", "owned-relationship", {
+        conversationId: "original-chat",
+        projectPath: "/original",
+      });
+      expect(store.conns).toEqual([]);
+    },
+  );
+
   // #3506 review — a deferred bind whose optimistic edge is removed before it settles must
   // hand the just-minted server relationship back through `onGitChangeUnbind`. Without this,
   // the visible edge disappears while the remote relationship remains — a leak with no UI

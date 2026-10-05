@@ -311,6 +311,17 @@ export interface Chat {
   readonly updatedAt: number;
 }
 
+/** Current producers return the committed chat; older servers may require a canonical read. */
+export type GitChangeConnectResponse =
+  | { readonly status: "connected"; readonly scope: ChatGitChangeScope; readonly chat?: Chat }
+  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
+
+/** A returned chat carries the store-owned grounding identity, never a client projection. */
+export type GitChangeRefreshResponse =
+  | { readonly status: "current"; readonly scope: ChatGitChangeScope; readonly chat?: Chat }
+  | { readonly status: "stale"; readonly scope: ChatGitChangeScope; readonly chat?: Chat }
+  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
+
 export type ChatRole = "user" | "assistant" | "system";
 
 /** A durable coding conversation; workspace references never confer execution authority. */

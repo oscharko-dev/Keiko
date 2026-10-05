@@ -827,6 +827,173 @@ describe("AppShell grounding connections", () => {
     expect(mocks.fetchChats).toHaveBeenLastCalledWith("/repo", expect.any(String), "chat-1");
   });
 
+  it("adopts the committed Git response without letting a later failed read reject its connection", async () => {
+    const scope = gitScope();
+    const committed = chat({
+      title: "Concurrent server rename",
+      gitChangeScopes: [scope],
+      updatedAt: 4,
+      groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+    });
+    await renderMounted();
+    mocks.connectGitChangeToChat.mockResolvedValue({ status: "connected", scope, chat: committed });
+    mocks.fetchChats.mockRejectedValue(new TypeError("private read failure"));
+    const result = await mocks.state.workspaceOptions?.onGitChangeBind?.("chat-window", {
+      baseRef: "dev",
+      headRef: "feature",
+    });
+    expect(result).toEqual(scope);
+    expect(mocks.fetchChats).not.toHaveBeenCalled();
+    expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(committed);
+  });
+
+  it.each(["read-failed", "missing-chat", "missing-scope"] as const)(
+    "retains an already committed legacy Git connection when its canonical adoption is %s",
+    async (failure) => {
+      const scope = gitScope();
+      await renderMounted();
+      mocks.connectGitChangeToChat.mockResolvedValue({ status: "connected", scope });
+      if (failure === "read-failed") mocks.fetchChats.mockRejectedValue(new TypeError("private"));
+      else
+        mocks.fetchChats.mockResolvedValue({ chats: failure === "missing-chat" ? [] : [chat()] });
+      const result = await mocks.state.workspaceOptions?.onGitChangeBind?.("chat-window", {
+        baseRef: "dev",
+        headRef: "feature",
+      });
+      expect(result).toEqual(failure === "missing-chat" ? false : scope);
+      if (failure === "missing-chat")
+        expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+      else
+        expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: "chat-1",
+            gitChangeScopes: [scope],
+          }),
+        );
+      expect(mocks.connectGitChangeToChat).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("renews the Git read deadline after the connection POST commits", async () => {
+    const scope = gitScope();
+    const posted = deferred<{ status: "connected"; scope: ChatGitChangeScope }>();
+    const refreshed = deferred<{ chats: Chat[] }>();
+    await renderMounted();
+    mocks.connectGitChangeToChat.mockReturnValue(posted.promise);
+    mocks.fetchChats.mockReturnValue(refreshed.promise);
+    vi.useFakeTimers();
+    const binding = mocks.state.workspaceOptions?.onGitChangeBind?.("chat-window", {
+      baseRef: "dev",
+      headRef: "feature",
+    });
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS - 2000);
+    await act(async () => posted.resolve({ status: "connected", scope }));
+    await vi.advanceTimersByTimeAsync(3000);
+    await act(async () =>
+      refreshed.resolve({ chats: [chat({ gitChangeScopes: [scope], updatedAt: 4 })] }),
+    );
+    expect(await binding).toEqual(scope);
+    expect(recordedFilesScopeDecision("timeout-blocked")).toBeUndefined();
+    const correlation = mocks.connectGitChangeToChat.mock.calls[0]?.[2];
+    expect(correlation).toEqual(expect.any(String));
+    expect(mocks.fetchChats).toHaveBeenCalledWith("/repo", correlation, "chat-1");
+  });
+
+  it("compensates only its committed Git scope when the selected Chat changes during POST", async () => {
+    const scope = gitScope();
+    const unrelated = gitScope("other-relationship");
+    const pending = deferred<{ status: "connected"; scope: ChatGitChangeScope; chat: Chat }>();
+    await renderMounted();
+    mocks.connectGitChangeToChat.mockReturnValue(pending.promise);
+    const canonical = chat({
+      gitChangeScopes: [unrelated, scope],
+      groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+      updatedAt: 4,
+    });
+    mocks.fetchChats.mockResolvedValue({ chats: [canonical] });
+    mocks.updateChatGitChangeScopes.mockResolvedValueOnce({
+      chat: chat({ gitChangeScopes: [unrelated], updatedAt: 5 }),
+    });
+    let current = true;
+    const binding = mocks.state.workspaceOptions?.onGitChangeBind?.(
+      "chat-window",
+      { baseRef: "dev", headRef: "feature" },
+      {
+        conversationId: "chat-1",
+        projectPath: "/repo",
+        isCurrent: () => current,
+      },
+    );
+    await waitFor(() => expect(mocks.connectGitChangeToChat).toHaveBeenCalledOnce());
+    current = false;
+    await act(async () => pending.resolve({ status: "connected", scope, chat: canonical }));
+    expect(await binding).toBe(false);
+    const correlation = mocks.connectGitChangeToChat.mock.calls[0]?.[2];
+    expect(mocks.updateChatGitChangeScopes).toHaveBeenCalledExactlyOnceWith(
+      "chat-1",
+      [unrelated],
+      canonical.groundingScopeIdentity,
+      correlation,
+    );
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(canonical);
+  });
+
+  it.each([false, true])(
+    "settles a late committed Git connection only after compensation (refused=%s)",
+    async (refused) => {
+      const scope = gitScope();
+      const pending = deferred<{ status: "connected"; scope: ChatGitChangeScope }>();
+      const canonical = chat({
+        gitChangeScopes: [scope],
+        groundingScopeIdentity: `gsi-v1:${"b".repeat(64)}`,
+        updatedAt: 3,
+      });
+      await renderMounted();
+      mocks.connectGitChangeToChat.mockReturnValue(pending.promise);
+      mocks.fetchChats.mockResolvedValue({ chats: [canonical] });
+      if (refused)
+        mocks.updateChatGitChangeScopes.mockRejectedValueOnce(
+          new TypeError("private-compensation-failure"),
+        );
+      else
+        mocks.updateChatGitChangeScopes.mockResolvedValueOnce({
+          chat: chat({ gitChangeScopes: [], updatedAt: 4 }),
+        });
+      vi.useFakeTimers();
+      const invoke = ():
+        ReturnType<NonNullable<WorkspaceHookOptions["onGitChangeBind"]>> | undefined =>
+        mocks.state.workspaceOptions?.onGitChangeBind?.("chat-window", {
+          baseRef: "dev",
+          headRef: "feature",
+        });
+      const binding = invoke();
+      await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS + 1);
+      expect(await binding).toBe(false);
+      await act(async () => pending.resolve({ status: "connected", scope }));
+      const correlation = mocks.connectGitChangeToChat.mock.calls[0]?.[2];
+      expect(mocks.updateChatGitChangeScopes).toHaveBeenCalledExactlyOnceWith(
+        "chat-1",
+        null,
+        canonical.groundingScopeIdentity,
+        correlation,
+      );
+      if (refused) {
+        expect(recordedFilesScopeDecision("timeout-recovered")).toBeUndefined();
+        expect(await invoke()).toBe(false);
+        expect(mocks.connectGitChangeToChat).toHaveBeenCalledOnce();
+        const failure = reportedDiagnostics.find((record) =>
+          record.message.includes("Late chat grounding mutation failed"),
+        );
+        expect(failure?.meta).toMatchObject({
+          correlationId: correlation,
+          errorKind: "unavailable",
+          errorEvidence: { errorClass: "TypeError" },
+        });
+        expect(JSON.stringify(failure)).not.toContain("private-compensation-failure");
+      } else expect(recordedFilesScopeDecision("timeout-recovered")).toBeDefined();
+    },
+  );
+
   it("does not load the gateway setup implementation during ordinary shell startup", async () => {
     expect(gatewaySetupLoadsAtShellImport).toBe(0);
 
@@ -2659,6 +2826,53 @@ describe("AppShell grounding connections", () => {
       recordedFilesScopeDecision("restored")?.meta?.correlationId,
     );
     expect(JSON.stringify(reportedDiagnostics)).not.toContain("/manuals/");
+  });
+
+  it("joins changed Files acknowledgement evidence to the original acknowledgement", async () => {
+    const scope = fileScope("/manuals/Scale");
+    const active = chat({ connectedScopes: [scope] });
+    mocks.state.session = { ...mocks.state.session!, activeChat: active, chats: [active] };
+    const next = fileScope("/manuals/Updated");
+    mocks.updateChatConnectedScopes.mockResolvedValue({
+      chat: chat({ connectedScopes: [next], updatedAt: 4 }),
+    });
+    const windows = [
+      win("files", { root: next.root, rootBinding: "coding-repository" }, "files-owner"),
+      win("chat", { chatId: active.id, projectPath: "/repo" }, "chat-owner"),
+    ];
+    const edge: Connection = {
+      id: "owned-edge",
+      a: "files-owner",
+      b: "chat-owner",
+      boundRoot: "/manuals/Scale",
+      boundScopeKind: scope.kind,
+      boundScopeFingerprint: connectedScopeFingerprint(scope)!,
+    };
+    mocks.state.workspaceResult = workspaceResult(windows, [edge]);
+    const view = render(<AppShell />);
+    await waitFor(() => expect(recordedFilesScopeDecision("acknowledged")).toBeDefined());
+    const acknowledged = recordedFilesScopeDecision("acknowledged");
+    const changed = fileScope("/manuals/New");
+    mocks.state.workspaceResult = workspaceResult(windows, [
+      {
+        ...edge,
+        boundRoot: "/manuals/New",
+        boundScopeFingerprint: connectedScopeFingerprint(changed)!,
+      },
+    ]);
+    view.rerender(<AppShell />);
+    await waitFor(() => expect(recordedFilesScopeDecision("ack-invalidated")).toBeDefined());
+    expect(recordedFilesScopeDecision("ack-invalidated")?.meta).toMatchObject({
+      parentCorrelationId: acknowledged?.meta?.correlationId,
+      filesScopeDecision: { decision: "ack-invalidated", candidateCount: 1 },
+    });
+    expect(recordedFilesScopeDecision("ack-invalidated")?.meta?.correlationId).not.toBe(
+      acknowledged?.meta?.correlationId,
+    );
+    expect(acknowledged?.meta?.filesScopeDecision).toMatchObject({
+      sourceCount: 1,
+      candidateCount: 1,
+    });
   });
 
   it("does not append a new root when a legacy edge cannot identify its existing source", async (): Promise<void> => {

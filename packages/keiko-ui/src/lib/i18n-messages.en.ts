@@ -533,6 +533,8 @@ export const EN_MESSAGES = {
     "Keiko could not connect that source. Check that it is still available and try again.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko could not connect that knowledge source. Check that it is still available and try again.",
+  "chat.grounding.gitChangeSavedRefreshUnavailable":
+    "Git change saved. The chat view could not be fully refreshed.",
   "chat.grounding.connectGitChangeFailed":
     "Keiko could not connect that Git change. Check that the repository and branches are still available and try again.",
 

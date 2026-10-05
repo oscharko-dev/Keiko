@@ -57,6 +57,62 @@ function makeGitChangeScope(overrides: Partial<ChatGitChangeScope> = {}): ChatGi
 }
 
 describe("GitChangeScopePill", () => {
+  it("adopts the committed refresh directly without requiring another read", async () => {
+    const original = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
+    const scope = makeGitChangeScope({ relationshipId: "replacement" });
+    const canonical = { ...original, gitChangeScopes: [scope], updatedAt: 3 };
+    const listChats = vi.fn().mockRejectedValue(new TypeError("read unavailable"));
+    const onRefreshed = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <GitChangeScopePill
+        chat={original}
+        refreshScope={vi.fn().mockResolvedValue({ status: "stale", scope, chat: canonical })}
+        listChats={listChats}
+        onRefreshed={onRefreshed}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Refresh main...feature/x" }));
+    await waitFor(() => expect(onRefreshed).toHaveBeenCalledWith(canonical));
+    expect(listChats).not.toHaveBeenCalled();
+  });
+
+  it("keeps a committed legacy replacement usable when the canonical read fails", async () => {
+    const original = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
+    const scope = makeGitChangeScope({ relationshipId: "replacement" });
+    const refreshScope = vi.fn().mockResolvedValue({ status: "stale", scope });
+    const listChats = vi.fn().mockRejectedValue(new TypeError("private read failure"));
+    const onRefreshed = vi.fn();
+    const user = userEvent.setup();
+    reportClientDiagnosticMock.mockClear();
+    render(
+      <GitChangeScopePill
+        chat={original}
+        refreshScope={refreshScope}
+        listChats={listChats}
+        onRefreshed={onRefreshed}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Refresh main...feature/x" }));
+    await waitFor(() =>
+      expect(onRefreshed).toHaveBeenCalledWith({ ...original, gitChangeScopes: [scope] }),
+    );
+    expect(
+      await screen.findByText("Git change saved. The chat view could not be fully refreshed."),
+    ).toBeInTheDocument();
+    const correlation = refreshScope.mock.calls[0]?.[3];
+    expect(correlation).toEqual(expect.any(String));
+    expect(listChats).toHaveBeenCalledWith(original.projectPath, correlation, original.id);
+    expect(reportClientDiagnosticMock).toHaveBeenCalledExactlyOnceWith(
+      "Committed Git scope refresh failed.",
+      expect.objectContaining({
+        correlationId: correlation,
+        errorKind: "unavailable",
+        errorEvidence: expect.objectContaining({ errorClass: "TypeError" }),
+      }),
+    );
+  });
+
   it("adopts the canonical scope identity and concurrent metadata after a successful refresh", async () => {
     const original = makeChat({
       gitChangeScopes: [makeGitChangeScope()],
@@ -340,7 +396,7 @@ describe("GitChangeScopePill", () => {
     );
     await user.click(screen.getByRole("button", { name: "Refresh main...feature/x" }));
     await waitFor(() => {
-      expect(refreshScope).toHaveBeenCalledWith("chat-1", "rel-1");
+      expect(refreshScope).toHaveBeenCalledWith("chat-1", "rel-1", undefined, expect.any(String));
     });
     expect(onRefreshed).toHaveBeenCalledWith({
       ...chat,
@@ -376,7 +432,7 @@ describe("GitChangeScopePill", () => {
     );
     await user.click(screen.getByRole("button", { name: "Refresh main...feature/x" }));
     await waitFor(() => {
-      expect(refreshScope).toHaveBeenCalledWith("chat-1", "rel-1");
+      expect(refreshScope).toHaveBeenCalledWith("chat-1", "rel-1", undefined, expect.any(String));
     });
     // A title rename lands (via the normal chat-list prop update) while the refresh is in flight.
     const renamedChat = { ...chat, title: "renamed while refresh was in flight" };

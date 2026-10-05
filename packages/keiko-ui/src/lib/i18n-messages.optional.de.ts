@@ -2336,6 +2336,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Wähle einen anderen Basis-Branch, bevor du diese Git-Änderung verbindest.",
   "gitChangeScope.connect.chatLoadError":
     "Die Chats für dieses Repository konnten nicht geladen werden.",
+  "gitChangeScope.savedRefreshUnavailable":
+    "Git-Änderung gespeichert. Die Chat-Ansicht konnte nicht vollständig aktualisiert werden.",
   "gitChangeScope.connect.error": "Diese Git-Änderung konnte nicht mit dem Chat verbunden werden.",
   "gitChangeScope.description.preview": "Vorschau",
   "gitChangeScope.description.previewAria": "Vorschau der Beschreibung für {label}",

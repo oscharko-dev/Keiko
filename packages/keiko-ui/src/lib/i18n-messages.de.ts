@@ -548,6 +548,8 @@ export const DE_MESSAGES = {
     "Keiko konnte diese Quelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko konnte diese Wissensquelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
+  "chat.grounding.gitChangeSavedRefreshUnavailable":
+    "Git-Änderung gespeichert. Die Chat-Ansicht konnte nicht vollständig aktualisiert werden.",
   "chat.grounding.connectGitChangeFailed":
     "Keiko konnte diese Git-Änderung nicht verbinden. Prüfe, ob Repository und Branches noch verfügbar sind, und versuche es erneut.",
 

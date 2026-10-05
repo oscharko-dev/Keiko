@@ -438,6 +438,20 @@ function connectRequestBody(chatId: string): Record<string, unknown> {
 }
 
 describe("POST /api/git-change/connect (Issue #3400)", () => {
+  it("returns the actual committed chat and its server-owned grounding identity", async () => {
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [fixtureSnapshot()] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const result = asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      status: "connected",
+      chat: chatStore.findChatById(chat.id),
+    });
+    expect(chatStore.findChatById(chat.id)?.groundingScopeIdentity).not.toBe(
+      chat.groundingScopeIdentity,
+    );
+  });
+
   // Two connects for the same chat, interleaved so both read `gitChangeScopes` before either
   // writes. The write must append to the list as it is at write time; against the previous code —
   // which wrote back `[...capturedBeforeTheAwait, scope]` — the slower request silently dropped
@@ -810,7 +824,10 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
 
     const refreshCtx = makeCtx({ schemaVersion: "1", chatId: chat.id, relationshipId });
     const refreshed = asRouteResult(await refreshHandler(refreshCtx, wiredDeps));
-    expect(refreshed.body).toMatchObject({ status: "current" });
+    expect(refreshed.body).toMatchObject({
+      status: "current",
+      chat: chatStore.findChatById(chat.id),
+    });
     const refreshedEvent = events.find((event) => event.op === "git-change.chat.refreshed");
     if (refreshedEvent === undefined) throw new Error("expected a refreshed event");
     const persistedRefreshed = expectActivityLogProof(
@@ -818,6 +835,46 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
       formatActivityLogProofLine(refreshedEvent),
     );
     expect(persistedRefreshed).toMatchObject({ relationshipId });
+  });
+
+  it("does not return a current scope that was removed while its comparison was being captured", async () => {
+    const snapshot = fixtureSnapshot();
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [snapshot] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const connected = asRouteResult(
+      await connectHandler(makeCtx(connectRequestBody(chat.id)), deps),
+    );
+    const relationshipId = requireDefined(
+      (connected.body as GitChangeScopeBody).scope,
+      "connected scope",
+    ).relationshipId;
+    const parked = parkingSnapshotService([snapshot]);
+    const events: ServerLogEvent[] = [];
+    const ctx = makeCtx({ schemaVersion: "1", chatId: chat.id, relationshipId });
+    const refreshing = refreshHandler(ctx, {
+      ...deps,
+      gitChangeSnapshotService: parked.service,
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    await untilFirstRequestParks(parked.arrived, refreshing);
+    chatStore.mutateGitChangeScopes(chat.id, () => []);
+    parked.release();
+    expect(asRouteResult(await refreshing)).toMatchObject({
+      status: 409,
+      body: { error: { code: "GIT_CHANGE_RELATIONSHIP_CONFLICT" } },
+    });
+    expect(events.some((event) => event.op === "git-change.chat.refreshed")).toBe(false);
+    const blocked = requireDefined(
+      events.find((event) => event.op === "git-change.chat.blocked"),
+      "blocked evidence",
+    );
+    expect(
+      expectActivityLogProof("git-change.chat.blocked.reason", formatActivityLogProofLine(blocked)),
+    ).toMatchObject({ reason: "relationship-conflict" });
   });
 
   it("archives the stale relationship and creates a new one when the head moved", async () => {
@@ -849,6 +906,7 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     const refreshed = asRouteResult(await refreshHandler(refreshCtx, wiredDeps));
     const body = refreshed.body as GitChangeScopeBody;
     expect(body.status).toBe("stale");
+    expect(refreshed.body).toMatchObject({ chat: chatStore.findChatById(chat.id) });
     const staleScope = requireDefined(body.scope, "refresh response scope");
     expect(staleScope.relationshipId).not.toBe(oldRelationshipId);
     expect(staleScope.snapshotDigest).toBe(moved.snapshotDigest);

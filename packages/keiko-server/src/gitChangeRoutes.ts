@@ -27,6 +27,8 @@ import type {
   Chat,
   ChatGitChangeScope,
   GitChangeBlockedReason,
+  GitChangeConnectResponse,
+  GitChangeRefreshResponse,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import { isGitChangeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
@@ -199,15 +201,6 @@ function errResult(status: number, code: GitChangeErrorCode): RouteResult {
 // keiko-contracts/bff-wire.ts) is owned once there and imported here — the browser client
 // (packages/keiko-ui/src/lib/api.ts) imports the same constant/type rather than each
 // hand-restating the same 11-member set (F30 in the epic #3384 final audit).
-
-type GitChangeConnectResult =
-  | { readonly status: "connected"; readonly scope: ChatGitChangeScope }
-  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
-
-type GitChangeRefreshResult =
-  | { readonly status: "current"; readonly scope: ChatGitChangeScope }
-  | { readonly status: "stale"; readonly scope: ChatGitChangeScope }
-  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
 
 // ─── Request parsing ────────────────────────────────────────────────────────────────────────────
 
@@ -685,12 +678,13 @@ function persistConnectedScope(
     captured.prNumber,
     now,
   );
+  let chat: Chat;
   try {
     // Appends against the list as it is at write time, not against the array captured before
     // `resolveConnectSnapshot`'s multi-second await: two concurrent connects for one chat both
     // read the same list, and writing a stale copy back dropped the other's scope while leaving
     // its relationship edge behind (#3384 review).
-    deps.store.mutateGitChangeScopes(chatId, (current) => [...current, scope]);
+    chat = deps.store.mutateGitChangeScopes(chatId, (current) => [...current, scope]);
   } catch (error) {
     if (error instanceof UiStoreError) {
       archiveGitChangeRelationship(deps, workspaceId, scope.relationshipId);
@@ -704,7 +698,7 @@ function persistConnectedScope(
     throw error;
   }
   logGitChangeConnected(deps, correlationId, scope);
-  const result: GitChangeConnectResult = { status: "connected", scope };
+  const result: GitChangeConnectResponse = { status: "connected", scope, chat };
   return { status: 200, body: result };
 }
 
@@ -731,12 +725,13 @@ function replaceStaleScope(
   chatId: string,
   found: FoundGitChangeScope,
   staleScope: ChatGitChangeScope,
-): RouteResult | undefined {
+): RouteResult | { readonly chat: Chat } {
+  let chat: Chat;
   try {
     // Same rule on the refresh path: the entry being replaced is identified by its relationship
     // id and removed from the CURRENT list inside the write, so a scope another request connected
     // during `captureComparison`'s await survives.
-    deps.store.mutateGitChangeScopes(chatId, (current) => [
+    chat = deps.store.mutateGitChangeScopes(chatId, (current) => [
       ...current.filter((entry) => entry.relationshipId !== found.scope.relationshipId),
       staleScope,
     ]);
@@ -757,7 +752,7 @@ function replaceStaleScope(
     );
     throw error;
   }
-  if (archived) return undefined;
+  if (archived) return { chat };
   compensateFailedStaleReplacement(
     deps,
     workspaceId,
@@ -823,7 +818,7 @@ function blockedConnectResult(
   reason: GitChangeBlockedReason,
 ): RouteResult {
   logGitChangeBlocked(deps, correlationId, reason);
-  const result: GitChangeConnectResult = { status: "blocked", reason };
+  const result: GitChangeConnectResponse = { status: "blocked", reason };
   return { status: 200, body: result };
 }
 
@@ -854,7 +849,7 @@ function blockedRefreshResult(
   reason: GitChangeBlockedReason,
 ): RouteResult {
   logGitChangeBlocked(deps, correlationId, reason);
-  const result: GitChangeRefreshResult = { status: "blocked", reason };
+  const result: GitChangeRefreshResponse = { status: "blocked", reason };
   return { status: 200, body: result };
 }
 
@@ -895,13 +890,17 @@ function persistStaleScope(
     ),
     descriptionStatus: "stale",
   };
-  const conflict = replaceStaleScope(deps, workspaceId, chatId, found, staleScope);
-  if (conflict !== undefined) {
+  const committed = replaceStaleScope(deps, workspaceId, chatId, found, staleScope);
+  if (!("chat" in committed)) {
     logGitChangeBlocked(deps, correlationId, "relationship-conflict");
-    return conflict;
+    return committed;
   }
   logGitChangeStale(deps, correlationId, staleScope);
-  const result: GitChangeRefreshResult = { status: "stale", scope: staleScope };
+  const result: GitChangeRefreshResponse = {
+    status: "stale",
+    scope: staleScope,
+    chat: committed.chat,
+  };
   return { status: 200, body: result };
 }
 
@@ -910,6 +909,23 @@ function isCurrentComparison(captured: CapturedComparison, found: FoundGitChange
     captured.snapshot.snapshotDigest === found.scope.snapshotDigest &&
     captured.remoteDigest === found.scope.remoteDigest
   );
+}
+
+function currentComparisonResult(
+  deps: UiHandlerDeps,
+  chatId: string,
+  relationshipId: string,
+  correlationId: string,
+): RouteResult {
+  const chat = deps.store.findChatById(chatId);
+  const current = chat?.gitChangeScopes?.find((scope) => scope.relationshipId === relationshipId);
+  if (chat === undefined || chat.status === "closed" || current === undefined) {
+    logGitChangeBlocked(deps, correlationId, "relationship-conflict");
+    return errResult(409, "GIT_CHANGE_RELATIONSHIP_CONFLICT");
+  }
+  logGitChangeRefreshed(deps, correlationId, current.relationshipId);
+  const result: GitChangeRefreshResponse = { status: "current", scope: current, chat };
+  return { status: 200, body: result };
 }
 
 export async function handleGitChangeRefresh(
@@ -947,9 +963,7 @@ export async function handleGitChangeRefresh(
   if (typeof captured === "string") return blockedRefreshResult(deps, correlationId, captured);
 
   if (isCurrentComparison(captured, found)) {
-    logGitChangeRefreshed(deps, correlationId, found.scope.relationshipId);
-    const result: GitChangeRefreshResult = { status: "current", scope: found.scope };
-    return { status: 200, body: result };
+    return currentComparisonResult(deps, request.chatId, request.relationshipId, correlationId);
   }
   return persistStaleScope(ctx, deps, request.chatId, found, captured, correlationId);
 }

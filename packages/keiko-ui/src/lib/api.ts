@@ -179,6 +179,7 @@ import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   GIT_CHANGE_BLOCKED_REASONS,
   isDesktopChatStreamEvent,
+  isGroundingScopeIdentity,
   type ChatContextStatusWire,
   type DesktopChatSendRequestWire,
   type ConversationAttachmentUploadRequestWire,
@@ -187,6 +188,8 @@ import {
   type DesktopChatStreamErrorEvent,
   type DesktopChatStreamEventType,
   type GitChangeBlockedReason,
+  type GitChangeConnectResponse,
+  type GitChangeRefreshResponse,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -3681,16 +3684,7 @@ const CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET: ReadonlySet<string> = new Set(
   CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
 );
 
-export type { GitChangeBlockedReason };
-
-export type GitChangeConnectResponse =
-  | { readonly status: "connected"; readonly scope: ChatGitChangeScope }
-  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
-
-export type GitChangeRefreshResponse =
-  | { readonly status: "current"; readonly scope: ChatGitChangeScope }
-  | { readonly status: "stale"; readonly scope: ChatGitChangeScope }
-  | { readonly status: "blocked"; readonly reason: GitChangeBlockedReason };
+export type { GitChangeBlockedReason, GitChangeConnectResponse, GitChangeRefreshResponse };
 
 const GIT_COMMIT_SHA_HEX = /^[0-9a-f]{40}$/u;
 
@@ -3739,20 +3733,38 @@ function isChatGitChangeScope(value: unknown): value is ChatGitChangeScope {
   return hasChatGitChangeScopeTextFields(value) && hasChatGitChangeScopeCountFields(value);
 }
 
-function validateGitChangeConnectResponse(value: unknown): GitRepositoryValidation {
-  if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
-  if (value.status === "blocked") {
-    return GIT_CHANGE_BLOCKED_REASON_SET.has(value.reason as string)
-      ? { ok: true }
-      : { ok: false, reasons: ["response.reason is not a known blocked reason"] };
-  }
-  if (value.status === "connected" && isChatGitChangeScope(value.scope)) {
-    return { ok: true };
-  }
-  return { ok: false, reasons: ["response does not match GitChangeConnectResponse"] };
+function hasCanonicalGitChatFields(value: Record<string, unknown>, chatId: string): boolean {
+  return (
+    value.id === chatId &&
+    typeof value.projectPath === "string" &&
+    typeof value.title === "string" &&
+    typeof value.selectedModel === "string" &&
+    Number.isSafeInteger(value.createdAt) &&
+    Number.isSafeInteger(value.updatedAt) &&
+    value.status === "open" &&
+    isGroundingScopeIdentity(value.groundingScopeIdentity)
+  );
 }
 
-function validateGitChangeRefreshResponse(value: unknown): GitRepositoryValidation {
+function hasCoherentGitChat(value: unknown, scope: ChatGitChangeScope, chatId: string): boolean {
+  if (value === undefined) return true;
+  if (!isRecordValue(value) || !hasCanonicalGitChatFields(value, chatId)) return false;
+  if (!Array.isArray(value.gitChangeScopes) || !value.gitChangeScopes.every(isChatGitChangeScope)) {
+    return false;
+  }
+  return value.gitChangeScopes.some(
+    (candidate: ChatGitChangeScope) =>
+      candidate.relationshipId === scope.relationshipId &&
+      candidate.remoteDigest === scope.remoteDigest &&
+      candidate.snapshotDigest === scope.snapshotDigest,
+  );
+}
+
+function validateGitChangeResponse(
+  value: unknown,
+  chatId: string,
+  statuses: ReadonlySet<string>,
+): GitRepositoryValidation {
   if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
   if (value.status === "blocked") {
     return GIT_CHANGE_BLOCKED_REASON_SET.has(value.reason as string)
@@ -3760,13 +3772,17 @@ function validateGitChangeRefreshResponse(value: unknown): GitRepositoryValidati
       : { ok: false, reasons: ["response.reason is not a known blocked reason"] };
   }
   if (
-    (value.status === "current" || value.status === "stale") &&
-    isChatGitChangeScope(value.scope)
-  ) {
+    typeof value.status === "string" &&
+    statuses.has(value.status) &&
+    isChatGitChangeScope(value.scope) &&
+    hasCoherentGitChat(value.chat, value.scope, chatId)
+  )
     return { ok: true };
-  }
-  return { ok: false, reasons: ["response does not match GitChangeRefreshResponse"] };
+  return { ok: false, reasons: ["response does not match the committed Git change"] };
 }
+
+const GIT_CONNECT_STATUSES: ReadonlySet<string> = new Set(["connected"]);
+const GIT_REFRESH_STATUSES: ReadonlySet<string> = new Set(["current", "stale"]);
 
 export interface ConnectGitChangeComparisonInput {
   readonly chatId: string;
@@ -3793,6 +3809,7 @@ export type ConnectGitChangeInput =
 export async function connectGitChangeToChat(
   input: ConnectGitChangeInput,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<GitChangeConnectResponse> {
   return fetchJson(
     "/api/git-change/connect",
@@ -3801,7 +3818,8 @@ export async function connectGitChangeToChat(
       body: JSON.stringify({ schemaVersion: "1", ...input }),
       ...(signal === undefined ? {} : { signal }),
     },
-    validateGitChangeConnectResponse,
+    (value) => validateGitChangeResponse(value, input.chatId, GIT_CONNECT_STATUSES),
+    correlationId,
   );
 }
 
@@ -3814,6 +3832,7 @@ export async function refreshGitChangeScope(
   chatId: string,
   relationshipId: string,
   signal?: AbortSignal,
+  correlationId?: string,
 ): Promise<GitChangeRefreshResponse> {
   return fetchJson(
     "/api/git-change/refresh",
@@ -3822,7 +3841,8 @@ export async function refreshGitChangeScope(
       body: JSON.stringify({ schemaVersion: "1", chatId, relationshipId }),
       ...(signal === undefined ? {} : { signal }),
     },
-    validateGitChangeRefreshResponse,
+    (value) => validateGitChangeResponse(value, chatId, GIT_REFRESH_STATUSES),
+    correlationId,
   );
 }
 

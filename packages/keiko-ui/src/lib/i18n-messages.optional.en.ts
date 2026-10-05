@@ -2253,6 +2253,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitChangeScope.connect.noBaseBranch":
     "Choose a different base branch before connecting this Git change.",
   "gitChangeScope.connect.chatLoadError": "Unable to load chats for this repository.",
+  "gitChangeScope.savedRefreshUnavailable":
+    "Git change saved. The chat view could not be fully refreshed.",
   "gitChangeScope.connect.error": "Unable to connect this Git change to the chat.",
   "gitChangeScope.description.preview": "Preview",
   "gitChangeScope.description.previewAria": "Preview description for {label}",

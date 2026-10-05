@@ -1736,45 +1736,56 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     });
   };
 
-  const settleOptimisticGitConnection = (
+  const releaseAcceptedGitConnection = (
+    attempt: ConnectionAttempt,
     binding: BindAcceptance,
-    fromId: string,
-    toId: string,
-    chatWindowId: string | null,
-    chatConversationIdAtBind: string | undefined,
-    gitChangeSelection: GitChangeBindSelection,
-    removeIfRejected: boolean,
   ): void => {
+    const relationshipId = binding.gitChangeRelationshipId;
+    const conversationId = attempt.chatConversationIdAtBind;
     if (
-      !binding.accepted ||
-      !endpointsStillCurrent(fromId, toId, chatWindowId, chatConversationIdAtBind, winById)
-    ) {
-      if (removeIfRejected) removeStoredConnectionBetween(fromId, toId);
+      relationshipId === undefined ||
+      conversationId === undefined ||
+      attempt.chatWindowId === null
+    )
+      return;
+    const target: ChatUnbindTarget = {
+      conversationId,
+      projectPath: attempt.bindingTarget?.projectPath,
+    };
+    if (onGitChangeUnbind === undefined) {
+      onConnectionUnbindFailure?.();
       return;
     }
-    // #3506 review — the operator can remove the optimistic edge before onGitChangeBind
-    // resolves; the edge disappears with no `boundGitChangeRelationshipId` yet, so `removeConn`
-    // cannot ask the server to release it. When the accept finally arrives, the edge is gone
-    // and no local update work remains — but the server just minted a relationship and unless
-    // we hand it back through `onGitChangeUnbind` the relationship leaks.
-    if (
-      binding.gitChangeRelationshipId !== undefined &&
-      chatWindowId !== null &&
-      !isDuplicate(connsRef.current, fromId, toId)
-    ) {
-      const target = chatUnbindTarget(winById(chatWindowId));
-      const relationshipId = binding.gitChangeRelationshipId;
-      if (onGitChangeUnbind !== undefined) {
-        try {
-          void Promise.resolve(onGitChangeUnbind(chatWindowId, relationshipId, target)).catch(
-            () => {
-              onConnectionUnbindFailure?.();
-            },
-          );
-        } catch {
+    try {
+      void Promise.resolve(onGitChangeUnbind(attempt.chatWindowId, relationshipId, target)).then(
+        (accepted) => {
+          if (!accepted) onConnectionUnbindFailure?.();
+        },
+        () => {
           onConnectionUnbindFailure?.();
-        }
-      }
+        },
+      );
+    } catch {
+      onConnectionUnbindFailure?.();
+    }
+  };
+
+  const settleOptimisticGitConnection = (
+    attempt: ConnectionAttempt,
+    binding: BindAcceptance,
+  ): void => {
+    const { fromId, toId, chatWindowId, chatConversationIdAtBind, gitChangeSelection } = attempt;
+    if (!binding.accepted) {
+      if (!attempt.hadGitConnectionBeforeBind) removeStoredConnectionBetween(fromId, toId);
+      return;
+    }
+    if (!endpointsStillCurrent(fromId, toId, chatWindowId, chatConversationIdAtBind, winById)) {
+      if (!attempt.hadGitConnectionBeforeBind) removeStoredConnectionBetween(fromId, toId);
+      releaseAcceptedGitConnection(attempt, binding);
+      return;
+    }
+    if (!isDuplicate(connsRef.current, fromId, toId)) {
+      releaseAcceptedGitConnection(attempt, binding);
       return;
     }
     updateConnectionScope(
@@ -1840,15 +1851,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     binding: BindAcceptance,
   ): void => {
     if (attempt.gitChangeSelection !== null) {
-      settleOptimisticGitConnection(
-        binding,
-        attempt.fromId,
-        attempt.toId,
-        attempt.chatWindowId,
-        attempt.chatConversationIdAtBind,
-        attempt.gitChangeSelection,
-        !attempt.hadGitConnectionBeforeBind,
-      );
+      settleOptimisticGitConnection(attempt, binding);
       reportAttemptOutcome(
         attempt,
         binding.accepted &&

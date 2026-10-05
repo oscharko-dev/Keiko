@@ -1,7 +1,11 @@
 "use client";
 
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { withGroundingScopeRefresh } from "@/lib/chat-grounding-mutation";
+import {
+  adoptableGitChat,
+  committedGitChat,
+  withGroundingScopeRefresh,
+} from "@/lib/chat-grounding-mutation";
 import type { ClientFilesScopeDecision } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import dynamic, { type DynamicOptionsLoadingProps } from "next/dynamic";
@@ -519,15 +523,6 @@ function currentFilesOwnedScope(
     : restored;
 }
 
-function canonicalAcknowledgedScope(
-  chat: Chat | undefined,
-  nextScope: ChatConnectedScope,
-): ChatConnectedScope | undefined {
-  return chat === undefined
-    ? undefined
-    : effectiveScopes(chat).find((scope) => isScopeConnected([scope], nextScope));
-}
-
 function acknowledgeFilesScope(input: {
   readonly correlationId: string;
   readonly edgeKey: string;
@@ -537,16 +532,19 @@ function acknowledgeFilesScope(input: {
   readonly connections: readonly Connection[];
   readonly scopes: Map<string, ChatConnectedScope>;
   readonly fingerprints: Map<string, string | undefined>;
+  readonly correlations: Map<string, string>;
 }): boolean {
-  const acknowledged = canonicalAcknowledgedScope(input.chat, input.nextScope);
+  const canonicalScopes = input.chat === undefined ? [] : effectiveScopes(input.chat);
+  const acknowledged = canonicalScopes.find((scope) => isScopeConnected([scope], input.nextScope));
   if (acknowledged === undefined) {
     reportFilesScopeDecision(input.correlationId, { decision: "ack-missing" });
     return false;
   }
   input.scopes.set(input.edgeKey, acknowledged);
+  input.correlations.set(input.edgeKey, input.correlationId);
   reportFilesScopeDecision(input.correlationId, {
     decision: "acknowledged",
-    sourceCount: input.chat === undefined ? 0 : effectiveScopes(input.chat).length,
+    sourceCount: canonicalScopes.length,
     candidateCount: 1,
     bindingFingerprint: connectedScopeFingerprint(acknowledged),
   });
@@ -665,11 +663,12 @@ function reconcileFilesAcknowledgementFingerprints(
   connections: readonly Connection[],
   acknowledgements: Map<string, ChatConnectedScope>,
   observed: Map<string, string | undefined>,
+  correlations: Map<string, string>,
 ): void {
   for (const connection of connections) {
     const fingerprint = connection.boundScopeFingerprint;
     if (observed.has(connection.id) && observed.get(connection.id) !== fingerprint) {
-      invalidateChangedFilesAcknowledgements(connection, acknowledgements);
+      invalidateChangedFilesAcknowledgements(connection, acknowledgements, correlations);
     }
     observed.set(connection.id, fingerprint);
   }
@@ -680,25 +679,28 @@ function reconcileFilesAcknowledgementFingerprints(
 function invalidateChangedFilesAcknowledgements(
   connection: Connection,
   acknowledgements: Map<string, ChatConnectedScope>,
+  correlations: Map<string, string>,
 ): void {
-  let invalidated = 0;
   for (const [key, scope] of acknowledgements) {
     if (
-      key.startsWith(`${connection.id}\u0000`) &&
-      connectedScopeFingerprint(scope) !== connection.boundScopeFingerprint
-    ) {
-      acknowledgements.delete(key);
-      invalidated += 1;
-    }
-  }
-  if (invalidated > 0) {
-    reportFilesScopeDecision(newClientCorrelationId(), {
-      decision: "ack-invalidated",
-      candidateCount: invalidated,
-      ...(isConnectedScopeFingerprint(connection.boundScopeFingerprint)
-        ? { bindingFingerprint: connection.boundScopeFingerprint }
-        : {}),
-    });
+      !key.startsWith(`${connection.id}\u0000`) ||
+      connectedScopeFingerprint(scope) === connection.boundScopeFingerprint
+    )
+      continue;
+    acknowledgements.delete(key);
+    const parentCorrelationId = correlations.get(key);
+    correlations.delete(key);
+    reportFilesScopeDecision(
+      newClientCorrelationId(),
+      {
+        decision: "ack-invalidated",
+        candidateCount: 1,
+        ...(isConnectedScopeFingerprint(connection.boundScopeFingerprint)
+          ? { bindingFingerprint: connection.boundScopeFingerprint }
+          : {}),
+      },
+      parentCorrelationId,
+    );
   }
 }
 
@@ -770,7 +772,14 @@ export function persistedChatProjectPath(win: AppWindow | undefined): string | u
   return value.trim().length > 0 ? value : undefined;
 }
 
-class ChatBindingCompensationFailure extends Error {}
+class ChatBindingCompensationFailure extends Error {
+  constructor(
+    cause?: unknown,
+    readonly correlationId?: string,
+  ) {
+    super("Chat binding compensation failed.", { cause });
+  }
+}
 class ChatMutationTimeoutFailure extends Error {
   constructor(readonly correlationId: string) {
     super("Chat grounding mutation timed out.");
@@ -840,6 +849,14 @@ function reportGroundingMutationFailure(
   error: unknown,
   originalCorrelationId?: string,
 ): void {
+  if (error instanceof ChatBindingCompensationFailure && error.cause !== undefined) {
+    reportGroundingMutationFailure(
+      message,
+      error.cause,
+      originalCorrelationId ?? error.correlationId,
+    );
+    return;
+  }
   const correlationId = originalCorrelationId ?? correlationIdOf(error);
   const summary = `[keiko] ${message}: ${clientErrorSummary(error)}`;
   if (originalCorrelationId === undefined) {
@@ -894,7 +911,7 @@ function groundingMutationFailureKey(
     return mutationFailedKey;
   }
   if (error instanceof ChatBindingCompensationFailure) {
-    reportGroundingMutationFailure("Chat binding compensation failed", error);
+    reportGroundingMutationFailure("Chat binding compensation failed", error, error.correlationId);
     return "chat.grounding.recoveryRequired";
   }
   if (error instanceof ChatMutationTimeoutFailure) {
@@ -1142,16 +1159,78 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   return `${root}/${relativePath}`;
 }
 
-function acceptedGitChangeScope(
-  chat: Chat | undefined,
-  chatId: string,
+async function compensateCommittedGitConnection(
+  chat: Chat,
   relationshipId: string,
   attempt: ChatMutationAttempt,
-  target: ChatLookupTarget | undefined,
-): ChatGitChangeScope | false {
-  if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return false;
-  if (chat?.id !== chatId) return false;
-  return chat.gitChangeScopes?.find((scope) => scope.relationshipId === relationshipId) ?? false;
+  remember: (chat: Chat) => void,
+): Promise<void> {
+  try {
+    await retryGroundingScopeIntent(async () => {
+      const response = await fetchChats(chat.projectPath, attempt.correlationId, chat.id);
+      const canonical = response.chats.find((candidate) => candidate.id === chat.id);
+      if (canonical === undefined || canonical.status === "closed") return true;
+      if (canonical.projectPath !== chat.projectPath) {
+        throw new ApiError("CONTRACT_VALIDATION_FAILED", "Git compensation target changed.", 502);
+      }
+      const remaining = removeGitChangeScope(canonical.gitChangeScopes ?? [], relationshipId);
+      if (remaining.length === (canonical.gitChangeScopes ?? []).length) return true;
+      const restored = await updateChatGitChangeScopes(
+        chat.id,
+        remaining.length === 0 ? null : remaining,
+        canonical.groundingScopeIdentity,
+        attempt.correlationId,
+      );
+      remember(restored.chat);
+      return true;
+    }, attempt);
+  } catch (error) {
+    throw new ChatBindingCompensationFailure(error, attempt.correlationId);
+  }
+}
+
+interface CommittedGitBinding {
+  readonly original: Chat;
+  readonly result: { readonly scope: ChatGitChangeScope; readonly chat?: Chat };
+  readonly attempt: ChatMutationAttempt;
+  readonly target: ChatLookupTarget | undefined;
+  readonly latest: () => Chat | undefined;
+  readonly remember: (chat: Chat) => void;
+  readonly publish: (chat: Chat) => void;
+  readonly warn: (confirmed: boolean) => void;
+}
+
+function gitBindingIsCurrent(input: CommittedGitBinding): boolean {
+  return input.attempt.isCurrent() && chatLookupTargetIsCurrent(input.target);
+}
+
+async function settleCommittedGitBinding(
+  input: CommittedGitBinding,
+): Promise<ChatGitChangeScope | false> {
+  const { original, result, attempt, remember } = input;
+  attempt.renewBudget();
+  const compensate = (): Promise<void> =>
+    compensateCommittedGitConnection(original, result.scope.relationshipId, attempt, remember);
+  if (!gitBindingIsCurrent(input)) {
+    await compensate();
+    return false;
+  }
+  const committed = await committedGitChat(original, result, attempt.correlationId);
+  if (!gitBindingIsCurrent(input)) {
+    await compensate();
+    return false;
+  }
+  const latest = input.latest();
+  const adopted =
+    latest === undefined ? undefined : adoptableGitChat(original, latest, committed, result.scope);
+  input.warn(committed.confirmed);
+  if (adopted === undefined) {
+    await compensate();
+    return false;
+  }
+  if (committed.confirmed) remember(adopted);
+  input.publish(adopted);
+  return result.scope;
 }
 
 function removeGitChangeScope(
@@ -1413,6 +1492,7 @@ function AppShellInner(): ReactNode {
   const wsWinsForBindingRef = useRef<readonly AppWindow[] | null>(null);
   const wsConnectionsForBindingRef = useRef<readonly Connection[]>([]);
   const acknowledgedFilesScopesRef = useRef(new Map<string, ChatConnectedScope>());
+  const acknowledgedFilesCorrelationsRef = useRef(new Map<string, string>());
   const acknowledgedFilesFingerprintsRef = useRef(new Map<string, string | undefined>());
   const automaticFilesAmbiguitiesRef = useRef(new Map<string, string>());
   const releasedFilesConnectionsRef = useRef(new Set<string>());
@@ -1764,6 +1844,7 @@ function AppShellInner(): ReactNode {
           connections: wsConnectionsForBindingRef.current,
           scopes: acknowledgedFilesScopesRef.current,
           fingerprints: acknowledgedFilesFingerprintsRef.current,
+          correlations: acknowledgedFilesCorrelationsRef.current,
         });
       }
       return accepted;
@@ -2049,6 +2130,17 @@ function AppShellInner(): ReactNode {
       t,
     ],
   );
+  const latestGitChat = useCallback(
+    (chatId: string): Chat | undefined =>
+      latestGroundingChat(
+        currentChatSessionRef.current.chats.find((candidate) => candidate.id === chatId) ??
+          (currentChatSessionRef.current.activeChat?.id === chatId
+            ? currentChatSessionRef.current.activeChat
+            : undefined),
+        confirmedGroundingChatsRef.current.get(chatId),
+      ),
+    [],
+  );
   const handleGitChangeBind = useCallback(
     async (
       chatWindowId: string,
@@ -2065,32 +2157,31 @@ function AppShellInner(): ReactNode {
               return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
             }
             if ((target?.conversationId ?? chat.id) !== chat.id) return false;
-            const result = await connectGitChangeToChat({
-              chatId: chat.id,
-              mode: "comparison",
-              ...selection,
-            });
+            const result = await connectGitChangeToChat(
+              {
+                chatId: chat.id,
+                mode: "comparison",
+                ...selection,
+              },
+              undefined,
+              attempt.correlationId,
+            );
             if (result.status === "blocked") {
               return rejectForConnectionFailure(t("chat.grounding.connectGitChangeFailed"));
             }
-            if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return false;
-            const updated = await resolveChatForWindow(
-              chatWindowId,
-              target,
-              true,
-              attempt.correlationId,
-            );
-            const connected = acceptedGitChangeScope(
-              updated,
-              chat.id,
-              result.scope.relationshipId,
+            return settleCommittedGitBinding({
+              original: chat,
+              result,
               attempt,
               target,
-            );
-            if (connected === false || updated === undefined) return false;
-            publishRefreshedGroundingChat(updated);
-            setSourceConnectionNotice(null);
-            return connected;
+              latest: () => latestGitChat(chat.id),
+              remember: rememberGroundingChat,
+              publish: (updated) => currentChatSessionRef.current.replaceChat(updated),
+              warn: (confirmed) =>
+                setSourceConnectionNotice(
+                  confirmed ? null : t("chat.grounding.gitChangeSavedRefreshUnavailable"),
+                ),
+            });
           },
           "git-change",
         );
@@ -2103,7 +2194,8 @@ function AppShellInner(): ReactNode {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
     [
       groundingMutationKey,
-      publishRefreshedGroundingChat,
+      latestGitChat,
+      rememberGroundingChat,
       rejectForConnectionFailure,
       resolveChatForWindow,
       t,
@@ -2275,10 +2367,12 @@ function AppShellInner(): ReactNode {
       ws.conns,
       acknowledgedFilesScopesRef.current,
       acknowledgedFilesFingerprintsRef.current,
+      acknowledgedFilesCorrelationsRef.current,
     );
     const liveEdges = new Set(ws.conns.map((conn) => conn.id));
     pruneReleasedFilesConnections(releasedFilesConnectionsRef.current, liveEdges);
     pruneFilesAcknowledgements(acknowledgedFilesScopesRef.current, liveEdges);
+    pruneFilesAcknowledgements(acknowledgedFilesCorrelationsRef.current, liveEdges);
     pruneFilesAcknowledgements(automaticFilesAmbiguitiesRef.current, liveEdges);
     pruneFilesAcknowledgements(automaticFilesRequestsRef.current, liveEdges);
     ws.conns.forEach(rebindFilesConnection);

@@ -891,6 +891,16 @@ under its own correlation, with the blocking action as `parentCorrelationId`. On
 attempts, including zero. These are separate actions plus a recovery summary, not repeated failures
 of the original action or a count of missing log events.
 
+Git connect and refresh retain the initiating correlation through the POST and any compatibility
+read. Current replies carry the actual committed Chat and its store-owned grounding identity;
+the UI adopts that response without a second read. An unavailable or unconfirming legacy read
+records one body-free client diagnostic and a localized saved-but-not-refreshed notice, never a
+second connect POST. A provisional view retains the existing identity rather than inventing one.
+Superseded shell bindings release only their newly accepted relationship against the current
+server identity; failed late compensation keeps the existing mutation queue blocked. A changed
+Files acknowledgement records its original action as `parentCorrelationId`, with one invalidated
+candidate per owned acknowledgement.
+
 `gateway.setup.metadata.resolved` records the discovery outcome (`available`, `unavailable`,
 `cancelled` or `failed`) and elapsed time. When setup supplied explicit selections,
 `selectedModelCount` counts selected chat and embedding entries. After successful discovery,

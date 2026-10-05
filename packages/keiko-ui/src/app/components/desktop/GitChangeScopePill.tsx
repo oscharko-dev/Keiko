@@ -6,7 +6,11 @@ import {
   type WidgetMessageKey as MessageKey,
 } from "@/lib/optional-widget-i18n";
 
-import { canonicalGroundingChat, replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
+import {
+  adoptableGitChat,
+  committedGitChat,
+  replaceGroundingScopeList,
+} from "@/lib/chat-grounding-mutation";
 
 // Issue #3400 (epic #3384) — git-change scope pills for the chat header.
 //
@@ -695,15 +699,28 @@ async function runGuardedPillAction(
   }
 }
 
-function adoptCanonicalGitChat(
-  latest: Chat,
-  original: Chat,
-  canonical: Chat,
-  onRefreshed: ((chat: Chat) => void) | undefined,
-): void {
-  if (latest.id !== original.id || latest.projectPath !== original.projectPath) return;
-  if (latest.updatedAt > canonical.updatedAt) return;
-  onRefreshed?.(canonical);
+async function refreshCommittedGitPill(
+  props: GitChangePillItemProps,
+  latest: RefObject<Chat>,
+  setError: (message: string | null) => void,
+): Promise<void> {
+  const { chat, scope, t } = props;
+  const correlationId = newClientCorrelationId();
+  const result = await props.refreshScope(chat.id, scope.relationshipId, undefined, correlationId);
+  if (result.status === "blocked") {
+    setError(gitChangeBlockedReasonMessage(result.reason, t));
+    return;
+  }
+  const committed = await committedGitChat(chat, result, correlationId, props.listChats);
+  const adopted = adoptableGitChat(
+    chat,
+    latest.current,
+    committed,
+    result.scope,
+    scope.relationshipId,
+  );
+  if (adopted !== undefined) props.onRefreshed?.(adopted);
+  if (!committed.confirmed) props.setDisconnectError(t("gitChangeScope.savedRefreshUnavailable"));
 }
 
 interface GitChangePillActions {
@@ -717,7 +734,7 @@ interface GitChangePillActions {
 // Extracted from GitChangePillItem so the component body stays under the max-lines-per-function
 // bar; both handlers share the same busy/error state and scope-list derivation.
 function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillActions {
-  const { chat, scope, allScopes, onDisconnect, onRefreshed, updateScopes, t } = props;
+  const { chat, scope, allScopes, onDisconnect, updateScopes, t } = props;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const disconnectRef = useRef<HTMLButtonElement | null>(null);
@@ -745,17 +762,10 @@ function useGitChangePillActions(props: GitChangePillItemProps): GitChangePillAc
     restoreScopeHeaderFocus(header, button);
   }
 
-  async function runRefresh(): Promise<void> {
-    await runGuardedPillAction(setBusy, setError, formatRefreshErrorMessage, t, async () => {
-      const result = await props.refreshScope(chat.id, scope.relationshipId);
-      if (result.status === "blocked") {
-        setError(gitChangeBlockedReasonMessage(result.reason, t));
-        return;
-      }
-      const canonical = await canonicalGroundingChat(chat, props.listChats);
-      adoptCanonicalGitChat(latestChatRef.current, chat, canonical, onRefreshed);
-    });
-  }
+  const runRefresh = (): Promise<void> =>
+    runGuardedPillAction(setBusy, setError, formatRefreshErrorMessage, t, () =>
+      refreshCommittedGitPill(props, latestChatRef, setError),
+    );
 
   return {
     busy,
