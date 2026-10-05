@@ -62,11 +62,12 @@ function gateway(
   call: ProviderAdapter["call"],
   config = gatewayConfig(),
   events: ModelGatewayLogEvent[] = [],
+  random: () => number = () => 0,
 ): Gateway {
   return new Gateway(config, {
     adapter: { call },
     clock: systemClock,
-    random: (): number => 0,
+    random,
     log: {
       write: (event): void => {
         events.push(event);
@@ -93,6 +94,59 @@ describe("concurrent provider cooldown admission", () => {
     await provider.chat(REQUEST);
     expect(random).not.toHaveBeenCalled();
   });
+  it("resamples admission jitter when another caller extends a sleeping cooldown", async () => {
+    vi.useFakeTimers();
+    const events: ModelGatewayLogEvent[] = [];
+    const random = vi.fn<() => number>().mockReturnValueOnce(0).mockReturnValue(1);
+    let rejectSlow!: (error: Error) => void;
+    const slowResponse = new Promise<NormalizedResponse>((_resolve, reject) => {
+      rejectSlow = reject;
+    });
+    const call = vi
+      .fn<ProviderAdapter["call"]>()
+      .mockReturnValueOnce(slowResponse)
+      .mockRejectedValueOnce(new RateLimitError("Synthetic initial cooldown", 100))
+      .mockResolvedValue(answer());
+    const config = gatewayConfig();
+    const provider = gateway(
+      call,
+      {
+        ...config,
+        providers: config.providers.map((entry) => ({
+          ...entry,
+          maxRetries: 0,
+          retryBaseDelayMs: 20,
+        })),
+        circuitBreaker: { failureThreshold: 10, cooldownMs: 1000, halfOpenProbes: 1 },
+      },
+      events,
+      random,
+    );
+    const slow = provider.chat(REQUEST).catch((error: unknown) => error);
+    await expect(provider.chat(REQUEST)).rejects.toBeInstanceOf(RateLimitError);
+    const waiting = provider.chat({
+      ...REQUEST,
+      logContext: { correlationId: "cooldown-resample" },
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(random).toHaveBeenCalledTimes(1);
+    rejectSlow(new RateLimitError("Synthetic extended cooldown", 200));
+    expect(await slow).toBeInstanceOf(RateLimitError);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(random).toHaveBeenCalledTimes(2);
+    const delays = events
+      .filter((event) => event.op === "gateway.circuit.wait" && event.extra?.outcome === "started")
+      .map((event) => event.extra?.delayMs);
+    expect(delays).toEqual([101, 220]);
+    await vi.advanceTimersByTimeAsync(219);
+    expect(call).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await waiting;
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(random).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each([0, 1])("bounds fresh-caller admission jitter at random=%i", async (random) => {
     vi.useFakeTimers();
     const events: ModelGatewayLogEvent[] = [];
