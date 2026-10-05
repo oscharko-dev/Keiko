@@ -57,6 +57,9 @@ import {
 import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { correlationIdOf } from "@/lib/client-error-summary";
+import { bffRequestErrorKind } from "@/lib/http";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLayoutLock";
 
@@ -1043,8 +1046,18 @@ function surfaceWorkspaceKeepaliveOvercap(byteLength: number): void {
   );
 }
 
-export function reportConnectionUnbindFailure(): void {
-  reportClientDiagnostic("[keiko] workspace connection unbind callback failed");
+export function reportConnectionUnbindFailure(error?: unknown): void {
+  reportClientDiagnostic(
+    "[keiko] workspace connection unbind callback failed",
+    error === undefined
+      ? undefined
+      : {
+          kind: "other",
+          correlationId: correlationIdOf(error),
+          errorKind: bffRequestErrorKind(error),
+          errorEvidence: clientErrorEvidence(error),
+        },
+  );
 }
 
 // Server sync failures were swallowed by bare `catch { return null; }` — network
@@ -2039,8 +2052,8 @@ async function unbindClosedWindowConnection(
       unbindGitChangeScope,
     );
     return (await Promise.all(results)).every(Boolean);
-  } catch {
-    reportConnectionUnbindFailure();
+  } catch (error) {
+    reportConnectionUnbindFailure(error);
     return false;
   }
 }

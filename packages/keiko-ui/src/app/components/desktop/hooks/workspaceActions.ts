@@ -1089,7 +1089,7 @@ interface ConnectArgs {
         target?: ChatUnbindTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
-  readonly onConnectionUnbindFailure?: (() => void) | undefined;
+  readonly onConnectionUnbindFailure?: ((error?: unknown) => void) | undefined;
 }
 
 export interface GitChangeBindSelection {
@@ -1320,7 +1320,7 @@ async function connectionUnbindAccepted(input: ConnectionUnbindAcceptanceInput):
     onScopeUnbind,
     onConnectorUnbind,
     onGitChangeUnbind,
-    onConnectionUnbindFailure,
+    onConnectionUnbindFailure: reportConnectionUnbindFailure,
   } = input;
   try {
     const results: Promise<boolean>[] = [];
@@ -1339,8 +1339,8 @@ async function connectionUnbindAccepted(input: ConnectionUnbindAcceptanceInput):
     }
     const resolved = await Promise.all(results);
     return resolved.every(Boolean);
-  } catch {
-    onConnectionUnbindFailure?.();
+  } catch (error) {
+    reportConnectionUnbindFailure?.(error);
     return false;
   }
 }
@@ -1609,7 +1609,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     onConnectorUnbind,
     onGitChangeBind,
     onGitChangeUnbind,
-    onConnectionUnbindFailure,
+    onConnectionUnbindFailure: reportConnectionUnbindFailure,
     onConnectionOutcome,
   } = args;
   const reportConnectionOutcome = (outcome: ConnectionOutcome): void => {
@@ -1753,20 +1753,20 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       projectPath: attempt.bindingTarget?.projectPath,
     };
     if (onGitChangeUnbind === undefined) {
-      onConnectionUnbindFailure?.();
+      reportConnectionUnbindFailure?.();
       return;
     }
     try {
       void Promise.resolve(onGitChangeUnbind(attempt.chatWindowId, relationshipId, target)).then(
         (accepted) => {
-          if (!accepted) onConnectionUnbindFailure?.();
+          if (!accepted) reportConnectionUnbindFailure?.();
         },
-        () => {
-          onConnectionUnbindFailure?.();
+        (error: unknown) => {
+          reportConnectionUnbindFailure?.(error);
         },
       );
-    } catch {
-      onConnectionUnbindFailure?.();
+    } catch (error) {
+      reportConnectionUnbindFailure?.(error);
     }
   };
 
@@ -2019,7 +2019,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       onScopeUnbind,
       onConnectorUnbind,
       onGitChangeUnbind,
-      onConnectionUnbindFailure,
+      onConnectionUnbindFailure: reportConnectionUnbindFailure,
     }).then((accepted): void => {
       pendingConnectionRemovals.delete(id);
       if (accepted) removeStoredConnection(id);

@@ -2,7 +2,12 @@
 // Epic #189 Slice 3 M1 — plural connector-scope helpers + Connector↔Chat binding.
 // Epic #710 #718 — linkedConnectorCapsuleIds reader.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { reportConnectionUnbindFailure } from "./useWorkspace";
+import { ApiError } from "@/lib/api-shared-primitives";
+import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
+
+afterEach(() => resetClientDiagnosticWriter());
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
 import {
   activeEditorPane,
@@ -3293,6 +3298,51 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
       },
     ]);
   });
+
+  it.each(["throw", "reject"] as const)(
+    "keeps the actual cause and request identity when late Git cleanup fails by %s",
+    async (outcome) => {
+      const writer = vi.fn();
+      setClientDiagnosticWriter(writer);
+      const failure = new ApiError("INTERNAL", "private body", 503);
+      failure.correlationId = "git-cleanup-request-123";
+      failure.cause = new TypeError("private endpoint");
+      const pending = deferredValue<ChatGitChangeScope>();
+      const cfg = { chatId: "old-private-chat", projectPath: "/private" };
+      const harness = makeConnectHarness(
+        [
+          win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "HEAD" }, "git-1"),
+          win("chat", cfg, "chat-1"),
+        ],
+        [],
+        {
+          connecting: { from: "git-1", x: 0, y: 0 },
+          onGitChangeBind: () => pending.promise,
+          onGitChangeUnbind: () => {
+            if (outcome === "throw") throw failure;
+            return Promise.reject(failure);
+          },
+          onConnectionUnbindFailure: reportConnectionUnbindFailure,
+        },
+      );
+      harness.confirmConnect("chat-1", evt);
+      cfg.chatId = "new-private-chat";
+      pending.resolve(gitScope("private-relationship"));
+      await vi.waitFor(() => expect(writer).toHaveBeenCalledOnce());
+      expect(writer).toHaveBeenCalledExactlyOnceWith(
+        "[keiko] workspace connection unbind callback failed",
+        expect.objectContaining({
+          correlationId: "git-cleanup-request-123",
+          errorKind: "unavailable",
+          errorEvidence: expect.objectContaining({
+            errorClass: "ApiError",
+            causeChain: ["TypeError"],
+          }),
+        }),
+      );
+      expect(JSON.stringify(writer.mock.calls)).not.toMatch(/private/);
+    },
+  );
 
   it.each(["retargeted", "closed"] as const)(
     "releases the original Git relationship if the endpoint is %s just before acceptance",
