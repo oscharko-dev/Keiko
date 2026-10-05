@@ -46,10 +46,10 @@ import {
   validateGitRepositorySummary,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository-summary";
 import {
+  isSafeGitRefName,
   validateGitRepositoryDiffResponse,
   validateGitRepositoryStatusResponse,
 } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
-import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
   CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS,
   CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS,
