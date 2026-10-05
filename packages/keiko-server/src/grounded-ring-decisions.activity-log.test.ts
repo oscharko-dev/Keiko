@@ -87,10 +87,10 @@ function assertPartition(result: Awaited<ReturnType<typeof retrieve>>): void {
 
 function assertCanonical(result: Awaited<ReturnType<typeof retrieve>>, source = false): void {
   const event = source ? result.source : result.completed;
-  const proof = source
-    ? "search.connected-context.source-details.line"
-    : "search.connected-context.completed.line";
-  const line = expectActivityLogProof(proof, formatActivityLogProofLine(event ?? {}));
+  const formatted = formatActivityLogProofLine(event ?? {});
+  const line = source
+    ? expectActivityLogProof("search.connected-context.source-details.line", formatted)
+    : expectActivityLogProof("search.connected-context.completed.line", formatted);
   expect(line).toHaveProperty("correlationId", CORRELATION);
   expect(line).toMatchObject(event?.extra ?? {});
   expect(result.log.lines().join("\n")).not.toContain(ROOT);
