@@ -69,7 +69,8 @@ counts-only-plus-enums:
   `SelectedScope.scopeId`), `scopeKind` (enum), `fileCount` (number; `-1` sentinel for
   `workspace-root`), `queryKind` (enum)
 - `usage` (full ExplorationUsage — all numbers)
-- `budget` (full ExplorationBudget — all numbers)
+- `budget` (full `ExplorationBudget`; `filesReadMax` and `elapsedMsMax` are nullable, with
+  `null` meaning no default file-count or elapsed-time cutoff; all usage counters remain numeric)
 - `citationCount`, `omittedCount`, `uncertaintyCount`, `elapsedMs` (numbers)
 
 Large context packs retain at most 4,096 omitted path details, independently of corpus size.
@@ -140,7 +141,9 @@ objects. The BFF returns the manifest run id on `GroundedAnswer.evidenceRunId`, 
 UI links to the local evidence detail route for reviewers who need the durable audit
 record.
 
-### D3.3 — Explicit connections support bounded recursive orientation and search
+### D3.3 — Explicit connections support recursive orientation and search
+
+#### Orientation and evidence admission
 
 An explicitly connected repository or ordinary folder is sufficient scope for a meaningful
 orientation or natural-language search request. A filename or symbol is useful for precision,
@@ -166,6 +169,8 @@ enrichment, and interrupted traversal disables it. When traversal finishes with 
 the bounded successfully decoded subset remains usable; coverage and its read-failure warnings stay
 incomplete, and no claim is made about the unreadable documents. Actual full-file ranges use
 file-listing provenance rather than synthetic lexical matches.
+#### Source coordinates and prompt fitting
+
 Folder excerpts sent to an answering model annotate each line with its original source-line offset;
 these prompt annotations do not alter stored source text or citation ranges. Single-source,
 multi-source and hybrid prompts also disclose canonical closed omission reason counts without
@@ -179,6 +184,8 @@ budget, and only those qualified paths may exceed the ordinary 8 KiB excerpt win
 cache fingerprints these per-path limits. Once the collector overflows, later files perform no
 collector byte-counting or line-counting work. Gateway fitting still enforces the model input
 budget independently. Named targets, exact absence checks, diagnostic questions, and relationship/history requests retain their existing routes.
+#### Traversal and explicit caller budgets
+
 Recursive lexical search and file discovery visit the accepted scope without a default file-count
 or elapsed-time cutoff. Final source reads likewise have no default file-count cutoff: `filesReadMax: null`
 retains eligible requested facts under the actual excerpt-byte and model-input budgets. Explicit finite
@@ -192,6 +199,8 @@ bounds. An unlimited default lookup uses the live traversal rather than treating
 index as complete coverage. Text files up to and including 2 MiB are eligible regardless of extension;
 images, binary content, unsafe aliases, and larger files are excluded. Ordinary folders do not inherit
 Git-oriented generated-directory exclusions merely from names such as `build` or `dist`.
+#### Filesystem consistency and redaction
+
 Streaming directory enumeration distinguishes membership changes from directory identity changes.
 Concurrent additions or disappeared entries retain safely observed evidence and sibling traversal,
 with `io-error` incomplete coverage; they never certify a stable snapshot. Replaced inode/device
@@ -412,9 +421,11 @@ test will catch it.
 
 **Positive**
 
-- Users see "Searched 3× · Read 5 / 32 files · 12,400 / 131,072 B · 1,812 / 30,000 ms"
-  on every grounded answer. They can verify that Keiko did not exfiltrate the whole
-  workspace.
+- Users see observed search/read counts, selected excerpt bytes and actual elapsed time.
+  For example: "Searched 3× · Read 5 files · 12,400 / 131,072 B · 1,812 ms".
+  Default `null` file/time caps are not rendered as invented numeric denominators;
+  explicitly finite caller limits remain visible. These counters describe retrieval
+  and selected context, not proof that the entire workspace was sent to the model.
 - The wire shape is small (well under 600 bytes serialised — pinned in test).
 - The summary's privacy contract is enforced by the type system; string-bearing
   grounded-answer fields are additionally scrubbed by the BFF redactor.
