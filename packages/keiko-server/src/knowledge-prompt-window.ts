@@ -38,7 +38,7 @@ const KNOWLEDGE_PROMPT_WINDOW_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["trimmed", "refused"],
+      values: ["trimmed", "metadata-trimmed", "refused"],
     },
     referenceCount: { type: "integer", dataClass: "count", required: true },
     sentReferenceCount: { type: "integer", dataClass: "count", required: true },
@@ -57,7 +57,7 @@ const KNOWLEDGE_PROMPT_WINDOW_OPERATION = defineActivityLogOperation({
 });
 
 export interface PromptWindowFit {
-  readonly state: "trimmed" | "refused";
+  readonly state: "trimmed" | "metadata-trimmed" | "refused";
   readonly referenceCount: number;
   readonly sentReferenceCount: number;
   readonly promptTokens: number;

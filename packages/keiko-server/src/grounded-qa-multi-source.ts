@@ -462,14 +462,6 @@ function buildRawMultiSourceGatewayMessages(
   ];
 }
 
-function multiSourceExcerptCount(labeledPacks: readonly LabeledPack[]): number {
-  return labeledPacks.reduce(
-    (count, entry) =>
-      count + entry.pack.files.reduce((fileCount, file) => fileCount + file.excerpts.length, 0),
-    0,
-  );
-}
-
 function withMultiSourcePromptExcerptByteLimit(
   labeledPacks: readonly LabeledPack[],
   maxExcerptBytes: number,
@@ -574,9 +566,6 @@ function budgetedMultiSourceGatewayMessages(
     limit,
   );
   if (metadataFit !== undefined) return { ...metadataFit, packs: labeledPacks };
-  if (multiSourceExcerptCount(labeledPacks) === 0) {
-    return { messages: fullMessages, packs: labeledPacks };
-  }
 
   const emptyPacks = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
   const overheadBytes = promptByteLength(
@@ -626,7 +615,7 @@ function loggedMultiSourceFit(
   } catch (error) {
     if (error instanceof ContextOverflowError) {
       const empty = withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
-      const promptTokens = tokens(buildRawMultiSourceGatewayMessages(question, empty, redactor));
+      const promptTokens = tokens(buildRawMultiSourceGatewayMessages(question, empty, redactor, 0));
       const fit = { referenceCount, sentReferenceCount: 0, promptTokens, inputBudget };
       logPromptWindowFit({ state: "refused", ...fit }, correlationId);
     }
@@ -635,7 +624,8 @@ function loggedMultiSourceFit(
   if (fitted.packs !== labeledPacks || fitted.omissionPathBytes !== undefined) {
     const sentReferenceCount = promptExcerptCount(fitted.packs.map((entry) => entry.pack));
     const fit = { referenceCount, sentReferenceCount, promptTokens: tokens(fitted.messages) };
-    logPromptWindowFit({ state: "trimmed", ...fit, inputBudget }, correlationId);
+    const state = fitted.packs === labeledPacks ? "metadata-trimmed" : "trimmed";
+    logPromptWindowFit({ state, ...fit, inputBudget }, correlationId);
   }
   return fitted;
 }
@@ -886,7 +876,7 @@ function classifyReturnedPack(
   });
   if (validationFailure === undefined) return undefined;
   return {
-    skipped: { label, message: "Pack validation failed." },
+    skipped: { label, message: GROUNDED_PACK_VALIDATION_MESSAGE },
     mapped: internalError(GROUNDED_PACK_VALIDATION_MESSAGE, ctx.correlationId),
     validationFailure,
   };

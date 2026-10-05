@@ -37,10 +37,12 @@ import {
   buildSelectedScopeFrom,
   handleGroundedAsk,
   modelWindowAwareBudget,
+  withPromptExcerptByteLimit,
   promptByteLength,
   type GroundedRunner,
   type MultiSourceSeam,
 } from "./grounded-qa.js";
+import { GROUNDED_PACK_VALIDATION_MESSAGE } from "./grounded-pack-validation.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import {
@@ -55,6 +57,7 @@ import {
   sourceLabels,
   splitExplorationBudget,
   splitExplorationBudgets,
+  type LabeledPack,
   type GroundedRetriever,
   type MultiSourceAnswerer,
 } from "./grounded-qa-multi-source.js";
@@ -719,6 +722,105 @@ describe("buildMultiSourceGatewayMessages", () => {
         buildRedactor({}, undefined),
       ),
     ).toThrow(ContextOverflowError);
+  });
+});
+
+function omissionHeavySources(): readonly LabeledPack[] {
+  return ["alpha", "beta"].map((label) => ({
+    label,
+    pack: {
+      ...scopePack(`src/${label}.ts`, 0.7, label),
+      omitted: Array.from({ length: 300 }, (_, index) => ({
+        scopePath: `manuals/${label}/${"section-".repeat(20)}${String(index)}.html`,
+        reason: "size-exceeded" as const,
+        omittedAtMs: NOW,
+      })),
+      omittedCounts: { ...connectedContextOmittedCounts({ omitted: [] }), "size-exceeded": 300 },
+    },
+  }));
+}
+
+describe("multi-source minimal prompt admission", () => {
+  afterEach(resetServerLogger);
+
+  it.each([0, 16])("refuses zero-excerpt overhead above a %i token window", (budget) => {
+    const packs = omissionHeavySources().map((entry) => ({
+      ...entry,
+      pack: { ...entry.pack, files: [] },
+    }));
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    expect(() =>
+      fittedMultiSourcePrompt(
+        "Explain",
+        packs,
+        buildRedactor({}),
+        { modelInputTokensMax: budget },
+        "empty-overflow",
+      ),
+    ).toThrow(ContextOverflowError);
+    expect(sink.events.at(-1)).toMatchObject({
+      correlationId: "empty-overflow",
+      extra: { state: "refused", referenceCount: 0, sentReferenceCount: 0, inputBudget: budget },
+    });
+  });
+
+  it("measures refused overhead with omitted paths removed and exact counts retained", () => {
+    const packs = omissionHeavySources();
+    const minimal = packs.map((entry) => ({
+      ...entry,
+      pack: { ...withPromptExcerptByteLimit(entry.pack, 0), omitted: [] },
+    }));
+    const expected = fittedMultiSourcePrompt("Explain", minimal, buildRedactor({}));
+    const expectedTokens = countGatewayPromptTokens({ messages: expected.messages });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    expect(() =>
+      fittedMultiSourcePrompt(
+        "Explain",
+        packs,
+        buildRedactor({}),
+        { modelInputTokensMax: 16 },
+        "minimal-refusal",
+      ),
+    ).toThrow(ContextOverflowError);
+    expect(sink.events.at(-1)).toMatchObject({
+      correlationId: "minimal-refusal",
+      extra: { state: "refused", promptTokens: expectedTokens, inputBudget: 16 },
+    });
+  });
+
+  it("distinguishes metadata-only reduction while preserving both evidence sources", () => {
+    const packs = omissionHeavySources();
+    const withoutPaths = packs.map((entry) => ({ ...entry, pack: { ...entry.pack, omitted: [] } }));
+    const baseline = fittedMultiSourcePrompt("Explain", withoutPaths, buildRedactor({}));
+    const inputBudget = countGatewayPromptTokens({ messages: baseline.messages }) + 100;
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const fitted = fittedMultiSourcePrompt(
+      "Explain",
+      packs,
+      buildRedactor({}),
+      { modelInputTokensMax: inputBudget },
+      "metadata-fit",
+    );
+    expect(fitted.sentReferenceCount).toBe(2);
+    expect(countGatewayPromptTokens({ messages: fitted.messages })).toBeLessThanOrEqual(
+      inputBudget,
+    );
+    const prompt = fitted.messages[1]?.content ?? "";
+    expect(prompt).toContain("body of src/alpha.ts");
+    expect(prompt).toContain("body of src/beta.ts");
+    expect(prompt.match(/Files excluded by file-size policy: 300\./gu)).toHaveLength(2);
+    expect((prompt.match(/omitted path:/gu) ?? []).length).toBeLessThan(600);
+    expect(sink.events.at(-1)).toMatchObject({
+      correlationId: "metadata-fit",
+      extra: { state: "metadata-trimmed", referenceCount: 2, sentReferenceCount: 2, inputBudget },
+    });
+    expectActivityLogProof(
+      "search.prompt.window-fitted.line",
+      formatActivityLogProofLine(sink.events.at(-1) ?? {}),
+    );
   });
 });
 
@@ -1945,6 +2047,9 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
         (marker) => marker.kind === "source-skipped" && marker.claim.includes("broken"),
       ),
     ).toBe(true);
+    expect(answer.uncertainty.find((marker) => marker.kind === "source-skipped")?.claim).toContain(
+      GROUNDED_PACK_VALIDATION_MESSAGE,
+    );
   });
 
   // ─── Fail-soft: pack validation failure skips, not aborts ────────────────
@@ -2018,6 +2123,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       (u) => u.kind === "source-skipped" && u.claim.includes("broken"),
     );
     expect(skippedEntries.length).toBeGreaterThan(0);
+    expect(skippedEntries[0]?.claim).toContain(GROUNDED_PACK_VALIDATION_MESSAGE);
   });
 
   it("fail-soft: all sources bad → coded error returned (500 internal error)", async () => {
@@ -2262,7 +2368,10 @@ describe("createMultiSourceAnswerer correlation threading", () => {
     // implementation always resolves the object branch — `normalizeGroundedAnswerPayload` is the
     // SAME narrowing every production caller already applies to this result
     // (grounded-qa-multi-source.ts, grounded-orchestrator.ts), not a test-only cast.
-    const result = normalizeGroundedAnswerPayload(await answerer("What is alpha?", []));
+    const empty = { ...scopePack("src/alpha.ts", 0.7, "alpha"), files: [] };
+    const result = normalizeGroundedAnswerPayload(
+      await answerer("What is alpha?", [{ label: "alpha", pack: empty }]),
+    );
 
     expect(result.content).toBe("multi-source answer");
     expect(seenRequests).toHaveLength(1);
