@@ -524,6 +524,9 @@ describe("canonical body-free offline report", () => {
     expect(Buffer.byteLength(serializeSupportReport(reduced))).toBeLessThan(fullBytes);
     // The report-budget metric names exactly what --max-bytes would have to allow.
     expect(reduced.selection.requiredBytes).toBe(fullBytes);
+    expect(query.truncation.requiredRecordCount).toBeGreaterThan(0);
+    expect(report.selection.requiredRecordCount).toBe(query.truncation.requiredRecordCount);
+    expect(reduced.selection.requiredRecordCount).toBe(query.truncation.requiredRecordCount);
     expect(reduced.evidence.recordCount).toBe(0);
     expect(reduced.selection.status).toBe("insufficient");
     expect(reduced.selection.reasons).toContain("report-budget-exceeded");
