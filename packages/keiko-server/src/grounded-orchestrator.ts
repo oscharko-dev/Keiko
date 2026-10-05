@@ -245,12 +245,12 @@ const SEARCH_CONNECTED_CONTEXT_STARTED_OPERATION = defineActivityLogOperation({
     maxResults: { type: "integer", dataClass: "count", required: false },
     searchCallsMax: { type: "integer", dataClass: "count", required: false },
     filesReadMax: { type: "integer", dataClass: "count", required: false },
-    filesReadBounded: { type: "boolean", dataClass: "closed-enum", required: false },
+    filesReadBounded: { type: "boolean", dataClass: "closed-enum", required: true },
     excerptBytesMax: { type: "integer", dataClass: "count", required: false },
     modelInputTokensMax: { type: "integer", dataClass: "count", required: false },
     modelOutputTokensMax: { type: "integer", dataClass: "count", required: false },
     elapsedMsMax: { type: "integer", dataClass: "duration", required: false },
-    elapsedMsBounded: { type: "boolean", dataClass: "closed-enum", required: false },
+    elapsedMsBounded: { type: "boolean", dataClass: "closed-enum", required: true },
     rerankCallsMax: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -7099,7 +7099,7 @@ function activityString(record: Readonly<Record<string, unknown>>, key: string):
 
 function activityNumber(record: Readonly<Record<string, unknown>>, key: string): ActivityNumber {
   const value = activityProperty(record, key);
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : "invalid";
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : "invalid";
 }
 
 function activityBoolean(record: Readonly<Record<string, unknown>>, key: string): ActivityBoolean {
@@ -7273,12 +7273,12 @@ function commonActivityExtra(
     ...(maxResults === undefined ? {} : { maxResults }),
     ...(searchCallsMax === undefined ? {} : { searchCallsMax }),
     ...(filesReadMax === undefined ? {} : { filesReadMax }),
-    filesReadBounded: identity.filesReadMax !== null,
+    filesReadBounded: filesReadMax !== undefined,
     ...(excerptBytesMax === undefined ? {} : { excerptBytesMax }),
     ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
     ...(modelOutputTokensMax === undefined ? {} : { modelOutputTokensMax }),
     ...(elapsedMsMax === undefined ? {} : { elapsedMsMax }),
-    elapsedMsBounded: identity.elapsedMsMax !== null,
+    elapsedMsBounded: elapsedMsMax !== undefined,
     ...(rerankCallsMax === undefined ? {} : { rerankCallsMax }),
     completeness: "complete",
     loss: "none",

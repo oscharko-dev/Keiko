@@ -16,6 +16,7 @@ import {
   DEFAULT_EXPLORATION_BUDGET,
   type ConnectedContextPack,
   type EvidenceAtom,
+  type ExplorationBudget,
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -147,6 +148,23 @@ function fixtureDeps(
     detectWorkspace: fixtureWorkspace,
     gitFileHistoryEvidence: NO_GIT_HISTORY,
   };
+}
+
+async function budgetStartedEvent(
+  budget: Readonly<Record<string, unknown>>,
+): Promise<ServerLogEvent> {
+  const activityLog = createBufferedServerLogSink();
+  const abort = new AbortController();
+  abort.abort();
+  await expect(
+    retrieveConnectedContextPack(
+      { ...fixtureInput(), budget: budget as unknown as ExplorationBudget },
+      { ...fixtureDeps(activityLog, CORRELATION_ID), signal: abort.signal },
+    ),
+  ).rejects.toBeInstanceOf(CancelledError);
+  const [started] = lifecycleEvents(activityLog, "search.connected-context.failed");
+  expectBodyFree(activityLog);
+  return started;
 }
 
 function privateFixtureValues(): readonly string[] {
@@ -519,6 +537,50 @@ function admissionOnlyExpectedWorkspaceIoActivity(): Readonly<Record<string, num
 }
 
 describe("retrieveConnectedContextPack activity log", () => {
+  describe.each([
+    ["filesReadMax", "filesReadBounded"],
+    ["elapsedMsMax", "elapsedMsBounded"],
+  ] as const)("request budget evidence for %s", (cap, boundedFlag) => {
+    it.each([
+      { label: "missing", value: undefined, valid: false, bounded: false },
+      { label: "undefined", value: undefined, valid: false, bounded: false },
+      { label: "NaN", value: Number.NaN, valid: false, bounded: false },
+      { label: "infinite", value: Infinity, valid: false, bounded: false },
+      { label: "negative", value: -1, valid: false, bounded: false },
+      { label: "fractional", value: 0.5, valid: false, bounded: false },
+      { label: "string", value: "100", valid: false, bounded: false },
+      { label: "unbounded", value: null, valid: true, bounded: false },
+      { label: "zero", value: 0, valid: true, bounded: true },
+      { label: "finite", value: 100, valid: true, bounded: true },
+    ])("records the exact $label cap state", async (entry) => {
+      const budget: Record<string, unknown> = { ...DEFAULT_EXPLORATION_BUDGET, [cap]: entry.value };
+      if (entry.label === "missing") Reflect.deleteProperty(budget, cap);
+      const started = await budgetStartedEvent(budget);
+      expect(started.extra).toMatchObject({
+        inputStatus: entry.valid ? "valid" : "invalid",
+        [boundedFlag]: entry.bounded,
+      });
+      if (entry.bounded) expect(started.extra?.[cap]).toBe(entry.value);
+      else expect(started.extra).not.toHaveProperty(cap);
+      const registration = activityLogEventRegistration(started);
+      expect(registration?.fields.filesReadBounded?.required).toBe(true);
+      expect(registration?.fields.elapsedMsBounded?.required).toBe(true);
+    });
+  });
+
+  it.each([undefined, null, 0, 100])("persists request budget state for %s", async (value) => {
+    const event = await budgetStartedEvent({
+      ...DEFAULT_EXPLORATION_BUDGET,
+      filesReadMax: value,
+      elapsedMsMax: value,
+    });
+    const line = expectActivityLogProof(
+      "search.connected-context.started.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(line).toMatchObject({ correlationId: CORRELATION_ID, ...event.extra });
+  });
+
   it("records unavailable directory streaming before any legacy array enumeration", async () => {
     const activityLog = createBufferedServerLogSink();
     const fs = { ...memFs(FIXTURE_ROOT, { "fact.txt": "PrivateCustomerHandler" }) };
