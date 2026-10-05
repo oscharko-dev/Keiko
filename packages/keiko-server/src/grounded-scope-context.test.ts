@@ -273,10 +273,10 @@ it.each([false, true])(
     if (read === undefined) throw new Error("Fixture lacks byte reader");
     const fs: WorkspaceFs = {
       ...base,
-      readFileBytes: (path, limit): Promise<Uint8Array> =>
+      readFileBytes: (path, limit, hardLinkPolicy, expected): Promise<Uint8Array> =>
         path.endsWith("/bad.txt")
           ? Promise.reject(Object.assign(new Error("read unavailable"), { code: "EIO" }))
-          : read(path, limit),
+          : read(path, limit, hardLinkPolicy, expected),
     };
     const { result, completed } = await retrieve(files, "Explain the workflow", 8192, {
       persisted,
@@ -301,9 +301,9 @@ it.each([false, true])(
     let clock = 0;
     const fs: WorkspaceFs = {
       ...base,
-      readFileBytes: (path, limit): Promise<Uint8Array> => {
+      readFileBytes: (path, limit, hardLinkPolicy, expected): Promise<Uint8Array> => {
         clock = 10;
-        return read(path, limit);
+        return read(path, limit, hardLinkPolicy, expected);
       },
     };
     const { result, completed } = await retrieve(files, "Explain the workflow", 8192, {
