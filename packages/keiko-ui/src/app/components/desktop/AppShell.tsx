@@ -578,6 +578,17 @@ function canonicalFilesPatchScope(
   return accepted;
 }
 
+function captureFilesPatchAcknowledgement(
+  acknowledgement: FilesPatchAcknowledgement,
+  submitted: readonly ChatConnectedScope[],
+  requested: ChatConnectedScope,
+  chat: Chat,
+): void {
+  acknowledgement.chat = chat;
+  const accepted = canonicalFilesPatchScope(submitted, requested, chat);
+  if (accepted !== undefined) acknowledgement.scope = accepted;
+}
+
 function acknowledgeFilesScope(input: {
   readonly correlationId: string;
   readonly edgeKey: string;
@@ -1799,15 +1810,11 @@ function AppShellInner(): ReactNode {
   // caller skips drawing the edge so no dangling ungrounded edge appears.
   const replaceFilesScopeNow = useCallback(
     async (
-      chatWindowId: string,
-      nextScope: ChatConnectedScope,
-      attempt: ChatMutationAttempt,
-      previousScope: ChatConnectedScope | null = null,
-      target?: ChatBindingTarget,
-      connectionId?: string,
-      automatic = false,
-      acknowledgement?: FilesPatchAcknowledgement,
+      input: FilesScopeRequest,
+      previousScope: ChatConnectedScope | null,
+      acknowledgement: FilesPatchAcknowledgement,
     ): Promise<boolean> => {
+      const { chatWindowId, nextScope, attempt, target, connectionId, automatic } = input;
       const observedFingerprint = wsConnectionsForBindingRef.current.find(
         (edge) => edge.id === connectionId,
       )?.boundScopeFingerprint;
@@ -1873,11 +1880,7 @@ function AppShellInner(): ReactNode {
         { remember: rememberGroundingChat, expectedIdentity: chat.groundingScopeIdentity },
       );
       if (persisted === undefined) return false;
-      if (acknowledgement !== undefined) {
-        acknowledgement.chat = persisted;
-        const accepted = canonicalFilesPatchScope(next, scope, persisted);
-        if (accepted !== undefined) acknowledgement.scope = accepted;
-      }
+      captureFilesPatchAcknowledgement(acknowledgement, next, scope, persisted);
       session.replaceChat(persisted);
       setSourceConnectionNotice(null);
       // Epic #532 unification — also record the green edge as a governed reads-context
@@ -1914,31 +1917,13 @@ function AppShellInner(): ReactNode {
   const automaticFilesRequestsRef = useRef(new Map<string, symbol>());
   const applyFilesScopeRequest = useCallback(
     async (input: FilesScopeRequest): Promise<boolean> => {
-      const {
-        chatWindowId,
-        nextScope,
-        previousScope,
-        attempt,
-        target,
-        connectionId,
-        edgeKey,
-        chatKey,
-      } = input;
+      const { nextScope, previousScope, attempt, connectionId, edgeKey, chatKey } = input;
       const confirmed =
         edgeKey === undefined ? undefined : acknowledgedFilesScopesRef.current.get(edgeKey);
       const acknowledgement: FilesPatchAcknowledgement = {};
       const accepted = await retryGroundingScopeIntent(async (): Promise<boolean> => {
         if (filesRequestWasSuperseded(input, automaticFilesRequestsRef.current)) return false;
-        return replaceFilesScopeNow(
-          chatWindowId,
-          nextScope,
-          attempt,
-          confirmed ?? previousScope,
-          target,
-          connectionId,
-          input.automatic,
-          acknowledgement,
-        );
+        return replaceFilesScopeNow(input, confirmed ?? previousScope, acknowledgement);
       }, attempt);
       if (accepted && attempt.isCurrent() && edgeKey !== undefined) {
         return acknowledgeFilesScope({
