@@ -29,7 +29,7 @@ afterEach(async () => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-it("keeps the actual health projection in the UI when retained stock exceeds a new admission capacity", async () => {
+it("keeps readiness truthful without projecting or removing retained stock above admission capacity", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "keiko-readiness-stock-"));
   directories.push(stateDir);
   for (let index = 0; index < 16; index += 1)
@@ -73,10 +73,14 @@ it("keeps the actual health projection in the UI when retained stock exceeds a n
     deps,
   );
   expect(result).not.toBe(STREAMING);
-  expect(result.body.diagnostics).toMatchObject({
-    retainedDiagnosticCount: retainedCount,
-    diagnosticCapacity: capacity,
-  });
+  // ADR-0173: health describes writer readiness, not candidate capacity. A changed admission
+  // policy must neither hide that readiness nor retire existing records during a health request.
+  expect(result.body.diagnostics).toHaveProperty("readiness");
+  expect(result.body.diagnostics).toHaveProperty("writer");
+  expect(result.body.diagnostics).toHaveProperty("lostEvents");
+  expect(result.body.diagnostics).not.toHaveProperty("retainedDiagnosticCount");
+  expect(result.body.diagnostics).not.toHaveProperty("diagnosticCapacity");
+  expect(listSupportIncidents(stateDir, { readOnly: true })).toHaveLength(retainedCount);
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => new globalThis.Response(JSON.stringify(result.body))),

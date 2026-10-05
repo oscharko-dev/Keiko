@@ -157,6 +157,10 @@ describe("recursive text search in ordinary folders", () => {
     const iterator = nodeWorkspaceFs.iterateDirectory;
     if (iterator === undefined) throw new Error("missing production directory iterator");
     let activeDirectories = 0;
+    let signalClosed!: () => void;
+    const physicallyClosed = new Promise<void>((resolve) => {
+      signalClosed = resolve;
+    });
     const fs = {
       ...nodeWorkspaceFs,
       iterateDirectory: async function* (path: string): AsyncIterable<WorkspaceDirEntry> {
@@ -168,6 +172,7 @@ describe("recursive text search in ordinary folders", () => {
           }
         } finally {
           activeDirectories -= 1;
+          signalClosed();
         }
       },
     };
@@ -175,6 +180,9 @@ describe("recursive text search in ordinary folders", () => {
       fs,
       signal: controller.signal,
     });
+    // The request settles on cancellation; physical generator cleanup settles independently.
+    // Observe its actual finally block before asserting closure or removing the fixture directory.
+    await physicallyClosed;
     expect(activeDirectories).toBe(0);
     expect(result.coverage.incomplete).toBe(true);
     expect(result.coverage.reasons).toContain("aborted");
