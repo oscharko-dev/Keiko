@@ -73,7 +73,10 @@ export interface AssembleOptions {
 export class ContextPackValidationError extends TypeError {
   readonly code = "CONTEXT_PACK_OMISSIONS_INVALID";
 
-  constructor(readonly violationCount: number) {
+  constructor(
+    readonly violationCount: number,
+    readonly validationReasons: readonly string[] = [],
+  ) {
     super(`Context pack omitted entries invalid (${String(violationCount)} violations).`);
     this.name = "ContextPackValidationError";
   }
@@ -810,7 +813,8 @@ function buildPack(input: AssembleInput, plan: BuildPlan, nowMs: number): Connec
     input.scope,
     plan.files.map((file) => file.scopePath),
   );
-  if (!validation.ok) throw new ContextPackValidationError(validation.reasons.length);
+  if (!validation.ok)
+    throw new ContextPackValidationError(validation.reasons.length, validation.reasons);
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     stableId: buildStableId(input, plan, omitted),

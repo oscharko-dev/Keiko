@@ -382,7 +382,10 @@ export interface UpdateProjectPatch {
 // leaves it untouched. The BFF PATCH handler is responsible for validating each scopePath via
 // isValidScopePath; this shape carries the post-validation values across the wire.
 export interface UpdateChatPatch {
-  /** Reject stale grounding changes without granting access to any source. */
+  /**
+   * When supplied, reject any patch if its scope identity is stale, including title-only,
+   * status-only and precondition-only updates. This precondition never grants source access.
+   */
   readonly expectedGroundingScopeIdentity?: string;
   readonly title?: string;
   readonly selectedModel?: string;

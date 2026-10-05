@@ -1,3 +1,9 @@
+import {
+  caughtGroundedPackValidation,
+  inspectGroundedPack,
+  recordGroundedPackValidation,
+  type GroundedPackValidationFailure,
+} from "./grounded-pack-validation.js";
 // Epic #189 Slice 2 — heterogeneous grounded merge. A chat may carry BOTH connected folders
 // (#532, lexical) AND Local Knowledge connectors (#189, vector), or two or more connectors. Asking
 // one question must retrieve from EVERY source and return ONE merged grounded answer with
@@ -141,9 +147,7 @@ import {
   groundedContextSummaryInput,
   groundedEvidenceRunId,
   groundedScopeWorkspaceFs,
-  isValidGroundedPack,
   mappedGatewayError,
-  mappedContextPackValidationError,
   mappedWorkspaceError,
   modelWindowAwareBudget,
   modelInputPromptByteLimit,
@@ -557,6 +561,36 @@ function retrievedFolderSlot(
   };
 }
 
+function invalidFolderSlot(
+  ctx: HybridGroundedAskCtx,
+  failure: GroundedPackValidationFailure,
+  label: string,
+  index: number,
+): FolderSlot {
+  recordGroundedPackValidation(ctx.deps, ctx.correlationId, failure, "source-skipped", index);
+  return {
+    kind: "skipped",
+    value: { label, reason: "pack-validation-failed", message: "Pack validation failed." },
+  };
+}
+
+function recoverableFolderFailure(
+  ctx: HybridGroundedAskCtx,
+  error: unknown,
+  label: string,
+  index: number,
+): FolderSlot | undefined {
+  const failure = caughtGroundedPackValidation(error);
+  if (failure !== undefined) return invalidFolderSlot(ctx, failure, label, index);
+  if (error instanceof EmbeddingAdapterError) {
+    return {
+      kind: "skipped",
+      value: { label, reason: "embedding-unavailable", message: "Embedding adapter unavailable." },
+    };
+  }
+  return undefined;
+}
+
 async function retrieveFolderIntoSlot(
   ctx: HybridGroundedAskCtx,
   retriever: FolderRetriever,
@@ -578,35 +612,15 @@ async function retrieveFolderIntoSlot(
     });
     ensureNotCancelled(ctx.signal);
   } catch (error) {
-    if (mappedContextPackValidationError(error, ctx.deps, ctx.correlationId) !== undefined) {
-      return {
-        kind: "skipped",
-        value: { label, reason: "pack-validation-failed", message: "Pack validation failed." },
-      };
-    }
-    // Mirror retrieveOneConnector (GRD-006): a per-source embedding-adapter outage is a skippable
-    // degradation (answer from the remaining sources, record the skip). EVERY other error MUST
-    // propagate — ClarificationNeededError -> 400, ProviderError -> 502, generic -> 500 — so the
-    // boundary maps and redacts it instead of silently dropping a folder and returning a
-    // misleadingly "complete" answer.
-    if (error instanceof EmbeddingAdapterError) {
-      return {
-        kind: "skipped",
-        value: {
-          label,
-          reason: "embedding-unavailable",
-          message: "Embedding adapter unavailable.",
-        },
-      };
-    }
+    // Only declared per-source degradation is recoverable; cancellation, gateway and unknown
+    // failures retain their original error and propagate to the owning route boundary.
+    const recovered = recoverableFolderFailure(ctx, error, label, index);
+    if (recovered !== undefined) return recovered;
     throw error;
   }
-  if (!isValidGroundedPack(out.pack)) {
-    return {
-      kind: "skipped",
-      value: { label, reason: "pack-validation-failed", message: "Pack validation failed." },
-    };
-  }
+  const validationFailure = inspectGroundedPack(out.pack);
+  if (validationFailure !== undefined)
+    return invalidFolderSlot(ctx, validationFailure, label, index);
   return retrievedFolderSlot(ctx, cs, label, scope, out);
 }
 

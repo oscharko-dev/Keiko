@@ -1,3 +1,10 @@
+import {
+  caughtGroundedPackValidation,
+  inspectGroundedPack,
+  recordGroundedPackValidation,
+  GROUNDED_PACK_VALIDATION_MESSAGE,
+} from "./grounded-pack-validation.js";
+import { parseExpectedGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { withAdoptedContextWindowRetry } from "./gateway-context-window.js";
 import { sentPromptContext, type SentGroundedPrompt } from "./grounded-prompt-context.js";
 import { compactCurrentChatPrompt } from "./chat-prompt-compaction.js";
@@ -30,10 +37,7 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import {
-  ContextPackValidationError,
-  DEFAULT_LEXICAL_MATCH_LIMIT,
-} from "@oscharko-dev/keiko-workflows";
+import { DEFAULT_LEXICAL_MATCH_LIMIT } from "@oscharko-dev/keiko-workflows";
 import {
   persistConnectedContextEvidence,
   type ConnectedContextEvidenceInput,
@@ -55,7 +59,6 @@ import {
   connectedContextOmittedCounts,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
-  validateConnectedContextPack,
   isValidScopePath,
   type ConnectedContextPack,
   type ContextExcerpt,
@@ -150,7 +153,6 @@ import {
   buildMemoryResult,
   chatClosedResult,
   parseClientTurnId,
-  parseExpectedGroundingScopeIdentity,
   parseMemoryRequest,
   logChatRejection,
   runPostCommitCanonicalTurnMemorySideEffects,
@@ -240,42 +242,28 @@ export function internalError(message: string, correlationId?: string): RouteRes
   return { status: 500, body: errorBody("INTERNAL", message, correlationId) };
 }
 
-const GROUNDED_INVARIANT_FAILURES = {
-  "pack-validation": {
-    code: "GROUNDED_PACK_VALIDATION_FAILED",
-    diagnosticStage: "grounded-pack-validation",
-    summary: "grounded-context-pack-validation-failed",
-    message: "Grounded answer context pack failed validation.",
-  },
-  "turn-completion": {
-    code: "GROUNDED_TURN_COMPLETION_CONFLICTED",
-    diagnosticStage: "grounded-turn-completion",
-    summary: "grounded-turn-completion-conflicted",
-    message: "Canonical grounded chat turn completion conflicted.",
-  },
-} as const;
-
-function groundedInvariantFailure(
+function groundedCompletionFailure(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
-  stage: keyof typeof GROUNDED_INVARIANT_FAILURES,
+  completionKind: "conflict",
 ): RouteResult {
-  const failure = GROUNDED_INVARIANT_FAILURES[stage];
-  const error =
-    stage === "pack-validation" ? new TypeError(failure.message) : new Error(failure.message);
+  const message = "Canonical grounded chat turn completion conflicted.";
   emitServerDiagnostic(deps.diagnostics, {
     ...serverDiagnosticFromError({
       correlationId: correlationIdOrUnknown(correlationId),
       operation: "POST /api/chats/messages/grounded",
-      source: `grounded.qa.${stage}`,
-      error: Object.assign(error, { code: failure.code }),
-      summary: failure.summary,
-      redact: (message): string => redactString(deps.redactor, message),
+      source: "grounded.qa.turn-completion",
+      error: new Error(message),
+      summary: "grounded-turn-completion-conflicted",
+      redact: (value): string => redactString(deps.redactor, value),
     }),
+    code: "GROUNDED_TURN_COMPLETION_CONFLICTED",
     httpStatus: 500,
-    diagnosticStage: failure.diagnosticStage,
+    diagnosticStage: "grounded-turn-completion",
+    diagnosticOutcome: "request-failed",
+    completionKind,
   });
-  return internalError(failure.message, correlationId);
+  return internalError(message, correlationId);
 }
 
 export function mappedContextPackValidationError(
@@ -283,9 +271,10 @@ export function mappedContextPackValidationError(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
 ): RouteResult | undefined {
-  return error instanceof ContextPackValidationError
-    ? groundedInvariantFailure(deps, correlationId, "pack-validation")
-    : undefined;
+  const failure = caughtGroundedPackValidation(error);
+  if (failure === undefined) return undefined;
+  recordGroundedPackValidation(deps, correlationId, failure, "request-failed");
+  return internalError(GROUNDED_PACK_VALIDATION_MESSAGE, correlationId);
 }
 
 // Issue #154 (GAP-B) — the dynamic `error.message` of a GatewayError may echo the provider base
@@ -361,14 +350,6 @@ export function mappedWorkspaceError(
     return badRequest(error.message);
   }
   return undefined;
-}
-
-export function isValidGroundedPack(pack: ConnectedContextPack): boolean {
-  try {
-    return validateConnectedContextPack(pack).ok;
-  } catch {
-    return false;
-  }
 }
 
 export interface AskInput {
@@ -1814,8 +1795,15 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   const query = buildQuery(workerCtx.retrievalContent ?? content, () => Date.now());
   const output = await runGroundedRunner(workerCtx, query);
   if (isRouteResult(output)) return output;
-  if (!isValidGroundedPack(output.pack)) {
-    return groundedInvariantFailure(deps, workerCtx.correlationId, "pack-validation");
+  const validationFailure = inspectGroundedPack(output.pack);
+  if (validationFailure !== undefined) {
+    recordGroundedPackValidation(
+      deps,
+      workerCtx.correlationId,
+      validationFailure,
+      "request-failed",
+    );
+    return internalError(GROUNDED_PACK_VALIDATION_MESSAGE, workerCtx.correlationId);
   }
   const cancelResult = ensureRouteNotCancelled(workerCtx.signal, deps, workerCtx.correlationId);
   if (cancelResult !== undefined) return cancelResult;
@@ -2791,7 +2779,7 @@ function settleGroundedChatTurn(
   if (completion.kind !== "completed") {
     discardGroundedTurn(result.body.assistantMessageId);
     deps.store.failChatTurn(prepared.chat.id, commitTurnId);
-    return groundedInvariantFailure(deps, prepared.correlationId, "turn-completion");
+    return groundedCompletionFailure(deps, prepared.correlationId, completion.kind);
   }
   commitGroundedTurn(result.body.assistantMessageId);
   runGroundedPostCommitMemorySideEffects(prepared, deps, result.body);

@@ -36,6 +36,30 @@ function diagnosticStage(value: unknown): ServerDiagnosticStage | undefined {
     : undefined;
 }
 
+export const PACK_VALIDATION_REASONS = [
+  "schema-version",
+  "stable-id",
+  "scope",
+  "query",
+  "files",
+  "excerpts",
+  "budget",
+  "omissions",
+  "omissions-invalid-path",
+  "omissions-overlap",
+  "omissions-duplicate",
+  "omissions-outside-scope",
+  "uncertainty",
+  "timestamp",
+  "ledger",
+  "diagnostics",
+  "invalid-shape",
+  "other",
+] as const;
+export type PackValidationReason = (typeof PACK_VALIDATION_REASONS)[number];
+const PACK_VALIDATION_REASON_SET: ReadonlySet<string> = new Set(PACK_VALIDATION_REASONS);
+const DIAGNOSTIC_OUTCOMES = ["request-failed", "source-skipped"] as const;
+
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -55,6 +79,34 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: SERVER_DIAGNOSTIC_STAGES,
+    },
+    diagnosticOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: DIAGNOSTIC_OUTCOMES,
+    },
+    validationReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      values: PACK_VALIDATION_REASONS,
+      maxItems: 18,
+    },
+    violationCount: { type: "integer", dataClass: "count", required: false },
+    validatorThrew: { type: "boolean", dataClass: "closed-enum", required: false },
+    sourceIndex: { type: "integer", dataClass: "count", required: false },
+    originalCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["CONTEXT_PACK_OMISSIONS_INVALID"],
+    },
+    completionKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["conflict"],
     },
     diagnosticErrorClass: {
       type: "string",
@@ -205,6 +257,13 @@ export interface ServerDiagnosticRecord {
   readonly errorClass: string;
   /** Code-declared stage preserved by canonical export; never derived from error text. */
   readonly diagnosticStage?: ServerDiagnosticStage | undefined;
+  readonly diagnosticOutcome?: (typeof DIAGNOSTIC_OUTCOMES)[number] | undefined;
+  readonly validationReasons?: readonly PackValidationReason[] | undefined;
+  readonly violationCount?: number | undefined;
+  readonly validatorThrew?: boolean | undefined;
+  readonly sourceIndex?: number | undefined;
+  readonly originalCode?: "CONTEXT_PACK_OMISSIONS_INVALID" | undefined;
+  readonly completionKind?: "conflict" | undefined;
   // A code-declared, allowlisted summary. Foreign error/provider/customer text is never read.
   // Typed as the closed `ServerDiagnosticSummary` union (Issue #3245) rather than `string`, so a
   // producer that assigns free text no longer compiles — `allowlistedSummary`'s runtime check
@@ -393,6 +452,9 @@ const UNSUPPORTED_REASON_FALLBACK = "unrecognised-mode";
 // `ts`; `correlationId`, `operation` and `errorClass` ride on the envelope.
 function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<string, unknown> {
   const fields: Record<string, unknown> = { source: record.source };
+  for (const [key, value] of Object.entries(diagnosticValidationFields(record))) {
+    if (value !== undefined) fields[key] = value;
+  }
   addBoundedField(fields, "diagnosticStage", diagnosticStage(record.diagnosticStage));
   addBoundedField(fields, "code", boundedDiagnosticCode(record.code));
   if (
@@ -461,7 +523,7 @@ function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEv
   return activityLogEvent(
     SERVER_DIAGNOSTIC_FAILURE_OPERATION,
     {
-      level: "error",
+      level: record.diagnosticOutcome === "source-skipped" ? "warn" : "error",
       correlationId: record.correlationId,
       errorKind: closedDiagnosticErrorKind(record.errorClass),
     },
@@ -495,11 +557,9 @@ function buildActivityLogTarget(stateDir: string | undefined): ActivityLogTarget
   return {
     stateDir,
     write: (record: ServerDiagnosticRecord): void => {
-      // Every record that reaches this sink is a FAILURE record — it carries an errorClass and a
-      // failure summary. Without an explicit level the line defaults to `info`, so
-      // `KEIKO_LOG_LEVEL=warn` would drop exactly the evidence an operator raised the threshold to
-      // isolate. `error` also matches what the server logger stamps on `category: "diagnostic"`
-      // lines, so both diagnostic paths land on the file at the same level.
+      // Request failures are errors; a rejected source in a continuing request is a warning.
+      // Both remain visible at the operator's warn threshold, without claiming a failed HTTP
+      // request when a healthy source still provides the answer.
       try {
         sink.write(diagnosticActivityLogEvent(record));
       } catch (error) {
@@ -870,9 +930,41 @@ function sanitizedParentCorrelationId(value: string | undefined): string | undef
 // `emitServerDiagnostic` applies it as well so a caller-supplied sink never observes the hostile
 // original; the operation is idempotent. `diagnosticActivityLogFields`'s own guard remains in place
 // as defence in depth.
+function validationCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function validationReasons(value: unknown): readonly PackValidationReason[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const reasons = value.filter(
+    (item: unknown): item is PackValidationReason =>
+      typeof item === "string" && PACK_VALIDATION_REASON_SET.has(item),
+  );
+  return [...new Set(reasons)].slice(0, PACK_VALIDATION_REASONS.length);
+}
+
+function diagnosticValidationFields(
+  record: ServerDiagnosticRecord,
+): Partial<ServerDiagnosticRecord> {
+  return {
+    diagnosticOutcome:
+      record.diagnosticOutcome === "source-skipped" || record.diagnosticOutcome === "request-failed"
+        ? record.diagnosticOutcome
+        : undefined,
+    validationReasons: validationReasons(record.validationReasons),
+    violationCount: validationCount(record.violationCount),
+    validatorThrew: typeof record.validatorThrew === "boolean" ? record.validatorThrew : undefined,
+    sourceIndex: validationCount(record.sourceIndex),
+    originalCode:
+      record.originalCode === "CONTEXT_PACK_OMISSIONS_INVALID" ? record.originalCode : undefined,
+    completionKind: record.completionKind === "conflict" ? record.completionKind : undefined,
+  };
+}
+
 function sanitizeDiagnosticRecord(record: ServerDiagnosticRecord): ServerDiagnosticRecord {
   return {
     ...record,
+    ...diagnosticValidationFields(record),
     correlationId: sanitizedCorrelationId(record.correlationId),
     parentCorrelationId: sanitizedParentCorrelationId(record.parentCorrelationId),
     diagnosticStage: diagnosticStage(record.diagnosticStage),

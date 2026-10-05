@@ -47,7 +47,6 @@ import {
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   MAX_DESKTOP_CHAT_INPUT_CHARS,
   isConversationMemoryCaptureSurfaceWire,
-  isGroundingScopeIdentity,
   type ConversationMemoryCaptureSurfaceWire,
   type ConversationMemoryActionWire,
   type ConversationMemoryRequestWire,
@@ -106,7 +105,11 @@ import {
   type ConversationAttachment,
 } from "./conversation-validation.js";
 import { validateProjectPath } from "./store/validation.js";
-import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
+import {
+  deriveChatGroundingScopeIdentity,
+  parseExpectedGroundingScopeIdentity,
+} from "./store/chat-grounding-scope-identity.js";
+export { parseExpectedGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
 // Issue #3400 (epic #3384, contract correction 4): the server-minted description authority
@@ -820,21 +823,6 @@ export function parseClientTurnId(value: unknown): string | RouteResult | undefi
     });
   }
   return asParsedOrRouteResult<string>(value);
-}
-
-export function parseExpectedGroundingScopeIdentity(
-  value: unknown,
-): string | RouteResult | undefined {
-  if (value === undefined) return undefined;
-  return isGroundingScopeIdentity(value)
-    ? value
-    : {
-        status: 400,
-        body: errorBody(
-          "BAD_REQUEST",
-          "expectedGroundingScopeIdentity must be a valid server-issued identity.",
-        ),
-      };
 }
 
 // eslint-disable-next-line complexity

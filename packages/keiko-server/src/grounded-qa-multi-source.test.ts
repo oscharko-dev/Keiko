@@ -1981,14 +1981,29 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       ["src/c.ts", goodPackC],
     ]);
     const answered = { count: 0 };
+    const records: ServerDiagnosticRecord[] = [];
+    const correlationId = "multi-pack-validation-review";
     const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "explain all" })),
-      recordingDeps([]),
+      { ...ctx(JSON.stringify({ chatId, content: "explain all" })), correlationId },
+      recordingDeps([], { diagnostics: { record: (record) => records.push(record) } }),
       undefined,
       seam(packPerScope(byPath), constAnswerer("partial answer [src/a.ts] [src/c.ts]", answered)),
     );
     // Must succeed (200), not fail (500)
     expect(result.status).toBe(200);
+    const validationRecords = records.filter(
+      (record) => record.diagnosticStage === "grounded-pack-validation",
+    );
+    expect(validationRecords).toHaveLength(1);
+    expect(validationRecords[0]).toMatchObject({
+      correlationId,
+      sourceIndex: 1,
+      diagnosticOutcome: "source-skipped",
+      validationReasons: ["stable-id"],
+      violationCount: 1,
+      validatorThrew: false,
+    });
+    expect(validationRecords[0]).not.toHaveProperty("httpStatus");
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.content).toBe("partial answer [src/a.ts] [src/c.ts]");
     // Answerer receives only the 2 healthy packs
@@ -2031,16 +2046,26 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
       ["src/b.ts", badPack("src/b.ts", "bad-b")],
     ]);
     let answererCalled = false;
+    const records: ServerDiagnosticRecord[] = [];
+    const correlationId = "multi-pack-validation-review";
     const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "explain both" })),
-      recordingDeps([]),
+      { ...ctx(JSON.stringify({ chatId, content: "explain both" })), correlationId },
+      recordingDeps([], { diagnostics: { record: (record) => records.push(record) } }),
       undefined,
       seam(packPerScope(byPath), () => {
         answererCalled = true;
         return Promise.resolve("nope");
       }),
     );
-    expect(result.status).toBe(500);
+    expect(result).toMatchObject({ status: 500, body: { error: { correlationId } } });
+    expect(records.filter((record) => record.diagnosticOutcome === "source-skipped")).toHaveLength(
+      2,
+    );
+    expect(records.at(-1)).toMatchObject({
+      correlationId,
+      diagnosticOutcome: "request-failed",
+      httpStatus: 500,
+    });
     expect(answererCalled).toBe(false);
   });
 });

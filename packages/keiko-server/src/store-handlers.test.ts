@@ -11,6 +11,7 @@ import { EventEmitter } from "node:events";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
+  readPersistedActivityLog,
 } from "../../../tests/support/activity-log-proof.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
@@ -45,7 +46,11 @@ import {
 import { clearAllGroundedTurns, groundedTurnRegistry } from "./grounded-turn-registry.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { ChatGitChangeScope, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  Chat,
+  ChatGitChangeScope,
+  GroundedAnswer,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { ChatContextStatusWire } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -54,6 +59,7 @@ import {
   DEFAULT_CHAT_LIST_LIMIT as DEFAULT_CHAT_LIST_PAGE,
   handleDeleteChat,
   handleUpdateChat,
+  handleListChats,
   handleCompactChatContext,
 } from "./store-handlers.js";
 import { MAX_CHAT_TITLE_LEN } from "./store/chats.js";
@@ -72,7 +78,12 @@ import {
   type CreateCapsuleInput,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { createWorkspaceScriptTrustService } from "./workspace-script-trust.js";
-import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
+import {
+  createServerLogger,
+  createFileServerLogSink,
+  setServerLogger,
+  type ServerLogEvent,
+} from "./observability/index.js";
 
 // One persisted assistant turn whose grounded answer carries an `indexLifecycle` block — the only
 // shape that makes the messages route open the local-knowledge store at all. Returns the assistant
@@ -2526,6 +2537,267 @@ describe("PATCH /api/chats", () => {
     const body = (await res.json()) as { error: { message: string } };
     // Error message must show the clamped ceiling (64), not the unclamped value.
     expect(body.error.message).toContain("64");
+  });
+});
+
+async function scopeUpdatePair(): Promise<{ initial: Chat; updated: Chat }> {
+  store.createProject(projDir);
+  const initial = store.createChat(projDir, "Private title", "m");
+  const patch = {
+    expectedGroundingScopeIdentity: initial.groundingScopeIdentity,
+    connectedScopes: [{ kind: "directory", relativePaths: ["src"], connectedAtMs: 1 }],
+  };
+  const ctx = (correlationId: string): RouteContext => ({
+    ...directRouteContext(`/api/chats?id=${initial.id}`, JSON.stringify(patch)).ctx,
+    correlationId,
+  });
+  expect((await handleUpdateChat(ctx("scope-applied-fixture"), deps())).status).toBe(200);
+  expect((await handleUpdateChat(ctx("scope-conflict-fixture"), deps())).status).toBe(409);
+  const updated = store.findChatById(initial.id);
+  if (updated === undefined) throw new Error("Expected updated chat");
+  return { initial, updated };
+}
+
+function expectScopeUpdateEvidence(
+  events: readonly Readonly<Record<string, unknown>>[],
+  initial: Chat,
+  updated: Chat,
+): void {
+  expect(events).toHaveLength(2);
+  const initialDigest = initial.groundingScopeIdentity?.slice("gsi-v1:".length);
+  const updatedDigest = updated.groundingScopeIdentity?.slice("gsi-v1:".length);
+  expect(events[0]).toMatchObject({
+    correlationId: "scope-applied-fixture",
+    outcome: "applied",
+    expectedScopeDigest: initialDigest,
+    actualScopeDigest: initialDigest,
+    resultScopeDigest: updatedDigest,
+    connectedSourceCount: 1,
+    localKnowledgeSourceCount: 0,
+    gitChangeSourceCount: 0,
+  });
+  expect(events[1]).toMatchObject({
+    correlationId: "scope-conflict-fixture",
+    outcome: "conflict",
+    expectedScopeDigest: initialDigest,
+    actualScopeDigest: updatedDigest,
+    resultScopeDigest: updatedDigest,
+    connectedSourceCount: 1,
+  });
+  const serialized = JSON.stringify(events);
+  for (const privateValue of [initial.id, projDir, "Private title", "src"]) {
+    expect(serialized).not.toContain(privateValue);
+  }
+}
+
+describe("chat scope precondition review regressions", () => {
+  it("reads the existing chat once while validating an accepted connected scope", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "Private title", "m");
+    const find = vi.spyOn(store, "findChatById");
+    const result = await handleUpdateChat(
+      directRouteContext(
+        `/api/chats?id=${chat.id}`,
+        JSON.stringify({
+          expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
+          connectedScopes: [{ kind: "directory", relativePaths: ["src"], connectedAtMs: 1 }],
+        }),
+      ).ctx,
+      deps(),
+    );
+    expect(result.status).toBe(200);
+    expect(find).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the shared parser rejection for malformed PATCH scope identities", async () => {
+    const result = await handleUpdateChat(
+      directRouteContext(
+        "/api/chats?id=missing",
+        JSON.stringify({
+          expectedGroundingScopeIdentity: "invalid",
+        }),
+      ).ctx,
+      deps(),
+    );
+    expect(result).toMatchObject({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "expectedGroundingScopeIdentity must be a valid server-issued identity.",
+        },
+      },
+    });
+  });
+
+  it.each([{ title: "Renamed" }, { status: "closed" }, {}])(
+    "serializes and applies an explicit matching precondition to patch %j",
+    async (patch) => {
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "Original", "m");
+      const serializer = createChatTurnSerializer();
+      const exclusive = vi.spyOn(serializer, "runExclusive");
+      const result = await handleUpdateChat(
+        directRouteContext(
+          `/api/chats?id=${chat.id}`,
+          JSON.stringify({
+            ...patch,
+            expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
+          }),
+        ).ctx,
+        deps({ chatTurnSerializer: serializer }),
+      );
+      expect(result.status).toBe(200);
+      expect(exclusive).toHaveBeenCalledTimes(1);
+      expect(store.findChatById(chat.id)).toMatchObject(patch);
+      expect(store.findChatById(chat.id)).not.toHaveProperty("expectedGroundingScopeIdentity");
+    },
+  );
+
+  it.each([{ title: "Renamed" }, { status: "closed" }, {}])(
+    "rejects a stale explicit precondition for patch %j with request correlation",
+    async (patch) => {
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "Original", "m");
+      const current = store.updateChat(chat.id, {
+        connectedScopes: [
+          {
+            kind: "directory",
+            relativePaths: ["src"],
+            connectedAtMs: 1,
+          },
+        ],
+      });
+      const ctx = directRouteContext(
+        `/api/chats?id=${chat.id}`,
+        JSON.stringify({
+          ...patch,
+          expectedGroundingScopeIdentity: chat.groundingScopeIdentity,
+        }),
+      ).ctx;
+      const result = await handleUpdateChat(
+        { ...ctx, correlationId: "scope-conflict-fixture" },
+        deps(),
+      );
+      expect(result).toMatchObject({
+        status: 409,
+        body: {
+          error: {
+            code: "GROUNDING_SCOPE_CHANGED",
+            correlationId: "scope-conflict-fixture",
+          },
+        },
+      });
+      expect(store.findChatById(chat.id)).toEqual(current);
+    },
+  );
+
+  it("returns 404 when a precondition names a missing chat", async () => {
+    const result = await handleUpdateChat(
+      directRouteContext(
+        "/api/chats?id=missing",
+        JSON.stringify({
+          expectedGroundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
+        }),
+      ).ctx,
+      deps(),
+    );
+    expect(result).toMatchObject({ status: 404, body: { error: { code: "NOT_FOUND" } } });
+  });
+
+  it("records accepted and conflicting source identities without user content", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const { initial, updated } = await scopeUpdatePair();
+      const events = sink.events
+        .filter((event) => event.op === "chat.scope.update")
+        .map((event) => ({ correlationId: event.correlationId, ...event.extra }));
+      expectScopeUpdateEvidence(events, initial, updated);
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("records an unconditional scope patch with the sanctioned correlation fallback", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "Private title", "m");
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const result = await handleUpdateChat(
+        directRouteContext(`/api/chats?id=${chat.id}`, JSON.stringify({ connectedScopes: null }))
+          .ctx,
+        deps(),
+      );
+      expect(result.status).toBe(200);
+      const events = sink.events.filter((event) => event.op === "chat.scope.update");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        correlationId: UNKNOWN_CORRELATION_ID,
+        extra: {
+          outcome: "applied",
+          connectedSourceCount: 0,
+        },
+      });
+      expect(events[0]?.extra).not.toHaveProperty("expectedScopeDigest");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("persists registered scope update outcomes with full identity and correlation", async () => {
+    const sink = createFileServerLogSink(tmp, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const { initial, updated } = await scopeUpdatePair();
+      sink.close?.();
+      const lines = readPersistedActivityLog(tmp)
+        .split("\n")
+        .filter(Boolean)
+        .filter((line) => (JSON.parse(line) as Record<string, unknown>).op === "chat.scope.update")
+        .map((line) => expectActivityLogProof("chat.scope.update.outcome", line));
+      expectScopeUpdateEvidence(lines, initial, updated);
+    } finally {
+      sink.close?.();
+      resetServerLogger();
+    }
+  });
+});
+
+describe("GET chats by ID review regressions", () => {
+  it.each(["id=", "id=known&limit=invalid", "id=known&limit=0", "id=known&limit=201"])(
+    "validates all supplied query fields for %s",
+    (query) => {
+      const result = handleListChats(
+        directRouteContext(`/api/chats?projectPath=${encodeURIComponent(projDir)}&${query}`).ctx,
+        deps(),
+      );
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "INVALID_REQUEST" } } });
+    },
+  );
+
+  it("does not expose a Coding History chat through the ordinary ID lookup", () => {
+    const history = store.codingHistory;
+    if (history === undefined) throw new Error("Expected the production coding history store");
+    const coding = history.create({
+      projectPath: projDir,
+      title: "Private coding task",
+      modelId: "m",
+      workspaceId: "ws_fixture",
+      taskId: "task_fixture",
+      branch: "test/fixture",
+      operatorDigest: "a".repeat(64),
+    });
+    const ordinary = store.createChat(projDir, "Ordinary", "m");
+    const lookup = (id: string): unknown =>
+      handleListChats(
+        directRouteContext(`/api/chats?projectPath=${encodeURIComponent(projDir)}&id=${id}`).ctx,
+        deps(),
+      );
+    expect(history.get(coding.id)).toBeDefined();
+    expect(lookup(coding.id)).toEqual({ status: 200, body: { chats: [] } });
+    expect(lookup(ordinary.id)).toEqual({ status: 200, body: { chats: [ordinary] } });
   });
 });
 

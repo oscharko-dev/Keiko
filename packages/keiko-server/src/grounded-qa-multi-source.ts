@@ -1,3 +1,10 @@
+import {
+  caughtGroundedPackValidation,
+  inspectGroundedPack,
+  recordGroundedPackValidation,
+  GROUNDED_PACK_VALIDATION_MESSAGE,
+  type GroundedPackValidationFailure,
+} from "./grounded-pack-validation.js";
 // Epic #532 — multi-source (1+N) grounded retrieval merge. A chat may connect N folders/files at
 // once; asking one question must search EVERY connected source and return ONE merged answer with
 // per-source attribution. This module owns the new branch only. The single-source path
@@ -96,9 +103,7 @@ import {
   groundedScopeWorkspaceFs,
   type GroundedGatewayPromptOptions,
   internalError,
-  isValidGroundedPack,
   mappedGatewayError,
-  mappedContextPackValidationError,
   mappedWorkspaceError,
   modelWindowAwareBudget,
   modelInputPromptByteLimit,
@@ -800,10 +805,30 @@ function classifyPerSourceRetrieveError(
   label: string,
   correlationId: string | undefined,
   deps: UiHandlerDeps,
-): { readonly skipped: SkippedScope; readonly mapped: RouteResult } | undefined {
-  const mapped =
-    mappedContextPackValidationError(error, deps, correlationId) ??
-    mappedWorkspaceError(error, { correlationId });
+  sourceIndex: number,
+):
+  | {
+      readonly skipped: SkippedScope;
+      readonly mapped: RouteResult;
+      readonly validationFailure?: GroundedPackValidationFailure;
+    }
+  | undefined {
+  const validationFailure = caughtGroundedPackValidation(error);
+  if (validationFailure !== undefined) {
+    recordGroundedPackValidation(
+      deps,
+      correlationId,
+      validationFailure,
+      "source-skipped",
+      sourceIndex,
+    );
+    return {
+      skipped: { label, message: GROUNDED_PACK_VALIDATION_MESSAGE },
+      mapped: internalError(GROUNDED_PACK_VALIDATION_MESSAGE, correlationId),
+      validationFailure,
+    };
+  }
+  const mapped = mappedWorkspaceError(error, { correlationId });
   if (mapped === undefined) return undefined;
   const body = mapped.body as { readonly error?: { readonly message?: unknown } };
   const safeMessage =
@@ -820,6 +845,22 @@ interface RetrieveAccumulator {
   readonly retrieved: (RetrievedSource | undefined)[];
   readonly skipped: SkippedScope[];
   firstError: RouteResult | undefined;
+  firstValidationFailure?: {
+    readonly failure: GroundedPackValidationFailure;
+    readonly sourceIndex: number;
+  };
+}
+
+function rememberSkippedSource(
+  acc: RetrieveAccumulator,
+  classified: NonNullable<ReturnType<typeof classifyPerSourceRetrieveError>>,
+  sourceIndex: number,
+): void {
+  acc.skipped.push(classified.skipped);
+  acc.firstError ??= classified.mapped;
+  if (classified.validationFailure !== undefined) {
+    acc.firstValidationFailure ??= { failure: classified.validationFailure, sourceIndex };
+  }
 }
 
 // Retrieve one source into the shared accumulator. GRD-006: a recoverable workspace error skips
@@ -851,15 +892,17 @@ async function retrieveOneSource(
     });
     ensureNotCancelled(ctx.signal);
   } catch (error) {
-    const classified = classifyPerSourceRetrieveError(error, label, ctx.correlationId, ctx.deps);
+    const classified = classifyPerSourceRetrieveError(error, label, ctx.correlationId, ctx.deps, i);
     if (classified === undefined) throw error; // non-workspace error → outer handler
-    acc.skipped.push(classified.skipped);
-    acc.firstError ??= classified.mapped;
+    rememberSkippedSource(acc, classified, i);
     return;
   }
-  if (!isValidGroundedPack(out.pack)) {
+  const failure = inspectGroundedPack(out.pack);
+  if (failure !== undefined) {
+    recordGroundedPackValidation(ctx.deps, ctx.correlationId, failure, "source-skipped", i);
     acc.skipped.push({ label, message: "Pack validation failed." });
-    acc.firstError ??= internalError("Grounded answer context pack failed validation.");
+    acc.firstError ??= internalError(GROUNDED_PACK_VALIDATION_MESSAGE, ctx.correlationId);
+    acc.firstValidationFailure ??= { failure, sourceIndex: i };
     return;
   }
   acc.retrieved[i] = {
@@ -900,7 +943,19 @@ async function retrieveAllSources(
   const sources = acc.retrieved.filter((source): source is RetrievedSource => source !== undefined);
   const skipped = acc.skipped;
   const firstError = acc.firstError;
-  if (sources.length === 0 && firstError !== undefined) return firstError;
+  if (sources.length === 0 && firstError !== undefined) {
+    const validation = acc.firstValidationFailure;
+    if (firstError.status === 500 && validation !== undefined) {
+      recordGroundedPackValidation(
+        ctx.deps,
+        ctx.correlationId,
+        validation.failure,
+        "request-failed",
+        validation.sourceIndex,
+      );
+    }
+    return firstError;
+  }
   return { retrieved: sources, skipped, firstError };
 }
 

@@ -22,6 +22,8 @@ import {
   defaultServerDiagnosticSink,
   type ServerDiagnosticRecord,
 } from "./diagnostics-log.js";
+import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
+import { inspectGroundedPack, recordGroundedPackValidation } from "./grounded-pack-validation.js";
 import { closeFileServerLogSinks } from "./observability/index.js";
 
 describe("server.diagnostic.failure activity log proof (#3532)", () => {
@@ -73,4 +75,42 @@ describe("server.diagnostic.failure activity log proof (#3532)", () => {
       loss: "none",
     });
   });
+  it.each(["source-skipped", "request-failed"] as const)(
+    "persists a truthful %s pack-validation outcome",
+    (outcome) => {
+      const failure = inspectGroundedPack({
+        customerBody: "private-validation-canary",
+      } as unknown as ConnectedContextPack);
+      if (failure === undefined) throw new TypeError("Invalid fixture unexpectedly validated");
+      recordGroundedPackValidation(
+        { diagnostics: defaultServerDiagnosticSink, redactor: (value) => value },
+        "pack-validation-proof",
+        failure,
+        outcome,
+        2,
+      );
+      const lines = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "server.diagnostic.failure",
+      );
+      expect(lines).toHaveLength(1);
+      const line = expectActivityLogProof(
+        "server.diagnostic.failure.activity-log-line",
+        lines[0] ?? "",
+      );
+      expect(line).toMatchObject({
+        level: outcome === "source-skipped" ? "warn" : "error",
+        correlationId: "pack-validation-proof",
+        diagnosticOutcome: outcome,
+        diagnosticStage: "grounded-pack-validation",
+        sourceIndex: 2,
+        validatorThrew: false,
+      });
+      expect(line.validationReasons).toContain("stable-id");
+      expect(line.violationCount).toBeGreaterThan(0);
+      if (outcome === "source-skipped") expect(line).not.toHaveProperty("httpStatus");
+      else expect(line.httpStatus).toBe(500);
+      expect(lines.join("\n")).not.toContain("private-validation-canary");
+    },
+  );
 });

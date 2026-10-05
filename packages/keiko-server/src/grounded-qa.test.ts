@@ -3512,7 +3512,15 @@ describe("handleGroundedAsk", () => {
       correlationId,
       code: "GROUNDED_PACK_VALIDATION_FAILED",
       diagnosticStage: "grounded-pack-validation",
+      diagnosticOutcome: "request-failed",
+      originalCode: "CONTEXT_PACK_OMISSIONS_INVALID",
+      validatorThrew: true,
     });
+    expect(diagnostics[0]?.violationCount).toBeGreaterThan(0);
+    expect(diagnostics[0]?.validationReasons).toContain("omissions-invalid-path");
+    expect(diagnostics[0]?.frames?.some((frame) => frame.includes("contextpack/assemble"))).toBe(
+      true,
+    );
     expect(JSON.stringify(diagnostics)).not.toContain("escaped-private-file");
   });
 
@@ -3565,7 +3573,12 @@ describe("handleGroundedAsk", () => {
         code: "GROUNDED_PACK_VALIDATION_FAILED",
         httpStatus: 500,
         message: "grounded-context-pack-validation-failed",
+        diagnosticOutcome: "request-failed",
+        validatorThrew: false,
+        ...(kind === "invalid" ? { violationCount: 1 } : {}),
       });
+      expect(diagnostics[0]?.validationReasons).toContain("stable-id");
+      expect(diagnostics[0]?.violationCount).toBeGreaterThan(0);
       expect(diagnostics[0]?.frames?.length).toBeGreaterThan(0);
       expect(JSON.stringify(diagnostics)).not.toContain("private-");
       expect(JSON.stringify(diagnostics)).not.toContain(tmp);
@@ -3799,6 +3812,7 @@ describe("handleGroundedAsk", () => {
       source: "grounded.qa.turn-completion",
       code: "GROUNDED_TURN_COMPLETION_CONFLICTED",
       message: "grounded-turn-completion-conflicted",
+      completionKind: "conflict",
       httpStatus: 500,
     });
     expect(store.listMessages(chatId)).toHaveLength(1);

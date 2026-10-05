@@ -60,6 +60,7 @@ import {
 import { groundedSourceScopeFingerprint } from "./grounded-qa-multi-source.js";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import { ClarificationNeededError } from "./grounded-orchestrator.js";
 import { connectedSearchNoEvidenceAnswer } from "./grounded-faithfulness.js";
@@ -2426,9 +2427,14 @@ describe("hybrid grounded ask — folder pack-validation failure is skipped, not
       connectedAtMs: NOW,
     };
     const chatId = makeHybridChat([source], [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+    const records: ServerDiagnosticRecord[] = [];
+    const correlationId = "hybrid-pack-validation-review";
     const result = await handleGroundedAsk(
-      routeCtx(JSON.stringify({ chatId, content: "Explain connected sources" })),
-      hybridDeps(),
+      {
+        ...routeCtx(JSON.stringify({ chatId, content: "Explain connected sources" })),
+        correlationId,
+      },
+      hybridDeps({ diagnostics: { record: (record) => records.push(record) } }),
       undefined,
       undefined,
       {
@@ -2438,6 +2444,21 @@ describe("hybrid grounded ask — folder pack-validation failure is skipped, not
       },
     );
     expect(result.status).toBe(200);
+    const validationRecords = records.filter(
+      (record) => record.diagnosticStage === "grounded-pack-validation",
+    );
+    expect(validationRecords).toHaveLength(1);
+    expect(validationRecords[0]).toMatchObject({
+      correlationId,
+      diagnosticOutcome: "source-skipped",
+      diagnosticStage: "grounded-pack-validation",
+      sourceIndex: 0,
+      originalCode: "CONTEXT_PACK_OMISSIONS_INVALID",
+      validatorThrew: true,
+    });
+    expect(validationRecords[0]).not.toHaveProperty("httpStatus");
+    expect(validationRecords[0]?.validationReasons).toContain("omissions-invalid-path");
+    expect(validationRecords[0]?.violationCount).toBeGreaterThan(0);
     const answer = asHybrid(result.body as GroundedAnswer);
     expect(answer.knowledgeCitations.length).toBeGreaterThan(0);
     expect(answer.uncertainty.some((marker) => marker.kind === "pack-validation-failed")).toBe(
@@ -2477,9 +2498,11 @@ describe("hybrid grounded ask — folder pack-validation failure is skipped, not
       answer: sentinelAnswerer(),
     };
 
+    const records: ServerDiagnosticRecord[] = [];
+    const correlationId = "hybrid-pack-validation-review";
     const result = await handleGroundedAsk(
-      routeCtx(JSON.stringify({ chatId, content: "What works?" })),
-      hybridDeps(),
+      { ...routeCtx(JSON.stringify({ chatId, content: "What works?" })), correlationId },
+      hybridDeps({ diagnostics: { record: (record) => records.push(record) } }),
       undefined,
       undefined,
       hybrid,
@@ -2534,9 +2557,11 @@ describe("hybrid grounded ask — folder pack-validation failure is skipped, not
       ["src/b2.ts", { ...folderPack("src/b2.ts", 0.5, "b2-atom"), stableId: "" }],
     ]);
 
+    const records: ServerDiagnosticRecord[] = [];
+    const correlationId = "hybrid-pack-validation-review";
     const result = await handleGroundedAsk(
-      routeCtx(JSON.stringify({ chatId, content: "Connector only?" })),
-      hybridDeps(),
+      { ...routeCtx(JSON.stringify({ chatId, content: "Connector only?" })), correlationId },
+      hybridDeps({ diagnostics: { record: (record) => records.push(record) } }),
       undefined,
       undefined,
       {

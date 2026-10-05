@@ -203,6 +203,31 @@ describe("emitServerDiagnostic (RB-6)", () => {
     expect(JSON.stringify(records)).not.toContain("private-stage-canary");
   });
 
+  it("closes validation fields before any diagnostic sink observes them", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const record = serverDiagnosticFromError({
+      correlationId: "validation-field-safety",
+      operation: "unit.validation",
+      source: "unit",
+      error: new TypeError(),
+      redact: identity,
+    });
+    emitServerDiagnostic({ record: (value) => records.push(value) }, {
+      ...record,
+      diagnosticOutcome: "private-outcome",
+      validationReasons: ["stable-id", "private-reason"],
+      violationCount: -1,
+      validatorThrew: "private-throw",
+      sourceIndex: Number.NaN,
+      originalCode: "private-code",
+      completionKind: "private-kind",
+    } as unknown as ServerDiagnosticRecord);
+    expect(records[0]).toMatchObject({ validationReasons: ["stable-id"] });
+    expect(records[0]?.violationCount).toBeUndefined();
+    expect(records[0]?.sourceIndex).toBeUndefined();
+    expect(JSON.stringify(records)).not.toContain("private-");
+  });
+
   it("keeps arbitrary provider and customer body text out of the diagnostic record", () => {
     const bodyMarker = "fixture-customer-provider-body-marker";
     const record = serverDiagnosticFromError({

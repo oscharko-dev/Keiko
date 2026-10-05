@@ -22,9 +22,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
-import { isGroundingScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { redactString } from "./grounded-qa.js";
-import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
+import {
+  deriveChatGroundingScopeIdentity,
+  parseExpectedGroundingScopeIdentity,
+} from "./store/chat-grounding-scope-identity.js";
+import { logChatScopeUpdate } from "./chat-scope-update-log.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentGroundingLimits } from "./deps.js";
@@ -1122,17 +1124,11 @@ function groundingScopePatchFields(
   };
 }
 
-function optionalExpectedScopeIdentity(body: Record<string, unknown>): string | undefined {
-  const identity = body.expectedGroundingScopeIdentity;
-  if (identity === undefined) return undefined;
-  if (!isGroundingScopeIdentity(identity)) {
-    throw new InvalidRequest('Field "expectedGroundingScopeIdentity" must be a scope identity.');
-  }
-  return identity;
-}
-
-function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): UpdateChatPatch {
-  const expectedGroundingScopeIdentity = optionalExpectedScopeIdentity(body);
+function buildChatPatch(
+  deps: UiHandlerDeps,
+  body: Record<string, unknown>,
+  expectedGroundingScopeIdentity: string | undefined,
+): UpdateChatPatch {
   const title = optionalString(body, "title");
   const selectedModel = optionalChatModelId(deps, body, "selectedModel");
   const branchLabel = optionalString(body, "branchLabel");
@@ -1230,7 +1226,9 @@ export async function handleUpdateChat(
     return await runHandler(async () => {
       const id = requireQuery(ctx, "id");
       const body = await readJsonObject(ctx.req);
-      const patch = buildChatPatch(deps, body);
+      const expected = parseExpectedGroundingScopeIdentity(body.expectedGroundingScopeIdentity);
+      if (expected !== undefined && typeof expected !== "string") return expected;
+      const patch = buildChatPatch(deps, body, expected);
       const apply = (): RouteResult => applyChatUpdate(deps, id, patch, ctx.req, ctx.correlationId);
       if (
         !patchTouchesGroundingScope(patch) &&
@@ -1250,15 +1248,14 @@ export async function handleUpdateChat(
 
 function groundingPatchConflict(
   deps: UiHandlerDeps,
-  id: string,
+  existing: Chat,
   patch: UpdateChatPatch,
   correlationId: string | undefined,
 ): RouteResult | undefined {
   if (patch.expectedGroundingScopeIdentity === undefined) return undefined;
-  const existing = findChatById(deps, id);
-  if (existing === undefined) return notFoundResult("Chat not found.");
   if (patch.expectedGroundingScopeIdentity === deriveChatGroundingScopeIdentity(existing))
     return undefined;
+  logChatScopeUpdate("conflict", existing, existing, patch, correlationId);
   const message = "The connected sources changed before this update could run.";
   emitServerDiagnostic(deps.diagnostics, {
     ...serverDiagnosticFromError({
@@ -1266,12 +1263,12 @@ function groundingPatchConflict(
       operation: "PATCH /api/chats",
       source: "chat.scope-update-conflict",
       error: Object.assign(new Error(message), { code: "GROUNDING_SCOPE_CHANGED" }),
-      redact: (value): string => redactString(deps.redactor, value),
+      redact: (value): string => String(deps.redactor(value)),
     }),
     errorClass: "invalid-request",
     httpStatus: 409,
   });
-  return { status: 409, body: errorBody("GROUNDING_SCOPE_CHANGED", message) };
+  return { status: 409, body: errorBody("GROUNDING_SCOPE_CHANGED", message, correlationId) };
 }
 
 function applyChatUpdate(
@@ -1281,14 +1278,14 @@ function applyChatUpdate(
   req: IncomingMessage,
   correlationId: string | undefined,
 ): RouteResult {
-  const conflict = groundingPatchConflict(deps, id, patch, correlationId);
+  const existing = findChatById(deps, id);
+  if (existing === undefined) return notFoundResult("Chat not found.");
+  const conflict = groundingPatchConflict(deps, existing, patch, correlationId);
   if (conflict !== undefined) return conflict;
   const scopesToCheck = scopesRequiringAccessValidation(patch);
   const needsGitChangeCheck = gitChangeScopePatchNeedsAccessValidation(patch);
   let safePatch = patch;
   if (scopesToCheck.length > 0 || needsGitChangeCheck) {
-    const existing = findChatById(deps, id);
-    if (existing === undefined) return notFoundResult("Chat not found.");
     safePatch = canonicalizeConnectedScopePatch(deps, existing, patch);
     safePatch = canonicalizeGitChangeScopePatch(deps, existing, req, safePatch);
   }
@@ -1297,6 +1294,9 @@ function applyChatUpdate(
     maxConnectedSources: limits.maxConnectedSources,
     maxLocalKnowledgeSources: limits.maxLocalKnowledgeSources,
   });
+  if (patchTouchesGroundingScope(safePatch) || patch.expectedGroundingScopeIdentity !== undefined) {
+    logChatScopeUpdate("applied", existing, chat, patch, correlationId);
+  }
   if (patchTouchesGroundingScope(safePatch) || safePatch.status !== undefined) {
     clearGroundedContextIndexesForConversation(id);
     clearGroundedTurnsForConversation(id);
