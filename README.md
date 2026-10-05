@@ -76,16 +76,16 @@ npm install -g @oscharko-dev/keiko
 ```
 
 ```bash
-keiko init && keiko start
+keiko start
 ```
 
-Run it inside a project with a `package.json`. The UI opens at `http://127.0.0.1:1983` — `keiko stop` shuts it down, `keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. On macOS, npm selects the optional coding-runtime package for Apple Silicon or Intel, and Keiko verifies its contents before use. A missing or unsupported runtime is reported as unavailable; installing Keiko does not bypass platform checks.
+Connected folders do not need Git metadata or a `package.json`. Run `keiko init` only if you want to add optional commands to an existing Node.js project. The UI opens at `http://127.0.0.1:1983` — `keiko stop` shuts it down, `keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. On macOS, npm selects the optional coding-runtime package for Apple Silicon or Intel, and Keiko verifies its contents before use. A missing or unsupported runtime is reported as unavailable; installing Keiko does not bypass platform checks.
 
 ## Honest limits
 
 - Updating to 1.2.0 requires manual review of custom support scripts: legacy inclusion flags, filename-based `--out` arguments and sidecar bundles are replaced by the canonical private report workflow. See the [support guide](docs/observability/support-workspace.md).
 - Windows Chat, Files and manual Editor use are separate from Coding execution. The Windows gateway-filter work remains a development implementation and does not enable the Coding runtime; see the [qualification status](docs/qa/windows-gateway-runtime-progress.md).
-- Model weights and inference servers are not bundled. Local models such as Gemma need a separately configured compatible server and gateway. This release does not install MLX or certify every model and context-window configuration.
+- Model weights and inference servers are not bundled. Connect a compatible local model server, including a separately installed Gemma server, through Keiko's gateway configuration, directly or through a proxy such as LiteLLM. This release does not install MLX or certify every model and context-window configuration.
 - The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
