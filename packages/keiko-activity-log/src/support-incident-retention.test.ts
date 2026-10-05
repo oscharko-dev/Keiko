@@ -16,6 +16,7 @@ import * as childProcesses from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inflateSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeFileServerLogSinks,
@@ -64,6 +65,7 @@ import {
   ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
   SUPPORT_INCIDENT_TTL_MS,
   type SupportIncidentRecord,
+  type SupportReportEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createDesktopSupportReport,
@@ -178,6 +180,33 @@ function expectRetirementStarted(
     correlationId: "new-retirement-request",
     parentCorrelationId: "original-retirement",
   });
+}
+
+function expectClosedRetirementReport(correlationId: string): void {
+  const response = createDesktopSupportReport(stateDir, correlationId);
+  const parsed = parseSupportReport(response.reportJson);
+  const analyzed = analyzeSupportReport(response.reportJson);
+  expect(analyzed.analysis.evidence.classification).toBe("supported");
+  expect(analyzed.analysis.sufficiency.classes.flatMap((entry) => entry.reasons)).not.toContain(
+    "lifecycle-start-missing",
+  );
+  // The canonical parser above validated this event array. Inspect event identities directly:
+  // analyzer timelines also contain descendants and intentionally omit each line's own ID.
+  const text = inflateSync(Buffer.from(parsed.evidence.payload, "base64")).toString("utf8");
+  const events = JSON.parse(text) as readonly SupportReportEvent[];
+  const started = events.find((event) => event.record.op === "support.incident.retirement-started");
+  const dismissed = events.find((event) => event.record.op === "support.incident.dismissed");
+  const pin = events.find((event) => event.record.op === "activity-log.pin.expired");
+  expect(typeof started?.record.correlationId).toBe("string");
+  expect(typeof pin?.record.correlationId).toBe("string");
+  expect(started?.record.correlationId).not.toBe(pin?.record.correlationId);
+  expect(started?.record.parentCorrelationId).toBe(pin?.record.correlationId);
+  expect(dismissed?.record).toMatchObject({
+    correlationId: started?.record.correlationId,
+    parentCorrelationId: pin?.record.correlationId,
+  });
+  expect(text).not.toContain("original-retirement");
+  expect(text).not.toContain("new-retirement-request");
 }
 
 describe("rolling diagnostic candidate retention", () => {
@@ -360,6 +389,46 @@ describe("rolling diagnostic candidate retention", () => {
       completeness: "partial",
     });
   });
+
+  it.each(["expired-record", "orphan-list", "orphan-remove"] as const)(
+    "preserves the actual sweep request correlation on a %s cleanup failure",
+    (stage) => {
+      const created = recordUserReportedIncident(stateDir, { correlationId: "sweep-owner" });
+      if (created.status !== "created") throw new TypeError("Expected sweep fixture candidate");
+      const failure = new TypeError("private-sweep-failure-canary");
+      const notice = vi.spyOn(serverLog, "reportServerLogFailure");
+      if (stage === "expired-record") {
+        vi.spyOn(incidentStore, "removeSupportIncidentRecord").mockImplementationOnce(() => {
+          throw failure;
+        });
+      } else if (stage === "orphan-list") {
+        vi.spyOn(incidentStore, "listSupportIncidentClaims").mockImplementationOnce(() => {
+          throw failure;
+        });
+      } else {
+        incidentStore.removeSupportIncidentRecord(stateDir, created.incidentId);
+        const claim = listSupportIncidentClaims(stateDir)[0];
+        if (claim === undefined) throw new TypeError("Expected owned orphan claim");
+        const abandoned = new Date(Date.now() - 60_000);
+        utimesSync(
+          join(incidentStore.supportIncidentDirectory(stateDir), claim.fileName),
+          abandoned,
+          abandoned,
+        );
+        vi.spyOn(incidentStore, "removeSupportIncidentClaimFile").mockImplementationOnce(() => {
+          throw failure;
+        });
+      }
+      listSupportIncidents(stateDir, {
+        nowMs: created.record.expiresAtMs,
+        correlationId: "actual-sweep-request",
+      });
+      expect(notice).toHaveBeenCalledWith(failure, {
+        op: "support.incident.expired",
+        correlationId: "actual-sweep-request",
+      });
+    },
+  );
 
   it("retains both actual claim errors while releasing the owned pin", () => {
     const created = recordRegisteredFailureIncident(stateDir, {
@@ -1578,13 +1647,9 @@ describe("rolling diagnostic candidate retention", () => {
     expect(actions).toContainEqual(
       expect.objectContaining({ correlationId: "new-retirement-request" }),
     );
-    const analyzed = analyzeSupportReport(
-      createDesktopSupportReport(stateDir, "original-retirement").reportJson,
-    );
-    expect(analyzed.analysis.evidence.classification).toBe("supported");
-    expect(analyzed.analysis.sufficiency.classes.flatMap((entry) => entry.reasons)).not.toContain(
-      "lifecycle-start-missing",
-    );
+    for (const correlationId of ["original-retirement", "new-retirement-request"]) {
+      expectClosedRetirementReport(correlationId);
+    }
   });
 
   it("preserves a peer slot reclaimed while the original record is being retired", () => {
