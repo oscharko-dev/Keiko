@@ -65,6 +65,7 @@ export interface ExplorationPlan {
   readonly planId: string;
   readonly state: ExplorationPlanState;
   readonly retrievalIntent: RetrievalIntent;
+  readonly directEvidenceLookup: boolean;
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
   readonly anchors: readonly SearchAnchor[];
@@ -540,13 +541,18 @@ export function directDefinitionSymbol(
     : undefined;
 }
 
+interface PlannedRings {
+  readonly rings: readonly RetrievalRing[];
+  readonly directEvidenceLookup: boolean;
+}
+
 function composeRings(
   anchors: readonly SearchAnchor[],
   scope: SelectedScope,
   query: RetrievalQuery,
   budget: ExplorationBudget,
   targetDecision: QueryTargetDecision,
-): readonly RetrievalRing[] {
+): PlannedRings {
   const rings: RetrievalRing[] = [buildRing("lexical", anchors, budget)];
   const directLookup =
     isDirectRouteLookup(query) || isDirectEvidenceLookup(query, anchors, targetDecision);
@@ -559,7 +565,7 @@ function composeRings(
   ) {
     rings.push(buildRing("git-history", anchors, budget));
   }
-  return rings;
+  return { rings, directEvidenceLookup: directLookup };
 }
 
 // ─── Clarification helpers ────────────────────────────────────────────────────
@@ -683,6 +689,7 @@ function buildScopeInvalidPlan(
     planId: derivePlanId(seed),
     state: "scope-invalid",
     retrievalIntent: classification.intent,
+    directEvidenceLookup: false,
     scope: input.scope,
     query: input.query,
     anchors: [],
@@ -713,10 +720,10 @@ export function createExplorationPlan(
     input.maxAnchors,
   );
   const decision = decideClarification(extraction.anchors, input.scope, classification.intent);
-  const rings =
+  const { rings, directEvidenceLookup } =
     decision.state === "ready"
       ? composeRings(extraction.anchors, input.scope, input.query, resolved.budget, targetDecision)
-      : [];
+      : { rings: [], directEvidenceLookup: false };
   const seed: PlanSeed = {
     scopeId: input.scope.scopeId,
     queryKind: input.query.kind,
@@ -730,6 +737,7 @@ export function createExplorationPlan(
     planId: derivePlanId(seed),
     state: decision.state,
     retrievalIntent: classification.intent,
+    directEvidenceLookup,
     scope: input.scope,
     query: input.query,
     anchors: extraction.anchors,

@@ -544,6 +544,7 @@ const SEARCH_CONNECTED_CONTEXT_SOURCE_DETAILS_OPERATION = defineActivityLogOpera
       required: true,
       values: ["complete", "unavailable"],
     },
+    directEvidenceLookup: { type: "boolean", dataClass: "closed-enum", required: false },
     semanticProviderDisposition: {
       type: "string",
       dataClass: "closed-enum",
@@ -640,6 +641,48 @@ const SEARCH_METADATA_UNAVAILABLE_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["connected-context-retrieval"],
   proofIds: ["search.connected-context.metadata-unavailable.line"],
+  releaseImpact: "patch",
+});
+
+const SEARCH_CONNECTED_CONTEXT_CLARIFICATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.clarification-needed",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.clarification",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    clarificationReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["no-anchors", "too-generic", "scope-empty", "scope-invalid"],
+    },
+    retrievalIntent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "project-metadata",
+        "repository-overview",
+        "targeted-code-search",
+        "diagnostic-search",
+        "clarification-needed",
+      ],
+    },
+    directEvidenceLookup: { type: "boolean", dataClass: "closed-enum", required: true },
+    anchorCount: { type: "integer", dataClass: "count", required: true },
+    plannedRingCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.clarification-needed.line"],
   releaseImpact: "patch",
 });
 
@@ -6047,7 +6090,11 @@ interface ReadyPlanResult {
   readonly governor: GovernorState;
 }
 
-function createReadyGovernedPlan(input: OrchestratorInput, nowMs: () => number): ReadyPlanResult {
+function createReadyGovernedPlan(
+  input: OrchestratorInput,
+  nowMs: () => number,
+  progress: ConnectedContextProgress,
+): ReadyPlanResult {
   const planned = planAndGovern(
     input.budget === undefined
       ? { scope: input.scope, query: input.query }
@@ -6055,6 +6102,7 @@ function createReadyGovernedPlan(input: OrchestratorInput, nowMs: () => number):
     { nowMs },
   );
   const { plan } = planned;
+  progress.plan = plan;
   if (plan.state !== "ready") {
     if (plan.clarification !== undefined) {
       throw new ClarificationNeededError(plan.clarification);
@@ -6858,6 +6906,7 @@ interface ConnectedContextExecution {
 
 interface ConnectedContextActivity {
   readonly metadataUnavailable: MetadataFailureObserver;
+  readonly clarification: (plan: ExplorationPlan) => void;
   readonly elapsedMs: () => number;
   readonly started: () => void;
   readonly completed: (execution: ConnectedContextExecution) => void;
@@ -6876,6 +6925,7 @@ type ConnectedContextPhase =
   | "directory-cleanup";
 
 interface ConnectedContextProgress {
+  plan?: ExplorationPlan | undefined;
   sourceDecision?: SourceDecisionObservation | undefined;
   scopeContextObservation?: ScopeContextObservation | undefined;
   phase: ConnectedContextPhase;
@@ -7507,6 +7557,7 @@ function sourceDetailsActivityExtra(
     return {
       ...shared,
       activityDetailStatus: "complete",
+      directEvidenceLookup: execution.output.plan.directEvidenceLookup,
       ...(execution.status.sourceDecision ?? emptySourceDecision("not-evaluated")),
       ...metadataRetentionActivityExtra(execution.status),
       ...omissionTotalsActivityExtra(execution.output.pack),
@@ -7734,6 +7785,32 @@ function logConnectedContextCompletion(
   );
 }
 
+function logConnectedContextClarification(
+  logger: ServerLogger,
+  identity: ConnectedContextActivityIdentity,
+  plan: ExplorationPlan,
+  correlationId: string,
+  durationMs: number,
+): void {
+  logger.info(() =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_CLARIFICATION_OPERATION,
+      { correlationId, durationMs },
+      {
+        scopeIdentitySha256: identity.scopeIdentitySha256,
+        queryIdentitySha256: identity.queryIdentitySha256,
+        clarificationReason: plan.clarification?.reason ?? "scope-invalid",
+        retrievalIntent: plan.retrievalIntent,
+        directEvidenceLookup: plan.directEvidenceLookup,
+        anchorCount: plan.anchors.length,
+        plannedRingCount: plan.rings.length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
 function logConnectedContextFailure(
   logger: ServerLogger,
   identity: ConnectedContextActivityIdentity,
@@ -7789,6 +7866,9 @@ function createConnectedContextActivity(
         metadataUnavailableInspectionCount,
       );
     },
+    clarification: (plan): void => {
+      logConnectedContextClarification(logger, identity, plan, correlationId, logElapsed());
+    },
     metadataUnavailable: (error, scopePath): void => {
       metadataUnavailableInspectionCount += 1;
       logger.warn(() => metadataUnavailableEvent(error, scopePath, identity, correlationId));
@@ -7806,6 +7886,7 @@ function fallbackConnectedContextActivity(
   return {
     elapsedMs: (): number => Math.max(0, nowMs() - logicalStartMs),
     metadataUnavailable: (): void => undefined,
+    clarification: (): void => undefined,
     started: (): void => undefined,
     completed: (): void => undefined,
     failed: (): void => undefined,
@@ -8565,7 +8646,7 @@ async function executeConnectedContextRetrieval(
 ): Promise<ConnectedContextExecution> {
   throwIfCancelled(deps.signal);
   runtime.progress.phase = "planning";
-  const { plan, governor } = createReadyGovernedPlan(input, runtime.nowMs);
+  const { plan, governor } = createReadyGovernedPlan(input, runtime.nowMs, runtime.progress);
   runtime.progress.plannedRingCount = plan.rings.length;
   deps.recordPlan?.(plan);
   throwIfCancelled(deps.signal);
@@ -8620,6 +8701,20 @@ function assertGroundedWorkspaceRootAllowed(
   }
 }
 
+function recordConnectedContextFailureOutcome(
+  activity: ConnectedContextActivity,
+  error: unknown,
+  progress: ConnectedContextProgress,
+): void {
+  if (
+    progress.phase === "planning" &&
+    progress.plan !== undefined &&
+    progress.plan.state !== "ready"
+  )
+    activity.clarification(progress.plan);
+  else activity.failed(error, progress);
+}
+
 export async function retrieveConnectedContextPack(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
@@ -8655,7 +8750,7 @@ export async function retrieveConnectedContextPack(
   } catch (error) {
     if (!isConnectedContextCancellation(error, safeConnectedContextErrorKind(error)))
       await progress.workspaceIoActivity?.settleCleanup();
-    activity.failed(error, progress);
+    recordConnectedContextFailureOutcome(activity, error, progress);
     throw error;
   }
 }

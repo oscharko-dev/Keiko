@@ -193,6 +193,12 @@ details and whether details were clipped. These are omission entries, not distin
 errors; a path may have more than one reason. Legacy packs derive totals from their complete detail
 list. These events carry the same request correlation and scope/query digests and precede the
 single `completed` terminal event. They contain no paths or source bodies.
+The planner records the direct-lookup decision that actually controls ring composition; source
+details carry that decision rather than reconstructing it from the final ring count. A plan that
+requests clarification settles with `search.connected-context.clarification-needed`, an information
+event carrying the closed clarification reason, retrieval intent, anchor/ring counts and request
+digests. It does not emit a retrieval failure. The existing user-facing clarification response is
+unchanged; unexpected planning errors still emit the correlated failure event.
 
 #### Traversal and explicit caller budgets
 

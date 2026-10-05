@@ -2551,11 +2551,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
         "search.connected-context.metadata-unavailable",
         "search.connected-context.source-details",
       ],
-      end: ["search.connected-context.completed"],
+      end: ["search.connected-context.clarification-needed", "search.connected-context.completed"],
       failure: ["search.connected-context.failed"],
       loss: [],
     },
     requiredCausalOperations: [
+      "search.connected-context.clarification-needed",
       "search.connected-context.completed",
       "search.connected-context.completion-details",
       "search.connected-context.failed",
@@ -2565,6 +2566,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "search.connected-context.clarification-needed",
       "search.connected-context.completed",
       "search.connected-context.completion-details",
       "search.connected-context.failed",
@@ -2574,6 +2576,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "search.connected-context.clarification-needed",
       "search.connected-context.completed",
       "search.connected-context.completion-details",
       "search.connected-context.metadata-unavailable",
