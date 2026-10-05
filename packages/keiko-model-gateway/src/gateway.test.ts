@@ -464,7 +464,7 @@ describe("Gateway.chat", () => {
     });
     await gateway.chat(REQUEST);
     // The actual clock includes both the announced minimum and positive retry jitter.
-    expect(clock.now()).toBeGreaterThan(overrunMs + 100);
+    expect(clock.now()).toBe(overrunMs + 100 + route.retryBaseDelayMs);
     expect(seenTimeouts).toEqual([attemptTimeoutMs, budgetMs - clock.now()]);
   });
 

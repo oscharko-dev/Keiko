@@ -3,16 +3,22 @@ import {
   CancelledError,
   CircuitOpenError,
   ProviderError,
+  RateLimitError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
+import type { Clock } from "./types.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 
-function fixture(failureThreshold = 10): {
+function fixture(
+  failureThreshold = 10,
+  halfOpenProbes = 1,
+  clock: Clock = systemClock,
+): {
   breaker: CircuitBreaker;
   events: ModelGatewayLogEvent[];
 } {
@@ -21,8 +27,8 @@ function fixture(failureThreshold = 10): {
     events,
     breaker: new CircuitBreaker(
       "admission-test-model",
-      { failureThreshold, cooldownMs: 200, halfOpenProbes: 1 },
-      systemClock,
+      { failureThreshold, cooldownMs: 200, halfOpenProbes },
+      clock,
       {
         write: (event): void => {
           events.push(event);
@@ -115,6 +121,7 @@ describe("provider admission decisions", () => {
   });
 
   it("records a body-free budget refusal even when no wait can begin", async () => {
+    vi.useFakeTimers();
     const { breaker, events } = fixture();
     breaker.assertAllowed().settle("failure", new ProviderError("Synthetic outage", 503, [], 100));
     await expect(breaker.waitForAdmission({ remainingMs: 50, jitterMs: 1 })).rejects.toBeInstanceOf(
@@ -258,12 +265,108 @@ describe("provider admission decisions", () => {
     expect(waitEvents(events).at(-1)?.extra).toMatchObject({
       reason: "probe-saturated",
       remainingMs: 0,
+      delayMs: 0,
     });
+    expect(
+      expectActivityLogProof(
+        "gateway.circuit.wait.emitted-line",
+        formatActivityLogProofLine(waitEvents(events).at(-1) ?? {}),
+      ),
+    ).toMatchObject({ reason: "probe-saturated", delayMs: 0, remainingMs: 0 });
     const before = waitEvents(events).length;
     probe.settle("success");
     await vi.advanceTimersByTimeAsync(0);
     expect(waitEvents(events)).toHaveLength(before);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not let a sibling probe extend the outage reopened by another probe", async () => {
+    vi.useFakeTimers();
+    const { breaker } = fixture(1, 2);
+    breaker.assertAllowed().settle("failure", new ProviderError("First outage", 503, [], 1));
+    await vi.advanceTimersByTimeAsync(201);
+    const first = breaker.assertAllowed();
+    const sibling = breaker.assertAllowed();
+    first.settle("failure", new ProviderError("Reopened outage", 503, [], 1));
+    sibling.settle("failure", new ProviderError("Stale probe", 503, [], 50_000));
+    await vi.advanceTimersByTimeAsync(201);
+    const admitted = await breaker.waitForAdmission({ remainingMs: 10, jitterMs: 1 });
+    expect(admitted.admission.halfOpen).toBe(true);
+    admitted.admission.settle("success");
+    breaker.assertAllowed().settle("success");
+    expect(breaker.status("admission-test-model").state).toBe("closed");
+  });
+
+  it("ignores a closed-generation cooldown while probes own the half-open generation", async () => {
+    vi.useFakeTimers();
+    const { breaker } = fixture(1, 2);
+    const old = breaker.assertAllowed();
+    breaker.assertAllowed().settle("failure", new ProviderError("First outage", 503, [], 1));
+    await vi.advanceTimersByTimeAsync(201);
+    const first = breaker.assertAllowed();
+    old.settle("failure", new ProviderError("Old response", 503, [], 50_000));
+    const second = await breaker.waitForAdmission({ remainingMs: 10, jitterMs: 1 });
+    expect(second.admission.halfOpen).toBe(true);
+    first.settle("success");
+    second.admission.settle("success");
+    expect(breaker.status("admission-test-model").state).toBe("closed");
+  });
+
+  it.each(["provider", "rate-limit"] as const)(
+    "shares a %s recovery minimum while closed",
+    async (kind) => {
+      vi.useFakeTimers();
+      const { breaker, events } = fixture();
+      const error =
+        kind === "provider"
+          ? new ProviderError("Synthetic unavailable", 503, [], 100)
+          : new RateLimitError("Synthetic rate limit", 100);
+      breaker.assertAllowed().settle("failure", error);
+      const settled = vi.fn();
+      const pending = breaker.waitForAdmission({ remainingMs: 200, jitterMs: 1 }).then(settled);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(waitEvents(events).map((event) => event.extra?.outcome)).toEqual(["started", "timer"]);
+      for (const event of waitEvents(events))
+        expect(
+          expectActivityLogProof(
+            "gateway.circuit.wait.emitted-line",
+            formatActivityLogProofLine(event),
+          ),
+        ).toMatchObject({ reason: "provider-cooldown", delayMs: 101 });
+      expect(breaker.status("admission-test-model").state).toBe("closed");
+    },
+  );
+
+  it("records a non-cancellation clock failure and disposes the wait subscription", async () => {
+    const failure = new TypeError("private-clock-failure-canary");
+    const controller = new AbortController();
+    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+    let sleepSignal: AbortSignal | undefined;
+    const clock: Clock = {
+      now: (): number => 0,
+      sleep: (_delay, signal): Promise<void> => {
+        sleepSignal = signal;
+        return Promise.reject(failure);
+      },
+    };
+    const { breaker, events } = fixture(10, 1, clock);
+    breaker.assertAllowed().settle("failure", new RateLimitError("Rate limit", 100));
+    await expect(
+      breaker.waitForAdmission({ remainingMs: 200, jitterMs: 1, signal: controller.signal }),
+    ).rejects.toBe(failure);
+    expect(waitEvents(events).map((event) => event.extra?.outcome)).toEqual(["started", "failed"]);
+    for (const event of waitEvents(events))
+      expectActivityLogProof(
+        "gateway.circuit.wait.emitted-line",
+        formatActivityLogProofLine(event),
+      );
+    expect(JSON.stringify(events)).not.toContain("private-clock-failure-canary");
+    expect(sleepSignal?.aborted).toBe(true);
+    expect(removeListener).toHaveBeenCalledWith("abort", expect.any(Function));
   });
 
   it("does not import a stale Retry-After from an earlier recovered outage", async () => {

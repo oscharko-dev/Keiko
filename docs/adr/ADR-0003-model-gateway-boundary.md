@@ -593,8 +593,8 @@ platform timer ceiling. Retryable `ProviderError` responses (including HTTP 503)
 optional `retryAfterMs` duration. OpenAI-compatible adapters parse both delay-seconds and HTTP-date
 forms of `Retry-After`; malformed values use the normal backoff. Provider cooldowns are never
 shortened to the exponential backoff cap: an overloaded LiteLLM queue may legitimately request
-a two-minute wait. Gateway calls add positive backoff jitter after that minimum, within the same
-remaining request budget. The delay uses cancellation-aware `clock.sleep()`. The
+a two-minute wait. Gateway calls add positive backoff jitter after that minimum and refuse a
+delay that cannot fit the remaining request budget. The delay uses cancellation-aware `clock.sleep()`. The
 following error types are never retried: `AuthenticationError`, `ModelRefusalError`,
 `ContextOverflowError`, `CancelledError`, `CircuitOpenError`, `ConfigInvalidError`,
 `UnknownModelError`.
@@ -684,6 +684,24 @@ States:
   and proposed delay, even when no wait timer starts.
 
 Circuit state is observable via `gateway.circuitStatus(modelId): CircuitBreakerStatus`.
+
+**Shared provider cooldown.** A retryable HTTP 429 or provider failure carrying `Retry-After`
+announces a per-model recovery minimum even while the breaker remains Closed. Every later caller
+using that breaker observes the same deadline, including after the announcing request ends.
+Its duration is capped only by the platform timer ceiling (2,147,483,647 ms); the expired deadline
+does not block later calls. A waiting admission samples positive jitter only when it encounters
+an active provider cooldown, using `max(1, round(retryBaseDelayMs * random()))`. Retries use the
+equal-jitter backoff ladder above. Both stay inside the caller's original whole-request budget.
+An admission refusal retains the previous provider error when present; otherwise a blocked caller
+receives `CircuitOpenError`, while an exhausted healthy admission receives `TimeoutError`.
+Late Closed-generation failures may extend the outage they opened. Late half-open probes cannot
+extend the outage reopened by a sibling probe or affect the next probe generation.
+
+`gateway.circuit.wait` records reasons `provider-cooldown`, `circuit-cooldown`, or `probe-saturated`
+and outcomes `started`, `timer`, `changed`, `cancelled`, `failed`, or `budget-refused`.
+For saturated probes there is no proposed cooldown duration: `delayMs` records the remaining
+request budget, including zero at refusal, rather than the platform timer ceiling. Stream lifecycle
+starts before admission waiting and settles with a zero-chunk failure if admission fails.
 
 ### CLI commands
 

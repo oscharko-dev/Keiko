@@ -721,7 +721,7 @@ interface CircuitAdmissionWait {
   readonly previousError?: Error | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly correlationId?: string | undefined;
-  readonly jitterMs: number;
+  readonly jitterMs: number | (() => number);
 }
 
 type CircuitWaitReason = "provider-cooldown" | "circuit-cooldown" | "probe-saturated";
@@ -874,7 +874,9 @@ export class CircuitBreaker {
     this.logWait(
       blocked.reason,
       "budget-refused",
-      Math.min(blocked.delayMs, MAX_TIMER_DELAY_MS),
+      blocked.reason === "probe-saturated"
+        ? remainingMs
+        : Math.min(blocked.delayMs, MAX_TIMER_DELAY_MS),
       options.correlationId,
       remainingMs,
     );
@@ -883,14 +885,16 @@ export class CircuitBreaker {
 
   private blockedWait(
     allowCircuitWait: boolean,
-    jitterMs: number,
+    jitterMs: CircuitAdmissionWait["jitterMs"],
   ): { readonly reason: CircuitWaitReason; readonly delayMs: number } | undefined {
     const cooldown = this.providerCooldownUntil - this.clock.now();
-    if (cooldown > 0)
+    if (cooldown > 0) {
+      const jitter = typeof jitterMs === "number" ? jitterMs : jitterMs();
       return {
         reason: "provider-cooldown",
-        delayMs: Math.min(cooldown + Math.max(1, jitterMs), MAX_TIMER_DELAY_MS),
+        delayMs: Math.min(cooldown + Math.max(1, jitter), MAX_TIMER_DELAY_MS),
       };
+    }
     if (!allowCircuitWait) return undefined;
     if (this.state === "open" && this.openedAt !== null) {
       const remaining = this.config.cooldownMs - (this.clock.now() - this.openedAt);
@@ -969,28 +973,28 @@ export class CircuitBreaker {
   // Each admission settles once. Circuit state and probe ownership stay generation-bound;
   // parallel recovery minima may extend only the open outage caused by that generation.
   private createAdmission(correlationId: string | undefined): CircuitBreakerAdmission {
-    const generation = this.generation;
+    const origin = { generation: this.generation, halfOpen: this.state === "half-open" };
     let settled = false;
     return {
-      halfOpen: this.state === "half-open",
+      halfOpen: origin.halfOpen,
       settle: (outcome, error): void => {
         if (settled) return;
         settled = true;
-        this.settleAdmission(generation, outcome, error, correlationId);
+        this.settleAdmission(origin, outcome, error, correlationId);
       },
     };
   }
 
   private settleAdmission(
-    generation: number,
+    origin: { readonly generation: number; readonly halfOpen: boolean },
     outcome: "success" | "failure" | "non-provider-fault",
     error: unknown,
     correlationId: string | undefined,
   ): void {
-    const current = generation === this.generation;
+    const current = origin.generation === this.generation;
     // Parallel responses from the generation that opened this outage still announce recovery
     // minima. Once a probe generation has begun, earlier responses have no authority over it.
-    if (!current && !(this.state === "open" && this.generation === generation + 1)) return;
+    if (!current && !this.canExtendClosedGenerationOutage(origin)) return;
     const before = this.admissionState();
     this.announceProviderCooldown(outcome, error);
     if (current) {
@@ -1001,6 +1005,13 @@ export class CircuitBreaker {
     if (before !== this.admissionState()) {
       for (const notify of this.waiters) notify();
     }
+  }
+
+  private canExtendClosedGenerationOutage(origin: {
+    readonly generation: number;
+    readonly halfOpen: boolean;
+  }): boolean {
+    return !origin.halfOpen && this.state === "open" && this.generation === origin.generation + 1;
   }
 
   private announceProviderCooldown(outcome: string, error: unknown): void {

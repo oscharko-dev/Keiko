@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CircuitOpenError,
+  CancelledError,
   ConfigInvalidError,
   ProviderEmptyAnswerError,
   TimeoutError,
@@ -104,7 +105,7 @@ function streamingFake(failures: readonly Error[] = []): StreamingFake {
     adapter: {
       call,
       callStream: async function* (
-        _request: GatewayRequest,
+        request: GatewayRequest,
         _config: ModelProviderConfig,
         read?: StreamReadBounds,
       ): AsyncGenerator<GatewayStreamChunk> {
@@ -113,6 +114,7 @@ function streamingFake(failures: readonly Error[] = []): StreamingFake {
         const failure = pending.shift();
         if (failure !== undefined) throw failure;
         yield { type: "delta", token: "answer" };
+        if (request.cancellationSignal?.aborted) throw new CancelledError("request cancelled");
         yield { type: "done", response: ANSWER };
       },
     },
@@ -471,6 +473,7 @@ describe("stream startup resilience", () => {
     const gateway = new Gateway(config(true), {
       clock,
       log,
+      random: (): number => 1,
       fetchImpl: (): Promise<Response> => {
         calls.push(clock.now());
         return Promise.resolve(
@@ -490,7 +493,7 @@ describe("stream startup resilience", () => {
       if (chunk.type === "delta") received.push(chunk.token);
     }
     expect(calls).toHaveLength(2);
-    expect(calls[1]).toBeGreaterThan(recoveryAt);
+    expect(calls[1]).toBe(recoveryAt + PROVIDER.retryBaseDelayMs);
     expect(received).toEqual(["recovered once"]);
     expect(log.events.find((event) => event.op === "gateway.retry.scheduled")?.extra).toMatchObject(
       {
@@ -498,9 +501,9 @@ describe("stream startup resilience", () => {
         retryAfterMs: 120_000,
       },
     );
-    expect(
-      log.events.find((event) => event.op === "gateway.retry.scheduled")?.extra?.delayMs,
-    ).toBeGreaterThan(120_000);
+    expect(log.events.find((event) => event.op === "gateway.retry.scheduled")?.extra?.delayMs).toBe(
+      120_000 + PROVIDER.retryBaseDelayMs,
+    );
     expect(JSON.stringify(log.events)).not.toContain("recovered once");
   });
 
@@ -688,7 +691,11 @@ it.each(["streaming", "buffered"])(
   },
 );
 
-it.each(["cancelled", "abandoned"])("releases a %s half-open stream probe", async (outcome) => {
+async function halfOpenStreamFixture(): Promise<{
+  readonly gateway: Gateway;
+  readonly fake: StreamingFake;
+  readonly log: ReturnType<typeof recorder>;
+}> {
   let now = 0;
   const fake = streamingFake([new TimeoutError("provider outage")]);
   const log = recorder();
@@ -706,31 +713,49 @@ it.each(["cancelled", "abandoned"])("releases a %s half-open stream probe", asyn
   );
   await expect(consumeStream(gateway)).rejects.toBeInstanceOf(TimeoutError);
   now = 1000;
-  const stream = gateway.chatStream({
-    ...REQUEST,
-    logContext: { correlationId: "cancelled-probe-0001" },
-    ...(outcome === "cancelled" ? { cancellationSignal: AbortSignal.abort() } : {}),
-  });
-  if (outcome === "cancelled") {
-    await expect(stream.next()).rejects.toMatchObject({ code: "GATEWAY_CANCELLED" });
-    expect(fake.bounds).toHaveLength(1);
-  } else {
-    expect((await stream.next()).value).toEqual({ type: "delta", token: "answer" });
-    await stream.return(undefined);
-  }
-  expect(log.events).toContainEqual(
-    expect.objectContaining({
-      op: outcome === "cancelled" ? "gateway.stream.failed" : "gateway.stream.abandoned",
-      correlationId: "cancelled-probe-0001",
-    }),
-  );
-  // An already-cancelled request never claims a probe; abandonment releases an actual probe.
-  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe(
-    outcome === "cancelled" ? "open" : "half-open",
-  );
+  return { gateway, fake, log };
+}
+
+it("never claims a half-open probe for an already-cancelled stream", async () => {
+  const { gateway, fake } = await halfOpenStreamFixture();
+  const stream = gateway.chatStream({ ...REQUEST, cancellationSignal: AbortSignal.abort() });
+  await expect(stream.next()).rejects.toBeInstanceOf(CancelledError);
+  expect(fake.bounds).toHaveLength(1);
+  expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("open");
   await expect(consumeStream(gateway)).resolves.toBeUndefined();
   expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
 });
+
+it.each(["cancelled", "abandoned"])(
+  "releases a %s half-open stream probe after admission",
+  async (outcome) => {
+    const { gateway, fake, log } = await halfOpenStreamFixture();
+    const controller = new AbortController();
+    const stream = gateway.chatStream({
+      ...REQUEST,
+      logContext: { correlationId: "cancelled-probe-0001" },
+      cancellationSignal: controller.signal,
+    });
+    expect((await stream.next()).value).toEqual({ type: "delta", token: "answer" });
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("half-open");
+    if (outcome === "cancelled") {
+      controller.abort();
+      await expect(stream.next()).rejects.toMatchObject({ code: "GATEWAY_CANCELLED" });
+    } else {
+      await stream.return(undefined);
+    }
+    expect(fake.bounds).toHaveLength(2);
+    expect(log.events).toContainEqual(
+      expect.objectContaining({
+        op: outcome === "cancelled" ? "gateway.stream.failed" : "gateway.stream.abandoned",
+        correlationId: "cancelled-probe-0001",
+      }),
+    );
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("half-open");
+    await expect(consumeStream(gateway)).resolves.toBeUndefined();
+    expect(gateway.circuitStatus(REQUEST.modelId).state).toBe("closed");
+  },
+);
 
 it.each(["abandoned", "succeeded", "failed"])(
   "does not let an older %s stream settle a later half-open probe",

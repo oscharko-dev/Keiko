@@ -558,6 +558,9 @@ Circuit admission that cannot fit a caller's remaining budget emits `gateway.cir
 Parallel retryable responses may extend the recovery minimum of the same open outage, while probe
 ownership and later circuit generations remain protected. Unchanged admission state does not wake
 every waiting caller.
+For a saturated probe, `delayMs` records the remaining request budget (zero at expiry), not a
+fabricated cooldown. A stream records its start before admission waiting and its zero-chunk failure
+if admission is refused or cancelled. Late sibling probes cannot extend a reopened outage.
 
 On retries, `reportedPromptTokens` always describes only the current counter response and is
 absent when that response has no count. `providerPromptTokens` adds the current response-schema

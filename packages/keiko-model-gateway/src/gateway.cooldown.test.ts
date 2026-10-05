@@ -3,6 +3,7 @@ import {
   CancelledError,
   CircuitOpenError,
   ProviderError,
+  RateLimitError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { Gateway } from "./gateway.js";
 import { CircuitBreaker, systemClock } from "./resilience.js";
@@ -83,6 +84,141 @@ async function consume(provider: Gateway): Promise<GatewayStreamChunk[]> {
 }
 
 describe("concurrent provider cooldown admission", () => {
+  it("does not draw recovery jitter for an unblocked successful admission", async () => {
+    const random = vi.fn(() => 0);
+    const provider = new Gateway(gatewayConfig(), {
+      adapter: { call: (): Promise<NormalizedResponse> => Promise.resolve(answer()) },
+      random,
+    });
+    await provider.chat(REQUEST);
+    expect(random).not.toHaveBeenCalled();
+  });
+  it.each([0, 1])("bounds fresh-caller admission jitter at random=%i", async (random) => {
+    vi.useFakeTimers();
+    const events: ModelGatewayLogEvent[] = [];
+    const call = vi
+      .fn()
+      .mockRejectedValueOnce(new RateLimitError("Synthetic 429", 100))
+      .mockResolvedValue(answer());
+    const config = gatewayConfig();
+    const provider = new Gateway(
+      {
+        ...config,
+        providers: config.providers.map((entry) => ({
+          ...entry,
+          maxRetries: 0,
+          retryBaseDelayMs: 20,
+        })),
+      },
+      {
+        adapter: { call },
+        clock: systemClock,
+        random: (): number => random,
+        log: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+      },
+    );
+    await expect(provider.chat(REQUEST)).rejects.toBeInstanceOf(RateLimitError);
+    const pending = provider.chat(REQUEST);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(call).toHaveBeenCalledTimes(1);
+    await vi.runAllTimersAsync();
+    await pending;
+    expect(call).toHaveBeenCalledTimes(2);
+    const waiting = events.find((event) => event.op === "gateway.circuit.wait");
+    expect(waiting?.extra).toMatchObject({
+      reason: "provider-cooldown",
+      outcome: "started",
+      delayMs: random === 0 ? 101 : 120,
+    });
+  });
+
+  it.each(["refused", "budget", "cancelled"] as const)(
+    "closes the stream lifecycle when initial admission is %s",
+    async (mode) => {
+      vi.useFakeTimers();
+      const events: ModelGatewayLogEvent[] = [];
+      const controller = new AbortController();
+      const recovery = mode === "refused" ? null : mode === "budget" ? 2_147_483_647 : 1000;
+      const call = vi.fn(() =>
+        Promise.reject(new ProviderError("Synthetic outage", 503, [], recovery)),
+      );
+      const config = gatewayConfig();
+      const provider = gateway(
+        call,
+        {
+          ...config,
+          providers: config.providers.map((entry) => ({ ...entry, maxRetries: 0 })),
+          circuitBreaker: { failureThreshold: 1, cooldownMs: 200, halfOpenProbes: 1 },
+        },
+        events,
+      );
+      await expect(provider.chat(REQUEST)).rejects.toBeInstanceOf(ProviderError);
+      const stream = provider.chatStream({
+        ...REQUEST,
+        cancellationSignal: controller.signal,
+        logContext: { correlationId: "initial-stream-admission" },
+      });
+      const pending = stream.next().catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(0);
+      const started = events.find((event) => event.op === "gateway.stream.started");
+      if (mode === "cancelled") controller.abort();
+      expect(await pending).toBeInstanceOf(
+        mode === "cancelled" ? CancelledError : CircuitOpenError,
+      );
+      const failed = events.find((event) => event.op === "gateway.stream.failed");
+      expect(started).toBeDefined();
+      expect(failed).toBeDefined();
+      expectActivityLogProof(
+        "gateway.stream.started.emitted-line",
+        formatActivityLogProofLine(started ?? {}),
+      );
+      expect(
+        expectActivityLogProof(
+          "gateway.stream.failed.emitted-line",
+          formatActivityLogProofLine(failed ?? {}),
+        ),
+      ).toMatchObject({ correlationId: "initial-stream-admission", chunkCount: 0 });
+      expect(call).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each([0, 1])("honors a 429 minimum plus bounded retry jitter at random=%i", async (random) => {
+    vi.useFakeTimers();
+    const events: ModelGatewayLogEvent[] = [];
+    const call = vi
+      .fn()
+      .mockRejectedValueOnce(new RateLimitError("Synthetic 429", 100))
+      .mockResolvedValue(answer());
+    const config = gatewayConfig();
+    const provider = new Gateway(
+      {
+        ...config,
+        providers: config.providers.map((entry) => ({ ...entry, retryBaseDelayMs: 20 })),
+      },
+      {
+        adapter: { call },
+        clock: systemClock,
+        random: (): number => random,
+        log: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+      },
+    );
+    const pending = provider.chat(REQUEST);
+    await vi.runAllTimersAsync();
+    await pending;
+    const scheduled = events.find((event) => event.op === "gateway.retry.scheduled");
+    expect(scheduled?.extra?.delayMs).toBe(random === 0 ? 110 : 120);
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
   it("completes retry callers after half-open saturation clears", async () => {
     vi.useFakeTimers();
     let calls = 0;

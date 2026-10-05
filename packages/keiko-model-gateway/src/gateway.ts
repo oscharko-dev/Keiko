@@ -1122,8 +1122,7 @@ export class Gateway {
   // streaming variant falls back to a single delta+done synthesised from its buffered call().
   async *chatStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
     const state = await this.prepareStream(request);
-    const { route, ids, start, elapsed, adapter, admission } = state;
-    const usesNativeStream = adapter.callStream !== undefined;
+    const { route, ids, start, elapsed, admission } = state;
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
     // other stream outcome. `??=` locks it in on the first non-empty delta and leaves it alone.
@@ -1133,7 +1132,6 @@ export class Gateway {
     // so the `finally` can tell "the consumer walked away" from the two paths that already spoke.
     let settled = false;
     try {
-      this.logCallStarted(ids, route, true, state.prepared.reasoningEffort, usesNativeStream);
       for await (const chunk of this.streamFrom(state)) {
         chunkCount += 1;
         firstTokenMs ??= firstNonEmptyDeltaMs(chunk, elapsed);
@@ -1182,6 +1180,13 @@ export class Gateway {
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
+    this.logCallStarted(
+      ids,
+      route,
+      true,
+      prepared.reasoningEffort,
+      adapter.callStream !== undefined,
+    );
     const { admission } = await this.initialStreamAdmission(route, prepared, ids, elapsed);
     return {
       route,
@@ -1211,7 +1216,6 @@ export class Gateway {
     } catch (error) {
       attachGatewayRequestId(error, ids.requestId);
       this.logStreamFailed(ids, route, 0, elapsed(), error);
-      this.reportContextWindow(route, ids, error);
       throw error;
     }
   }
@@ -1726,7 +1730,7 @@ export class Gateway {
       previousError,
       signal: request.cancellationSignal,
       correlationId,
-      jitterMs: Math.max(1, Math.round(provider.retryBaseDelayMs * this.random())),
+      jitterMs: (): number => Math.max(1, Math.round(provider.retryBaseDelayMs * this.random())),
     });
   }
 
