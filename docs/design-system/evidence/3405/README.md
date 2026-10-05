@@ -1,10 +1,11 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-10-04 for PR #3687 after connected-source repairs
-changed the shared UI API and localization modules. No updater behavior changed. All eight Chromium
-checks passed on the supported Node runtime in an isolated checkout, including the real-BFF
-outage journey, and refreshed the tracked updater artifacts. The eight source and four harness hashes
-match the current checkout. The tests prove the startup notice yields only while a visible, foreground **ready**
+The current repair evidence was regenerated on 2026-10-05 from PR #3687 head
+`8b8f92e7dabcb3ae5b62f52cce6d2aa6149ef798` after shared UI API and localization changes made the
+previous source hashes stale. No updater behavior changed. All eight Chromium checks passed in an
+isolated Linux/amd64 checkout on Node 24.18.0, including the real-BFF outage journey. The unchanged
+producer refreshed all 17 tracked artifacts, and the evidence freshness gate passed. The eight
+source and four harness hashes match the current checkout. The tests prove the startup notice yields only while a visible, foreground **ready**
 Update window owns the same critical context and actions; the notice returns when that window is
 backgrounded or minimized, and remains available while the foreground updater is loading or
 contains only a load error. The background-window check establishes keyboard modality with a real
@@ -24,7 +25,9 @@ npm run check:update-ui-evidence
 ```
 
 The retained command name now captures this directory, not historical #1696. Run only one owner
-against the suite's configured port/build tree. The required CI subset is:
+against the suite's configured port/build tree. Container runs need an init process, for example
+`docker run --init`, so detached BFF processes are reaped after the real stop/restart journey.
+The required CI subset is:
 
 ```bash
 npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
