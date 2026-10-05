@@ -187,11 +187,14 @@ function matchesReferentCommand(
   suffixes: ReadonlySet<string>,
 ): boolean {
   for (const match of content.matchAll(prefix)) {
-    const remainder = stripReferentSuffix(
-      trimReferentPunctuation(content.slice(match.index + match[0].length)),
-      suffixes,
-    );
-    if (object.test(remainder)) return true;
+    const remainder = content.slice(match.index + match[0].length);
+    let command = trimReferentPunctuation(remainder.split(/[,;]/u, 1)[0] ?? remainder);
+    let stripped = stripReferentSuffix(command, suffixes);
+    while (stripped !== command) {
+      command = stripped;
+      stripped = stripReferentSuffix(command, suffixes);
+    }
+    if (object.test(command)) return true;
   }
   return false;
 }
@@ -202,7 +205,7 @@ function needsReferentResolution(content: string): boolean {
     isAnaphoricTestRequest(content) ||
     matchesReferentCommand(
       content,
-      /\b(?:erkläre?|beschreibe?|prüfe?|vergleiche?|fasse?)\s+/giu,
+      /\b(?:erkl(?:ä|ae)re?|beschreibe?|pr(?:ü|ue)fe?|vergleiche?|fasse?)\s+/giu,
       /^(?:mir\s+)?(?:das|dies|dieses|diesen|diese|diesem)$/iu,
       GERMAN_REFERENT_SUFFIXES,
     ) ||
@@ -233,6 +236,12 @@ function isNamedCamelTarget(query: string, term: string): boolean {
   );
 }
 
+function isNamedDottedTarget(term: string): boolean {
+  if (!term.includes(".")) return false;
+  if (/^\d+(?:\.\d+)+$/u.test(term)) return false;
+  return !/^(?:\p{L}\.)+\p{L}$/u.test(term);
+}
+
 function hasIndependentQueryTarget(query: string): boolean {
   return extractAnchors({ text: query, maxAnchors: 8 }).anchors.some(
     (anchor) =>
@@ -240,7 +249,8 @@ function hasIndependentQueryTarget(query: string): boolean {
       anchor.kind === "quoted" ||
       (anchor.kind === "identifier" &&
         (anchor.weight >= 0.9 ||
-          /[_.]/u.test(anchor.term) ||
+          anchor.term.includes("_") ||
+          isNamedDottedTarget(anchor.term) ||
           (anchor.weight >= 0.85 && isNamedCamelTarget(query, anchor.term)))),
   );
 }
