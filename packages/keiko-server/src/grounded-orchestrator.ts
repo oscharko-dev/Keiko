@@ -2908,18 +2908,18 @@ function descriptorReadExceededLimit(error: unknown): boolean {
   return isRecord(error) && error.reason === "too-large";
 }
 
-function readBoundedWorkspaceManifest(
+async function readBoundedWorkspaceManifest(
   fs: WorkspaceFs,
   absolutePath: string,
   cache?: FileExistenceCache,
-): string | undefined {
+): Promise<string | undefined> {
   try {
     const stat = fs.stat(absolutePath);
     if (!stat.isFile || stat.size > WORKSPACE_MANIFEST_BYTES_MAX) {
       recordMetadataCoverageIssue(cache, "workspace-manifest-byte-limit");
       return undefined;
     }
-    const boundedRead = fs.readFileUtf8SameDescriptor;
+    const boundedRead = fs.readFileBytes;
     // ADR-0005 D1: a bounded lane, or no advisory metadata at all. Falling back to the unbounded
     // `readFileUtf8` and checking the cap afterwards materializes the entire file first, so the cap
     // stops bounding anything — the exact class this PR removed from the workspace read lanes.
@@ -2927,9 +2927,24 @@ function readBoundedWorkspaceManifest(
       recordMetadataCoverageIssue(cache, "workspace-manifest-read-unavailable");
       return undefined;
     }
-    const read = boundedRead(absolutePath, WORKSPACE_MANIFEST_BYTES_MAX, "reject", stat);
-    if (!isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)) return undefined;
-    return decodeTextFileBytes(Buffer.from(read.rawText, "utf8"))?.text;
+    const bytes = await boundedRead.call(
+      fs,
+      absolutePath,
+      WORKSPACE_MANIFEST_BYTES_MAX,
+      "reject",
+      stat,
+    );
+    if (
+      bytes.length !== stat.size ||
+      !isWorkspacePathSnapshotCurrent(fs, absolutePath, absolutePath, stat)
+    ) {
+      recordMetadataCoverageIssue(cache, "workspace-manifest-read-unavailable");
+      return undefined;
+    }
+    const decoded = decodeTextFileBytes(bytes);
+    if (decoded === undefined)
+      recordMetadataCoverageIssue(cache, "workspace-manifest-shape-unsupported");
+    return decoded?.text;
   } catch (error) {
     rethrowMetadataCancellation(error);
     recordMetadataCoverageIssue(
@@ -2975,12 +2990,12 @@ function boundedWorkspacePatterns(
   return patterns;
 }
 
-function readWorkspacePatterns(
+async function readWorkspacePatterns(
   searchScope: SearchScope,
   fs: WorkspaceFs,
   control: MetadataTraversalControl,
   existsCache?: FileExistenceCache,
-): readonly string[] {
+): Promise<readonly string[]> {
   if (!metadataTraversalCanContinue(control)) return [];
   if (!fileExistsInSearchScope(searchScope, fs, "package.json", existsCache)) {
     return [];
@@ -2992,7 +3007,7 @@ function readWorkspacePatterns(
       recordMetadataCoverageIssue(existsCache, "workspace-manifest-read-unavailable");
       return [];
     }
-    rawText = readBoundedWorkspaceManifest(fs, contained.path, existsCache);
+    rawText = await readBoundedWorkspaceManifest(fs, contained.path, existsCache);
   } catch (error) {
     rethrowMetadataCancellation(error);
     recordMetadataCoverageIssue(existsCache, "workspace-manifest-read-unavailable");
@@ -3085,6 +3100,7 @@ function metadataTraversalOperation<T>(control: MetadataTraversalControl, run: (
 
 function metadataTraversalFs(fs: WorkspaceFs, control: MetadataTraversalControl): WorkspaceFs {
   const descriptorRead = fs.readFileUtf8SameDescriptor;
+  const byteRead = fs.readFileBytes;
   const canonicalRoot = fs.canonicalWorkspaceRoot;
   const run = <T>(operation: () => T): T => metadataTraversalOperation(control, operation);
   return preserveOwnedRootAuthority(fs, {
@@ -3105,6 +3121,21 @@ function metadataTraversalFs(fs: WorkspaceFs, control: MetadataTraversalControl)
             expected: WorkspaceStat,
           ): WorkspaceDescriptorUtf8Read =>
             run(() => descriptorRead.call(fs, path, maxBytes, hardLinkPolicy, expected)),
+        }),
+    ...(byteRead === undefined
+      ? {}
+      : {
+          readFileBytes: async (
+            path: string,
+            maxBytes: number,
+            hardLinkPolicy: WorkspaceHardLinkPolicy,
+            expected: WorkspaceStat,
+          ): Promise<Uint8Array> => {
+            assertMetadataTraversalActive(control);
+            const bytes = await byteRead.call(fs, path, maxBytes, hardLinkPolicy, expected);
+            assertMetadataTraversalActive(control);
+            return bytes;
+          },
         }),
     ...(canonicalRoot === undefined
       ? {}
@@ -3401,7 +3432,9 @@ async function workspacePackageManifestPaths(
 ): Promise<readonly string[]> {
   if (input.scope.kind !== "workspace-root" || input.scope.relativePaths.length !== 0) return [];
   if (!metadataTraversalCanContinue(control)) return [];
-  const patterns = new Set<string>(readWorkspacePatterns(searchScope, fs, control, existsCache));
+  const patterns = new Set<string>(
+    await readWorkspacePatterns(searchScope, fs, control, existsCache),
+  );
   for (const dir of WORKSPACE_PACKAGE_DIRS) patterns.add(`${dir}/*`);
   const paths = new BoundedMetadataPaths(maxResults);
   for (const pattern of [...patterns].sort(compareStrings)) {

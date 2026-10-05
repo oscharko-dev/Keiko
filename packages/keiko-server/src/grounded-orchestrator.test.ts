@@ -2636,7 +2636,79 @@ describe("runGroundedExploration", () => {
     expect(out.pack.files.map((file) => file.scopePath)).not.toContain("pom.xml");
   });
 
-  it("reads workspace patterns through the bounded same-descriptor production port", async () => {
+  it.each([false, true])(
+    "discovers workspace packages from UTF-16 manifests (bigEndian=%s)",
+    async (bigEndian) => {
+      mkdirSync(join(ROOT, "custom-services/payments"), { recursive: true });
+      const bytes = Buffer.from(
+        "\uFEFF" + JSON.stringify({ workspaces: ["custom-services/*"] }),
+        "utf16le",
+      );
+      writeFileSync(join(ROOT, "package.json"), bigEndian ? bytes.swap16() : bytes);
+      writeFileSync(
+        join(ROOT, "custom-services/payments/pom.xml"),
+        "<project><java.version>21</java.version></project>\n",
+      );
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({
+            text: "Welche Technologien und Abhängigkeiten verwendet dieses Projekt?",
+          }),
+        }),
+        { correlationId: undefined, answerer: echoAnswerer, nowMs: () => NOW },
+      );
+      expect(out.pack.files.map((file) => file.scopePath)).toContain(
+        "custom-services/payments/pom.xml",
+      );
+      expect(
+        out.pack.uncertainty.some((marker) => marker.claim.includes("workspace-manifest-")),
+      ).toBe(false);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    },
+  );
+
+  it("classifies an undecodable workspace manifest in metadata coverage", async () => {
+    writeFileSync(join(ROOT, "package.json"), Buffer.from([0xff, 0xfe, 0x00, 0xd8]));
+    const activityLog = createBufferedServerLogSink();
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Welche Technologien und Abhängigkeiten verwendet dieses Projekt?",
+        }),
+      }),
+      { correlationId: "manifest-codec", answerer: echoAnswerer, nowMs: () => NOW, activityLog },
+    );
+    expect(
+      out.pack.uncertainty.some((marker) =>
+        marker.claim.includes("workspace-manifest-shape-unsupported:1"),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    const completed = activityLog.events.find(
+      (event) => event.op === "search.connected-context.completed",
+    );
+    expect(completed?.correlationId).toBe("manifest-codec");
+    const incompleteCount = out.pack.uncertainty.filter(
+      (marker) => marker.kind === "scope-incomplete",
+    ).length;
+    expect(numericEventExtra(completed?.extra, "scopeIncompleteUncertaintyCount")).toBe(
+      incompleteCount,
+    );
+    const line = activityLog
+      .lines()
+      .find((entry) => entry.includes('"op":"search.connected-context.completed"'));
+    expect(line).toContain('"correlationId":"manifest-codec"');
+    expect(line).toContain(`"scopeIncompleteUncertaintyCount":${String(incompleteCount)}`);
+    expect(line).not.toContain("package.json");
+  });
+
+  it("reads workspace patterns through the bounded same-descriptor byte port", async () => {
     mkdirSync(join(ROOT, "custom-services/payments"), { recursive: true });
     writeFileSync(
       join(ROOT, "package.json"),
@@ -2649,22 +2721,13 @@ describe("runGroundedExploration", () => {
     const descriptorCaps: number[] = [];
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
-      readFileUtf8SameDescriptor: (absolutePath, maxBytes, hardLinkPolicy, expected) => {
+      readFileBytes: (absolutePath, maxBytes, hardLinkPolicy, expected) => {
         if (absolutePath === realpathSync(join(ROOT, "package.json"))) {
           descriptorCaps.push(maxBytes);
         }
-        return (
-          nodeWorkspaceFs.readFileUtf8SameDescriptor?.(
-            absolutePath,
-            maxBytes,
-            hardLinkPolicy,
-            expected,
-          ) ?? {
-            rawText: readFileSync(absolutePath, "utf8"),
-            sizeBytes: statSync(absolutePath).size,
-            stat: nodeWorkspaceFs.stat(absolutePath),
-          }
-        );
+        const read = nodeWorkspaceFs.readFileBytes;
+        if (read === undefined) throw new Error("bounded descriptor byte port missing");
+        return read(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
     };
 
@@ -2716,6 +2779,12 @@ describe("runGroundedExploration", () => {
       stat: (absolutePath): WorkspaceStat => {
         if (absolutePath === deniedTarget) deniedStats += 1;
         return nodeWorkspaceFs.stat(absolutePath);
+      },
+      readFileBytes: (absolutePath, maxBytes, hardLinkPolicy, expected): Promise<Uint8Array> => {
+        if (absolutePath === deniedTarget) deniedReads += 1;
+        const read = nodeWorkspaceFs.readFileBytes;
+        if (read === undefined) throw new Error("bounded descriptor byte port missing");
+        return read(absolutePath, maxBytes, hardLinkPolicy, expected);
       },
       readFileUtf8SameDescriptor: (
         absolutePath,
@@ -2922,7 +2991,7 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("omits manifest metadata rather than reading it unbounded without a same-descriptor lane", async () => {
+  it("omits manifest metadata rather than reading it unbounded without a same-descriptor byte lane", async () => {
     mkdirSync(join(ROOT, "hidden-services/payments"), { recursive: true });
     writeFileSync(
       join(ROOT, "package.json"),
@@ -2934,6 +3003,8 @@ describe("runGroundedExploration", () => {
     );
     const manifestPath = realpathSync(join(ROOT, "package.json"));
     const unboundedReads: string[] = [];
+    const { readFileBytes, ...fs } = descriptorlessWorkspaceFs(unboundedReads);
+    expect(readFileBytes).toBeDefined();
 
     const out = await retrieveConnectedContextPack(
       input({
@@ -2945,7 +3016,7 @@ describe("runGroundedExploration", () => {
         answerer: echoAnswerer,
         nowMs: () => NOW,
         detectWorkspace: () => fakeWorkspace(),
-        fs: descriptorlessWorkspaceFs(unboundedReads),
+        fs,
       },
     );
 
