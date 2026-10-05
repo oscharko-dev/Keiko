@@ -2834,7 +2834,9 @@ describe("reviewed navigation and render evidence", () => {
 });
 
 describe("citation activation ingestion", () => {
-  beforeEach(() => resetClientDiagnosticsIngestStateForTests());
+  beforeEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+  });
   afterEach(() => {
     resetClientDiagnosticsIngestStateForTests();
     resetServerLogger();
