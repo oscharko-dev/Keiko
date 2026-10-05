@@ -29,7 +29,6 @@ export {
   createExplorationPlan,
   directDefinitionSymbol,
   isDirectEvidenceLookup,
-  requiresContextualEvidence,
   resolveQueryTargetDecision,
   requiresRelationshipOrHistoryRings,
 } from "./plan.js";

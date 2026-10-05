@@ -4,7 +4,6 @@ import { extractAnchors } from "./anchors.js";
 import {
   directDefinitionSymbol,
   isDirectEvidenceLookup,
-  requiresContextualEvidence,
   resolveQueryTargetDecision,
   requiresRelationshipOrHistoryRings,
 } from "./plan.js";
@@ -69,11 +68,11 @@ describe("contextual evidence query shape", () => {
   });
 
   it.each([
-    'Find the exact literal "why failed implementation".',
-    "Find the exact literal 'Missing failure'.",
-    'What value is documented for "Missing failure"?',
-  ])("does not derive contextual intent from quoted data: %s", (text) => {
-    expect(requiresContextualEvidence(query(text))).toBe(false);
+    ['Find the exact literal "why failed implementation".', "literal-search"],
+    ["Find the exact literal 'Missing failure'.", "literal-search"],
+    ['What value is documented for "Missing failure"?', "direct-fact"],
+  ])("does not derive contextual intent from quoted data: %s", (text, expected) => {
+    expect(resolveQueryTargetDecision(query(text), anchors(text)).kind).toBe(expected);
   });
 
   it.each([
@@ -81,13 +80,14 @@ describe("contextual evidence query shape", () => {
     'Explain "Smart Mode',
     'Find the exact literal "Missing failure',
   ])("keeps ambiguous or contextual prose broad: %s", (text) => {
-    expect(requiresContextualEvidence(query(text))).toBe(true);
+    expect(resolveQueryTargetDecision(query(text), anchors(text)).kind).toBe("contextual");
   });
 
   it("keeps explicitly typed exact-symbol contents literal", () => {
+    const text = "why failed implementation";
     expect(
-      requiresContextualEvidence({ ...query("why failed implementation"), kind: "exact-symbol" }),
-    ).toBe(false);
+      resolveQueryTargetDecision({ ...query(text), kind: "exact-symbol" }, anchors(text)).kind,
+    ).toBe("literal-search");
   });
 
   it("cannot authorize a complete literal command from a truncated target set", () => {

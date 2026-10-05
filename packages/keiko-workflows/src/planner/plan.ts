@@ -493,15 +493,6 @@ export function resolveQueryTargetDecision(
   };
 }
 
-export function requiresContextualEvidence(query: RetrievalQuery): boolean {
-  return (
-    resolveQueryTargetDecision(
-      query,
-      extractAnchors({ text: query.text, maxAnchors: query.text.length }).anchors,
-    ).kind === "contextual"
-  );
-}
-
 // Direct named evidence needs definition/document discovery, while requested relationships and
 // diagnostics retain their structural/history routing. The single-symbol narrowing API below
 // remains separate so a multi-target question cannot accidentally become a one-symbol query.
