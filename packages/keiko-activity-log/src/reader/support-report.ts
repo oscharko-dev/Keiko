@@ -314,6 +314,12 @@ function validateReportInput(
   return registry;
 }
 
+function recordCountRequirement(
+  requiredRecordCount: number,
+): Pick<SupportReportSelection, "requiredRecordCount"> {
+  return requiredRecordCount > 0 ? { requiredRecordCount } : {};
+}
+
 /** Generates only the canonical private projection and registered causal evidence. */
 export function buildSupportReport(
   incident: SupportIncidentPrivateProjection,
@@ -333,7 +339,7 @@ export function buildSupportReport(
     status: diagnosticSufficiencyStatus(selectedReasons),
     reasons: selectedReasons,
     requiredBytes,
-    requiredRecordCount: query.truncation.requiredRecordCount,
+    ...recordCountRequirement(query.truncation.requiredRecordCount),
     lifetimes,
   };
   let report = sealSupportReport(privateIncident, selection, evidence);
@@ -352,7 +358,7 @@ export function buildSupportReport(
         status: "insufficient",
         reasons: budgetReasons,
         requiredBytes: completeBytes,
-        requiredRecordCount: query.truncation.requiredRecordCount,
+        ...recordCountRequirement(query.truncation.requiredRecordCount),
         lifetimes: [],
       },
       encodeSupportReportEvidence([]),

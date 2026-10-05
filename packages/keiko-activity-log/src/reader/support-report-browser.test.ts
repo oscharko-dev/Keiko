@@ -101,6 +101,7 @@ describe("shared canonical browser report producer", () => {
     expect(serializeSupportReport(report)).toBe(serializeSupportReport(reference));
     const parsed = parseSupportReport(serializeSupportReport(report));
     expect(parsed.evidence.recordCount).toBe(0);
+    expect(reference.selection).not.toHaveProperty("requiredRecordCount");
     expect(analyzeSupportReport(serializeSupportReport(report)).selection.status).toBe(
       "insufficient",
     );
