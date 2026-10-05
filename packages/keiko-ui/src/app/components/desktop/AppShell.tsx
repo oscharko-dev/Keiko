@@ -68,7 +68,11 @@ import {
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { bffRequestErrorKind } from "@/lib/http";
-import { reportClientDiagnostic, reportFilesScopeDecision } from "@/lib/client-diagnostics";
+import {
+  reportClientDiagnostic,
+  reportFilesScopeDecision,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
 import type { I18nTranslate } from "@/lib/i18n";
@@ -780,6 +784,15 @@ class ChatBindingCompensationFailure extends Error {
     super("Chat binding compensation failed.", { cause });
   }
 }
+class ChatMutationFailure extends Error {
+  constructor(
+    cause: unknown,
+    readonly correlationId: string,
+  ) {
+    super("Chat grounding mutation failed.", { cause });
+  }
+}
+
 class ChatMutationTimeoutFailure extends Error {
   constructor(readonly correlationId: string) {
     super("Chat grounding mutation timed out.");
@@ -844,6 +857,21 @@ function runtimeProjectPathForChat(chatWindowId: string, chatId: string): string
 
 export const CHAT_MUTATION_TIMEOUT_MS = 15_000;
 
+function groundingFailureIdentity(
+  error: unknown,
+  attemptCorrelationId?: string,
+): Pick<ClientDiagnosticMeta, "correlationId" | "parentCorrelationId"> {
+  const requestCorrelationId = correlationIdOf(error);
+  return {
+    correlationId: requestCorrelationId ?? attemptCorrelationId,
+    ...(requestCorrelationId !== undefined &&
+    attemptCorrelationId !== undefined &&
+    requestCorrelationId !== attemptCorrelationId
+      ? { parentCorrelationId: attemptCorrelationId }
+      : {}),
+  };
+}
+
 function reportGroundingMutationFailure(
   message: string,
   error: unknown,
@@ -857,14 +885,14 @@ function reportGroundingMutationFailure(
     );
     return;
   }
-  const correlationId = originalCorrelationId ?? correlationIdOf(error);
+  const identity = groundingFailureIdentity(error, originalCorrelationId);
   const summary = `[keiko] ${message}: ${clientErrorSummary(error)}`;
   if (originalCorrelationId === undefined) {
-    reportClientDiagnostic(summary, correlationId === undefined ? undefined : { correlationId });
+    reportClientDiagnostic(summary, identity.correlationId === undefined ? undefined : identity);
     return;
   }
   reportClientDiagnostic(summary, {
-    correlationId,
+    ...identity,
     kind: "other",
     errorKind: error instanceof ChatMutationTimeoutFailure ? "timeout" : bffRequestErrorKind(error),
     errorEvidence: clientErrorEvidence(error),
@@ -881,10 +909,13 @@ class ChatLookupFailure extends Error {
   }
 }
 
-function reportChatLookupFailure(error: ChatLookupFailure): void {
+function reportChatLookupFailure(error: ChatLookupFailure, attemptCorrelationId?: string): void {
   reportClientDiagnostic("[keiko] Chat lookup failed: ChatLookupFailure", {
     kind: "other",
-    correlationId: error.correlationId ?? newClientCorrelationId(),
+    ...groundingFailureIdentity(
+      error,
+      attemptCorrelationId ?? error.correlationId ?? newClientCorrelationId(),
+    ),
     errorKind: bffRequestErrorKind(error.cause),
     errorEvidence: clientErrorEvidence(error.cause),
   });
@@ -905,20 +936,31 @@ function groundingMutationFailureKey(
     | "chat.grounding.connectKnowledgeFailed"
     | "chat.grounding.connectGitChangeFailed"
     | "scope.disconnectError",
+  attemptCorrelationId?: string,
 ): "chat.grounding.recoveryRequired" | "chat.grounding.timeoutBlocked" | typeof mutationFailedKey {
+  if (error instanceof ChatMutationFailure)
+    return groundingMutationFailureKey(error.cause, mutationFailedKey, error.correlationId);
   if (error instanceof ChatLookupFailure) {
-    reportChatLookupFailure(error);
+    reportChatLookupFailure(error, attemptCorrelationId);
     return mutationFailedKey;
   }
   if (error instanceof ChatBindingCompensationFailure) {
-    reportGroundingMutationFailure("Chat binding compensation failed", error, error.correlationId);
+    reportGroundingMutationFailure(
+      "Chat binding compensation failed",
+      error,
+      attemptCorrelationId ?? error.correlationId,
+    );
     return "chat.grounding.recoveryRequired";
   }
   if (error instanceof ChatMutationTimeoutFailure) {
-    reportGroundingMutationFailure("Chat grounding timeout", error, error.correlationId);
+    reportGroundingMutationFailure(
+      "Chat grounding timeout",
+      error,
+      attemptCorrelationId ?? error.correlationId,
+    );
     return "chat.grounding.timeoutBlocked";
   }
-  reportGroundingMutationFailure("Chat grounding mutation failed", error);
+  reportGroundingMutationFailure("Chat grounding mutation failed", error, attemptCorrelationId);
   return mutationFailedKey;
 }
 
@@ -1086,7 +1128,9 @@ async function serializeChatMutation<T>(
   void settled.then((): void => {
     if (queue.tails.get(chatKey) === settled) queue.tails.delete(chatKey);
   });
-  return result;
+  return result.catch((cause: unknown): never => {
+    throw new ChatMutationFailure(cause, correlationId);
+  });
 }
 
 function reportMutationQueueDecision(

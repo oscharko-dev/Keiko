@@ -1351,8 +1351,19 @@ describe("AppShell grounding connections", () => {
     ).resolves.toBe(false);
 
     expect(await screen.findByText(/Keiko could not connect that source/u)).toBeInTheDocument();
+    const correlationId = expectSharedMutationCorrelation(
+      mocks.updateChatConnectedScopes.mock.calls,
+    );
     expect(reportedDiagnostics).toEqual([
-      { message: "[keiko] Chat grounding mutation failed: Error" },
+      {
+        message: "[keiko] Chat grounding mutation failed: Error",
+        meta: {
+          correlationId,
+          kind: "other",
+          errorKind: "unknown",
+          errorEvidence: { errorClass: "Error", frames: [], causeChain: [] },
+        },
+      },
     ]);
   });
 
@@ -1369,8 +1380,19 @@ describe("AppShell grounding connections", () => {
     expect(
       await screen.findByText(/Keiko could not connect that knowledge source/u),
     ).toBeInTheDocument();
+    const correlationId = expectSharedMutationCorrelation(
+      mocks.updateChatLocalKnowledgeScopes.mock.calls,
+    );
     expect(reportedDiagnostics).toEqual([
-      { message: "[keiko] Chat grounding mutation failed: Error" },
+      {
+        message: "[keiko] Chat grounding mutation failed: Error",
+        meta: {
+          correlationId,
+          kind: "other",
+          errorKind: "unknown",
+          errorEvidence: { errorClass: "Error", frames: [], causeChain: [] },
+        },
+      },
     ]);
   });
 
@@ -1578,11 +1600,14 @@ describe("AppShell grounding connections", () => {
     mocks.fetchChats.mockRejectedValueOnce(failure);
     await renderMounted();
     await mocks.state.workspaceOptions?.onScopeBind?.("private-window", fileScope("/repo"));
+    const parentCorrelationId = mocks.fetchChats.mock.calls[0]?.[1];
+    expect(parentCorrelationId).toEqual(expect.any(String));
     expect(reportedDiagnostics).toEqual([
       {
         message: "[keiko] Chat lookup failed: ChatLookupFailure",
         meta: {
           correlationId: "scope-lookup-test",
+          parentCorrelationId,
           kind: "other",
           errorKind: "unavailable",
           errorEvidence: { errorClass: "ApiError", causeChain: [], frames: [] },
@@ -1784,6 +1809,93 @@ describe("AppShell grounding connections", () => {
     ]);
     expect(decisions[1]?.correlationId).not.toBe(decisions[0]?.correlationId);
     expect(decisions[1]?.parentCorrelationId).toBe(decisions[0]?.correlationId);
+  });
+
+  it("joins an immediate untagged mutation failure to its actual attempt", async () => {
+    mocks.updateChatConnectedScopes.mockRejectedValueOnce(new TypeError("private-scope-failure"));
+    await renderMounted();
+    expect(
+      await mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/failed")),
+    ).toBe(false);
+    const correlationId = mocks.updateChatConnectedScopes.mock.calls[0]?.[3];
+    expect(correlationId).toEqual(expect.any(String));
+    expect(reportedDiagnostics).toContainEqual({
+      message: "[keiko] Chat grounding mutation failed: TypeError",
+      meta: {
+        correlationId,
+        kind: "other",
+        errorKind: "unavailable",
+        errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+      },
+    });
+    expect(JSON.stringify(reportedDiagnostics)).not.toContain("private-scope-failure");
+  });
+
+  it("retains a late server failure identity and its timeout-attempt parent", async () => {
+    const pending = deferred<void>();
+    const failure = new ApiError("INTERNAL", "private-server-failure", 500);
+    failure.correlationId = "server-failed-request-123";
+    mocks.updateChatConnectedScopes.mockImplementationOnce(async () => {
+      await pending.promise;
+      throw failure;
+    });
+    await renderMounted();
+    vi.useFakeTimers();
+    const binding = mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/late"));
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+    expect(await binding).toBe(false);
+    const correlationId = mocks.updateChatConnectedScopes.mock.calls[0]?.[3];
+    expect(correlationId).toEqual(expect.any(String));
+    expect(reportedDiagnostics).toContainEqual(expectedTimeoutDiagnostic(correlationId));
+    await act(async () => pending.resolve());
+    expect(recordedFilesScopeDecision("timeout-recovered")?.meta?.correlationId).toBe(
+      correlationId,
+    );
+    expect(reportedDiagnostics).toContainEqual({
+      message: "[keiko] Late chat grounding mutation failed: ApiError",
+      meta: {
+        correlationId: "server-failed-request-123",
+        parentCorrelationId: correlationId,
+        kind: "other",
+        errorKind: "internal",
+        errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+      },
+    });
+    expect(JSON.stringify(reportedDiagnostics)).not.toContain("private-server-failure");
+    expect(failure.correlationId).toBe("server-failed-request-123");
+  });
+
+  it("keeps an echoed request identity without a self-parent correlation", async () => {
+    mocks.updateChatConnectedScopes.mockImplementationOnce(
+      async (
+        _id: string,
+        _scopes: readonly ChatConnectedScope[] | null,
+        _identity: string | undefined,
+        id: string | undefined,
+      ): Promise<never> => {
+        const failure = new ApiError("INTERNAL", "private-server-failure", 500);
+        if (id !== undefined) failure.correlationId = id;
+        throw failure;
+      },
+    );
+    await renderMounted();
+    expect(
+      await mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/failed")),
+    ).toBe(false);
+    const correlationId = expectSharedMutationCorrelation(
+      mocks.updateChatConnectedScopes.mock.calls,
+    );
+    expect(reportedDiagnostics).toEqual([
+      {
+        message: "[keiko] Chat grounding mutation failed: ApiError",
+        meta: {
+          correlationId,
+          kind: "other",
+          errorKind: "internal",
+          errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
+        },
+      },
+    ]);
   });
 
   it("joins late failure facts and zero-refusal recovery to the original timeout", async () => {
@@ -2161,8 +2273,19 @@ describe("AppShell grounding connections", () => {
 
     await expect(binding).resolves.toBe(false);
     expect(await screen.findByText(/Chat grounding recovery failed/u)).toBeInTheDocument();
+    const correlationId = expectSharedMutationCorrelation(
+      mocks.updateChatConnectedScopes.mock.calls,
+    );
     expect(reportedDiagnostics).toEqual([
-      { message: "[keiko] Chat binding compensation failed: Error" },
+      {
+        message: "[keiko] Chat binding compensation failed: Error",
+        meta: {
+          correlationId,
+          kind: "other",
+          errorKind: "unknown",
+          errorEvidence: { errorClass: "Error", frames: [], causeChain: [] },
+        },
+      },
     ]);
   });
 
