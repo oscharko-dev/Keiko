@@ -77,6 +77,13 @@ workspace index reject stale or substituted records. This keeps the security-rel
 testable with an in-memory fake, confines production workspace IO to one auditable adapter, and
 keeps consumers independent of the host filesystem API.
 
+Uncapped recursive directory searches require the port's `iterateDirectory` capability. A legacy
+port without it fails with the existing workspace-read error before any array enumeration; it can
+still serve explicitly selected files and finite, bounded inventory discovery. The search never
+substitutes native filesystem access for a missing caller capability. The native iterator closes
+each directory before queued children are visited, so depth does not accumulate open descriptors
+and needs no artificial corpus-depth ceiling.
+
 The production `stat` and `exists` operations use no-follow metadata semantics: a symlink is
 reported as a symlink entry rather than dereferenced. Detection reads manifests and ignore metadata
 only through the bounded same-descriptor lane; a custom port without that capability yields absent

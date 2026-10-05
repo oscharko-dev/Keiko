@@ -5,7 +5,7 @@
 //   - a symlink whose realpath escapes the root is skipped (never followed);
 //   - inventory discovery honors its explicit depth/result/directory-entry budgets;
 //   - complete search uses native directory streaming and closes each handle before descent;
-//   - legacy ports without an iterator retain their existing array-based readDir contract.
+//   - directory streaming is required for complete search; legacy ports keep bounded inventories.
 
 import { relative } from "node:path";
 import {
@@ -648,17 +648,6 @@ interface StreamingWalk {
   filesDiscovered: number;
 }
 
-async function* streamingDirectoryEntries(
-  fs: WorkspaceFs,
-  path: string,
-): AsyncIterable<WorkspaceDirEntry> {
-  if (fs.iterateDirectory !== undefined) {
-    yield* fs.iterateDirectory(path);
-    return;
-  }
-  for (const entry of fs.readDir(path)) yield entry;
-}
-
 interface PendingStreamingDirectory {
   readonly absolute: string;
   readonly relativeDir: string;
@@ -697,7 +686,10 @@ async function* admittedStreamingDirectoryEntries(
     if (walk.executionControl !== undefined) assertStructuralExecutionActive(walk.executionControl);
     const current = currentContainedDirectory(walk, absolute, relativeDir);
     if (current === undefined) return;
-    yield* streamingDirectoryEntries(walk.fs, current);
+    if (walk.fs.iterateDirectory === undefined) {
+      throw new WorkspaceReadError("Directory streaming is unavailable.", relativeDir);
+    }
+    yield* walk.fs.iterateDirectory(current);
     currentContainedDirectory(walk, current, relativeDir);
   } catch (error) {
     if (

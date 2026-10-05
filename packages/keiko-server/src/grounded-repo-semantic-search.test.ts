@@ -147,6 +147,9 @@ function testFs(files: Record<string, string>): WorkspaceFs {
       return fileStat(files, key, abs);
     },
     readDir: (abs: string): readonly WorkspaceDirEntry[] => childEntries(files, abs),
+    iterateDirectory: async function* (abs): AsyncIterable<WorkspaceDirEntry> {
+      for (const item of childEntries(files, abs)) yield await Promise.resolve(item);
+    },
     realPath: (abs: string): string => abs,
     exists: (abs: string): boolean => abs === ROOT || keyFor(abs) !== undefined,
     readFileBytes: (abs: string, maxBytes: number): Promise<Uint8Array> => {

@@ -110,6 +110,8 @@ export interface WorkspaceFs {
   ) => WorkspaceDescriptorUtf8Read;
   readonly stat: (absolutePath: string) => WorkspaceStat;
   readonly readDir: (absolutePath: string, maxEntries?: number) => readonly WorkspaceDirEntry[];
+  // Required by uncapped directory searches. Legacy ports can still serve finite inventories
+  // and explicitly selected files, but cannot substitute an unbounded array read for streaming.
   readonly iterateDirectory?: (absolutePath: string) => AsyncIterable<WorkspaceDirEntry>;
   readonly realPath: (absolutePath: string) => string;
   // Optional request-scoped canonical-root resolver. Containment may reuse this value for the

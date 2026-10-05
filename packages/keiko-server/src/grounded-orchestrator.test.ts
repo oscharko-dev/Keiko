@@ -2910,6 +2910,9 @@ describe("runGroundedExploration", () => {
       readFileUtf8: base.fs.readFileUtf8,
       stat: base.fs.stat,
       readDir: base.fs.readDir,
+      ...(base.fs.iterateDirectory === undefined
+        ? {}
+        : { iterateDirectory: base.fs.iterateDirectory }),
       realPath: base.fs.realPath,
       exists: base.fs.exists,
       ...(base.fs.readFileBytes === undefined ? {} : { readFileBytes: base.fs.readFileBytes }),
