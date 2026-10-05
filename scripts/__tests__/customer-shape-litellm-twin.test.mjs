@@ -1,7 +1,10 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { apiKeyHeaderValue } from "../../packages/keiko-model-gateway/dist/index.js";
 import {
   CUSTOMER_SHAPE_API_KEY,
+  failTransportResponse,
+  transportWait,
   startCustomerShapeLiteLlmTwin,
 } from "../lib/customer-shape-litellm-twin.mjs";
 import {
@@ -407,6 +410,69 @@ describe("customer-shape LiteLLM twin", () => {
         "current-run",
       ),
     ).toBeUndefined();
+  });
+});
+
+describe("closed gateway twin transports", () => {
+  it("does not install a delay or close listener after a transport was already destroyed", async () => {
+    const response = Object.assign(new EventEmitter(), { destroyed: true });
+    const result = transportWait(response, 35_000);
+    try {
+      expect(response.listenerCount("close")).toBe(0);
+      await expect(result).resolves.toBe(false);
+    } finally {
+      response.emit("close");
+      await result;
+    }
+  });
+
+  it.each([false, true])(
+    "does not write or destroy an already closed failure (%s)",
+    (headersSent) => {
+      const response = {
+        destroyed: true,
+        headersSent,
+        destroy: vi.fn(),
+        writeHead: vi.fn(),
+        end: vi.fn(),
+      };
+      failTransportResponse(response);
+      expect(response.destroy).not.toHaveBeenCalled();
+      expect(response.writeHead).not.toHaveBeenCalled();
+      expect(response.end).not.toHaveBeenCalled();
+    },
+  );
+
+  it("destroys an open response when failure occurs after headers were sent", () => {
+    const response = {
+      destroyed: false,
+      headersSent: true,
+      destroy: vi.fn(),
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    };
+    failTransportResponse(response);
+    expect(response.destroy).toHaveBeenCalledExactlyOnceWith();
+    expect(response.writeHead).not.toHaveBeenCalled();
+    expect(response.end).not.toHaveBeenCalled();
+  });
+
+  it("sends one closed error payload when failure precedes headers", () => {
+    const response = {
+      destroyed: false,
+      headersSent: false,
+      destroy: vi.fn(),
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    };
+    failTransportResponse(response);
+    expect(response.writeHead).toHaveBeenCalledExactlyOnceWith(400, {
+      "content-type": "application/json",
+    });
+    expect(response.end).toHaveBeenCalledExactlyOnceWith(
+      '{"error":{"type":"invalid_request_error"}}',
+    );
+    expect(response.destroy).not.toHaveBeenCalled();
   });
 });
 

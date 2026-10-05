@@ -241,7 +241,7 @@ function transportReply(response, stream, text = "Synthetic gateway transport te
   response.end("data: [DONE]\n\n");
 }
 
-async function transportWait(response, milliseconds) {
+export async function transportWait(response, milliseconds) {
   if (response.destroyed) return false;
   const controller = new globalThis.AbortController();
   const cancel = () => controller.abort();
@@ -330,6 +330,12 @@ function handleTransportControl(request, response, requests, options) {
   return false;
 }
 
+export function failTransportResponse(response) {
+  if (response.destroyed) return;
+  if (response.headersSent) response.destroy();
+  else sendJson(response, { error: { type: "invalid_request_error" } }, 400);
+}
+
 function handleTransportRequest(request, response, requests, options) {
   if (handleTransportControl(request, response, requests, options)) return;
   const scenario = transportCase(request);
@@ -345,9 +351,7 @@ function handleTransportRequest(request, response, requests, options) {
   if (request.method === "POST" && (request.url ?? "").endsWith("/chat/completions")) {
     if (!acceptChatAuthentication(request, response)) return;
     void transportChat(request, response, requests, options, scenario).catch(() => {
-      if (!response.destroyed && !response.headersSent)
-        sendJson(response, { error: { type: "invalid_request_error" } }, 400);
-      else if (!response.destroyed) response.destroy();
+      failTransportResponse(response);
     });
     return;
   }
