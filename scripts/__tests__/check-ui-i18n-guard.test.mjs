@@ -75,7 +75,7 @@ test.each([
           repoRoot,
           changedFiles: [file, EN_CATALOG, DE_CATALOG],
         });
-        expect(result.ok).toBe(accepted);
+        expect(result.ok, result.problems.join("; ")).toBe(accepted);
         expect(result.problems.some((problem) => problem.includes("do not use the i18n API"))).toBe(
           !accepted,
         );
@@ -83,6 +83,61 @@ test.each([
     );
   },
 );
+
+test.each([
+  ["t", "", "Intl.NumberFormat(t.locale)", true],
+  ["resolvedLocale", "", "new Intl.DateTimeFormat(resolvedLocale)", true],
+  ["locale", "", "Intl.PluralRules(locale)", true],
+  ["locale", "", "new Intl.NumberFormat(locale)", true],
+  ["locale", "", 'new Intl.NumberFormat("en")', false],
+  ["unused", 'const locale = "en";', "new Intl.NumberFormat(locale)", false],
+  ["unused", 'const fixed = "en"; const locale = fixed;', "new Intl.NumberFormat(locale)", false],
+  [
+    "selectedLocale",
+    "const resolvedLocale = selectedLocale;",
+    "Intl.NumberFormat(resolvedLocale)",
+    true,
+  ],
+])(
+  "recognizes dynamic Intl at file scope: %s %s %s",
+  async (parameter, binding, formatter, accepted) => {
+    const file = "packages/keiko-ui/src/lib/format.ts";
+    await withFixture(
+      {
+        ...matchingCatalogs,
+        [file]: `export function format(value, ${parameter}) { ${binding}\n  return \`${"${"}${formatter}.${formatter.includes("PluralRules") ? "select" : "format"}(value)} s\`;\n}`,
+      },
+      (repoRoot) => {
+        const result = checkUiI18nGuard({ repoRoot, changedFiles: [file, EN_CATALOG, DE_CATALOG] });
+        expect(result.ok, result.problems.join("; ")).toBe(accepted);
+        expect(result.problems.some((problem) => problem.includes("do not use the i18n API"))).toBe(
+          !accepted,
+        );
+      },
+    );
+  },
+);
+
+test("pure number formatting changes do not require catalog edits", async () => {
+  const file = "packages/keiko-ui/src/lib/format.ts";
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [file]:
+        "export function format(value, locale) { return new Intl.NumberFormat(locale).format(value); }",
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({ repoRoot, changedFiles: [file] });
+      expect(result.ok, result.problems.join("; ")).toBe(true);
+    },
+  );
+});
+
+test("Intl formatting is file usage rather than a new translated-message signature", () => {
+  const line = "return new Intl.NumberFormat(locale).format(value);";
+  expect(hasNewI18nSignature([line], [])).toBe(false);
+  expect(hasI18nRelevantAddedLine(line)).toBe(false);
+});
 
 test("selected-locale number formatting does not excuse untranslated adjacent copy", async () => {
   await withFixture(
