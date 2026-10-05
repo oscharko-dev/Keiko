@@ -5,13 +5,13 @@
   "cssSha256": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
   "sourceSha256": {
     "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx": "3a9c9a489d7f87e2afc920fa1fa4dd412af7bbecd44900b52a8b2f4acb5acdc8",
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "095cf18b86ecf3158d00020203985fa736a836ec09dbb1aa5d3473d9550f2f89",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "e470cb8c0fe7c18fef7d5b2b7f49eb3d16d39f26f5c3a882aed12f2ae3c715ed",
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "9ae951f2aa6c98beaa04b587364291776998ba000d0e33064bffc09962d51998",
     "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "5e34eb591f63aca2ce64fd43daba10de0e172d12014f055092b4a1a00830c2da",
     "packages/keiko-ui/src/app/globals.css": "a9c78b0f2115ab9eb83ac53dda6f98bc4f3cc716954ec7ab15cc8a3ee6c75871",
-    "packages/keiko-ui/src/lib/api.ts": "0e80d8eeeb2cb8a455dd80cc0b0d53444caaa1b9b3bf0c2584230a75fb97ec35",
-    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "b99c6fe55181a429c3e355395708de63e0a8de5c8259cb1cfb94d1b189955286",
-    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "c30a57422e5fad10c684f30da3fcf904dd6b6037a0f8d4cb984ae55627161dcf"
+    "packages/keiko-ui/src/lib/api.ts": "5baa7207c58e9c02b0a73215b37125830863f12844a29619278443c7280cdef0",
+    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "e77c08d6d80b946f11e10ce06064eefb754eef435d007936a938d531e7fd041e",
+    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "6a912952afd97e73be424c8aeef00a4cbfd9c2e54ddd6f9e406d1093538b2f83"
   },
   "harnessProvenanceSha256": {
     "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
@@ -22,7 +22,7 @@
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-10-04T19:05:51.010Z",
+  "generatedAt": "2026-10-05T00:16:11.126Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {
