@@ -626,6 +626,7 @@ export function PdfCitationPreviewWindow({
     return `${origin.chatId}:${origin.assistantMessageId}:${origin.marker}:${citationContext.activeStableId}`;
   }, [citationContext]);
 
+  const fallbackDocumentLabel = t("pdfCitationPreviewWindow.documentLabelFallback");
   const display = useMemo((): Pick<
     PdfCitationPreviewSafeWindowCfg,
     "anchorQuality" | "documentLabel" | "pageLabel" | "pageNumber" | "sourceLabel"
@@ -638,7 +639,7 @@ export function PdfCitationPreviewWindow({
       documentLabel:
         readOptionalString(cfg.documentLabel) ??
         sessionEntry?.display.documentLabel ??
-        t("pdfCitationPreviewWindow.documentLabelFallback"),
+        fallbackDocumentLabel,
       anchorQuality:
         activeCitation?.display.anchorQuality ?? sessionEntry?.display.anchorQuality ?? "page-only",
       ...(sourceLabel === undefined ? {} : { sourceLabel }),
@@ -651,8 +652,8 @@ export function PdfCitationPreviewWindow({
     cfg.pageLabel,
     cfg.pageNumber,
     cfg.sourceLabel,
+    fallbackDocumentLabel,
     sessionEntry,
-    t,
   ]);
 
   const zoomMode = readZoomMode(cfg.zoomMode);

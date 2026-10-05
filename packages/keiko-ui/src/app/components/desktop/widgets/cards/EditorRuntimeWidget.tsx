@@ -4429,18 +4429,15 @@ function EditorRuntimeWidget({
     return callHierarchyRevealRequest ?? outlineSelectionRequest ?? lineRevealRequest;
   };
   const surfaceRevealRequest = buildSurfaceRevealRequest();
-  const callHierarchyLabels = useMemo(
-    () => ({
-      title: optionalT("editor.callHierarchy.title"),
-      incoming: optionalT("editor.callHierarchy.incoming"),
-      outgoing: optionalT("editor.callHierarchy.outgoing"),
-      callSite: optionalT("editor.callHierarchy.callSite"),
-      empty: optionalT("editor.callHierarchy.empty"),
-      close: optionalT("editor.callHierarchy.close"),
-      command: optionalT("editor.callHierarchy.command"),
-    }),
-    [optionalT],
-  );
+  const callHierarchyLabels = {
+    title: optionalT("editor.callHierarchy.title"),
+    incoming: optionalT("editor.callHierarchy.incoming"),
+    outgoing: optionalT("editor.callHierarchy.outgoing"),
+    callSite: optionalT("editor.callHierarchy.callSite"),
+    empty: optionalT("editor.callHierarchy.empty"),
+    close: optionalT("editor.callHierarchy.close"),
+    command: optionalT("editor.callHierarchy.command"),
+  };
 
   const renderGitGutterPeek = (): ReactNode => {
     if (gitGutterPeek === null || file === undefined) return null;
