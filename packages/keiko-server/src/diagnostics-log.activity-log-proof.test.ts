@@ -23,7 +23,7 @@ import {
   type ServerDiagnosticRecord,
 } from "./diagnostics-log.js";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
-import { inspectGroundedPack, recordGroundedPackValidation } from "./grounded-pack-validation.js";
+import { inspectGroundedPack } from "./grounded-pack-validation.js";
 import { closeFileServerLogSinks } from "./observability/index.js";
 
 describe("server.diagnostic.failure activity log proof (#3532)", () => {
@@ -78,17 +78,16 @@ describe("server.diagnostic.failure activity log proof (#3532)", () => {
   it.each(["source-skipped", "request-failed"] as const)(
     "persists a truthful %s pack-validation outcome",
     (outcome) => {
-      const failure = inspectGroundedPack({
-        customerBody: "private-validation-canary",
-      } as unknown as ConnectedContextPack);
-      if (failure === undefined) throw new TypeError("Invalid fixture unexpectedly validated");
-      recordGroundedPackValidation(
-        { diagnostics: defaultServerDiagnosticSink, redactor: (value) => value },
-        "pack-validation-proof",
-        failure,
-        outcome,
-        2,
+      const failure = inspectGroundedPack(
+        { customerBody: "private-validation-canary" } as unknown as ConnectedContextPack,
+        {
+          deps: { diagnostics: defaultServerDiagnosticSink, redactor: (value) => value },
+          correlationId: "pack-validation-proof",
+          outcome,
+          sourceIndex: 2,
+        },
       );
+      if (failure === undefined) throw new TypeError("Invalid fixture unexpectedly validated");
       const lines = persistedActivityLogLines(
         readPersistedActivityLog(stateDir),
         "server.diagnostic.failure",

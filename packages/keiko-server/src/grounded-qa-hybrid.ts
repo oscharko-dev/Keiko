@@ -2,7 +2,6 @@ import {
   caughtGroundedPackValidation,
   inspectGroundedPack,
   recordGroundedPackValidation,
-  type GroundedPackValidationFailure,
 } from "./grounded-pack-validation.js";
 // Epic #189 Slice 2 — heterogeneous grounded merge. A chat may carry BOTH connected folders
 // (#532, lexical) AND Local Knowledge connectors (#189, vector), or two or more connectors. Asking
@@ -561,13 +560,7 @@ function retrievedFolderSlot(
   };
 }
 
-function invalidFolderSlot(
-  ctx: HybridGroundedAskCtx,
-  failure: GroundedPackValidationFailure,
-  label: string,
-  index: number,
-): FolderSlot {
-  recordGroundedPackValidation(ctx.deps, ctx.correlationId, failure, "source-skipped", index);
+function invalidFolderSlot(label: string): FolderSlot {
   return {
     kind: "skipped",
     value: { label, reason: "pack-validation-failed", message: "Pack validation failed." },
@@ -581,7 +574,10 @@ function recoverableFolderFailure(
   index: number,
 ): FolderSlot | undefined {
   const failure = caughtGroundedPackValidation(error);
-  if (failure !== undefined) return invalidFolderSlot(ctx, failure, label, index);
+  if (failure !== undefined) {
+    recordGroundedPackValidation(ctx.deps, ctx.correlationId, failure, "source-skipped", index);
+    return invalidFolderSlot(label);
+  }
   if (error instanceof EmbeddingAdapterError) {
     return {
       kind: "skipped",
@@ -618,9 +614,13 @@ async function retrieveFolderIntoSlot(
     if (recovered !== undefined) return recovered;
     throw error;
   }
-  const validationFailure = inspectGroundedPack(out.pack);
-  if (validationFailure !== undefined)
-    return invalidFolderSlot(ctx, validationFailure, label, index);
+  const validationFailure = inspectGroundedPack(out.pack, {
+    deps: ctx.deps,
+    correlationId: ctx.correlationId,
+    outcome: "source-skipped",
+    sourceIndex: index,
+  });
+  if (validationFailure !== undefined) return invalidFolderSlot(label);
   return retrievedFolderSlot(ctx, cs, label, scope, out);
 }
 

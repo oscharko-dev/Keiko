@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
 import { ContextPackValidationError } from "@oscharko-dev/keiko-workflows";
 import { caughtGroundedPackValidation, inspectGroundedPack } from "./grounded-pack-validation.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 describe("grounded pack validation failure evidence", () => {
   it("preserves the actual validator exception and cause without inventing a violation count", () => {
@@ -11,10 +12,25 @@ describe("grounded pack validation failure evidence", () => {
         throw error;
       },
     });
-    const failure = inspectGroundedPack(pack as ConnectedContextPack);
+    const record = vi.fn<(record: ServerDiagnosticRecord) => void>();
+    const failure = inspectGroundedPack(pack as ConnectedContextPack, {
+      deps: { diagnostics: { record }, redactor: (message) => message },
+      correlationId: "pack-validator-exception",
+      outcome: "source-skipped",
+      sourceIndex: 2,
+    });
     expect(failure?.error).toBe(error);
     expect(failure).toMatchObject({ validatorThrew: true, validationReasons: ["invalid-shape"] });
     expect(failure).not.toHaveProperty("violationCount");
+    expect(record).toHaveBeenCalledOnce();
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlationId: "pack-validator-exception",
+        diagnosticOutcome: "source-skipped",
+        validatorThrew: true,
+        sourceIndex: 2,
+      }),
+    );
   });
 
   it("retains the actual assembler error and converts every reason to a closed class", () => {

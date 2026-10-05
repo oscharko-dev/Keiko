@@ -69,21 +69,50 @@ export function caughtGroundedPackValidation(
   };
 }
 
+interface GroundedPackValidationContext {
+  readonly deps: Pick<UiHandlerDeps, "diagnostics" | "redactor">;
+  readonly correlationId: string | undefined;
+  readonly outcome: "request-failed" | "source-skipped";
+  readonly sourceIndex?: number;
+}
+
+function recordInspectedPackFailure(
+  failure: GroundedPackValidationFailure,
+  context: GroundedPackValidationContext,
+): GroundedPackValidationFailure {
+  recordGroundedPackValidation(
+    context.deps,
+    context.correlationId,
+    failure,
+    context.outcome,
+    context.sourceIndex,
+  );
+  return failure;
+}
+
 export function inspectGroundedPack(
   pack: ConnectedContextPack,
+  context: GroundedPackValidationContext,
 ): GroundedPackValidationFailure | undefined {
+  let result: ReturnType<typeof validateConnectedContextPack>;
   try {
-    const result = validateConnectedContextPack(pack);
-    if (result.ok) return undefined;
-    return {
+    result = validateConnectedContextPack(pack);
+  } catch (error) {
+    return recordInspectedPackFailure(
+      { error, validationReasons: ["invalid-shape"], validatorThrew: true },
+      context,
+    );
+  }
+  if (result.ok) return undefined;
+  return recordInspectedPackFailure(
+    {
       error: new TypeError(GROUNDED_PACK_VALIDATION_MESSAGE),
       violationCount: result.reasons.length,
       validationReasons: closedValidationReasons(result.reasons),
       validatorThrew: false,
-    };
-  } catch (error) {
-    return { error, validationReasons: ["invalid-shape"], validatorThrew: true };
-  }
+    },
+    context,
+  );
 }
 
 export function recordGroundedPackValidation(
