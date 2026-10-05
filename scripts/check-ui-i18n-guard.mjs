@@ -520,7 +520,9 @@ function hasDynamicIntlLocale(expression, visited = new Set()) {
     return hasDynamicIntlLocale(expression.expression, visited);
   }
   if (!ts.isIdentifier(expression)) return false;
-  for (let scope = expression.parent; scope !== undefined; scope = scope.parent) {
+  let scope = expression;
+  while (!ts.isSourceFile(scope)) {
+    scope = scope.parent;
     const binding = intlLocaleBinding(scope, expression.text);
     if (binding === undefined) continue;
     if (ts.isParameter(binding)) return true;
