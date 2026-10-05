@@ -68,6 +68,16 @@ id-bound waiver. Each waiver carries its reachability analysis and an `ignoreUnt
 npm's audit feed did not list either advisory yet, so `check:osv-waiver-scope` now also asks OSV
 whether a waived advisory affects any package the lockfile does not flag dev.
 
+Rechecked on 2026-10-05: the [npm registry](https://registry.npmjs.org/http-cache-semantics)
+lists http-cache-semantics 4.3.0, published on 2026-10-04. The lockfile still resolves the same
+dev-only 4.2.0 signing-tool dependency, with the unchanged non-caching reachability described in
+`osv-scanner.toml`. [Dependabot alert #34](https://github.com/oscharko-dev/Keiko/security/dependabot/34)
+remains open, and the [GitHub advisory](https://github.com/advisories/GHSA-ch52-4w7c-c8xp) remains
+unwithdrawn with no identified patched version. The
+[maintainer's dispute](https://github.com/kornelski/http-cache-semantics/issues/56#issuecomment-5975759591)
+does not establish a withdrawal or a fix in 4.3.0. The waiver retains its original dev-only scope,
+expiry, and revisit conditions.
+
 ### How this queue must be queried — and the trap in it
 
 The count above is 2, not 1, and reproducing it requires the exact query
