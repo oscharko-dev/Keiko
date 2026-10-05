@@ -27,7 +27,7 @@ function providerReturning(matches: readonly SemanticSearchMatch[]): SemanticSea
 
 describe("repoSearchSemantic", () => {
   it.each([
-    { text: "ok�", maxDocumentBytes: 5, expected: "ok�" },
+    { text: "ok\uFFFD", maxDocumentBytes: 5, expected: "ok\uFFFD" },
     { text: "ok中", maxDocumentBytes: 4, expected: "ok" },
     { text: "ok😀", maxDocumentBytes: 5, expected: "ok" },
   ])(
@@ -58,7 +58,7 @@ describe("repoSearchSemantic", () => {
     for (let index = 0; index < 6; index += 1) {
       collectSemanticSearchDocument(
         session,
-        { scopePath: `note-${String(index)}.txt`, text: "ok�tail" },
+        { scopePath: `note-${String(index)}.txt`, text: "ok\uFFFDtail" },
         index,
       );
     }
@@ -68,7 +68,7 @@ describe("repoSearchSemantic", () => {
       "note-4.txt",
       "note-3.txt",
     ]);
-    expect(supplied.map((document) => document.text)).toEqual(["ok�", "ok�", "ok�"]);
+    expect(supplied.map((document) => document.text)).toEqual(["ok\uFFFD", "ok\uFFFD", "ok\uFFFD"]);
     expect(supplied).toHaveLength(bounds.maxDocuments);
     expect(supplied.reduce((sum, document) => sum + Buffer.byteLength(document.text), 0)).toBe(
       bounds.maxDocumentBytes,
