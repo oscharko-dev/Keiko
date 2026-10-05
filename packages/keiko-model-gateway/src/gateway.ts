@@ -657,7 +657,6 @@ function streamStartupRetryConfig(
 
 interface BufferedChatAttempt {
   readonly route: RoutedCall;
-  readonly breaker: CircuitBreaker;
   readonly adapter: ProviderAdapter;
   readonly originalRequest: GatewayCallRequest;
   readonly promptAdmission: GatewayPromptAdmission;
@@ -978,7 +977,6 @@ export class Gateway {
     const adapter = this.adapterFor(requestId, route, ids.correlationId);
     const attempt: BufferedChatAttempt = {
       route,
-      breaker: this.breakerFor(route.provider),
       adapter,
       originalRequest: request,
       promptAdmission: this.promptAdmission(route, ids),

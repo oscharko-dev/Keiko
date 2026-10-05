@@ -83,7 +83,7 @@ async function consume(provider: Gateway): Promise<GatewayStreamChunk[]> {
 }
 
 describe("concurrent provider cooldown admission", () => {
-  it("retains retry callers through half-open saturation instead of losing the provider cause", async () => {
+  it("completes retry callers after half-open saturation clears", async () => {
     vi.useFakeTimers();
     let calls = 0;
     let releaseProbe: ((value: NormalizedResponse) => void) | undefined;
@@ -152,8 +152,14 @@ describe("concurrent provider cooldown admission", () => {
     await vi.advanceTimersByTimeAsync(0);
     try {
       expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(2);
+      expect((await results).map((result) => result.status)).toEqual(["fulfilled", "fulfilled"]);
+      expect(calls).toBe(3);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
-      await vi.advanceTimersByTimeAsync(120_001);
+      await vi.runAllTimersAsync();
       await results;
     }
   });
