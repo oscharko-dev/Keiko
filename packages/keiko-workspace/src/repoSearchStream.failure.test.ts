@@ -63,7 +63,13 @@ function concurrentFixture(
     fingerprint: "fixture",
     contentLane: "evidence",
     literalTerms: ["probe"],
-    query: { kind: "natural-language", text: "probe", caseSensitive: false, emittedAtMs: 0, maxResults: 10 },
+    query: {
+      kind: "natural-language",
+      text: "probe",
+      caseSensitive: false,
+      emittedAtMs: 0,
+      maxResults: 10,
+    },
     matcher: {
       match: (line): number => {
         if (line.includes("probe-a")) throw failures[0];
