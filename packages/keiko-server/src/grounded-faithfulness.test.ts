@@ -1,3 +1,4 @@
+import { LEGACY_CONNECTED_SEARCH_ABSTENTION } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { describe, expect, it } from "vitest";
 import {
   CITATION_FINDING_LIST_MAX,
@@ -16,7 +17,6 @@ import { attachCitationsToAnswer } from "@oscharko-dev/keiko-local-knowledge";
 import {
   DEFAULT_ENTAILMENT_OPTIONS,
   ENTAILMENT_MAX_EVIDENCE_ITEMS_PER_CLAIM,
-  GROUNDED_NO_EVIDENCE_ANSWER,
   NUMERIC_EVIDENCE_FRAMING_CHARS,
   buildPackCitationIndex,
   buildPackExcerptTextResolver,
@@ -919,10 +919,10 @@ describe("packHasUsableEvidence / packsHaveUsableEvidence", () => {
   });
 });
 
-describe("GROUNDED_NO_EVIDENCE_ANSWER", () => {
+describe("LEGACY_CONNECTED_SEARCH_ABSTENTION", () => {
   it("is a safe, source-neutral abstention message", () => {
-    expect(GROUNDED_NO_EVIDENCE_ANSWER.toLowerCase()).toContain("could not find");
-    expect(GROUNDED_NO_EVIDENCE_ANSWER).not.toContain("/");
+    expect(LEGACY_CONNECTED_SEARCH_ABSTENTION.toLowerCase()).toContain("could not find");
+    expect(LEGACY_CONNECTED_SEARCH_ABSTENTION).not.toContain("/");
   });
 });
 

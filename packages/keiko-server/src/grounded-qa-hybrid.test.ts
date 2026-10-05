@@ -63,7 +63,6 @@ import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/inte
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import { ClarificationNeededError } from "./grounded-orchestrator.js";
-import { connectedSearchNoEvidenceAnswer } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   parseGatewayConfig,
@@ -1758,9 +1757,12 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     expect(body.error.message).not.toContain("clarification needed:");
   });
 
-  it.each(["What evidence exists?", "Welche Belege gibt es?"])(
+  it.each([
+    ["What evidence exists?", "No matching evidence was found for this search."],
+    ["Welche Belege gibt es?", "Keine passenden Belege für diese Suche gefunden."],
+  ])(
     "returns localized no evidence without calling the model for zero references: %s",
-    async (question) => {
+    async (question, expected) => {
       const { capsuleId: capA } = await seedReadyCapsule("Empty A Docs");
       const { capsuleId: capB } = await seedReadyCapsule("Empty B Docs");
       const chatId = makeHybridChat(
@@ -1783,7 +1785,7 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
 
       expect(result.status, JSON.stringify(result.body)).toBe(200);
       const answer = asHybrid(result.body as GroundedAnswer);
-      expect(answer.content).toBe(connectedSearchNoEvidenceAnswer(question));
+      expect(answer.content).toBe(expected);
       // A deterministic abstention sent no prompt, so it reports no prompt context.
       expect((result.body as GroundedAnswer).promptContext).toBeUndefined();
       expect(answer.citations).toHaveLength(0);
@@ -2287,9 +2289,7 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.content).toBe(
-      connectedSearchNoEvidenceAnswer("What do the skipped sources say?"),
-    );
+    expect(answer.content).toBe("No matching evidence was found for this search.");
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -3655,7 +3655,7 @@ describe("shared byte budget — oversized evidence fails closed", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
 
-    expect(answer.content).toBe(connectedSearchNoEvidenceAnswer("Budget question?"));
+    expect(answer.content).toBe("No matching evidence was found for this search.");
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);

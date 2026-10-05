@@ -10,12 +10,14 @@
 
 import {
   buildPackCitationIndex,
-  GROUNDED_NO_EVIDENCE_ANSWER,
   packHasUsableEvidence,
   reconcileInlineCitations,
   type PackCitationIndex,
 } from "./grounded-faithfulness.js";
-import { isCanonicalConnectedSearchAbstention } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
+import {
+  connectedSearchNoEvidenceAnswer,
+  isCanonicalConnectedSearchAbstention,
+} from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 import { buildEvalContextPack, evalFileEntry, evalUncertainty } from "./grounded-eval-support.js";
 import type {
   ConnectedContextPack,
@@ -158,10 +160,17 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
   {
-    name: "refusal-on-empty",
+    name: "refusal-on-empty-en",
     variant: "refusal",
     packScopePaths: [],
-    answerText: GROUNDED_NO_EVIDENCE_ANSWER,
+    answerText: connectedSearchNoEvidenceAnswer("What evidence exists?"),
+    expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
+  },
+  {
+    name: "refusal-on-empty-de",
+    variant: "refusal",
+    packScopePaths: [],
+    answerText: connectedSearchNoEvidenceAnswer("Welche Belege gibt es?"),
     expectedUnsupportedCitations: NO_UNSUPPORTED_CITATIONS,
   },
 ];

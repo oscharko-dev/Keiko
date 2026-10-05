@@ -68,7 +68,7 @@ import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
-import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
+import { connectedSearchNoEvidenceAnswer } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -4692,7 +4692,7 @@ describe("handleGroundedAsk", () => {
     const abstainRunner: GroundedRunner = (_input): Promise<OrchestratorOutput> => {
       return Promise.resolve({
         pack: noEvidencePack,
-        assistantContent: GROUNDED_NO_EVIDENCE_ANSWER,
+        assistantContent: connectedSearchNoEvidenceAnswer(_input.query.text),
         elapsedMs: 1,
         noEvidence: true,
       });
@@ -4706,7 +4706,7 @@ describe("handleGroundedAsk", () => {
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     // The abstention answer is surfaced, but with NO citations, NO evidence run id, and NO persisted
     // grounded-evidence manifest — there is nothing to ground, so nothing may be recorded as grounded.
-    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
+    expect(answer.content).toBe("No matching evidence was found for this search.");
     expect(answer.citations).toEqual([]);
     expect(answer.evidenceRunId).toBeUndefined();
     expect(answer.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(true);

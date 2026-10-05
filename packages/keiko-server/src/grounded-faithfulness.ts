@@ -40,10 +40,6 @@ import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts
 import { isNoEvidenceAnswerText } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 export { connectedSearchNoEvidenceAnswer } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
 
-// Preserve the legacy source-neutral response for stored answers and historical evaluation
-// fixtures. Current folder, multi-source and hybrid producers share the localized builder above.
-export { LEGACY_CONNECTED_SEARCH_ABSTENTION as GROUNDED_NO_EVIDENCE_ANSWER } from "@oscharko-dev/keiko-contracts/runtime/no-evidence-answer";
-
 // ─── Evidence-presence predicates ─────────────────────────────────────────────
 
 /** Total excerpt count across every file in the pack. */
