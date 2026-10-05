@@ -219,6 +219,19 @@ function loadLocalReport(
   return waitForReportStep(import("@/lib/support-report-local"), signal);
 }
 
+async function loadReportModules(
+  signal: AbortSignal,
+  onApiLoaded: (api: typeof import("@/lib/support-report-api")) => void,
+): Promise<
+  [typeof import("@/lib/support-report-api"), typeof import("@/lib/support-report-local")]
+> {
+  const api = import("@/lib/support-report-api").then((loaded) => {
+    onApiLoaded(loaded);
+    return loaded;
+  });
+  return await waitForReportStep(Promise.all([api, loadLocalReport(signal)]), signal);
+}
+
 function isReportDeliveryUnavailable(
   error: unknown,
   api: typeof import("@/lib/support-report-api") | undefined,
@@ -538,27 +551,26 @@ async function runReport(
   const correlationId = selectedSupportReportCorrelationId(selectedCorrelationId);
   const pending = { key, controller };
   request.current = pending;
-  const signal = AbortSignal.any([
-    controller.signal,
-    AbortSignal.timeout(SUPPORT_REPORT_REQUEST_TIMEOUT_MS),
-  ]);
+  const deadline = AbortSignal.timeout(SUPPORT_REPORT_REQUEST_TIMEOUT_MS);
+  const signal = AbortSignal.any([controller.signal, deadline]);
   let api: typeof import("@/lib/support-report-api") | undefined;
   let phase: "module" | "facts" | "request" | "artifact" = "facts";
   let failure: ClientOnlySupportReportInput["failure"];
   try {
     failure = typeof failureInput === "function" ? failureInput() : failureInput;
     phase = "module";
-    api = await waitForReportStep(import("@/lib/support-report-api"), signal);
-    const local = await loadLocalReport(signal);
+    const [loadedApi, local] = await loadReportModules(signal, (loaded) => {
+      api = loaded;
+    });
     phase = "facts";
     failure = local.originalSupportReportFailure({ correlationId, failure });
     phase = "request";
-    const creation = createReportForNotice(api, correlationId, signal, failure, clientOnly);
+    const creation = createReportForNotice(loadedApi, correlationId, signal, failure, clientOnly);
     const report = await waitForReportStep(creation, signal);
     if (!reportRequestIsCurrent(request, pending)) return;
     signal.throwIfAborted();
     phase = "artifact";
-    const download = api.createSupportReportDownload(report);
+    const download = loadedApi.createSupportReportDownload(report);
     fulfillReport(key, report, download);
     setFeedback({ key, state: "saved" });
   } catch (error) {
