@@ -344,6 +344,7 @@ const EMBEDDING_LADDER_ITEM_FAILED_OPERATION = defineActivityLogOperation({
 const EMBEDDING_LADDER_ITEM_COMPLETED_OPERATION = defineActivityLogOperation({
   ...EMBEDDING_OPERATION_BASE,
   op: "embedding.scalar-ladder.item-completed",
+  diagnosticWhen: [{ field: "truncated", values: [true] }],
   emitter: "openai-embedding-adapter.logLadderItem",
   fields: {
     endpointDigest: ENDPOINT_DIGEST_FIELD,
@@ -353,6 +354,7 @@ const EMBEDDING_LADDER_ITEM_COMPLETED_OPERATION = defineActivityLogOperation({
     // Characters actually sent. Smaller than `inputChars` exactly when the item was shortened to
     // fit the endpoint's input limit, so a truncation is visible without reading any content.
     sentChars: COUNT_FIELD,
+    truncated: { type: "boolean", dataClass: "closed-enum", required: false },
   },
   lifecycle: "state",
   analyzerProjection: "timeline",
@@ -1531,6 +1533,7 @@ function logLadderItem(
         total: request.inputs.length,
         inputChars: item.inputChars,
         sentChars: item.sentChars,
+        ...(item.sentChars < item.inputChars ? { truncated: true } : {}),
       },
     ),
   );
