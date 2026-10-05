@@ -94,7 +94,9 @@ async function failChat(
   await expect(alert).toBeVisible();
   await expect(alert.getByRole("button")).toHaveCount(0);
   await expect(alert.getByRole("link")).toHaveCount(0);
-  const notice = window.locator(".ui-error-notice").filter({ has: alert });
+  const notice = window.locator(".ui-error-notice").filter({
+    has: page.getByRole("alert").filter({ hasText: "Support ID:" }),
+  });
   await expect(notice).toHaveCount(1);
   await assertNoticeDismissAlignment(notice);
   const supportId = /Support ID: ([a-zA-Z0-9_-]+)/u.exec(await alert.innerText())?.[1];
