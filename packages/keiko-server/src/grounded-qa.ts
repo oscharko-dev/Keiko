@@ -1072,7 +1072,9 @@ export function packBudgetSummary(pack: ConnectedContextPack): string {
     `model input tokens ${String(usage.modelInputTokens)}/${String(budget.modelInputTokensMax)}`,
     `model output tokens ${String(usage.modelOutputTokens)}/${String(budget.modelOutputTokensMax)}`,
     `rerank calls ${String(usage.rerankCalls)}/${String(budget.rerankCallsMax)}`,
-    `elapsed ${String(usage.elapsedMs)}/${String(budget.elapsedMsMax)} ms`,
+    budget.elapsedMsMax === null
+      ? `elapsed ${String(usage.elapsedMs)} ms (no search time limit)`
+      : `elapsed ${String(usage.elapsedMs)}/${String(budget.elapsedMsMax)} ms`,
   ].join("; ");
 }
 

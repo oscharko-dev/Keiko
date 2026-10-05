@@ -57,11 +57,13 @@ import {
   mappedWorkspaceError,
   modelWindowAwareBudget,
   modelInputPromptByteLimit,
+  packBudgetSummary,
   promptByteLength,
   withPromptExcerptBudget,
   withPromptExcerptByteLimit,
   type GroundedRunner,
 } from "./grounded-qa.js";
+import { buildMultiSourceGatewayMessages } from "./grounded-qa-multi-source.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
@@ -937,6 +939,37 @@ describe("mappedWorkspaceError", () => {
     ]);
     expect(JSON.stringify(activityLog.events)).not.toContain(unavailablePath);
   });
+});
+
+describe("grounded prompt elapsed budget", () => {
+  it.each([
+    { elapsedMsMax: null, elapsedMs: 37, expected: "elapsed 37 ms (no search time limit)" },
+    { elapsedMsMax: 1000, elapsedMs: 37, expected: "elapsed 37/1000 ms" },
+    { elapsedMsMax: 0, elapsedMs: 0, expected: "elapsed 0/0 ms" },
+  ])(
+    "renders $expected consistently in each folder prompt",
+    ({ elapsedMsMax, elapsedMs, expected }) => {
+      const base = emptyPack();
+      const pack = {
+        ...base,
+        budget: { ...base.budget, modelInputTokensMax: 16_000, elapsedMsMax },
+        usage: { ...base.usage, elapsedMs },
+      };
+      const summary = packBudgetSummary(pack);
+      expect(summary.split("; ").at(-1)).toBe(expected);
+      const redactor = buildRedactor({});
+      const single = buildGroundedGatewayMessages("Review the available evidence", pack, redactor);
+      const multi = buildMultiSourceGatewayMessages(
+        "Review the available evidence",
+        [{ label: "Source", pack }],
+        redactor,
+      );
+      for (const messages of [single, multi]) {
+        expect(JSON.stringify(messages)).toContain(`- budget/usage: ${summary}`);
+        expect(JSON.stringify(messages)).not.toContain("/null ms");
+      }
+    },
+  );
 });
 
 describe("buildGroundedGatewayMessages", () => {
