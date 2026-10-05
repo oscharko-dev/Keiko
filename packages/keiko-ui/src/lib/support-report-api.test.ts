@@ -8,8 +8,10 @@ import {
 } from "./support-report-api";
 import { bffFetchJson } from "./http";
 import { ApiError } from "./api";
+import * as diagnostics from "./client-diagnostics";
 import { canonicalSupportReportFixture } from "../test-utils/support-report-fixture";
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   MAX_SUPPORT_REPORT_BYTES,
   SUPPORT_INCIDENT_TRIGGERS,
   supportReportFileName,
@@ -58,6 +60,46 @@ describe("support report browser download", () => {
       await expect(createSupportReport()).rejects.toThrow("Invalid report summary");
     },
   );
+
+  it.each([
+    ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    "bad correlation id",
+    "customer@example.test",
+    "123-45-6789",
+    `sk-proj-${"a".repeat(32)}`,
+  ])(
+    "omits unsafe selected identity %s before evidence lookup and outbound report transport",
+    async (correlationId) => {
+      diagnostics.takeClientDiagnosticLoss();
+      const ensure = vi
+        .spyOn(diagnostics, "ensureClientDiagnosticDelivery")
+        .mockResolvedValue(true);
+      response.value = await canonicalSupportReportFixture();
+      const failure = { errorKind: "unavailable", context: [] } as const;
+      await createSupportReport(correlationId, undefined, failure);
+      expect(bffFetchJson).toHaveBeenCalledWith(
+        "/api/diagnostics/report",
+        expect.objectContaining({ body: JSON.stringify({ failure }) }),
+        expect.any(Object),
+      );
+      expect(ensure).not.toHaveBeenCalled();
+      expect(diagnostics.takeClientDiagnosticLoss()?.errorsSuppressed).toBe(1);
+    },
+  );
+
+  it("retains a safe selected identity in both evidence selection and report transport", async () => {
+    diagnostics.takeClientDiagnosticLoss();
+    const ensure = vi.spyOn(diagnostics, "ensureClientDiagnosticDelivery").mockResolvedValue(true);
+    response.value = await canonicalSupportReportFixture();
+    await createSupportReport("selected-request-123");
+    expect(ensure).toHaveBeenCalledExactlyOnceWith("selected-request-123", expect.any(AbortSignal));
+    expect(bffFetchJson).toHaveBeenCalledWith(
+      "/api/diagnostics/report",
+      expect.objectContaining({ body: JSON.stringify({ correlationId: "selected-request-123" }) }),
+      expect.any(Object),
+    );
+    expect(diagnostics.takeClientDiagnosticLoss()).toBeUndefined();
+  });
 
   it("requests only the supplied client failure when the displayed notice has no trusted correlation", async () => {
     response.value = await canonicalSupportReportFixture();

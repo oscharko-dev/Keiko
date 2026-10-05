@@ -31,12 +31,7 @@ import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-j
 import { fetchCodingWorkbenchJourneyRefresh } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { correlationIdOf } from "@/lib/client-error-summary";
-import {
-  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
-  isActivityLogCorrelationId,
-  looksLikePersonalIdentifier,
-  looksLikeSecret,
-} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { bffCodeErrorKind } from "@/lib/http";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchApprovalRisk,
@@ -1048,15 +1043,13 @@ function WorkbenchAlert({
 }
 
 function workbenchFailureReport(failure: CodingWorkbenchClientError | null): ReactNode {
-  const correlationId = failure?.correlationId;
-  if (
-    !isActivityLogCorrelationId(correlationId) ||
-    correlationId === ACTIVITY_LOG_UNKNOWN_CORRELATION_ID ||
-    looksLikeSecret(correlationId) ||
-    looksLikePersonalIdentifier(correlationId)
-  )
-    return null;
-  return <SupportReportButton correlationId={correlationId} />;
+  if (failure === null) return null;
+  return (
+    <SupportReportButton
+      correlationId={failure.correlationId}
+      failure={{ errorKind: bffCodeErrorKind(failure.code), context: [] }}
+    />
+  );
 }
 
 /**

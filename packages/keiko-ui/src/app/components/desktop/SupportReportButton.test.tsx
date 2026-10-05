@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import { ApiError } from "@/lib/api";
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   MAX_SUPPORT_REPORT_BYTES,
   SUPPORT_REPORT_REQUEST_TIMEOUT_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -14,7 +15,7 @@ import {
 } from "@/lib/support-report-api";
 import { prepareLocalSupportReport, prepareCachedSupportReport } from "@/lib/support-report-local";
 import { canonicalSupportReportFixture } from "@/test-utils/support-report-fixture";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { reportClientDiagnostic, recordClientDiagnosticLoss } from "@/lib/client-diagnostics";
 import { SupportReportButton, resetSupportReportOutcomesForTests } from "./SupportReportButton";
 
 vi.mock("@/lib/support-report-api", async (importOriginal) => ({
@@ -32,6 +33,7 @@ vi.mock("@/lib/support-report-local", async (original) => {
 });
 vi.mock("@/lib/client-diagnostics", () => ({
   reportClientDiagnostic: vi.fn(),
+  recordClientDiagnosticLoss: vi.fn(),
   retainedClientDiagnosticFailure: vi.fn(() => undefined),
 }));
 const create = vi.mocked(createSupportReport);
@@ -51,6 +53,40 @@ afterEach(() => {
 });
 
 describe("SupportReportButton", () => {
+  it.each([
+    ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    "bad correlation id",
+    "customer@example.test",
+    "123-45-6789",
+    `sk-proj-${"a".repeat(32)}`,
+  ])(
+    "keeps the report action while omitting unsafe selected identity %s from request and delivery evidence",
+    async (correlationId) => {
+      create.mockResolvedValue(report);
+      render(
+        <SupportReportButton
+          correlationId={correlationId}
+          failure={{ errorKind: "unavailable", context: [] }}
+        />,
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
+      const link = await screen.findByRole("link", { name: "Download report" });
+      expect(create).toHaveBeenCalledExactlyOnceWith(undefined, expect.any(AbortSignal), {
+        errorKind: "unavailable",
+        context: [],
+      });
+      expect(recordClientDiagnosticLoss).toHaveBeenCalledExactlyOnceWith("errorsSuppressed");
+      await userEvent.click(link);
+      expect(reportClientDiagnostic).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ correlationId: undefined }),
+      );
+      expect(JSON.stringify(vi.mocked(reportClientDiagnostic).mock.calls)).not.toContain(
+        correlationId,
+      );
+    },
+  );
+
   it.each(["en", "de"])(
     "prepares a %s report for direct download without claiming a file was saved",
     async (locale) => {
@@ -541,19 +577,19 @@ describe("SupportReportButton", () => {
     create.mockResolvedValue(report);
     const { rerender } = render(
       <I18nProvider>
-        <SupportReportButton correlationId="one" />
+        <SupportReportButton correlationId="report-one" />
       </I18nProvider>,
     );
     await userEvent.click(await screen.findByRole("button", { name: "Fehlerbericht erstellen" }));
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Bericht bereit."));
     rerender(
       <I18nProvider>
-        <SupportReportButton correlationId="two" />
+        <SupportReportButton correlationId="report-two" />
       </I18nProvider>,
     );
     expect(screen.getByRole("status")).toBeEmptyDOMElement();
     await userEvent.click(screen.getByRole("button", { name: "Fehlerbericht erstellen" }));
-    expect(create).toHaveBeenLastCalledWith("two", expect.any(AbortSignal));
+    expect(create).toHaveBeenLastCalledWith("report-two", expect.any(AbortSignal));
     expect(automaticClick).not.toHaveBeenCalled();
   });
 

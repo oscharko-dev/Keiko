@@ -23,6 +23,7 @@ import {
 import type { LocalFailureContext, PreparedLocalSupportReport } from "@/lib/support-report-local";
 import {
   SupportReportBudgetExceeded,
+  selectedSupportReportCorrelationId,
   localSupportReportErrorKind,
 } from "@/lib/support-report-errors";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
@@ -525,7 +526,7 @@ function createReportForNotice(
 
 async function runReport(
   key: string,
-  correlationId: string | undefined,
+  selectedCorrelationId: string | undefined,
   request: ReportRequestRef,
   setFeedback: (feedback: ReportFeedback) => void,
   regenerate: boolean,
@@ -534,6 +535,7 @@ async function runReport(
 ): Promise<void> {
   const controller = beginReport(key, regenerate);
   if (controller === undefined) return;
+  const correlationId = selectedSupportReportCorrelationId(selectedCorrelationId);
   const pending = { key, controller };
   request.current = pending;
   const signal = AbortSignal.any([
@@ -575,7 +577,7 @@ async function runReport(
 
 function reportSupportDownload(correlationId: string | undefined, ready: ReadyReport): void {
   reportClientDiagnostic("[keiko] support report download initiated", {
-    correlationId,
+    correlationId: normalizeSupportReportCorrelationId(correlationId),
     supportReportDelivery: {
       mode: "manual",
       source: ready.source,

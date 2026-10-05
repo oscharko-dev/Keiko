@@ -17,6 +17,7 @@ import {
   SUPPORT_REPORT_DELIVERY_TTL_MS,
   SUPPORT_INCIDENT_TRIGGERS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { selectedSupportReportCorrelationId } from "./support-report-errors.js";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 import {
@@ -77,11 +78,12 @@ async function ensureReportEvidence(
 }
 
 export async function createSupportReport(
-  correlationId?: string,
+  selectedCorrelationId?: string,
   signal?: AbortSignal,
   failure?: DesktopSupportReportRequest["failure"],
   evidenceScope?: DesktopSupportReportRequest["evidenceScope"],
 ): Promise<DesktopSupportReportResponse> {
+  const correlationId = selectedSupportReportCorrelationId(selectedCorrelationId);
   const deadline = AbortSignal.timeout(SUPPORT_REPORT_REQUEST_TIMEOUT_MS);
   const requestSignal = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
   await codingAppSessionPairingSettled(requestSignal);
