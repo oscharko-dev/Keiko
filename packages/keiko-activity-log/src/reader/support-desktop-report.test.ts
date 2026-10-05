@@ -11,7 +11,7 @@ import {
   listSupportIncidents,
   dismissSupportIncident,
   recordRegisteredFailureIncident,
-  prepareUnretainedUserReportIncident,
+  prepareUnretainedUserReportDescriptor,
 } from "../support-incident.js";
 import {
   expectActivityLogProof,
@@ -276,7 +276,7 @@ describe("desktop canonical support report", () => {
 
   it("describes an empty budget-rejected manual export instead of its unexported complete window", () => {
     writeFailures();
-    const record = prepareUnretainedUserReportIncident(stateDir, "manual-report");
+    const record = prepareUnretainedUserReportDescriptor("manual-report");
     const evidence = executeLocalSupportQuery(
       stateDir,
       {
@@ -372,7 +372,7 @@ describe("desktop canonical support report", () => {
     const selected = readDesktopSupportReportSelection(stateDir, correlationId);
     const response = createPreparedDesktopSupportReport(
       stateDir,
-      prepareUnretainedUserReportIncident(stateDir, correlationId),
+      prepareUnretainedUserReportDescriptor(correlationId),
       correlationId,
       selected.evidence,
     );

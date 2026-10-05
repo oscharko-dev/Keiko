@@ -114,11 +114,6 @@ export {
   SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   SUPPORT_INCIDENT_WINDOW_AFTER_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-/** Legacy compatibility value, superseded by the governing byte reservation policy. */
-export { SUPPORT_INCIDENT_SLOT_COUNT as MAX_SUPPORT_INCIDENTS } from "@oscharko-dev/keiko-contracts/runtime/observability";
-/** Legacy compatibility reserve, superseded by the governing byte reservation policy. */
-export const MAX_REGISTERED_FAILURE_INCIDENTS = 24;
-
 /** A process re-evaluates one defectFingerprint at most this often. */
 export const SUPPORT_INCIDENT_SUPPRESSION_MS = MINUTE_MS;
 /**
@@ -946,14 +941,6 @@ function buildRecord(
   return { ...buildDescriptor(draft, context, pin, incidentId), slotIndex };
 }
 
-/** A manual export can describe retained evidence without claiming another durable candidate. */
-export function prepareUnretainedUserReportIncident(
-  _stateDir: string,
-  correlationId: string,
-): SupportIncidentDescriptorRecord {
-  return prepareUnretainedUserReportDescriptor(correlationId);
-}
-
 /** Pure transient descriptor: no store, pin, retention or log access. */
 export function prepareUnretainedUserReportDescriptor(
   correlationId: string,
@@ -1009,6 +996,18 @@ function mayEvictCandidate(draft: CandidateDraft, record: SupportIncidentRecord)
   return draft.input.op !== "client.diagnostic" || record.fingerprint.op === "client.diagnostic";
 }
 
+function occupiedClassSlots(occupied: ReadonlySet<number>, capacity: number): Set<number> {
+  return new Set([...occupied].filter((index) => index <= capacity));
+}
+
+function evictableRecord(
+  record: SupportIncidentRecord | undefined,
+  draft: CandidateDraft,
+  capacity: number,
+): record is SupportIncidentRecord {
+  return record !== undefined && record.slotIndex <= capacity && mayEvictCandidate(draft, record);
+}
+
 function evictOldestCandidate(
   context: CandidateContext,
   draft: CandidateDraft,
@@ -1019,10 +1018,7 @@ function evictOldestCandidate(
 ): string | undefined {
   const entry = entries.find(
     ({ record }) =>
-      record !== undefined &&
-      record.incidentId !== publishedIncidentId &&
-      record.slotIndex <= capacity &&
-      mayEvictCandidate(draft, record),
+      evictableRecord(record, draft, capacity) && record.incidentId !== publishedIncidentId,
   );
   if (entry === undefined) return undefined;
   const removal = removeEntry(context.stateDir, entry, context);
@@ -1035,10 +1031,6 @@ function evictOldestCandidate(
     reason: "retention",
   });
   return removal.complete ? entry.incidentId : undefined;
-}
-
-interface ClaimedQuotaSlot {
-  readonly slotIndex: number;
 }
 
 function ownsRecoveryClaim(stateDir: string, record: SupportIncidentRecord | undefined): boolean {
@@ -1056,7 +1048,7 @@ function recoverPublicationReserve(
   incidentId: string,
   occupied: ReadonlySet<number>,
 ): number | undefined {
-  const classSlots = new Set([...occupied].filter((index) => index <= capacity));
+  const classSlots = occupiedClassSlots(occupied, capacity);
   if (classSlots.size <= capacity) return undefined;
   const durable = entries.filter(
     ({ record }) => record !== undefined && classSlots.has(record.slotIndex),
@@ -1089,15 +1081,12 @@ function claimQuotaSlot(
   draft: CandidateDraft,
   incidentId: string,
   entries: readonly SupportIncidentStoreEntry[],
-): ClaimedQuotaSlot | undefined {
+): number | undefined {
   const capacity = slotCapacity(context, draft);
   const occupied = new Set(occupiedSlots(context.stateDir));
   if (
-    [...occupied].filter((index) => index <= capacity).length >= capacity &&
-    !entries.some(
-      ({ record }) =>
-        record !== undefined && record.slotIndex <= capacity && mayEvictCandidate(draft, record),
-    )
+    occupiedClassSlots(occupied, capacity).size >= capacity &&
+    !entries.some(({ record }) => evictableRecord(record, draft, capacity))
   )
     return undefined;
   let slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1, occupied);
@@ -1114,7 +1103,7 @@ function claimQuotaSlot(
     occupied.delete(released);
     slotIndex = claimAvailableSlot(context, draft, incidentId, capacity + 1, occupied);
   }
-  return slotIndex === undefined ? undefined : { slotIndex };
+  return slotIndex;
 }
 
 // Releases a window pin a draft already published before dedup or quota was decided (the
@@ -1155,15 +1144,6 @@ const REJECTED_PIN: SupportIncidentPin = {
   evidenceLostBeforePin: false,
 };
 
-/**
- * Publishes the Activity Log retention pin for the incident window and seals the caller's own
- * active segment as part of that request (#3530). Also detects the residual race a synchronous
- * caller cannot fully close on its own: a sealed segment inside the window, visible in the
- * directory just before this call, that is already gone by the time the pin actually covers it —
- * for example another process sharing `stateDir` running retention in the same narrow gap. That
- * loss is reported as `evidenceLostBeforePin` instead of a silent, clean `pinned`. A failed pin
- * never blocks the candidate: it is recorded as `rejected`, so sufficiency can say so.
- */
 interface IncidentPinContext {
   readonly stateDir: string;
   readonly nowMs: number;
@@ -1209,7 +1189,7 @@ function rollDiagnosticPin(context: IncidentPinContext, publishedIncidentId: str
   });
 }
 
-function requestIncidentPin(context: IncidentPinContext): ActivityLogPinResult {
+function requestIncidentPin(context: Omit<IncidentPinContext, "candidate">): ActivityLogPinResult {
   const window = supportIncidentWindow(context.nowMs);
   const request = {
     scope: { kind: "window" as const, fromMs: window.fromMs, toMs: window.toMs },
@@ -1220,6 +1200,15 @@ function requestIncidentPin(context: IncidentPinContext): ActivityLogPinResult {
   return pinActivityLogWindow(context.stateDir, request, context.env);
 }
 
+/**
+ * Publishes the Activity Log retention pin for the incident window and seals the caller's own
+ * active segment as part of that request (#3530). Also detects the residual race a synchronous
+ * caller cannot fully close on its own: a sealed segment inside the window, visible in the
+ * directory just before this call, that is already gone by the time the pin actually covers it —
+ * for example another process sharing `stateDir` running retention in the same narrow gap. That
+ * loss is reported as `evidenceLostBeforePin` instead of a silent, clean `pinned`. A failed pin
+ * never blocks the candidate: it is recorded as `rejected`, so sufficiency can say so.
+ */
 function pinIncidentWindow(
   stateDir: string,
   nowMs: number,
@@ -1232,9 +1221,7 @@ function pinIncidentWindow(
     candidate?.sealedSegmentsBeforePin ??
     overlappingSealedSegmentNames(stateDir, window, correlationId);
   try {
-    const pin = pinFromResult(
-      requestIncidentPin({ stateDir, nowMs, correlationId, env, candidate }),
-    );
+    const pin = pinFromResult(requestIncidentPin({ stateDir, nowMs, correlationId, env }));
     if (pin.status === "rejected" || before.size === 0) return pin;
     const after = overlappingSealedSegmentNames(stateDir, window, correlationId);
     const evidenceLostBeforePin = [...before].some((name) => !after.has(name));
@@ -1500,7 +1487,7 @@ function admitCandidateQuota(
   incidentId: string,
   entries: readonly SupportIncidentStoreEntry[],
   fingerprint: string | undefined,
-): ClaimedQuotaSlot | SupportIncidentCreation {
+): number | SupportIncidentCreation {
   try {
     const quota = claimQuotaSlot(context, draft, incidentId, entries);
     if (quota !== undefined) return quota;
@@ -1547,11 +1534,10 @@ function createCandidate(
   }
 
   const quota = admitCandidateQuota(context, draft, incidentId, entries, dedupFingerprint);
-  if ("status" in quota) return quota;
+  if (typeof quota !== "number") return quota;
 
-  const created = publishCandidate(draft, context, entries, incidentId, quota.slotIndex);
-  if (created.status !== "created")
-    releaseClaims(stateDir, dedupFingerprint, quota.slotIndex, incidentId);
+  const created = publishCandidate(draft, context, entries, incidentId, quota);
+  if (created.status !== "created") releaseClaims(stateDir, dedupFingerprint, quota, incidentId);
   return created;
 }
 

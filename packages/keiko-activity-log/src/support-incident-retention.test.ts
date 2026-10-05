@@ -779,13 +779,14 @@ describe("rolling diagnostic candidate retention", () => {
       const peer = spawnSync(
         process.execPath,
         [
-          fileURLToPath(new URL("../../../node_modules/vitest/vitest.mjs", import.meta.url)),
+          fileURLToPath(new URL("vitest.mjs", import.meta.resolve("vitest/package.json"))),
           "run",
           "--root",
           fileURLToPath(new URL("..", import.meta.url)),
           "src/support-incident-retention.test.ts",
           "-t",
           "another process competes",
+          "--reporter=json",
         ],
         {
           env: { ...process.env, KEIKO_TEST_PUBLICATION_PEER_STATE: stateDir },
@@ -795,6 +796,11 @@ describe("rolling diagnostic candidate retention", () => {
       );
       expect(peer.error).toBeUndefined();
       expect(peer.status, peer.stdout + peer.stderr).toBe(0);
+      expect(JSON.parse(peer.stdout)).toMatchObject({
+        success: true,
+        numPassedTests: 1,
+        numFailedTests: 0,
+      });
       throw new Error("simulated publication failure after concurrent admission");
     });
     expect(recordUserReportedIncident(stateDir)).toEqual({

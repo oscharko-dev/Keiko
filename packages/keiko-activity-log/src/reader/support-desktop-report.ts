@@ -22,7 +22,7 @@ import {
   listSupportIncidents,
   SUPPORT_INCIDENT_WINDOW_BEFORE_MS,
   recordUserReportedIncident,
-  prepareUnretainedUserReportIncident,
+  prepareUnretainedUserReportDescriptor,
   supportIncidentSegmentFiles,
   type SupportIncidentRejection,
 } from "../support-incident.js";
@@ -76,7 +76,7 @@ export function prepareManualSupportReportIncident(
   const created = recordUserReportedIncident(stateDir, { correlationId: safeCorrelationId });
   if (created.status === "rejected") {
     if (created.reason === "quota-exhausted") {
-      return prepareUnretainedUserReportIncident(stateDir, safeCorrelationId);
+      return prepareUnretainedUserReportDescriptor(safeCorrelationId);
     }
     throw new DesktopSupportReportPreparationError(created.reason);
   }
@@ -214,13 +214,11 @@ export function createPreparedDesktopSupportReport(
     incidentDescriptor(attributeUnretainedReportFailure(record, evidence.result), evidence.result),
     evidence.result,
   );
-  return desktopReportResponse(
-    report,
-    evidence.manifestStats.unreadableCount,
-    evidence.manifestStats.reusedCount,
-    undefined,
-    parseSupportIncidentRecord(record) === undefined ? "transient" : "stored",
-  );
+  return desktopReportResponse(report, {
+    manifestUnreadableCount: evidence.manifestStats.unreadableCount,
+    manifestReusedCount: evidence.manifestStats.reusedCount,
+    retentionDisposition: parseSupportIncidentRecord(record) === undefined ? "transient" : "stored",
+  });
 }
 
 export function createDesktopSupportReport(
@@ -255,18 +253,28 @@ export function createClientOnlySupportReport(
       : {}),
   });
   const report = sealSupportReport(sections.incident, sections.selection, sections.evidence);
-  return desktopReportResponse(report, 0, 0, "client-only");
+  return desktopReportResponse(report, {
+    manifestUnreadableCount: 0,
+    manifestReusedCount: 0,
+    evidenceScope: "client-only",
+  });
+}
+
+interface DesktopReportResponseOptions {
+  readonly manifestUnreadableCount: number;
+  readonly manifestReusedCount: number;
+  readonly evidenceScope?: "client-only";
+  readonly retentionDisposition?: NonNullable<
+    DesktopSupportReportResponse["summary"]
+  >["retentionDisposition"];
 }
 
 function desktopReportResponse(
   report: SupportReport,
-  manifestUnreadableCount: number,
-  manifestReusedCount: number,
-  evidenceScope?: "client-only",
-  retentionDisposition?: NonNullable<
-    DesktopSupportReportResponse["summary"]
-  >["retentionDisposition"],
+  options: DesktopReportResponseOptions,
 ): DesktopSupportReportResponse {
+  const { manifestUnreadableCount, manifestReusedCount, evidenceScope, retentionDisposition } =
+    options;
   return {
     ...(evidenceScope === undefined ? {} : { evidenceScope }),
     fileName: supportReportFileName(
