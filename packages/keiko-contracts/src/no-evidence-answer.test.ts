@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   NO_EVIDENCE_ANSWER_MAX_CHARS,
   connectedSearchNoEvidenceAnswer,
+  shouldUseGermanForSystemAnswer,
   isCanonicalConnectedSearchAbstention,
   isNoEvidenceAnswerText,
 } from "./no-evidence-answer.js";
@@ -16,6 +17,25 @@ describe("connected search abstention", () => {
     expect(result).toBe(text);
     expect(isCanonicalConnectedSearchAbstention(result)).toBe(true);
     expect(isNoEvidenceAnswerText(result)).toBe(true);
+  });
+
+  it.each([
+    "Where was parseConfig defined?",
+    "Does the parser die on empty input?",
+    "Find the den implementation.",
+    "What does Ölwechsel mean in the handbook?",
+    "Explain the field named `die`.",
+  ])("does not mistake English wording or source names for German: %s", (question) => {
+    expect(shouldUseGermanForSystemAnswer(question)).toBe(false);
+  });
+
+  it.each([
+    "Was bedeutet das?",
+    "Suche nach parseConfig.",
+    "Wo finde ich die Version?",
+    "Erkläre das bitte.",
+  ])("recognizes ordinary German questions: %s", (question) => {
+    expect(shouldUseGermanForSystemAnswer(question)).toBe(true);
   });
 
   it("recognizes the legacy English deterministic response", () => {

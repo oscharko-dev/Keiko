@@ -826,6 +826,7 @@ describe("grounded continuity evidence lifecycle", () => {
     );
     expect(second.status).toBe(200);
     if (captured === undefined) throw new TypeError("Missing follow-up input");
+    expect(captured.currentQuestion).toBe(followUp);
     expect(captured.answerQuestion).toContain("Earlier conversation reference data");
     expect(captured.answerQuestion).toContain(proposed);
     expect(captured.answerQuestion).toContain(followUp);

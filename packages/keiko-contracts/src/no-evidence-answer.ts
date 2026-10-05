@@ -37,10 +37,11 @@ export {
 /** Longest answer (after whitespace collapse) that can still be read as a bare refusal. */
 export const NO_EVIDENCE_ANSWER_MAX_CHARS = 240;
 
+// Shared English/German words such as "was", "die" and "den", or an umlaut in a source
+// identifier, cannot determine the question language by themselves.
 const GERMAN_QUERY_PATTERNS: readonly RegExp[] = [
-  /[äöüß]/iu,
-  /\b(?:bitte|was|wie|warum|welche|welcher|welches|wieviel|wieso)\b/iu,
-  /\b(?:erkläre|erklaere|zeige|gibt|ist|sind|der|die|das|den|dem|des)\b/iu,
+  /\b(?:bitte|wie|warum|welche|welcher|welches|wieviel|wieso|wo)\b/iu,
+  /\b(?:erkläre|erklaere|zeige|gibt|ist|sind|bedeutet|suche|finde)\b/iu,
   /\b(?:und|oder|nicht|keine|kein|evidenz|belege|hinweise)\b/iu,
 ];
 

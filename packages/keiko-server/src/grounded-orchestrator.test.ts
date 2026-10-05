@@ -4235,6 +4235,26 @@ describe("runGroundedExploration", () => {
     },
   );
 
+  it("uses the current English question for abstention after German retrieval continuity", async () => {
+    const out = await runGroundedExploration(
+      input({
+        scope: happyScope({ kind: "files", relativePaths: ["src/bar.ts"] }),
+        query: happyQuery({
+          text: "Where was `CompletelyMissingSymbol` defined?\nIst es vorhanden?",
+        }),
+        currentQuestion: "Where was `CompletelyMissingSymbol` defined?",
+      }),
+      {
+        correlationId: undefined,
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(out.noEvidence).toBe(true);
+    expect(out.assistantContent).toBe("No matching evidence was found for this search.");
+  });
+
   it("answers from explicit governed personal context without projecting source evidence", async () => {
     let receivedQuestion = "";
     const out = await runGroundedExploration(

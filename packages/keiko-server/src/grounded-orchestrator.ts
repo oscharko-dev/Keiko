@@ -614,6 +614,8 @@ export interface OrchestratorInput {
   // separately assembled answer question (for example with governed memory context) so personal
   // context can inform generation without changing repository retrieval decisions.
   readonly answerQuestion?: string | undefined;
+  /** Current user wording, before retrieval continuity or answer-only memory is appended. */
+  readonly currentQuestion?: string | undefined;
   readonly answerOnlyContextAvailable?: boolean | undefined;
   readonly workspaceRoot: string;
   // Request-scoped filesystem authority for the exact canonical root. Ordinary callers omit it;
@@ -8058,7 +8060,7 @@ export async function runGroundedExploration(
     const elapsedMs = Math.max(0, nowMs() - start);
     return {
       pack,
-      assistantContent: connectedSearchNoEvidenceAnswer(input.query.text),
+      assistantContent: connectedSearchNoEvidenceAnswer(input.currentQuestion ?? input.query.text),
       elapsedMs,
       plan,
       noEvidence: true,

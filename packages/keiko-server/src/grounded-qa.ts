@@ -1923,6 +1923,7 @@ async function runGroundedRunner(
       scope,
       query,
       answerQuestion: answerContent,
+      currentQuestion: workerCtx.content,
       answerOnlyContextAvailable: workerCtx.answerOnlyContextAvailable,
       workspaceRoot: scope.workspaceRoot,
       ...optionalWorkspaceFs(workerCtx.workspaceFs),
