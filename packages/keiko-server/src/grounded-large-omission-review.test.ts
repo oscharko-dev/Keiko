@@ -11,6 +11,9 @@ import { buildQuery } from "./grounded-qa.js";
 const ROOT = "/synthetic/large-omission-review";
 
 describe("large ordinary-folder omission accumulation", () => {
+  // This is a stack-overflow/count regression, not the calibrated retrieval-latency gate.
+  // Linux V8 coverage took 28.9 s with 0.5 CPU/4 GiB; hosted coverage exhausted the old 20 s
+  // runner deadline. Allow slower workers to finish the unchanged 150,000-file assertions.
   it("retains exact exclusion totals without spreading 150000 arguments", async (): Promise<void> => {
     const files: Record<string, string> = {};
     for (let index = 0; index < 150_000; index += 1)
@@ -73,5 +76,5 @@ describe("large ordinary-folder omission accumulation", () => {
     expect(connectedContextOmittedCounts(pack).binary).toBe(150_000);
     expect(pack.omitted.length).toBeLessThanOrEqual(MAX_OMITTED_CONTEXT_ENTRIES);
     expect(bodyReads).toBe(0);
-  }, 20_000);
+  }, 45_000);
 });
