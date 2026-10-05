@@ -1925,7 +1925,7 @@ function hasCoherentScopeDecisionFields(value: Record<string, unknown>): boolean
 function hasValidScopeArrayCounts(value: Record<string, unknown>): boolean {
   // These producers count JS arrays of connected scopes, whose length cannot exceed uint32.
   // This is an evidence representation constraint, not a recursive-search file-count limit.
-  const arrayLengthMax = 0xffff_ffff;
+  const arrayLengthMax = 4_294_967_295;
   return (
     (value.sourceCount === undefined ||
       isBoundedNonNegativeInteger(value.sourceCount, arrayLengthMax)) &&
