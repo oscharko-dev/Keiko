@@ -609,6 +609,11 @@ failure status. Expected stale-scope refusals before admission or after generati
 `request-refused` at warning level and return the same correlation identifier in their 409 response.
 They retain rejection and diagnostic evidence without automatically allocating an incident or pin;
 an explicit report action can still select and export their cause.
+Optional grounded-memory preparation and capture failures use the initiating request correlation,
+including the closed unknown fallback when none was supplied. Their real exception passes through
+the existing diagnostic sanitizer so safe frames and cause classes remain available without
+retaining memory content or foreign error messages. The grounded answer still succeeds without
+the optional memory enrichment.
 `search.connected-context.completion-details` separates scope-context state,
 observed/retained files and charged/capacity bytes; excerpt omitted ranges, truncated windows,
 unread files and stop reasons; and metadata observed, retained and discarded counts. These are

@@ -4162,7 +4162,9 @@ describe("handleGroundedAsk", () => {
       get(target, property, receiver): unknown {
         if (property === "listMemoriesByScope") {
           return (): never => {
-            throw new Error("sensitive-memory-backend-detail");
+            throw new Error("sensitive-memory-backend-detail", {
+              cause: new TypeError("private-memory-cause-canary"),
+            });
           };
         }
         const value: unknown = Reflect.get(target, property, receiver);
@@ -4173,23 +4175,26 @@ describe("handleGroundedAsk", () => {
 
     try {
       const result = await handleGroundedAsk(
-        ctx(
-          JSON.stringify({
-            chatId,
-            content: "Which package manager should I use?",
-            memory: {
-              enabled: true,
-              budgetTokens: 1200,
-              mode: "governed-assist",
-              context: {
-                userId: "local-operator",
-                workspaceId: projectPath,
-                projectId: projectPath,
-                conversationId: chatId,
+        {
+          ...ctx(
+            JSON.stringify({
+              chatId,
+              content: "Which package manager should I use?",
+              memory: {
+                enabled: true,
+                budgetTokens: 1200,
+                mode: "governed-assist",
+                context: {
+                  userId: "local-operator",
+                  workspaceId: projectPath,
+                  projectId: projectPath,
+                  conversationId: chatId,
+                },
               },
-            },
-          }),
-        ),
+            }),
+          ),
+          correlationId: "grounded-memory-preparation-request",
+        },
         deps(
           undefined,
           {},
@@ -4206,6 +4211,11 @@ describe("handleGroundedAsk", () => {
       expect(
         (result.body as GroundedAnswer & { readonly memory?: unknown }).memory,
       ).toBeUndefined();
+      const memoryFailure = diagnostics.find((record) => record.operation === "grounded.memory");
+      expect(memoryFailure?.correlationId).toBe("grounded-memory-preparation-request");
+      expect(memoryFailure?.frames?.length).toBeGreaterThan(0);
+      expect(memoryFailure?.causeChain).toEqual(["Error", "TypeError"]);
+      expect(JSON.stringify(diagnostics)).not.toContain("private-memory-cause-canary");
       // Two records: the semantic-retrieval signal (now a diagnostic, never console.warn — audit of
       // #3233) and the enrichment failure this test is about.
       expect(diagnostics.map((record) => record.operation)).toEqual([
@@ -4310,7 +4320,9 @@ describe("handleGroundedAsk", () => {
       get(target, property, receiver): unknown {
         if (property === "insertMemory") {
           return (): never => {
-            throw new Error("sensitive-canonical-memory-capture-detail");
+            throw new Error("sensitive-canonical-memory-capture-detail", {
+              cause: new TypeError("private-memory-cause-canary"),
+            });
           };
         }
         const value: unknown = Reflect.get(target, property, receiver);
@@ -4337,7 +4349,7 @@ describe("handleGroundedAsk", () => {
 
     try {
       const result = await handleGroundedAsk(
-        ctx(JSON.stringify(request)),
+        { ...ctx(JSON.stringify(request)), correlationId: "grounded-memory-capture-request" },
         deps(
           undefined,
           {},
@@ -4352,6 +4364,11 @@ describe("handleGroundedAsk", () => {
       expect(result.status).toBe(200);
       expect((result.body as GroundedAnswer).content).toContain("Dark mode");
       expect(store.listMessages(chatId)).toHaveLength(2);
+      const memoryFailure = diagnostics.find((record) => record.operation === "grounded.memory");
+      expect(memoryFailure?.correlationId).toBe("grounded-memory-capture-request");
+      expect(memoryFailure?.frames?.length).toBeGreaterThan(0);
+      expect(memoryFailure?.causeChain).toEqual(["TypeError"]);
+      expect(JSON.stringify(diagnostics)).not.toContain("private-memory-cause-canary");
       // The semantic-retrieval signal precedes the capture failure (audit of #3233).
       expect(diagnostics.map((record) => record.operation)).toEqual([
         "memory.retrieval.semantic-disabled",

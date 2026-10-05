@@ -190,11 +190,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { renderConversationMemoryContextBlock } from "./conversation-prompt.js";
-import {
-  contentFreeErrorClass,
-  emitServerDiagnostic,
-  serverDiagnosticFromError,
-} from "./diagnostics-log.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
@@ -2479,9 +2475,9 @@ function groundedAnswerContent(content: string, memory: ConversationMemoryResult
 function groundedMemoryPreparationFailure(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
-  errorClass: string,
+  error: unknown,
 ): PreparedGroundedAsk | RouteResult {
-  recordGroundedMemoryFailure(deps, prepared.chat.id, errorClass);
+  recordGroundedMemoryFailure(prepared, deps, error);
   return prepared;
 }
 
@@ -2518,7 +2514,13 @@ async function prepareGroundedMemory(
   if (memoryRequest === undefined) return prepared;
   const context = prepared.memoryContext;
   if (context === undefined) {
-    return groundedMemoryPreparationFailure(prepared, deps, "GroundedMemoryContextUnavailable");
+    return groundedMemoryPreparationFailure(
+      prepared,
+      deps,
+      Object.assign(new Error("Grounded memory context is unavailable"), {
+        name: "GroundedMemoryContextUnavailable",
+      }),
+    );
   }
   try {
     const result = await buildMemoryResult(
@@ -2537,7 +2539,7 @@ async function prepareGroundedMemory(
     );
     return withPreparedGroundedMemory(prepared, context, result);
   } catch (error) {
-    return groundedMemoryPreparationFailure(prepared, deps, contentFreeErrorClass(error));
+    return groundedMemoryPreparationFailure(prepared, deps, error);
   }
 }
 
@@ -2848,18 +2850,21 @@ function groundedAnswerBody(value: unknown): value is GroundedAnswer {
 }
 
 function recordGroundedMemoryFailure(
+  prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
-  assistantMessageId: string,
-  errorClass: string,
+  error: unknown,
 ): void {
-  emitServerDiagnostic(deps.diagnostics, {
-    correlationId: assistantMessageId,
-    timestamp: new Date(Date.now()).toISOString(),
-    operation: "grounded.memory",
-    source: "grounded-qa.attach-memory",
-    errorClass,
-    message: "grounded-memory-enrichment-failed",
-  });
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(prepared.correlationId),
+      operation: "grounded.memory",
+      source: "grounded-qa.attach-memory",
+      summary: "grounded-memory-enrichment-failed",
+      error,
+      redact: (value): string => redactString(deps.redactor, value),
+    }),
+  );
 }
 
 function groundedCanonicalMemoryRequest(
@@ -2912,7 +2917,7 @@ async function attachGroundedMemory(
     );
     return memory === undefined ? markedResult : { ...markedResult, body: { ...body, memory } };
   } catch (error) {
-    recordGroundedMemoryFailure(deps, result.body.assistantMessageId, contentFreeErrorClass(error));
+    recordGroundedMemoryFailure(prepared, deps, error);
     return markedResult;
   }
 }
