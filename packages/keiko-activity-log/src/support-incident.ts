@@ -90,6 +90,7 @@ import { activityLogTestWriterInstalled } from "./server-logger.js";
 import {
   claimSupportIncidentFingerprint,
   claimSupportIncidentSlot,
+  countSupportIncidentEntries,
   ensureSupportIncidentDirectory,
   listSupportIncidentClaims,
   listSupportIncidentSlotIndexes,
@@ -1314,11 +1315,10 @@ function publishCandidate(
     });
     return reject(context, { ...draft, prePinned: pin }, "store-unavailable", entries.length);
   }
-  const retainedCount = listSupportIncidentEntries(context.stateDir).filter((entry) =>
-    openEntry(entry, context.nowMs),
-  ).length;
+  const publishedEntries = listSupportIncidentEntries(context.stateDir);
+  const retainedCount = publishedEntries.filter((entry) => openEntry(entry, context.nowMs)).length;
   createdEvidence(context.stateDir, record, draft.evidenceCorrelationId, retainedCount);
-  finishCandidateRetention(context, draft, record.incidentId);
+  finishCandidateRetention(context, draft, record.incidentId, publishedEntries);
   return { status: "created", incidentId: record.incidentId, record };
 }
 
@@ -1328,10 +1328,10 @@ function finishCandidateRetention(
   context: CandidateContext,
   draft: CandidateDraft,
   incidentId: string,
+  entries: readonly SupportIncidentStoreEntry[],
 ): void {
   try {
     const capacity = slotCapacity(context, draft);
-    const entries = listSupportIncidentEntries(context.stateDir);
     if ([...occupiedSlots(context.stateDir)].filter((index) => index <= capacity).length > capacity)
       evictOldestCandidate(context, draft, entries, capacity, incidentId);
     rollDiagnosticPin(
@@ -1749,13 +1749,15 @@ function removeEntry(
 // the in-flight grace: a crash between claiming and writing that record, or a record already
 // removed by the loop above in this same pass. A younger claim may belong to an occurrence still
 // publishing its record in another process, so it is left alone (#3533 review 4050606506).
-// Checks each claim against a FRESH read, never a pre-computed "open" set: entries/open is
-// a snapshot taken earlier in this same sweep, and a claim (with its record) can legitimately be
-// published by another process in the gap between that snapshot and this loop -- reusing the
-// stale snapshot here would delete a brand-new, perfectly live claim out from under its owner,
-// silently reopening the exact cross-process race this whole scheme exists to close. Best-effort
-// per claim (#3533 review 4050606506) so one bad removal never blocks the rest.
-function sweepOrphanedClaims(stateDir: string, correlationId: string): void {
+// A validated retained owner in this sweep is sufficient to KEEP a claim. If a peer removes that
+// owner after the snapshot, conservative retention only postpones orphan cleanup to the next pass.
+// A snapshot can never prove absence: an unknown owner is freshly read before guarded removal,
+// preserving a peer that published between this sweep's first scan and its claim inspection.
+function sweepOrphanedClaims(
+  stateDir: string,
+  correlationId: string,
+  retained: ReadonlySet<string>,
+): void {
   let claims: readonly SupportIncidentClaimEntry[];
   try {
     claims = listSupportIncidentClaims(stateDir);
@@ -1767,7 +1769,8 @@ function sweepOrphanedClaims(stateDir: string, correlationId: string): void {
     if (!abandonedStoreFile(claim.claimedAtMs)) continue;
     if (
       claim.incidentId !== undefined &&
-      readSupportIncidentRecord(stateDir, claim.incidentId) !== undefined
+      (retained.has(claim.incidentId) ||
+        readSupportIncidentRecord(stateDir, claim.incidentId) !== undefined)
     ) {
       continue;
     }
@@ -1804,7 +1807,10 @@ function sweepExpiredEntries(
       nowMs,
     });
   }
-  sweepOrphanedClaims(stateDir, correlationId);
+  const retained = new Set(
+    open.flatMap(({ record }) => (record === undefined ? [] : [record.incidentId])),
+  );
+  sweepOrphanedClaims(stateDir, correlationId, retained);
   return open;
 }
 
@@ -2188,7 +2194,7 @@ function admittedEvidence(event: ServerLogEvent): AdmissionOutcome {
 
 // At most one `support.incident.rejected` line per suppression window (see
 // lastRateLimitEvidenceAtMs above), so a sustained storm costs one evidenced line per minute, not
-// one per dropped evaluation. openIncidentCount is a plain listing, never the full expiry sweep:
+// one per dropped evaluation. openIncidentCount counts directory entries without opening records:
 // this path exists specifically to stay cheap under a storm.
 function reportRateLimitedEvaluation(
   stateDir: string,
@@ -2210,7 +2216,7 @@ function reportRateLimitedEvaluation(
     defectFingerprint,
     fingerprintAlgorithm,
     correlationId: correlationId ?? randomUUID(),
-    openIncidentCount: listSupportIncidentEntries(stateDir).length,
+    openIncidentCount: countSupportIncidentEntries(stateDir),
   });
 }
 

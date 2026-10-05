@@ -1768,7 +1768,13 @@ The first bound loses no evidence (the fingerprint's own candidate already pins 
 second can drop a defect Keiko has never seen before, purely because the shared cap was already
 spent; that case is evidenced as `support.incident.rejected` (`evaluation-rate-limited`), throttled
 to at most one line per suppression window so a storm reports the loss once rather than flooding the
-log with one line per dropped evaluation (#3533 audit).
+log with one line per dropped evaluation (#3533 audit). That rejection's stored-record count uses a
+single directory-entry scan over regular closed-name records, including unreadable records; it does
+not open or parse their contents, follow symlinks, or run expiry cleanup. This is an observed count,
+not admission authority: exclusive slot claims still govern concurrent admission. Expiry cleanup
+continues to validate canonical record deadlines. A fresh post-publication snapshot supplies both
+the observed created count and immediate slot-retention selection, without another full parse.
+The pin-ceiling path inspects a fresh snapshot only when that ceiling is reached.
 
 On the registered-failure trigger, the window's Activity Log retention pin (15 minutes before, 5
 minutes after, through D14's pin primitive, across every process instance) is requested
@@ -1890,8 +1896,10 @@ unreadable record at any moment, so such a file is treated as in flight until it
 one-minute grace by its own mtime: a repeat of the same retention key deduplicates onto the id
 the claim names instead of taking the claim over, and neither the orphan sweep nor torn-record
 recovery removes it. Only an older file has lost its writer (a crash in that gap) and is swept,
-against a fresh, per-claim read taken at sweep time, never a snapshot taken earlier in the same
-pass. An occurrence that finds an abandoned claim the sweep could not remove, or a claim still torn
+against a fresh, per-claim read before removal. A validated retained owner from the same sweep
+can justify keeping its claim without another body read; if a peer removes that owner afterward,
+cleanup waits for the next sweep. An owner absent from that snapshot must still be read freshly:
+a peer may have published it in the meantime. Snapshot absence never authorizes deletion. An occurrence that finds an abandoned claim the sweep could not remove, or a claim still torn
 on a second read, gives up as `store-unavailable` rather than publish a second candidate.
 Acknowledge, dismiss and report remain explicit human actions; nothing is disclosed automatically.
 

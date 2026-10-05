@@ -123,6 +123,7 @@ import {
 // the resolved namespace after both modules finish loading works around it.
 import { supportIncidentRetentionPolicy } from "./support-incident-retention.js";
 import * as serverLogModule from "./server-log.js";
+import * as incidentStore from "./support-incident-store.js";
 import {
   claimSupportIncidentFingerprint,
   claimSupportIncidentSlot,
@@ -490,6 +491,9 @@ describe("SupportIncident candidates", () => {
           ...evidence,
           correlationId: "concurrent-process",
         });
+        // Even claims old enough for orphan cleanup must fresh-read this newly published owner:
+        // it was absent from the first process's snapshot and cannot safely be inferred missing.
+        for (const name of claimNames()) abandon(name);
       };
       const result = recordRegisteredFailureIncident(stateDir, {
         ...evidence,
@@ -506,6 +510,112 @@ describe("SupportIncident candidates", () => {
       expect(storeNames()).toHaveLength(1);
       expect(lines("support.incident.created")).toHaveLength(1);
       expect(lines("support.incident.deduplicated")).toHaveLength(1);
+    });
+
+    it("reuses retained record validation instead of reopening each old owning claim's record", () => {
+      created(
+        recordRegisteredFailureIncident(stateDir, { op: FAILURE_OP, errorKind: "unavailable" }),
+      );
+      created(recordRegisteredFailureIncident(stateDir, { op: FAILURE_OP, errorKind: "timeout" }));
+      for (const name of claimNames()) abandon(name);
+      const entries = vi.spyOn(incidentStore, "listSupportIncidentEntries");
+      const ownerReads = vi.spyOn(incidentStore, "readSupportIncidentRecord");
+      created(recordUserReportedIncident(stateDir));
+      expect(entries).toHaveBeenCalledTimes(2);
+      expect(ownerReads).not.toHaveBeenCalled();
+      expect(storeNames()).toHaveLength(3);
+      expect(claimNames()).toHaveLength(5);
+    });
+
+    it("counts a peer published after the expiry snapshot in the actual created evidence", () => {
+      let peer: SupportIncidentCreation | undefined;
+      dedupRace.onStaleSnapshot = (): void => {
+        peer = recordUserReportedIncident(stateDir, { correlationId: "post-snapshot-peer" });
+      };
+      const result = created(
+        recordUserReportedIncident(stateDir, { correlationId: "post-snapshot-owner" }),
+      );
+      expect(peer?.status).toBe("created");
+      expect(storeNames()).toHaveLength(2);
+      expect(
+        expectActivityLogProof(
+          "support.incident.created.emitted-line",
+          lines("support.incident.created").at(-1) ?? "",
+        ),
+      ).toMatchObject({
+        incidentId: result.incidentId,
+        correlationId: "post-snapshot-owner",
+        openIncidentCount: 2,
+      });
+    });
+
+    it("defers a known owner's concurrent removal until the next orphan sweep", () => {
+      const prior = created(recordRegisteredFailureIncident(stateDir, { op: FAILURE_OP }));
+      for (const name of claimNames()) abandon(name);
+      dedupRace.onStaleSnapshot = (): void => {
+        incidentStore.removeSupportIncidentRecord(stateDir, prior.incidentId);
+      };
+      const next = created(recordUserReportedIncident(stateDir));
+      expect(storeNames()).toEqual([supportIncidentFileName(next.incidentId)]);
+      expect(incidentStore.listSupportIncidentClaims(stateDir)).toHaveLength(3);
+      expect(listSupportIncidents(stateDir).map((record) => record.incidentId)).toEqual([
+        next.incidentId,
+      ]);
+      expect(incidentStore.listSupportIncidentClaims(stateDir)).toMatchObject([
+        { incidentId: next.incidentId },
+      ]);
+    });
+
+    it("uses the validated deadline even when an expired record has a fresh file timestamp", () => {
+      const nowMs = Date.now();
+      const prior = created(recordUserReportedIncident(stateDir, { nowMs }));
+      const laterMs = nowMs + SUPPORT_INCIDENT_TTL_MS + 1;
+      utimesSync(
+        join(stateDir, SUPPORT_INCIDENT_DIRECTORY_NAME, supportIncidentFileName(prior.incidentId)),
+        new Date(laterMs),
+        new Date(laterMs),
+      );
+      const next = created(recordUserReportedIncident(stateDir, { nowMs: laterMs }));
+      expect(storeNames()).toEqual([supportIncidentFileName(next.incidentId)]);
+      expect(incidentStore.listSupportIncidentClaims(stateDir)).toMatchObject([
+        { incidentId: next.incidentId },
+      ]);
+    });
+
+    it("bounds browser candidates by atomic reservations when all pins and later cleanup fail", () => {
+      vi.stubEnv("KEIKO_LOG_RETENTION_BYTES", "65536");
+      vi.spyOn(serverLogModule, "pinActivityLogWindow").mockReturnValue({
+        status: "rejected",
+        reason: "storage-unavailable",
+      });
+      const capacity = supportIncidentRetentionPolicy(stateDir).browserCapacity;
+      const register = (index: number): SupportIncidentCreation | undefined =>
+        recordRegisteredFailureIncident(stateDir, {
+          op: "client.diagnostic",
+          errorKind: "internal",
+          clientKind: "boundary",
+          renderFailure: "window-body",
+          correlationId: `no-pin-browser-${String(index)}`,
+        });
+      for (let index = 0; index < capacity + 2; index += 1) {
+        expect(created(register(index)).record.pin.status).toBe("rejected");
+        expect(storeNames().length).toBeLessThanOrEqual(capacity);
+      }
+      vi.spyOn(incidentStore, "removeSupportIncidentRecord").mockImplementation(() => {
+        throw new TypeError("simulated metadata cleanup refusal");
+      });
+      expect(created(register(capacity + 2)).record.pin.status).toBe("rejected");
+      const retained = incidentStore.listSupportIncidentEntries(stateDir);
+      expect(retained).toHaveLength(capacity + 1);
+      for (let index = capacity + 3; index < capacity + 6; index += 1) {
+        expect(register(index)).toEqual({ status: "rejected", reason: "quota-exhausted" });
+        expect(incidentStore.listSupportIncidentEntries(stateDir)).toEqual(retained);
+      }
+      const claims = incidentStore.listSupportIncidentClaims(stateDir);
+      expect(claims).toHaveLength(retained.length * 2);
+      expect(
+        claims.every((claim) => retained.some((entry) => entry.incidentId === claim.incidentId)),
+      ).toBe(true);
     });
 
     it("recovers a fingerprint and slot claim orphaned by a crash between claiming and writing the record", () => {
@@ -1067,6 +1177,42 @@ describe("SupportIncident candidates", () => {
         rejectionReason: "evaluation-rate-limited",
         trigger: "registered-failure",
         errorKind: "rate-limited",
+        completeness: "partial",
+        loss: "event-dropped",
+      });
+    });
+
+    it("counts retained records without parsing their bodies when evaluation is rate-limited", () => {
+      setSupportIncidentTriggerForTests(true);
+      const sink = createFileServerLogSink(stateDir);
+      for (let index = 0; index < MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE; index += 1) {
+        sink.write(
+          failureEvent({
+            errorKind: "unavailable",
+            extra: {
+              phase: "endpoint",
+              frames: [`packages/keiko-server/dist/storm/count${String(index)}.js:1:1`],
+              causeChain: ["Error"],
+              completeness: "complete",
+              loss: "none",
+            },
+          }),
+        );
+      }
+      drainSupportIncidentCandidates();
+      const retained = listSupportIncidents(stateDir, { readOnly: true });
+      expect(retained).toHaveLength(MAX_SUPPORT_INCIDENT_EVALUATIONS_PER_MINUTE);
+      const parseEntries = vi.spyOn(incidentStore, "listSupportIncidentEntries");
+      sink.write(failureEvent({ errorKind: "internal" }));
+      expect(parseEntries).not.toHaveBeenCalled();
+      const rejection = expectActivityLogProof(
+        "support.incident.rejected.emitted-line",
+        lines("support.incident.rejected")[0] ?? "",
+      );
+      expect(rejection).toMatchObject({
+        rejectionReason: "evaluation-rate-limited",
+        openIncidentCount: retained.length,
+        correlationId: "failure-correlation-1",
         completeness: "partial",
         loss: "event-dropped",
       });

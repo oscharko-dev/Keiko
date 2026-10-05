@@ -161,6 +161,21 @@ export function listSupportIncidentEntries(stateDir: string): readonly SupportIn
   );
 }
 
+/** Counts closed-name regular records without opening bodies, including torn records. */
+export function countSupportIncidentEntries(stateDir: string): number {
+  try {
+    let count = 0;
+    for (const entry of readdirSync(supportIncidentDirectory(stateDir), { withFileTypes: true })) {
+      if (entry.isFile() && isSupportIncidentId(parseSupportIncidentFileName(entry.name)))
+        count += 1;
+    }
+    return count;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return 0;
+    throw error;
+  }
+}
+
 /** One record by id through the same hardened read, or `undefined` when absent or unreadable. */
 export function readSupportIncidentRecord(
   stateDir: string,
