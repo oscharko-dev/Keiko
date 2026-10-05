@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "eb45c21e02a3d65e9a3a6c4afab6e61a3b4f500b1cc4d2a18f4f32532fb078b5"
+    "catalogDigest": "14dfab7e506721e37358d85c2f9176b6e136a5fa7974e4fbc7d0b71fed2d7664"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2339,6 +2339,7 @@
       "packages/keiko-server/src/support-report-download.test.ts"
     ],
     "support.report.ui.failed.lifecycle": [
+      "packages/keiko-server/src/support-report-download.test.ts",
       "packages/keiko-server/src/support-report-routes.test.ts"
     ],
     "support.report.ui.started.lifecycle": [
