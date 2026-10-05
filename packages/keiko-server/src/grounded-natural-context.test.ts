@@ -143,6 +143,41 @@ function legacyHandbooks(): string {
 }
 
 describe("natural connected-folder context", () => {
+  it.each(["utf16le", "utf16be", "windows-1252"] as const)(
+    "keeps decoded %s secrets out of the actual fitted gateway prompt",
+    async (codec) => {
+      const root = ordinaryApp();
+      const secret = ["private", "codec", "sentinel"].join("-");
+      const text = `<meta charset="${codec}">\n<p>CodecServiceProbe Ölwechsel 750 hours; password="${secret}"</p>\n`;
+      const bytes =
+        codec === "windows-1252"
+          ? Buffer.from(text, "latin1")
+          : Buffer.from(`\uFEFF${text}`, "utf16le");
+      writeFileSync(
+        join(root, "handbook/services/encoded.html"),
+        codec === "utf16be" ? bytes.swap16() : bytes,
+      );
+      const query = 'Find "CodecServiceProbe" and cite its documented maintenance interval.';
+      const output = await retrieve(root, query);
+      const evidence = output.pack.files
+        .flatMap((file) => file.excerpts)
+        .map((excerpt) => excerpt.content)
+        .join("\n");
+      expect(evidence).toContain("Ölwechsel 750 hours");
+      expect(evidence).toContain("[REDACTED]");
+      expect(JSON.stringify(output.pack)).not.toContain(secret);
+      const sent = fittedGroundedGatewayPrompt(
+        query,
+        output.pack,
+        (value: unknown): unknown => value,
+      );
+      const prompt = sent.messages.map((message) => message.content).join("\n");
+      expect(prompt).toContain("Ölwechsel 750 hours");
+      expect(prompt).not.toContain(secret);
+      expect(prompt).toContain("handbook/services/encoded.html");
+    },
+  );
+
   it.each([
     ["What Next.js version is documented?", "Next.js 16 is documented."],
     ["Which package manager is documented?", "The package manager is npm."],

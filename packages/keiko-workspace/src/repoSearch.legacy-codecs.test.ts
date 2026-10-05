@@ -42,7 +42,46 @@ function manual(charset: string, encodedText: Uint8Array): Buffer {
   ]);
 }
 
+function encodedPrivateManual(
+  codec: "utf16le" | "utf16be" | "windows-1252",
+  secret: string,
+): Buffer {
+  const content = `<meta charset="${codec}">\n<p>CodecServiceProbe Ölwechsel 750 hours; password="${secret}"</p>\n`;
+  if (codec === "windows-1252") return Buffer.from(content, "latin1");
+  const bytes = Buffer.from(`\uFEFF${content}`, "utf16le");
+  return codec === "utf16be" ? bytes.swap16() : bytes;
+}
+
 describe("explicitly declared legacy HTML codecs", () => {
+  it.each(["utf16le", "utf16be", "windows-1252"] as const)(
+    "redacts decoded %s secrets from atoms and excerpts while retaining the public fact",
+    async (codec) => {
+      const secret = ["private", "codec", "sentinel"].join("-");
+      put(path, encodedPrivateManual(codec, secret));
+      const selected = scope();
+      const result = await searchText(selected, query);
+      expect(result.coverage).toMatchObject({ incomplete: false, filesScanned: 1 });
+      expect(result.atoms).toContainEqual(
+        expect.objectContaining({ scopePath: path, lineRange: { startLine: 2, endLine: 2 } }),
+      );
+      const excerpt = await readExcerpt(selected, {
+        scopePath: path,
+        startLine: 2,
+        endLine: 2,
+        maxBytes: 512,
+      });
+      expect(excerpt.content).toContain("Ölwechsel 750 hours");
+      expect(excerpt.content).toContain("[REDACTED]");
+      expect(JSON.stringify({ result, excerpt })).not.toContain(secret);
+      const secretOnly = await searchText(selected, { ...query, text: secret });
+      expect(secretOnly.atoms).toEqual([]);
+      const editorControl = await searchText(selected, { ...query, text: secret }, undefined, {
+        contentLane: "editor",
+      });
+      expect(editorControl.atoms).toHaveLength(1);
+    },
+  );
+
   it.each([
     '<meta charset=""><meta charset="utf-8">',
     '<meta charset="  "><meta charset="utf-8">',
