@@ -83060,14 +83060,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:251",
+      "site": "packages/keiko-server/src/grounded-qa.ts:253",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:2549",
+      "site": "packages/keiko-server/src/grounded-qa.ts:2551",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -85247,7 +85247,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:2846",
+      "site": "packages/keiko-server/src/grounded-qa.ts:2848",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
