@@ -20,6 +20,7 @@ import {
   discoverWithStats,
   readWorkspaceFile,
   readWorkspaceFileForEditing,
+  readWorkspaceFilePrefixForEvidence,
   visitWorkspaceFiles,
 } from "./discovery.js";
 import { detectWorkspace, detectWorkspaceAt } from "./detect.js";
@@ -78,6 +79,113 @@ function fakeWorkspace(root: string): WorkspaceInfo {
 }
 
 describe("streamed discovery failure propagation", () => {
+  it("closes each directory before descending through a deep folder chain", async () => {
+    const depth = 96;
+    const relative = `${"nested/".repeat(depth)}leaf.txt`;
+    const base = memFs("/ws", { [relative]: "deep fact" });
+    let open = 0;
+    let peak = 0;
+    let closed = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      iterateDirectory: async function* (path) {
+        open += 1;
+        peak = Math.max(peak, open);
+        try {
+          if (open > 8) throw Object.assign(new Error("descriptor pressure"), { code: "EMFILE" });
+          for (const entry of base.readDir(path)) yield await Promise.resolve(entry);
+        } finally {
+          open -= 1;
+          closed += 1;
+        }
+      },
+    };
+    const visited: string[] = [];
+    const result = await visitWorkspaceFiles(
+      fakeWorkspace("/ws"),
+      [],
+      false,
+      fs,
+      createStructuralExecutionControl(null),
+      (entry) => {
+        visited.push(entry.relativePath);
+        return Promise.resolve();
+      },
+    );
+    expect(visited).toEqual([relative]);
+    expect(result).toMatchObject({ filesDiscovered: 1, ioErrors: 0 });
+    expect(peak).toBe(1);
+    expect(open).toBe(0);
+    expect(closed).toBe(depth + 1);
+  });
+
+  it("does not open queued descendants after cancellation during directory closure", async () => {
+    const base = memFs("/ws", { "child/leaf.txt": "fact" });
+    const abort = new AbortController();
+    const opened: string[] = [];
+    const fs: WorkspaceFs = {
+      ...base,
+      iterateDirectory: async function* (path) {
+        opened.push(path);
+        try {
+          for (const entry of base.readDir(path)) yield await Promise.resolve(entry);
+        } finally {
+          abort.abort();
+        }
+      },
+    };
+    await expect(
+      visitWorkspaceFiles(
+        fakeWorkspace("/ws"),
+        [],
+        false,
+        fs,
+        createStructuralExecutionControl(null, Date.now, abort.signal),
+        () => Promise.resolve(),
+      ),
+    ).rejects.toMatchObject({ reason: "aborted" });
+    expect(opened).toEqual(["/ws"]);
+  });
+
+  it("traverses deeply nested native directories with one open directory handle", async () => {
+    const relative = `${"n/".repeat(96)}fact.txt`;
+    file(relative, "native deep fact");
+    const iterate = nodeWorkspaceFs.iterateDirectory;
+    if (iterate === undefined) throw new TypeError("Native directory streaming is required");
+    let open = 0;
+    let peak = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      readDir: () => {
+        throw new Error("Native streaming must not materialize a directory");
+      },
+      iterateDirectory: async function* (path) {
+        open += 1;
+        peak = Math.max(peak, open);
+        try {
+          yield* iterate(path);
+        } finally {
+          open -= 1;
+        }
+      },
+    };
+    const visited: string[] = [];
+    const stats = await visitWorkspaceFiles(
+      fakeWorkspace(dir),
+      [],
+      false,
+      fs,
+      createStructuralExecutionControl(null),
+      (entry) => {
+        visited.push(entry.relativePath);
+        return Promise.resolve();
+      },
+    );
+    expect(visited).toEqual(["package.json", relative]);
+    expect(stats).toMatchObject({ filesDiscovered: 2, ioErrors: 0 });
+    expect({ open, peak }).toEqual({ open: 0, peak: 1 });
+  });
+
   it.each([
     new Error("directory read unavailable"),
     new WorkspaceReadError("read unavailable", ""),
@@ -1187,9 +1295,7 @@ describe("readWorkspaceFileForEditing", () => {
     expect(redacted.text).toContain("[REDACTED]");
   });
 
-  it("preserves line numbering that redaction collapses (multi-line PEM block)", () => {
-    // redact() rewrites a whole BEGIN/END PRIVATE KEY block as ONE token, so every line after it
-    // shifts in the redacted view. Editor coordinates drive a WRITE and must address the real file.
+  it("preserves physical line numbering in raw and redacted reads after a PEM block", () => {
     file(
       "key.ts",
       [
@@ -1204,11 +1310,13 @@ describe("readWorkspaceFileForEditing", () => {
     const rawLines = readWorkspaceFileForEditing(workspace, "key.ts").rawText.split("\n");
     const redactedLines = readWorkspaceFile(workspace, "key.ts").text.split("\n");
 
-    // Raw: the marker is the 4th line (index 3). Redacted: the 3-line PEM block became one token,
-    // so the same marker moved to index 1 and the file lost two lines.
     expect(rawLines[3]).toContain("needle-after-pem");
-    expect(redactedLines[1]).toContain("needle-after-pem");
-    expect(redactedLines).toHaveLength(rawLines.length - 2);
+    expect(redactedLines[3]).toContain("needle-after-pem");
+    expect(redactedLines).toHaveLength(rawLines.length);
+    expect(redactedLines.join("\n")).not.toContain("AAAAB3NzaC1yc2EAAAADAQABAAABgQ");
+    const prefix = readWorkspaceFilePrefixForEvidence(workspace, "key.ts", 512, nodeWorkspaceFs);
+    expect(prefix?.split("\n")[3]).toContain("needle-after-pem");
+    expect(prefix).not.toContain("AAAAB3NzaC1yc2EAAAADAQABAAABgQ");
   });
 
   it("reports sizeBytes as the UTF-8 byte count", () => {

@@ -140,22 +140,29 @@ function htmlAttributeValue(cursor: HtmlAttributeCursor): string | undefined {
   return end === start ? undefined : cursor.tag.slice(start, end);
 }
 
-function htmlMetaTagEnd(prefix: string, offset: number): number | undefined {
+interface HtmlMetaTag {
+  readonly end: number;
+  readonly attributes: ReadonlyMap<string, string>;
+}
+
+function parseHtmlMetaTag(prefix: string, offset: number): HtmlMetaTag | undefined {
   const cursor = { tag: prefix, offset };
+  const attributes = new Map<string, string>();
   while (cursor.offset < prefix.length) {
     skipHtmlAttributeSeparators(cursor, true);
-    if (prefix.charAt(cursor.offset) === ">") return cursor.offset + 1;
+    if (cursor.offset === prefix.length) return undefined;
+    if (prefix.charAt(cursor.offset) === ">") return { end: cursor.offset + 1, attributes };
     const name = htmlAttributeName(cursor);
     skipHtmlAttributeSeparators(cursor);
-    if (prefix.charAt(cursor.offset) === "=") {
-      cursor.offset += 1;
-      htmlAttributeValue(cursor);
-    } else if (name === "") cursor.offset += 1;
+    if (prefix.charAt(cursor.offset) !== "=") continue;
+    cursor.offset += 1;
+    const value = htmlAttributeValue(cursor);
+    if (name !== "" && value !== undefined && !attributes.has(name)) attributes.set(name, value);
   }
   return undefined;
 }
 
-function* htmlMetaTags(prefix: string): Generator<string> {
+function* htmlMetaTags(prefix: string): Generator<ReadonlyMap<string, string>> {
   const folded = prefix.toLowerCase();
   let offset = 0;
   while (offset < prefix.length) {
@@ -163,38 +170,21 @@ function* htmlMetaTags(prefix: string): Generator<string> {
     if (start < 0) return;
     offset = start + 5;
     if (!/[\t\n\f\r />]/u.test(prefix.charAt(offset))) continue;
-    const end = htmlMetaTagEnd(prefix, offset);
-    if (end === undefined) return;
-    offset = end;
-    yield prefix.slice(start, end);
+    const tag = parseHtmlMetaTag(prefix, offset);
+    if (tag === undefined) return;
+    offset = tag.end;
+    yield tag.attributes;
   }
 }
 
-function htmlMetaAttributes(tag: string): ReadonlyMap<string, string> {
-  const attributes = new Map<string, string>();
-  const cursor = { tag, offset: 5 };
-  while (cursor.offset < tag.length) {
-    skipHtmlAttributeSeparators(cursor, true);
-    if (tag.charAt(cursor.offset) === ">") break;
-    const name = htmlAttributeName(cursor);
-    skipHtmlAttributeSeparators(cursor);
-    if (tag.charAt(cursor.offset) !== "=") {
-      if (name === "") cursor.offset += 1;
-      continue;
-    }
-    cursor.offset += 1;
-    const value = htmlAttributeValue(cursor);
-    if (name !== "" && value !== undefined && !attributes.has(name)) attributes.set(name, value);
-  }
-  return attributes;
-}
-
-function htmlMetaCharset(tag: string): string | undefined {
-  const attributes = htmlMetaAttributes(tag);
+function htmlMetaCharset(attributes: ReadonlyMap<string, string>): string | undefined {
   const direct = attributes.get("charset");
   if (direct !== undefined) return direct;
   if (attributes.get("http-equiv")?.toLowerCase() !== "content-type") return undefined;
-  return /\bcharset\s*=\s*([a-z0-9_-]+)/iu.exec(attributes.get("content") ?? "")?.[1];
+  const value = /\bcharset[\t\n\f\r ]*=[\t\n\f\r ]*(?:"([^"]*)"|'([^']*)'|([^;\t\n\f\r ]+))/iu.exec(
+    attributes.get("content") ?? "",
+  );
+  return value?.[1] ?? value?.[2] ?? value?.[3];
 }
 
 function supportedDeclaredHtmlEncoding(charset: string): TextByteEncoding | false {

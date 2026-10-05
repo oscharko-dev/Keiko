@@ -11,7 +11,7 @@ interface AnchoredByteWindow {
 }
 
 // This is the existing planner/literal request envelope, not a source traversal limit.
-const MAX_EXCERPT_ANCHOR_CHARACTERS = 4096;
+export const MAX_EXCERPT_ANCHOR_CHARACTERS = 4096;
 
 export function validateExcerptAnchors(anchors: readonly string[]): readonly string[] {
   if (!Array.isArray(anchors)) throw new RepoSearchInvalidRangeError("invalid excerpt anchors");

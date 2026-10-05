@@ -75,6 +75,7 @@ import {
   createSemanticSearchSession,
   runSemanticSearchSession,
   semanticSearchTool,
+  DEFAULT_STREAMED_SEMANTIC_BOUNDS,
   type SemanticSearchMatch,
   type SemanticSearchProvider,
 } from "./repoSearchSemantic.js";
@@ -588,7 +589,7 @@ function buildSearchTextRunner(
   deps: SearchTextRunnerDeps,
 ): SearchTextRunner {
   const semanticBounds =
-    limits.maxFilesScanned === null ? { maxDocumentBytes: 131_072, maxDocuments: 32 } : undefined;
+    limits.maxFilesScanned === null ? DEFAULT_STREAMED_SEMANTIC_BOUNDS : undefined;
   return {
     scope,
     limits: {

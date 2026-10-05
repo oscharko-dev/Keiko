@@ -5,10 +5,17 @@ import type {
 } from "@oscharko-dev/keiko-contracts/connected-context";
 
 import { queryRankingTerms } from "./repoSearchRanking.js";
-import { anchoredExcerptByteWindow } from "./repoSearchExcerptWindow.js";
+import {
+  anchoredExcerptByteWindow,
+  MAX_EXCERPT_ANCHOR_CHARACTERS,
+} from "./repoSearchExcerptWindow.js";
 
 export const SEMANTIC_SEARCH_TOOL_PREFIX = "repo.semanticSearch";
 export const SEMANTIC_RRF_K = 60;
+export const DEFAULT_STREAMED_SEMANTIC_BOUNDS = Object.freeze({
+  maxDocumentBytes: 131_072,
+  maxDocuments: 32,
+});
 
 export interface SemanticSearchDocument {
   // Source origin of a bounded fragment; provider match lines remain absolute source lines.
@@ -144,6 +151,18 @@ function validMatch(
   );
 }
 
+function semanticExcerptTerms(query: RetrievalQuery): readonly string[] {
+  const terms: string[] = [];
+  let characters = 0;
+  for (const term of queryRankingTerms(query.text)) {
+    const cost = term.length + (terms.length === 0 ? 0 : 1);
+    if (characters + cost > MAX_EXCERPT_ANCHOR_CHARACTERS) continue;
+    terms.push(term);
+    characters += cost;
+  }
+  return terms;
+}
+
 export function createSemanticSearchSession(
   provider: SemanticSearchProvider | undefined,
   query: RetrievalQuery,
@@ -157,7 +176,7 @@ export function createSemanticSearchSession(
     documents: [],
     ...bounds,
     documentBytes: 0,
-    queryTerms: queryRankingTerms(query.text),
+    queryTerms: semanticExcerptTerms(query),
     documentScores: new Map(),
   };
 }
@@ -171,7 +190,7 @@ function boundedSemanticDocument(
   if (window !== undefined)
     return { scopePath: document.scopePath, text: window.content, startLine: window.startLine };
   const bytes = new TextEncoder().encode(document.text).subarray(0, maxBytes);
-  const text = new TextDecoder("utf-8").decode(bytes).replace(/\uFFFD$/u, "");
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes, { stream: true });
   return { ...document, text };
 }
 

@@ -3,6 +3,7 @@ import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-con
 import { memFs } from "./_memfs.js";
 import { DEFAULT_SEARCH_LIMITS, searchText, type SearchScope } from "./repoSearch.js";
 import type { WorkspaceFs } from "./fs.js";
+import { DEFAULT_STREAMED_SEMANTIC_BOUNDS } from "./repoSearchSemantic.js";
 
 function scope(): SearchScope {
   return {
@@ -42,6 +43,32 @@ function delayedFs(files: Record<string, string>, reverse: boolean): WorkspaceFs
 }
 
 describe("shared streamed search review regressions", () => {
+  it("keeps a long natural query intact while bounding only semantic excerpt hints", async () => {
+    const text = `${"a".repeat(5000)} session renewal`;
+    const source = `${"background\n".repeat(1000)}session renewal available`;
+    let suppliedQuery = "";
+    let suppliedText = "";
+    const result = await searchText(scope(), query(text), undefined, {
+      fs: memFs("/ws", { "deep/manual/session.txt": source }),
+      semanticSearchProvider: {
+        name: "long-query-review",
+        search: (input) => {
+          suppliedQuery = input.query.text;
+          suppliedText = input.documents[0]?.text ?? "";
+          return Promise.resolve([{ scopePath: "deep/manual/session.txt", score: 1, line: 1001 }]);
+        },
+      },
+    });
+    expect(suppliedQuery).toBe(text);
+    expect(suppliedText).toContain("session renewal available");
+    expect(result.coverage).toMatchObject({ incomplete: false, filesScanned: 1 });
+    expect(result.atoms).toContainEqual(
+      expect.objectContaining({
+        scopePath: "deep/manual/session.txt",
+        lineRange: { startLine: 1001, endLine: 1001 },
+      }),
+    );
+  });
   it("keeps ordinary lexical callers free of synthetic source-inspection hits", async () => {
     const fs = memFs("/ws", { "src/unrelated.ts": "export const unrelated = 42;\n" });
     const result = await searchText(
@@ -79,10 +106,13 @@ describe("shared streamed search review regressions", () => {
       },
     });
     expect(supplied).toContain("zzzz/session.ts");
-    expect(supplied.length).toBeLessThanOrEqual(32);
+    expect(supplied.length).toBeLessThanOrEqual(DEFAULT_STREAMED_SEMANTIC_BOUNDS.maxDocuments);
     expect(suppliedText).toContain("session renewal");
     expect(suppliedStart).toBeGreaterThan(1);
-    expect(Buffer.byteLength(suppliedText)).toBeLessThanOrEqual(4096);
+    expect(Buffer.byteLength(suppliedText)).toBeLessThanOrEqual(
+      DEFAULT_STREAMED_SEMANTIC_BOUNDS.maxDocumentBytes /
+        DEFAULT_STREAMED_SEMANTIC_BOUNDS.maxDocuments,
+    );
     expect(result.atoms.find((atom) => atom.provenance.kind === "model-rerank")?.lineRange).toEqual(
       { startLine: 1001, endLine: 1001 },
     );
@@ -90,8 +120,9 @@ describe("shared streamed search review regressions", () => {
   it("supplies deterministic ranked semantic documents under opposite read completion order", async () => {
     const files: Record<string, string> = {};
     for (let index = 0; index < 40; index += 1)
-      files[`file-${String(index)}.txt`] = "session renewal available";
+      files[`file-${String(index)}.txt`] = "session renewal available\n".repeat(300);
     const supplies: string[][] = [];
+    const suppliedBytes: number[] = [];
     for (const reverse of [true, false]) {
       await searchText(scope(), query("session renewal"), undefined, {
         fs: delayedFs(files, reverse),
@@ -99,16 +130,21 @@ describe("shared streamed search review regressions", () => {
           name: "deterministic-review",
           search: ({ documents }) => {
             supplies.push(documents.map((document) => document.scopePath));
-            expect(
+            suppliedBytes.push(
               documents.reduce((sum, document) => sum + Buffer.byteLength(document.text), 0),
-            ).toBeLessThanOrEqual(131_072);
+            );
             return Promise.resolve([]);
           },
         },
       });
     }
-    expect(supplies[0]).toHaveLength(32);
+    expect(supplies[0]).toHaveLength(DEFAULT_STREAMED_SEMANTIC_BOUNDS.maxDocuments);
     expect(supplies[1]).toEqual(supplies[0]);
+    expect(suppliedBytes).toHaveLength(2);
+    for (const bytes of suppliedBytes) {
+      expect(bytes).toBeGreaterThan(0);
+      expect(bytes).toBeLessThanOrEqual(DEFAULT_STREAMED_SEMANTIC_BOUNDS.maxDocumentBytes);
+    }
   });
 
   it("retains the same bounded omission paths despite opposite completion order", async () => {

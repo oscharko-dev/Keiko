@@ -44,6 +44,34 @@ function exq(text: string): RetrievalQuery {
 }
 
 describe("buildSymbolGraph", () => {
+  it("keeps definition and reference coordinates after redacting a multiline PEM block", async () => {
+    const source = [
+      "/* -----BEGIN PRIVATE KEY-----",
+      "private-graph-fixture",
+      "-----END PRIVATE KEY----- */",
+      "export function afterPem(): number { return 1; }",
+      "afterPem();",
+    ].join("\n");
+    const { scope, fs } = makeScope({ "src/after-pem.ts": source });
+    const graph = await buildSymbolGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+    expect(definitionsForSymbol(graph, "afterPem").map((record) => record.line)).toEqual([4]);
+    expect(callsToSymbol(graph, "afterPem").map((record) => record.line)).toEqual([5]);
+    const atoms = await symbolGraphAdapter.lookup(
+      scope,
+      exq("afterPem"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms).toContainEqual(
+      expect.objectContaining({
+        scopePath: "src/after-pem.ts",
+        lineRange: { startLine: 4, endLine: 4 },
+      }),
+    );
+    expect(JSON.stringify({ graph, atoms })).not.toContain("private-graph-fixture");
+  });
+
   it("finds a function definition when the filename does not match the symbol", async () => {
     const { scope, fs } = makeScope({
       "src/config.ts":

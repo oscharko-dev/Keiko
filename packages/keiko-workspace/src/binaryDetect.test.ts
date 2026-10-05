@@ -171,6 +171,31 @@ describe("declared HTML character encoding", () => {
       );
     },
   );
+  it.each([
+    `charset='iso-8859-1'`,
+    `charset=iso_8859-1:1987`,
+    `charset='iso_8859-1:1987'; boundary=demo`,
+  ])("decodes the complete http-equiv encoding label in %s", (parameter) => {
+    const markup = `<meta content="text/html; ${parameter}" http-equiv="Content-Type"><p>Öl</p>`;
+    expect(decodeTextFileBytes(legacy(markup), { scopePath: "manual.htm" })).toEqual({
+      encoding: "windows-1252",
+      text: markup,
+    });
+  });
+  it.each(["metadata", "meta-x"])("ignores a %s element that is not meta", (tag) => {
+    const markup = `<${tag} charset="windows-1252"><p>Öl</p>`;
+    expect(decodeTextFileBytes(legacy(markup), { scopePath: "manual.htm" })).toBeUndefined();
+  });
+  it("does not accept an unsupported label by truncating it at punctuation", () => {
+    const markup =
+      '<meta content="text/html; charset=windows-1252.invalid" http-equiv="content-type">Öl';
+    expect(() =>
+      decodeTextFileBytes(legacy(markup), {
+        scopePath: "manual.htm",
+        requireSupportedEncoding: true,
+      }),
+    ).toThrow("declared text encoding is unavailable");
+  });
   it("accepts an http-equiv declaration with reordered attributes", () => {
     const bytes = legacy(
       '<META content="text/html; charset=ISO-8859-1" HTTP-EQUIV="Content-Type"><p>Öl</p>',

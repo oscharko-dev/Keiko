@@ -1,10 +1,11 @@
-// Recursive, bounded, deterministic file discovery and a single boundary-checked read path.
+// Recursive discovery and a single boundary-checked read path.
 // Security invariants (ADR-0005 D2/D3):
 //   - every directory descent and every read goes through resolveWithinWorkspace first;
 //   - always-on DENY patterns are applied before the optional .gitignore subset;
 //   - a symlink whose realpath escapes the root is skipped (never followed);
-//   - recursion is capped by maxDepth and total results by maxFiles;
-//   - every directory read is capped, so one huge directory cannot be materialized in full.
+//   - inventory discovery honors its explicit depth/result/directory-entry budgets;
+//   - complete search uses native directory streaming and closes each handle before descent;
+//   - legacy ports without an iterator retain their existing array-based readDir contract.
 
 import { relative } from "node:path";
 import {
@@ -651,10 +652,16 @@ async function* streamingDirectoryEntries(
   for (const entry of fs.readDir(path)) yield entry;
 }
 
+interface PendingStreamingDirectory {
+  readonly absolute: string;
+  readonly relativeDir: string;
+}
+
 async function visitStreamingEntry(
   state: StreamingWalk,
   relativeDir: string,
   entry: WorkspaceDirEntry,
+  directories: PendingStreamingDirectory[],
 ): Promise<void> {
   await yieldToEventLoop(state);
   const walk = state.walk;
@@ -666,25 +673,29 @@ async function visitStreamingEntry(
   }
   const current = currentContainedEntry(walk, path);
   if (current === undefined || !isAllowed(walk, path, current.stat.isDirectory)) return;
-  if (current.stat.isDirectory) await visitStreamingDirectory(state, current.absolutePath, path);
+  if (current.stat.isDirectory)
+    directories.push({ absolute: current.absolutePath, relativeDir: path });
   else if (current.stat.isFile) {
     state.filesDiscovered += 1;
     await state.onFile({ relativePath: path, sizeBytes: current.stat.size });
   }
 }
 
-async function visitStreamingDirectory(
+async function collectStreamingDirectory(
   state: StreamingWalk,
   absolute: string,
   relativeDir: string,
+  directories: PendingStreamingDirectory[],
 ): Promise<void> {
   try {
+    if (state.walk.executionControl !== undefined)
+      assertStructuralExecutionActive(state.walk.executionControl);
     const current = currentContainedDirectory(state.walk, absolute, relativeDir);
     if (current === undefined) return;
     for await (const entry of streamingDirectoryEntries(state.walk.fs, current)) {
       if (state.walk.executionControl !== undefined)
         assertStructuralExecutionActive(state.walk.executionControl);
-      await visitStreamingEntry(state, relativeDir, entry);
+      await visitStreamingEntry(state, relativeDir, entry, directories);
     }
     currentContainedDirectory(state.walk, current, relativeDir);
   } catch (error) {
@@ -696,6 +707,23 @@ async function visitStreamingDirectory(
       return;
     }
     throw directoryReadFailure(relativeDir, error);
+  }
+}
+
+async function visitStreamingDirectory(
+  state: StreamingWalk,
+  absolute: string,
+  relativeDir: string,
+): Promise<void> {
+  const pending: PendingStreamingDirectory[] = [{ absolute, relativeDir }];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    if (directory === undefined) break;
+    const children: PendingStreamingDirectory[] = [];
+    await collectStreamingDirectory(state, directory.absolute, directory.relativeDir, children);
+    // Finish and close the current descriptor before descending. Only directory paths are queued;
+    // file contents and file inventories are never retained by discovery.
+    for (const child of children.reverse()) pending.push(child);
   }
 }
 
@@ -1091,7 +1119,7 @@ export function readWorkspaceFilePrefixForEvidence(
     mapPrefixReadFailure(error, target, maxBytes);
   }
   assertStablePrefixRead(workspace, fs, target);
-  return redact(rawText);
+  return redact(rawText, [], { preserveSourceLineBreaks: true });
 }
 
 /** Internal text seam that keeps stable read metadata attached until index persistence. */
@@ -1212,7 +1240,7 @@ export function readWorkspaceFile(
   return {
     relativePath: raw.relativePath,
     sizeBytes: raw.sizeBytes,
-    text: redact(raw.rawText),
+    text: redact(raw.rawText, [], { preserveSourceLineBreaks: true }),
     truncated: raw.truncated,
   };
 }

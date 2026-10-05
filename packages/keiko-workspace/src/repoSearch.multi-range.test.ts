@@ -146,6 +146,106 @@ describe("fresh multi-range excerpt projection", () => {
     expect(reads.caps).toEqual([]);
   });
 
+  it("does not publish content when the total byte grant is zero", async () => {
+    await expect(readExcerpt(scope(), { ...request(), maxTotalBytes: 0 })).rejects.toMatchObject({
+      reason: "io-error",
+    });
+  });
+
+  it("keeps duplicate and overlapping explicit ranges in requested order and charges each", async () => {
+    writeFileSync(join(root, "readings.txt"), "alpha\nbeta\ngamma");
+    const result = await readExcerpt(scope(), {
+      ...request(),
+      startLine: 1,
+      endLine: 3,
+      maxBytes: 32,
+      maxTotalBytes: 64,
+      ranges: [
+        { startLine: 1, endLine: 2 },
+        { startLine: 1, endLine: 2 },
+        { startLine: 2, endLine: 3 },
+      ],
+    });
+    expect(result.windows?.map((window) => window.content)).toEqual([
+      "alpha\nbeta",
+      "alpha\nbeta",
+      "beta\ngamma",
+    ]);
+    expect(result.windows?.map((window) => window.atom.lineRange)).toEqual([
+      { startLine: 1, endLine: 2 },
+      { startLine: 1, endLine: 2 },
+      { startLine: 2, endLine: 3 },
+    ]);
+    expect(result.omittedRangeCount).toBe(0);
+    const charged = await readExcerpt(scope(), {
+      ...request(),
+      startLine: 1,
+      endLine: 3,
+      maxBytes: 32,
+      maxTotalBytes: 20,
+      ranges: [
+        { startLine: 1, endLine: 2 },
+        { startLine: 1, endLine: 2 },
+        { startLine: 2, endLine: 3 },
+      ],
+    });
+    expect(charged.windows?.map((window) => window.content)).toEqual([
+      "alpha\nbeta",
+      "alpha\nbeta",
+    ]);
+    expect(charged.omittedRangeCount).toBe(1);
+  });
+
+  it("shares anchors and a multi-window byte budget across disjoint requested ranges", async () => {
+    writeFileSync(
+      join(root, "readings.txt"),
+      `${"prefix ".repeat(50)}FirstRangeProbe${" filler".repeat(50)}SecondRangeProbe\nFinalRangeProbe`,
+    );
+    const result = await readExcerpt(scope(), {
+      ...request(),
+      startLine: 1,
+      endLine: 2,
+      maxBytes: 32,
+      maxTotalBytes: 80,
+      maxWindows: 3,
+      anchors: ["FirstRangeProbe", "SecondRangeProbe", "FinalRangeProbe"],
+      ranges: [
+        { startLine: 1, endLine: 1 },
+        { startLine: 2, endLine: 2 },
+      ],
+    });
+    expect(result.windows).toHaveLength(3);
+    expect(result.windows?.map((window) => window.content)).toEqual([
+      expect.stringContaining("FirstRangeProbe"),
+      expect.stringContaining("SecondRangeProbe"),
+      "FinalRangeProbe",
+    ]);
+    expect(result.windows?.map((window) => window.atom.lineRange)).toEqual([
+      { startLine: 1, endLine: 1 },
+      { startLine: 1, endLine: 1 },
+      { startLine: 2, endLine: 2 },
+    ]);
+    expect(
+      (result.windows ?? []).reduce((sum, window) => sum + Buffer.byteLength(window.content), 0),
+    ).toBeLessThanOrEqual(80);
+    expect(result.omittedRangeCount).toBe(0);
+  });
+
+  it("rejects the entire batch if a later admitted range starts beyond the physical EOF", async () => {
+    writeFileSync(join(root, "readings.txt"), "alpha\nbeta");
+    await expect(
+      readExcerpt(scope(), {
+        ...request(),
+        startLine: 1,
+        endLine: 10,
+        ranges: [
+          { startLine: 1, endLine: 1 },
+          { startLine: 8, endLine: 8 },
+        ],
+      }),
+    ).rejects.toThrow("cannot read excerpt outside the file line range");
+  });
+
   it("preserves an explicit returned-window limit and its skipped-range count", async (): Promise<void> => {
     const result = await readExcerpt(scope(), { ...request(), maxWindows: 2 });
     expect(result.windows).toHaveLength(2);

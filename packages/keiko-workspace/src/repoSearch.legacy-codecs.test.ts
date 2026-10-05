@@ -53,6 +53,38 @@ function encodedPrivateManual(
 }
 
 describe("explicitly declared legacy HTML codecs", () => {
+  it.each(["'iso-8859-1'", "iso_8859-1:1987"])(
+    "searches a deeply nested non-Git HTML manual using declared %s",
+    async (label) => {
+      put(
+        path,
+        Buffer.from(
+          `<meta http-equiv="Content-Type" content="text/html; charset=${label}">\n<p>CodecServiceProbe Ölwechsel 750 hours</p>`,
+          "latin1",
+        ),
+      );
+      const selected = scope();
+      const result = await searchText(selected, query);
+      expect(result.coverage).toMatchObject({
+        incomplete: false,
+        filesScanned: 1,
+        filesSkipped: 0,
+      });
+      expect(result.atoms).toContainEqual(
+        expect.objectContaining({
+          scopePath: path,
+          lineRange: { startLine: 2, endLine: 2 },
+        }),
+      );
+      const excerpt = await readExcerpt(selected, {
+        scopePath: path,
+        startLine: 2,
+        endLine: 2,
+        maxBytes: 512,
+      });
+      expect(excerpt.content).toBe("<p>CodecServiceProbe Ölwechsel 750 hours</p>");
+    },
+  );
   it.each(["utf16le", "utf16be", "windows-1252"] as const)(
     "redacts decoded %s secrets from atoms and excerpts while retaining the public fact",
     async (codec) => {
