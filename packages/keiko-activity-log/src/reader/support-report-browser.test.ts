@@ -1,6 +1,7 @@
 import { webcrypto } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   buildSupportReportEnvelope,
   canonicalSupportJson,
   clientOnlySupportReportSections,
@@ -321,8 +322,25 @@ it("rejects private or malformed client failure fields instead of filtering them
     },
   ])
     expect(() => clientOnlySupportReportSections({ ...base, failure })).toThrow(SupportReportError);
-  for (const correlationId of ["/private/customer", "ghp_invalid/path", "token=invalid"])
-    expect(() => clientOnlySupportReportSections({ ...base, correlationId })).toThrow(
-      SupportReportError,
-    );
 });
+
+it.each([
+  [undefined, "id000001"],
+  [ACTIVITY_LOG_UNKNOWN_CORRELATION_ID, "id000001"],
+  ["short", "id000001"],
+  ["proxy:original-request", "id000001"],
+  ["customer@example.com", "id000001"],
+  ["ghp_" + "A".repeat(36), "id000001"],
+  ["selected-client-cause", "selected-client-cause"],
+])(
+  "uses identical Node and browser correlation normalization for %s",
+  async (correlation, expected) => {
+    const node = createClientOnlySupportReport(correlation, "service-unavailable");
+    const reference = parseSupportReport(node.reportJson);
+    const browser = await browserReport(reference, correlation, "service-unavailable");
+    expect(reference.incident.correlation.rootCorrelationId).toBe(expected);
+    expect(browser.incident.correlation.rootCorrelationId).toBe(expected);
+    expect(serializeSupportReport(browser)).toBe(node.reportJson);
+    expect(analyzeSupportReport(node.reportJson).selection.status).toBe("insufficient");
+  },
+);

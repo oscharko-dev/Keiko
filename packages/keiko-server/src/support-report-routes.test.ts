@@ -508,6 +508,9 @@ describe("desktop support report transport", () => {
     ["uncorrelated", "correlation-unavailable", "gzip"],
     ["uncorrelated", "correlation-unavailable", "summary"],
     ["uncorrelated", "correlation-unavailable", "completion"],
+    ["unknown", "correlation-unavailable", "gzip"],
+    ["unknown", "correlation-unavailable", "summary"],
+    ["unknown", "correlation-unavailable", "completion"],
     ["manual", "client-only-selected", "gzip"],
     ["manual", "client-only-selected", "summary"],
     ["manual", "client-only-selected", "completion"],
@@ -524,6 +527,7 @@ describe("desktop support report transport", () => {
         evidenceScope: "client-only",
         ...(selection === "manual" ? {} : { failure }),
         ...(selection === "selected" ? { correlationId: "selected-client-cause" } : {}),
+        ...(selection === "unknown" ? { correlationId: "unknown-correlation-id" } : {}),
       };
       const owner = {
         ...deps(),
@@ -534,6 +538,9 @@ describe("desktop support report transport", () => {
       const result = await handleCreateSupportReport(context(JSON.stringify(request)), owner);
       expect(result.status).toBe(200);
       const report = result.body as DesktopSupportReportResponse;
+      expect(parseSupportReport(report.reportJson).incident.correlation.rootCorrelationId).toBe(
+        selection === "selected" ? "selected-client-cause" : "id000001",
+      );
       if (projection === "summary") expect(report.summary?.availabilityReason).toBe(reason);
       else if (projection === "completion") {
         const index = sink.events.findIndex((event) => event.op === "support.report.ui.completed");
@@ -546,6 +553,9 @@ describe("desktop support report transport", () => {
           loss: "none",
           recordCount: 0,
         });
+        if (selection === "selected")
+          expect(completed.selectedCorrelationId).toBe("selected-client-cause");
+        else expect(completed).not.toHaveProperty("selectedCorrelationId");
       } else {
         await assertLimitedGzipDownload(
           report,

@@ -1,11 +1,9 @@
 // Desktop composition uses the same incident, query and canonical serializer as CLI export.
 import { randomBytes, randomUUID } from "node:crypto";
 import { computeDefectFingerprint, incidentCorrelationId } from "../defect-fingerprint.js";
-import { isRedactedLogLabel } from "../log-redaction.js";
 import { serverLogProcessIdentity } from "../server-log.js";
 import {
   clientOnlySupportReportSections,
-  isActivityLogCorrelationId,
   parseSupportIncidentRecord,
   supportIncidentBuild,
   supportIncidentEffectiveExpiry,
@@ -248,9 +246,7 @@ export function createClientOnlySupportReport(
     defectFingerprint: computeDefectFingerprint(UNATTRIBUTED_DEFECT_FINGERPRINT_INPUT),
     availabilityReason,
     ...(failure === undefined ? {} : { failure }),
-    ...(isActivityLogCorrelationId(correlationId) && isRedactedLogLabel(correlationId)
-      ? { correlationId }
-      : {}),
+    correlationId,
   });
   const report = sealSupportReport(sections.incident, sections.selection, sections.evidence);
   return desktopReportResponse(report, {

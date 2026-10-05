@@ -1,6 +1,7 @@
 import {
   isClientReportFailure,
   MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES,
+  normalizeSupportReportCorrelationId,
   type DesktopSupportReportRequest,
   type ClientOnlySupportReportInput,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -161,9 +162,10 @@ async function createReportResponse(
 function clientOnlyReportReason(
   request: DesktopSupportReportRequest,
   hasSession: boolean,
+  correlationId: string | undefined,
 ): ClientOnlySupportReportInput["availabilityReason"] {
   if (!hasSession) return "session-unavailable";
-  if (request.failure !== undefined && request.correlationId === undefined)
+  if (request.failure !== undefined && correlationId === undefined)
     return "correlation-unavailable";
   return "client-only-selected";
 }
@@ -174,19 +176,16 @@ function clientOnlyReportResponse(
   request: DesktopSupportReportRequest,
   hasSession: boolean,
 ): RouteResult {
-  emitSupportReportStarted(
-    ctx.correlationId,
-    request.correlationId !== undefined,
-    request.correlationId,
-  );
+  const correlationId = normalizeSupportReportCorrelationId(request.correlationId);
+  emitSupportReportStarted(ctx.correlationId, correlationId !== undefined, correlationId);
   try {
     const report = createClientOnlySupportReport(
-      request.correlationId ?? ctx.correlationId,
-      clientOnlyReportReason(request, hasSession),
+      correlationId,
+      clientOnlyReportReason(request, hasSession, correlationId),
       request.failure,
     );
     const delivery = cacheSupportReportDownload(deps, undefined, report, ctx.correlationId);
-    emitSupportReportCompleted(ctx.correlationId, report, request.correlationId);
+    emitSupportReportCompleted(ctx.correlationId, report, correlationId);
     return {
       status: 200,
       body: { ...report, ...delivery },

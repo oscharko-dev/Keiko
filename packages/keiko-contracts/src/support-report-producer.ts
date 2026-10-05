@@ -1,5 +1,9 @@
 import { looksLikePersonalIdentifier, looksLikeSecret } from "./activity-log-label-policy.js";
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+  isActivityLogCorrelationId,
+} from "./observability.js";
+import {
   DEFECT_FINGERPRINT_ALGORITHM_VERSION,
   SUPPORT_INCIDENT_SCHEMA_VERSION,
   SUPPORT_INCIDENT_TTL_MS,
@@ -80,11 +84,14 @@ export interface ClientOnlySupportReportInput {
 
 const CLIENT_ONLY_ROOT_CORRELATION_ID = "id000001";
 
-function clientOnlyCorrelationId(correlationId: string | undefined): string {
-  if (correlationId === undefined) return CLIENT_ONLY_ROOT_CORRELATION_ID;
-  if (looksLikeSecret(correlationId) || looksLikePersonalIdentifier(correlationId))
-    return CLIENT_ONLY_ROOT_CORRELATION_ID;
-  return correlationId;
+/** A selected failure reference, never a transport sentinel, credential or personal label. */
+export function normalizeSupportReportCorrelationId(value: unknown): string | undefined {
+  return isActivityLogCorrelationId(value) &&
+    value !== ACTIVITY_LOG_UNKNOWN_CORRELATION_ID &&
+    !looksLikeSecret(value) &&
+    !looksLikePersonalIdentifier(value)
+    ? value
+    : undefined;
 }
 
 function clientOnlyIncident(input: ClientOnlySupportReportInput): SupportIncidentPrivateProjection {
@@ -103,7 +110,8 @@ function clientOnlyIncident(input: ClientOnlySupportReportInput): SupportInciden
     frameCount: 0,
     build: input.build,
     correlation: {
-      rootCorrelationId: input.correlationId ?? CLIENT_ONLY_ROOT_CORRELATION_ID,
+      rootCorrelationId:
+        normalizeSupportReportCorrelationId(input.correlationId) ?? CLIENT_ONLY_ROOT_CORRELATION_ID,
       childCorrelationIds: [],
     },
     window: supportIncidentWindow(input.nowMs),
@@ -141,15 +149,8 @@ function clientOnlyIncident(input: ClientOnlySupportReportInput): SupportInciden
 export function clientOnlySupportReportSections(
   input: ClientOnlySupportReportInput,
 ): Pick<SupportReport, "incident" | "selection" | "evidence"> {
-  const parsed = parseSupportIncidentPrivateProjection(clientOnlyIncident(input));
-  if (parsed === undefined) throw new SupportReportError("unsafe-report");
-  const incident = {
-    ...parsed,
-    correlation: {
-      ...parsed.correlation,
-      rootCorrelationId: clientOnlyCorrelationId(parsed.correlation.rootCorrelationId),
-    },
-  };
+  const incident = parseSupportIncidentPrivateProjection(clientOnlyIncident(input));
+  if (incident === undefined) throw new SupportReportError("unsafe-report");
   return {
     incident,
     selection: {
