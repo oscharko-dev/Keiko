@@ -5107,6 +5107,7 @@ async function withDeterministicContextAtoms(
   if (
     deterministic.atoms.length === 0 &&
     deterministic.uncertainty.length === 0 &&
+    (deterministic.omitted?.length ?? 0) === 0 &&
     deterministic.metadataRetention === undefined
   ) {
     return rings;
@@ -6497,16 +6498,7 @@ function afterExcerptReadOmissions(
 async function assemblePackFromReads(
   inputs: FinalContextPackInputs,
 ): Promise<ConnectedContextPack> {
-  const {
-    input,
-    plan,
-    rings,
-    prepared,
-    excerptReads,
-    documentEvidence,
-    cacheIdentity,
-    assembleOptions,
-  } = inputs;
+  const { input, plan, rings, prepared, excerptReads, documentEvidence, assembleOptions } = inputs;
   const excerpts = mergeExcerptSources(excerptReads.excerpts, documentEvidence.excerpts);
   const ordered = afterExcerptReadOmissions(
     prepared.ordered,
@@ -6529,14 +6521,6 @@ async function assemblePackFromReads(
       ranked: [...ordered.kept, ...documentEvidence.candidates],
       omittedFromRanking: [...codeOmitted, ...documentEvidence.omitted],
       excerpts,
-      // Document evidence is request-local and not part of the file-state cache key, so a pack that
-      // carries any document evidence — extracted atoms OR skipped-document omissions — must not be
-      // written into the micro-index under a code-only file-state key (it would orphan an entry the
-      // read-bypass gate never serves). Mirror the bypass condition in prepareGroundedAssembly.
-      cacheIdentity:
-        documentEvidence.atoms.length > 0 || documentEvidence.omitted.length > 0
-          ? undefined
-          : cacheIdentity,
       initialUsage: prepared.initialUsage,
       diagnostics: rings.diagnostics,
       initialUncertainty: [
