@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { findFiles, DEFAULT_SEARCH_LIMITS } from "./repoSearch.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { createStructuralAdapterRequestContext } from "./structuralAdapterRequestContext.js";
+import * as filenameMatchers from "./repoSearchMatchers.js";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { SearchScope } from "./repoSearch.js";
 
@@ -169,16 +170,24 @@ describe("trusted grouped filename listings", () => {
   it.each(["REJECTED_CALLBACK_CONTENT_MUST_STAY_PRIVATE", undefined])(
     "fails closed for a malformed matcher rejection %s without exposing its value",
     async (unexpected) => {
-      const test = vi.spyOn(RegExp.prototype, "test").mockImplementation(function (
-        this: RegExp,
-        value: string,
-      ): boolean {
-        if (this.source.includes("FairBetaProbe") && value.endsWith("FairBetaProbe.ts")) {
-          // eslint-disable-next-line @typescript-eslint/only-throw-error -- Deliberately malformed callback tests the collector's Error boundary.
-          throw unexpected;
-        }
-        return this.exec(value) !== null;
-      });
+      const compile = filenameMatchers.compileGlob;
+      const rejected = vi.fn();
+      const test = vi
+        .spyOn(filenameMatchers, "compileGlob")
+        .mockImplementation((pattern, sensitive) => {
+          const matcher = compile(pattern, sensitive);
+          if (pattern !== "**/FairBetaProbe.*") return matcher;
+          return {
+            test: (value): boolean => {
+              if (value.endsWith("FairBetaProbe.ts")) {
+                rejected();
+                // eslint-disable-next-line @typescript-eslint/only-throw-error -- Malformed callback rejection must retain its private cause at the real matcher boundary.
+                throw unexpected;
+              }
+              return matcher.test(value);
+            },
+          };
+        });
       try {
         await expect(
           findFiles(scope(), query, limits, {
@@ -194,6 +203,7 @@ describe("trusted grouped filename listings", () => {
             error.cause.cause === unexpected &&
             !error.message.includes("REJECTED_CALLBACK_CONTENT_MUST_STAY_PRIVATE"),
         );
+        expect(rejected).toHaveBeenCalledOnce();
       } finally {
         test.mockRestore();
       }
