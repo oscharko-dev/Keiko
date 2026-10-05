@@ -846,7 +846,9 @@ causes, and request correlation. It leaves ownership intact and does not invent 
 metadata or counts. Successful dismissal still requires its complete descriptor metadata. Existing candidates and
 transient descriptors grant no abandonment ownership. No additional report archive is created.
 
-The terminal dismissal explicitly records `removalStatus`, `claimsStatus` and `pinRelease`. A
+After successful descriptor inspection, `support.incident.retirement-started` records the actual
+withdrawal attempt under the retirement request correlation, joined to the original incident through
+its parent. The terminal dismissal closes that request lifecycle and explicitly records `removalStatus`, `claimsStatus` and `pinRelease`. A
 failed record removal preserves the intended candidate/reported state and leaves claims and the
 pin `not-attempted`; failure after removal yields `dismissed-incomplete`, with the record already
 withdrawn and remaining cleanup explicitly incomplete. The CLI reports this distinction and exits

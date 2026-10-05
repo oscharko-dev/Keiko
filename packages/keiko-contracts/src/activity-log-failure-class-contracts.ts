@@ -7842,7 +7842,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     failureClass: "support-incident",
     requiredProductSurfaces: ["keiko-activity-log", "keiko-server"],
     requiredLifecycleOperations: {
-      start: ["support.incident.created"],
+      start: ["support.incident.created", "support.incident.retirement-started"],
       state: ["support.diagnostics.capacity", "support.incident.deduplicated"],
       end: ["support.incident.dismissed", "support.incident.expired"],
       failure: ["support.incident.retirement-failed"],
@@ -7856,6 +7856,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "support.incident.expired",
       "support.incident.rejected",
       "support.incident.retirement-failed",
+      "support.incident.retirement-started",
     ],
     requiredLossOperations: ["support.incident.rejected"],
     requiredProofOperations: [
@@ -7866,6 +7867,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "support.incident.expired",
       "support.incident.rejected",
       "support.incident.retirement-failed",
+      "support.incident.retirement-started",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
@@ -7874,6 +7876,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "support.incident.deduplicated",
       "support.incident.dismissed",
       "support.incident.expired",
+      "support.incident.retirement-started",
     ],
     requiredEvidenceClasses: [
       "closed-enum",

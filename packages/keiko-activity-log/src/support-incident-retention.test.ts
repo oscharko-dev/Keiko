@@ -163,6 +163,23 @@ function persistFreshFailure(): void {
   );
 }
 
+function expectRetirementStarted(
+  text: string,
+  incidentId: string,
+  incidentState: "candidate" | "reported",
+): void {
+  const started = persistedActivityLogLines(text, "support.incident.retirement-started");
+  expect(started).toHaveLength(1);
+  expect(
+    expectActivityLogProof("support.incident.retirement-started.emitted-line", started[0] ?? ""),
+  ).toMatchObject({
+    incidentId,
+    incidentState,
+    correlationId: "new-retirement-request",
+    parentCorrelationId: "original-retirement",
+  });
+}
+
 describe("rolling diagnostic candidate retention", () => {
   it.each([
     ["list", "manual"],
@@ -292,7 +309,7 @@ describe("rolling diagnostic candidate retention", () => {
       expect(ended).toHaveLength(1);
       expect(JSON.parse(ended[0] ?? "{}")).toMatchObject({
         level: "warn",
-        errorKind: "internal",
+        errorKind: "unsafe-target",
         failureKind: "unsafe-target",
         correlationId: "unsafe-claim-retire",
         parentCorrelationId: "unsafe-claim-owner",
@@ -1092,6 +1109,15 @@ describe("rolling diagnostic candidate retention", () => {
       causeChain: ["RangeError"],
       frames: ["packages/keiko-activity-log/dist/support-incident.js:40:5"],
     });
+    const started = persistedActivityLogLines(
+      readPersistedActivityLog(stateDir),
+      "support.incident.retirement-started",
+    );
+    expect(JSON.parse(started[0] ?? "{}")).toMatchObject({
+      correlationId: "prepared-removal-attempt",
+      parentCorrelationId: "prepared-removal-source",
+      incidentState: "reported",
+    });
     expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([created.record]);
     expect(lines[0]).not.toContain("private");
   });
@@ -1496,6 +1522,11 @@ describe("rolling diagnostic candidate retention", () => {
     );
     expect(releases).not.toContainEqual(
       expect.objectContaining({ correlationId: "new-retirement-request" }),
+    );
+    expectRetirementStarted(
+      text,
+      first.record.incidentId,
+      action === "prepared" ? "reported" : "candidate",
     );
     const actions = persistedActivityLogLines(text, "support.incident.dismissed").map(
       (line) => JSON.parse(line) as unknown,

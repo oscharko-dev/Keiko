@@ -277,6 +277,31 @@ const SUPPORT_INCIDENT_REJECTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
+const SUPPORT_INCIDENT_RETIREMENT_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "support.incident.retirement-started",
+  category: "diagnostic",
+  owner: "keiko-activity-log",
+  emitter: "support-incident.retirementStartedEvidence",
+  fields: {
+    incidentId: INCIDENT_ID_FIELD,
+    trigger: TRIGGER_FIELD,
+    incidentState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["candidate", "reported"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["support-incident"],
+  proofIds: ["support.incident.retirement-started.emitted-line"],
+  releaseImpact: "patch",
+});
+
 const SUPPORT_INCIDENT_DISMISSED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -417,6 +442,7 @@ export const SUPPORT_INCIDENT_OPERATIONS: ReadonlySet<string> = new Set([
   SUPPORT_INCIDENT_REJECTED_OPERATION.op,
   SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
   SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION.op,
+  SUPPORT_INCIDENT_RETIREMENT_STARTED_OPERATION.op,
   SUPPORT_INCIDENT_EXPIRED_OPERATION.op,
 ]);
 
@@ -606,6 +632,22 @@ function retirementEnvelope(
       ? {}
       : { level: "warn", errorKind: failure?.errorKind ?? "unavailable" }),
   };
+}
+
+function retirementStartedEvidence(
+  stateDir: string,
+  record: SupportIncidentRecord,
+  correlationId: string,
+  state: "candidate" | "reported",
+): void {
+  writeEvidence(
+    stateDir,
+    activityLogEvent(
+      SUPPORT_INCIDENT_RETIREMENT_STARTED_OPERATION,
+      retirementEnvelope(correlationId, undefined, record),
+      { incidentId: record.incidentId, trigger: record.trigger, incidentState: state },
+    ),
+  );
 }
 
 function dismissedEvidence(
@@ -1854,6 +1896,33 @@ function inspectRetirement(
   }
 }
 
+function finishRetirement(
+  stateDir: string,
+  record: SupportIncidentRecord,
+  options: SupportIncidentRetirementOptions & { readonly correlationId: string },
+  openIncidentCount: number,
+): SupportIncidentDismissal {
+  const claims = releaseEntryClaims(
+    stateDir,
+    record,
+    SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
+    options.correlationId,
+  );
+  const pinRelease = releaseIncidentPin(stateDir, record, {
+    correlationId: incidentLifecycleCorrelation(record, options.correlationId),
+    env: options.env ?? process.env,
+  });
+  dismissedEvidence(stateDir, record, {
+    correlationId: options.correlationId,
+    openIncidentCount: openIncidentCount - 1,
+    pinRelease,
+    claimsReleased: claims.released,
+    ...(claims.released ? {} : { failure: claims.failure }),
+    reason: options.retirementReason,
+  });
+  return claims.released && pinRelease !== "rejected" ? "dismissed" : "dismissed-incomplete";
+}
+
 /** Withdraw the owned record before releasing its pin and claims; retain ownership on failure. */
 function retireSupportIncident(
   stateDir: string,
@@ -1861,10 +1930,16 @@ function retireSupportIncident(
   options: SupportIncidentRetirementOptions,
   state: "candidate" | "reported",
 ): SupportIncidentDismissal {
-  const correlationId = options.correlationId ?? randomUUID();
-  const inspected = inspectRetirement(stateDir, incidentId, { ...options, correlationId });
+  const requestCorrelationId = options.correlationId ?? randomUUID();
+  const inspected = inspectRetirement(stateDir, incidentId, {
+    ...options,
+    correlationId: requestCorrelationId,
+  });
   if (typeof inspected === "string") return inspected;
   const { record, openIncidentCount } = inspected;
+  const correlationId =
+    options.correlationId ?? incidentLifecycleCorrelation(record, requestCorrelationId);
+  retirementStartedEvidence(stateDir, record, correlationId, state);
   try {
     removeSupportIncidentRecord(stateDir, incidentId);
   } catch (error) {
@@ -1880,29 +1955,12 @@ function retireSupportIncident(
       },
     );
   }
-  const claims = releaseEntryClaims(
-    stateDir,
-    record,
-    SUPPORT_INCIDENT_DISMISSED_OPERATION.op,
-    correlationId,
-  );
-  const pinRelease = releaseIncidentPin(stateDir, record, {
-    correlationId: incidentLifecycleCorrelation(record, correlationId),
-    env: options.env ?? process.env,
-  });
-  dismissedEvidence(
+  return finishRetirement(
     stateDir,
     { ...record, state },
-    {
-      correlationId,
-      openIncidentCount: openIncidentCount - 1,
-      pinRelease,
-      claimsReleased: claims.released,
-      ...(claims.released ? {} : { failure: claims.failure }),
-      reason: options.retirementReason,
-    },
+    { ...options, correlationId },
+    openIncidentCount,
   );
-  return claims.released && pinRelease !== "rejected" ? "dismissed" : "dismissed-incomplete";
 }
 
 /** Explicit withdrawal of one retained candidate, including an owner's abandoned preparation. */

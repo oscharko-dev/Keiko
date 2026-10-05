@@ -112,7 +112,9 @@ whether that event was recorded intact. Availability reasons apply only to clien
 ### Local cleanup after preparing a report
 
 Preparing a report retires its temporary incident candidate; it does not prove a download was
-saved. `support.incident.dismissed` records the intended incident state, explicit `removalStatus`,
+saved. Once the candidate is inspected, `support.incident.retirement-started` records the withdrawal
+attempt under its request correlation and joins the original incident through its parent correlation.
+The terminal `support.incident.dismissed` closes that request and records the intended incident state, explicit `removalStatus`,
 `claimsStatus` and `pinRelease`. A failed removal leaves the candidate and its ownership intact,
 with claims and pin release `not-attempted`. Failed claim cleanup after removal is a distinct
 `dismissed-incomplete` result: the incident is withdrawn, but local cleanup is incomplete. The CLI
