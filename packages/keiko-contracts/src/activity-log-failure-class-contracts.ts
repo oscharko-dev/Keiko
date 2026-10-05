@@ -2576,6 +2576,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredResourceOperations: [
       "search.connected-context.completed",
       "search.connected-context.completion-details",
+      "search.connected-context.metadata-unavailable",
       "search.connected-context.source-details",
       "search.connected-context.started",
     ],
@@ -9054,11 +9055,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "safe-platform-class",
     ],
     requiredFrameOperations: [
+      "client.support-report.preparation-failed",
       "support.report.degraded",
       "support.report.failed",
       "support.report.ui.failed",
     ],
     requiredCauseOperations: [
+      "client.support-report.preparation-failed",
       "support.report.degraded",
       "support.report.failed",
       "support.report.ui.failed",
