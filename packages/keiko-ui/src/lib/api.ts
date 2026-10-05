@@ -7,7 +7,6 @@
 import type {
   BffError,
   ChatConnectedScope,
-  ChatGitChangeDescriptionStatus,
   ChatGitChangeScope,
   ChatLocalKnowledgeScope,
   ChatResponse,
@@ -175,11 +174,8 @@ import {
   recordResponseCorrelationId,
 } from "./bff-correlation";
 import {
-  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
-  GIT_CHANGE_BLOCKED_REASONS,
   isDesktopChatStreamEvent,
-  isGroundingScopeIdentity,
   type ChatContextStatusWire,
   type DesktopChatSendRequestWire,
   type ConversationAttachmentUploadRequestWire,
@@ -3251,6 +3247,7 @@ export interface GitDeliverySyncInput {
 
 async function loadGitWorkbenchApi(
   moduleLoadFailure: "git-sync" | "git-history" = "git-sync",
+  correlationId?: string,
 ): Promise<typeof import("./coding-workbench-lazy-fetchers")> {
   try {
     return await import("./coding-workbench-lazy-fetchers");
@@ -3260,7 +3257,7 @@ async function loadGitWorkbenchApi(
       "Git could not start. Reload Keiko and try again.",
       0,
     );
-    error.correlationId = newClientCorrelationId();
+    error.correlationId = correlationId ?? newClientCorrelationId();
     error.cause = cause;
     reportClientDiagnostic("git:module-load-failed", {
       kind: "other",
@@ -3673,116 +3670,7 @@ export async function updateGitHubIssueReaderAuthorization(
 
 // ─── Issue #3400 — Git-to-Chat connect/refresh (server-resolved comparison, never a browser root)
 
-// The 11-member closed reason set is owned once by keiko-contracts (bff-wire.ts) and imported
-// here rather than restated — the server route (gitChangeRoutes.ts) imports the same constant
-// (F30 in the epic #3384 final audit).
-const GIT_CHANGE_BLOCKED_REASON_SET: ReadonlySet<string> = new Set(GIT_CHANGE_BLOCKED_REASONS);
-
-// Owner audit b1-12 — the closed `descriptionStatus` vocabulary is owned once by keiko-contracts
-// (bff-wire.ts) and imported here rather than restated, mirroring the blocked-reason set above.
-const CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET: ReadonlySet<string> = new Set(
-  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
-);
-
 export type { GitChangeBlockedReason, GitChangeConnectResponse, GitChangeRefreshResponse };
-
-const GIT_COMMIT_SHA_HEX = /^[0-9a-f]{40}$/u;
-
-function isSha256Hex(value: unknown): value is string {
-  return typeof value === "string" && SHA256_HEX.test(value);
-}
-
-function isGitCommitShaHex(value: unknown): value is string {
-  return typeof value === "string" && GIT_COMMIT_SHA_HEX.test(value);
-}
-
-// Owner audit b1-12 — the sibling `blocked` reason is checked against the closed set below; this
-// mirrors it for `descriptionStatus` instead of accepting any bounded string, so an unrecognised
-// value is rejected here rather than reaching the pill's status-badge lookup and throwing.
-function isChatGitChangeDescriptionStatus(value: unknown): value is ChatGitChangeDescriptionStatus {
-  return typeof value === "string" && CHAT_GIT_CHANGE_DESCRIPTION_STATUS_SET.has(value);
-}
-
-function hasChatGitChangeScopeTextFields(value: Record<string, unknown>): boolean {
-  return (
-    isBoundedText(value.relationshipId, 256) &&
-    isSha256Hex(value.remoteDigest) &&
-    isBoundedText(value.comparisonLabel, 240) &&
-    isBoundedText(value.baseRef, 512) &&
-    isBoundedText(value.headRef, 512) &&
-    isGitCommitShaHex(value.baseSha) &&
-    isGitCommitShaHex(value.headSha) &&
-    isGitCommitShaHex(value.mergeBaseSha) &&
-    isSha256Hex(value.snapshotDigest) &&
-    isChatGitChangeDescriptionStatus(value.descriptionStatus)
-  );
-}
-
-function hasChatGitChangeScopeCountFields(value: Record<string, unknown>): boolean {
-  return (
-    Number.isSafeInteger(value.fileCount) &&
-    Number.isSafeInteger(value.totalFiles) &&
-    Number.isSafeInteger(value.omittedFiles) &&
-    Number.isSafeInteger(value.truncatedFiles) &&
-    Number.isSafeInteger(value.connectedAtMs)
-  );
-}
-
-function isChatGitChangeScope(value: unknown): value is ChatGitChangeScope {
-  if (!isRecordValue(value) || value.kind !== "git-change") return false;
-  return hasChatGitChangeScopeTextFields(value) && hasChatGitChangeScopeCountFields(value);
-}
-
-function hasCanonicalGitChatFields(value: Record<string, unknown>, chatId: string): boolean {
-  return (
-    value.id === chatId &&
-    typeof value.projectPath === "string" &&
-    typeof value.title === "string" &&
-    typeof value.selectedModel === "string" &&
-    Number.isSafeInteger(value.createdAt) &&
-    Number.isSafeInteger(value.updatedAt) &&
-    value.status === "open" &&
-    isGroundingScopeIdentity(value.groundingScopeIdentity)
-  );
-}
-
-function hasCoherentGitChat(value: unknown, scope: ChatGitChangeScope, chatId: string): boolean {
-  if (value === undefined) return true;
-  if (!isRecordValue(value) || !hasCanonicalGitChatFields(value, chatId)) return false;
-  if (!Array.isArray(value.gitChangeScopes) || !value.gitChangeScopes.every(isChatGitChangeScope)) {
-    return false;
-  }
-  return value.gitChangeScopes.some(
-    (candidate: ChatGitChangeScope) =>
-      candidate.relationshipId === scope.relationshipId &&
-      candidate.remoteDigest === scope.remoteDigest &&
-      candidate.snapshotDigest === scope.snapshotDigest,
-  );
-}
-
-function validateGitChangeResponse(
-  value: unknown,
-  chatId: string,
-  statuses: ReadonlySet<string>,
-): GitRepositoryValidation {
-  if (!isRecordValue(value)) return { ok: false, reasons: ["response must be an object"] };
-  if (value.status === "blocked") {
-    return GIT_CHANGE_BLOCKED_REASON_SET.has(value.reason as string)
-      ? { ok: true }
-      : { ok: false, reasons: ["response.reason is not a known blocked reason"] };
-  }
-  if (
-    typeof value.status === "string" &&
-    statuses.has(value.status) &&
-    isChatGitChangeScope(value.scope) &&
-    hasCoherentGitChat(value.chat, value.scope, chatId)
-  )
-    return { ok: true };
-  return { ok: false, reasons: ["response does not match the committed Git change"] };
-}
-
-const GIT_CONNECT_STATUSES: ReadonlySet<string> = new Set(["connected"]);
-const GIT_REFRESH_STATUSES: ReadonlySet<string> = new Set(["current", "stale"]);
 
 export interface ConnectGitChangeComparisonInput {
   readonly chatId: string;
@@ -3811,39 +3699,19 @@ export async function connectGitChangeToChat(
   signal?: AbortSignal,
   correlationId?: string,
 ): Promise<GitChangeConnectResponse> {
-  return fetchJson(
-    "/api/git-change/connect",
-    {
-      method: "POST",
-      body: JSON.stringify({ schemaVersion: "1", ...input }),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    (value) => validateGitChangeResponse(value, input.chatId, GIT_CONNECT_STATUSES),
-    correlationId,
-  );
+  const api = await loadGitWorkbenchApi("git-sync", correlationId);
+  return api.connectGitChangeToChat(fetchJson, input, signal, correlationId);
 }
 
-/**
- * Re-checks a connected git-change scope against the live repository. `reads-context` is
- * immutable and non-reconnectable, so a drifted comparison archives the existing relationship and
- * creates a new one server-side; the chat's scope list is updated in the same call.
- */
+/** Refreshes a connected comparison through the same validated Git request boundary. */
 export async function refreshGitChangeScope(
   chatId: string,
   relationshipId: string,
   signal?: AbortSignal,
   correlationId?: string,
 ): Promise<GitChangeRefreshResponse> {
-  return fetchJson(
-    "/api/git-change/refresh",
-    {
-      method: "POST",
-      body: JSON.stringify({ schemaVersion: "1", chatId, relationshipId }),
-      ...(signal === undefined ? {} : { signal }),
-    },
-    (value) => validateGitChangeResponse(value, chatId, GIT_REFRESH_STATUSES),
-    correlationId,
-  );
+  const api = await loadGitWorkbenchApi("git-sync", correlationId);
+  return api.refreshGitChangeScope(fetchJson, chatId, relationshipId, signal, correlationId);
 }
 
 // ─── Governed PR mark-ready intent (#3389, epic #3384, ADR-0086) ──────────────────────────────────
