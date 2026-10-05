@@ -2042,9 +2042,15 @@ async function discoverLiteLlmModelInfo(
   apiKeyHeaderName: string,
   egress: GatewayEgressConfig | undefined,
   correlationId: string | undefined,
-  signal: AbortSignal,
-  deadlineAt: number,
-  trace: SetupDiscoveryTrace,
+  {
+    signal,
+    deadlineAt,
+    trace,
+  }: {
+    readonly signal: AbortSignal;
+    readonly deadlineAt: number;
+    readonly trace: SetupDiscoveryTrace;
+  },
 ): Promise<GatewayDiscoveredModels | undefined> {
   const endpoints = modelInfoEndpointCandidates(baseUrl);
   for (const [index, endpoint] of endpoints.entries()) {
@@ -2098,12 +2104,13 @@ function discoveryManagementSignal(
 async function defaultGatewayModelDiscovery(
   baseUrl: string,
   apiKey: string,
-  apiKeyHeaderName = DEFAULT_API_KEY_HEADER_NAME,
+  requestedApiKeyHeaderName: string | undefined,
   egress: GatewayEgressConfig | undefined,
   correlationId: string | undefined,
   trace: SetupDiscoveryTrace,
   callerSignal?: AbortSignal,
 ): Promise<GatewayDiscoveredModels> {
+  const apiKeyHeaderName = requestedApiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
   // One existing discovery budget covers the management fallbacks and model list together.
   const deadlineAt = Date.now() + DISCOVERY_TIMEOUT_MS;
   const signal = AbortSignal.any([
@@ -2116,9 +2123,7 @@ async function defaultGatewayModelDiscovery(
     apiKeyHeaderName,
     egress,
     correlationId,
-    signal,
-    deadlineAt,
-    trace,
+    { signal, deadlineAt, trace },
   );
   if (litellmModels !== undefined) {
     return litellmModels;

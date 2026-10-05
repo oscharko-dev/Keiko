@@ -12081,6 +12081,12 @@ function slowMetadataResponse(signal: AbortSignal | null | undefined): Promise<R
 }
 
 describe("selected metadata responsiveness", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    resetServerLogger();
+  });
   it("retains declared geometry from a management route responding after fourteen seconds", async () => {
     const deps = await metadataResponsivenessDeps();
     Object.assign(deps, { gatewayModelDiscovery: undefined });
@@ -12267,13 +12273,6 @@ describe("selected metadata responsiveness", () => {
       }
     },
   );
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    resetServerLogger();
-  });
 
   it("falls back to the healthy model list within the shared budget after management routes hang", async () => {
     const deps = await metadataResponsivenessDeps();
