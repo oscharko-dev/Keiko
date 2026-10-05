@@ -508,12 +508,7 @@ function policyBootstrapAbsent(directory: string, error: unknown): boolean {
   );
 }
 
-/** The default reader tolerates unavailable policy; admission can require a readable existing one. */
-export function readActivityLogPolicyRecord(
-  directory: string,
-  trustedRoot: string,
-  options: { readonly requireReadable?: boolean } = {},
-): ActivityLogPolicyRecord | undefined {
+function readPolicyValueOnce(directory: string, trustedRoot: string): unknown {
   let descriptor: number | undefined;
   try {
     descriptor = openSafeArtifactFile(policyRecordPath(directory), {
@@ -524,6 +519,36 @@ export function readActivityLogPolicyRecord(
     const text = readBoundedText(descriptor, fstatSync(descriptor).size);
     if (text === undefined) throw new SafeArtifactFileError("activity-log", "read-failed");
     const value: unknown = JSON.parse(text);
+    return value;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function readPolicyValue(directory: string, trustedRoot: string): unknown {
+  try {
+    return readPolicyValueOnce(directory, trustedRoot);
+  } catch (error) {
+    if (
+      error instanceof SyntaxError ||
+      (error instanceof SafeArtifactFileError && error.kind === "read-failed")
+    ) {
+      // A peer may have finished its exclusive-create publication since the first read.
+      // Retry once through the same guards; never wait or retry unsafe filesystem failures.
+      return readPolicyValueOnce(directory, trustedRoot);
+    }
+    throw error;
+  }
+}
+
+/** The default reader tolerates unavailable policy; admission can require a readable existing one. */
+export function readActivityLogPolicyRecord(
+  directory: string,
+  trustedRoot: string,
+  options: { readonly requireReadable?: boolean } = {},
+): ActivityLogPolicyRecord | undefined {
+  try {
+    const value = readPolicyValue(directory, trustedRoot);
     if (!isActivityLogPolicyRecord(value))
       throw new SafeArtifactFileError("activity-log", "read-failed");
     return value;
@@ -533,8 +558,6 @@ export function readActivityLogPolicyRecord(
     throw error instanceof SafeArtifactFileError
       ? error
       : new SafeArtifactFileError("activity-log", "read-failed");
-  } finally {
-    if (descriptor !== undefined) closeSync(descriptor);
   }
 }
 

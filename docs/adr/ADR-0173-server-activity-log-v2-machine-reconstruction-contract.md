@@ -1838,6 +1838,10 @@ count fields remain accepted for wire compatibility but are no longer produced. 
 creation, rejection and retirement continue to carry their actual counts and lifecycle evidence.
 An absent bootstrap policy permits the existing environment fallback; a present unreadable or
 corrupt governing policy still refuses diagnostic admission and is evidenced by that owner.
+An incomplete or invalid-JSON policy read is retried once immediately through the same guarded
+reader, allowing a concurrent publisher that has since finished to be observed. This bounded retry
+does not wait for a stalled publisher or eliminate the publication window. Persistent corruption
+still fails closed; unsafe filesystem reads and valid JSON outside the policy schema are not retried.
 The existing Activity Log pin ceiling remains unchanged. After durable publication, pressure at
 that ceiling retires one older eligible diagnostic candidate with an exact owned `incident` window
 pin, preserving one free pin slot inside the existing ceiling for the next publication. Its own
