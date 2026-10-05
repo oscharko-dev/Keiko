@@ -1488,6 +1488,50 @@ describe("rolling diagnostic candidate retention", () => {
     },
   );
 
+  it.each(["manual", "registered-child"] as const)(
+    "keeps %s expiry on its original lifecycle during a different sweep request",
+    (kind) => {
+      const original =
+        kind === "manual"
+          ? recordUserReportedIncident(stateDir, { correlationId: "expiry-original" })
+          : recordRegisteredFailureIncident(stateDir, {
+              op: "client.diagnostic",
+              errorKind: "internal",
+              correlationId: "expiry-original",
+              parentCorrelationId: "expiry-original-parent",
+              clientKind: "boundary",
+              renderFailure: "window-body",
+            });
+      if (original?.status !== "created") throw new TypeError("Expected expiry fixture candidate");
+      expect(
+        listSupportIncidents(stateDir, {
+          nowMs: original.record.expiresAtMs,
+          correlationId: "different-sweep-request",
+        }),
+      ).toEqual([]);
+      const text = readPersistedActivityLog(stateDir);
+      const expired = persistedActivityLogLines(text, "support.incident.expired");
+      expect(expired).toHaveLength(1);
+      expect(
+        expectActivityLogProof("support.incident.expired.emitted-line", expired[0] ?? ""),
+      ).toMatchObject({
+        incidentId: original.incidentId,
+        correlationId: "expiry-original",
+        expiryReason: "expired",
+        removalStatus: "removed",
+      });
+      expect(JSON.parse(expired[0] ?? "{}")).not.toHaveProperty("parentCorrelationId");
+      expect(expired[0]).not.toContain("different-sweep-request");
+      const analysis = analyzeSupportReport(
+        createDesktopSupportReport(stateDir, "expiry-original").reportJson,
+      );
+      expect(analysis.analysis.evidence.classification).toBe("supported");
+      expect(analysis.analysis.sufficiency.classes.flatMap((entry) => entry.reasons)).not.toContain(
+        "lifecycle-start-missing",
+      );
+    },
+  );
+
   it.each([
     ["prepared", "manual"],
     ["dismissed", "manual"],

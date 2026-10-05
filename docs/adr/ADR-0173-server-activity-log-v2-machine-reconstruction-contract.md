@@ -817,8 +817,11 @@ only on response finish; `parentCorrelationId` joins the creating request and `r
 identifies the canonical artifact. `support.report.ui.failed` records cancellation, compression
 failure and response-write failure. `support.report.ui.download-refused` records closed authority
 or unavailable-reference refusals. Neither implies a successful download. The routine
-`client.support-report.download-started` line records `automatic` or `manual` initiation under the
-selected error's correlation; it records no report body, destination, filename or saved claim.
+`client.support-report.download-started` line records manual initiation and its causal link to the
+selected error. Structured delivery facts preserve the source (`server` or `browser`), evidence scope
+(`server` or `client-only`), and canonical report digest when available, including when a server report
+is served again through a local Blob. Legacy string `automatic` and `manual` values are accepted only
+for older clients. The line carries no report body, destination, filename or saved claim.
 
 The shared desktop report action preserves the selected error when reporting itself fails. A
 session refusal offers report regeneration, a local service failure names application recovery, and a
