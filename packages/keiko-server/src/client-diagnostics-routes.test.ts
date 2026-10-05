@@ -2834,6 +2834,12 @@ describe("reviewed navigation and render evidence", () => {
 });
 
 describe("citation activation ingestion", () => {
+  beforeEach(() => resetClientDiagnosticsIngestStateForTests());
+  afterEach(() => {
+    resetClientDiagnosticsIngestStateForTests();
+    resetServerLogger();
+  });
+
   it.each([
     { rootCount: Number.MAX_SAFE_INTEGER, correlationId: "citation-action-123", outcome: "opened" },
     { rootCount: 2, correlationId: undefined, outcome: "opened" },
