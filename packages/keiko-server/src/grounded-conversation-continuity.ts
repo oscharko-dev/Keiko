@@ -77,7 +77,11 @@ export function groundedConversationContinuity(
 }
 
 function previousUserQuestion(history: readonly ChatMessage[]): string | undefined {
-  return [...history].reverse().find((message) => message.role === "user")?.content;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (message?.role === "user") return message.content;
+  }
+  return undefined;
 }
 
 function assembleContinuity(
@@ -265,9 +269,10 @@ function resolvedRetrievalContent(
   if (
     remaining <= 0 ||
     previous === undefined ||
-    hasIndependentQueryTarget(query) ||
-    !needsReferentResolution(query)
+    !needsReferentResolution(query) ||
+    hasIndependentQueryTarget(query)
   )
     return content;
-  return `${content}\n${previous.slice(0, remaining)}`;
+  const prefix = previous.slice(0, remaining).replace(/[\uD800-\uDBFF]$/u, "");
+  return `${content}\n${prefix}`;
 }

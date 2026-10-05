@@ -743,6 +743,26 @@ describe("composer context status and manual maintenance", () => {
     expect(continuity.retrievalContent).toContain("Qwen invoice extraction process.");
     expect(continuity.retrievalContent.startsWith(query)).toBe(true);
   });
+  it.each([0, 1])(
+    "keeps the prior question well-formed at an astral cut with offset %s",
+    (offset) => {
+      // The fixture's eight-unit prefix puts the emoji at 1498 or 1499, around the 1500-unit cut.
+      const { deps, chatId } = fixture(1, `${"word ".repeat(298)}${"x".repeat(offset)}😀 trailing`);
+      const query = "Explain that.";
+      const continuity = groundedConversationContinuity(
+        deps,
+        currentMessage(deps, chatId, query),
+        "fixture",
+      );
+      expect(continuity.retrievalContent.startsWith(`${query}\nNote 0.`)).toBe(true);
+      expect(Buffer.from(continuity.retrievalContent, "utf8").toString("utf8")).toBe(
+        continuity.retrievalContent,
+      );
+      expect(continuity.retrievalContent.endsWith("😀")).toBe(offset === 0);
+      expect(continuity.retrievalContent).not.toContain("trailing");
+      expect(continuity.retrievalContent.length).toBeLessThanOrEqual(query.length + 1 + 1500);
+    },
+  );
   it("keeps an expanded retrieval query within the existing anchor planner limit", () => {
     const { deps, chatId } = fixture(1, "Prior contract documentation. ".repeat(60));
     const query = "Current contract details. ".repeat(150) + " Dazu bitte mehr Informationen.";
