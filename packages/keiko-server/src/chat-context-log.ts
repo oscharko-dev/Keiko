@@ -65,6 +65,7 @@ const CHAT_CONTEXT_MANAGEMENT = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
   op: "chat.context.management",
+  diagnosticWhen: [{ field: "outcome", values: ["failed", "prompt-failed"] }],
   owner: "keiko-server",
   category: "gateway",
   emitter: "chat-context-log.logChatContextManagement",
