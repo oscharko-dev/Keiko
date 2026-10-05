@@ -130,7 +130,7 @@ export function beginAppSessionOperation(
   const token = readSessionCookie(req);
   const release = deps.codingAppSessionChannel.beginOperation(token);
   if (release === undefined) return (): void => undefined;
-  const startedAt = Date.now();
+  const startedAt = performance.now();
   let released = false;
   const settle = (): void => {
     if (released) return;
@@ -144,7 +144,7 @@ export function beginAppSessionOperation(
         token,
         context,
         "released",
-        Math.max(0, Date.now() - startedAt),
+        Math.max(0, Math.round(performance.now() - startedAt)),
         signal.aborted ? "aborted" : "settled",
       );
     }

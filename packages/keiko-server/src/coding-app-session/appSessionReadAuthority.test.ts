@@ -143,6 +143,29 @@ describe("explicit app-session request operation", () => {
     }
   });
 
+  it("measures release duration with a monotonic clock across a wall-clock correction", () => {
+    const fixture = operationFixture();
+    const wallClock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    const monotonicClock = vi.spyOn(performance, "now").mockReturnValue(20.25);
+    const release = beginAppSessionOperation(
+      fixture.deps,
+      fixture.request,
+      new AbortController().signal,
+      { correlationId: "operation-clock", surface: "desktop-chat" },
+    );
+    wallClock.mockReturnValue(1);
+    monotonicClock.mockReturnValue(80.75);
+    release();
+    const terminal = fixture.deps.activityLog.events.at(-1);
+    expect(terminal).toBeDefined();
+    if (terminal === undefined) throw new Error("Missing operation release evidence");
+    const record = expectActivityLogProof(
+      "coding-app-session.operation.state.line",
+      formatActivityLogProofLine(terminal),
+    );
+    expect(record).toMatchObject({ phase: "released", durationMs: 61, releaseReason: "settled" });
+  });
+
   it.each(["acquired", "released", "aborted"] as const)(
     "uses the safe process logger when injected %s telemetry delivery fails",
     (phase) => {
