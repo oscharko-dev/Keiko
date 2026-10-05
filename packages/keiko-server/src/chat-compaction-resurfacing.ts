@@ -22,6 +22,7 @@ import { correlationIdOrUnknown } from "./correlation.js";
 export const CHAT_COMPACTION_CONTEXT_HEADER = "# Persisted compaction context";
 
 interface TimedRecord {
+  readonly runId: string;
   readonly startedAt: number;
   readonly record: ContextCompactionRecord;
 }
@@ -90,27 +91,40 @@ export function loadChatContinuityCheckpoint(
   onDisposition?: (disposition: CheckpointLoadDisposition) => void,
 ): ContextCompactionRecord | undefined {
   try {
-    const readStatus = { failed: false };
-    const records = loadChatCompactionRecords(store, chatId, correlationId, () => {
-      readStatus.failed = true;
+    const failedRunIds: string[] = [];
+    const records = loadChatCompactionRecords(store, chatId, correlationId, (runId) => {
+      failedRunIds.push(runId);
     });
-    if (readStatus.failed) {
+    const checkpoint = [...records]
+      .reverse()
+      .find(({ record }) => record.conversationCoverage?.historyRevision === historyRevision);
+    if (failuresMaySupersedeCheckpoint(failedRunIds, checkpoint, chatId)) {
       onDisposition?.("read-failed");
       return undefined;
     }
-    const checkpoint = [...records]
-      .reverse()
-      .find(
-        ({ record }) => record.conversationCoverage?.historyRevision === historyRevision,
-      )?.record;
     const missingDisposition = records.length === 0 ? "none" : "revision-mismatch";
     onDisposition?.(checkpoint === undefined ? missingDisposition : "available");
-    return checkpoint;
+    return checkpoint?.record;
   } catch (error) {
     recordReadFailure(error, correlationId);
     onDisposition?.("read-failed");
     return undefined;
   }
+}
+
+function failuresMaySupersedeCheckpoint(
+  failedRunIds: readonly string[],
+  checkpoint: TimedRecord | undefined,
+  chatId: string,
+): boolean {
+  if (failedRunIds.length === 0) return false;
+  const prefix = `chat-${sha256Hex(chatId).slice(0, 16)}-t`;
+  const checkpointTurn = checkpoint === undefined ? undefined : runIdTurn(checkpoint.runId, prefix);
+  if (checkpointTurn === undefined) return true;
+  return failedRunIds.some((runId) => {
+    const failedTurn = runIdTurn(runId, prefix);
+    return failedTurn === undefined || failedTurn >= checkpointTurn;
+  });
 }
 
 function recordReadFailure(error: unknown, correlationId: string | undefined): void {
@@ -143,7 +157,7 @@ function loadChatCompactionRecords(
   store: EvidenceStore,
   chatId: string,
   correlationId: string | undefined,
-  onReadFailure?: () => void,
+  onReadFailure?: (runId: string) => void,
 ): readonly TimedRecord[] {
   const prefix = `chat-${sha256Hex(chatId).slice(0, 16)}-t`;
   const records: TimedRecord[] = [];
@@ -155,7 +169,7 @@ function loadChatCompactionRecords(
     for (const record of manifest.compaction ?? []) {
       const validRecord = recordForResurfacing(record);
       if (validRecord !== undefined) {
-        records.push({ startedAt: manifest.run.startedAt, record: validRecord });
+        records.push({ runId, startedAt: manifest.run.startedAt, record: validRecord });
       }
     }
   }
@@ -215,13 +229,13 @@ function safeLoad(
   store: EvidenceStore,
   runId: string,
   correlationId: string | undefined,
-  onReadFailure?: () => void,
+  onReadFailure?: (runId: string) => void,
 ): EvidenceManifest | undefined {
   try {
     return loadEvidence(store, runId);
   } catch (error) {
     recordReadFailure(error, correlationId);
-    onReadFailure?.();
+    onReadFailure?.(runId);
     return undefined;
   }
 }

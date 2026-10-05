@@ -104,6 +104,45 @@ function persist(input: {
 }
 
 describe("buildChatCompactionResurfacingContext", () => {
+  it.each([
+    { failedTurn: 7, revision: 2, expectedDisposition: "available", retained: true },
+    { failedTurn: 11, revision: 2, expectedDisposition: "read-failed", retained: false },
+    { failedTurn: 7, revision: 3, expectedDisposition: "read-failed", retained: false },
+    { failedTurn: "unknown", revision: 2, expectedDisposition: "read-failed", retained: false },
+  ])("keeps readable checkpoints only ahead of failed manifests: %j", (scenario) => {
+    const checkpoint = record({
+      conversationCoverage: {
+        version: 1,
+        throughMessageId: "m1",
+        historyRevision: 2,
+        contextWindowTokens: 128_000,
+        effectiveInputBudget: 116_000,
+      },
+    });
+    const base = persist({ chatId: CHAT_ID, turn: 10, records: [checkpoint] });
+    const failedId = `chat-${sha256Hex(CHAT_ID).slice(0, 16)}-t${String(scenario.failedTurn)}`;
+    const disposition = vi.fn();
+    const output = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const store = {
+      ...base,
+      list: (): string[] => [...base.list(), failedId],
+      get: (id: string): ReturnType<typeof base.get> => {
+        if (id === failedId) throw new TypeError("private-corrupt-checkpoint");
+        return base.get(id);
+      },
+    };
+    const result = loadChatContinuityCheckpoint(
+      store,
+      CHAT_ID,
+      scenario.revision,
+      "mixed-checkpoint",
+      disposition,
+    );
+    expect(result).toEqual(scenario.retained ? checkpoint : undefined);
+    expect(disposition).toHaveBeenCalledExactlyOnceWith(scenario.expectedDisposition);
+    expect(JSON.stringify(output.mock.calls)).toContain("mixed-checkpoint");
+    expect(JSON.stringify(output.mock.calls)).not.toContain("private-corrupt-checkpoint");
+  });
   it.each(["listing", "manifest"])(
     "joins a failed %s read to the caller with safe frames",
     (failure) => {

@@ -1,3 +1,4 @@
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   buildGatewayAssembly,
   captureGatewayTurnSnapshot,
@@ -1226,6 +1227,35 @@ describe("composer context status and manual maintenance", () => {
 });
 
 describe("shared checkpoint capture", () => {
+  it("persists manual compaction despite an older unreadable checkpoint", () => {
+    const { deps, chatId } = fixture(80);
+    const base = deps.evidenceStore;
+    const failedId = `chat-${sha256Hex(chatId).slice(0, 16)}-t1`;
+    const evidenceStore = {
+      ...base,
+      listByPrefix: (prefix: string): string[] =>
+        [...base.list(), failedId].filter((id) => id.startsWith(prefix)),
+      get: (id: string): ReturnType<typeof base.get> => {
+        if (id === failedId) throw new TypeError("private-old-checkpoint");
+        return base.get(id);
+      },
+    };
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const status = compactChatContext(
+      { ...deps, evidenceStore },
+      chatId,
+      "fixture",
+      "mixed-manual-checkpoint",
+    );
+    expect(status.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(sink.events.find((event) => event.op === "chat.context.management")).toMatchObject({
+      correlationId: "mixed-manual-checkpoint",
+      extra: { outcome: "compacted" },
+    });
+    expect(sink.events.some((event) => event.op === "chat.context.failed")).toBe(false);
+    expect(JSON.stringify(sink.events)).not.toContain("private-old-checkpoint");
+  });
   it("loads the checkpoint once when projecting an oversized context meter", () => {
     const { deps, chatId } = fixture(80);
     const listByPrefix = vi.fn((prefix: string) =>
