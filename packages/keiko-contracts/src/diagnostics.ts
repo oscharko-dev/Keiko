@@ -666,17 +666,6 @@ function hasValidVoiceCaptureContext(value: Record<string, unknown>): boolean {
   );
 }
 
-function hasValidSupportPreparationContext(value: Record<string, unknown>): boolean {
-  if (value.supportReportPreparation === undefined) return true;
-  return (
-    isClientSupportReportPreparation(value.supportReportPreparation) &&
-    value.kind === undefined &&
-    value.errorKind === undefined &&
-    value.errorEvidence === undefined &&
-    value.supportReportDelivery === undefined
-  );
-}
-
 const CLOSED_CLIENT_REPORT_KEYS = [
   "selectDismissal",
   "knowledgeCatalog",
@@ -729,7 +718,7 @@ function hasValidClosedReportContext(value: Record<string, unknown>): boolean {
     hasExclusiveClosedReportContext(value) &&
     hasValidCitationActivationContext(value) &&
     isOptional(value.supportReportDelivery, isClientSupportReportDelivery) &&
-    hasValidSupportPreparationContext(value) &&
+    isOptional(value.supportReportPreparation, isClientSupportReportPreparation) &&
     hasValidFilesScopeDecisionContext(value)
   );
 }
@@ -1904,25 +1893,6 @@ const FILES_SCOPE_DECISION_KEYS = new Set([
   "mutationSurface",
   "rejectionCount",
 ]);
-const FILES_SCOPE_DECISION_EXCLUSIVE_KEYS = [
-  "kind",
-  "errorKind",
-  "errorEvidence",
-  "moduleLoadFailure",
-  "renderFailure",
-  "supportReportDelivery",
-  "supportReportPreparation",
-  "selectDismissal",
-  "knowledgeCatalog",
-  "answerCopy",
-  "answerSpeech",
-  "citationActivation",
-  "gitClientOperation",
-  "composerActivity",
-  "gitChangeDescription",
-  "workspaceTrustBinding",
-  "voiceDialogueStage",
-];
 function isScopeDecisionCount(value: unknown): boolean {
   return (
     value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
@@ -1956,8 +1926,7 @@ function hasValidFilesScopeDecisionContext(value: Record<string, unknown>): bool
   if (value.filesScopeDecision === undefined) return true;
   return (
     isClientFilesScopeDecision(value.filesScopeDecision) &&
-    isActivityLogCorrelationId(value.correlationId) &&
-    FILES_SCOPE_DECISION_EXCLUSIVE_KEYS.every((key) => value[key] === undefined)
+    isActivityLogCorrelationId(value.correlationId)
   );
 }
 
@@ -2021,9 +1990,6 @@ function hasValidCitationActivationContext(value: Record<string, unknown>): bool
   if (value.citationActivation === undefined) return true;
   return (
     isActivityLogCorrelationId(value.correlationId) &&
-    isClientDiagnosticCitationActivation(value.citationActivation) &&
-    [...FILES_SCOPE_DECISION_EXCLUSIVE_KEYS, "filesScopeDecision"].every(
-      (key) => key === "citationActivation" || value[key] === undefined,
-    )
+    isClientDiagnosticCitationActivation(value.citationActivation)
   );
 }

@@ -1,3 +1,4 @@
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 // Issue #1558 — the assistant speech-output audio engine. Verifies it synthesizes the exact visible
 // assistant text (AC2), plays it through the lifecycle (AC1), releases the audio element / object URL /
 // pending fetch on stop, mute, session switch, and unmount (AC3), and degrades to the visible text on a
@@ -510,6 +511,7 @@ describe("useAssistantSpeech — Issue #1559 persona routing", () => {
     expect(reports).toEqual([
       ["Keiko chat answer prepared for speech.", { answerSpeech: preparation, correlationId }],
     ]);
+    await expectDiagnosticWireAccepted(reports.map(([message, meta]) => ({ message, meta })));
   });
 });
 

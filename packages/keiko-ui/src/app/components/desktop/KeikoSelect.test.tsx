@@ -1,3 +1,4 @@
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -590,6 +591,7 @@ describe("KeikoSelect interactions", () => {
           meta: { kind: "other", selectDismissal: { reason: "escape", focus: "trigger" } },
         },
       ]);
+      await expectDiagnosticWireAccepted(diagnostics);
     });
 
     it("reports the option focus location when Escape closes the menu from an option", async () => {

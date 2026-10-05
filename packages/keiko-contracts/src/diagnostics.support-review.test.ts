@@ -16,9 +16,30 @@ const closed = [
   { supportReportPreparation: prepared },
   { filesScopeDecision: { decision: "restored" } },
   { supportReportDelivery: "manual" },
+  { selectDismissal: { reason: "escape", focus: "trigger" } },
+  {
+    knowledgeCatalog: {
+      podCount: 1,
+      readyPodCount: 1,
+      setCount: 0,
+      boundCount: 0,
+      missingCount: 0,
+      notReadyCount: 0,
+    },
+  },
+  { answerCopy: { outcome: "copied", grounded: true, strippedGroupCount: 0, keptGroupCount: 1 } },
+  { answerSpeech: { grounded: true, strippedGroupCount: 0, keptGroupCount: 1 } },
+  { citationActivation: { reason: "matched", outcome: "opened", rootCount: 1, matchCount: 1 } },
 ];
 
 describe("closed support diagnostics review regressions", () => {
+  it.each(closed)("refuses every other closed report beside %j", (report) => {
+    expect(isClientDiagnosticIngestRequest({ ...base, ...report })).toBe(true);
+    for (const companion of closed) {
+      if (companion === report) continue;
+      expect(isClientDiagnosticIngestRequest({ ...base, ...report, ...companion })).toBe(false);
+    }
+  });
   it.each(closed)(
     "rejects every defined companion outside the common envelope for %j",
     (report) => {

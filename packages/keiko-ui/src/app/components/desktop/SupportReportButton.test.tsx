@@ -1,3 +1,4 @@
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,7 +32,8 @@ vi.mock("@/lib/support-report-local", async (original) => {
     prepareCachedSupportReport: vi.fn(producer.prepareCachedSupportReport),
   };
 });
-vi.mock("@/lib/client-diagnostics", () => ({
+vi.mock("@/lib/client-diagnostics", async (original) => ({
+  ...(await original<typeof import("@/lib/client-diagnostics")>()),
   reportClientDiagnostic: vi.fn(),
   recordClientDiagnosticLoss: vi.fn(),
   retainedClientDiagnosticFailure: vi.fn(() => undefined),
@@ -344,6 +346,10 @@ describe("SupportReportButton", () => {
       },
     );
     expect(automaticClick).not.toHaveBeenCalled();
+    const prepared = vi
+      .mocked(reportClientDiagnostic)
+      .mock.calls.filter(([, meta]) => meta?.supportReportPreparation !== undefined);
+    await expectDiagnosticWireAccepted(prepared.map(([message, meta]) => ({ message, meta })));
   });
 
   it.each([

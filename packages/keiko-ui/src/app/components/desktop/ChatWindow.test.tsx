@@ -1,3 +1,4 @@
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 // Issue #185 AC3 — tests for the grounded-request cancel button in ChatWindow.
 
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -33,7 +34,11 @@ import {
   translateOptionalWidget as translate,
   type OptionalWidgetTranslate as I18nTranslate,
 } from "@/lib/optional-widget-i18n";
-import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import { connectedScopeFingerprint } from "./hooks/workspaceScopeIdentity";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -4126,7 +4131,10 @@ describe("ChatWindow message copy", () => {
   // PR #3678 review: every copy leaves body-free evidence — outcome, grounded flag and the marker
   // groups removed and kept — and a failed copy its error kind; never the copied text.
   it("reports each copy's outcome and marker counts without the copied text", async () => {
-    const reports: { readonly message: string; readonly meta: unknown }[] = [];
+    const reports: {
+      readonly message: string;
+      readonly meta: ClientDiagnosticMeta | undefined;
+    }[] = [];
     setClientDiagnosticWriter((message, meta) => {
       reports.push({ message, meta });
     });
@@ -4181,6 +4189,7 @@ describe("ChatWindow message copy", () => {
       }),
     ]);
     expect(JSON.stringify(copyReports)).not.toContain("Paris");
+    await expectDiagnosticWireAccepted(copyReports);
     resetClientDiagnosticWriter();
     if (clipboardDescriptor !== undefined) {
       Object.defineProperty(navigator, "clipboard", clipboardDescriptor);

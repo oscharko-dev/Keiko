@@ -1,3 +1,4 @@
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 // The client diagnostic sink: the redaction rule it makes enforceable, and the reason its default
 // buffers instead of dropping.
 
@@ -226,7 +227,7 @@ describe("clientErrorSummary", () => {
   });
 });
 
-it("routes Files ownership decisions without replacing a real global failure", () => {
+it("routes Files ownership decisions without replacing a real global failure", async () => {
   const priorFailure = currentGlobalClientFailure();
   const written: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
   setClientDiagnosticWriter((message, meta) => written.push({ message, meta }));
@@ -236,6 +237,7 @@ it("routes Files ownership decisions without replacing a real global failure", (
     candidateCount: 2,
     bindingFingerprint: "a".repeat(64),
   });
+  await expectDiagnosticWireAccepted(written);
   expect(written).toEqual([
     {
       message: "Keiko Files scope ownership decision.",
