@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 it.each(["pending", "ready"] as const)(
-  "preserves the %s report and original correlation while degraded health counters change",
+  "preserves the %s server report while degraded health counters change",
   async (phase) => {
     const report = await canonicalSupportReportFixture();
     vi.useFakeTimers();
@@ -61,10 +61,7 @@ it.each(["pending", "ready"] as const)(
     });
     fireEvent.click(screen.getByRole("button", { name: "Create error report" }));
     await act(async () => await Promise.resolve());
-    expect(create).toHaveBeenCalledExactlyOnceWith(
-      fetch.mock.calls[0]?.[0],
-      expect.any(AbortSignal),
-    );
+    expect(create).toHaveBeenCalledExactlyOnceWith(undefined, expect.any(AbortSignal));
     const signal = create.mock.calls[0]?.[1];
     if (phase === "ready") await act(async () => finish?.(report));
     await act(async () => {

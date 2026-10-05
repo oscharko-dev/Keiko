@@ -174,7 +174,7 @@ it("shows verified degraded readiness immediately without inventing an exception
   expect(view.result.current).toEqual({
     state: "loaded",
     health,
-    report: { correlationId: fetch.mock.calls[0]?.[0] },
+    report: {},
   });
   fetch.mockResolvedValueOnce(ready);
   await act(async () => await vi.advanceTimersByTimeAsync(HEALTH_POLL_INTERVAL_MS));
@@ -183,7 +183,7 @@ it("shows verified degraded readiness immediately without inventing an exception
   expect(view.result.current).toEqual({
     state: "loaded",
     health,
-    report: { correlationId: fetch.mock.calls[2]?.[0] },
+    report: {},
   });
   expect(fetch.mock.calls[2]?.[0]).not.toBe(fetch.mock.calls[0]?.[0]);
   expect(reportClientDiagnostic).not.toHaveBeenCalled();

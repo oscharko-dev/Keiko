@@ -18,7 +18,7 @@ import { bffRequestErrorKind } from "@/lib/http";
 export const HEALTH_POLL_INTERVAL_MS = 60_000;
 
 interface HealthReport {
-  readonly correlationId: string;
+  readonly correlationId?: string;
   readonly failure?: ClientOnlySupportReportInput["failure"];
 }
 
@@ -71,7 +71,9 @@ function observedHealthReport(
   }
   poll.invalidReport = undefined;
   if (health.diagnostics !== undefined && health.diagnostics.readiness !== "ready") {
-    poll.degradedReport ??= { correlationId };
+    // The successful health read did not cause the degraded writer. Let the existing report
+    // owner select recent failure/incident evidence, including uncorrelated readiness lines.
+    poll.degradedReport ??= {};
     return poll.degradedReport;
   }
   poll.degradedReport = undefined;
