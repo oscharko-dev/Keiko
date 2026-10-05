@@ -1330,7 +1330,11 @@ describe("AppShell grounding connections", () => {
       expect.any(String),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
-    expect(mocks.recordReadsContextRelationship).toHaveBeenCalledWith("chat-1", "/repo");
+    expect(mocks.recordReadsContextRelationship).toHaveBeenCalledWith(
+      "chat-1",
+      "/repo",
+      mocks.updateChatConnectedScopes.mock.calls[0]?.[3],
+    );
     // The app-level announcer mounts a permanent (empty) role="alert" region, so scope the
     // "no notice" assertion to the inline source-limit alert specifically.
     expect(document.querySelector(".source-limit-alert")).toBeNull();
@@ -1421,8 +1425,16 @@ describe("AppShell grounding connections", () => {
       expect.any(String),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(concurrent);
-    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith("chat-1", "/repo");
-    expect(mocks.recordReadsContextRelationship).toHaveBeenCalledWith("chat-1", "/other");
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith(
+      "chat-1",
+      "/repo",
+      expect.any(String),
+    );
+    expect(mocks.recordReadsContextRelationship).toHaveBeenCalledWith(
+      "chat-1",
+      "/other",
+      mocks.updateChatConnectedScopes.mock.calls.at(-1)?.[3],
+    );
   });
 
   it("rejects an already-stale binding target before either persistence API runs", async (): Promise<void> => {
@@ -1845,7 +1857,11 @@ describe("AppShell grounding connections", () => {
       expect.any(String),
     );
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(updated);
-    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith("chat-1", "/late");
+    expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith(
+      "chat-1",
+      "/late",
+      expect.any(String),
+    );
     expect(reportError).not.toHaveBeenCalled();
     const attemptCorrelation = mocks.fetchChats.mock.calls[0]?.[1] as string;
     const rejectedCorrelation = recordedFilesScopeDecision("timeout-rejected")?.meta?.correlationId;

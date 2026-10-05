@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitFor } from "@testing-library/react";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import { recordReadsContextRelationship } from "./connector-relationship";
 import { createRelationship, RelationshipApiError } from "./api";
 
@@ -23,7 +25,9 @@ describe("recordReadsContextRelationship", () => {
     vi.clearAllMocks();
   });
 
-  it("records a deterministic reads-context relationship for valid chat-folder pairs", () => {
+  afterEach(() => resetClientDiagnosticWriter());
+
+  it("records a deterministic reads-context relationship for valid chat-folder pairs", async () => {
     vi.mocked(createRelationship).mockResolvedValue({
       relationship: {
         id: "rel-1",
@@ -40,7 +44,8 @@ describe("recordReadsContextRelationship", () => {
       etag: "1",
     });
 
-    recordReadsContextRelationship("chat-1", "/repo");
+    recordReadsContextRelationship("chat-1", "/repo", "files-bind-123");
+    await waitFor(() => expect(createRelationship).toHaveBeenCalledOnce());
 
     expect(createRelationship).toHaveBeenCalledWith(
       {
@@ -53,20 +58,32 @@ describe("recordReadsContextRelationship", () => {
 
     const key = vi.mocked(createRelationship).mock.calls[0]?.[1];
     vi.mocked(createRelationship).mockClear();
-    recordReadsContextRelationship("chat-1", "/repo");
+    recordReadsContextRelationship("chat-1", "/repo", "files-bind-123");
+    await waitFor(() => expect(createRelationship).toHaveBeenCalledOnce());
     expect(vi.mocked(createRelationship).mock.calls[0]?.[1]).toBe(key);
   });
 
-  it("skips incomplete pairs and swallows best-effort failures", async () => {
+  it("skips incomplete pairs and records non-blocking relationship failures", async () => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
     vi.mocked(createRelationship).mockRejectedValue(
       new RelationshipApiError("policy_denied", "denied", 403),
     );
 
-    recordReadsContextRelationship("", "/repo");
-    recordReadsContextRelationship("chat-1", "");
-    recordReadsContextRelationship("chat-1", "/repo");
+    recordReadsContextRelationship("", "/repo", "files-bind-123");
+    recordReadsContextRelationship("chat-1", "", "files-bind-123");
+    recordReadsContextRelationship("chat-1", "/repo", "files-bind-123");
+    await waitFor(() => expect(createRelationship).toHaveBeenCalledOnce());
 
     expect(createRelationship).toHaveBeenCalledTimes(1);
-    await Promise.resolve();
+    await waitFor(() => expect(writer).toHaveBeenCalledOnce());
+    expect(writer).toHaveBeenCalledWith(
+      "Files relationship recording failed.",
+      expect.objectContaining({
+        correlationId: "files-bind-123",
+        errorKind: "authority-denied",
+      }),
+    );
+    expect(JSON.stringify(writer.mock.calls)).not.toMatch(/\/repo|chat-1|policy_denied/);
   });
 });

@@ -1781,7 +1781,8 @@ function AppShellInner(): ReactNode {
       // relationship so the connection is validated, audited, and visible in the relationship
       // graph. Best-effort: never blocks or breaks the grounding scope bind above.
       const relationshipPath = relationshipPathForScope(scope);
-      if (relationshipPath !== null) recordReadsContextRelationship(chat.id, relationshipPath);
+      if (relationshipPath !== null)
+        recordReadsContextRelationship(chat.id, relationshipPath, attempt.correlationId);
       return true;
     },
     // GEN-PERF-RENDER-001 — depend on the stable `session.replaceChat` useCallback (the only member
