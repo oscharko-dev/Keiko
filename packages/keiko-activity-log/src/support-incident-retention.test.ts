@@ -1450,6 +1450,37 @@ describe("rolling diagnostic candidate retention", () => {
     expect(listActivityLogDirectory(join(stateDir, "logs")).pins).toHaveLength(1);
   });
 
+  it("does not retire live evidence for expired pins arriving after publication", () => {
+    const original = recordUserReportedIncident(stateDir, { correlationId: "live-pin-owner" });
+    if (original.status !== "created") throw new Error("Expected original incident");
+    const directory = join(stateDir, "logs");
+    const pin = readActivityLogPins(listActivityLogDirectory(directory), directory)[0]?.record;
+    if (pin === undefined) throw new Error("Expected produced pin");
+    const writeRecord = incidentStore.writeSupportIncidentRecord;
+    vi.spyOn(incidentStore, "writeSupportIncidentRecord").mockImplementationOnce((...args) => {
+      writeRecord(...args);
+      for (let index = 0; index < MAX_ACTIVITY_LOG_PINS - 2; index += 1) {
+        writeActivityLogPinRecord(directory, directory, {
+          ...pin,
+          pinId: index.toString(16).padStart(24, "0"),
+          createdAtMs: original.record.createdAtMs - 10_000,
+          expiresAtMs: original.record.createdAtMs - 1,
+        });
+      }
+    });
+    const next = recordUserReportedIncident(stateDir, { correlationId: "next-live-pin-owner" });
+    if (next.status !== "created") throw new Error("Expected next incident");
+    expect(next.record.pin.status).toBe("pinned");
+    expect(listSupportIncidents(stateDir, { readOnly: true })).toEqual([
+      original.record,
+      next.record,
+    ]);
+    expect(listActivityLogDirectory(directory).pins).toHaveLength(MAX_ACTIVITY_LOG_PINS);
+    expect(
+      persistedActivityLogLines(readPersistedActivityLog(stateDir), "support.incident.expired"),
+    ).toEqual([]);
+  });
+
   it("does not claim recovered pin pressure when the owned pin release was rejected", () => {
     occupyDiagnosticPinReserve();
     vi.spyOn(serverLog, "releaseActivityLogPin").mockReturnValueOnce({

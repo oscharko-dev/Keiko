@@ -58,6 +58,7 @@ import {
 
 import {
   activityLogPinCovers,
+  activeActivityLogPins,
   MAX_ACTIVITY_LOG_PINS,
   isActivityLogSegmentEntry,
   listActivityLogDirectory,
@@ -1164,8 +1165,9 @@ function ownsDiagnosticPin(record: SupportIncidentRecord, pin: ActivityLogPinRec
 
 function rollDiagnosticPin(context: IncidentPinContext, publishedIncidentId: string): void {
   const directory = join(context.stateDir, ACTIVITY_LOG_DIRECTORY_NAME);
-  const pins = readActivityLogPins(listActivityLogDirectory(directory), directory).flatMap(
-    ({ record }) => (record === undefined ? [] : [record]),
+  const pins = activeActivityLogPins(
+    readActivityLogPins(listActivityLogDirectory(directory), directory),
+    context.nowMs,
   );
   if (pins.length < MAX_ACTIVITY_LOG_PINS) return;
   const entries = listSupportIncidentEntries(context.stateDir);
