@@ -521,15 +521,15 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredCausalOperations: [
       "chat.creation.rejected",
       "chat.regeneration.rejected",
-      "chat.send.rejected",
       "chat.scope.update",
+      "chat.send.rejected",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
       "chat.creation.rejected",
       "chat.regeneration.rejected",
-      "chat.send.rejected",
       "chat.scope.update",
+      "chat.send.rejected",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: ["chat.scope.update"],
