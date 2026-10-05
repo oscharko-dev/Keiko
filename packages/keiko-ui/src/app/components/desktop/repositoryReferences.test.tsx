@@ -74,7 +74,9 @@ describe("explicit repository source choice", () => {
     await user.keyboard("{Enter}");
     expect(openReference).not.toHaveBeenCalled();
     expect(trigger).toHaveAttribute("aria-expanded", "true");
-    const option = screen.getByRole("button", { name: "Select repository source: Manual" });
+    const option = screen.getByRole("button", {
+      name: "Select repository source: Manual · repo/manual",
+    });
     expect(option.parentElement).toHaveAttribute("id", trigger.getAttribute("aria-controls"));
     await user.tab();
     expect(option).toHaveFocus();
@@ -113,7 +115,9 @@ describe("explicit repository source choice", () => {
     await user.keyboard("{Escape}");
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(trigger).toHaveFocus();
-    expect(screen.queryByRole("button", { name: "Select repository source: Repo" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Select repository source: Repo · repo" }),
+    ).toBeNull();
     expect(openReference).not.toHaveBeenCalled();
   });
 });

@@ -650,24 +650,30 @@ interface RepositoryReferenceInlineProps {
   readonly citationActivation?: Omit<ClientDiagnosticCitationActivation, "outcome"> | undefined;
 }
 
+function sourceChoicePath(
+  root: RepositoryReferenceRoot,
+  roots: readonly RepositoryReferenceRoot[],
+): string | undefined {
+  const sameLabel = roots.filter((candidate) => candidate.label === root.label).length > 1;
+  if (sameLabel) return repositoryReferenceDisplayPath(root.root);
+  const suffix = repositoryRootSuffix(root.root);
+  return suffix === root.label ? undefined : suffix;
+}
+
 function sourceChoiceLabel(
   root: RepositoryReferenceRoot,
   roots: readonly RepositoryReferenceRoot[],
 ): string {
-  const sameLabel = roots.filter((candidate) => candidate.label === root.label).length > 1;
-  return sameLabel ? `${root.label} · ${repositoryReferenceDisplayPath(root.root)}` : root.label;
+  const detail = sourceChoicePath(root, roots);
+  return detail === undefined ? root.label : `${root.label} · ${detail}`;
 }
 
 function sourceChoiceDetail(
   root: RepositoryReferenceRoot,
   roots: readonly RepositoryReferenceRoot[],
 ): ReactNode {
-  const disambiguated = sourceChoiceLabel(root, roots) !== root.label;
-  const detail = disambiguated
-    ? repositoryReferenceDisplayPath(root.root)
-    : repositoryRootSuffix(root.root);
-  if (!disambiguated && detail === root.label) return null;
-  return <span className="repo-ref-root-path">{detail}</span>;
+  const detail = sourceChoicePath(root, roots);
+  return detail === undefined ? null : <span className="repo-ref-root-path">{detail}</span>;
 }
 
 const OPENED_CONFIRMATION_MS = 1800;

@@ -1046,7 +1046,7 @@ describe("GroundedAnswer", () => {
     expect(screen.queryByRole("button", { name: /Select repository source:/u })).toBeNull();
   });
 
-  it.each(["replacement", "different subfolder", "ambiguous"])(
+  it.each(["replacement", "different subfolder", "ambiguous"] as const)(
     "requires a manual source choice for %s identity instead of guessing from labels",
     (kind) => {
       const original = {
@@ -1083,13 +1083,14 @@ describe("GroundedAnswer", () => {
         screen.getByRole("button", { name: "Open src/foo.ts at lines 10-25 in editor" }),
       );
       expect(openReference).not.toHaveBeenCalled();
-      const expectedNames =
-        kind === "ambiguous"
-          ? [
-              "Select repository source: manual · /alias/manual",
-              "Select repository source: manual · /old/manual",
-            ]
-          : ["Select repository source: manual"];
+      const expectedNames = {
+        ambiguous: [
+          "Select repository source: manual · /alias/manual",
+          "Select repository source: manual · /old/manual",
+        ],
+        replacement: ["Select repository source: manual · new/manual"],
+        "different subfolder": ["Select repository source: manual · old/manual"],
+      }[kind];
       const choices = screen.getAllByRole("button", { name: /^Select repository source:/u });
       expect(choices).toHaveLength(expectedNames.length);
       for (const name of expectedNames) expect(screen.getByRole("button", { name })).toBeVisible();
@@ -2944,7 +2945,9 @@ describe("attributed citation activation evidence", () => {
       openEvidenceDisclosure(document.body);
       fireEvent.click(screen.getByRole("button", { name: /Open src\/foo.ts/ }));
       expect(openReference).not.toHaveBeenCalled();
-      fireEvent.click(screen.getByRole("button", { name: "Select repository source: Repo" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Select repository source: Repo · repo" }),
+      );
       expect(openReference).toHaveBeenCalledExactlyOnceWith({
         root: "/repo",
         path: "src/foo.ts",
@@ -3068,7 +3071,9 @@ describe("attributed citation activation evidence", () => {
         citationActivation: { reason, outcome, rootCount: 2, matchCount },
       });
       if (reason !== "matched")
-        fireEvent.click(screen.getByRole("button", { name: "Select repository source: Second" }));
+        fireEvent.click(
+          screen.getByRole("button", { name: "Select repository source: Second · private/second" }),
+        );
       expect(writer).toHaveBeenLastCalledWith("[keiko] citation activation settled", {
         correlationId: expect.any(String),
         citationActivation: { reason, outcome: "opened", rootCount: 2, matchCount },
@@ -3125,9 +3130,12 @@ it("joins citation picker dismissal and selection to their actual activation", (
   const trigger = screen.getByRole("button", { name: /Open src\/foo.ts/ });
   fireEvent.click(trigger);
   const first = writer.mock.calls[0]?.[1]?.correlationId;
-  fireEvent.keyDown(screen.getByRole("button", { name: "Select repository source: First" }), {
-    key: "Escape",
-  });
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: "Select repository source: First · first" }),
+    {
+      key: "Escape",
+    },
+  );
   expect(writer.mock.calls[1]?.[1]).toMatchObject({
     correlationId: first,
     citationActivation: {
@@ -3141,9 +3149,56 @@ it("joins citation picker dismissal and selection to their actual activation", (
   fireEvent.click(trigger);
   const second = writer.mock.calls[2]?.[1]?.correlationId;
   expect(second).not.toBe(first);
-  fireEvent.click(screen.getByRole("button", { name: "Select repository source: Second" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Select repository source: Second · second" }),
+  );
   expect(writer.mock.calls[3]?.[1]).toMatchObject({
     correlationId: second,
     citationActivation: { outcome: "opened" },
   });
+});
+
+it("preserves the open citation picker, focus and activation across a parent rerender", () => {
+  const writer = vi.fn<ClientDiagnosticWriter>();
+  setClientDiagnosticWriter(writer);
+  const openReference = vi.fn(() => ({ ok: true as const, windowId: "editor-1" }));
+  const props = {
+    answer: answer({ citations: [citation()] }),
+    busy: false,
+    repositoryRoots: [
+      { root: "/first", label: "first" },
+      { root: "/second", label: "second" },
+    ],
+    openRepositoryReference: openReference,
+  };
+  const { rerender } = render(<GroundedAnswer {...props} />);
+  openEvidenceDisclosure(document.body);
+  const trigger = screen.getByRole("button", { name: /Open src\/foo.ts/ });
+  fireEvent.click(trigger);
+  const selected = screen.getByRole("button", { name: "Select repository source: second" });
+  selected.focus();
+  const correlationId = writer.mock.calls[0]?.[1]?.correlationId;
+  expect(correlationId).toEqual(expect.any(String));
+  expect(writer).toHaveBeenCalledOnce();
+  rerender(<GroundedAnswer {...props} answer={{ ...props.answer, content: "More answer text" }} />);
+  expect(trigger).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("button", { name: "Select repository source: second" })).toBe(selected);
+  expect(selected).toHaveFocus();
+  expect(writer).toHaveBeenCalledOnce();
+  fireEvent.click(selected);
+  expect(openReference).toHaveBeenCalledExactlyOnceWith({
+    root: "/second",
+    path: "src/foo.ts",
+    lineStart: 10,
+    lineEnd: 25,
+  });
+  expect(trigger).toHaveFocus();
+  expect(writer.mock.calls.map((call) => call[1]?.correlationId)).toEqual([
+    correlationId,
+    correlationId,
+  ]);
+  expect(writer.mock.calls.map((call) => call[1]?.citationActivation?.outcome)).toEqual([
+    "picker-opened",
+    "opened",
+  ]);
 });

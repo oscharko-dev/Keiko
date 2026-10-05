@@ -4727,7 +4727,9 @@ describe("ChatWindow message copy", () => {
 
     expect(openEditorFile).not.toHaveBeenCalled();
     expect(screen.getAllByRole("button", { name: /^Select repository source:/ })).toHaveLength(2);
-    await user.click(screen.getByRole("button", { name: "Select repository source: Keiko" }));
+    await user.click(
+      screen.getByRole("button", { name: "Select repository source: Keiko · Projects/Keiko" }),
+    );
     expect(openEditorFile).toHaveBeenCalledWith({
       root: "/Users/dev/Projects/Keiko",
       path: "packages/keiko-editor/src/range.ts",

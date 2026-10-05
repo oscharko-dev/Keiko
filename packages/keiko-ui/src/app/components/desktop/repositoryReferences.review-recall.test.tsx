@@ -47,6 +47,45 @@ describe("explicit repository reference recall", () => {
 });
 
 describe("repository reference choice presentation", () => {
+  it("includes each visible unique-root suffix in its accessible choice name", () => {
+    render(
+      <RepositoryReferenceInline
+        reference={{ path: "src/a.ts", label: "src/a.ts" }}
+        roots={[
+          { root: "/work/project", label: "Project" },
+          { root: "/work/other", label: "Other" },
+        ]}
+        openReference={vi.fn(() => ({ ok: true as const, windowId: "editor" }))}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open src/a.ts in editor" }));
+    const project = screen.getByRole("button", {
+      name: "Select repository source: Project · work/project",
+    });
+    expect(project).toHaveTextContent("Project");
+    expect(project.querySelector(".repo-ref-root-path")).toHaveTextContent("work/project");
+    expect(
+      screen.getByRole("button", { name: "Select repository source: Other · work/other" }),
+    ).toBeVisible();
+  });
+
+  it("omits a redundant suffix from both the visible and accessible root choice", () => {
+    render(
+      <RepositoryReferenceInline
+        reference={{ path: "src/a.ts", label: "src/a.ts" }}
+        roots={[
+          { root: "/alpha", label: "alpha" },
+          { root: "/beta", label: "beta" },
+        ]}
+        openReference={vi.fn(() => ({ ok: true as const, windowId: "editor" }))}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open src/a.ts in editor" }));
+    const alpha = screen.getByRole("button", { name: "Select repository source: alpha" });
+    expect(alpha).toHaveTextContent(/^alpha$/);
+    expect(alpha.querySelector(".repo-ref-root-path")).toBeNull();
+  });
+
   it("visibly distinguishes roots with identical short suffixes", () => {
     render(
       <RepositoryReferenceInline

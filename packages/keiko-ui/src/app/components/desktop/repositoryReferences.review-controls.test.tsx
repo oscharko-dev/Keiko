@@ -96,12 +96,16 @@ describe("repository source picker lifecycle", () => {
   it("does not let an old opened timer close a reopened picker", () => {
     vi.useFakeTimers();
     const trigger = renderPicker(() => ({ ok: true, windowId: "editor" }));
-    fireEvent.click(screen.getByRole("button", { name: "Select repository source: alpha" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select repository source: alpha · alpha/repo" }),
+    );
     expect(trigger).toHaveAttribute("data-state", "opened");
     fireEvent.click(trigger);
     act(() => vi.advanceTimersByTime(1800));
     expect(trigger).toHaveAttribute("data-state", "choosing");
-    expect(screen.getByRole("button", { name: "Select repository source: beta" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Select repository source: beta · beta/repo" }),
+    ).toBeVisible();
   });
 
   it.each([
@@ -114,7 +118,9 @@ describe("repository source picker lifecycle", () => {
       ok ? { ok: true, windowId: "editor" } : { ok: false, message: "Refused" },
     );
     const trigger = renderPicker(openReference);
-    const source = screen.getByRole("button", { name: "Select repository source: beta" });
+    const source = screen.getByRole("button", {
+      name: "Select repository source: beta · beta/repo",
+    });
     source.focus();
     await userEvent.setup().keyboard(key);
     expect(trigger).toHaveFocus();
@@ -129,7 +135,9 @@ describe("repository source picker lifecycle", () => {
         outside.focus();
         return { ok: true, windowId: "editor" };
       });
-      const source = screen.getByRole("button", { name: "Select repository source: alpha" });
+      const source = screen.getByRole("button", {
+        name: "Select repository source: alpha · alpha/repo",
+      });
       source.focus();
       fireEvent.click(source);
       expect(outside).toHaveFocus();
