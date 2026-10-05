@@ -52,6 +52,22 @@ describe("closed support diagnostics review regressions", () => {
       ).toBe(true);
     },
   );
+  it("preserves the legacy neutral select envelope without accepting failure fields", () => {
+    const selected = {
+      ...base,
+      kind: "other",
+      selectDismissal: { reason: "escape", focus: "trigger" },
+    };
+    expect(isClientDiagnosticIngestRequest(selected)).toBe(true);
+    expect(isClientDiagnosticIngestRequest({ ...selected, kind: "window-error" })).toBe(false);
+    expect(isClientDiagnosticIngestRequest({ ...selected, errorKind: "unavailable" })).toBe(false);
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...selected,
+        errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+      }),
+    ).toBe(false);
+  });
   it("retains the registered copy-failure evidence without accepting it on a copied result", () => {
     const failure = {
       ...base,

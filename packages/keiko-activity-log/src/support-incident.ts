@@ -1693,34 +1693,30 @@ interface RetirementInspection {
 }
 
 function retirementFailedEvidence(
-  stateDir: string,
   incidentId: string,
   options: SupportIncidentRetirementOptions & { readonly correlationId: string },
   failureStage: "read" | "sweep",
   error: unknown,
-): void {
+): ServerLogEvent {
   const frames = keikoStackFrames(error);
   const causes = causeChain(error);
-  writeEvidence(
-    stateDir,
-    activityLogEvent(
-      SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION,
-      {
-        level: "warn",
-        correlationId: options.correlationId,
-        errorKind: activityLogErrorKindOr(errorKindOf(error), "internal"),
-      },
-      {
-        incidentId,
-        failureStage,
-        failureKind: errorKindOf(error),
-        ...(options.retirementReason === undefined ? {} : { reason: options.retirementReason }),
-        ...(frames.length === 0 ? {} : { frames }),
-        ...(causes.length === 0 ? {} : { causeChain: causes }),
-        completeness: "partial",
-        loss: "none",
-      },
-    ),
+  return activityLogEvent(
+    SUPPORT_INCIDENT_RETIREMENT_FAILED_OPERATION,
+    {
+      level: "warn",
+      correlationId: options.correlationId,
+      errorKind: activityLogErrorKindOr(errorKindOf(error), "internal"),
+    },
+    {
+      incidentId,
+      failureStage,
+      failureKind: errorKindOf(error),
+      ...(options.retirementReason === undefined ? {} : { reason: options.retirementReason }),
+      ...(frames.length === 0 ? {} : { frames }),
+      ...(causes.length === 0 ? {} : { causeChain: causes }),
+      completeness: "partial",
+      loss: "none",
+    },
   );
 }
 
@@ -1737,7 +1733,8 @@ function inspectRetirement(
     const record = open.find((entry) => entry.incidentId === incidentId)?.record;
     return record === undefined ? "not-found" : { record, openIncidentCount: open.length };
   } catch (error) {
-    retirementFailedEvidence(stateDir, incidentId, options, stage, error);
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    sink.write(retirementFailedEvidence(incidentId, options, stage, error));
     return "failed";
   }
 }

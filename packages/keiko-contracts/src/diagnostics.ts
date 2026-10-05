@@ -700,6 +700,10 @@ function allowsClosedReportFailureField(value: Record<string, unknown>, key: str
     (key === "errorKind" || key === "errorEvidence")
   );
 }
+function allowsLegacySelectKind(value: Record<string, unknown>, key: string): boolean {
+  // Existing select-menu producers label routine dismissal as neutral `other`, never a failure.
+  return key === "kind" && value.kind === "other" && value.selectDismissal !== undefined;
+}
 function hasExclusiveClosedReportContext(value: Record<string, unknown>): boolean {
   const selected = CLOSED_CLIENT_REPORT_KEYS.filter((key) => value[key] !== undefined);
   if (selected.length === 0) return true;
@@ -709,7 +713,8 @@ function hasExclusiveClosedReportContext(value: Record<string, unknown>): boolea
       value[key] === undefined ||
       key === selected[0] ||
       CLOSED_CLIENT_REPORT_ENVELOPE_KEYS.has(key) ||
-      allowsClosedReportFailureField(value, key),
+      allowsClosedReportFailureField(value, key) ||
+      allowsLegacySelectKind(value, key),
   );
 }
 
