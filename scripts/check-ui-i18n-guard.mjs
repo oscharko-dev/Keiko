@@ -513,13 +513,15 @@ function intlLocaleBinding(scope, name) {
     .find((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name);
 }
 
-function hasDynamicIntlLocale(expression, visited = new Set()) {
-  if (expression === undefined || visited.has(expression)) return false;
-  visited.add(expression);
-  if (ts.isPropertyAccessExpression(expression) && expression.name.text === "locale") {
-    return hasDynamicIntlLocale(expression.expression, visited);
-  }
-  if (!ts.isIdentifier(expression)) return false;
+function hasDynamicIntlFallback(expression, visited) {
+  // The selected locale stays authoritative; a literal default only handles its absence.
+  return (
+    expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken &&
+    hasDynamicIntlLocale(expression.left, visited)
+  );
+}
+
+function hasDynamicIntlIdentifier(expression, visited) {
   let scope = expression;
   while (!ts.isSourceFile(scope)) {
     scope = scope.parent;
@@ -529,6 +531,16 @@ function hasDynamicIntlLocale(expression, visited = new Set()) {
     return hasDynamicIntlLocale(binding.initializer, visited);
   }
   return false;
+}
+
+function hasDynamicIntlLocale(expression, visited = new Set()) {
+  if (expression === undefined || visited.has(expression)) return false;
+  visited.add(expression);
+  if (ts.isPropertyAccessExpression(expression) && expression.name.text === "locale") {
+    return hasDynamicIntlLocale(expression.expression, visited);
+  }
+  if (ts.isBinaryExpression(expression)) return hasDynamicIntlFallback(expression, visited);
+  return ts.isIdentifier(expression) && hasDynamicIntlIdentifier(expression, visited);
 }
 
 function isSelectedLocaleIntlCall(node) {

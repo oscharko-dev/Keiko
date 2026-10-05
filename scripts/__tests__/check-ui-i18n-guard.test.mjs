@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { URL } from "node:url";
 import { expect, test } from "vitest";
 
 import {
@@ -98,6 +99,22 @@ test.each([
     "Intl.NumberFormat(resolvedLocale)",
     true,
   ],
+  ["locale", "", 'new Intl.NumberFormat(locale ?? "en")', true],
+  [
+    "locale",
+    'const resolvedLocale = locale ?? "en";',
+    "new Intl.NumberFormat(resolvedLocale)",
+    true,
+  ],
+  [
+    "unused",
+    'const fixed = "de"; const resolvedLocale = fixed ?? "en";',
+    "new Intl.NumberFormat(resolvedLocale)",
+    false,
+  ],
+  ["locale", "", 'new Intl.NumberFormat("en" ?? locale)', false],
+  ["locale", "", 'new Intl.NumberFormat(locale + "-DE")', false],
+  ["locale", "", 'new Intl.NumberFormat(locale || "en")', false],
 ])(
   "recognizes dynamic Intl at file scope: %s %s %s",
   async (parameter, binding, formatter, accepted) => {
@@ -117,6 +134,29 @@ test.each([
     );
   },
 );
+
+test("recognizes the real cached numeric presenter and rejects its fixed-locale counterfactual", async () => {
+  const file = "packages/keiko-ui/src/lib/format.ts";
+  const source = await readFile(new URL(`../../${file}`, import.meta.url), "utf8");
+  const baseline = await readFile(new URL(`../../${LITERAL_BASELINE}`, import.meta.url), "utf8");
+  const counterfactual = source.replace('locale ?? "en"', '"en"');
+  expect(counterfactual).not.toBe(source);
+  for (const [contents, accepted] of [
+    [source, true],
+    [counterfactual, false],
+  ]) {
+    await withFixture(
+      { ...matchingCatalogs, [LITERAL_BASELINE]: baseline, [file]: contents },
+      (repoRoot) => {
+        const result = checkUiI18nGuard({ repoRoot, changedFiles: [file, EN_CATALOG, DE_CATALOG] });
+        expect(result.ok, result.problems.join("; ")).toBe(accepted);
+        expect(result.problems.some((problem) => problem.includes("do not use the i18n API"))).toBe(
+          !accepted,
+        );
+      },
+    );
+  }
+});
 
 test("pure number formatting changes do not require catalog edits", async () => {
   const file = "packages/keiko-ui/src/lib/format.ts";
