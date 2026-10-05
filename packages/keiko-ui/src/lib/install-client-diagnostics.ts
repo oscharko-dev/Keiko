@@ -126,14 +126,14 @@ function parsedSseReadyState(digit: string): ClientDiagnosticReadyState {
   return 1;
 }
 
-// The stage wire body carries no `message`, `clientTs`, `correlationId` or `loss`: a stage mount is
-// not itself a server request (there is nothing to correlate against) and its evidence is already
-// closed and bounded, never free text (KEIKO-3557).
+// Stage evidence carries closed fields and validated request/parent joins, never message text.
 function clientStagePostBody(
   report: ClientDiagnosticStageReport,
   correlationId: string | undefined,
+  parentCorrelationId: string | undefined,
 ): ClientStageIngestRequest {
   const id = validCorrelationId(correlationId);
+  const parentId = validCorrelationId(parentCorrelationId);
   return report.phase === "started"
     ? {
         kind: "stage",
@@ -141,6 +141,7 @@ function clientStagePostBody(
         phase: "started",
         ordinal: report.ordinal,
         correlationId: id,
+        ...(parentId === undefined ? {} : { parentCorrelationId: parentId }),
         deletion: report.deletion,
       }
     : {
@@ -154,6 +155,7 @@ function clientStagePostBody(
           ? {}
           : { navigationOutcome: report.navigationOutcome }),
         correlationId: id,
+        ...(parentId === undefined ? {} : { parentCorrelationId: parentId }),
         deletion: report.deletion,
       };
 }
@@ -234,7 +236,7 @@ function structuredPostBody(
   meta: ClientDiagnosticMeta | undefined,
 ): StructuredPostBody | undefined {
   if (meta?.stageReport !== undefined) {
-    return clientStagePostBody(meta.stageReport, meta.correlationId);
+    return clientStagePostBody(meta.stageReport, meta.correlationId, meta.parentCorrelationId);
   }
   if (meta?.bindingReport !== undefined) {
     return clientBindingPostBody(meta.bindingReport, meta.correlationId);

@@ -4,6 +4,7 @@ import {
   clientOnlySupportReportSections,
   defectFingerprintPreimage,
   MAX_SUPPORT_REPORT_BYTES,
+  SUPPORT_REPORT_DELIVERY_TTL_MS,
   isActivityLogCorrelationId,
   isClientReportFailure,
   looksLikeSecret,
@@ -163,7 +164,7 @@ export async function prepareCachedSupportReport(
     download: {
       href,
       fileName: `${report.fileName}.gz`,
-      expiresAtMs: Date.now() + 15 * 60_000,
+      expiresAtMs: Date.now() + SUPPORT_REPORT_DELIVERY_TTL_MS,
       dispose: (): void => URL.revokeObjectURL(href),
     },
   };

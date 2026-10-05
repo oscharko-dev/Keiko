@@ -12,6 +12,8 @@ import { useTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import {
   MAX_SUPPORT_REPORT_BYTES,
+  SUPPORT_REPORT_REQUEST_TIMEOUT_MS,
+  SUPPORT_REPORT_DELIVERY_TTL_MS,
   isActivityLogCorrelationId,
   type DesktopSupportReportResponse,
   type ClientOnlySupportReportInput,
@@ -28,12 +30,12 @@ import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary"
 import { bffRequestErrorKind } from "@/lib/http";
 import styles from "./SupportReportButton.module.css";
 
-const REPORT_DEADLINE_MS = 35_000;
 const MAX_FULFILLED_REPORTS = 128;
 interface ReadyReport {
   readonly report: DesktopSupportReportResponse;
   readonly download: SupportReportDownload | undefined;
   readonly bytes: number;
+  readonly source: "server" | "browser";
   readonly pending?: AbortController;
 }
 type ReportOutcome = AbortController | ReadyReport;
@@ -78,8 +80,8 @@ function releaseReport(key: string, controller: AbortController): void {
     !(outcome instanceof AbortController) &&
     outcome.pending === controller
   ) {
-    const { report, download, bytes } = outcome;
-    outcomes.set(key, { report, download, bytes });
+    const { report, download, bytes, source } = outcome;
+    outcomes.set(key, { report, download, bytes, source });
   } else return;
   notifyOutcomes();
 }
@@ -103,7 +105,7 @@ function forgetReadyReport(key: string): void {
   notifyOutcomes();
 }
 
-function expireServerDownload(key: string): void {
+function expireReportDownload(key: string): void {
   const outcome = outcomes.get(key);
   if (outcome === undefined || outcome instanceof AbortController) return;
   outcome.download?.dispose();
@@ -115,6 +117,7 @@ function fulfillReport(
   key: string,
   report: DesktopSupportReportResponse,
   download: SupportReportDownload,
+  source: "server" | "browser" = "server",
 ): number {
   const bytes = new TextEncoder().encode(report.reportJson).byteLength;
   if (bytes > MAX_SUPPORT_REPORT_BYTES) {
@@ -124,7 +127,7 @@ function fulfillReport(
   const prior = outcomes.get(key);
   if (prior !== undefined && !(prior instanceof AbortController)) prior.download?.dispose();
   outcomes.delete(key);
-  outcomes.set(key, { report, download, bytes });
+  outcomes.set(key, { report, download, bytes, source });
   const ready = fulfilledReports();
   let retainedBytes = ready.reduce((total, [, entry]) => total + entry.bytes, 0);
   let retainedCount = ready.length;
@@ -273,6 +276,10 @@ function localPreparationContext(
   };
 }
 
+function reportSource(outcome: ReportOutcome | undefined): "server" | "browser" {
+  return outcome === undefined || outcome instanceof AbortController ? "browser" : outcome.source;
+}
+
 async function recoverLocalReport(
   key: string,
   controller: AbortController,
@@ -303,7 +310,7 @@ async function recoverLocalReport(
       prepared.download.dispose();
       return false;
     }
-    const bytes = fulfillReport(key, prepared.report, prepared.download);
+    const bytes = fulfillReport(key, prepared.report, prepared.download, reportSource(previous));
     reportLocalPreparation(prepared.report, context.correlationId, bytes);
     return true;
   } catch (error_) {
@@ -343,8 +350,8 @@ function useReportExpiry(key: string, outcome: ReportOutcome | undefined): void 
     const expiresAtMs = outcome.download?.expiresAtMs;
     if (expiresAtMs === undefined) return undefined;
     const timeout = window.setTimeout(
-      () => expireServerDownload(key),
-      Math.max(0, expiresAtMs - Date.now()),
+      () => expireReportDownload(key),
+      Math.min(SUPPORT_REPORT_DELIVERY_TTL_MS, Math.max(0, expiresAtMs - Date.now())),
     );
     return (): void => window.clearTimeout(timeout);
   }, [key, outcome]);
@@ -476,7 +483,10 @@ async function runReport(
   if (controller === undefined) return;
   const pending = { key, controller };
   request.current = pending;
-  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(REPORT_DEADLINE_MS)]);
+  const signal = AbortSignal.any([
+    controller.signal,
+    AbortSignal.timeout(SUPPORT_REPORT_REQUEST_TIMEOUT_MS),
+  ]);
   let api: typeof import("@/lib/support-report-api") | undefined;
   let phase: "module" | "facts" | "request" | "artifact" = "module";
   try {
@@ -507,10 +517,17 @@ async function runReport(
   }
 }
 
-function reportSupportDownload(correlationId: string | undefined): void {
+function reportSupportDownload(correlationId: string | undefined, ready: ReadyReport): void {
   reportClientDiagnostic("[keiko] support report download initiated", {
     correlationId,
-    supportReportDelivery: "manual",
+    supportReportDelivery: {
+      mode: "manual",
+      source: ready.source,
+      evidenceScope: ready.report.evidenceScope ?? "server",
+      ...(ready.report.summary === undefined
+        ? {}
+        : { reportDigest: ready.report.summary.reportDigest }),
+    },
   });
 }
 
@@ -626,7 +643,7 @@ function ReadyReportActions({
           className={className}
           href={ready.download.href}
           download={ready.download.fileName ?? ready.report.fileName}
-          onClick={() => reportSupportDownload(props.correlationId)}
+          onClick={() => reportSupportDownload(props.correlationId, ready)}
         >
           {t("supportReport.download")}
         </a>

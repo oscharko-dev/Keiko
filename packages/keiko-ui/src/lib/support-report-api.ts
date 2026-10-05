@@ -13,6 +13,8 @@ import {
   DIAGNOSTIC_SUFFICIENCY_REASONS,
   MAX_DESKTOP_SUPPORT_REPORT_REQUEST_BYTES,
   MAX_SUPPORT_REPORT_BYTES,
+  SUPPORT_REPORT_REQUEST_TIMEOUT_MS,
+  SUPPORT_REPORT_DELIVERY_TTL_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
@@ -79,7 +81,7 @@ export async function createSupportReport(
   failure?: DesktopSupportReportRequest["failure"],
   evidenceScope?: DesktopSupportReportRequest["evidenceScope"],
 ): Promise<DesktopSupportReportResponse> {
-  const deadline = AbortSignal.timeout(35_000);
+  const deadline = AbortSignal.timeout(SUPPORT_REPORT_REQUEST_TIMEOUT_MS);
   const requestSignal = signal === undefined ? deadline : AbortSignal.any([signal, deadline]);
   await codingAppSessionPairingSettled(requestSignal);
   requestSignal.throwIfAborted();
@@ -173,6 +175,16 @@ function validateSupportReportResponse(value: unknown): DesktopSupportReportResp
   };
 }
 
+function isDownloadExpiry(value: unknown): value is number {
+  const now = Date.now();
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > now &&
+    value <= now + SUPPORT_REPORT_DELIVERY_TTL_MS
+  );
+}
+
 function validateDownloadTarget(
   value: object,
 ): Pick<DesktopSupportReportResponse, "downloadPath" | "downloadExpiresAtMs"> {
@@ -182,9 +194,7 @@ function validateDownloadTarget(
     typeof value.downloadPath !== "string" ||
     !isSupportReportDownloadPath(value.downloadPath) ||
     !("downloadExpiresAtMs" in value) ||
-    typeof value.downloadExpiresAtMs !== "number" ||
-    !Number.isSafeInteger(value.downloadExpiresAtMs) ||
-    value.downloadExpiresAtMs <= Date.now()
+    !isDownloadExpiry(value.downloadExpiresAtMs)
   )
     throw new SupportReportResponseInvalid("Invalid support report download target");
   return { downloadPath: value.downloadPath, downloadExpiresAtMs: value.downloadExpiresAtMs };

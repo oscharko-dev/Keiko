@@ -3,7 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/lib/i18n";
 import { ApiError } from "@/lib/api";
-import { MAX_SUPPORT_REPORT_BYTES } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  MAX_SUPPORT_REPORT_BYTES,
+  SUPPORT_REPORT_REQUEST_TIMEOUT_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createSupportReport,
   createSupportReportDownload,
@@ -73,7 +76,7 @@ describe("SupportReportButton", () => {
       await userEvent.click(link);
       expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
         correlationId: "direct-download",
-        supportReportDelivery: "manual",
+        supportReportDelivery: { mode: "manual", source: "server", evidenceScope: "server" },
       });
       expect(automaticClick).not.toHaveBeenCalled();
       expect(create).toHaveBeenCalledOnce();
@@ -124,7 +127,7 @@ describe("SupportReportButton", () => {
     await userEvent.click(screen.getByRole("link", { name: "Download report" }));
     expect(reportClientDiagnostic).toHaveBeenLastCalledWith(expect.any(String), {
       correlationId: "prepared-original",
-      supportReportDelivery: "manual",
+      supportReportDelivery: { mode: "manual", source: "server", evidenceScope: "server" },
     });
     create.mockRejectedValueOnce(new ApiError("SUPPORT_REPORT_UNAVAILABLE", "private", 503));
     await userEvent.click(screen.getByRole("button", { name: "Regenerate report" }));
@@ -243,7 +246,7 @@ describe("SupportReportButton", () => {
     create.mockReturnValueOnce(new Promise(() => undefined));
     render(<SupportReportButton correlationId="stalled-export" />);
     await userEvent.click(screen.getByRole("button", { name: "Create error report" }));
-    expect(AbortSignal.timeout).toHaveBeenCalledExactlyOnceWith(35_000);
+    expect(AbortSignal.timeout).toHaveBeenCalledExactlyOnceWith(SUPPORT_REPORT_REQUEST_TIMEOUT_MS);
     await act(async () => deadline.abort(new DOMException("Deadline expired", "TimeoutError")));
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent("Report unavailable. Try again."),
@@ -413,7 +416,7 @@ describe("SupportReportButton", () => {
     await userEvent.click(screen.getByRole("link", { name: "Download report" }));
     expect(reportClientDiagnostic).toHaveBeenLastCalledWith(expect.any(String), {
       correlationId: "failure-1",
-      supportReportDelivery: "manual",
+      supportReportDelivery: { mode: "manual", source: "server", evidenceScope: "server" },
     });
     expect(create).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Create error report" })).not.toBeInTheDocument();

@@ -1,3 +1,4 @@
+import { SUPPORT_REPORT_REQUEST_TIMEOUT_MS } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
@@ -51,7 +52,7 @@ async function cancelApiChunk(component: ReportComponent): Promise<void> {
     "aria-disabled",
     "true",
   );
-  expect(timeout).toHaveBeenCalledExactlyOnceWith(35_000);
+  expect(timeout).toHaveBeenCalledExactlyOnceWith(SUPPORT_REPORT_REQUEST_TIMEOUT_MS);
   await act(async () => deadline.abort(new DOMException("Deadline expired", "TimeoutError")));
   expect(await screen.findByRole("status")).toHaveTextContent("Report unavailable. Try again.");
   timeout.mockReturnValue(new AbortController().signal);

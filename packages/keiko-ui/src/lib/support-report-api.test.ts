@@ -322,6 +322,7 @@ it.each([
   { name: "current instant", expiry: "now" },
   { name: "non-integer", expiry: "fractional future" },
   { name: "unsafe integer", expiry: Number.MAX_SAFE_INTEGER + 1 },
+  { name: "timer overflow", expiry: Number.MAX_SAFE_INTEGER },
 ])("rejects a canonical response with $name HTTP target expiry", async ({ expiry }) => {
   const canonical = await canonicalSupportReportFixture();
   let observedExpiry = expiry;

@@ -86,6 +86,16 @@ it("reuses full canonical bytes locally after an attachment expires and the serv
       loss: "none",
     },
   });
+  await act(async () => screen.getByRole("link", { name: "Download report" }).click());
+  expect(diagnostic).toHaveBeenCalledWith("[keiko] support report download initiated", {
+    correlationId: "expired-full-offline",
+    supportReportDelivery: {
+      mode: "manual",
+      source: "server",
+      evidenceScope: "server",
+      reportDigest: report.summary.reportDigest,
+    },
+  });
   expect(screen.getAllByRole("status")).toHaveLength(1);
 });
 
@@ -99,6 +109,12 @@ it.each([new TypeError("private network failure"), new ApiError("INTERNAL", "pri
     const link = await screen.findByRole("link", { name: "Download report" });
     expect(link).toHaveAttribute("href", local.download.href);
     expect(link).toHaveAttribute("download", local.download.fileName);
+    const diagnostic = vi.spyOn(clientDiagnostics, "reportClientDiagnostic");
+    await userEvent.click(link);
+    expect(diagnostic).toHaveBeenCalledWith("[keiko] support report download initiated", {
+      correlationId: "original-offline-error",
+      supportReportDelivery: { mode: "manual", source: "browser", evidenceScope: "client-only" },
+    });
     expect(screen.getAllByRole("status")).toHaveLength(1);
     expect(screen.queryByText(/private/u)).toBeNull();
     expect(prepareLocalSupportReport).toHaveBeenCalledExactlyOnceWith(expect.any(AbortSignal), {

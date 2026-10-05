@@ -612,6 +612,38 @@ describe("fanOutClientDiagnostic correlationId handling", () => {
 // rather than the failure-shaped message/kind wire body above. The console still gets the exact
 // same human-readable text (nothing here decorates or replaces it) — only the POST body changes.
 describe("fanOutClientDiagnostic stage evidence", () => {
+  it.each(["started", "settled"] as const)(
+    "preserves a validated parent for a %s source preview",
+    (phase) => {
+      vi.spyOn(console, "debug").mockImplementation(() => undefined);
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+      vi.stubGlobal("fetch", fetchMock);
+      const stageReport =
+        phase === "started"
+          ? { stage: "files source preview" as const, phase, ordinal: 1 }
+          : { stage: "files source preview" as const, phase, ordinal: 1, durationMs: 3 };
+      fanOutClientDiagnostic("private customer source path", {
+        correlationId: "source-preview-123",
+        parentCorrelationId: "editor-read-123",
+        stageReport,
+      });
+      expect(lastPostedBody(fetchMock)).toMatchObject({
+        kind: "stage",
+        correlationId: "source-preview-123",
+        parentCorrelationId: "editor-read-123",
+        phase,
+      });
+      expect(isClientStageIngestRequest(lastPostedBody(fetchMock))).toBe(true);
+      fanOutClientDiagnostic("private customer source path", {
+        correlationId: "source-preview-123",
+        parentCorrelationId: "/customer/private?token=secret",
+        stageReport,
+      });
+      expect(lastPostedBody(fetchMock)).not.toHaveProperty("parentCorrelationId");
+      expect(JSON.stringify(lastPostedBody(fetchMock))).not.toMatch(/customer|token|secret/u);
+    },
+  );
+
   it("posts the closed stage wire shape for a started report, never the message body", () => {
     const consoleDebug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse());

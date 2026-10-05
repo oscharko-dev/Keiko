@@ -1,3 +1,5 @@
+import { SUPPORT_REPORT_REQUEST_TIMEOUT_MS } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS } from "./client-diagnostics";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSupportReport } from "./support-report-api";
 import { clientErrorEvidence } from "./client-error-evidence";
@@ -242,7 +244,7 @@ describe("browser incident delivery before report selection", () => {
     const stage = new AbortController();
     const overall = new AbortController();
     vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) =>
-      ms === 15_000 ? stage.signal : overall.signal,
+      ms === CLIENT_DIAGNOSTIC_ACK_TIMEOUT_MS ? stage.signal : overall.signal,
     );
     const limited = { ...report, evidenceScope: "client-only" };
     const fetch = vi.fn((path: string): Promise<Response> =>
@@ -295,6 +297,6 @@ describe("browser incident delivery before report selection", () => {
     deadline.abort(new DOMException("Expired", "TimeoutError"));
     await settled;
     expect(fetch).toHaveBeenCalledOnce();
-    expect(AbortSignal.timeout).toHaveBeenCalledWith(35_000);
+    expect(AbortSignal.timeout).toHaveBeenCalledWith(SUPPORT_REPORT_REQUEST_TIMEOUT_MS);
   });
 });
