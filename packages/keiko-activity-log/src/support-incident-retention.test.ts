@@ -1120,6 +1120,7 @@ describe("rolling diagnostic candidate retention", () => {
           retained.length - 1,
         );
       } else {
+        if (result.status !== "rejected") throw new Error("Expected exclusive claim refusal");
         expect(result.reason).toBe("quota-exhausted");
         expect(
           incidentStore.readSupportIncidentSlotClaim(stateDir, oldest.slotIndex),
