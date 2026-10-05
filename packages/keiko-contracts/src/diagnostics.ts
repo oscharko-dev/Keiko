@@ -1870,6 +1870,7 @@ export interface ClientFilesScopeDecision {
   readonly candidateCount?: number | undefined;
   readonly bindingFingerprint?: string | undefined;
   readonly mutationSurface?: (typeof CLIENT_GROUNDING_MUTATION_SURFACES)[number] | undefined;
+  readonly rejectionCount?: number | undefined;
 }
 const FILES_SCOPE_DECISIONS: ReadonlySet<unknown> = new Set(CLIENT_FILES_SCOPE_DECISIONS);
 export const CLIENT_GROUNDING_MUTATION_SURFACES = [
@@ -1886,6 +1887,7 @@ const FILES_SCOPE_DECISION_KEYS = new Set([
   "candidateCount",
   "bindingFingerprint",
   "mutationSurface",
+  "rejectionCount",
 ]);
 const FILES_SCOPE_DECISION_EXCLUSIVE_KEYS = [
   "kind",
@@ -1920,9 +1922,19 @@ function isClientFilesScopeDecision(value: unknown): value is ClientFilesScopeDe
       GROUNDING_MUTATION_SURFACES.has(value.mutationSurface)) &&
     isScopeDecisionCount(value.sourceCount) &&
     isScopeDecisionCount(value.candidateCount) &&
-    (value.bindingFingerprint === undefined ||
-      (typeof value.bindingFingerprint === "string" &&
-        CLIENT_BINDING_TARGET_FINGERPRINT_PATTERN.test(value.bindingFingerprint)))
+    hasValidScopeRejectionCount(value) &&
+    isOptional(value.bindingFingerprint, isScopeBindingFingerprint)
+  );
+}
+
+function isScopeBindingFingerprint(value: unknown): value is string {
+  return typeof value === "string" && CLIENT_BINDING_TARGET_FINGERPRINT_PATTERN.test(value);
+}
+
+function hasValidScopeRejectionCount(value: Record<string, unknown>): boolean {
+  return (
+    value.rejectionCount === undefined ||
+    (value.decision === "timeout-recovered" && isScopeDecisionCount(value.rejectionCount))
   );
 }
 function hasValidFilesScopeDecisionContext(value: Record<string, unknown>): boolean {

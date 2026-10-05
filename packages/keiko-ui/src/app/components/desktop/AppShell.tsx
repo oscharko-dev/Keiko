@@ -783,7 +783,11 @@ export function persistedChatProjectPath(win: AppWindow | undefined): string | u
 }
 
 class ChatBindingCompensationFailure extends Error {}
-class ChatMutationTimeoutFailure extends Error {}
+class ChatMutationTimeoutFailure extends Error {
+  constructor(readonly correlationId: string) {
+    super("Chat grounding mutation timed out.");
+  }
+}
 
 interface ChatMutationQueue {
   readonly blocked: Map<string, GroundingMutationBlock>;
@@ -794,6 +798,7 @@ type GroundingMutationSurface = NonNullable<ClientFilesScopeDecision["mutationSu
 interface GroundingMutationBlock {
   readonly correlationId: string;
   readonly surface: GroundingMutationSurface;
+  rejectionCount: number;
 }
 
 interface FilesScopeUnbindInput {
@@ -818,6 +823,7 @@ interface FilesScopeRequest {
 
 interface ChatMutationAttempt {
   readonly correlationId: string;
+  readonly surface: GroundingMutationSurface;
   readonly isCurrent: () => boolean;
   readonly renewBudget: () => void;
 }
@@ -855,7 +861,7 @@ function reportGroundingMutationFailure(
   reportClientDiagnostic(summary, {
     correlationId,
     kind: "other",
-    errorKind: bffRequestErrorKind(error),
+    errorKind: error instanceof ChatMutationTimeoutFailure ? "timeout" : bffRequestErrorKind(error),
     errorEvidence: clientErrorEvidence(error),
   });
 }
@@ -904,7 +910,7 @@ function groundingMutationFailureKey(
     return "chat.grounding.recoveryRequired";
   }
   if (error instanceof ChatMutationTimeoutFailure) {
-    reportGroundingMutationFailure("Chat grounding timeout", error);
+    reportGroundingMutationFailure("Chat grounding timeout", error, error.correlationId);
     return "chat.grounding.timeoutBlocked";
   }
   reportGroundingMutationFailure("Chat grounding mutation failed", error);
@@ -942,7 +948,10 @@ async function retryGroundingScopeIntent(
   } catch (error: unknown) {
     if (!isGroundingScopeConflict(error) || !attempt.isCurrent()) throw error;
     attempt.renewBudget();
-    reportFilesScopeDecision(attempt.correlationId, { decision: "conflict-retried" });
+    reportFilesScopeDecision(attempt.correlationId, {
+      decision: "conflict-retried",
+      mutationSurface: attempt.surface,
+    });
     return mutation();
   }
 }
@@ -1000,6 +1009,7 @@ export async function mutationWithTimeout<T>(
   onTimeout: () => void,
   onLateSuccess: () => void,
   correlationId: string,
+  surface: GroundingMutationSurface = "files",
 ): Promise<T> {
   let timeoutId: number | undefined;
   let current = true;
@@ -1011,13 +1021,14 @@ export async function mutationWithTimeout<T>(
       timeoutId = window.setTimeout((): void => {
         current = false;
         onTimeout();
-        reject(new ChatMutationTimeoutFailure());
+        reject(new ChatMutationTimeoutFailure(correlationId));
       }, CHAT_MUTATION_TIMEOUT_MS);
     };
     renewBudget();
   });
   const attempt: ChatMutationAttempt = {
     correlationId,
+    surface,
     isCurrent: (): boolean => current,
     renewBudget,
   };
@@ -1028,7 +1039,8 @@ export async function mutationWithTimeout<T>(
     },
     (error: unknown): void => {
       if (!current && !(error instanceof ChatBindingCompensationFailure)) onLateSuccess();
-      if (!current) reportGroundingMutationFailure("Late chat grounding mutation failed", error);
+      if (!current)
+        reportGroundingMutationFailure("Late chat grounding mutation failed", error, correlationId);
     },
   );
   try {
@@ -1044,22 +1056,20 @@ async function serializeChatMutation<T>(
   mutation: (attempt: ChatMutationAttempt) => Promise<T>,
   surface: GroundingMutationSurface = "files",
 ): Promise<T> {
-  assertMutationQueueAvailable(queue, chatKey);
+  const correlationId = newClientCorrelationId();
+  assertMutationQueueAvailable(queue, chatKey, correlationId, surface);
   const preceding = queue.tails.get(chatKey) ?? Promise.resolve();
   const execute = async (): Promise<T> => {
-    assertMutationQueueAvailable(queue, chatKey);
-    const correlationId = newClientCorrelationId();
+    assertMutationQueueAvailable(queue, chatKey, correlationId, surface);
     return mutationWithTimeout(
       mutation,
       (): void => {
-        queue.blocked.set(chatKey, { correlationId, surface });
+        queue.blocked.set(chatKey, { correlationId, surface, rejectionCount: 0 });
         reportMutationQueueDecision(correlationId, surface, "timeout-blocked");
       },
-      (): void => {
-        queue.blocked.delete(chatKey);
-        reportMutationQueueDecision(correlationId, surface, "timeout-recovered");
-      },
+      (): void => recoverMutationQueue(queue, chatKey, correlationId),
       correlationId,
+      surface,
     );
   };
   const result = preceding.then(execute, execute);
@@ -1078,18 +1088,48 @@ function reportMutationQueueDecision(
   correlationId: string,
   surface: GroundingMutationSurface,
   decision: "timeout-blocked" | "timeout-recovered" | "timeout-rejected",
+  parentCorrelationId?: string,
+  rejectionCount?: number,
 ): void {
-  reportFilesScopeDecision(correlationId, {
-    decision,
-    ...(surface === "files" ? {} : { mutationSurface: surface }),
-  });
+  reportFilesScopeDecision(
+    correlationId,
+    {
+      decision,
+      mutationSurface: surface,
+      ...(rejectionCount === undefined ? {} : { rejectionCount }),
+    },
+    parentCorrelationId,
+  );
 }
 
-function assertMutationQueueAvailable(queue: ChatMutationQueue, chatKey: string): void {
+function recoverMutationQueue(
+  queue: ChatMutationQueue,
+  chatKey: string,
+  correlationId: string,
+): void {
+  const block = queue.blocked.get(chatKey);
+  if (block?.correlationId !== correlationId) return;
+  queue.blocked.delete(chatKey);
+  reportMutationQueueDecision(
+    correlationId,
+    block.surface,
+    "timeout-recovered",
+    undefined,
+    block.rejectionCount,
+  );
+}
+
+function assertMutationQueueAvailable(
+  queue: ChatMutationQueue,
+  chatKey: string,
+  correlationId: string,
+  surface: GroundingMutationSurface,
+): void {
   const block = queue.blocked.get(chatKey);
   if (block === undefined) return;
-  reportMutationQueueDecision(block.correlationId, block.surface, "timeout-rejected");
-  throw new ChatMutationTimeoutFailure();
+  block.rejectionCount += 1;
+  reportMutationQueueDecision(correlationId, surface, "timeout-rejected", block.correlationId);
+  throw new ChatMutationTimeoutFailure(correlationId);
 }
 
 function isConversationGroundingConnection(

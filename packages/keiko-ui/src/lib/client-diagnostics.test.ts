@@ -253,6 +253,26 @@ it("routes Files ownership decisions without replacing a real global failure", (
   expect(currentGlobalClientFailure()).toBe(priorFailure);
 });
 
+it("links a refused scope action to its blocker without making the routine event a global error", () => {
+  const priorFailure = currentGlobalClientFailure();
+  const writer = vi.fn();
+  setClientDiagnosticWriter(writer);
+  reportFilesScopeDecision(
+    "ui_refused-action-0001",
+    {
+      decision: "timeout-rejected",
+      mutationSurface: "git-change",
+    },
+    "ui_blocking-action-0001",
+  );
+  expect(writer).toHaveBeenCalledExactlyOnceWith("Keiko Files scope ownership decision.", {
+    correlationId: "ui_refused-action-0001",
+    parentCorrelationId: "ui_blocking-action-0001",
+    filesScopeDecision: { decision: "timeout-rejected", mutationSurface: "git-change" },
+  });
+  expect(currentGlobalClientFailure()).toBe(priorFailure);
+});
+
 describe("clientDiagnosticFailureFacts", () => {
   it.each([
     [{}, []],

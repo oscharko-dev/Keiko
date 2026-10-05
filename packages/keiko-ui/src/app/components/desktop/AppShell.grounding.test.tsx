@@ -448,6 +448,46 @@ function expectSharedMutationCorrelation(calls: readonly (readonly unknown[])[])
   return correlationId;
 }
 
+function expectedTimeoutDiagnostic(correlationId: unknown): unknown {
+  return {
+    message: "[keiko] Chat grounding timeout: Error",
+    meta: {
+      correlationId,
+      kind: "other",
+      errorKind: "timeout",
+      errorEvidence: { errorClass: "Error", frames: [], causeChain: [] },
+    },
+  };
+}
+
+function decisionMetadata(): ClientDiagnosticMeta[] {
+  return reportedDiagnostics.flatMap((record) =>
+    record.meta?.filesScopeDecision === undefined ? [] : [record.meta],
+  );
+}
+
+function expectScopeRetry(correlationId: unknown, mutationSurface: string): void {
+  expect(
+    decisionMetadata().filter((meta) => meta.filesScopeDecision?.decision === "conflict-retried"),
+  ).toEqual([
+    { correlationId, filesScopeDecision: { decision: "conflict-retried", mutationSurface } },
+  ]);
+}
+
+function expectQueueRecovery(mutationSurface: string): void {
+  const decisions = decisionMetadata();
+  expect(decisions.map((meta) => meta.filesScopeDecision)).toEqual([
+    { decision: "timeout-blocked", mutationSurface },
+    { decision: "timeout-rejected", mutationSurface },
+    { decision: "timeout-recovered", mutationSurface, rejectionCount: 1 },
+  ]);
+  const correlationId = decisions[0]?.correlationId;
+  expect(correlationId).toMatch(/^[a-zA-Z0-9._-]{8,128}$/u);
+  expect(decisions[2]?.correlationId).toBe(correlationId);
+  expect(decisions[1]?.correlationId).not.toBe(correlationId);
+  expect(decisions[1]?.parentCorrelationId).toBe(correlationId);
+}
+
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
   return { id, type, x: 0, y: 0, w: 400, h: 300, z: 1, cfg, max: false, zoom: 1 };
 }
@@ -596,6 +636,89 @@ function deferred<T>(): {
     resolve = innerResolve;
   });
   return { promise, resolve };
+}
+
+function queuedConnectorMutation(
+  action: "bind" | "unbind",
+  pending: Promise<void>,
+): () => Promise<unknown> {
+  const source = capsuleScope("queue-source");
+  const initial = chat({ localKnowledgeScopes: action === "unbind" ? [source] : [] });
+  mocks.state.session = { ...mocks.state.session!, activeChat: initial, chats: [initial] };
+  mocks.updateChatLocalKnowledgeScopes
+    .mockImplementationOnce(async () => {
+      await pending;
+      return {
+        chat: chat({ localKnowledgeScopes: action === "bind" ? [source] : [], updatedAt: 3 }),
+      };
+    })
+    .mockResolvedValueOnce({ chat: { ...initial, updatedAt: 4 } });
+  return async () => {
+    const handler =
+      action === "bind"
+        ? mocks.state.workspaceOptions?.onConnectorBind
+        : mocks.state.workspaceOptions?.onConnectorUnbind;
+    return handler?.("chat-window", source);
+  };
+}
+
+function queuedGitMutation(
+  action: "bind" | "unbind",
+  pending: Promise<void>,
+): () => Promise<unknown> {
+  const scope = gitScope();
+  const initial = chat({ gitChangeScopes: action === "unbind" ? [scope] : [] });
+  mocks.state.session = { ...mocks.state.session!, activeChat: initial, chats: [initial] };
+  if (action === "bind") {
+    mocks.connectGitChangeToChat.mockImplementationOnce(async () => {
+      await pending;
+      return { status: "connected", scope };
+    });
+    return async () =>
+      mocks.state.workspaceOptions?.onGitChangeBind?.("chat-window", {
+        baseRef: "dev",
+        headRef: "feature",
+      });
+  }
+  mocks.updateChatGitChangeScopes
+    .mockImplementationOnce(async () => {
+      await pending;
+      return { chat: chat({ gitChangeScopes: [], updatedAt: 3 }) };
+    })
+    .mockResolvedValueOnce({ chat: { ...initial, updatedAt: 4 } });
+  return async () =>
+    mocks.state.workspaceOptions?.onGitChangeUnbind?.("chat-window", scope.relationshipId);
+}
+
+type ScopeConflictAction = "connector-bind" | "connector-unbind" | "git-unbind";
+
+function scopeConflictFixture(action: ScopeConflictAction): {
+  readonly persist: typeof mocks.updateChatLocalKnowledgeScopes;
+  readonly invoke: () => Promise<unknown>;
+  readonly surface: "local-knowledge" | "git-change";
+} {
+  const source = capsuleScope("queue-conflict");
+  const initial = chat({
+    localKnowledgeScopes: action === "connector-unbind" ? [source] : [],
+    gitChangeScopes: [gitScope()],
+  });
+  mocks.state.session = { ...mocks.state.session!, activeChat: initial, chats: [initial] };
+  const handlers = {
+    "connector-bind": async (): Promise<unknown> =>
+      mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", source),
+    "connector-unbind": async (): Promise<unknown> =>
+      mocks.state.workspaceOptions?.onConnectorUnbind?.("chat-window", source),
+    "git-unbind": async (): Promise<unknown> =>
+      mocks.state.workspaceOptions?.onGitChangeUnbind?.("chat-window", "git-rel"),
+  };
+  return {
+    persist:
+      action === "git-unbind"
+        ? mocks.updateChatGitChangeScopes
+        : mocks.updateChatLocalKnowledgeScopes,
+    invoke: handlers[action],
+    surface: action === "git-unbind" ? "git-change" : "local-knowledge",
+  };
 }
 
 async function renderMounted(): Promise<void> {
@@ -762,6 +885,7 @@ describe("AppShell grounding connections", () => {
         mocks.updateChatLocalKnowledgeScopes.mock.calls,
       );
       expect(mocks.fetchChats).toHaveBeenCalledWith("/repo", correlationId, initial.id);
+      expectScopeRetry(correlationId, "local-knowledge");
       expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(accepted);
     },
   );
@@ -874,6 +998,7 @@ describe("AppShell grounding connections", () => {
       mocks.updateChatGitChangeScopes.mock.calls,
     );
     expect(mocks.fetchChats).toHaveBeenCalledWith("/repo", correlationId, initial.id);
+    expectScopeRetry(correlationId, "git-change");
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(accepted);
   });
 
@@ -1414,15 +1539,106 @@ describe("AppShell grounding connections", () => {
       persisted.resolve({ chat: updated });
       await persisted.promise;
     });
+    expect(
+      reportedDiagnostics.some(
+        (record) => record.meta?.filesScopeDecision?.decision === "timeout-blocked",
+      ),
+    ).toBe(false);
     await expect(binding).resolves.toBe(true);
     expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
-    expect(reportedDiagnostics).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          filesScopeDecision: { decision: "timeout-blocked" },
-        }),
-      ]),
+  });
+
+  it("attributes cross-surface refusals separately and summarizes their exact recovery count", async () => {
+    const pending = deferred<{ readonly chat: Chat }>();
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce({ chat: chat({ connectedScopes: [], updatedAt: 4 }) });
+    await renderMounted();
+    vi.useFakeTimers();
+    const actions = mocks.state.workspaceOptions!;
+    const binding = actions.onScopeBind?.("chat-window", fileScope("/late"));
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+    expect(await binding).toBe(false);
+    expect(await actions.onConnectorBind?.("chat-window", capsuleScope("refused"))).toBe(false);
+    expect(await actions.onGitChangeUnbind?.("chat-window", "refused-comparison")).toBe(false);
+    await act(async () => {
+      pending.resolve({ chat: chat({ connectedScopes: [fileScope("/late")], updatedAt: 3 }) });
+    });
+    const decisions = reportedDiagnostics.flatMap((record) =>
+      record.meta?.filesScopeDecision === undefined ? [] : [record.meta],
     );
+    expect(decisions.map((meta) => meta.filesScopeDecision)).toEqual([
+      { decision: "timeout-blocked", mutationSurface: "files" },
+      { decision: "timeout-rejected", mutationSurface: "local-knowledge" },
+      { decision: "timeout-rejected", mutationSurface: "git-change" },
+      { decision: "timeout-recovered", mutationSurface: "files", rejectionCount: 2 },
+    ]);
+    const parent = decisions[0]?.correlationId;
+    expect(parent).toEqual(expect.any(String));
+    expect(decisions[3]?.correlationId).toBe(parent);
+    expect(decisions.slice(1, 3).map((meta) => meta.parentCorrelationId)).toEqual([parent, parent]);
+    expect(new Set(decisions.slice(0, 3).map((meta) => meta.correlationId)).size).toBe(3);
+    const failures = reportedDiagnostics.filter((record) => record.meta?.errorKind === "timeout");
+    expect(failures.map((record) => record.meta?.correlationId)).toEqual(
+      decisions.slice(0, 3).map((meta) => meta.correlationId),
+    );
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledTimes(2);
+  });
+
+  it("attributes a Files refusal to its action when a Knowledge mutation blocks the shared chat", async () => {
+    const pending = deferred<void>();
+    const invoke = queuedConnectorMutation("bind", pending.promise);
+    await renderMounted();
+    vi.useFakeTimers();
+    const first = invoke();
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+    expect(await first).toBe(false);
+    expect(
+      await mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/refused")),
+    ).toBe(false);
+    await act(async () => pending.resolve());
+    const decisions = decisionMetadata();
+    expect(decisions.map((meta) => meta.filesScopeDecision)).toEqual([
+      { decision: "timeout-blocked", mutationSurface: "local-knowledge" },
+      { decision: "timeout-rejected", mutationSurface: "files" },
+      { decision: "timeout-recovered", mutationSurface: "local-knowledge", rejectionCount: 1 },
+    ]);
+    expect(decisions[1]?.correlationId).not.toBe(decisions[0]?.correlationId);
+    expect(decisions[1]?.parentCorrelationId).toBe(decisions[0]?.correlationId);
+  });
+
+  it("joins late failure facts and zero-refusal recovery to the original timeout", async () => {
+    const pending = deferred<void>();
+    mocks.updateChatConnectedScopes.mockImplementationOnce(async () => {
+      await pending.promise;
+      throw new TypeError("private-late-failure-canary");
+    });
+    await renderMounted();
+    vi.useFakeTimers();
+    const first = mocks.state.workspaceOptions?.onScopeBind?.("chat-window", fileScope("/late"));
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+    expect(await first).toBe(false);
+    await act(async () => pending.resolve());
+    const correlationId = recordedFilesScopeDecision("timeout-blocked")?.meta?.correlationId;
+    expect(correlationId).toEqual(expect.any(String));
+    expect(recordedFilesScopeDecision("timeout-recovered")?.meta).toEqual({
+      correlationId,
+      filesScopeDecision: {
+        decision: "timeout-recovered",
+        mutationSurface: "files",
+        rejectionCount: 0,
+      },
+    });
+    expect(reportedDiagnostics).toContainEqual({
+      message: "[keiko] Late chat grounding mutation failed: TypeError",
+      meta: {
+        correlationId,
+        kind: "other",
+        errorKind: "unavailable",
+        errorEvidence: { errorClass: "TypeError", frames: [], causeChain: [] },
+      },
+    });
+    expect(JSON.stringify(reportedDiagnostics)).not.toContain("private-late-failure-canary");
   });
 
   it("compensates a timed-out bind and blocks later mutations", async (): Promise<void> => {
@@ -1465,28 +1681,36 @@ describe("AppShell grounding connections", () => {
     expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith("chat-1", "/late");
     expect(reportError).not.toHaveBeenCalled();
     const attemptCorrelation = mocks.fetchChats.mock.calls[0]?.[1] as string;
+    const rejectedCorrelation = recordedFilesScopeDecision("timeout-rejected")?.meta?.correlationId;
+    expect(rejectedCorrelation).toEqual(expect.any(String));
+    expect(rejectedCorrelation).not.toBe(attemptCorrelation);
     expect(reportedDiagnostics).toEqual([
       {
         message: "Keiko Files scope ownership decision.",
         meta: {
           correlationId: attemptCorrelation,
-          filesScopeDecision: { decision: "timeout-blocked" },
+          filesScopeDecision: { decision: "timeout-blocked", mutationSurface: "files" },
         },
       },
-      { message: "[keiko] Chat grounding timeout: Error" },
+      expectedTimeoutDiagnostic(attemptCorrelation),
+      {
+        message: "Keiko Files scope ownership decision.",
+        meta: {
+          correlationId: rejectedCorrelation,
+          parentCorrelationId: attemptCorrelation,
+          filesScopeDecision: { decision: "timeout-rejected", mutationSurface: "files" },
+        },
+      },
+      expectedTimeoutDiagnostic(rejectedCorrelation),
       {
         message: "Keiko Files scope ownership decision.",
         meta: {
           correlationId: attemptCorrelation,
-          filesScopeDecision: { decision: "timeout-rejected" },
-        },
-      },
-      { message: "[keiko] Chat grounding timeout: Error" },
-      {
-        message: "Keiko Files scope ownership decision.",
-        meta: {
-          correlationId: attemptCorrelation,
-          filesScopeDecision: { decision: "timeout-recovered" },
+          filesScopeDecision: {
+            decision: "timeout-recovered",
+            mutationSurface: "files",
+            rejectionCount: 1,
+          },
         },
       },
     ]);
@@ -1542,7 +1766,7 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenCalledTimes(2);
   });
 
-  it("records a connector queue timeout, blocked refusal and late recovery under the same attempt", async () => {
+  it("joins connector timeout recovery and the distinct refused attempt through its parent", async () => {
     const persisted = deferred<{ readonly chat: Chat }>();
     const source = capsuleScope("late-capsule");
     mocks.updateChatLocalKnowledgeScopes
@@ -1558,18 +1782,79 @@ describe("AppShell grounding connections", () => {
     await act(async () => {
       persisted.resolve({ chat: chat({ localKnowledgeScopes: [source], updatedAt: 3 }) });
     });
-    const decisions = reportedDiagnostics.filter((record) => record.meta?.filesScopeDecision);
-    expect(decisions.map((record) => record.meta?.filesScopeDecision)).toEqual([
-      { decision: "timeout-blocked", mutationSurface: "local-knowledge" },
-      { decision: "timeout-rejected", mutationSurface: "local-knowledge" },
-      { decision: "timeout-recovered", mutationSurface: "local-knowledge" },
-    ]);
-    const correlationId = decisions[0]?.meta?.correlationId;
-    expect(correlationId).toMatch(/^[a-zA-Z0-9._-]{8,128}$/u);
-    expect(decisions.every((record) => record.meta?.correlationId === correlationId)).toBe(true);
+    expectQueueRecovery("local-knowledge");
     expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(decisions)).not.toContain("late-capsule");
+    expect(JSON.stringify(decisionMetadata())).not.toContain("late-capsule");
   });
+
+  it.each([
+    ["connector", "bind", queuedConnectorMutation, "local-knowledge"],
+    ["connector", "unbind", queuedConnectorMutation, "local-knowledge"],
+    ["Git", "bind", queuedGitMutation, "git-change"],
+    ["Git", "unbind", queuedGitMutation, "git-change"],
+  ] as const)(
+    "retains the complete %s %s queue lifecycle and refused-action parent",
+    async (_kind, action, prepare, surface) => {
+      const pending = deferred<void>();
+      const invoke = prepare(action, pending.promise);
+      await renderMounted();
+      vi.useFakeTimers();
+      const first = invoke();
+      await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+      expect(await first).toBe(false);
+      expect(await invoke()).toBe(false);
+      await act(async () => pending.resolve());
+      expectQueueRecovery(surface);
+    },
+  );
+
+  it.each(["connector-bind", "connector-unbind", "git-unbind"] as const)(
+    "refuses a second 409 without a third %s attempt",
+    async (action) => {
+      const { persist, invoke, surface } = scopeConflictFixture(action);
+      persist
+        .mockImplementationOnce(rejectScopeMutationConflict)
+        .mockImplementationOnce(rejectScopeMutationConflict);
+      await renderMounted();
+      expect(await invoke()).toBe(false);
+      expect(persist).toHaveBeenCalledTimes(2);
+      expectScopeRetry(expectSharedMutationCorrelation(persist.mock.calls), surface);
+      expect(
+        reportedDiagnostics.some(
+          (record) => record.message === "[keiko] Chat grounding mutation failed: ApiError",
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each(["connector-bind", "connector-unbind", "git-unbind"] as const)(
+    "renews the actual %s deadline after a late scope conflict",
+    async (action) => {
+      const { persist, invoke, surface } = scopeConflictFixture(action);
+      const conflictReady = deferred<void>();
+      const persisted = deferred<{ chat: Chat }>();
+      persist
+        .mockImplementationOnce(async (...args: Parameters<typeof rejectScopeMutationConflict>) => {
+          await conflictReady.promise;
+          return rejectScopeMutationConflict(...args);
+        })
+        .mockReturnValueOnce(persisted.promise);
+      await renderMounted();
+      vi.useFakeTimers();
+      const binding = invoke();
+      await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS - 1000);
+      await act(async () => {
+        conflictReady.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(persist).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(2000);
+      await act(async () => persisted.resolve({ chat: chat({ updatedAt: 4 }) }));
+      expect(recordedFilesScopeDecision("timeout-blocked")).toBeUndefined();
+      expect(await binding).toBe(true);
+      expectScopeRetry(expectSharedMutationCorrelation(persist.mock.calls), surface);
+    },
+  );
 
   it("disposes the mutation deadline when the producer throws synchronously", async () => {
     vi.useFakeTimers();

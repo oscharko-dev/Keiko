@@ -1703,6 +1703,46 @@ describe("browser support report preparation evidence", () => {
 });
 
 describe("Files scope ownership decision evidence", () => {
+  it.each(["timeout-blocked", "timeout-rejected", "conflict-retried"])(
+    "does not accept a recovery summary count on %s",
+    (decision) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "queue-blocking-attempt",
+          filesScopeDecision: { decision, rejectionCount: 1 },
+        }),
+      ).toBe(false);
+    },
+  );
+  it.each([0, 1, 25, Number.MAX_SAFE_INTEGER])(
+    "accepts exact recovery rejection count %s",
+    (rejectionCount) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "queue-blocking-attempt",
+          filesScopeDecision: {
+            decision: "timeout-recovered",
+            mutationSurface: "files",
+            rejectionCount,
+          },
+        }),
+      ).toBe(true);
+    },
+  );
+  it.each([-1, 0.5, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, "2"])(
+    "rejects malformed recovery rejection count %s",
+    (rejectionCount) => {
+      expect(
+        isClientDiagnosticIngestRequest({
+          ...validRequest(),
+          correlationId: "queue-blocking-attempt",
+          filesScopeDecision: { decision: "timeout-recovered", rejectionCount },
+        }),
+      ).toBe(false);
+    },
+  );
   it.each([
     "timeout-blocked",
     "timeout-recovered",

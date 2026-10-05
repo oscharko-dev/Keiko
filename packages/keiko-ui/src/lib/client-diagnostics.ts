@@ -394,9 +394,11 @@ export function sseStreamErrorDiagnostic(stream: string, readyState: number | un
 export function reportFilesScopeDecision(
   correlationId: string,
   decision: ClientFilesScopeDecision,
+  parentCorrelationId?: string,
 ): void {
   reportClientDiagnostic("Keiko Files scope ownership decision.", {
     correlationId,
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
     filesScopeDecision: decision,
   });
 }

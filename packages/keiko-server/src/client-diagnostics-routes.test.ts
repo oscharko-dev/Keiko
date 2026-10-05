@@ -1389,8 +1389,8 @@ describe("POST /api/diagnostics/client", () => {
       expect(record).not.toHaveProperty("messageDigest");
     },
   );
-  it.each(["local-knowledge", "git-change"])(
-    "persists the closed %s grounding queue surface under the original correlation",
+  it.each(["files", "local-knowledge", "git-change"])(
+    "persists the refused %s grounding action under its own correlation and blocker parent",
     async (mutationSurface) => {
       const sink = captureServerLog();
       const filesScopeDecision = { decision: "timeout-rejected", mutationSurface };
@@ -1401,6 +1401,7 @@ describe("POST /api/diagnostics/client", () => {
               message: "Keiko grounding mutation queue decision.",
               clientTs: CLIENT_TS,
               correlationId: "ui_queue-decision-0001",
+              parentCorrelationId: "ui_queue-blocker-0001",
               filesScopeDecision,
             }),
           ),
@@ -1415,6 +1416,7 @@ describe("POST /api/diagnostics/client", () => {
       ).toMatchObject({
         ...filesScopeDecision,
         correlationId: "ui_queue-decision-0001",
+        parentCorrelationId: "ui_queue-blocker-0001",
         completeness: "complete",
         loss: "none",
       });
@@ -1422,6 +1424,41 @@ describe("POST /api/diagnostics/client", () => {
       expect(clientDiagnosticEvents(sink)).toHaveLength(0);
     },
   );
+  it("persists an exact queue recovery summary without a fabricated parent", async () => {
+    const sink = captureServerLog();
+    expect(
+      await handleClientDiagnosticIngest(
+        context(
+          JSON.stringify({
+            message: "Keiko grounding mutation queue decision.",
+            clientTs: CLIENT_TS,
+            correlationId: "ui_queue-blocker-0001",
+            filesScopeDecision: {
+              decision: "timeout-recovered",
+              mutationSurface: "files",
+              rejectionCount: 2,
+            },
+          }),
+        ),
+      ),
+    ).toEqual({ status: 204, body: null });
+    const event = sink.events.find((record) => record.op === "client.files-scope.decision");
+    const record = expectActivityLogProof(
+      "client.files-scope.decision.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_queue-blocker-0001",
+      decision: "timeout-recovered",
+      mutationSurface: "files",
+      rejectionCount: 2,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record).not.toHaveProperty("parentCorrelationId");
+    expect(record).not.toHaveProperty("errorKind");
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+  });
   it("keeps browser-declared artifact loss separate from loss of the routine diagnostic", async () => {
     const sink = captureServerLog();
     await handleClientDiagnosticIngest(

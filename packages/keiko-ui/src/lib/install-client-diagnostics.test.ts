@@ -1414,6 +1414,33 @@ it("posts scope ownership decisions through routine capacity and preserves failu
   expect(clientDiagnosticPostThrottledCount()).toBe(0);
 });
 
+it("preserves queue refusal parent and recovery count on the existing routine transport", () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const refusal = {
+    correlationId: "ui_refused-action-0001",
+    parentCorrelationId: "ui_blocking-action-0001",
+    filesScopeDecision: {
+      decision: "timeout-rejected" as const,
+      mutationSurface: "git-change" as const,
+    },
+  };
+  fanOutClientDiagnostic("Keiko Files scope ownership decision.", refusal);
+  expect(lastPostedBody(fetchMock)).toMatchObject(refusal);
+  const recovery = {
+    correlationId: "ui_blocking-action-0001",
+    filesScopeDecision: {
+      decision: "timeout-recovered" as const,
+      mutationSurface: "files" as const,
+      rejectionCount: 2,
+    },
+  };
+  fanOutClientDiagnostic("Keiko Files scope ownership decision.", recovery);
+  expect(lastPostedBody(fetchMock)).toMatchObject(recovery);
+  expect(lastPostedBody(fetchMock)).not.toHaveProperty("parentCorrelationId");
+  expect(retainedClientDiagnosticFailure("ui_refused-action-0001")).toBeUndefined();
+});
+
 it("posts failed local preparation through routine capacity without replacing failure evidence", () => {
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   vi.spyOn(console, "debug").mockImplementation(() => undefined);

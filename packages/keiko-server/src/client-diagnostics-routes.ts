@@ -1199,6 +1199,7 @@ const CLIENT_FILES_SCOPE_DECISION_OPERATION = defineActivityLogOperation({
     sourceCount: { type: "integer", dataClass: "count", required: false },
     candidateCount: { type: "integer", dataClass: "count", required: false },
     bindingFingerprint: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    rejectionCount: { type: "integer", dataClass: "count", required: false },
     mutationSurface: {
       type: "string",
       dataClass: "closed-enum",
@@ -1924,6 +1925,9 @@ function logClientFilesScopeDecision(
         ...(decision.candidateCount === undefined
           ? {}
           : { candidateCount: decision.candidateCount }),
+        ...(decision.rejectionCount === undefined
+          ? {}
+          : { rejectionCount: decision.rejectionCount }),
         ...(decision.bindingFingerprint === undefined
           ? {}
           : { bindingFingerprint: decision.bindingFingerprint }),
